@@ -11,50 +11,115 @@ common:
 cases:
 - id: positive
   source:
-    total: 1
-    record:
-      operator_id: operator
-      active: true
-      status: active
-      address_canary: synthetic-address-private-canary
+    intercepts:
+    - type: endpoint
+      endpoint: operator-register
+    exchanges:
+    - request:
+        endpoint: operator-register
+        method: GET
+        path: "/operators/operator"
+        headers:
+          accept: application/json
+      response:
+        status: 200
+        body:
+          total: 1
+          record:
+            operator_id: operator
+            active: true
+            status: active
+            address_canary: synthetic-address-private-canary
   expectedValue: true
   expectedLookup: match
   derivationRuns: true
   signedSuccess: true
 - id: negative-inactive
   source:
-    total: 1
-    record:
-      operator_id: operator
-      active: false
-      status: inactive
-      address_canary: synthetic-address-private-canary
+    intercepts:
+    - type: endpoint
+      endpoint: operator-register
+    exchanges:
+    - request:
+        endpoint: operator-register
+        method: GET
+        path: "/operators/operator"
+        headers:
+          accept: application/json
+      response:
+        status: 200
+        body:
+          total: 1
+          record:
+            operator_id: operator
+            active: false
+            status: inactive
+            address_canary: synthetic-address-private-canary
   expectedValue: false
   expectedLookup: match
   derivationRuns: true
   signedSuccess: true
 - id: boundary-suspended-active-flag
   source:
-    total: 1
-    record:
-      operator_id: operator
-      active: true
-      status: suspended
-      address_canary: synthetic-address-private-canary
+    intercepts:
+    - type: endpoint
+      endpoint: operator-register
+    exchanges:
+    - request:
+        endpoint: operator-register
+        method: GET
+        path: "/operators/operator"
+        headers:
+          accept: application/json
+      response:
+        status: 200
+        body:
+          total: 1
+          record:
+            operator_id: operator
+            active: true
+            status: suspended
+            address_canary: synthetic-address-private-canary
   expectedValue: false
   expectedLookup: match
   derivationRuns: true
   signedSuccess: true
 - id: no-match
   source:
-    total: 0
+    intercepts:
+    - type: endpoint
+      endpoint: operator-register
+    exchanges:
+    - request:
+        endpoint: operator-register
+        method: GET
+        path: "/operators/operator"
+        headers:
+          accept: application/json
+      response:
+        status: 200
+        body:
+          total: 0
   expectedLookup: no_match
   expectedPublicProblem: evidence.unavailable
   derivationRuns: false
   signedSuccess: false
 - id: ambiguous
   source:
-    total: 2
+    intercepts:
+    - type: endpoint
+      endpoint: operator-register
+    exchanges:
+    - request:
+        endpoint: operator-register
+        method: GET
+        path: "/operators/operator"
+        headers:
+          accept: application/json
+      response:
+        status: 200
+        body:
+          total: 2
   expectedLookup: ambiguous
   expectedPublicProblem: evidence.unavailable
   derivationRuns: false
@@ -72,11 +137,24 @@ cases:
   expected: output-gate-rejection
 - id: missing-required-fact
   source:
-    total: 1
-    record:
-      operator_id: operator
-      status: active
-      address_canary: synthetic-address-private-canary
+    intercepts:
+    - type: endpoint
+      endpoint: operator-register
+    exchanges:
+    - request:
+        endpoint: operator-register
+        method: GET
+        path: "/operators/operator"
+        headers:
+          accept: application/json
+      response:
+        status: 200
+        body:
+          total: 1
+          record:
+            operator_id: operator
+            status: active
+            address_canary: synthetic-address-private-canary
   derivationRuns: false
   signedSuccess: false
   expectedPublicProblem: source.unavailable

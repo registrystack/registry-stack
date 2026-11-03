@@ -216,72 +216,69 @@ fn object_keys(value: &Value) -> String {
     }
 }
 
-fn acquisition_source_ids(acquisition: &Value) -> Vec<&str> {
-    match acquisition["type"].as_str() {
-        Some("single") => acquisition["source"].as_str().into_iter().collect(),
-        Some("search-then-fetch") => [
-            acquisition["search"].as_str(),
-            acquisition["fetch"].as_str(),
-        ]
+fn typed_object_properties(schema: &Value) -> String {
+    let Some(properties) = schema["properties"].as_object() else {
+        return "none".to_owned();
+    };
+    let mut properties = properties.iter().collect::<Vec<_>>();
+    properties.sort_unstable_by(|left, right| left.0.cmp(right.0));
+    properties
         .into_iter()
-        .flatten()
-        .collect(),
-        Some("search-then-fetch-set") => acquisition["search"]
-            .as_str()
-            .into_iter()
-            .chain(
-                acquisition["fetch"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|fetch| fetch["source"].as_str()),
-            )
-            .collect(),
-        _ => Vec::new(),
-    }
+        .map(|(name, schema)| match schema["type"].as_str() {
+            Some(schema_type) => format!("{name} ({schema_type})"),
+            None => name.to_owned(),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn source_inputs(inputs: &Value) -> String {
+    let Some(inputs) = inputs.as_object() else {
+        return "none".to_owned();
+    };
+    let mut inputs = inputs.iter().collect::<Vec<_>>();
+    inputs.sort_unstable_by(|left, right| left.0.cmp(right.0));
+    inputs
+        .into_iter()
+        .map(|(name, binding)| {
+            let selector = &binding["selector"];
+            match (
+                selector["role"].as_str(),
+                selector["profile"].as_str(),
+                selector["field"].as_str(),
+            ) {
+                (Some(role), Some(profile), Some(field)) => {
+                    format!("{name} <- selector {role}@{profile}.{field}")
+                }
+                _ => name.to_owned(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn render_source(source: &Value, out: &mut dyn io::Write) -> io::Result<()> {
     let id = source["id"].as_str().unwrap_or("unknown");
-    let source_type = source["type"].as_str().unwrap_or("unknown");
-    write!(out, "    Source {id}: {source_type}")?;
-    if let (Some(method), Some(path)) = (
-        source["operation"]["method"].as_str(),
-        source["operation"]["path"].as_str(),
-    ) {
-        write!(out, " {method} {path}")?;
-    }
+    let pack = source["pack"]["id"].as_str().unwrap_or("unknown");
+    let version = source["pack"]["version"].as_str().unwrap_or("unknown");
+    let route = source["route"].as_str().unwrap_or("unknown");
+    write!(out, "    Source {id}: pack {pack}@{version}; route {route}")?;
     if let Some(connection) = source["connection"].as_str() {
         writeln!(out, "; connection {connection}")?;
     } else {
         writeln!(out, "; no named connection")?;
     }
-
-    let preparation = if source["resolvedPreparation"]["generated"] == true {
-        "generated".to_owned()
-    } else if let Some(function) = source["prepare"]["function"].as_str() {
-        format!("Function {function}")
-    } else {
-        "authored".to_owned()
-    };
     writeln!(
         out,
-        "      Prepare: {preparation}; extract: Function {}",
-        source["extract"]["function"].as_str().unwrap_or("unknown")
+        "      Posture: {}",
+        source["acquisitionPosture"].as_str().unwrap_or("unknown")
     )?;
-    writeln!(out, "      Facts: {}", object_keys(&source["facts"]))?;
-
-    let attempt = source["limits"]["attemptTimeoutMilliseconds"].as_u64();
-    let concurrency = source["limits"]["maximumConcurrency"].as_u64();
-    let response_bytes = source["response"]["maximumBytes"].as_u64();
-    if let (Some(attempt), Some(concurrency), Some(response_bytes)) =
-        (attempt, concurrency, response_bytes)
-    {
-        writeln!(
-            out,
-            "      Limits: {attempt} ms attempt, {concurrency} concurrent, {response_bytes} bytes response"
-        )?;
-    }
+    writeln!(out, "      Inputs: {}", source_inputs(&source["inputs"]))?;
+    writeln!(
+        out,
+        "      Facts: {}",
+        typed_object_properties(&source["facts"])
+    )?;
     Ok(())
 }
 
@@ -318,23 +315,18 @@ pub(crate) fn render_human(
                 definition["requirement"].as_str().unwrap_or("unknown")
             )?;
             let acquisition = &definition["acquisition"];
-            writeln!(
-                out,
-                "  Acquisition: {}",
-                acquisition["type"].as_str().unwrap_or("unknown")
-            )?;
-            for source_id in acquisition_source_ids(acquisition) {
-                referenced_sources.insert(source_id.to_owned());
-                if let Some(source) = report["sources"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .find(|source| source["id"].as_str() == Some(source_id))
-                {
-                    render_source(source, out)?;
-                } else {
-                    writeln!(out, "    Source {source_id}: unresolved")?;
-                }
+            let source_id = acquisition["source"].as_str().unwrap_or("unknown");
+            writeln!(out, "  Acquisition: Source {source_id}")?;
+            referenced_sources.insert(source_id.to_owned());
+            if let Some(source) = report["sources"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|source| source["id"].as_str() == Some(source_id))
+            {
+                render_source(source, out)?;
+            } else {
+                writeln!(out, "    Source {source_id}: unresolved")?;
             }
             writeln!(
                 out,
@@ -895,70 +887,68 @@ acceptances:
             "command":"explain",
             "status":"complete",
             "project":"example",
-            "assertionDefinitions":[{
-                "id":"eligible",
-                "requirement":"urn:example:eligible",
-                "acquisition":{
-                    "type":"search-then-fetch-set",
-                    "search":"records-search",
-                    "fetch":[
-                        {"source":"income-record","factInputs":["record-id"]},
-                        {"source":"residence-record","factInputs":["record-id"]}
-                    ],
-                    "maximumAcquisitionMilliseconds":8000
+            "assertionDefinitions":[
+                {
+                    "id":"eligible",
+                    "requirement":"urn:example:eligible",
+                    "acquisition":{"source":"records-search"},
+                    "derive":{"function":"derive-eligible"},
+                    "outputs":{"eligible":{"type":"boolean"},"reason":{"type":"string"}},
+                    "grantCeiling":{"authorities":["organizational"]}
                 },
-                "derive":{"function":"derive-eligible"},
-                "outputs":{"eligible":{"type":"boolean"},"reason":{"type":"string"}},
-                "grantCeiling":{"authorities":["organizational"]}
-            }],
+                {
+                    "id":"income",
+                    "requirement":"urn:example:income",
+                    "acquisition":{"source":"income-record"},
+                    "derive":{"function":"derive-income"},
+                    "outputs":{"income":{"type":"integer"}},
+                    "grantCeiling":{"authorities":["organizational"]}
+                },
+                {
+                    "id":"residence",
+                    "requirement":"urn:example:residence",
+                    "acquisition":{"source":"residence-record"},
+                    "derive":{"function":"derive-residence"},
+                    "outputs":{"resident":{"type":"boolean"}},
+                    "grantCeiling":{"authorities":["organizational"]}
+                }
+            ],
             "sources":[
                 {
                     "id":"income-record",
-                    "type":"http-json",
+                    "pack":{"id":"benefits-register","version":"1"},
+                    "route":"income-record",
                     "connection":"benefits-api",
-                    "operation":{"method":"GET","path":"/income/{record_id}"},
-                    "facts":{"income":{"type":"integer"}},
-                    "response":{"shape":{"const":"PRIVATE-SOURCE-CANARY"},"maximumBytes":32768},
-                    "prepare":{"function":"prepare-income"},
-                    "resolvedPreparation":{"generated":false},
-                    "extract":{"function":"extract-income"},
-                    "limits":{"attemptTimeoutMilliseconds":2000,"maximumConcurrency":4}
+                    "inputs":{"recordId":{"selector":{"role":"subject","profile":"record-by-id","field":"record-id"}}},
+                    "acquisitionPosture":"record-transformed",
+                    "facts":{"type":"object","properties":{"income":{"type":"integer","const":"PRIVATE-SOURCE-CANARY"}}}
                 },
                 {
                     "id":"records-search",
-                    "type":"http-json",
+                    "pack":{"id":"records-register","version":"2"},
+                    "route":"record-search",
                     "connection":"registry-api",
-                    "operation":{"method":"POST","path":"/records/search"},
-                    "facts":{"record-id":{"type":"string"}},
-                    "response":{"maximumBytes":65536},
-                    "prepare":null,
-                    "resolvedPreparation":{"generated":true},
-                    "extract":{"function":"extract-search"},
-                    "limits":{"attemptTimeoutMilliseconds":3000,"maximumConcurrency":8}
+                    "inputs":{"query":{"selector":{"role":"subject","profile":"record-query","field":"query"}}},
+                    "acquisitionPosture":"field-projected",
+                    "facts":{"type":"object","properties":{"record-id":{"type":"string"}}}
                 },
                 {
                     "id":"residence-record",
-                    "type":"sqlite-extract",
+                    "pack":{"id":"residence-register","version":"3"},
+                    "route":"residence-record",
                     "connection":null,
-                    "operation":{"method":null,"path":null},
-                    "facts":{"region":{"type":"string"}},
-                    "response":{"maximumBytes":16384},
-                    "prepare":null,
-                    "resolvedPreparation":{"generated":true},
-                    "extract":{"function":"extract-residence"},
-                    "limits":{"attemptTimeoutMilliseconds":1000,"maximumConcurrency":2}
+                    "inputs":{"recordId":{"selector":{"role":"subject","profile":"record-by-id","field":"record-id"}}},
+                    "acquisitionPosture":"record-transformed",
+                    "facts":{"type":"object","properties":{"region":{"type":"string"}}}
                 },
                 {
                     "id":"draft-source",
-                    "type":"http-json",
+                    "pack":{"id":"draft-register","version":"1"},
+                    "route":"draft-record",
                     "connection":"draft-api",
-                    "operation":{"method":"GET","path":"/draft"},
-                    "facts":{"draft-id":{"type":"string"}},
-                    "response":{"maximumBytes":8192},
-                    "prepare":null,
-                    "resolvedPreparation":{"generated":true},
-                    "extract":{"function":"extract-draft"},
-                    "limits":{"attemptTimeoutMilliseconds":1000,"maximumConcurrency":1}
+                    "inputs":{"draftId":{"selector":{"role":"subject","profile":"draft-by-id","field":"draft-id"}}},
+                    "acquisitionPosture":"record-transformed",
+                    "facts":{"type":"object","properties":{"draft-id":{"type":"string"}}}
                 }
             ],
             "functions":[{"id":"derive-eligible","interface":"assertion-derive/v1","digest":"sha256:reviewed","callSites":["/assertionDefinitions/eligible/derive"],"bindings":{},"capabilities":["declared-outputs"]}],
@@ -967,35 +957,34 @@ acceptances:
         let mut output = Vec::new();
         render_human(&report, &Report::new(Vec::new()), &mut output).unwrap();
         let output = String::from_utf8(output).unwrap();
-        let search = output.find("Source records-search").expect("search source");
-        let first_fetch = output
-            .find("Source income-record")
-            .expect("first fetch source");
-        let second_fetch = output
+        let first_source = output.find("Source records-search").expect("first source");
+        let second_source = output.find("Source income-record").expect("second source");
+        let third_source = output
             .find("Source residence-record")
-            .expect("second fetch source");
+            .expect("third source");
         assert!(
-            search < first_fetch && first_fetch < second_fetch,
+            first_source < second_source && second_source < third_source,
             "{output}"
         );
         assert!(output.contains(
-            "Source records-search: http-json POST /records/search; connection registry-api"
+            "Source records-search: pack records-register@2; route record-search; connection registry-api"
         ));
-        assert!(output.contains("Prepare: generated; extract: Function extract-search"));
+        assert!(output.contains("Posture: field-projected"));
+        assert!(output.contains("Inputs: query <- selector subject@record-query.query"));
         assert!(output.contains(
-            "Source income-record: http-json GET /income/{record_id}; connection benefits-api"
+            "Source income-record: pack benefits-register@1; route income-record; connection benefits-api"
         ));
-        assert!(
-            output.contains("Prepare: Function prepare-income; extract: Function extract-income")
-        );
-        assert!(output.contains("Facts: income"));
-        assert!(output.contains("Limits: 2000 ms attempt, 4 concurrent, 32768 bytes response"));
+        assert!(output.contains("Facts: income (integer)"));
         assert!(output.contains("Derive: Function derive-eligible"));
         assert!(output.contains("Outputs: eligible, reason"));
         assert!(output.contains("Sources not referenced by definitions:"));
-        assert!(output.contains("Source draft-source: http-json GET /draft; connection draft-api"));
+        assert!(output.contains(
+            "Source draft-source: pack draft-register@1; route draft-record; connection draft-api"
+        ));
         assert!(output.contains("Function derive-eligible"));
         assert!(output.contains("authorityRevision"));
+        assert!(!output.contains("Prepare:"), "{output}");
+        assert!(!output.contains("extract:"), "{output}");
         assert!(!output.contains("PRIVATE-SOURCE-CANARY"), "{output}");
     }
 }

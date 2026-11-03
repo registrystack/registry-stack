@@ -25,3 +25,20 @@ audit:
 outboundTls:
   systemRoots: true
   trustProfiles: {}
+sourceConnections:
+  opencrvs:
+    id: opencrvs
+    endpoints:
+      - endpoint: events
+        baseUrl: https://events.opencrvs.gov.example
+        credential:
+          type: oauth2-client-credentials
+          tokenEndpoint: https://auth.opencrvs.gov.example/token
+          clientIdRef: secret:file/opencrvs-client-id
+          clientSecretRef: secret:file/opencrvs-client-secret
+          scope: recordsearch
+          credentialPlacement: form-body
+          maximumCacheSeconds: 300
+          assumedLifetimeSeconds: 600
+        attemptTimeoutMilliseconds: 3000
+        maximumResponseBytes: 262144

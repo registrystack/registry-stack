@@ -99,9 +99,34 @@ pub struct BregConnectorConfig {
     /// The per-attempt timeout the client enforces; the client's own
     /// default applies when this stays unset.
     pub attempt_timeout: Option<std::time::Duration>,
+    /// An operator-selected private CA bundle for the fixed BReg origin.
+    pub trusted_root_certificates: Option<Vec<u8>>,
 }
 
 impl BregConnectorConfig {
+    /// Configure only the Action families used by the ingestion job's direct
+    /// destination. Record, batch, read, and import selectors remain absent,
+    /// so an authored direct job does not invent unrelated record settings.
+    pub fn for_action(
+        origin: impl Into<String>,
+        token_provider: Arc<dyn TokenProvider>,
+        access_profile: impl Into<String>,
+        action_identifier: impl Into<String>,
+    ) -> Self {
+        Self {
+            origin: origin.into(),
+            token_provider,
+            access_profile: access_profile.into(),
+            action_identifier: action_identifier.into(),
+            record_type: String::new(),
+            record_route: String::new(),
+            allow_tombstone: false,
+            allow_import_profile: false,
+            attempt_timeout: None,
+            trusted_root_certificates: None,
+        }
+    }
+
     /// Configure a connector for one origin, profile, action, and record
     /// type; destructive and operator-opened authority stay off.
     pub fn new(
@@ -122,6 +147,7 @@ impl BregConnectorConfig {
             allow_tombstone: false,
             allow_import_profile: false,
             attempt_timeout: None,
+            trusted_root_certificates: None,
         }
     }
 
@@ -143,6 +169,13 @@ impl BregConnectorConfig {
     #[must_use]
     pub fn with_attempt_timeout(mut self, timeout: std::time::Duration) -> Self {
         self.attempt_timeout = Some(timeout);
+        self
+    }
+
+    /// Trust exactly this PEM bundle for the fixed BReg origin.
+    #[must_use]
+    pub fn with_trusted_root_certificates(mut self, pem: Vec<u8>) -> Self {
+        self.trusted_root_certificates = Some(pem);
         self
     }
 }
@@ -179,20 +212,20 @@ impl BregConnector {
     pub async fn connect(config: BregConnectorConfig) -> Result<Self, ConnectorFault> {
         // The base URL type is the client configuration's own; parsing stays
         // through it, so this crate carries no URL dependency of its own.
-        let client = Arc::new(
-            BaseRegistryClient::new(
-                BaseRegistryClientConfig::new(
-                    config
-                        .origin
-                        .parse()
-                        .map_err(|_| ConnectorFault::InvalidInput)?,
-                )
-                .with_token_provider(config.token_provider)
-                .with_user_agent("registry-adapter-connector")
-                .with_attempt_timeout(config.attempt_timeout.unwrap_or(DEFAULT_ATTEMPT_TIMEOUT)),
-            )
-            .map_err(|error| fault(&error))?,
-        );
+        let mut client_config = BaseRegistryClientConfig::new(
+            config
+                .origin
+                .parse()
+                .map_err(|_| ConnectorFault::InvalidInput)?,
+        )
+        .with_token_provider(config.token_provider)
+        .with_user_agent("registry-adapter-connector")
+        .with_attempt_timeout(config.attempt_timeout.unwrap_or(DEFAULT_ATTEMPT_TIMEOUT));
+        if let Some(certificates) = config.trusted_root_certificates {
+            client_config = client_config.with_trusted_root_certificates(certificates);
+        }
+        let client =
+            Arc::new(BaseRegistryClient::new(client_config).map_err(|error| fault(&error))?);
         let metadata = client
             .registry_contract(Some(&config.access_profile))
             .await
@@ -203,28 +236,30 @@ impl BregConnector {
             .map_err(|_| ConnectorFault::AuthorityAbsent)?;
         let direct =
             |identifier: String| metadata.select_direct_write(&identifier, &config.access_profile);
-        let create = direct(format!("records.{}.create", config.record_type))
-            .ok()
+        let create = (!config.record_type.is_empty())
+            .then(|| direct(format!("records.{}.create", config.record_type)))
+            .and_then(Result::ok)
             .and_then(|write| match write {
                 BRegDirectWrite::Create(binding) => Some(binding),
                 BRegDirectWrite::Patch(_) => None,
             });
-        let patch = direct(format!("records.{}.patch", config.record_type))
-            .ok()
+        let patch = (!config.record_type.is_empty())
+            .then(|| direct(format!("records.{}.patch", config.record_type)))
+            .and_then(Result::ok)
             .and_then(|write| match write {
                 BRegDirectWrite::Patch(binding) => Some(binding),
                 BRegDirectWrite::Create(_) => None,
             });
-        let tombstone = if config.allow_tombstone {
+        let tombstone = if config.allow_tombstone && !config.record_type.is_empty() {
             metadata
                 .select_tombstone(&config.record_type, &config.access_profile)
                 .ok()
         } else {
             None
         };
-        let batch = metadata
-            .select_batch(&config.record_type, &config.access_profile)
-            .ok();
+        let batch = (!config.record_type.is_empty())
+            .then(|| metadata.select_batch(&config.record_type, &config.access_profile))
+            .and_then(Result::ok);
         let proposal_get = metadata.select_proposal_get(&config.access_profile).ok();
         let proposal_collection = metadata.select_proposals(&config.access_profile).ok();
         // A runtime must not be built inside another runtime's context,
@@ -406,6 +441,15 @@ impl BregConnector {
 
     pub(crate) fn action_mode(&self) -> BRegActionMode {
         self.action.mode()
+    }
+
+    /// The metadata-selected Action mode, for the host's authored-mode check.
+    #[must_use]
+    pub fn action_mode_name(&self) -> &'static str {
+        match self.action_mode() {
+            BRegActionMode::Immediate => "immediate",
+            BRegActionMode::Proposal => "proposal",
+        }
     }
 
     pub(crate) fn create_binding(&self) -> Result<&BRegCreateBinding, ConnectorFault> {

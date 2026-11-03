@@ -26,15 +26,11 @@ use registry_evidence_authoring::{
 
 use super::fetch;
 
-/// Reads and parses the OpenAPI document `source` names, from disk or
-/// from the network. Accepts YAML or JSON (YAML is a superset for this
-/// purpose, so both are parsed the same way) and requires a top-level
-/// `openapi: 3.0.x` or `3.1.x` version string.
-pub fn open(source: &SpecSource) -> Result<Spec> {
-    open_retained(source).map(|(spec, _)| spec)
-}
-
 /// Read and validate a document once while retaining its exact UTF-8 text.
+///
+/// Accepts YAML or JSON (YAML is a superset for this purpose, so both are
+/// parsed the same way) and requires a top-level `openapi: 3.0.x` or `3.1.x`
+/// version string.
 ///
 /// `evidencectl init` stores this text for the later question-authoring
 /// step. Returning it from the same read that produced `Spec` prevents a

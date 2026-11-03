@@ -1,0 +1,44 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/job-runtime/job-runtime.v1alpha1.schema.json
+#
+# Example runtime for job.hook.yaml. The public HTTPS endpoint terminates at
+# an operator-controlled reverse proxy. Only that proxy forwards the webhook
+# to this loopback listener.
+apiVersion: id.registrystack.org/formats/adapter/job-runtime/v1alpha1
+kind: AdapterJobRuntimeConfig
+id: kobotoolbox-job-hook-example
+secretProviders:
+  environment: {}
+  file:
+    root: /run/secrets/adapter-job
+endpoints:
+  - endpoint: kobo-api
+    baseUrl: https://kobo.example.invalid/api/v2/assets/aFixtureUid0000000000000000000001/data
+    credential:
+      type: basic
+      usernameRef: secret:env/KOBO_USERNAME
+      passwordRef: secret:env/KOBO_PASSWORD
+allowedPrivateCidrs:
+  - 10.0.0.0/8
+destinations:
+  household-registry:
+    type: direct-breg
+    baseUrl: https://breg.example.invalid
+    tokenEndpoint: https://identity.example.invalid/oauth2/token
+    clientId: adapter-kobo-ingestion
+    privateKeyRef: secret:env/BREG_PRIVATE_KEY
+    scopes: [registry:write]
+    resource: urn:example:base-registry
+    attemptTimeoutMilliseconds: 5000
+store:
+  runtimeUrlRef: secret:env/ADAPTER_JOB_DB
+hookIngress:
+  listener:
+    bind: 127.0.0.1:8091
+    tlsTermination: operator-controlled-upstream
+    networkExposure: private-address
+  sources:
+    kobo-submissions:
+      usernameRef: secret:file/kobo-hook-username
+      passwordRef: secret:file/kobo-hook-password
+      requestsPerMinute: 60
+      burst: 10

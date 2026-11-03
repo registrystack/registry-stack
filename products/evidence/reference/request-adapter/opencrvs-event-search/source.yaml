@@ -1,5 +1,5 @@
-# Focused executable OpenCRVS adapter fragment. For a deployable governed
-# bundle and runtime binding, use deployment-projects/opencrvs-family-evidence/.
+# Historical inline OpenCRVS Source fragment, refused by the current grammar.
+# Current pack-bound deployment: deployment-projects/opencrvs-family-evidence/.
 type: http-json
 baseUrl: https://events.opencrvs.example.invalid
 posture: record-transformed

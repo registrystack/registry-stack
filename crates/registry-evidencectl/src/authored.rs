@@ -268,13 +268,13 @@ fn compiler_action(code: &str) -> &'static str {
             "Remove the member, which the closed Evidence source shape does not define."
         }
         "evidence.source.transport-missing" => {
-            "Declare the source's type: http-json or sqlite-extract."
+            "Declare the Source's reviewed pack, route, named connection and selector inputs."
         }
         "evidence.source.production-channel" => {
-            "Give the production source an https baseUrl and an authentication type other than none or review-required."
+            "Set the named target endpoint's origin and any OAuth tokenEndpoint to HTTPS, and choose the authenticated type declared by the reviewed pack endpoint."
         }
         "evidence.source.production-transport" => {
-            "Use a source transport with stated production conditions: http-json or sqlite-extract."
+            "Select a reviewed pack route whose reachable sends use HTTP, GraphQL, or offline SQLite."
         }
         "evidence.bundle.shape" => {
             "Correct the named member so the compiled bundle satisfies the closed Evidence bundle shape the authoring reference describes."
@@ -601,6 +601,18 @@ mod tests {
         assert_eq!(
             action,
             "Lower the definition's validitySeconds to the target's signing.maximumAssertionValiditySeconds or below, or raise that maximum under `signing` in the target document."
+        );
+    }
+
+    #[test]
+    fn production_source_actions_name_current_pack_and_target_fields() {
+        assert_eq!(
+            compiler_action("evidence.source.production-channel"),
+            "Set the named target endpoint's origin and any OAuth tokenEndpoint to HTTPS, and choose the authenticated type declared by the reviewed pack endpoint."
+        );
+        assert_eq!(
+            compiler_action("evidence.source.production-transport"),
+            "Select a reviewed pack route whose reachable sends use HTTP, GraphQL, or offline SQLite."
         );
     }
 

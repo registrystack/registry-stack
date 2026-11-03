@@ -15,7 +15,7 @@ use std::marker::PhantomData;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::pin::Pin;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::task::{Context, Poll};
 use std::time::Duration;
@@ -109,6 +109,46 @@ static DESTINATION_DNS_PERMITS: Semaphore =
 static DESTINATION_SYSTEM_RESOLVER: OnceLock<Option<TokioResolver>> = OnceLock::new();
 static DESTINATION_NATIVE_ROOTS: OnceLock<Vec<reqwest::Certificate>> = OnceLock::new();
 
+/// An explicit caller-owned ceiling for one fixed-destination operation.
+///
+/// Ordinary product sends use [`MAX_DESTINATION_OPERATION_TIMEOUT`] through
+/// [`FixedDestinationPolicy::send`]. A caller with a separate aggregate
+/// deadline may opt into a different positive finite duration, while the same
+/// checked absolute deadline continues to cover DNS, connect, send, and body
+/// read. The policy carries no product semantics and grants no destination
+/// authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DestinationOperationTimeoutPolicy {
+    maximum: Duration,
+}
+
+impl DestinationOperationTimeoutPolicy {
+    /// Construct an explicit positive operation ceiling.
+    ///
+    /// # Errors
+    ///
+    /// A zero duration is not a finite working budget. Whether the current
+    /// monotonic clock can represent the eventual deadline is checked when a
+    /// send begins, against the actual remaining duration.
+    pub fn try_new(maximum: Duration) -> Result<Self, DestinationOperationTimeoutPolicyError> {
+        if maximum.is_zero() {
+            return Err(DestinationOperationTimeoutPolicyError);
+        }
+        Ok(Self { maximum })
+    }
+
+    /// The largest remaining duration this explicit policy admits.
+    #[must_use]
+    pub const fn maximum(self) -> Duration {
+        self.maximum
+    }
+}
+
+/// A zero explicit destination operation ceiling is refused.
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+#[error("the destination operation timeout policy must be positive")]
+pub struct DestinationOperationTimeoutPolicyError;
+
 fn destination_native_roots() -> &'static [reqwest::Certificate] {
     DESTINATION_NATIVE_ROOTS
         .get_or_init(|| {
@@ -183,6 +223,19 @@ pub enum DataDestination {}
 impl sealed::Sealed for DataDestination {}
 impl DestinationSlot for DataDestination {
     const DEBUG_NAME: &'static str = "data";
+    const CREDENTIAL_EXCHANGE: bool = false;
+    const EVENT_DELIVERY: bool = false;
+}
+
+/// Registry-data destination response selected for one reviewed host
+/// protocol. Requests retain the ordinary data-destination authority; only
+/// this sealed response slot may move the exact bounded wire bytes into a
+/// protocol verifier before JSON decoding.
+pub enum ProtocolDataDestination {}
+
+impl sealed::Sealed for ProtocolDataDestination {}
+impl DestinationSlot for ProtocolDataDestination {
+    const DEBUG_NAME: &'static str = "protocol-data";
     const CREDENTIAL_EXCHANGE: bool = false;
     const EVENT_DELIVERY: bool = false;
 }
@@ -579,6 +632,26 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
         self.send_with_deadline(request, deadline).await
     }
 
+    /// Resolve, validate, pin, and send under an explicit caller-owned
+    /// operation ceiling. This exceptional path does not alter the ordinary
+    /// ten-second [`Self::send`] policy.
+    pub async fn send_with_timeout_policy(
+        &self,
+        request: BoundedDestinationRequest<S>,
+        remaining: Duration,
+        policy: DestinationOperationTimeoutPolicy,
+    ) -> Result<BoundedDestinationResponse<S>, DestinationSendError> {
+        let deadline = deadline_from_remaining(remaining, policy.maximum)?;
+        self.send_with_deadline_bounded(
+            request,
+            deadline,
+            policy.maximum,
+            &SystemResolver,
+            TransportTrust::Policy,
+        )
+        .await
+    }
+
     /// Resolve, validate, pin, and send under an existing absolute deadline.
     ///
     /// This is the exact-deadline primitive for callers that already hold a
@@ -905,6 +978,28 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
         self.origin
             .port_or_known_default()
             .expect("fixed destination construction proves a port")
+    }
+}
+
+impl FixedDestinationPolicy<DataDestination> {
+    /// Send an ordinary reviewed data request while sealing its response for
+    /// a host protocol that must verify the exact bounded wire bytes before
+    /// decoding. This grants no new destination, request, redirect, TLS, or
+    /// timeout authority.
+    pub async fn send_protocol_with_timeout_policy(
+        &self,
+        request: BoundedDestinationRequest<DataDestination>,
+        remaining: Duration,
+        policy: DestinationOperationTimeoutPolicy,
+    ) -> Result<BoundedDestinationResponse<ProtocolDataDestination>, DestinationSendError> {
+        let response = self
+            .send_with_timeout_policy(request, remaining, policy)
+            .await?;
+        Ok(BoundedDestinationResponse {
+            response: response.response,
+            deadline: response.deadline,
+            slot: PhantomData,
+        })
     }
 }
 
@@ -3742,6 +3837,61 @@ impl<S: DestinationSlot> BoundedDestinationResponse<S> {
         &self,
         names: impl ExactSizeIterator<Item = &'a str>,
     ) -> Result<Vec<Option<String>>, DestinationResponseHeaderError> {
+        self.selected_response_headers(names, true)
+    }
+
+    /// Select bounded UTF-8 response headers for one trusted host-protocol
+    /// verifier. These values never become script-visible: the protocol is
+    /// code-owned and may require transport headers such as `traceparent`
+    /// which the ordinary script-response deny-list intentionally hides.
+    ///
+    /// Names remain count-bounded and unique, and duplicate upstream fields
+    /// fail closed before any value reaches the verifier.
+    pub fn selected_host_protocol_response_headers<'a>(
+        &self,
+        names: impl ExactSizeIterator<Item = &'a str>,
+    ) -> Result<Vec<Option<String>>, DestinationResponseHeaderError> {
+        self.selected_response_headers(names, false)
+    }
+
+    /// Select every bounded field for headers owned by one trusted host
+    /// protocol verifier. Repeated fields remain repeated so the protocol can
+    /// apply its own exact cardinality and diagnostic rules. Values never
+    /// become script-visible, and selected names remain bounded and unique.
+    pub fn selected_host_protocol_response_header_fields<'a>(
+        &self,
+        names: impl ExactSizeIterator<Item = &'a str>,
+    ) -> Result<Vec<(String, String)>, DestinationResponseHeaderError> {
+        if names.len() > MAX_DESTINATION_REQUEST_HEADERS {
+            return Err(DestinationResponseHeaderError::TooManySelectedHeaders);
+        }
+        let mut selected = Vec::new();
+        let mut prior = Vec::<HeaderName>::with_capacity(names.len());
+        for name in names {
+            let name = HeaderName::from_str(name)
+                .map_err(|_| DestinationResponseHeaderError::HeaderDenied)?;
+            if prior.contains(&name) {
+                return Err(DestinationResponseHeaderError::HeaderDenied);
+            }
+            prior.push(name.clone());
+            for value in self.response.headers().get_all(&name) {
+                selected.push((
+                    name.as_str().to_owned(),
+                    value
+                        .to_str()
+                        .map_err(|_| DestinationResponseHeaderError::InvalidHeaderValue)?
+                        .to_owned(),
+                ));
+            }
+        }
+        Ok(selected)
+    }
+
+    fn selected_response_headers<'a>(
+        &self,
+        names: impl ExactSizeIterator<Item = &'a str>,
+        script_visible: bool,
+    ) -> Result<Vec<Option<String>>, DestinationResponseHeaderError> {
         if names.len() > MAX_DESTINATION_REQUEST_HEADERS {
             return Err(DestinationResponseHeaderError::TooManySelectedHeaders);
         }
@@ -3750,7 +3900,9 @@ impl<S: DestinationSlot> BoundedDestinationResponse<S> {
         for name in names {
             let name = HeaderName::from_str(name)
                 .map_err(|_| DestinationResponseHeaderError::HeaderDenied)?;
-            if is_forbidden_script_response_header(&name) || prior.contains(&name) {
+            if (script_visible && is_forbidden_script_response_header(&name))
+                || prior.contains(&name)
+            {
                 return Err(DestinationResponseHeaderError::HeaderDenied);
             }
             prior.push(name.clone());
@@ -3775,8 +3927,23 @@ impl<S: DestinationSlot> BoundedDestinationResponse<S> {
         self,
         max_bytes: usize,
     ) -> Result<BoundedDestinationBody<S>, DestinationResponseError> {
+        self.read_bounded_counted(max_bytes)
+            .await
+            .map_err(DestinationResponseReadError::kind)
+    }
+
+    /// Consume the response body under the operation deadline and byte cap,
+    /// retaining the exact number of wire body bytes observed even when a
+    /// later chunk, read failure, or deadline refuses the body.
+    pub async fn read_bounded_counted(
+        self,
+        max_bytes: usize,
+    ) -> Result<BoundedDestinationBody<S>, DestinationResponseReadError> {
         if max_bytes > MAX_DESTINATION_RESPONSE_BODY_BYTES {
-            return Err(DestinationResponseError::BodyLimitTooHigh);
+            return Err(DestinationResponseReadError::new(
+                DestinationResponseError::BodyLimitTooHigh,
+                0,
+            ));
         }
         let Self {
             mut response,
@@ -3787,20 +3954,30 @@ impl<S: DestinationSlot> BoundedDestinationResponse<S> {
             .content_length()
             .is_some_and(|length| length > max_bytes as u64)
         {
-            return Err(DestinationResponseError::BodyTooLarge);
+            return Err(DestinationResponseReadError::new(
+                DestinationResponseError::BodyTooLarge,
+                0,
+            ));
         }
 
+        let bytes_read = Arc::new(AtomicUsize::new(0));
+        let read_count = Arc::clone(&bytes_read);
         let read = async move {
             let mut body = Zeroizing::new(Vec::with_capacity(max_bytes.min(8_192)));
-            while let Some(chunk) = response
-                .chunk()
-                .await
-                .map_err(|_| DestinationResponseError::BodyReadFailed)?
-            {
-                let next_len = body
-                    .len()
-                    .checked_add(chunk.len())
-                    .ok_or(DestinationResponseError::BodyTooLarge)?;
+            loop {
+                let chunk = response
+                    .chunk()
+                    .await
+                    .map_err(|_| DestinationResponseError::BodyReadFailed)?;
+                let Some(chunk) = chunk else {
+                    break;
+                };
+                let next_len = read_count
+                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+                        Some(count.saturating_add(chunk.len()))
+                    })
+                    .unwrap_or_else(|count| count)
+                    .saturating_add(chunk.len());
                 if next_len > max_bytes {
                     return Err(DestinationResponseError::BodyTooLarge);
                 }
@@ -3812,9 +3989,17 @@ impl<S: DestinationSlot> BoundedDestinationResponse<S> {
             })
         };
 
-        timeout_at(deadline, read)
-            .await
-            .map_err(|_| DestinationResponseError::DeadlineExceeded)?
+        match timeout_at(deadline, read).await {
+            Ok(Ok(body)) => Ok(body),
+            Ok(Err(kind)) => Err(DestinationResponseReadError::new(
+                kind,
+                bytes_read.load(Ordering::Relaxed),
+            )),
+            Err(_) => Err(DestinationResponseReadError::new(
+                DestinationResponseError::DeadlineExceeded,
+                bytes_read.load(Ordering::Relaxed),
+            )),
+        }
     }
 }
 
@@ -3844,16 +4029,44 @@ pub enum DestinationResponseError {
     DeadlineExceeded,
 }
 
+/// A value-free bounded response-read failure plus the number of body bytes
+/// already consumed from the wire. The count lets aggregate acquisition
+/// budgets charge failed and retried attempts without exposing response data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[error("{kind}")]
+pub struct DestinationResponseReadError {
+    kind: DestinationResponseError,
+    bytes_read: usize,
+}
+
+impl DestinationResponseReadError {
+    fn new(kind: DestinationResponseError, bytes_read: usize) -> Self {
+        Self { kind, bytes_read }
+    }
+
+    #[must_use]
+    pub const fn kind(self) -> DestinationResponseError {
+        self.kind
+    }
+
+    #[must_use]
+    pub const fn bytes_read(self) -> usize {
+        self.bytes_read
+    }
+}
+
 /// Marker-typed bounded response bytes.
 ///
 /// Production code cannot inspect these bytes through this transport
 /// foundation. There is no borrowing accessor: a caller-supplied callback
 /// could copy the raw body out of its zeroizing owner. The data slot stays
 /// opaque behind the reviewed strict data decoder. The event and credential
-/// slots are the two whose bodies are declared parts of their protocols, and
-/// each moves its whole buffer out in zeroizing storage
+/// slots and the explicitly selected host-protocol slot are the bodies whose
+/// bytes are declared parts of their protocols. Each moves its whole buffer
+/// out in zeroizing storage
 /// ([`BoundedDestinationBody::to_event_answer`],
-/// [`BoundedDestinationBody::into_credential_bytes`]), never as an inspectable
+/// [`BoundedDestinationBody::into_credential_bytes`],
+/// [`BoundedDestinationBody::into_protocol_bytes`]), never as an inspectable
 /// borrow.
 ///
 /// ```compile_fail
@@ -3882,6 +4095,8 @@ pub struct BoundedDestinationBody<S: DestinationSlot> {
 
 /// Registry-data response bytes.
 pub type DataDestinationBody = BoundedDestinationBody<DataDestination>;
+/// Exact bounded response bytes available only to a selected host protocol.
+pub type ProtocolDataDestinationBody = BoundedDestinationBody<ProtocolDataDestination>;
 /// Credential-exchange response bytes.
 pub type CredentialDestinationBody = BoundedDestinationBody<CredentialDestination>;
 
@@ -3923,6 +4138,15 @@ impl<S: DestinationSlot> BoundedDestinationBody<S> {
     #[must_use]
     fn with_bytes<T>(&self, inspect: impl FnOnce(&[u8]) -> T) -> T {
         inspect(self.bytes.as_slice())
+    }
+}
+
+impl BoundedDestinationBody<ProtocolDataDestination> {
+    /// Move the exact bounded wire bytes into the host protocol verifier.
+    /// Ordinary registry-data bodies deliberately expose no equivalent.
+    #[must_use]
+    pub fn into_protocol_bytes(self) -> Zeroizing<Vec<u8>> {
+        self.bytes
     }
 }
 
@@ -4659,6 +4883,7 @@ mod tests {
     use rcgen::{generate_simple_self_signed, CertifiedKey};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
+    use tokio::sync::Notify;
     use tokio::task::JoinHandle;
     use tokio_rustls::rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
     use tokio_rustls::rustls::ServerConfig;
@@ -7832,6 +8057,233 @@ mod tests {
             Err(DestinationSendError::InvalidRemainingTimeout)
         ));
         assert_eq!(credential_resolver.calls.load(Ordering::SeqCst), 0);
+    }
+
+    /// A caller that explicitly selects a larger finite operation policy can
+    /// complete one real DNS/connect/send/body-read after the standard ten
+    /// second ceiling. The ordinary API above remains closed at ten seconds.
+    #[tokio::test]
+    async fn an_explicit_finite_policy_serves_a_response_after_ten_seconds() {
+        let request_arrived = Arc::new(Notify::new());
+        let release_response = Arc::new(Notify::new());
+        let route_request_arrived = Arc::clone(&request_arrived);
+        let route_release_response = Arc::clone(&release_response);
+        let app = Router::new().route(
+            "/messages",
+            post(move || {
+                let request_arrived = Arc::clone(&route_request_arrived);
+                let release_response = Arc::clone(&route_release_response);
+                async move {
+                    request_arrived.notify_one();
+                    release_response.notified().await;
+                    (StatusCode::OK, "{}")
+                }
+            }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind delayed destination");
+        let address = listener.local_addr().expect("delayed destination address");
+        tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve delayed destination");
+        });
+        let policy = loopback_send_policy(address);
+        let timeout_policy = DestinationOperationTimeoutPolicy::try_new(Duration::from_secs(15))
+            .expect("finite timeout policy");
+        let send = tokio::spawn(async move {
+            policy
+                .send_with_timeout_policy(
+                    post_send_request(),
+                    Duration::from_secs(15),
+                    timeout_policy,
+                )
+                .await
+        });
+        request_arrived.notified().await;
+        tokio::time::pause();
+        let started = Instant::now();
+        tokio::time::advance(Duration::from_secs(11)).await;
+        release_response.notify_one();
+
+        let response = send
+            .await
+            .expect("delayed send task completes")
+            .expect("the explicitly bounded delayed response completes");
+        let body = response.read_bounded(16).await.expect("bounded body");
+
+        assert_eq!(body.as_bytes(), b"{}");
+        assert!(started.elapsed() >= Duration::from_secs(11));
+    }
+
+    #[tokio::test]
+    async fn a_protocol_response_preserves_exact_bounded_wire_bytes_before_decode() {
+        let wire = b" \n{\"payload\":\"not-canonical-json-whitespace\"}\n ";
+        let app = Router::new().route(
+            "/messages",
+            post(move || async move {
+                (
+                    StatusCode::OK,
+                    [
+                        ("content-type", "application/jose+json"),
+                        (
+                            "traceparent",
+                            "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+                        ),
+                    ],
+                    wire.as_slice(),
+                )
+            }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind protocol destination");
+        let address = listener.local_addr().expect("protocol destination address");
+        tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve protocol destination");
+        });
+        let policy = loopback_send_policy(address);
+        let timeout_policy = DestinationOperationTimeoutPolicy::try_new(Duration::from_secs(2))
+            .expect("finite timeout policy");
+
+        let response = policy
+            .send_protocol_with_timeout_policy(
+                post_send_request(),
+                Duration::from_secs(2),
+                timeout_policy,
+            )
+            .await
+            .expect("protocol response arrives");
+        assert_eq!(
+            response
+                .selected_host_protocol_response_headers(
+                    ["content-type", "traceparent"].into_iter(),
+                )
+                .expect("trusted protocol headers are bounded"),
+            vec![
+                Some("application/jose+json".to_owned()),
+                Some("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01".to_owned(),),
+            ]
+        );
+        assert_eq!(
+            response.selected_script_response_headers(["traceparent"].into_iter()),
+            Err(DestinationResponseHeaderError::HeaderDenied)
+        );
+        let body = response
+            .read_bounded_counted(128)
+            .await
+            .expect("protocol body is bounded")
+            .into_protocol_bytes();
+
+        assert_eq!(body.as_slice(), wire);
+    }
+
+    #[tokio::test]
+    async fn repeated_response_fields_are_preserved_only_for_trusted_host_protocols() {
+        let traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+        let app = Router::new().route(
+            "/messages",
+            post(move || async move {
+                let mut headers = HeaderMap::new();
+                headers.append(
+                    CONTENT_TYPE,
+                    HeaderValue::from_static("application/jose+json"),
+                );
+                headers.append("traceparent", HeaderValue::from_static(traceparent));
+                headers.append("traceparent", HeaderValue::from_static(traceparent));
+                (StatusCode::OK, headers, "{}")
+            }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind repeated-header destination");
+        let address = listener
+            .local_addr()
+            .expect("repeated-header destination address");
+        tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve repeated-header destination");
+        });
+        let response = loopback_send_policy(address)
+            .send_protocol_with_timeout_policy(
+                post_send_request(),
+                Duration::from_secs(2),
+                DestinationOperationTimeoutPolicy::try_new(Duration::from_secs(2))
+                    .expect("finite timeout policy"),
+            )
+            .await
+            .expect("protocol response arrives");
+
+        assert_eq!(
+            response
+                .selected_host_protocol_response_header_fields(
+                    ["content-type", "traceparent"].into_iter(),
+                )
+                .expect("trusted protocol fields remain bounded"),
+            vec![
+                (
+                    "content-type".to_owned(),
+                    "application/jose+json".to_owned()
+                ),
+                ("traceparent".to_owned(), traceparent.to_owned()),
+                ("traceparent".to_owned(), traceparent.to_owned()),
+            ]
+        );
+        assert_eq!(
+            response.selected_host_protocol_response_headers(["traceparent"].into_iter()),
+            Err(DestinationResponseHeaderError::DuplicateHeader)
+        );
+        assert_eq!(
+            response.selected_script_response_headers(["traceparent"].into_iter()),
+            Err(DestinationResponseHeaderError::HeaderDenied)
+        );
+        assert_eq!(
+            response.selected_host_protocol_response_header_fields(std::iter::repeat_n(
+                "content-type",
+                MAX_DESTINATION_REQUEST_HEADERS + 1
+            ),),
+            Err(DestinationResponseHeaderError::TooManySelectedHeaders)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_bounded_read_reports_every_wire_byte_already_consumed() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind counted destination");
+        let address = listener.local_addr().expect("counted destination address");
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("counted connection");
+            let mut request = Vec::new();
+            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                let mut chunk = [0_u8; 512];
+                let read = stream.read(&mut chunk).await.expect("request head");
+                assert!(read > 0, "request head completes");
+                request.extend_from_slice(&chunk[..read]);
+            }
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n8\r\nabcdefgh\r\n8\r\nijklmnop\r\n0\r\n\r\n",
+                )
+                .await
+                .expect("chunked response");
+        });
+        let response = loopback_send_policy(address)
+            .send(post_send_request(), Duration::from_secs(2))
+            .await
+            .expect("counted response arrives");
+
+        let error = response
+            .read_bounded_counted(10)
+            .await
+            .expect_err("second chunk exceeds the body bound");
+
+        assert_eq!(error.kind(), DestinationResponseError::BodyTooLarge);
+        assert_eq!(error.bytes_read(), 16);
     }
 
     /// One captured request as the loopback destination saw it.

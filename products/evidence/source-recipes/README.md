@@ -1,10 +1,10 @@
 # Evidence source recipes
 
 This catalog distributes reviewed source integration assets through the existing
-`source-export.json` contract. Each recipe imports as an ordinary Source,
-selector profile, and pair of bounded Functions. It supplies no assertion
-meaning, caller grant, connection origin, credential, installer, or provider
-service.
+`source-export.json` contract. Each recipe imports as an ordinary thin Source
+binding, selector profile, and digest-pinned Adapter pack closure. It supplies
+no assertion meaning, caller grant, connection origin, credential, installer,
+or provider service.
 
 | Recipe | Sanitized contract represented | Compatibility basis |
 | --- | --- | --- |
@@ -26,8 +26,9 @@ evidencectl source update ./dhis2-tracker-next --project ./evidence
 evidencectl source detach dhis2-tracker ./evidence
 ```
 
-The manifest inventories every portable asset by exact SHA-256 checksum. A
-checksum mismatch is refused before authored files change. The sibling
+The manifest inventories the Source, selector profile, pack document, and every
+artifact in the pack's checked closure by exact SHA-256 checksum. A checksum
+mismatch or pack-pin mismatch is refused before authored files change. The sibling
 `fixture-validation/` project is deliberately outside the export: it contributes
 synthetic assertion semantics, target bindings, grants, and evaluator fixtures
 only for local validation.

@@ -45,7 +45,7 @@ fn local_sqlite_extract_creates_a_runnable_synthetic_starter() {
     assert_sqlite_project(&project);
     let printed = stdout(&output);
     assert!(printed.contains("editable SQLite-extract authoring project"));
-    assert!(printed.contains("queries"));
+    assert!(printed.contains("adapter packs"));
     assert!(printed.contains("evidencectl check"));
     assert!(printed.contains("evidencectl test"));
     assert!(printed.contains("normalized synthetic Source, AssertionDefinition, and local target"));
@@ -96,9 +96,13 @@ fn a_complete_normalized_starter_is_preserved_with_its_assets_and_grants() {
         "evidence.yaml",
         "local-target.yaml",
         "dev-authority.yaml",
-        "functions/extract-record-status.rhai",
         "functions/derive-record-status.rhai",
-        "queries/record-status.sql",
+        "adapter-packs/starter-source/pack.yaml",
+        "adapter-packs/starter-source/queries/record-status.sql",
+        "adapter-packs/starter-source/schemas/facts.json",
+        "adapter-packs/starter-source/schemas/inputs.json",
+        "adapter-packs/starter-source/schemas/response.json",
+        "adapter-packs/starter-source/scripts/extract.rhai",
         "fixtures/record-status.yaml",
         "serve-source.py",
     ]
@@ -127,7 +131,7 @@ fn a_complete_normalized_starter_is_preserved_with_its_assets_and_grants() {
     .expect("copied normalized project")
     .value;
     assert_eq!(project_document.id.to_string(), "reviewed-evidence");
-    assert_eq!(project_document.functions.len(), 2);
+    assert_eq!(project_document.functions.len(), 1);
     assert_eq!(project_document.assertion_definitions.len(), 1);
     let authority = registry_evidence_authoring::target::read_authority(
         "dev-authority.yaml",
@@ -159,7 +163,7 @@ fn a_starter_without_authored_source_files_receives_the_normalized_synthetic_sou
     assert!(printed.contains("to prove the copied starter"));
     assert!(project.join("evidence.yaml").is_file());
     assert!(project
-        .join("functions/extract-record-status.rhai")
+        .join("adapter-packs/starter-source/scripts/extract.rhai")
         .is_file());
 }
 
@@ -645,8 +649,8 @@ fn init_writes_the_normalized_project_envelope() {
         "HTTP source cases select the coequal evaluator"
     );
     assert_eq!(fixture["syntheticOnly"], true);
-    assert!(fixture["cases"][0].get("source").is_some());
-    assert!(fixture["cases"][0].get("expectedValue").is_some());
+    assert!(fixture["cases"][0].get("acquisition").is_some());
+    assert!(fixture["cases"][0]["expected"].get("value").is_some());
     assert!(fixture.get("synthetic_only").is_none());
 
     assert_eq!(
@@ -734,8 +738,7 @@ fn the_starter_ships_a_readme_that_names_every_file_it_wrote() {
     let readme = fs::read_to_string(project.join("README.md")).expect("starter README reads");
     for named in [
         "evidence.yaml",
-        "queries/record-status.sql",
-        "functions/extract-record-status.rhai",
+        "adapter-packs/starter-source/",
         "functions/derive-record-status.rhai",
         "fixtures/record-status.yaml",
         "local-target.yaml",
@@ -766,6 +769,7 @@ fn the_retained_openapi_project_ships_a_readme_that_says_what_is_empty() {
     for named in [
         "evidence.yaml",
         "source.openapi.yaml",
+        "adapter-packs/",
         "functions/",
         "fixtures/",
         "local-target.yaml",
@@ -819,17 +823,45 @@ fn every_generated_starter_file_says_what_its_blocks_do() {
     )
     .expect("generated project is normalized")
     .value;
-    assert_eq!(authored.functions.len(), 2);
+    assert_eq!(authored.functions.len(), 1);
     assert!(authored.functions.iter().all(|function| {
         function.source.starts_with("functions/") && function.source.ends_with(".rhai")
     }));
     let record_status = "record-status".parse().expect("valid local identifier");
     let source = authored.sources.get(&record_status).expect("named Source");
-    assert!(source.prepare.is_none());
-    assert_eq!(source.extract.function.to_string(), "extract-record-status");
-    assert_eq!(source.response.maximum_bytes.get(), 8_192);
-    assert_eq!(source.limits.attempt_timeout_milliseconds.get(), 2_000);
-    assert_eq!(source.limits.maximum_concurrency.get(), 8);
+    assert_eq!(source.pack.id.to_string(), "starter-source");
+    assert_eq!(source.pack.version, "1");
+    assert_eq!(source.route.to_string(), "lookup");
+    assert_eq!(source.connection.to_string(), "starter-source");
+    let pack_path = project.join("adapter-packs/starter-source/pack.yaml");
+    let mut pack_value: serde_json::Value =
+        serde_json::from_slice(&fs::read(&pack_path).expect("generated AdapterPack reads"))
+            .expect("generated AdapterPack is JSON");
+    assert_eq!(
+        pack_value["apiVersion"],
+        registry_adapter_core::ADAPTER_PACK_API_VERSION
+    );
+    assert_eq!(pack_value["kind"], registry_adapter_core::ADAPTER_PACK_KIND);
+    pack_value
+        .as_object_mut()
+        .expect("AdapterPack is an object")
+        .remove("apiVersion");
+    pack_value
+        .as_object_mut()
+        .expect("AdapterPack is an object")
+        .remove("kind");
+    let pack: registry_adapter_core::AdapterPack =
+        serde_json::from_value(pack_value).expect("generated AdapterPack is typed");
+    let endpoint = pack.endpoints.first().expect("one SQLite endpoint");
+    assert_eq!(endpoint.attempt_timeout_milliseconds.unwrap().get(), 2_000);
+    assert_eq!(endpoint.maximum_response_bytes.get(), 8_192);
+    let sqlite = endpoint
+        .sqlite_extract
+        .as_ref()
+        .expect("SQLite endpoint owns the reviewed statement");
+    assert_eq!(sqlite.concurrency.get(), 8);
+    assert_eq!(sqlite.statement.path, "queries/record-status.sql");
+    assert_eq!(pack.source_routes[0].id.to_string(), "lookup");
     let definition = authored
         .assertion_definitions
         .get(&record_status)
@@ -842,8 +874,9 @@ fn every_generated_starter_file_says_what_its_blocks_do() {
     assert!(definition.outputs.contains_key(&satisfied));
 
     for relative in [
-        "queries/record-status.sql",
-        "functions/extract-record-status.rhai",
+        "adapter-packs/starter-source/pack.yaml",
+        "adapter-packs/starter-source/queries/record-status.sql",
+        "adapter-packs/starter-source/scripts/extract.rhai",
         "functions/derive-record-status.rhai",
         "fixtures/record-status.yaml",
     ] {
@@ -1029,6 +1062,7 @@ fn assert_minimal_project(project: &Path, with_keys: bool) {
         ".vscode",
         ".zed",
         "README.md",
+        "adapter-packs",
         "dev-authority.yaml",
         "evidence.yaml",
         "fixtures",
@@ -1042,7 +1076,7 @@ fn assert_minimal_project(project: &Path, with_keys: bool) {
     assert!(project.join("local-target.yaml").is_file());
     assert!(project.join("dev-authority.yaml").is_file());
     assert!(project
-        .join("functions/extract-record-status.rhai")
+        .join("adapter-packs/starter-source/scripts/extract.rhai")
         .is_file());
     assert_eq!(
         fs::read_to_string(project.join(".gitignore")).expect("gitignore"),
@@ -1143,12 +1177,12 @@ fn assert_sqlite_project(project: &Path) {
             ".vscode",
             ".zed",
             "README.md",
+            "adapter-packs",
             "dev-authority.yaml",
             "evidence.yaml",
             "fixtures",
             "functions",
             "local-target.yaml",
-            "queries",
         ]
     );
     assert_common_starter_files(project);
@@ -1164,6 +1198,7 @@ fn assert_starter_project(project: &Path) {
             ".vscode",
             ".zed",
             "README.md",
+            "adapter-packs",
             "dev-authority.yaml",
             "evidence.yaml",
             "fixtures",
@@ -1173,7 +1208,8 @@ fn assert_starter_project(project: &Path) {
     );
     for file in [
         "evidence.yaml",
-        "functions/extract-record-status.rhai",
+        "adapter-packs/starter-source/pack.yaml",
+        "adapter-packs/starter-source/scripts/extract.rhai",
         "functions/derive-record-status.rhai",
         "fixtures/record-status.yaml",
         "local-target.yaml",
@@ -1187,8 +1223,9 @@ fn assert_starter_project(project: &Path) {
 fn assert_common_starter_files(project: &Path) {
     for file in [
         "evidence.yaml",
-        "queries/record-status.sql",
-        "functions/extract-record-status.rhai",
+        "adapter-packs/starter-source/pack.yaml",
+        "adapter-packs/starter-source/queries/record-status.sql",
+        "adapter-packs/starter-source/scripts/extract.rhai",
         "functions/derive-record-status.rhai",
         "fixtures/record-status.yaml",
         "local-target.yaml",

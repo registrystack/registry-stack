@@ -1,5 +1,15 @@
-type: object
-additionalProperties: false
-required: [marker]
-properties:
-  marker: {type: string, enum: [accepted]}
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "marker"
+  ],
+  "properties": {
+    "marker": {
+      "type": "string",
+      "enum": [
+        "accepted"
+      ]
+    }
+  }
+}

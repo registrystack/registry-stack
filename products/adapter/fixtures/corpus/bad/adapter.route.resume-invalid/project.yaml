@@ -1,0 +1,39 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.route.resume-invalid: the checker must emit this exact code. All data is synthetic.
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-api-example
+  version: '1'
+profile:
+  id: case-api
+  version: '1'
+  digest: sha256:c169594e4644c43ce0868f1ee1e3522c674cd5258a5101fa8d901b35c1097547
+pack:
+  id: case-api-pack
+  version: '1'
+  digest: sha256:6275c97f729d70c122375345d81fd27a61022d1f42b6820a77c7937f9633b643
+recordTypes:
+- name: case
+  fields:
+  - name: case_type
+    type: string
+    required: true
+templatedRoutes:
+- routeTemplate: find-cases
+  routeId: case-find
+bindings:
+- id: case-get
+  operation: cases-get
+  recordType: case
+  route: case-find
+  maximumUpstreamCalls: 4
+accessProfiles:
+- id: case-reader
+  scopes:
+  - cases.read
+  operations:
+  - cases-get
+  recordTypes:
+  - case

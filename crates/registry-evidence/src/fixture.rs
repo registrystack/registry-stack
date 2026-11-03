@@ -55,6 +55,7 @@ pub const EVIDENCE_FIXTURE_FORMAT: FormatSpec<'static> = FormatSpec {
         RemovedKey { pointer: "/cases/*/injected_derivation", replacement: "Write `injectedDerivation` instead." },
         RemovedKey { pointer: "/cases/*/expected_value", replacement: "Write `expectedValue` instead." },
         RemovedKey { pointer: "/cases/*/expected_values", replacement: "Write `expectedValues` instead." },
+        RemovedKey { pointer: "/cases/*/expected_facts", replacement: "Write `expectedFacts` instead." },
         RemovedKey { pointer: "/privacyExpectation/evidence_contains", replacement: "Write `evidenceContains` instead." },
         RemovedKey { pointer: "/privacyExpectation/evidence_excludes", replacement: "Write `evidenceExcludes` instead." },
         RemovedKey { pointer: "/privacyExpectation/diagnostics_exclude", replacement: "Write `diagnosticsExclude` instead." },
@@ -207,6 +208,8 @@ pub(crate) mod shape {
         pub audience: Option<String>,
         pub observed_at: Option<String>,
         pub source_failure: Option<String>,
+        /// Exact recorded sends and responses, checked by the pack replay host.
+        pub acquisition: Option<ForeignValue>,
         pub bundle_mutation: Option<String>,
         pub statement_mutation: Option<String>,
         pub request_mutation: Option<String>,
@@ -251,6 +254,8 @@ pub(crate) mod shape {
         pub verified_token_claims: Option<ForeignValue>,
         pub derivation_selector_inputs: Option<ForeignValue>,
         pub injected_derivation: Option<ForeignValue>,
+        /// Exact final facts from the selected pack route, before derivation.
+        pub expected_facts: Option<ForeignValue>,
         pub expected_value: Option<ForeignValue>,
         pub expected_values: Option<ForeignValue>,
     }
@@ -275,7 +280,13 @@ pub(crate) mod shape {
         pub derivation_runs: Option<bool>,
         // The evaluator counts references in one list concept, whose limit is 64 items.
         pub entity_reference_count: Option<registry_platform_yaml::BoundedU64<0, 64>>,
-        pub source_request_count: Option<registry_platform_yaml::BoundedU64<0, 2>>,
+        /// Expected data sends exclude OAuth work and cannot exceed the offline budget.
+        pub source_request_count: Option<
+            registry_platform_yaml::BoundedU64<
+                0,
+                { registry_adapter_engine::evidence::DEFAULT_MAXIMUM_DATA_OPERATIONS },
+            >,
+        >,
         pub facts: Option<ForeignValue>,
         pub value: Option<ForeignValue>,
         pub values: Option<ForeignValue>,
@@ -741,6 +752,29 @@ mod tests {
                 assert!(!report.render_human().contains(CANARY));
             }
         }
+    }
+
+    #[test]
+    fn coequal_expected_facts_preserve_source_owned_keys_and_nulls() {
+        let text = format!(
+            "{HEADER}syntheticOnly: true\ncoequalAcceptanceDefinition: true\ncases:\n  - id: positive\n    expectedFacts: {{source_key: null, nested_fact: {{foreign_key: [1, true]}}}}\n"
+        );
+        let value = read_fixture(
+            "fixtures/cases.yaml",
+            text.as_bytes(),
+            false,
+            AssuranceProfile::Local,
+        )
+        .expect("coequal expected facts retain the source contract's vocabulary");
+
+        assert_eq!(
+            value["cases"][0]["expectedFacts"]["source_key"],
+            Value::Null
+        );
+        assert_eq!(
+            value["cases"][0]["expectedFacts"]["nested_fact"]["foreign_key"],
+            serde_json::json!([1, true])
+        );
     }
 
     #[test]

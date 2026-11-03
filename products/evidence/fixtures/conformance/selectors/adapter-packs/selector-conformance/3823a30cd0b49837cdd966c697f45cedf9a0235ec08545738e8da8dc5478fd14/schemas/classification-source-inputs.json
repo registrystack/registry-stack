@@ -1,0 +1,14 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "request_record_reference": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 96
+    }
+  },
+  "required": [
+    "request_record_reference"
+  ]
+}

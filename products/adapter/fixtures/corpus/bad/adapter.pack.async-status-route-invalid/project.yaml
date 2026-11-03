@@ -1,0 +1,38 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.pack.async-status-route-invalid: the checker must emit this exact code. All data is synthetic.
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-api-example
+  version: '1'
+profile:
+  id: case-api
+  version: '1'
+  digest: sha256:409f0877e6c2027030f736ab004aacaca6e2996bcdda8cb0f89e624967580eb3
+pack:
+  id: case-api-pack
+  version: '1'
+  digest: sha256:1db50ebbc1de21cc82fbd0870535f0800d27b571c3ee8a0c70859a900c2d6fbc
+recordTypes:
+- name: case
+  fields:
+  - name: case_type
+    type: string
+    required: true
+bindings:
+- id: case-create
+  operation: cases-create
+  recordType: case
+  route: create-case
+  maximumUpstreamCalls: 4
+  asyncCompletion:
+    type: status-link
+accessProfiles:
+- id: case-reader
+  scopes:
+  - cases.read
+  operations:
+  - cases-create
+  recordTypes:
+  - case

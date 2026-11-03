@@ -1,0 +1,24 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/job-runtime/job-runtime.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/adapter/job-runtime/v1alpha1
+kind: AdapterJobRuntimeConfig
+id: sftp-source-example
+endpoints: []
+sources:
+  sftp:
+    submissions:
+      host: sftp.example.org
+      port: 22
+      user: registry-adapter-reader
+      # The server confines this read-only account to this tree.
+      baseDirectory: /incoming/registry-adapter
+      # Replace this syntactically valid example with the server's complete key.
+      pinnedHostKey: "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBMxBTpMIGvo7CnordO7wP0QQRqpBwUjOLl4eMhfucfE1sjTYyK5wmTl1UqoSDS1PtRVTBdl+0+9pquFb46U7fwg="
+      credential:
+        type: password
+        passwordRef: secret:env/SFTP_SOURCE_PASSWORD
+      namespace: submissions
+      include: "*.csv"
+      completion:
+        type: done-file
+        name: "$simple{file:name}.done"
+      maximumListingEntries: 500

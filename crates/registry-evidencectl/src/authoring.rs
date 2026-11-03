@@ -256,10 +256,13 @@ fn compile_local_project_with_target_inputs_resource_and_authority(
     // Resolve the complete plan before writing anything. Unsupported or
     // ambiguous authoring inputs therefore leave the staging root empty.
     let inputs = read_inputs(&project_root, true)?;
-    if inputs.project.sources.values().any(|source| {
-        source.source_type == registry_evidence_authoring::project::SourceType::SqliteExtract
-    }) {
-        bail!("local dev requires HTTP sources; SQLite extracts remain available through fixture and deployed runtime paths");
+    for source in inputs.project.sources.values() {
+        if crate::normalized::source_route_operations(&project_root, source)?
+            .iter()
+            .any(|operation| operation.component == "sqlite-extract")
+        {
+            bail!("local dev requires HTTP sources; SQLite extracts remain available through fixture and deployed runtime paths");
+        }
     }
     ensure_local_project_key_material(&project_root)?;
     let (active_public_jwk_file, active_public_jwk) =
@@ -286,11 +289,18 @@ fn compile_local_project_with_target_inputs_resource_and_authority(
         &target_bytes,
     )?
     .value;
+    let target_root = crate::normalized::target_directory(&target_path)
+        .canonicalize()
+        .context("resolving local EvidenceTarget directory")?;
+    let runtime_source_connections =
+        crate::normalized::runtime_source_connections(&target_root, &target)?;
+    let runtime_source_acquisition = target
+        .source_acquisition
+        .as_ref()
+        .map(|source_acquisition| source_acquisition.runtime_value())
+        .transpose()?;
     let (project, _) = crate::normalized::read(&project_root)?;
-    let authority_path = crate::normalized::safe_asset(
-        crate::normalized::target_directory(&target_path),
-        &target.authority,
-    )?;
+    let authority_path = crate::normalized::safe_asset(&target_root, &target.authority)?;
     let authority_bytes = authored::read_authored_file(&authority_path, "target authority")?;
     plan.authority_document = Some(crate::normalized::compiled_authority(
         &project,
@@ -311,7 +321,11 @@ fn compile_local_project_with_target_inputs_resource_and_authority(
         &plan,
         ports,
         evidence_bin,
-        outbound_tls,
+        LocalRuntimeProjection {
+            source_connections: runtime_source_connections,
+            source_acquisition: runtime_source_acquisition,
+            outbound_tls,
+        },
     )?;
 
     if let Err(error) = check_with_evidence(evidence_bin, &compilation.runtime_path) {
@@ -375,7 +389,7 @@ pub(crate) fn compile_target_project_with_revision(
     check_target_signing_validity(&plan)?;
     if production {
         reject_local_production_values(&plan.bundle)?;
-        validate_production_sources(&plan.bundle)?;
+        validate_production_sources(&plan.bundle, &plan.generated_artifacts)?;
     }
     let bundle_path = write_bundle(
         &project_root,
@@ -432,6 +446,7 @@ fn check_target_signing_validity(plan: &CompilePlan) -> Result<()> {
 struct Inputs {
     project: registry_evidence_authoring::project::EvidenceProject,
     scripts: BTreeMap<String, String>,
+    pack_routes: Vec<registry_evidence_authoring::compile::CheckedPackRoute>,
 }
 
 struct CompilePlan {
@@ -440,6 +455,12 @@ struct CompilePlan {
     local_public_jwk: Option<(String, Vec<u8>)>,
     generated_artifacts: BTreeMap<String, Vec<u8>>,
     authority_document: Option<Value>,
+}
+
+struct LocalRuntimeProjection {
+    source_connections: Value,
+    source_acquisition: Option<Value>,
+    outbound_tls: Value,
 }
 
 struct DefinitionPlan {
@@ -553,7 +574,12 @@ fn validate_evidence_binary(path: &Path) -> Result<()> {
 
 fn read_inputs(project_root: &Path, _require_local_secrets: bool) -> Result<Inputs> {
     let (project, scripts) = crate::normalized::read(project_root)?;
-    Ok(Inputs { project, scripts })
+    let pack_routes = crate::normalized::read_pack_routes(project_root, &project)?;
+    Ok(Inputs {
+        project,
+        scripts,
+        pack_routes,
+    })
 }
 
 fn local_signing_public_jwk(project_root: &Path) -> Result<(String, Vec<u8>)> {
@@ -686,85 +712,283 @@ fn reject_local_production_values(bundle: &Value) -> Result<()> {
     Ok(())
 }
 
-/// Hold every production source to the conditions its own transport carries.
-/// A transport that opens a network channel must reach the registry over an
-/// encrypted, authenticated connection, so its origin and its authentication
-/// kind are both read here. A transport carrying no network channel is judged
-/// by neither, and a transport this gate has no stated conditions for is
-/// refused rather than waved through under another transport's rules.
-fn validate_production_sources(bundle: &Value) -> Result<()> {
+#[derive(Clone, Debug)]
+struct ProductionRouteOperation {
+    component: registry_adapter_core::SendComponent,
+    endpoint: String,
+}
+
+/// Hold every production source to the conditions of every transport its
+/// reviewed pack route can reach. The exact pack bytes come from the checked,
+/// digest-covered compile closure, not from a second filesystem read.
+fn validate_production_sources(
+    bundle: &Value,
+    generated_artifacts: &BTreeMap<String, Vec<u8>>,
+) -> Result<()> {
     let sources = bundle
         .get("sources")
         .and_then(Value::as_object)
         .ok_or_else(|| anyhow!("the deployment bundle has no sources object"))?;
     for (source_id, source) in sources {
-        let transport =
-            source
-                .get("type")
-                .and_then(Value::as_str)
-                .ok_or_else(|| AuthoredDiagnostic {
-                    code: "evidence.source.transport-missing".to_owned(),
-                    path: format!("sources/{source_id}.yaml:/type"),
-                    message: "every production source must declare its transport".to_owned(),
-                })?;
-        match transport {
-            "http-json" => {
-                let connection = source
-                    .get("connection")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| {
-                        anyhow!("production HTTP Source must name a target connection")
-                    })?;
-                let binding = bundle
-                    .get("sourceConnections")
-                    .and_then(Value::as_object)
-                    .and_then(|connections| connections.get(connection))
-                    .ok_or_else(|| {
-                        anyhow!("production HTTP Source requires its named target connection")
-                    })?;
-                let https = binding
-                    .get("baseUrl")
-                    .and_then(Value::as_str)
-                    .is_some_and(|value| value.starts_with("https://"));
-                let authenticated = binding
-                    .pointer("/authentication/type")
-                    .and_then(Value::as_str)
-                    .is_some_and(|kind| kind != "none" && kind != "review-required");
-                if !https || !authenticated {
-                    return Err(AuthoredDiagnostic {
-                        code: "evidence.source.production-channel".to_owned(),
-                        path: if !https {
-                            format!("target.yaml:/connections/{connection}/origin")
-                        } else {
-                            format!("target.yaml:/connections/{connection}/authentication/type")
-                        },
-                        message: "every production source must use authenticated HTTPS".to_owned(),
-                    }
-                    .into());
-                }
+        let connection = source
+            .get("connection")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("production pack Source must name a target connection"))?;
+        let pack_prefix = source
+            .pointer("/pack/artifactPrefix")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("production pack Source must name its captured pack"))?;
+        let route = source
+            .get("route")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("production pack Source must name its reviewed route"))?;
+        let pack_artifact = format!("{pack_prefix}/pack.yaml");
+        let pack_bytes = generated_artifacts
+            .get(&pack_artifact)
+            .ok_or_else(|| anyhow!("production pack Source requires its checked pack artifact"))?;
+        let pack = checked_adapter_pack(&pack_artifact, pack_bytes)?;
+        for operation in production_route_operations(&pack, route).map_err(|error| {
+            AuthoredDiagnostic {
+                code: "evidence.source.production-transport".to_owned(),
+                path: format!("evidence.yaml:/sources/{source_id}/route"),
+                message: format!(
+                    "the production source route cannot be proven against the closed transport profile: {error}"
+                ),
             }
-            // A statement source reads one extract file the operator mounted
-            // read-only. It names no origin, opens no connection, and holds no
-            // credential, so there is no channel for a scheme or an
-            // authentication kind to govern. The conditions it does carry, a
-            // bound extract profile and a stated maximum extract age, are
-            // closed bundle fields the Evidence loader settles for every
-            // assurance profile, and the runtime binds the profile to a path.
-            // Restating them here would duplicate `evidence bundle-check`
-            // rather than add a production condition.
-            "sqlite-extract" => {}
-            _ => {
-                return Err(AuthoredDiagnostic {
-                    code: "evidence.source.production-transport".to_owned(),
-                    path: format!("sources/{source_id}.yaml:/type"),
-                    message: "the production source transport has no stated production conditions"
-                        .to_owned(),
+        })? {
+            let endpoint = pack
+                .endpoints
+                .iter()
+                .find(|endpoint| endpoint.id.as_str() == operation.endpoint)
+                .ok_or_else(|| production_transport_diagnostic(source_id))?;
+            match operation.component {
+                registry_adapter_core::SendComponent::Http
+                | registry_adapter_core::SendComponent::GraphQl => {
+                    if endpoint.component.name()
+                        != production_component_name(operation.component)
+                    {
+                        return Err(production_transport_diagnostic(source_id).into());
+                    }
+                    validate_production_endpoint(
+                        bundle,
+                        source_id,
+                        connection,
+                        &operation.endpoint,
+                        endpoint.authentication.kind(),
+                    )?;
                 }
-                .into())
+                // SQLite extracts open only the host-bound immutable file.
+                // The pack owns the reviewed statement and the runtime owns
+                // the extract binding, so no endpoint policy, credential or
+                // origin is meaningful here. The normal pack and bundle
+                // loaders still enforce that complete offline profile.
+                registry_adapter_core::SendComponent::SqliteExtract
+                    if endpoint.component.name() == "sqlite-extract"
+                        && endpoint.authentication.kind() == "none" => {}
+                _ => return Err(production_transport_diagnostic(source_id).into()),
             }
         }
     }
     Ok(())
+}
+
+fn checked_adapter_pack(path: &str, bytes: &[u8]) -> Result<registry_adapter_core::AdapterPack> {
+    let format = registry_platform_yaml::FormatSpec {
+        kind: registry_adapter_core::ADAPTER_PACK_KIND,
+        envelope: registry_platform_yaml::EnvelopeRule::ApiVersionKind {
+            api_versions: &[registry_platform_yaml::ApiVersion::current(
+                registry_adapter_core::ADAPTER_PACK_API_VERSION,
+            )],
+            retired_api_versions: &[],
+        },
+        removed_keys: &[],
+    };
+    registry_platform_yaml::Reader::new(path)
+        .decode::<registry_adapter_core::AdapterPack>(
+            bytes,
+            &registry_platform_yaml::Expect::one(&format),
+        )
+        .map(|decoded| decoded.value)
+        .map_err(|_| anyhow!("checked Adapter pack no longer satisfies its admitted format"))
+}
+
+fn production_route_operations(
+    pack: &registry_adapter_core::AdapterPack,
+    route_id: &str,
+) -> Result<Vec<ProductionRouteOperation>> {
+    let route = pack
+        .source_routes
+        .iter()
+        .find(|route| route.id.as_str() == route_id)
+        .ok_or_else(|| anyhow!("the selected source route is absent"))?;
+    let direct_routes = pack
+        .routes
+        .iter()
+        .map(|route| (route.from.uri.id.as_str(), route.steps.as_slice()))
+        .collect::<BTreeMap<_, _>>();
+    let mut active = BTreeSet::new();
+    let mut operations = Vec::new();
+    collect_production_route_operations(
+        route.steps.as_slice(),
+        &direct_routes,
+        &mut active,
+        &mut operations,
+    )?;
+    Ok(operations)
+}
+
+fn collect_production_route_operations<'a>(
+    steps: &'a [registry_adapter_core::Step],
+    direct_routes: &BTreeMap<&'a str, &'a [registry_adapter_core::Step]>,
+    active: &mut BTreeSet<String>,
+    operations: &mut Vec<ProductionRouteOperation>,
+) -> Result<()> {
+    let mut sends = Vec::new();
+    let mut invalid_poll_uri = None;
+    registry_adapter_core::walk_steps(steps, &mut |step, _| match step {
+        registry_adapter_core::Step::To(to) => sends.push(to.uri.clone()),
+        registry_adapter_core::Step::Enrich(enrich) => sends.push(enrich.uri.clone()),
+        registry_adapter_core::Step::PollEnrich(poll) => {
+            if let Some(uri) = registry_adapter_core::SendUri::parse(&poll.uri) {
+                sends.push(uri);
+            } else {
+                invalid_poll_uri = Some(poll.uri.clone());
+            }
+        }
+        _ => {}
+    });
+    if invalid_poll_uri.is_some() {
+        bail!("one route operation has an invalid static URI");
+    }
+    for send in sends {
+        if send.component == registry_adapter_core::SendComponent::Direct {
+            if !active.insert(send.id.clone()) {
+                bail!("the selected route contains a direct cycle");
+            }
+            let nested = direct_routes
+                .get(send.id.as_str())
+                .ok_or_else(|| anyhow!("the selected route names an absent direct route"))?;
+            collect_production_route_operations(nested, direct_routes, active, operations)?;
+            active.remove(&send.id);
+        } else {
+            operations.push(ProductionRouteOperation {
+                component: send.component,
+                endpoint: send.id,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn production_component_name(component: registry_adapter_core::SendComponent) -> &'static str {
+    match component {
+        registry_adapter_core::SendComponent::Direct => "direct",
+        registry_adapter_core::SendComponent::Http => "http",
+        registry_adapter_core::SendComponent::GraphQl => "graphql",
+        registry_adapter_core::SendComponent::Postgres => "postgres",
+        registry_adapter_core::SendComponent::File => "file",
+        registry_adapter_core::SendComponent::RabbitMq => "rabbitmq",
+        registry_adapter_core::SendComponent::Sftp => "sftp",
+        registry_adapter_core::SendComponent::SqliteExtract => "sqlite-extract",
+    }
+}
+
+fn validate_production_endpoint(
+    bundle: &Value,
+    source_id: &str,
+    connection: &str,
+    endpoint: &str,
+    declared_authentication: &str,
+) -> Result<()> {
+    let policies = bundle
+        .get("sourceConnections")
+        .and_then(Value::as_object)
+        .and_then(|connections| connections.get(connection))
+        .and_then(|connection| connection.get("endpoints"))
+        .and_then(Value::as_array)
+        .ok_or_else(|| production_channel_diagnostic(source_id, connection, "endpoints"))?;
+    let matching = policies
+        .iter()
+        .filter(|policy| policy.get("endpoint").and_then(Value::as_str) == Some(endpoint))
+        .collect::<Vec<_>>();
+    let [policy] = matching.as_slice() else {
+        return Err(production_channel_diagnostic(source_id, connection, "endpoints").into());
+    };
+    let base = format!("endpoints/{endpoint}");
+    if !policy
+        .get("baseUrl")
+        .and_then(Value::as_str)
+        .is_some_and(is_https_url)
+    {
+        return Err(production_channel_diagnostic(
+            source_id,
+            connection,
+            &format!("{base}/origin"),
+        )
+        .into());
+    }
+    let selected_authentication = policy
+        .pointer("/authentication/type")
+        .and_then(Value::as_str);
+    const AUTHENTICATED_KINDS: &[&str] = &[
+        "basic",
+        "static-authorization",
+        "static-api-key",
+        "oauth2-client-credentials",
+        "oauth2-private-key-jwt",
+    ];
+    if selected_authentication != Some(declared_authentication)
+        || !AUTHENTICATED_KINDS.contains(&declared_authentication)
+    {
+        return Err(production_channel_diagnostic(
+            source_id,
+            connection,
+            &format!("{base}/authentication/type"),
+        )
+        .into());
+    }
+    if matches!(
+        declared_authentication,
+        "oauth2-client-credentials" | "oauth2-private-key-jwt"
+    ) && !policy
+        .pointer("/authentication/tokenEndpoint")
+        .and_then(Value::as_str)
+        .is_some_and(is_https_url)
+    {
+        return Err(production_channel_diagnostic(
+            source_id,
+            connection,
+            &format!("{base}/authentication/tokenEndpoint"),
+        )
+        .into());
+    }
+    Ok(())
+}
+
+fn is_https_url(value: &str) -> bool {
+    registry_platform_yaml::Url::new(value).is_ok_and(|url| url.is_https())
+}
+
+fn production_channel_diagnostic(
+    source_id: &str,
+    connection: &str,
+    member: &str,
+) -> AuthoredDiagnostic {
+    AuthoredDiagnostic {
+        code: "evidence.source.production-channel".to_owned(),
+        path: format!("target.yaml:/connections/{connection}/{member}"),
+        message: format!(
+            "production source `{source_id}` requires each reachable HTTP or GraphQL endpoint and OAuth token endpoint to use matching authenticated HTTPS policy"
+        ),
+    }
+}
+
+fn production_transport_diagnostic(source_id: &str) -> AuthoredDiagnostic {
+    AuthoredDiagnostic {
+        code: "evidence.source.production-transport".to_owned(),
+        path: format!("evidence.yaml:/sources/{source_id}/route"),
+        message: "the production source route reaches a transport outside the closed HTTP, GraphQL, and offline SQLite profile".to_owned(),
+    }
 }
 
 fn read_regular_file(path: &Path, maximum_bytes: u64, description: &str) -> Result<Vec<u8>> {
@@ -824,8 +1048,12 @@ fn compile_plan_with_connections(
     profile: CompileProfile,
     source_connections: Value,
 ) -> Result<CompilePlan> {
-    let compiled = registry_evidence_authoring::compile::compile(&inputs.project, &inputs.scripts)
-        .map_err(|findings| authored::file_findings_report("evidence.yaml", "project", findings))?;
+    let compiled = registry_evidence_authoring::compile::compile_with_pack_routes(
+        &inputs.project,
+        &inputs.scripts,
+        &inputs.pack_routes,
+    )
+    .map_err(|findings| authored::file_findings_report("evidence.yaml", "project", findings))?;
     let (mut bundle, local_public_jwk) = match profile {
         CompileProfile::Production(governance) => (governance, None),
         CompileProfile::Local {
@@ -851,31 +1079,6 @@ fn compile_plan_with_connections(
         object.insert(key.clone(), value.clone());
     }
     object.insert("sourceConnections".to_owned(), source_connections.clone());
-    let connections = source_connections
-        .as_object()
-        .ok_or_else(|| anyhow!("sourceConnections must be a mapping"))?;
-    for source in object
-        .get_mut("sources")
-        .expect("compiled sources")
-        .as_object_mut()
-        .expect("sources is object")
-        .values_mut()
-    {
-        if let Some(name) = source
-            .get("connection")
-            .and_then(Value::as_str)
-            .map(str::to_owned)
-        {
-            let connection = connections
-                .get(&name)
-                .ok_or_else(|| anyhow!("source connection `{name}` requires an explicit target"))?;
-            source["baseUrl"] = connection["baseUrl"].clone();
-            source["authentication"] = connection["authentication"].clone();
-            if let Some(trust) = connection.get("tlsTrustProfile") {
-                source["tlsTrustProfile"] = trust.clone();
-            }
-        }
-    }
     let formats = inputs
         .project
         .assertion_definitions
@@ -973,7 +1176,7 @@ pub(crate) fn source_connection_users(
     Ok(project
         .sources
         .iter()
-        .filter(|(_, source)| source.connection.as_ref().map(|id| id.as_str()) == Some(connection))
+        .filter(|(_, source)| source.connection.as_str() == connection)
         .map(|(id, _)| id.to_string())
         .collect())
 }
@@ -992,9 +1195,8 @@ fn validate_source_artifact_graph_with_target_bindings(
     let (project, _) = crate::normalized::compile(project_root)?;
     Ok(project
         .sources
-        .iter()
-        .filter(|(_, source)| source.connection.is_some())
-        .map(|(id, _)| TargetBoundSource {
+        .keys()
+        .map(|id| TargetBoundSource {
             source_id: id.to_string(),
         })
         .collect())
@@ -1133,7 +1335,7 @@ fn write_plan(
     plan: &CompilePlan,
     ports: LocalServicePorts,
     evidence_bin: &Path,
-    outbound_tls: Value,
+    projection: LocalRuntimeProjection,
 ) -> Result<CompiledProject> {
     write_bundle(project_root, None, staging_root, plan, evidence_bin, None)?;
     create_private_directory(&staging_root.join("audit"))?;
@@ -1163,8 +1365,12 @@ fn write_plan(
         "audit": {
             "path": canonical_staging.join("audit/evidence.jsonl").to_string_lossy(),
         },
-        "outboundTls": outbound_tls,
+        "outboundTls": projection.outbound_tls,
+        "sourceConnections": projection.source_connections,
     });
+    if let Some(source_acquisition) = projection.source_acquisition {
+        runtime["sourceAcquisition"] = source_acquisition;
+    }
     let authority = plan
         .authority_document
         .as_ref()
@@ -1501,8 +1707,8 @@ pub(crate) fn package_limits() -> registry_platform_config::PackageLimits {
         max_files: 1_024,
         max_file_bytes: MAX_SOURCE_ARTIFACT_BYTES,
         max_total_bytes: 16 * 1024 * 1024,
-        max_depth: 3,
-        max_path_bytes: 128,
+        max_depth: 16,
+        max_path_bytes: 512,
     }
 }
 
@@ -2065,17 +2271,7 @@ mod tests {
         }
         let example = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../products/evidence/examples/standalone");
-        fs::copy(example.join("evidence.yaml"), project.join("evidence.yaml")).unwrap();
-        fs::copy(
-            example.join("dev-authority.yaml"),
-            project.join("dev-authority.yaml"),
-        )
-        .unwrap();
-        for (relative, bytes) in crate::normalized::read(&example).unwrap().1 {
-            let path = project.join(relative);
-            fs::create_dir_all(path.parent().unwrap()).unwrap();
-            fs::write(path, bytes).unwrap();
-        }
+        copy_project_tree(&example, &project);
         let mut target = fs::read_to_string(example.join("local-target.yaml")).unwrap();
         target.push_str("signing:\n  maximumAssertionValiditySeconds: 100\n");
         let target_path = project.join("local-target.yaml");
@@ -2132,6 +2328,75 @@ mod tests {
             .open(path)
             .expect("stub");
         file.write_all(script.as_bytes()).expect("write stub");
+    }
+
+    fn copy_project_tree(source: &Path, destination: &Path) {
+        fs::create_dir_all(destination).expect("create copied project directory");
+        for entry in fs::read_dir(source).expect("read project directory") {
+            let entry = entry.expect("project entry");
+            let target = destination.join(entry.file_name());
+            if entry.file_type().expect("project entry type").is_dir() {
+                copy_project_tree(&entry.path(), &target);
+            } else {
+                fs::copy(entry.path(), target).expect("copy project file");
+            }
+        }
+    }
+
+    #[test]
+    fn normalized_local_compilation_projects_target_connections_into_runtime() {
+        let temporary = tempfile::tempdir().expect("temporary root");
+        let project = temporary.path().join("project");
+        let stage = temporary.path().join("stage");
+        copy_project_tree(
+            &Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../products/evidence/examples/standalone"),
+            &project,
+        );
+        let target_path = project.join("local-target.yaml");
+        let mut target = fs::read_to_string(&target_path).expect("read local target");
+        target.push_str(
+            "sourceAcquisition:\n  maximumDataOperations: 3\n  acquisitionDeadlineMilliseconds: 4321\n  maximumResponseBytes: 54321\n",
+        );
+        fs::write(&target_path, target).expect("write target acquisition limits");
+        create_private_directory(&stage).expect("private staging directory");
+        let evidence = temporary.path().join("evidence-stub");
+        write_stub_evidence(
+            &evidence,
+            "#!/bin/sh\nif [ \"$1\" = render-discovery-description ]; then printf '{}'; fi\nexit 0\n",
+        );
+
+        let compiled = compile_normalized_local_project(
+            &project,
+            &stage,
+            &evidence,
+            LocalServicePorts::default(),
+            &target_path,
+            LOCAL_AUDIENCE,
+            &LocalAdmission::default(),
+        )
+        .expect("compile a local project with its target connection");
+        let runtime = crate::build::runtime_value(
+            &fs::read(&compiled.runtime_path).expect("read generated runtime"),
+        )
+        .expect("decode generated runtime");
+        let connection = &runtime["sourceConnections"]["synthetic-register"];
+        assert_eq!(connection["id"], "synthetic-register");
+        assert_eq!(connection["endpoints"][0]["endpoint"], "register");
+        assert_eq!(
+            connection["endpoints"][0]["credential"]["tokenRef"],
+            "secret:file/synthetic-source-token"
+        );
+        assert!(
+            connection["endpoints"][0].get("authentication").is_none(),
+            "the runtime must use the credential projection, not governed authentication metadata"
+        );
+        assert_eq!(runtime["sourceAcquisition"]["maximumDataOperations"], 3);
+        assert_eq!(
+            runtime["sourceAcquisition"]["acquisitionDeadlineMilliseconds"],
+            4321
+        );
+        assert_eq!(runtime["sourceAcquisition"]["maximumResponseBytes"], 54321);
     }
 
     #[test]
@@ -2397,6 +2662,257 @@ mod tests {
         }
     }
 
+    fn production_source_bundle(base_url: &str, authentication: Value) -> Value {
+        let digest = "1".repeat(64);
+        json!({
+            "sourceConnections": {
+                "register": {
+                    "endpoints": [{
+                        "endpoint": "records",
+                        "baseUrl": base_url,
+                        "clientIdentity": "forbidden",
+                        "authentication": authentication
+                    }]
+                }
+            },
+            "sources": {
+                "record": {
+                    "pack": {
+                        "id": "synthetic-register",
+                        "version": "1",
+                        "digest": format!("sha256:{digest}"),
+                        "artifactPrefix": format!("adapter-packs/synthetic-register/{digest}")
+                    },
+                    "route": "lookup",
+                    "connection": "register",
+                    "inputs": {},
+                    "posture": "record-transformed",
+                    "factSchema": "schemas/record-facts.json"
+                }
+            }
+        })
+    }
+
+    fn production_pack_artifacts(
+        component: &str,
+        authentication: Value,
+        source_steps: Value,
+        routes: Value,
+    ) -> BTreeMap<String, Vec<u8>> {
+        let digest = "1".repeat(64);
+        let mut endpoint = json!({
+            "id": "records",
+            "component": component,
+            "authentication": authentication,
+            "attemptTimeoutMilliseconds": 3000,
+            "maximumResponseBytes": 131072
+        });
+        if component == "sqlite-extract" {
+            endpoint["sqliteExtract"] = json!({
+                "extractProfile": "records-extract",
+                "statement": {
+                    "path": "queries/records.sql",
+                    "digest": format!("sha256:{}", "4".repeat(64))
+                },
+                "columns": [{"name": "matched", "type": "boolean"}],
+                "parameters": [],
+                "maximumExtractAgeSeconds": 604800,
+                "maximumRows": 2,
+                "maximumCellBytes": 64,
+                "maximumStatementSteps": 100000,
+                "concurrency": 8
+            });
+        }
+        let pack = json!({
+            "apiVersion": registry_adapter_core::ADAPTER_PACK_API_VERSION,
+            "kind": registry_adapter_core::ADAPTER_PACK_KIND,
+            "id": "synthetic-register",
+            "version": "1",
+            "testedVersions": [],
+            "endpoints": [endpoint],
+            "routes": routes,
+            "sourceRoutes": [{
+                "id": "lookup",
+                "evidence": {
+                    "inputsSchema": {
+                        "path": "schemas/inputs.json",
+                        "digest": format!("sha256:{}", "2".repeat(64))
+                    },
+                    "factsSchema": {
+                        "path": "schemas/facts.json",
+                        "digest": format!("sha256:{}", "3".repeat(64))
+                    },
+                    "acquisitionPosture": "record-transformed"
+                },
+                "steps": source_steps
+            }]
+        });
+        BTreeMap::from([(
+            format!("adapter-packs/synthetic-register/{digest}/pack.yaml"),
+            serde_json::to_vec(&pack).expect("pack JSON"),
+        )])
+    }
+
+    fn direct_http_pack(authentication: Value) -> BTreeMap<String, Vec<u8>> {
+        production_pack_artifacts(
+            "http",
+            authentication,
+            json!([{"to": {"uri": "direct:read-records"}}]),
+            json!([{
+                "id": "shared-read-route",
+                "from": {"uri": "direct:read-records"},
+                "steps": [{
+                    "to": {
+                        "uri": "http:records",
+                        "parameters": {"httpMethod": "GET", "path": "/v1/records"}
+                    }
+                }]
+            }]),
+        )
+    }
+
+    fn assert_production_source_diagnostic(
+        bundle: &Value,
+        artifacts: &BTreeMap<String, Vec<u8>>,
+        expected_code: &str,
+        expected_path: &str,
+    ) {
+        let error = validate_production_sources(bundle, artifacts)
+            .expect_err("the unsafe production source must be refused");
+        let diagnostic = error
+            .downcast_ref::<AuthoredDiagnostic>()
+            .expect("the refusal is an authored source diagnostic");
+        assert_eq!(diagnostic.code, expected_code);
+        assert_eq!(diagnostic.path, expected_path);
+    }
+
+    #[test]
+    fn production_pack_route_over_authenticated_https_is_accepted() {
+        let bundle =
+            production_source_bundle("https://registry.example.invalid", json!({"type": "basic"}));
+        let artifacts = direct_http_pack(json!({"type": "basic"}));
+
+        validate_production_sources(&bundle, &artifacts)
+            .expect("an authenticated HTTPS pack route is production-safe");
+    }
+
+    #[test]
+    fn production_pack_route_refuses_plaintext_http() {
+        let bundle =
+            production_source_bundle("http://registry.example.invalid", json!({"type": "basic"}));
+        let artifacts = direct_http_pack(json!({"type": "basic"}));
+
+        assert_production_source_diagnostic(
+            &bundle,
+            &artifacts,
+            "evidence.source.production-channel",
+            "target.yaml:/connections/register/endpoints/records/origin",
+        );
+    }
+
+    #[test]
+    fn production_pack_route_refuses_unauthenticated_https() {
+        let bundle =
+            production_source_bundle("https://registry.example.invalid", json!({"type": "none"}));
+        let artifacts = direct_http_pack(json!({"type": "none"}));
+
+        assert_production_source_diagnostic(
+            &bundle,
+            &artifacts,
+            "evidence.source.production-channel",
+            "target.yaml:/connections/register/endpoints/records/authentication/type",
+        );
+    }
+
+    #[test]
+    fn production_pack_route_refuses_authentication_policy_mismatch() {
+        let bundle = production_source_bundle(
+            "https://registry.example.invalid",
+            json!({"type": "oauth2-client-credentials", "tokenEndpoint": "https://identity.example.invalid/token", "credentialPlacement": "basic-header"}),
+        );
+        let artifacts = direct_http_pack(json!({"type": "basic"}));
+
+        assert_production_source_diagnostic(
+            &bundle,
+            &artifacts,
+            "evidence.source.production-channel",
+            "target.yaml:/connections/register/endpoints/records/authentication/type",
+        );
+    }
+
+    #[test]
+    fn production_pack_route_refuses_plaintext_oauth_token_endpoint() {
+        let bundle = production_source_bundle(
+            "https://registry.example.invalid",
+            json!({"type": "oauth2-client-credentials", "tokenEndpoint": "http://identity.example.invalid/token", "credentialPlacement": "basic-header"}),
+        );
+        let artifacts = direct_http_pack(json!({"type": "oauth2-client-credentials"}));
+
+        assert_production_source_diagnostic(
+            &bundle,
+            &artifacts,
+            "evidence.source.production-channel",
+            "target.yaml:/connections/register/endpoints/records/authentication/tokenEndpoint",
+        );
+    }
+
+    #[test]
+    fn production_pack_route_refuses_unknown_transport() {
+        let bundle =
+            production_source_bundle("https://registry.example.invalid", json!({"type": "basic"}));
+        let artifacts = production_pack_artifacts(
+            "postgres",
+            json!({"type": "none"}),
+            json!([{"to": {"uri": "postgres:records"}}]),
+            json!([]),
+        );
+
+        assert_production_source_diagnostic(
+            &bundle,
+            &artifacts,
+            "evidence.source.production-transport",
+            "evidence.yaml:/sources/record/route",
+        );
+    }
+
+    #[test]
+    fn production_pack_route_accepts_case_insensitive_https_origin() {
+        let bundle =
+            production_source_bundle("HTTPS://registry.example.invalid", json!({"type": "basic"}));
+        let artifacts = direct_http_pack(json!({"type": "basic"}));
+
+        validate_production_sources(&bundle, &artifacts)
+            .expect("the typed URL contract treats an uppercase HTTPS scheme as secure");
+    }
+
+    #[test]
+    fn production_pack_route_accepts_case_insensitive_https_oauth_token_endpoint() {
+        let bundle = production_source_bundle(
+            "https://registry.example.invalid",
+            json!({"type": "oauth2-client-credentials", "tokenEndpoint": "HTTPS://identity.example.invalid/token", "credentialPlacement": "basic-header"}),
+        );
+        let artifacts = direct_http_pack(json!({"type": "oauth2-client-credentials"}));
+
+        validate_production_sources(&bundle, &artifacts)
+            .expect("the typed URL contract treats an uppercase OAuth HTTPS scheme as secure");
+    }
+
+    #[test]
+    fn production_pack_route_accepts_offline_sqlite_extract() {
+        let mut bundle =
+            production_source_bundle("https://unused.example.invalid", json!({"type": "none"}));
+        bundle["sourceConnections"]["register"]["endpoints"] = json!([]);
+        let artifacts = production_pack_artifacts(
+            "sqlite-extract",
+            json!({"type": "none"}),
+            json!([{"to": {"uri": "sqlite-extract:records"}}]),
+            json!([]),
+        );
+
+        validate_production_sources(&bundle, &artifacts)
+            .expect("a reviewed SQLite extract route opens no production channel");
+    }
+
     #[test]
     fn target_signing_validity_passes_a_requirement_at_the_target_signing_maximum() {
         check_target_signing_validity(&plan_with_validity(
@@ -2539,9 +3055,12 @@ mod tests {
         let project_root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../products/evidence/examples/standalone");
         let inputs = read_inputs(&project_root, false).unwrap();
-        let expected =
-            registry_evidence_authoring::compile::compile(&inputs.project, &inputs.scripts)
-                .unwrap();
+        let expected = registry_evidence_authoring::compile::compile_with_pack_routes(
+            &inputs.project,
+            &inputs.scripts,
+            &inputs.pack_routes,
+        )
+        .unwrap();
         let (connections, _) =
             crate::build::local_dev_target_inputs(&project_root.join("local-target.yaml")).unwrap();
         let plan = compile_plan_with_connections(
@@ -2562,6 +3081,13 @@ mod tests {
             expected.model["selectorProfiles"]
         );
         assert_eq!(plan.bundle["sources"].as_object().unwrap().len(), 3);
+        assert!(plan.bundle["sources"]
+            .as_object()
+            .unwrap()
+            .values()
+            .all(|source| source.get("authentication").is_none()
+                && source.get("baseUrl").is_none()
+                && source.get("tlsTrustProfile").is_none()));
         assert_eq!(plan.bundle["requirements"].as_array().unwrap().len(), 4);
         assert_eq!(plan.bundle["authorityProfiles"], json!({}));
         assert!(plan.bundle["sources"]

@@ -14,7 +14,7 @@
     subjects:
     - role: child
       selectors: [opencrvs-tracking-id-v1]
-    acquisition: {type: single, source: opencrvs-event-search}
+    acquisition: {source: opencrvs-event-search}
     derive: {function: derive-registered-parent}
     outputs:
       registered-parent-present:

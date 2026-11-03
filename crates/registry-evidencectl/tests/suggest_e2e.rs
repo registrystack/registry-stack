@@ -144,22 +144,26 @@ fn explicit_selector_mappings_generate_path_bindings_and_query_preparation() {
         "the report must not describe generated request machinery as absent: {stdout}"
     );
 
-    let document: Value = serde_norway::from_str(
-        &std::fs::read_to_string(project.join("evidence.yaml")).expect("read project"),
-    )
-    .expect("parse project");
+    let document = read_yaml_value(&project.join("evidence.yaml"));
     let source = &document["sources"]["mapped"];
     assert_eq!(
-        source["selectors"],
-        serde_json::json!([{"role":"subject","profiles":["subject-reference-v1"]}])
+        source["inputs"],
+        serde_json::json!({
+            "input1":{"selector":{"role":"subject","profile":"subject-reference-v1","field":"reference"}},
+            "input2":{"selector":{"role":"subject","profile":"subject-reference-v1","field":"reference"}}
+        })
     );
+    let pack = read_yaml_value(&project.join("adapter-packs/mapped/pack.yaml"));
+    let parameters = pack_to_parameters(&pack);
     assert_eq!(
-        source["request"]["pathBindings"]["record_id"]["selector"]["field"],
-        "reference"
+        parameters["pathParameters"]["record_id"]["jsonpath"],
+        "$.input1"
     );
-    let prepare = std::fs::read_to_string(project.join("functions/mapped-prepare.rhai"))
-        .expect("read prepare Function");
-    assert!(prepare.contains(r#"query_pair("reference""#), "{prepare}");
+    assert_eq!(parameters["query"]["reference"]["jsonpath"], "$.input2");
+    let prepare =
+        std::fs::read_to_string(project.join("adapter-packs/mapped/scripts/mapped-prepare.rhai"))
+            .expect("read pack preparation script");
+    assert!(prepare.contains("\n    ()\n"), "{prepare}");
     assert!(!prepare.contains("TODO(evidencectl)"), "{prepare}");
 }
 
@@ -223,17 +227,28 @@ fn mapped_get_and_post_projects_pass_the_offline_compiler() {
             .iter()
             .find(|source| source["id"] == "mapped")
             .expect("generated Source was compiled");
-        assert_eq!(source["operation"]["method"], method);
-        assert_eq!(source["operation"]["path"], "/records/{record_id}");
-        assert_eq!(source["resolvedPreparation"]["generated"], false);
         assert_eq!(
-            source["resolvedPreparation"]["script"],
-            "adapters/functions/mapped-prepare.rhai"
+            source["pack"],
+            serde_json::json!({"id":"mapped","version":"0.1.0"})
         );
-        let limits = &source["resolvedPreparation"]["limits"];
-        assert_eq!(limits["query"], "required");
-        assert_eq!(limits["maximumQueryPairs"], 1);
-        assert_eq!(limits["jsonBody"], body_requirement);
+        assert_eq!(source["route"], "mapped");
+        assert_eq!(source["connection"], "mapped");
+        assert_eq!(source["acquisitionPosture"], "record-transformed");
+        assert_eq!(source["facts"]["properties"]["allowed"]["type"], "boolean");
+
+        let pack = read_yaml_value(&project.join("adapter-packs/mapped/pack.yaml"));
+        let parameters = pack_to_parameters(&pack);
+        assert_eq!(parameters["httpMethod"], method);
+        assert_eq!(parameters["path"], "/records/{{record_id}}");
+        assert_eq!(parameters["query"]["reference"]["jsonpath"], "$.input2");
+        match body_requirement {
+            "required" => assert_eq!(
+                parameters["body"]["rhai"],
+                serde_json::json!({"file":"scripts/mapped-prepare.rhai","entrypoint":"prepare"})
+            ),
+            "forbidden" => assert!(parameters.get("body").is_none()),
+            unexpected => panic!("unexpected body requirement {unexpected}"),
+        }
     }
 }
 
@@ -711,9 +726,10 @@ fn optional_request_body_may_remain_absent_when_only_query_is_mapped() {
         &["subject.subject-reference-v1.reference=query:reference".to_owned()],
     );
     assert!(output.status.success(), "{}", stderr_of(&output));
-    let prepare = std::fs::read_to_string(project.join("functions/mapped-prepare.rhai"))
-        .expect("generated prepare Function");
-    assert!(prepare.contains("body: ()"), "{prepare}");
+    let prepare =
+        std::fs::read_to_string(project.join("adapter-packs/mapped/scripts/mapped-prepare.rhai"))
+            .expect("generated pack preparation script");
+    assert!(prepare.contains("\n    ()\n"), "{prepare}");
 }
 
 #[test]
@@ -731,9 +747,10 @@ fn optional_non_json_request_body_may_remain_unused_by_query_mapping() {
         &["subject.subject-reference-v1.reference=query:reference".to_owned()],
     );
     assert!(output.status.success(), "{}", stderr_of(&output));
-    let prepare = std::fs::read_to_string(project.join("functions/mapped-prepare.rhai"))
-        .expect("generated prepare Function");
-    assert!(prepare.contains("body: ()"), "{prepare}");
+    let prepare =
+        std::fs::read_to_string(project.join("adapter-packs/mapped/scripts/mapped-prepare.rhai"))
+            .expect("generated pack preparation script");
+    assert!(prepare.contains("\n    ()\n"), "{prepare}");
 }
 
 #[test]
@@ -792,9 +809,10 @@ fn unused_optional_json_body_with_external_schema_does_not_block_query_mapping()
         &["subject.subject-reference-v1.reference=query:reference".to_owned()],
     );
     assert!(output.status.success(), "{}", stderr_of(&output));
-    let prepare = std::fs::read_to_string(project.join("functions/mapped-prepare.rhai"))
-        .expect("generated prepare Function");
-    assert!(prepare.contains("body: ()"), "{prepare}");
+    let prepare =
+        std::fs::read_to_string(project.join("adapter-packs/mapped/scripts/mapped-prepare.rhai"))
+            .expect("generated pack preparation script");
+    assert!(prepare.contains("\n    ()\n"), "{prepare}");
 }
 
 #[test]
@@ -1231,10 +1249,14 @@ fn complete_optional_object_materialization_succeeds() {
         ],
     );
     assert!(output.status.success(), "{}", stderr_of(&output));
-    let prepare = std::fs::read_to_string(project.join("functions/mapped-prepare.rhai"))
-        .expect("generated prepare Function");
+    let prepare =
+        std::fs::read_to_string(project.join("adapter-packs/mapped/scripts/mapped-prepare.rhai"))
+            .expect("generated pack preparation script");
     assert!(prepare.contains(r#""criteria": #{"#), "{prepare}");
-    assert!(prepare.contains(r#""required_sibling":"#), "{prepare}");
+    assert!(
+        prepare.contains(r#""required_sibling": inputs["#),
+        "{prepare}"
+    );
 }
 
 #[test]
@@ -1277,8 +1299,9 @@ fn fully_required_nested_object_with_shared_mapped_leaves_succeeds() {
         ],
     );
     assert!(output.status.success(), "{}", stderr_of(&output));
-    let prepare = std::fs::read_to_string(project.join("functions/mapped-prepare.rhai"))
-        .expect("generated prepare Function");
+    let prepare =
+        std::fs::read_to_string(project.join("adapter-packs/mapped/scripts/mapped-prepare.rhai"))
+            .expect("generated pack preparation script");
     assert!(prepare.contains(r#""outer": #{"#), "{prepare}");
     assert!(prepare.contains(r#""inner": #{"#), "{prepare}");
 }
@@ -1315,8 +1338,9 @@ fn wholly_absent_optional_object_stays_omitted() {
         &["subject.subject-reference-v1.reference=body:/request_id".to_owned()],
     );
     assert!(output.status.success(), "{}", stderr_of(&output));
-    let prepare = std::fs::read_to_string(project.join("functions/mapped-prepare.rhai"))
-        .expect("generated prepare Function");
+    let prepare =
+        std::fs::read_to_string(project.join("adapter-packs/mapped/scripts/mapped-prepare.rhai"))
+            .expect("generated pack preparation script");
     assert!(!prepare.contains(r#""criteria""#), "{prepare}");
 }
 
@@ -1459,23 +1483,56 @@ fn drafts_into_a_project_and_then_refuses_to_overwrite_the_draft() {
     assert!(stdout.contains("authored fixtures"), "{stdout}");
     assert!(stdout.contains("evidencectl test"), "{stdout}");
 
-    let prepare_path = project.join("functions/source-b-prepare.rhai");
-    let script_path = project.join("functions/source-b-extract.rhai");
-    for path in [&prepare_path, &script_path, &project.join("evidence.yaml")] {
+    let pack_root = project.join("adapter-packs/source-b");
+    let prepare_path = pack_root.join("scripts/source-b-prepare.rhai");
+    let script_path = pack_root.join("scripts/source-b-extract.rhai");
+    let mut pack_files = Vec::new();
+    collect_snapshot_files(&pack_root, &mut pack_files);
+    assert_eq!(
+        pack_files
+            .iter()
+            .map(|path| path.strip_prefix(&pack_root).expect("pack-relative path"))
+            .collect::<Vec<_>>(),
+        [
+            "openapi/source.openapi.yaml",
+            "pack.yaml",
+            "schemas/source-b-facts.schema.json",
+            "schemas/source-b-inputs.schema.json",
+            "scripts/source-b-extract.rhai",
+            "scripts/source-b-prepare.rhai",
+        ]
+        .map(Path::new)
+        .to_vec()
+    );
+    for path in [
+        &pack_root.join("pack.yaml"),
+        &prepare_path,
+        &script_path,
+        &pack_root.join("schemas/source-b-inputs.schema.json"),
+        &pack_root.join("schemas/source-b-facts.schema.json"),
+        &pack_root.join("openapi/source.openapi.yaml"),
+        &project.join("evidence.yaml"),
+    ] {
         assert!(path.is_file(), "expected {} to be written", path.display());
     }
-    let project_document: Value = serde_norway::from_str(
-        &std::fs::read_to_string(project.join("evidence.yaml")).expect("read EvidenceProject"),
-    )
-    .expect("EvidenceProject parses");
+    let project_document = read_yaml_value(&project.join("evidence.yaml"));
     let source = &project_document["sources"]["source-b"];
-    assert_eq!(source["type"], "http-json");
+    assert_eq!(
+        source["pack"],
+        serde_json::json!({"id":"source-b","version":"0.1.0"})
+    );
+    assert_eq!(source["route"], "source-b");
     assert_eq!(source["connection"], "source-b");
+    assert!(source.get("inputs").is_none());
     assert_eq!(source["acquisitionPosture"], "record-transformed");
 
-    // The normalized Source response shape carries the sample-derived bounds,
-    // widened by the narrowing policy rather than copied.
-    let schema = &source["response"]["shape"];
+    // The pack facts schema carries the sample-derived bounds, widened by the
+    // narrowing policy rather than copied.
+    let schema: Value = serde_json::from_slice(
+        &std::fs::read(pack_root.join("schemas/source-b-facts.schema.json"))
+            .expect("read generated facts schema"),
+    )
+    .expect("generated facts schema parses");
     assert_eq!(schema["type"], "object");
     assert_eq!(schema["additionalProperties"], Value::Bool(false));
     assert_eq!(schema["properties"]["total"]["minimum"], 0);
@@ -1491,12 +1548,15 @@ fn drafts_into_a_project_and_then_refuses_to_overwrite_the_draft() {
 
     let script = std::fs::read_to_string(&script_path).expect("read extract script");
     assert!(
-        script.contains(r#"get_path(source_response, "/total")"#),
+        script.contains(r#"if "total" in value"#)
+            && script.contains(r#"out["total"] = value["total"]"#),
         "extract skeleton must read the selected scalar leaf: {script}"
     );
     assert!(
-        script.contains(r#"get_path(source_response, "/records/0/trackingId")"#),
-        "extract skeleton must substitute a numeric index for the `*` segment: {script}"
+        script.contains("for item in value")
+            && script.contains(r#"if "trackingId" in value"#)
+            && script.contains(r#"out["trackingId"] = value["trackingId"]"#),
+        "extract skeleton must project the selected leaf from every array item: {script}"
     );
 
     let stdout = stdout_of(&output);
@@ -1525,9 +1585,7 @@ fn drafts_into_a_project_and_then_refuses_to_overwrite_the_draft() {
         stdout.contains("Set the source origin.")
             && stdout.contains("Review the generated Source posture and default source limits.")
             && stdout.contains("Configure target-owned authentication.")
-            && stdout.contains(
-                "Complete selector bindings, the preparation Function, and request limits."
-            ),
+            && stdout.contains("Complete selector bindings and the pack request mapping."),
         "the report must name the completion and review work: {stdout}"
     );
 
@@ -1561,6 +1619,7 @@ fn drafts_into_a_project_and_then_refuses_to_overwrite_the_draft() {
 fn a_project_always_uses_its_retained_openapi() {
     let workspace = tempfile::tempdir().expect("tempdir");
     let project = scaffold(workspace.path(), OPENAPI_DOCUMENT);
+    let before = project_snapshot(&project);
     let other = write(workspace.path(), "other.openapi.yaml", OPENAPI_DOCUMENT);
     let output = evidencectl(&[
         "source".to_owned(),
@@ -1574,7 +1633,7 @@ fn a_project_always_uses_its_retained_openapi() {
         "/total".to_owned(),
     ]);
     assert_safe_usage_failure(&output);
-    assert!(bundle_entries(&project).is_empty());
+    assert_eq!(project_snapshot(&project), before);
 }
 
 #[test]
@@ -1589,7 +1648,7 @@ fn prints_the_draft_without_a_project_and_writes_nothing() {
     let workspace = tempfile::tempdir().expect("tempdir");
     let openapi = write(workspace.path(), "records.openapi.yaml", OPENAPI_DOCUMENT);
     let project = scaffold(workspace.path(), OPENAPI_DOCUMENT);
-    let bundle_before = bundle_entries(&project);
+    let project_before = project_snapshot(&project);
 
     let output = evidencectl(&[
         "source".to_owned(),
@@ -1611,8 +1670,12 @@ fn prints_the_draft_without_a_project_and_writes_nothing() {
 
     let stdout = stdout_of(&output);
     for block in [
-        "--- functions/source-c-prepare.rhai ---",
-        "--- functions/source-c-extract.rhai ---",
+        "--- adapter-packs/source-c/pack.yaml ---",
+        "--- adapter-packs/source-c/scripts/source-c-prepare.rhai ---",
+        "--- adapter-packs/source-c/scripts/source-c-extract.rhai ---",
+        "--- adapter-packs/source-c/schemas/source-c-inputs.schema.json ---",
+        "--- adapter-packs/source-c/schemas/source-c-facts.schema.json ---",
+        "--- adapter-packs/source-c/openapi/source.openapi.yaml ---",
         "--- the block to merge at the document root in evidence.yaml ---",
     ] {
         assert!(
@@ -1620,6 +1683,11 @@ fn prints_the_draft_without_a_project_and_writes_nothing() {
             "missing draft block {block}:\n{stdout}"
         );
     }
+    assert_eq!(
+        stdout.matches("--- adapter-packs/source-c/").count(),
+        6,
+        "print-only output contains exactly the current pack closure: {stdout}"
+    );
     assert!(
         stdout.contains("sources:") && stdout.contains("source-c:"),
         "the pasteable source block belongs on stdout: {stdout}"
@@ -1627,7 +1695,7 @@ fn prints_the_draft_without_a_project_and_writes_nothing() {
     // With no sample, the page-size parameter is the only evidence of how long
     // the array can be, and the string leaf has none at all.
     assert!(
-        stdout.contains("maxItems: 50"),
+        stdout.contains("\"maxItems\": 50"),
         "the page-size parameter must bound the array: {stdout}"
     );
     assert!(
@@ -1641,8 +1709,8 @@ fn prints_the_draft_without_a_project_and_writes_nothing() {
     );
 
     assert_eq!(
-        bundle_entries(&project),
-        bundle_before,
+        project_snapshot(&project),
+        project_before,
         "a print-only run must not write into any project"
     );
 }
@@ -1675,7 +1743,7 @@ fn a_page_size_bounds_the_collection_but_not_an_array_inside_a_record() {
 
     let stdout = stdout_of(&output);
     assert!(
-        stdout.contains("maxItems: 50"),
+        stdout.contains("\"maxItems\": 50"),
         "the page-size parameter must bound the collection: {stdout}"
     );
     assert!(
@@ -1683,7 +1751,7 @@ fn a_page_size_bounds_the_collection_but_not_an_array_inside_a_record() {
         "a nested array must not inherit the page size: {stdout}"
     );
     assert_eq!(
-        stdout.matches("maxItems: 50").count(),
+        stdout.matches("\"maxItems\": 50").count(),
         1,
         "only the collection carries the page-size bound: {stdout}"
     );
@@ -1721,11 +1789,11 @@ fn the_smallest_advertised_size_ceiling_bounds_the_collection() {
 
     let stdout = stdout_of(&output);
     assert!(
-        stdout.contains("maxItems: 50"),
+        stdout.contains("\"maxItems\": 50"),
         "the smallest ceiling must bound the collection: {stdout}"
     );
     assert!(
-        !stdout.contains("maxItems: 200"),
+        !stdout.contains("\"maxItems\": 200"),
         "a ceiling the response cannot reach must not become the bound: {stdout}"
     );
 }
@@ -1783,10 +1851,7 @@ fn a_non_interactive_run_names_the_flags_it_needs() {
     );
 }
 
-/// The classification of `evidence check` is reported in plain words. The
-/// runtime is represented here by a stub printing one of its fixed messages,
-/// so the assertion is about `evidencectl`'s reporting and not about a
-/// deployment project that is not frozen or provisioned yet.
+/// Run the real test-built `evidencectl` binary with captured output.
 fn evidencectl(arguments: &[String]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_evidencectl"))
         .args(arguments)
@@ -1939,12 +2004,13 @@ fn mapped_suggest(project: &Path, mappings: &[String]) -> Output {
 }
 
 fn project_snapshot(project: &Path) -> Vec<(PathBuf, Vec<u8>)> {
-    let mut paths = vec![project.join("evidence.yaml")];
-    paths.extend(
-        std::fs::read_dir(project.join("functions"))
-            .expect("read Functions")
-            .map(|entry| entry.expect("Function entry").path()),
-    );
+    let mut paths = ["evidence.yaml", "source.openapi.yaml"]
+        .into_iter()
+        .map(|relative| project.join(relative))
+        .collect::<Vec<_>>();
+    for directory in ["functions", "adapter-packs"] {
+        collect_snapshot_files(&project.join(directory), &mut paths);
+    }
     paths.sort();
     paths
         .into_iter()
@@ -1957,6 +2023,21 @@ fn project_snapshot(project: &Path) -> Vec<(PathBuf, Vec<u8>)> {
             (relative, bytes)
         })
         .collect()
+}
+
+fn collect_snapshot_files(directory: &Path, paths: &mut Vec<PathBuf>) {
+    let mut children = std::fs::read_dir(directory)
+        .unwrap_or_else(|error| panic!("read {}: {error}", directory.display()))
+        .map(|entry| entry.expect("snapshot entry").path())
+        .collect::<Vec<_>>();
+    children.sort();
+    for path in children {
+        if path.is_dir() {
+            collect_snapshot_files(&path, paths);
+        } else {
+            paths.push(path);
+        }
+    }
 }
 
 fn assert_mapping_failure_is_atomic(
@@ -1982,14 +2063,30 @@ fn assert_mapping_failure_is_atomic(
 
 fn edit_project(project: &Path, edit: impl FnOnce(&mut Value)) {
     let path = project.join("evidence.yaml");
-    let mut document: Value = serde_json::from_slice(&std::fs::read(&path).expect("read project"))
-        .expect("parse project JSON");
+    let mut document = read_yaml_value(&path);
     edit(&mut document);
     std::fs::write(
         path,
-        serde_json::to_vec_pretty(&document).expect("render project JSON"),
+        serde_norway::to_string(&document).expect("render project YAML"),
     )
     .expect("write project");
+}
+
+fn read_yaml_value(path: &Path) -> Value {
+    registry_platform_yaml::Reader::new(path.display().to_string())
+        .scan(&std::fs::read(path).expect("read YAML document"))
+        .expect("scan YAML document")
+        .expect("one YAML document")
+        .to_json_value()
+}
+
+fn pack_to_parameters(pack: &Value) -> &Value {
+    pack["sourceRoutes"][0]["steps"]
+        .as_array()
+        .expect("source route steps")
+        .iter()
+        .find_map(|step| step.get("to").and_then(|send| send.get("parameters")))
+        .expect("HTTP send parameters")
 }
 
 fn add_string_selector_field(project: &Path, field: &str, maximum_bytes: u64) {
@@ -2020,59 +2117,39 @@ fn set_integer_selector_bounds(project: &Path, minimum: i64, maximum: i64) {
     });
 }
 
-/// Create the only precondition `source suggest --project` requires: an
-/// existing project directory. `new` is tested separately and now owns the
-/// OpenAPI path itself.
+/// Create the maintained local OpenAPI starter, then add the two selector
+/// profiles whose request-mapping boundaries this suite exercises. The
+/// starter keeps its current pack, derive-only Function, acquisition and
+/// synthetic fixture intact.
 fn scaffold(root: &Path, openapi: &str) -> PathBuf {
     let project = root.join("project");
-    std::fs::create_dir(&project).expect("project directory");
-    std::fs::create_dir(project.join("functions")).expect("Function directory");
-    let document = serde_json::json!({
-        "apiVersion":"id.registrystack.org/formats/evidence/project/v1alpha1",
-        "kind":"EvidenceProject",
-        "id":"suggest-e2e",
-        "selectorProfiles":{
-            "subject-reference-v1":{"maximumAggregateBytes":128,"fields":{"reference":{"type":"string","minimumBytes":1,"maximumBytes":128}}},
-            "integer-v1":{"maximumAggregateBytes":32,"fields":{"value":{"type":"integer","minimum":0,"maximum":100}}}
-        },
-        "functions":[
-            {"id":"baseline-prepare","interface":"source-prepare/v1","source":"functions/baseline-prepare.rhai"},
-            {"id":"baseline-extract","interface":"source-extract/v1","source":"functions/baseline-extract.rhai"},
-            {"id":"baseline-derive","interface":"assertion-derive/v1","source":"functions/baseline-derive.rhai"}
-        ],
-        "sources":{"baseline":{
-            "type":"http-json","connection":"baseline","acquisitionPosture":"field-projected",
-            "selectors":[{"role":"subject","profiles":["subject-reference-v1"]}],
-            "request":{"method":"POST","path":"/v1/facts","fixedHeaders":[]},
-            "prepare":{"function":"baseline-prepare"},"extract":{"function":"baseline-extract"},
-            "response":{"projection":["/allowed"],"shape":{"type":"object","required":["allowed"],"properties":{"allowed":{"type":"boolean"}}},"maximumBytes":4096},
-            "facts":{"allowed":{"type":"boolean"}},
-            "limits":{"attemptTimeoutMilliseconds":1000,"maximumConcurrency":1}
-        }},
-        "assertionDefinitions":{"baseline":{
-            "question":"Is the baseline condition satisfied?",
-            "semantics":{"requirement":"urn:example:requirements:baseline:v1","kind":"criterion","evidenceType":"urn:example:evidence-types:baseline:v1","referenceFrameworks":["urn:example:frameworks:baseline:v1"]},
-            "purpose":"testing","grantCeiling":{"authorities":["organizational"],"actorKinds":["service"],"valueOrigins":["request"],"audiences":["urn:example:audiences:test"]},
-            "subjects":[{"role":"subject","selectors":["subject-reference-v1","integer-v1"]}],
-            "acquisition":{"type":"single","source":"baseline"},"derive":{"function":"baseline-derive"},
-            "outputs":{"allowed":{"concept":"urn:example:concepts:allowed","type":"boolean"}},
-            "validitySeconds":300,"subjectBinding":"audience-scoped","representations":["signed-jws"]
-        }}
+    let openapi_path = write(root, "scaffold.openapi.yaml", openapi);
+    let output = evidencectl(&[
+        "init".to_owned(),
+        path_argument(&project),
+        "--openapi".to_owned(),
+        path_argument(&openapi_path),
+        "--profile".to_owned(),
+        "local".to_owned(),
+    ]);
+    assert!(
+        output.status.success(),
+        "current project scaffold failed: {}{}",
+        stdout_of(&output),
+        stderr_of(&output)
+    );
+    edit_project(&project, |document| {
+        document["selectorProfiles"]["subject-reference-v1"] = serde_json::json!({
+            "maximumAggregateBytes":128,
+            "fields":{"reference":{"type":"string","minimumBytes":1,"maximumBytes":128}}
+        });
+        document["selectorProfiles"]["integer-v1"] = serde_json::json!({
+            "maximumAggregateBytes":32,
+            "fields":{"value":{"type":"integer","minimum":0,"maximum":100}}
+        });
+        document["assertionDefinitions"]["record-status"]["subjects"][0]["selectors"] =
+            serde_json::json!(["record-reference", "subject-reference-v1", "integer-v1"]);
     });
-    std::fs::write(
-        project.join("evidence.yaml"),
-        serde_json::to_vec_pretty(&document).expect("EvidenceProject JSON"),
-    )
-    .expect("EvidenceProject");
-    for (name, script) in [
-        ("baseline-prepare", "fn prepare(selectors, context) { #{query: [], body: ()} }\n"),
-        ("baseline-extract", "fn extract(source_response, context) { #{outcome: \"match\", facts: #{allowed: source_response[\"allowed\"]}} }\n"),
-        ("baseline-derive", "fn derive(facts, selectors, context) { [#{output: \"allowed\", value: facts[\"allowed\"]}] }\n"),
-    ] {
-        std::fs::write(project.join(format!("functions/{name}.rhai")), script)
-            .expect("Function script");
-    }
-    std::fs::write(project.join("source.openapi.yaml"), openapi).expect("retained OpenAPI");
     project
 }
 
@@ -2080,27 +2157,6 @@ fn write(root: &Path, name: &str, contents: &str) -> PathBuf {
     let path = root.join(name);
     std::fs::write(&path, contents).expect("writing a test input");
     path
-}
-
-/// Every path beneath the project's bundle directory, sorted, so a test can
-/// prove a run wrote nothing.
-fn bundle_entries(project: &Path) -> Vec<PathBuf> {
-    let mut entries = Vec::new();
-    let mut pending = vec![project.join("bundle")];
-    while let Some(directory) = pending.pop() {
-        let Ok(children) = std::fs::read_dir(&directory) else {
-            continue;
-        };
-        for child in children.flatten() {
-            let path = child.path();
-            if path.is_dir() {
-                pending.push(path.clone());
-            }
-            entries.push(path);
-        }
-    }
-    entries.sort();
-    entries
 }
 
 fn path_argument(path: &Path) -> String {
@@ -2324,12 +2380,16 @@ fn a_delivered_draft_reports_the_written_files_and_equivalent_command_in_json() 
     let files = report["files"].as_array().expect("written files");
     assert_eq!(
         files.len(),
-        3,
-        "two Functions plus the updated EvidenceProject"
+        7,
+        "six pack artifacts plus the updated EvidenceProject"
     );
     for relative in [
-        "functions/source-b-prepare.rhai",
-        "functions/source-b-extract.rhai",
+        "adapter-packs/source-b/pack.yaml",
+        "adapter-packs/source-b/scripts/source-b-prepare.rhai",
+        "adapter-packs/source-b/scripts/source-b-extract.rhai",
+        "adapter-packs/source-b/schemas/source-b-inputs.schema.json",
+        "adapter-packs/source-b/schemas/source-b-facts.schema.json",
+        "adapter-packs/source-b/openapi/source.openapi.yaml",
         "evidence.yaml",
     ] {
         assert!(
@@ -2358,7 +2418,7 @@ fn a_delivered_draft_reports_the_written_files_and_equivalent_command_in_json() 
         report["equivalentCommand"]
     );
     assert!(
-        !stdout_of(&output).contains("--- functions/source-b-prepare.rhai ---"),
+        !stdout_of(&output).contains("--- adapter-packs/source-b/pack.yaml ---"),
         "the draft blocks stay off JSON stdout"
     );
 

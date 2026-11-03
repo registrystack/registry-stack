@@ -136,6 +136,38 @@
         }
       ]
     },
+    "AsyncAcceptedId": {
+      "additionalProperties": false,
+      "description": "One JSONPath selector extracting the bounded source operation id from a\ndeclared 202 response. The closed object deliberately admits no other\nexpression language.",
+      "properties": {
+        "jsonpath": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "jsonpath"
+      ],
+      "type": "object"
+    },
+    "AsyncUncertaintyRecovery": {
+      "additionalProperties": false,
+      "description": "A source-native lookup that can prove the disposition of a host-supplied\ncorrelation id after the initial non-safe send became uncertain.",
+      "properties": {
+        "requestHeader": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "The one reviewed source-owned request header carrying the id."
+        },
+        "statusRoute": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "The safe internal route resolving that correlation id."
+        }
+      },
+      "required": [
+        "requestHeader",
+        "statusRoute"
+      ],
+      "type": "object"
+    },
     "Capabilities": {
       "additionalProperties": false,
       "description": "The engine capabilities a pack requires: the components, languages, and\nEIPs its routes use. The ctl refuses a pack the binary cannot run\n(`products/adapter/CONCEPT.md` section 6).",
@@ -306,15 +338,17 @@
       "type": "object"
     },
     "ComponentKind": {
-      "description": "A component kind, the ported subset of Camel's component library\n(`products/adapter/CONCEPT.md` sections 8.8 and 17.2). `rest` is the\nfacade consumer; `direct` calls routes in process; `http`, `graphql`,\nand `postgres` are the upstream producers; `file` and `sftp` are the\njob-only sources a facade route may never reach (section 17.1).",
+      "description": "A component kind, the ported subset of Camel's component library\n(`products/adapter/CONCEPT.md` sections 8.8 and 17.2). `rest` is the\nfacade consumer; `direct` calls routes in process; `http`, `graphql`,\n`postgres` and `sqlite-extract` are read-only producers; `file`, `rabbitmq`,\nand `sftp` are job-only sources a facade route may never reach (section\n17.1).",
       "enum": [
         "direct",
         "file",
         "graphql",
         "http",
         "postgres",
+        "rabbitmq",
         "rest",
-        "sftp"
+        "sftp",
+        "sqlite-extract"
       ],
       "type": "string"
     },
@@ -520,9 +554,9 @@
       "description": "One endpoint a route may send to: the component, the authentication\nkind, the declared response headers, the endpoint operations with their\n`idempotentUpstream` claims, and the tested upstream versions\n(`products/adapter/CONCEPT.md` sections 6, 8.8, and 10.2).",
       "properties": {
         "attemptTimeoutMilliseconds": {
-          "description": "The longest one attempt to this endpoint may take, in\nmilliseconds. Required, no default; a value above the platform\nceiling is refused, never shortened. The runtime binding may lower\nit, never raise it.",
+          "description": "The longest one attempt to this endpoint may take, in milliseconds.\nEvidence defaults an omission to 30 seconds; facade and job require an\nexplicit value within their ten-second policy. The profile compiler\nowns that policy rather than the shared wire shape.",
           "format": "uint64",
-          "maximum": 10000,
+          "maximum": 18446744073709551615,
           "minimum": 1,
           "type": "integer"
         },
@@ -534,9 +568,17 @@
           "$ref": "#/$defs/ComponentKind",
           "description": "The producer component: `http`, `graphql`, or the read-only\n`postgres` source; or the job-only `file` and `sftp` sources a\n`pollEnrich` step reads (section 17.1)."
         },
+        "hostProtocol": {
+          "$ref": "#/$defs/HostProtocol",
+          "description": "A host-implemented source protocol selected explicitly by this\nendpoint, with its reviewed, digest-pinned public configuration."
+        },
         "id": {
           "$ref": "#/$defs/LocalId",
           "description": "The endpoint identifier `http:`, `graphql:`, `postgres:`, and the\n`pollEnrich` URIs name."
+        },
+        "keyColumn": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "The PostgreSQL result column whose scalar is the source item's\nstable identity. Required for a `postgres` endpoint and absent\nfrom every other component."
         },
         "maximumResponseBytes": {
           "description": "The largest response body one send to this endpoint may take in, in\nbytes. Required, no default; a value above the platform cap is\nrefused, never shortened. The runtime binding may lower it, never\nraise it. A facade-reachable endpoint stays within the facade\nceiling and a source-route-only endpoint may declare up to the\nplatform cap (D39); the checks refuse the facade-reachable excess\nunder `adapter.job.endpoint-response-bound`.",
@@ -555,6 +597,14 @@
             "$ref": "#/$defs/EndpointOperation"
           },
           "type": "array"
+        },
+        "parameterOrder": {
+          "description": "The reviewed names bound to the PostgreSQL query's contiguous\n`$1`-onward positions, in order. Omitted only when the query has\nno parameters, and absent from every non-PostgreSQL component.",
+          "items": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "type": "array",
+          "uniqueItems": true
         },
         "queryFile": {
           "description": "The GraphQL query file, from the pack's query-file inventory.\nRequired for a `graphql` endpoint.",
@@ -576,6 +626,10 @@
           "type": "array",
           "uniqueItems": true
         },
+        "sqliteExtract": {
+          "$ref": "#/$defs/SqliteExtractDeclaration",
+          "description": "The reviewed statement and bounds of a SQLite extract producer.\nFilesystem locations are supplied by the host's logical extract binding."
+        },
         "testedVersions": {
           "description": "The upstream versions this pack was tested against.",
           "items": {
@@ -592,8 +646,27 @@
         "id",
         "component",
         "authentication",
-        "attemptTimeoutMilliseconds",
         "maximumResponseBytes"
+      ],
+      "type": "object"
+    },
+    "EndpointAsyncCompletion": {
+      "additionalProperties": false,
+      "description": "The source-native acceptance and status proof contract for one endpoint\noperation. Caller paths, envelopes, waiting policy, and custody remain\noutside the pack.",
+      "properties": {
+        "acceptedId": {
+          "$ref": "#/$defs/AsyncAcceptedId"
+        },
+        "statusRoute": {
+          "$ref": "#/$defs/ExternalId"
+        },
+        "uncertaintyRecovery": {
+          "$ref": "#/$defs/AsyncUncertaintyRecovery"
+        }
+      },
+      "required": [
+        "acceptedId",
+        "statusRoute"
       ],
       "type": "object"
     },
@@ -699,6 +772,10 @@
       "additionalProperties": false,
       "description": "One operation of an endpoint, with the reviewed write claim\n(`products/adapter/CONCEPT.md` sections 8.7 and 9): redelivery over a\nnon-safe send is admitted only when the endpoint operation declares\n`idempotentUpstream: true`.",
       "properties": {
+        "asyncCompletion": {
+          "$ref": "#/$defs/EndpointAsyncCompletion",
+          "description": "The source-native asynchronous acceptance and status proof contract."
+        },
         "graphql": {
           "$ref": "#/$defs/GraphQlOperationKind",
           "description": "The GraphQL operation kind the pinned query file declares, on a\n`graphql` endpoint; a send naming this operation is safe only for\na query (`products/adapter/CONCEPT.md` section 8.8)."
@@ -803,6 +880,37 @@
           "description": "The no-op error handler: failures propagate untouched."
         }
       },
+      "type": "object"
+    },
+    "EvidenceAcquisitionPosture": {
+      "description": "The closed input and final-fact schemas of an Evidence source route.\nBoth artifacts are supplied with the pack and digest-pinned, so a host\ncan compile the route without filesystem or network access.",
+      "enum": [
+        "source-derived",
+        "field-projected",
+        "record-transformed"
+      ],
+      "type": "string"
+    },
+    "EvidenceRouteContract": {
+      "additionalProperties": false,
+      "properties": {
+        "acquisitionPosture": {
+          "$ref": "#/$defs/EvidenceAcquisitionPosture",
+          "description": "The least-invasive acquisition posture the reviewed route satisfies.\nOmission is conservative for packs authored before this declaration."
+        },
+        "factsSchema": {
+          "$ref": "#/$defs/ScriptReference",
+          "description": "The JSON Schema for the route's final facts value."
+        },
+        "inputsSchema": {
+          "$ref": "#/$defs/ScriptReference",
+          "description": "The JSON Schema for the reviewed acquisition inputs."
+        }
+      },
+      "required": [
+        "inputsSchema",
+        "factsSchema"
+      ],
       "type": "object"
     },
     "Expression": {
@@ -931,6 +1039,25 @@
           "type": "string"
         }
       ]
+    },
+    "HostProtocol": {
+      "additionalProperties": false,
+      "description": "One closed host protocol selection. The engine recognizes only protocols\na host registry installs; an unknown id fails closed at compilation.",
+      "properties": {
+        "config": {
+          "$ref": "#/$defs/ScriptReference",
+          "description": "The reviewed public protocol configuration."
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The protocol implementation id in the host registry."
+        }
+      },
+      "required": [
+        "id",
+        "config"
+      ],
+      "type": "object"
     },
     "HttpMethod": {
       "description": "An HTTP method a facade operation or an upstream send may declare. The\nmethod decides send safety: `GET` is safe, the write methods are not\n(`products/adapter/CONCEPT.md` sections 8.7 and 9).",
@@ -1128,11 +1255,11 @@
           "type": "string"
         }
       ],
-      "description": "The decoder a `pollEnrich` step selects. A mapping form is a `csv`\ndeclaration with its options, the only decoder that carries options; a\nbare string names one of `csv`, `jsonl`, or `raw`. One member carries\nboth forms, so `decoder: csv` and `decoder: {\"delimiter\": \";\"}` read\nthe same way."
+      "description": "The decoder a `pollEnrich` step selects. A mapping form is a `csv`\ndeclaration with its options, the only decoder that carries options; a\nbare string names one of `csv`, `jsonl`, `rabbitmq-json`, or `raw`. One member carries\nboth forms, so `decoder: csv` and `decoder: {\"delimiter\": \";\"}` read\nthe same way."
     },
     "PollEnrichStep": {
       "additionalProperties": false,
-      "description": "A `pollEnrich` step, the bounded job-only port of Camel's Poll Enricher\n(`products/adapter/CONCEPT.md` sections 17.1 and 17.2). It reads one\nbounded page from a static `file:` or `sftp:` endpoint the pack\ndeclares; no dynamic endpoint expression and no `consumerSendTo` are\nported. Absent a strategy, the page replaces the body, as `enrich`\nreplaces it. `timeoutMilliseconds` is mandatory: the checks refuse its\nabsence under `adapter.job.poll-timeout`, and the reader refuses a\nvalue outside 1 to 10000 (D39 keeps the platform-frozen per-attempt\nceiling for every endpoint). The step never appears in a\nfacade-reachable route (`adapter.job.poll-facade-refused`).",
+      "description": "A `pollEnrich` step, the bounded job-only port of Camel's Poll Enricher\n(`products/adapter/CONCEPT.md` sections 17.1 and 17.2). It reads one\nbounded page from a static `file:`, `rabbitmq:`, or `sftp:` endpoint the pack\ndeclares; no dynamic endpoint expression and no `consumerSendTo` are\nported. Absent a strategy, the page replaces the body, as `enrich`\nreplaces it. `timeoutMilliseconds` is mandatory: the checks refuse its\nabsence under `adapter.job.poll-timeout`, and the reader refuses a\nvalue outside 1 to 10000 (D39 keeps the platform-frozen per-attempt\nceiling for every endpoint). The step never appears in a\nfacade-reachable route (`adapter.job.poll-facade-refused`).",
       "properties": {
         "aggregationStrategy": {
           "$ref": "#/$defs/AggregationStrategy",
@@ -1140,7 +1267,11 @@
         },
         "decoder": {
           "$ref": "#/$defs/PollDecoder",
-          "description": "The decoder the read applies: absent, `raw`, the file bytes' digest\npage; `csv` decodes rows with the options of [`CsvDecoder`], written\neither as the bare name `csv` or as a mapping of its options;\n`jsonl` decodes one bounded JSON value per line. The checks refuse\nany other name under `adapter.job.decoder-unknown`."
+          "description": "The decoder the read applies: absent, `raw`, the file bytes' digest\npage; `csv` decodes rows with the options of [`CsvDecoder`], written\neither as the bare name `csv` or as a mapping of its options;\n`jsonl` decodes one bounded JSON value per line. `rabbitmq-json`\ndecodes exactly one bounded broker message and is valid only for a\n`rabbitmq:` source. The checks refuse any other name or a mismatched\nprofile under `adapter.job.decoder-unknown`."
+        },
+        "keyPointer": {
+          "description": "RFC 6901 selector of the opaque business-key string in a decoded row.\nRequired for CSV and JSONL, forbidden for raw files and broker messages.",
+          "type": "string"
         },
         "timeoutMilliseconds": {
           "description": "The mandatory poll timeout in milliseconds, bounded 1 to 10000.",
@@ -1150,7 +1281,7 @@
           "type": "integer"
         },
         "uri": {
-          "description": "The static job source URI: `file:<endpointId>` or\n`sftp:<endpointId>`, naming a declared pack endpoint of the matching\ncomponent. The authoring checks refuse an unknown endpoint\n(`adapter.job.poll-endpoint-unknown`) and an endpoint whose\ncomponent does not match the scheme\n(`adapter.job.poll-endpoint-kind`).",
+          "description": "The static job source URI: `file:<endpointId>`,\n`rabbitmq:<endpointId>`, or `sftp:<endpointId>`, naming a declared pack endpoint of the matching\ncomponent. The authoring checks refuse an unknown endpoint\n(`adapter.job.poll-endpoint-unknown`) and an endpoint whose\ncomponent does not match the scheme\n(`adapter.job.poll-endpoint-kind`).",
           "type": "string"
         }
       },
@@ -1332,7 +1463,7 @@
     },
     "SendUri": {
       "description": "The destination of a `to` or `enrich` send: a `direct:` route, an\n`http:`, `graphql:`, or `postgres:` endpoint declared in the pack\n(`products/adapter/CONCEPT.md` sections 8.3, 8.8, and 17.2). The URI is\nstatic; no `toD` is ported. A `file:` or `sftp:` URI parses so the\nauthoring checks can refuse it under its own code\n(`adapter.job.send-component-refused`): a job source is read through the\n`pollEnrich` step, never through a send.",
-      "pattern": "^(direct|http|graphql|postgres|file|sftp):.+$",
+      "pattern": "^(direct|http|graphql|postgres|file|sftp|sqlite-extract):.+$",
       "type": "string"
     },
     "SetHeaderStep": {
@@ -1395,6 +1526,10 @@
         "edits": {
           "description": "How the source reports edits to items the scan has already read,\none of [`SOURCE_EDIT_VALUES`]: `ordered`, where an edit moves the\nitem past the read position or items never change so an ordinary\npass suffices, or `rescan`, where an edit can stay behind the\nposition and the declared `rescanDelaySeconds` starts an ordinary\npass from the first page. Mandatory; the checks refuse its absence\nunder `adapter.job.source-edits-required` and a value outside the\nclosed set under `adapter.job.source-edits-unknown`.",
           "type": "string"
+        },
+        "evidence": {
+          "$ref": "#/$defs/EvidenceRouteContract",
+          "description": "The Evidence acquisition contract when this source route is a\nlistener-free, read-only Evidence entry point."
         },
         "id": {
           "$ref": "#/$defs/LocalId",
@@ -1488,6 +1623,113 @@
       },
       "required": [
         "expression"
+      ],
+      "type": "object"
+    },
+    "SqliteExtractColumn": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/ExternalId"
+        },
+        "type": {
+          "$ref": "#/$defs/SqliteExtractColumnType"
+        }
+      },
+      "required": [
+        "name",
+        "type"
+      ],
+      "type": "object"
+    },
+    "SqliteExtractColumnType": {
+      "enum": [
+        "string",
+        "integer",
+        "number",
+        "boolean"
+      ],
+      "type": "string"
+    },
+    "SqliteExtractDeclaration": {
+      "additionalProperties": false,
+      "description": "A read-only statement over one host-captured SQLite extract. Its SQL is\npinned with the pack, while its parameters may receive only route values.",
+      "properties": {
+        "columns": {
+          "items": {
+            "$ref": "#/$defs/SqliteExtractColumn"
+          },
+          "type": "array"
+        },
+        "concurrency": {
+          "format": "uint64",
+          "maximum": 1024,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "extractProfile": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "maximumCellBytes": {
+          "format": "uint64",
+          "maximum": 8388608,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "maximumExtractAgeSeconds": {
+          "format": "uint64",
+          "maximum": 2592000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "maximumRows": {
+          "format": "uint64",
+          "maximum": 10000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "maximumStatementSteps": {
+          "format": "uint64",
+          "maximum": 1000000000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "parameters": {
+          "items": {
+            "$ref": "#/$defs/SqliteExtractParameter"
+          },
+          "type": "array"
+        },
+        "statement": {
+          "$ref": "#/$defs/ScriptReference"
+        }
+      },
+      "required": [
+        "extractProfile",
+        "statement",
+        "columns",
+        "parameters",
+        "maximumExtractAgeSeconds",
+        "maximumRows",
+        "maximumCellBytes",
+        "maximumStatementSteps",
+        "concurrency"
+      ],
+      "type": "object"
+    },
+    "SqliteExtractParameter": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/ExternalId"
+        },
+        "required": {
+          "default": true,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name"
       ],
       "type": "object"
     },
@@ -1673,6 +1915,19 @@
           },
           "required": [
             "validate"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Validate the complete provider response body against one reviewed,\ndigest-pinned JSON Schema before extraction. A mismatch is a terminal\nsource-protocol refusal, not a catchable route validation outcome.",
+          "properties": {
+            "validateSchema": {
+              "$ref": "#/$defs/ScriptReference"
+            }
+          },
+          "required": [
+            "validateSchema"
           ],
           "type": "object"
         },
@@ -1963,7 +2218,7 @@
     },
     "ToParameters": {
       "additionalProperties": false,
-      "description": "The parameters of an upstream send, Camel's `http` component options\n(`products/adapter/CONCEPT.md` section 8.8). The path template's\n`{name}` segments are filled from `pathParameters` expressions and\npercent-encoded by the engine as single segments; query members are\nengine-encoded.",
+      "description": "The parameters of an upstream send, Camel's `http` component options\n(`products/adapter/CONCEPT.md` section 8.8). The path template's\n`{{name}}` segments are filled from `pathParameters` expressions and\npercent-encoded by the engine as single segments; query members are\nengine-encoded.",
       "properties": {
         "body": {
           "$ref": "#/$defs/Expression",
@@ -1986,7 +2241,7 @@
           "description": "The endpoint operation this send invokes, when the pack declares\nendpoint operations; write-safety checks read its\n`idempotentUpstream` claim."
         },
         "path": {
-          "description": "The path template, e.g. `/v2/cases/{type}`.",
+          "description": "The path template, e.g. `/v2/cases/{{type}}`.",
           "type": "string"
         },
         "pathParameters": {
@@ -2140,6 +2395,10 @@
     "kind": {
       "const": "AdapterPack",
       "type": "string"
+    },
+    "openApi": {
+      "$ref": "#/$defs/ScriptReference",
+      "description": "The provider OpenAPI document used by consumer tooling such as\nEvidence source mocks, captured and digest-pinned with the pack."
     },
     "queryFiles": {
       "default": [],

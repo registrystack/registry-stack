@@ -327,6 +327,38 @@ mod tests {
     }
 
     #[test]
+    fn fixture_request_count_matches_the_offline_acquisition_budget() {
+        let maximum =
+            registry_adapter_engine::evidence::EvidenceLimits::default().maximum_data_operations();
+        let document: Value =
+            serde_json::from_str(&fixture_documents().unwrap()[FIXTURE_SCHEMA_FILE]).unwrap();
+        assert_eq!(
+            document["$defs"]["ReferenceExpected"]["properties"]["sourceRequestCount"]["maximum"]
+                .as_u64(),
+            Some(maximum),
+            "an expected count cannot exceed the offline runner's acquisition budget"
+        );
+        let validator = fixture_validator();
+        for (count, accepted) in [(0, true), (3, true), (maximum, true), (maximum + 1, false)] {
+            let value = serde_json::json!({
+                "apiVersion": "id.registrystack.org/formats/evidence/fixture/v1alpha1",
+                "kind": "EvidenceFixture",
+                "syntheticOnly": true,
+                "cases": [{"id": "positive", "expected": {"sourceRequestCount": count}}]
+            });
+            let bytes = serde_json::to_vec(&value).unwrap();
+            let actual = crate::fixture::read_fixture(
+                "fixtures/case.json",
+                &bytes,
+                true,
+                crate::config::AssuranceProfile::Local,
+            );
+            assert_eq!(actual.is_ok(), accepted, "reader count {count}");
+            assert_eq!(validator.is_valid(&value), accepted, "schema count {count}");
+        }
+    }
+
+    #[test]
     fn the_fixture_schema_accepts_what_the_reader_accepts_and_refuses_what_it_refuses() {
         let validator = fixture_validator();
         let header = "apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1\nkind: EvidenceFixture\n";
@@ -355,8 +387,11 @@ mod tests {
             (format!("{header}syntheticOnly: true\ncommon: {{selectors: null}}\ncases:\n{complete}"), true),
             (format!("{header}syntheticOnly: true\ncoequalAcceptanceDefinition: true\ncases:\n  - {{id: positive, observedAt: null}}\n"), false),
             (format!("{header}syntheticOnly: true\ncoequalAcceptanceDefinition: true\ncases:\n  - {{id: positive, source: null, expectedValue: null}}\n"), true),
+            (format!("{header}syntheticOnly: true\ncoequalAcceptanceDefinition: true\ncases:\n  - {{id: positive, expectedFacts: {{source_key: null}}}}\n"), true),
             (format!("{header}syntheticOnly: true\ncases:\n  - {{id: positive, expected: {{sourceRequestCount: 2}}}}\n"), true),
-            (format!("{header}syntheticOnly: true\ncases:\n  - {{id: positive, expected: {{sourceRequestCount: 3}}}}\n"), false),
+            (format!("{header}syntheticOnly: true\ncases:\n  - {{id: positive, expected: {{sourceRequestCount: 3}}}}\n"), true),
+            (format!("{header}syntheticOnly: true\ncases:\n  - {{id: positive, expected: {{sourceRequestCount: three}}}}\n"), false),
+            ("{\"apiVersion\":\"id.registrystack.org/formats/evidence/fixture/v1alpha1\",\"kind\":\"EvidenceFixture\",\"syntheticOnly\":true,\"cases\":[{\"id\":\"positive\",\"expected\":{\"sourceRequestCount\":18446744073709551616}}]}".to_owned(), false),
             (format!("{header}cases:\n{complete}"), false),
             (format!("{header}syntheticOnly: true\n"), false),
             (format!("{header}syntheticOnly: true\ncases: []\n"), false),
@@ -376,12 +411,38 @@ mod tests {
                 true,
                 crate::config::AssuranceProfile::Local,
             );
-            let instance: Value =
+            let instance: Value = if text.starts_with('{') {
+                serde_json::from_str(&text).unwrap()
+            } else {
                 serde_json::to_value(serde_norway::from_str::<serde_norway::Value>(&text).unwrap())
-                    .unwrap();
+                    .unwrap()
+            };
             assert_eq!(reader.is_ok(), expected, "reader: {text}");
             assert_eq!(validator.is_valid(&instance), expected, "schema: {text}");
         }
+    }
+
+    #[test]
+    fn coequal_expected_facts_schema_tracks_the_reader() {
+        let validator = fixture_validator();
+        let text = "apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1\n\
+                    kind: EvidenceFixture\n\
+                    syntheticOnly: true\n\
+                    coequalAcceptanceDefinition: true\n\
+                    cases:\n\
+                    \x20 - id: positive\n\
+                    \x20   expectedFacts: {source_key: null, nested_fact: {foreign_key: [1, true]}}\n";
+        crate::fixture::read_fixture(
+            "fixtures/case.yaml",
+            text.as_bytes(),
+            false,
+            crate::config::AssuranceProfile::Local,
+        )
+        .expect("the fixture reader accepts source-owned fact keys and nulls");
+        let instance: Value =
+            serde_json::to_value(serde_norway::from_str::<serde_norway::Value>(text).unwrap())
+                .unwrap();
+        assert!(validator.is_valid(&instance));
     }
 
     #[test]

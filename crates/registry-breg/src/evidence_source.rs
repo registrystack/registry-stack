@@ -64,6 +64,22 @@ struct ExportManifestArtifact<'a> {
 
 /// Technical choices only. Questions, permissions, targets and credentials stay with
 /// the Evidence project and its operator.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum EvidenceSourceAuthentication {
+    #[default]
+    StaticAuthorization,
+    Oauth2PrivateKeyJwt,
+}
+
+impl EvidenceSourceAuthentication {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::StaticAuthorization => "static-authorization",
+            Self::Oauth2PrivateKeyJwt => "oauth2-private-key-jwt",
+        }
+    }
+}
+
 pub struct EvidenceSourceOptions {
     pub access_profile: String,
     pub entity: String,
@@ -71,6 +87,7 @@ pub struct EvidenceSourceOptions {
     pub fields: Vec<String>,
     pub source_id: String,
     pub connection: String,
+    pub authentication: EvidenceSourceAuthentication,
 }
 
 pub struct EvidenceSourceExport {
@@ -113,6 +130,14 @@ fn artifact(path: String, media_type: &str, bytes: Vec<u8>) -> GeneratedArtifact
         sha256: format!("sha256:{}", digest(&bytes)),
         bytes,
     }
+}
+
+fn file_bytes<'a>(artifacts: &'a [GeneratedArtifact], path: &str) -> &'a [u8] {
+    &artifacts
+        .iter()
+        .find(|artifact| artifact.path == path)
+        .expect("the generated pack artifact was inserted before it was pinned")
+        .bytes
 }
 
 /// A source or selector document: the flat body under its envelope header.
@@ -261,6 +286,29 @@ fn object(properties: Map<String, Value>, required: Vec<String>) -> Value {
     json!({"type":"object","additionalProperties":false,"required":required,"properties":properties})
 }
 
+fn route_input_name(selector: &str, field: &str) -> String {
+    let framed = format!("{}:{selector}{}:{field}", selector.len(), field.len());
+    format!("input-{}", digest(framed.as_bytes()))
+}
+
+fn route_input_schema(selector: &Value) -> Value {
+    let mut schema = selector.clone();
+    let object = schema
+        .as_object_mut()
+        .expect("selector schemas are objects");
+    if let Some(value) = object.remove("minimumBytes") {
+        object.insert("minLength".to_owned(), value);
+    }
+    if let Some(value) = object.remove("maximumBytes") {
+        object.insert("maxLength".to_owned(), value);
+    }
+    if object.get("type") == Some(&json!("uuid")) {
+        object.insert("type".to_owned(), json!("string"));
+        object.insert("format".to_owned(), json!("uuid"));
+    }
+    schema
+}
+
 /// Export multiple alternatives in one source. Each invocation replaces no
 /// files; the caller publishes this inventory to a new output directory.
 pub fn export_evidence_source(
@@ -344,12 +392,16 @@ pub fn export_evidence_source(
     let mut all_fields = fields.clone();
     let mut selector_profiles = BTreeMap::new();
     let mut identity_fields = BTreeMap::new();
-    let mut alternatives = Vec::new();
-    let mut prepare = String::from(
-        "// Generated from the compiled registry. Review before changing.\nfn prepare(selectors, context) {\n    let subject = selectors[\"subject\"];\n",
+    let mut route_input_properties = Map::new();
+    let mut route_input_alternatives = Vec::new();
+    let mut source_inputs = Map::new();
+    let mut select_fields = String::from(
+        "// Generated from the compiled registry. Review before changing.\nfn select_fields(exchange) {\n    let inputs = exchange.body;\n",
     );
+    let mut prepare =
+        String::from("fn prepare_request(exchange) {\n    let inputs = exchange.body;\n");
     let mut extract = String::from(
-        "// Identity is checked once, before facts can feed any question.\nfn extract(response, selectors, context) {\n    let subject = selectors[\"subject\"];\n    let record = response[\"data\"][\"domainData\"];\n",
+        "// Identity is checked once, before facts can feed any question.\nfn lookup(exchange) {\n    let inputs = exchange.properties[\"bregEvidenceInputs\"];\n    let record = exchange.body[\"data\"][\"domainData\"];\n",
     );
     let mut profile_dependencies = Vec::new();
     for selector_id in selectors {
@@ -410,6 +462,7 @@ pub fn export_evidence_source(
         let mut selector_fields = Map::new();
         let mut maximum = 0_u64;
         let mut body_fields = Vec::new();
+        let mut required_inputs = Vec::new();
         let mut selected = fields.clone();
         let mut checks = String::new();
         for id in &selector.fields {
@@ -422,15 +475,30 @@ pub fn export_evidence_source(
             let logical = field(entity, id)?;
             let (schema, bound) = selector_schema(&logical.field_type)?;
             maximum += bound;
-            selector_fields.insert(id.clone(), schema);
+            selector_fields.insert(id.clone(), schema.clone());
+            let input = route_input_name(&selector_id, id);
+            if route_input_properties
+                .insert(input.clone(), route_input_schema(&schema))
+                .is_some()
+            {
+                return Err(refusal(
+                    "selectors",
+                    "selector inputs did not produce distinct bounded route names",
+                ));
+            }
+            required_inputs.push(input.clone());
+            source_inputs.insert(
+                input.clone(),
+                json!({"selector":{"role":"subject","profile":profile,"field":id}}),
+            );
             body_fields.push(format!(
-                "{}: subject[\"values\"][{}]",
+                "{}: inputs[{}]",
                 json!(logical.api_name),
-                json!(id)
+                json!(input)
             ));
             selected.insert(id.clone());
             all_fields.insert(id.clone());
-            checks.push_str(&format!("        if is_missing(record[{api}]) || type_of(record[{api}]) != type_of(subject[\"values\"][{id}]) || record[{api}] != subject[\"values\"][{id}] {{ throw \"source_protocol_error\"; }}\n",api=json!(logical.api_name),id=json!(id)));
+            checks.push_str(&format!("        if record[{api}] == () || type_of(record[{api}]) != type_of(inputs[{input}]) || record[{api}] != inputs[{input}] {{ throw \"source_protocol_error\"; }}\n",api=json!(logical.api_name),input=json!(input)));
         }
         if maximum > 8192 {
             return Err(refusal(
@@ -443,18 +511,30 @@ pub fn export_evidence_source(
             .map(|id| field(entity, id).map(|field| field.api_name.clone()))
             .collect::<Result<Vec<_>, _>>()?
             .join(",");
-        prepare.push_str(&format!("    if subject[\"profile\"] == {profile} {{\n        return #{{query: [#{{name: \"accessProfile\", value: {access}}}, #{{name: \"$select\", value: {projection}}}], body: #{{selector: {selector}, values: #{{{values}}}}}}};\n    }}\n",profile=json!(profile),access=json!(options.access_profile),projection=json!(projection),selector=json!(selector_id),values=body_fields.join(", ")));
+        let condition = required_inputs
+            .iter()
+            .map(|input| format!("inputs.contains({})", json!(input)))
+            .collect::<Vec<_>>()
+            .join(" && ");
+        select_fields.push_str(&format!(
+            "    if {condition} {{ return {projection}; }}\n",
+            projection = json!(projection)
+        ));
+        prepare.push_str(&format!(
+            "    if {condition} {{ return #{{selector: {selector}, values: #{{{values}}}}}; }}\n",
+            selector = json!(selector_id),
+            values = body_fields.join(", ")
+        ));
         extract.push_str(&format!(
-            "    {}if subject[\"profile\"] == {} {{\n{}    }}",
+            "    {}if {condition} {{\n{}    }}",
             if selector_profiles.is_empty() {
                 ""
             } else {
                 "else "
             },
-            json!(profile),
             checks
         ));
-        alternatives.push(json!({"profile":profile,"fields":selector.fields}));
+        route_input_alternatives.push(json!({"required":required_inputs}));
         artifacts.push(enveloped_document(
             format!("selectors/{profile}.yaml"),
             SELECTOR_HEADER,
@@ -467,6 +547,7 @@ pub fn export_evidence_source(
         profile_dependencies.push(json!({"selector":selector,"grant":grant}));
         selector_profiles.insert(selector_id, profile);
     }
+    select_fields.push_str("    throw \"unsupported source selector profile\";\n}\n");
     prepare.push_str("    throw \"unsupported source selector profile\";\n}\n");
     if all_fields.len() > 64 {
         return Err(refusal(
@@ -474,10 +555,20 @@ pub fn export_evidence_source(
             "the union of selected identity and fact fields exceeds Evidence's 64 projected properties; split the alternatives into separate sources",
         ));
     }
+    let mut project_response = String::from(
+        "fn project_response(exchange) {\n    let record = exchange.body[\"data\"][\"domainData\"];\n    let projected = #{};\n",
+    );
+    for id in &all_fields {
+        let api_name = json!(field(entity, id)?.api_name);
+        project_response.push_str(&format!(
+            "    if record.contains({api_name}) {{ projected[{api_name}] = record[{api_name}]; }}\n"
+        ));
+    }
+    project_response.push_str("    #{data: #{domainData: projected}}\n}\n");
     extract.push_str(" else { throw \"unsupported source selector profile\"; }\n");
     for id in &fields {
         extract.push_str(&format!(
-            "    if is_missing(record[{}]) {{ return #{{outcome: \"no_match\"}}; }}\n",
+            "    if record[{}] == () {{ return #{{lookup: \"no-match\"}}; }}\n",
             json!(field(entity, id)?.api_name)
         ));
     }
@@ -489,11 +580,14 @@ pub fn export_evidence_source(
         })
         .collect::<Result<Vec<_>, _>>()?;
     extract.push_str(&format!(
-        "    #{{outcome: \"match\", facts: #{{{}}}}}\n}}\n",
+        "    #{{lookup: \"matched\", facts: #{{{}}}}}\n}}\n",
         facts.join(", ")
     ));
+    extract.push_str(
+        "fn is_unresolved(exchange) {\n    exchange.headers[\"camelhttpresponsecode\"] == 404\n}\n",
+    );
+    let script = format!("{select_fields}\n{prepare}\n{project_response}\n{extract}");
     let mut response_fields = Map::new();
-    let mut projection = Vec::new();
     let mut dependencies = Map::new();
     for id in &all_fields {
         let logical = field(entity, id)?;
@@ -506,7 +600,6 @@ pub fn export_evidence_source(
             .expect("scalar schema object")
             .remove("enum");
         response_fields.insert(logical.api_name.clone(), schema);
-        projection.push(format!("/data/domainData/{}", logical.api_name));
         dependencies.insert(
             id.clone(),
             serde_json::to_value(logical)
@@ -533,39 +626,110 @@ pub fn export_evidence_source(
         )]),
         vec!["data".into()],
     );
-    artifacts.push(document(
-        format!("schemas/{prefix}-response.yaml"),
-        &response,
-    )?);
-    artifacts.push(document(
-        format!("schemas/{prefix}-facts.yaml"),
-        &object(fact_properties, fields.into_iter().collect()),
-    )?);
-    artifacts.push(document(
-        format!("schemas/{prefix}-parameters.yaml"),
-        &object(Map::new(), vec![]),
-    )?);
+    let pack_root = format!("adapter-packs/{prefix}");
+    let inputs_path = "schemas/inputs.json";
+    let facts_path = "schemas/facts.json";
+    let response_path = "schemas/response.json";
+    let script_path = "scripts/lookup.rhai";
+    let protocol_path = "protocols/registry-lookup.json";
+    let inputs = json!({
+        "type":"object",
+        "additionalProperties":false,
+        "properties":route_input_properties,
+        "oneOf":route_input_alternatives
+    });
+    let facts_schema = object(fact_properties, fields.into_iter().collect());
+    let inputs_bytes = serde_json::to_vec_pretty(&inputs)
+        .map_err(|_| refusal("export", "could not encode the route input schema"))?;
+    let facts_bytes = serde_json::to_vec_pretty(&facts_schema)
+        .map_err(|_| refusal("export", "could not encode the route fact schema"))?;
+    let response_bytes = serde_json::to_vec_pretty(&response)
+        .map_err(|_| refusal("export", "could not encode the provider response schema"))?;
+    let script_bytes = script.into_bytes();
+    let protocol_bytes = serde_json::to_vec(&json!({
+        "unresolvedProblem":{
+            "status":404,
+            "type":crate::problem::ProblemCode::LookupUnresolved.type_uri(),
+            "code":"lookup.unresolved"
+        },
+        "forwardAccessAttribution":entity.access_log.is_some()
+    }))
+    .map_err(|_| refusal("export", "could not encode the registry lookup protocol"))?;
+    for (path, media_type, bytes) in [
+        (inputs_path, "application/schema+json", inputs_bytes),
+        (facts_path, "application/schema+json", facts_bytes),
+        (response_path, "application/schema+json", response_bytes),
+        (script_path, "text/plain", script_bytes),
+    ] {
+        artifacts.push(artifact(format!("{pack_root}/{path}"), media_type, bytes));
+    }
     artifacts.push(artifact(
-        format!("adapters/{prefix}-prepare.rhai"),
-        "text/plain",
-        prepare.into_bytes(),
+        format!("{pack_root}/{protocol_path}"),
+        "application/json",
+        protocol_bytes.clone(),
     ));
-    artifacts.push(artifact(
-        format!("adapters/{prefix}-extract.rhai"),
-        "text/plain",
-        extract.into_bytes(),
-    ));
-    artifacts.push(enveloped_document(format!("sources/{prefix}.yaml"),SOURCE_HEADER,&json!({
-        "type":"http-json","connection":options.connection,"behaviorRevision":behavior_revision,"posture":"field-projected",
-        "forwardAccessAttribution":entity.access_log.is_some(),
-        "unresolvedProblem":{"status":404,"type":crate::problem::ProblemCode::LookupUnresolved.type_uri(),"code":"lookup.unresolved"},
-        "request":{"method":"POST","path":route.path,"fixedHeaders":[{"name":"Accept","value":"application/json"}],
-            "selectorInputs":[{"role":"subject","alternatives":alternatives}],"prepareScript":format!("adapters/{prefix}-prepare.rhai"),
-            "adapterParameters":{},"adapterParametersSchema":format!("schemas/{prefix}-parameters.yaml"),
-            "preparationLimits":{"query":"required","jsonBody":"required","maximumJsonDepth":8,"maximumCollectionItems":128,"maximumStringBytes":8192,"maximumNormalizedBytes":16384},
-            "projection":projection,"redirects":"deny","attemptTimeoutMilliseconds":5000,"maximumResponseBytes":65536},
-        "responseSchema":format!("schemas/{prefix}-response.yaml"),"extractScript":format!("adapters/{prefix}-extract.rhai"),"factSchema":format!("schemas/{prefix}-facts.yaml")
-    }))?);
+    let pin =
+        |path: &str, bytes: &[u8]| json!({"path":path,"digest":format!("sha256:{}",digest(bytes))});
+    let script_reference = pin(
+        script_path,
+        file_bytes(&artifacts, &format!("{pack_root}/{script_path}")),
+    );
+    let response_reference = pin(
+        response_path,
+        file_bytes(&artifacts, &format!("{pack_root}/{response_path}")),
+    );
+    let endpoint = json!({
+        "id":"registry",
+        "component":"http",
+        "authentication":{"type":options.authentication.as_str()},
+        "attemptTimeoutMilliseconds":5000,
+        "maximumResponseBytes":65536,
+        "requestHeaders":["accept"],
+        "operations":[{"id":"lookup","safeUpstream":true}],
+        "hostProtocol":{"id":"registry-lookup-v1","config":pin(protocol_path,&protocol_bytes)},
+        "testedVersions":["breg-evidence-lookup-v2"]
+    });
+    let pack = json!({
+        "apiVersion":"id.registrystack.org/formats/adapter/pack/v1alpha1",
+        "kind":"AdapterPack",
+        "id":prefix,
+        "version":behavior_revision,
+        "testedVersions":["breg-evidence-lookup-v2"],
+        "endpoints":[endpoint],
+        "sourceRoutes":[{
+            "id":"lookup",
+            "evidence":{
+                "inputsSchema":pin(inputs_path,file_bytes(&artifacts,&format!("{pack_root}/{inputs_path}"))),
+                "factsSchema":pin(facts_path,file_bytes(&artifacts,&format!("{pack_root}/{facts_path}"))),
+                "acquisitionPosture":"field-projected"
+            },
+            "steps":[
+                {"setProperty":{"name":"bregEvidenceInputs","value":{"jsonpath":"$"}}},
+                {"setProperty":{"name":"bregSelect","value":{"rhai":{"file":script_path,"entrypoint":"select_fields"}}}},
+                {"setBody":{"rhai":{"file":script_path,"entrypoint":"prepare_request"}}},
+                {"setHeader":{"name":"Accept","value":{"constant":"application/json"}}},
+                {"to":{"uri":"http:registry","parameters":{"httpMethod":"POST","path":route.path,"operation":"lookup","throwExceptionOnFailure":false,"query":{"accessProfile":{"constant":options.access_profile},"$select":{"exchangeProperty":"bregSelect"}},"body":{"jsonpath":"$"}}}},
+                {"choice":{"when":[{"rhai":{"file":script_path,"entrypoint":"is_unresolved"},"steps":[{"stop":{}}]}]}},
+                {"setBody":{"rhai":{"file":script_path,"entrypoint":"project_response"}}},
+                {"validateSchema":response_reference},
+                {"setBody":{"rhai":{"file":script_path,"entrypoint":"lookup"}}}
+            ]
+        }],
+        "scripts":[script_reference],
+        "capabilities":{"components":["http"],"languages":["constant","exchangeProperty","jsonpath","rhai"],"eips":["choice","setBody","setHeader","setProperty","stop","to"]}
+    });
+    artifacts.push(document(format!("{pack_root}/pack.yaml"), &pack)?);
+    artifacts.push(enveloped_document(
+        format!("sources/{prefix}.yaml"),
+        SOURCE_HEADER,
+        &json!({
+            "pack":{"id":prefix,"version":behavior_revision},
+            "route":"lookup",
+            "connection":options.connection,
+            "inputs":source_inputs,
+            "acquisitionPosture":"field-projected"
+        }),
+    )?);
     artifacts.sort_by(|a, b| a.path.cmp(&b.path));
     let manifest = serde_json::to_vec(&ExportManifest {
         api_version: EVIDENCE_SOURCE_EXPORT_API_VERSION,
@@ -656,7 +820,7 @@ fn selected_behavior(
         .map(|boundary| &boundary.field)
         .map(|id| field(entity, id).map(|field| json!(field)))
         .collect::<Result<Vec<_>, _>>()?;
-    let mut behavior = json!({"protocol":"breg-evidence-lookup-v2","readSemantics":"collection-dependencies-v1/evaluation-date-transaction-v1/access-attribution-v1","entity":entity.id,"route":entity.route,"canonicalId":entity.canonical_id,"tombstone":entity.tombstone,"fields":logical_fields,"selectors":selectors,"access":{"profile":access.id,"principalClaim":access.principal_claim,"requiredScopes":access.required_scopes,"requiredPurposes":access.required_purposes,"rowBoundaries":access.row_boundaries,"boundaryFields":boundary_fields,"requirements":entity.access_requirements,"accessLog":entity.access_log,"selectPolicies":select_policies(registry,entity,&options.access_profile)},"derived":derived,"sources":sources});
+    let mut behavior = json!({"protocol":"breg-evidence-lookup-v2","readSemantics":"collection-dependencies-v1/evaluation-date-transaction-v1/access-attribution-v1","missingFactOutcome":"no-match","authentication":options.authentication.as_str(),"entity":entity.id,"route":entity.route,"canonicalId":entity.canonical_id,"tombstone":entity.tombstone,"fields":logical_fields,"selectors":selectors,"access":{"profile":access.id,"principalClaim":access.principal_claim,"requiredScopes":access.required_scopes,"requiredPurposes":access.required_purposes,"rowBoundaries":access.row_boundaries,"boundaryFields":boundary_fields,"requirements":entity.access_requirements,"accessLog":entity.access_log,"selectPolicies":select_policies(registry,entity,&options.access_profile)},"derived":derived,"sources":sources});
     let membership = membership_behavior(registry, entity, &options.access_profile)?;
     if !membership.is_empty() {
         behavior["access"]["membershipBoundaries"] = json!(membership);

@@ -10,7 +10,7 @@ use std::{
 
 use chrono::{TimeZone as _, Utc};
 use registry_evidence::{
-    bundle::{Bundle, MAX_ARTIFACT_BYTES, MAX_BUNDLE_BYTES, MAX_BUNDLE_FILES},
+    bundle::{evidence_package_limits, Bundle},
     kernel::{EvidenceScope, OfflineKernel, ValueProjection},
 };
 use registry_evidence_authoring::{
@@ -18,8 +18,8 @@ use registry_evidence_authoring::{
     output::Bound,
     project::{self, EvidenceProject, Output, MAX_OUTPUTS_PER_ASSERTION},
 };
-use registry_platform_config::{write_sum_file, PackageLimits};
-use registry_platform_yaml::Reader;
+use registry_platform_config::{sha256_uri, write_sum_file};
+use registry_platform_yaml::{LocalId, Reader};
 use serde_json::{json, Value};
 
 const PUBLIC_JWK: &[u8] = include_bytes!(
@@ -33,43 +33,36 @@ fn project_document() -> Value {
         "id": "all-output-forms",
         "selectorProfiles": {
             "record-by-code": {
-                "maximumAggregateBytes": 8,
+                "maximumAggregateBytes": 16,
                 "fields": {
                     "record-code": {
                         "type": "controlled-code",
                         "codelist": "codelists/codes.yaml",
                         "codelistVersion": "1",
                         "maximumBytes": 8
-                    }
+                    },
+                    "record-reference": {"type": "string", "minimumBytes": 1, "maximumBytes": 8}
                 }
             }
         },
         "functions": [
-            {"id": "extract-record", "interface": "source-extract/v1", "source": "functions/extract.rhai"},
             {"id": "derive-values", "interface": "assertion-derive/v1", "source": "functions/derive.rhai"}
         ],
         "sources": {
             "records": {
-                "type": "http-json",
+                "pack": {"id": "output-forms-source", "version": "1"},
+                "route": "lookup",
                 "connection": "records",
+                "inputs": {
+                    "recordReference": {
+                        "selector": {
+                            "role": "subject",
+                            "profile": "record-by-code",
+                            "field": "record-reference"
+                        }
+                    }
+                },
                 "acquisitionPosture": "record-transformed",
-                "selectors": [{"role": "subject", "profiles": ["record-by-code"]}],
-                "request": {
-                    "method": "GET",
-                    "path": "/records/{record-code}",
-                    "pathBindings": {
-                        "record-code": {"selector": {"role": "subject", "profile": "record-by-code", "field": "record-code"}}
-                    },
-                    "fixedHeaders": []
-                },
-                "response": {
-                    "projection": ["/marker"],
-                    "shape": {"type": "object", "required": ["marker"], "properties": {"marker": {"type": "boolean"}}},
-                    "maximumBytes": 4096
-                },
-                "extract": {"function": "extract-record"},
-                "facts": {"marker": {"type": "boolean"}},
-                "limits": {"attemptTimeoutMilliseconds": 2000, "maximumConcurrency": 4}
             }
         },
         "assertionDefinitions": {
@@ -89,7 +82,7 @@ fn project_document() -> Value {
                     "audiences": ["urn:example:audience:all-output-forms"]
                 },
                 "subjects": [{"role": "subject", "selectors": ["record-by-code"]}],
-                "acquisition": {"type": "single", "source": "records"},
+                "acquisition": {"source": "records"},
                 "derive": {"function": "derive-values"},
                 "outputs": {
                     "boolean": {"concept": "urn:example:concept:boolean", "type": "boolean"},
@@ -157,13 +150,6 @@ fn codelist(uri: &str, codes: &[&str]) -> String {
 fn assets() -> BTreeMap<String, String> {
     BTreeMap::from([
         (
-            "functions/extract.rhai".to_owned(),
-            r#"fn extract(response, selectors, context) {
-    #{outcome: "match", facts: #{marker: response.marker}}
-}"#
-            .to_owned(),
-        ),
-        (
             "functions/derive.rhai".to_owned(),
             r#"fn derive(facts, selectors, context) {
     [
@@ -223,6 +209,136 @@ fn assets() -> BTreeMap<String, String> {
     ])
 }
 
+fn checked_pack_route() -> compile::CheckedPackRoute {
+    let inputs_schema = json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["recordReference"],
+        "properties": {
+            "recordReference": {"type": "string", "minLength": 1, "maxLength": 8}
+        }
+    });
+    let facts_schema = json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["marker"],
+        "properties": {"marker": {"type": "boolean"}}
+    });
+    let provider_schema = facts_schema.clone();
+    let inputs_bytes = serde_json::to_vec(&inputs_schema).expect("pack input schema serializes");
+    let facts_bytes = serde_json::to_vec(&facts_schema).expect("pack facts schema serializes");
+    let provider_bytes =
+        serde_json::to_vec(&provider_schema).expect("provider response schema serializes");
+    let route_script = br#"fn request(exchange) {
+    #{record_reference: exchange.body["recordReference"]}
+}
+
+fn facts(exchange) {
+    #{marker: exchange.body["marker"]}
+}
+"#
+    .to_vec();
+    let pack_bytes = serde_json::to_vec_pretty(&json!({
+        "apiVersion": "id.registrystack.org/formats/adapter/pack/v1alpha1",
+        "kind": "AdapterPack",
+        "id": "output-forms-source",
+        "version": "1",
+        "testedVersions": [],
+        "endpoints": [{
+            "id": "records",
+            "component": "http",
+            "authentication": {"type": "static-authorization"},
+            "attemptTimeoutMilliseconds": 2000,
+            "maximumResponseBytes": 4096,
+            "requestHeaders": ["accept"],
+            "operations": [{"id": "lookup", "safeUpstream": true}],
+            "testedVersions": []
+        }],
+        "scripts": [{
+            "path": "scripts/records.rhai",
+            "digest": sha256_uri(&route_script)
+        }],
+        "sourceRoutes": [{
+            "id": "lookup",
+            "evidence": {
+                "inputsSchema": {
+                    "path": "schemas/inputs.json",
+                    "digest": sha256_uri(&inputs_bytes)
+                },
+                "factsSchema": {
+                    "path": "schemas/facts.json",
+                    "digest": sha256_uri(&facts_bytes)
+                },
+                "acquisitionPosture": "record-transformed"
+            },
+            "steps": [
+                {
+                    "setHeader": {
+                        "name": "Accept",
+                        "value": {"constant": "application/json"}
+                    }
+                },
+                {
+                    "to": {
+                        "uri": "http:records",
+                        "parameters": {
+                            "httpMethod": "POST",
+                            "path": "/records/lookup",
+                            "body": {
+                                "rhai": {
+                                    "file": "scripts/records.rhai",
+                                    "entrypoint": "request"
+                                }
+                            },
+                            "operation": "lookup"
+                        }
+                    }
+                },
+                {
+                    "validateSchema": {
+                        "path": "schemas/provider.json",
+                        "digest": sha256_uri(&provider_bytes)
+                    }
+                },
+                {
+                    "setBody": {
+                        "rhai": {
+                            "file": "scripts/records.rhai",
+                            "entrypoint": "facts"
+                        }
+                    }
+                }
+            ]
+        }]
+    }))
+    .expect("pack serializes");
+    compile::CheckedPackRoute {
+        pack: project::PackReference {
+            id: LocalId::new("output-forms-source").expect("pack id"),
+            version: "1".to_owned(),
+        },
+        route: LocalId::new("lookup").expect("route id"),
+        digest: sha256_uri(&pack_bytes),
+        inputs_schema,
+        facts_schema,
+        acquisition_posture: project::AcquisitionPosture::RecordTransformed,
+        pack_bytes,
+        artifacts: BTreeMap::from([
+            ("schemas/inputs.json".to_owned(), inputs_bytes),
+            ("schemas/facts.json".to_owned(), facts_bytes),
+            ("schemas/provider.json".to_owned(), provider_bytes),
+            ("scripts/records.rhai".to_owned(), route_script),
+        ]),
+    }
+}
+
+fn compile_project(
+    project: &EvidenceProject,
+    source_assets: &BTreeMap<String, String>,
+) -> Result<compile::CompiledProject, Vec<registry_evidence_authoring::Finding>> {
+    compile::compile_with_pack_routes(project, source_assets, &[checked_pack_route()])
+}
+
 fn output_mut<'a>(project: &'a mut EvidenceProject, handle: &str) -> &'a mut Output {
     project
         .assertion_definitions
@@ -263,7 +379,7 @@ fn invalid_output_tags_bounds_and_selector_codelist_identity_are_refused_at_thei
         codelist("urn:example:codelist:codes", &["C-A", "C-B"])
             .replace("\"version\": \"1\"", "\"version\": \"2\""),
     );
-    let findings = compile::compile(&authored_project(), &mismatched_assets)
+    let findings = compile_project(&authored_project(), &mismatched_assets)
         .expect_err("selector codelist version mismatch is refused");
     assert!(findings.iter().any(|finding| {
         finding.code == "codelist-identity"
@@ -280,7 +396,7 @@ fn authored_output_ceiling_compiles_into_the_runtime_and_refuses_one_more() {
     let maximum_project = project::read_project("evidence.yaml", &maximum_bytes)
         .expect("the authoring ceiling is accepted")
         .value;
-    let compiled = compile::compile(&maximum_project, &assets()).expect("project compiles");
+    let compiled = compile_project(&maximum_project, &assets()).expect("project compiles");
     assert_eq!(
         compiled.model["requirements"][0]["concepts"]
             .as_array()
@@ -318,7 +434,7 @@ fn authored_output_ceiling_compiles_into_the_runtime_and_refuses_one_more() {
 fn all_authored_output_forms_compile_load_and_derive_through_the_runtime() {
     let project = authored_project();
     let source_assets = assets();
-    let compiled = compile::compile(&project, &source_assets).expect("project compiles");
+    let compiled = compile_project(&project, &source_assets).expect("project compiles");
     let concepts = compiled.model["requirements"][0]["concepts"]
         .as_array()
         .expect("compiled concepts");
@@ -474,23 +590,17 @@ fn write_runtime_bundle(package: &Path, model: Value, artifacts: BTreeMap<String
     object.remove("publication");
     bundle["sourceConnections"] = json!({
         "records": {
-            "baseUrl": "https://source.invalid",
-            "authentication": {"type": "static-authorization", "tokenRef": "secret:file/source-token"},
-            "maximumConcurrency": 4
+            "endpoints": [{
+                "endpoint": "records",
+                "baseUrl": "https://source.invalid",
+                "authentication": {"type": "static-authorization"},
+                "clientIdentity": "forbidden"
+            }]
         }
     });
     bundle["authorityProfiles"] = json!({});
     for (name, value) in model.as_object().expect("compiled model object") {
         bundle[name] = value.clone();
-    }
-    for source in bundle["sources"]
-        .as_object_mut()
-        .expect("compiled source object")
-        .values_mut()
-    {
-        source["baseUrl"] = json!("https://source.invalid");
-        source["authentication"] =
-            json!({"type": "static-authorization", "tokenRef": "secret:file/source-token"});
     }
     fs::write(
         package.join("evidence.yaml"),
@@ -525,13 +635,7 @@ cases:
     write_sum_file(
         package,
         None,
-        &PackageLimits {
-            max_files: MAX_BUNDLE_FILES,
-            max_file_bytes: MAX_ARTIFACT_BYTES,
-            max_total_bytes: MAX_BUNDLE_BYTES,
-            max_depth: 3,
-            max_path_bytes: 128,
-        },
+        &evidence_package_limits(),
         "authoring Output form bridge",
     )
     .expect("package checksums write");

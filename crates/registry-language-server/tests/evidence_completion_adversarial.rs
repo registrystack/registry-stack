@@ -39,20 +39,22 @@ fn controls_in_recoverable_names_are_not_offered() {
     assert!(labels(
         &p.index(),
         &p.path(PROJECT),
-        after(&source, "acquisition: {type: single, source: ")
+        after(&source, "acquisition: {source: ")
     )
     .iter()
     .all(|x| !x.chars().any(char::is_control)));
 }
 #[test]
 fn output_completion_never_offers_private_facts() {
-    let source = SOURCE.replace(
-        "facts: {active: {type: boolean}}",
-        "facts: {active: {type: boolean}, canary: {type: string}}",
+    let p = Project::new(SOURCE);
+    p.write(
+        DERIVE,
+        r#"fn derive(facts, selectors, context) { let local_fact = facts["canary"]; [#{output: "active", value: facts.active}] }"#,
     );
-    let p = Project::new(&source);
+    let index = p.index();
+    assert!(index.diagnostics().is_empty(), "{:?}", index.diagnostics());
     assert_eq!(
-        labels(&p.index(), &p.path(DERIVE), p.at(DERIVE, "active\"")),
+        labels(&index, &p.path(DERIVE), p.at(DERIVE, "active\"")),
         vec!["active"]
     );
 }

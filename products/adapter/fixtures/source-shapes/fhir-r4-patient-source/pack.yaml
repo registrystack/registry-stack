@@ -15,8 +15,9 @@
 #   URL (https://hl7.org/fhir/R4/http.html#paging).
 #
 # `_format=json` is the FHIR query-parameter override of the Accept header
-# (https://hl7.org/fhir/R4/http.html#mime-type); it stands in for
-# `Accept: application/fhir+json`, which the `to` step cannot declare.
+# (https://hl7.org/fhir/R4/http.html#mime-type). This shape predates the
+# endpoint `requestHeaders` allowlist and still exercises the query form;
+# a current pack may set and allowlist `Accept: application/fhir+json`.
 #
 # Authentication: SMART Backend Services style OAuth2 client credentials
 # (https://hl7.org/fhir/smart-app-launch/backend-services.html uses
@@ -54,33 +55,9 @@ routeTemplates:
           exception:
             - upstream.timeout
             - upstream.connection
-          handled: true
           redeliveryPolicy:
             maximumRedeliveries: 1
             retryDelaySeconds: 2
-          steps:
-            - setBody:
-                constant:
-                  title: The source did not answer in time.
-                  status: 503
-                  code: source.unavailable
-            - stop: {}
-      - onException:
-          exception:
-            - upstream.http
-            - upstream.malformed
-            - upstream.too-large
-            - aggregation.duplicate
-            - loop.maximum-iterations-reached
-            - script
-          handled: true
-          steps:
-            - setBody:
-                constant:
-                  title: The source answered something unusable.
-                  status: 502
-                  code: source.upstream-error
-            - stop: {}
       - setProperty:
           name: fhirIdentifierSystem
           value:
@@ -130,8 +107,8 @@ routes:
                 file: scripts/is-continuation.rhai
                 entrypoint: is_continuation
               steps:
-                # HAPI FHIR continuation: the opaque next link cannot be
-                # followed, so its HAPI-specific query is rebuilt here.
+                # This older shape rebuilds HAPI FHIR's continuation query
+                # instead of using the current origin-pinned httpUri form.
                 - setProperty:
                     name: fhirPagesId
                     value:
@@ -188,7 +165,7 @@ scripts:
   - path: scripts/is-continuation.rhai
     digest: sha256:8673a304e10ed6f7494466326a917167f8f48f9f9103d3716d5e2e605d9b1da9
   - path: scripts/next-page-token.rhai
-    digest: sha256:9ff70582b06293e07d6eba5cb26d7c14b50228475f660a8c6e4da62c954bcd55
+    digest: sha256:e02ae84c5267fccc377ee4beb74ae45dc4b9f8e66fe3fe6b26c6eb43a9987d12
   - path: scripts/to-records.rhai
     digest: sha256:66e457e9014ba7fc28584f551ffdfe4fba9a9f98351db9a6ddf7717f9d64afa4
 capabilities:
@@ -207,5 +184,4 @@ capabilities:
     - setBody
     - setHeader
     - setProperty
-    - stop
     - to

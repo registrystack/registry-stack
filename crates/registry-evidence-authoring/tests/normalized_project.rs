@@ -5,24 +5,79 @@ use registry_evidence_authoring::{
 };
 use registry_platform_yaml::LocalId;
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
 fn project() -> project::EvidenceProject {
     serde_json::from_value(json!({
         "id":"synthetic-evidence", "selectorProfiles":{"person-by-id":{"maximumAggregateBytes":64,"fields":{"person-id":{"type":"string","minimumBytes":1,"maximumBytes":64}}}},
-        "functions":[{"id":"extract-person","interface":"source-extract/v1","source":"functions/extract.rhai"},{"id":"derive-status","interface":"assertion-derive/v1","source":"functions/derive.rhai"}],
-        "sources":{"person":{"type":"http-json","connection":"population","acquisitionPosture":"record-transformed","selectors":[{"role":"person","profiles":["person-by-id"]}],"request":{"method":"GET","path":"/people/{person-id}","pathBindings":{"person-id":{"selector":{"role":"person","profile":"person-by-id","field":"person-id"}}},"fixedHeaders":[]},"response":{"projection":["/active","/canary"],"shape":{"type":"object","required":["active","canary"],"properties":{"active":{"type":"boolean"},"canary":{"type":"string","maximumBytes":128}}},"maximumBytes":4096},"extract":{"function":"extract-person"},"facts":{"active":{"type":"boolean"},"canary":{"type":"string","maximumBytes":128}},"limits":{"attemptTimeoutMilliseconds":2000,"maximumConcurrency":4}}},
-        "assertionDefinitions":{"active-status":{"question":"Is the person active?","semantics":{"requirement":"urn:example:requirement:active","kind":"criterion","evidenceType":"urn:example:evidence:active","referenceFrameworks":["urn:example:framework:status"]},"purpose":"status-verification","grantCeiling":{"authorities":["organizational"],"actorKinds":["service"],"valueOrigins":["request"],"audiences":["urn:example:audience:consumer"]},"subjects":[{"role":"person","selectors":["person-by-id"]}],"acquisition":{"type":"single","source":"person"},"derive":{"function":"derive-status"},"outputs":{"active":{"concept":"urn:example:concept:active","type":"boolean"}},"validitySeconds":300,"subjectBinding":"audience-scoped","representations":["signed-jws"]}}
+        "functions":[{"id":"derive-status","interface":"assertion-derive/v1","source":"functions/derive.rhai"}],
+        "sources":{"person":{"pack":{"id":"synthetic-register","version":"0.1.0"},"route":"evidence-person","connection":"population","inputs":{"personId":{"selector":{"role":"person","profile":"person-by-id","field":"person-id"}}},"acquisitionPosture":"record-transformed"}},
+        "assertionDefinitions":{"active-status":{"question":"Is the person active?","semantics":{"requirement":"urn:example:requirement:active","kind":"criterion","evidenceType":"urn:example:evidence:active","referenceFrameworks":["urn:example:framework:status"]},"purpose":"status-verification","grantCeiling":{"authorities":["organizational"],"actorKinds":["service"],"valueOrigins":["request"],"audiences":["urn:example:audience:consumer"]},"subjects":[{"role":"person","selectors":["person-by-id"]}],"acquisition":{"source":"person"},"derive":{"function":"derive-status"},"outputs":{"active":{"concept":"urn:example:concept:active","type":"boolean"}},"validitySeconds":300,"subjectBinding":"audience-scoped","representations":["signed-jws"]}}
     })).unwrap()
 }
 fn scripts() -> BTreeMap<String, String> {
-    BTreeMap::from([("functions/extract.rhai".to_owned(),"fn extract(response, selectors, context) { #{outcome: \"match\", facts: #{active: response.active, canary: response.canary}} }".to_owned()),("functions/derive.rhai".to_owned(),"// derive is a name\nfn  derive (facts, selectors, context) { [#{output: \"active\", value: facts.active}] }".to_owned())])
+    BTreeMap::from([("functions/derive.rhai".to_owned(),"// derive is a name\nfn  derive (facts, selectors, context) { [#{output: \"active\", value: facts.active}] }".to_owned())])
+}
+
+fn pack_routes() -> Vec<compile::CheckedPackRoute> {
+    let inputs_schema = json!({"type":"object","additionalProperties":false,"required":["personId"],"properties":{"personId":{"type":"string","minLength":1,"maxLength":64}}});
+    let facts_schema = json!({"type":"object","additionalProperties":false,"required":["active"],"properties":{"active":{"type":"boolean"},"canary":{"type":"string","maxLength":128}}});
+    let inputs_bytes = serde_json::to_vec(&inputs_schema).unwrap();
+    let facts_bytes = serde_json::to_vec(&facts_schema).unwrap();
+    let pack_bytes = serde_json::to_vec(&json!({
+        "apiVersion":"id.registrystack.org/formats/adapter/pack/v1alpha1",
+        "kind":"AdapterPack",
+        "id":"synthetic-register",
+        "version":"0.1.0",
+        "testedVersions":[],
+        "sourceRoutes":[{
+            "id":"evidence-person",
+            "evidence":{
+                "inputsSchema":{"path":"schemas/inputs.schema.json","digest":sha256_uri(&inputs_bytes)},
+                "factsSchema":{"path":"schemas/facts.schema.json","digest":sha256_uri(&facts_bytes)}
+            }
+        }]
+    })).unwrap();
+    vec![compile::CheckedPackRoute {
+        pack: project::PackReference {
+            id: LocalId::new("synthetic-register").unwrap(),
+            version: "0.1.0".to_owned(),
+        },
+        route: LocalId::new("evidence-person").unwrap(),
+        digest: sha256_uri(&pack_bytes),
+        inputs_schema,
+        facts_schema,
+        acquisition_posture: project::AcquisitionPosture::RecordTransformed,
+        pack_bytes,
+        artifacts: BTreeMap::from([
+            ("schemas/inputs.schema.json".to_owned(), inputs_bytes),
+            ("schemas/facts.schema.json".to_owned(), facts_bytes),
+        ]),
+    }]
+}
+
+fn sha256_uri(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    let mut hex = String::with_capacity(64);
+    for byte in digest {
+        use std::fmt::Write as _;
+        write!(&mut hex, "{byte:02x}").unwrap();
+    }
+    format!("sha256:{hex}")
+}
+
+fn compile_project(
+    project: &project::EvidenceProject,
+    scripts: &BTreeMap<String, String>,
+) -> Result<compile::CompiledProject, Vec<registry_evidence_authoring::Finding>> {
+    compile::compile_with_pack_routes(project, scripts, &pack_routes())
 }
 
 #[test]
 fn normalized_project_compiles_sources_outputs_and_named_functions() {
     let project = project();
-    let compiled = compile::compile(&project, &scripts()).unwrap();
+    let compiled = compile_project(&project, &scripts()).unwrap();
     assert_eq!(compiled.model["requirements"][0]["handle"], "active-status");
     assert_eq!(
         compiled.model["requirements"][0]["concepts"]
@@ -32,8 +87,12 @@ fn normalized_project_compiles_sources_outputs_and_named_functions() {
         1
     );
     assert_eq!(
-        compiled.model["sources"]["person"]["request"]["pathBindings"]["person-id"]["type"],
-        "selector"
+        compiled.model["sources"]["person"]["route"],
+        "evidence-person"
+    );
+    assert_eq!(
+        compiled.model["sources"]["person"]["pack"]["digest"],
+        pack_routes()[0].digest
     );
     let script =
         String::from_utf8(compiled.artifacts["derivations/active-status.rhai"].clone()).unwrap();
@@ -41,7 +100,7 @@ fn normalized_project_compiles_sources_outputs_and_named_functions() {
     assert!(!script.contains("canary"));
     assert_eq!(
         compiled.functions[0]["callSites"][0],
-        "/sources/person/extract"
+        "/assertionDefinitions/active-status/derive"
     );
 }
 
@@ -58,7 +117,7 @@ fn constructed_project_display_text_is_checked_before_compilation() {
 
     for findings in [
         project::validate_project(&project),
-        compile::compile(&project, &scripts()).expect_err("unsafe display text must be refused"),
+        compile_project(&project, &scripts()).expect_err("unsafe display text must be refused"),
     ] {
         assert!(findings.iter().any(|finding| {
             finding.code == "definition-question"
@@ -80,7 +139,7 @@ fn constructed_project_id_collisions_are_checked_before_compilation() {
 
     for findings in [
         project::validate_project(&project),
-        compile::compile(&project, &scripts())
+        compile_project(&project, &scripts())
             .expect_err("separator-lookalike selector profiles must be refused"),
     ] {
         assert!(findings.iter().any(|finding| {
@@ -192,7 +251,7 @@ fn constructed_multilingual_display_text_remains_valid() {
         .question = "العربية \u{200f}Latin".to_owned();
 
     assert!(project::validate_project(&project).is_empty());
-    compile::compile(&project, &scripts()).expect("allowed multilingual text compiles");
+    compile_project(&project, &scripts()).expect("allowed multilingual text compiles");
 }
 
 #[test]
@@ -207,16 +266,9 @@ fn function_interfaces_are_checked_without_execution() {
         FunctionInterface::AssertionDerive
     )
     .is_empty());
-    assert!(!registry_evidence_authoring::derivation::validate_function(
-        "fn prepare(a,b,c) {}",
-        FunctionInterface::SourcePrepare
-    )
-    .is_empty());
-    assert!(!registry_evidence_authoring::derivation::validate_function(
-        "fn extract(a,b) {} fn extract(a,b,c) {}",
-        FunctionInterface::SourceExtract
-    )
-    .is_empty());
+    for retired in ["source-prepare/v1", "source-extract/v1"] {
+        assert!(serde_json::from_value::<FunctionInterface>(json!(retired)).is_err());
+    }
 }
 
 #[test]
@@ -246,14 +298,7 @@ fn question_presentation_does_not_change_definition_dependencies() {
         before,
         compile::definition_dependencies(&after, "active-status").unwrap()
     );
-    after
-        .sources
-        .values_mut()
-        .next()
-        .unwrap()
-        .response
-        .projection
-        .push("/extra".to_owned());
+    after.sources.values_mut().next().unwrap().route = LocalId::new("evidence-person-v2").unwrap();
     assert_ne!(
         before,
         compile::definition_dependencies(&after, "active-status").unwrap()
@@ -322,65 +367,27 @@ fn complete_target_grants_resolve_names_without_unioning_permissions() {
 #[test]
 fn acquisition_variants_and_timezone_are_definition_owned() {
     let mut document = serde_json::to_value(project()).unwrap();
-    document["sources"]["person-fetch"] = document["sources"]["person"].clone();
-    document["sources"]["person-check"] = document["sources"]["person"].clone();
+    document["assertionDefinitions"]["active-status"]["observationTimezone"] =
+        json!("Asia/Bangkok");
+    let project: project::EvidenceProject = serde_json::from_value(document.clone()).unwrap();
+    let compiled = compile_project(&project, &scripts()).unwrap();
+    assert_eq!(
+        compiled.model["requirements"][0]["acquisition"],
+        json!({"source":"person"})
+    );
+    assert_eq!(
+        compiled.model["requirements"][0]["observationTimezone"],
+        "Asia/Bangkok"
+    );
+
     for acquisition in [
         json!({"type":"single","source":"person"}),
         json!({"type":"search-then-fetch","search":"person","fetch":"person-fetch"}),
         json!({"type":"search-then-fetch-set","search":"person","fetch":[{"source":"person-fetch","factInputs":["active"]},{"source":"person-check","factInputs":["active"]}],"maximumAcquisitionMilliseconds":3000}),
     ] {
-        document["assertionDefinitions"]["active-status"]["acquisition"] = acquisition.clone();
-        document["assertionDefinitions"]["active-status"]["observationTimezone"] =
-            json!("Asia/Bangkok");
-        let mut scripts = scripts();
-        if acquisition["type"] == "search-then-fetch-set" {
-            document["acquisitionCapabilities"] = json!(["search-then-fetch-set"]);
-            for (source, function, path, facts, body) in [
-                (
-                    "person",
-                    "extract-search",
-                    "functions/search.rhai",
-                    json!({"reference":{"type":"string","maximumBytes":64}}),
-                    "#{reference:\"synthetic\"}",
-                ),
-                (
-                    "person-fetch",
-                    "extract-fetch",
-                    "functions/fetch.rhai",
-                    json!({"active":{"type":"boolean"}}),
-                    "#{active:response.active}",
-                ),
-                (
-                    "person-check",
-                    "extract-check",
-                    "functions/check.rhai",
-                    json!({"canary":{"type":"string","maximumBytes":128}}),
-                    "#{canary:response.canary}",
-                ),
-            ] {
-                document["sources"][source]["facts"] = facts;
-                document["sources"][source]["extract"] = json!({"function":function});
-                document["functions"]
-                    .as_array_mut()
-                    .unwrap()
-                    .push(json!({"id":function,"interface":"source-extract/v1","source":path}));
-                scripts.insert(path.to_owned(),format!("fn extract(response,selectors,context){{#{{outcome:\"match\",facts:{body}}}}}"));
-            }
-            document["assertionDefinitions"]["active-status"]["acquisition"]["fetch"][0]
-                ["factInputs"] = json!(["reference"]);
-            document["assertionDefinitions"]["active-status"]["acquisition"]["fetch"][1]
-                ["factInputs"] = json!(["reference"]);
-        }
-        let project = serde_json::from_value(document.clone()).unwrap();
-        let compiled = compile::compile(&project, &scripts).unwrap();
-        assert_eq!(
-            compiled.model["requirements"][0]["acquisition"],
-            document["assertionDefinitions"]["active-status"]["acquisition"]
-        );
-        assert_eq!(
-            compiled.model["requirements"][0]["observationTimezone"],
-            "Asia/Bangkok"
-        );
+        let mut retired = document.clone();
+        retired["assertionDefinitions"]["active-status"]["acquisition"] = acquisition;
+        assert!(serde_json::from_value::<project::EvidenceProject>(retired).is_err());
     }
 }
 
@@ -395,7 +402,7 @@ fn bounded_outputs_and_sd_jwt_projection_retain_constraints() {
         let mut document = serde_json::to_value(project()).unwrap();
         document["assertionDefinitions"]["active-status"]["outputs"]["active"] = output.clone();
         let project = serde_json::from_value(document).unwrap();
-        let compiled = compile::compile(&project, &scripts()).unwrap();
+        let compiled = compile_project(&project, &scripts()).unwrap();
         assert_eq!(
             compiled.model["requirements"][0]["concepts"][0]["type"],
             output["type"]
@@ -410,7 +417,7 @@ fn bounded_outputs_and_sd_jwt_projection_retain_constraints() {
     let project = serde_json::from_value(document).unwrap();
     let mut scripts = scripts();
     scripts.insert("schemas/projected.json".to_owned(),json!({"$id":"urn:example:schema:projected","type":"object","required":["active"],"properties":{"active":{"type":"boolean"}},"additionalProperties":false}).to_string());
-    let compiled = compile::compile(&project, &scripts).unwrap();
+    let compiled = compile_project(&project, &scripts).unwrap();
     assert_eq!(
         compiled.model["requirements"][0]["concepts"][0]["sdJwtVc"]["claim"],
         "active"
@@ -431,26 +438,7 @@ fn sqlite_sources_preserve_reviewed_statement_and_execution_bounds() {
     source["maximumExtractAgeSeconds"] = json!(3600);
     source["request"] = json!({"statement":"queries/person.sql","columns":[{"name":"active","type":"boolean"}],"parameterBindings":{"person_id":{"selector":{"role":"person","profile":"person-by-id","field":"person-id"}}},"maximumRows":2,"maximumCellBytes":1024,"maximumStatementSteps":1000});
     source["response"]["projection"] = json!(["/rows"]);
-    let project = serde_json::from_value(document).unwrap();
-    let mut scripts = scripts();
-    scripts.insert(
-        "queries/person.sql".to_owned(),
-        "SELECT active FROM people WHERE person_id = :person_id LIMIT 2".to_owned(),
-    );
-    let compiled = compile::compile(&project, &scripts).unwrap();
-    assert!(compiled.artifacts.contains_key("queries/person.sql"));
-    assert_eq!(
-        compiled.model["sources"]["person"]["request"]["maximumRows"],
-        2
-    );
-    assert_eq!(
-        compiled.model["sources"]["person"]["request"]["maximumConcurrency"],
-        4
-    );
-    assert_eq!(
-        compiled.model["sources"]["person"]["maximumExtractAgeSeconds"],
-        3600
-    );
+    assert!(serde_json::from_value::<project::EvidenceProject>(document).is_err());
 }
 
 #[test]
@@ -515,7 +503,7 @@ fn derivations_cannot_read_undeclared_private_facts() {
         "fn derive(facts, selectors, context) { [#{output: \"active\", value: facts.unacquired}] }"
             .to_owned(),
     );
-    let findings = compile::compile(&project(), &scripts).unwrap_err();
+    let findings = compile_project(&project(), &scripts).unwrap_err();
     assert!(findings
         .iter()
         .any(|finding| finding.code == "derivation-fact-undeclared"));
@@ -531,37 +519,25 @@ fn source_function_refs_reject_ignored_call_parameters() {
 }
 
 #[test]
-fn compiler_metadata_exposes_typed_function_bindings_and_exact_extract_outcomes() {
-    let compiled = compile::compile(&project(), &scripts()).unwrap();
+fn compiler_metadata_exposes_typed_derivation_bindings_and_exact_outputs() {
+    let compiled = compile_project(&project(), &scripts()).unwrap();
     let binding = &compiled.functions[0]["bindings"][0];
     assert_eq!(
-        binding["outputs"]["anyOf"][0]["properties"]["outcome"]["enum"],
-        json!(["match"])
+        binding["outputs"]["items"]["anyOf"][0]["properties"]["output"]["enum"],
+        json!(["active"])
     );
     assert_eq!(
-        binding["outputs"]["anyOf"][1]["properties"]["outcome"]["enum"],
-        json!(["no_match", "ambiguous"])
-    );
-    assert_eq!(
-        binding["outputs"]["anyOf"][0]["properties"]["facts"]["properties"]["active"]["type"],
+        binding["inputs"]["facts"]["properties"]["active"]["type"],
         "boolean"
     );
+    assert_eq!(binding["inputs"]["selectors"]["properties"], json!({}));
     assert_eq!(
-        binding["inputs"]["selectors"]["properties"]["person"]["anyOf"][0]["properties"]["values"]
-            ["properties"]["person-id"]["maxLength"],
-        64
-    );
-    assert_eq!(
-        binding["inputs"]["context"]["properties"]["prior_facts"]["properties"],
+        binding["inputs"]["context"]["properties"]["parameters"]["properties"],
         json!({})
     );
-    assert_eq!(
-        compiled.artifacts["schemas/source-parameters/person.schema.json"],
-        serde_json::to_vec_pretty(
-            &json!({"type":"object","additionalProperties":false,"properties":{},"required":[]})
-        )
-        .unwrap()
-    );
+    assert!(!compiled
+        .artifacts
+        .contains_key("schemas/source-parameters/person.schema.json"));
 }
 
 #[test]
@@ -594,8 +570,8 @@ fn presentation_metadata_does_not_change_compiled_semantics_or_behavior_dependen
     edited["assertionDefinitions"]["active-status"]["description"] = json!("Presentation only");
     edited["assertionDefinitions"]["active-status"]["outputs"]["active"]["label"] = json!("Active");
     let edited: project::EvidenceProject = serde_json::from_value(edited).unwrap();
-    let a = compile::compile(&original, &scripts()).unwrap();
-    let b = compile::compile(&edited, &scripts()).unwrap();
+    let a = compile_project(&original, &scripts()).unwrap();
+    let b = compile_project(&edited, &scripts()).unwrap();
     assert_eq!(a.model, b.model);
     assert_eq!(a.artifacts, b.artifacts);
     assert_eq!(
@@ -609,7 +585,7 @@ fn malformed_references_return_findings_without_panicking_during_inspection() {
     let mut value = serde_json::to_value(project()).unwrap();
     value["assertionDefinitions"]["active-status"]["acquisition"]["source"] = json!("missing");
     let project: project::EvidenceProject = serde_json::from_value(value).unwrap();
-    let findings = compile::compile(&project, &scripts()).unwrap_err();
+    let findings = compile_project(&project, &scripts()).unwrap_err();
     assert!(findings
         .iter()
         .any(|finding| finding.field.to_json_pointer()
@@ -617,82 +593,40 @@ fn malformed_references_return_findings_without_panicking_during_inspection() {
 }
 
 #[test]
-fn source_batches_compile_named_source_interfaces_and_package_gates() {
-    let mut value = serde_json::to_value(project()).unwrap();
-    value["acquisitionCapabilities"] = json!(["source-batch"]);
-    value["maximumHolderBoundBatchSize"] = json!(4);
-    value["functions"].as_array_mut().unwrap().extend([
-        json!({"id":"batch-prepare","interface":"source-prepare/v1","source":"functions/batch-prepare.rhai"}),
-        json!({"id":"batch-extract","interface":"source-extract/v1","source":"functions/batch-extract.rhai"}),
-    ]);
-    value["sources"]["person"]["batch"] = json!({"maximumItems":4,"prepare":{"function":"batch-prepare"},"extract":{"function":"batch-extract"},"response":{"projection":["/results/*"],"shape":{"type":"object","required":["results"],"properties":{"results":{"type":"array","maxItems":4,"items":{"type":"object","required":["active"],"properties":{"active":{"type":"boolean"}}}}}}}});
-    let project: project::EvidenceProject = serde_json::from_value(value).unwrap();
-    let mut scripts = scripts();
-    scripts.insert(
-        "functions/batch-prepare.rhai".to_owned(),
-        "fn prepare(items, context) { #{query:[],body:#{items:items}} }".to_owned(),
-    );
-    scripts.insert(
-        "functions/batch-extract.rhai".to_owned(),
-        "fn extract(response, context) { [] }".to_owned(),
-    );
-    let compiled = compile::compile(&project, &scripts).unwrap();
-    assert_eq!(
-        compiled.model["acquisitionCapabilities"],
-        json!(["source-batch"])
-    );
+fn retired_source_batch_and_acquisition_capability_wire_is_refused() {
+    let mut current = project();
+    current.maximum_holder_bound_batch_size = Some(serde_json::from_value(json!(4)).unwrap());
+    let compiled =
+        compile_project(&current, &scripts()).expect("the current batch ceiling compiles");
     assert_eq!(compiled.model["maximumHolderBoundBatchSize"], 4);
-    assert!(String::from_utf8(
-        compiled.artifacts["adapters/source-batch-prepare/person.rhai"].clone()
-    )
-    .unwrap()
-    .contains("fn prepare_batch"));
-    assert!(String::from_utf8(
-        compiled.artifacts["adapters/source-batch-extract/person.rhai"].clone()
-    )
-    .unwrap()
-    .contains("fn extract_batch"));
-    let ts = project::typescript(&project, &compiled);
-    let py = project::python(&project, &compiled);
-    for text in [&ts, &py] {
-        assert!(text.contains("batch-prepare") && text.contains("batch-extract"));
-        assert!(text.contains("\"slots\"") && text.contains("\"slot\""));
-    }
-    let mut invalid = project;
-    invalid.acquisition_capabilities = Default::default();
-    assert!(compile::compile(&invalid, &scripts).is_err());
+
+    let mut retired_capability = serde_json::to_value(project()).unwrap();
+    retired_capability["acquisitionCapabilities"] = json!(["source-batch"]);
+    assert!(serde_json::from_value::<project::EvidenceProject>(retired_capability).is_err());
+
+    let mut retired_source_batch = serde_json::to_value(project()).unwrap();
+    retired_source_batch["sources"]["person"]["batch"] = json!({
+        "maximumItems":4,
+        "prepare":{"function":"batch-prepare"},
+        "extract":{"function":"batch-extract"},
+        "response":{"projection":["/results/*"],"shape":{
+            "type":"object","required":["results"],
+            "properties":{"results":{"type":"array","maxItems":4,"items":{
+                "type":"object","required":["active"],
+                "properties":{"active":{"type":"boolean"}}
+            }}}
+        }}
+    });
+    assert!(serde_json::from_value::<project::EvidenceProject>(retired_source_batch).is_err());
 }
 
 #[test]
 fn colliding_local_ids_retain_distinct_artifacts_and_deterministic_output() {
     let mut value = serde_json::to_value(project()).unwrap();
-    value["acquisitionCapabilities"] = json!(["source-batch"]);
-    value["functions"][0]["id"] = json!("person-prepare");
-    value["sources"]["person"]["extract"]["function"] = json!("person-prepare");
-    let mut second_source = value["sources"]["person"].clone();
-    second_source["prepare"] = json!({"function":"person-batch-prepare"});
-    second_source["extract"] = json!({"function":"person-batch-extract"});
-    value["sources"]["person-batch"] = second_source;
-    value["functions"].as_array_mut().unwrap().extend([
-        json!({"id":"person-batch-prepare","interface":"source-prepare/v1","source":"functions/ordinary-prepare.rhai"}),
-        json!({"id":"person-batch-extract","interface":"source-extract/v1","source":"functions/ordinary-extract.rhai"}),
-        json!({"id":"batch-prepare","interface":"source-prepare/v1","source":"functions/batch-prepare.rhai"}),
-        json!({"id":"batch-extract","interface":"source-extract/v1","source":"functions/batch-extract.rhai"}),
-        json!({"id":"derive-extra","interface":"assertion-derive/v1","source":"functions/derive-extra.rhai"}),
-    ]);
-    value["sources"]["person"]["batch"] = json!({
-        "maximumItems":4,
-        "prepare":{"function":"batch-prepare"},
-        "extract":{"function":"batch-extract"},
-        "response":{
-            "projection":["/results/*"],
-            "shape":{
-                "type":"object",
-                "required":["results"],
-                "properties":{"results":{"type":"array","maxItems":4,"items":{"type":"object","required":["active"],"properties":{"active":{"type":"boolean"}}}}}
-            }
-        }
-    });
+    value["functions"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"id":"derive-extra","interface":"assertion-derive/v1","source":"functions/derive-extra.rhai"}));
     value["assertionDefinitions"]["active-status"]["outputs"] = json!({
         "active-extra":{
             "concept":"urn:example:concept:first",
@@ -719,44 +653,18 @@ fn colliding_local_ids_retain_distinct_artifacts_and_deterministic_output() {
             .to_owned(),
     );
     scripts.insert(
-        "functions/ordinary-prepare.rhai".to_owned(),
-        "fn prepare(selectors, context) { #{query:[\"ordinary\"],body:()} }".to_owned(),
-    );
-    scripts.insert(
-        "functions/ordinary-extract.rhai".to_owned(),
-        "fn extract(response, selectors, context) { #{outcome:\"match\",facts:#{active:true,canary:\"ordinary\"}} }"
-            .to_owned(),
-    );
-    scripts.insert(
-        "functions/batch-prepare.rhai".to_owned(),
-        "fn prepare(items, context) { #{query:[\"batch\"],body:#{items:items}} }".to_owned(),
-    );
-    scripts.insert(
-        "functions/batch-extract.rhai".to_owned(),
-        "fn extract(response, context) { [] }".to_owned(),
-    );
-    scripts.insert(
         "functions/derive-extra.rhai".to_owned(),
         "fn derive(facts, selectors, context) { [#{output: \"extra\", value: \"second\"}] }"
             .to_owned(),
     );
 
-    let compiled = compile::compile(&project, &scripts).unwrap();
-    let repeated = compile::compile(&project, &scripts).unwrap();
+    let compiled = compile_project(&project, &scripts).unwrap();
+    let repeated = compile_project(&project, &scripts).unwrap();
     assert_eq!(compiled.model, repeated.model);
     assert_eq!(compiled.artifacts, repeated.artifacts);
 
     let text =
         |path: &str| String::from_utf8(compiled.artifacts[path].clone()).expect("text artifact");
-    assert!(text("adapters/functions/person-prepare.rhai").contains("response.active"));
-    assert!(text("adapters/source-prepare/person.rhai").contains("query: []"));
-    assert!(text("adapters/functions/person-batch-prepare.rhai").contains("ordinary"));
-    assert!(text("adapters/source-batch-prepare/person.rhai").contains("batch"));
-    assert!(text("adapters/functions/person-batch-extract.rhai").contains("ordinary"));
-    assert!(text("adapters/source-batch-extract/person.rhai").contains("fn extract_batch"));
-    assert!(text("schemas/source-response/person-batch.schema.json").contains("\"canary\""));
-    assert!(text("schemas/source-batch-response/person.schema.json").contains("\"results\""));
-
     let first_codelist = compiled.model["requirements"]
         .as_array()
         .unwrap()
@@ -784,13 +692,13 @@ fn an_authored_asset_cannot_replace_a_generated_artifact() {
     value["assertionDefinitions"]["active-status"]["outputs"]["details"] = json!({
         "concept":"urn:example:concept:details",
         "type":"reviewed-structured-value",
-        "schema":"schemas/source-response/person.schema.json",
+        "schema":"schemas/source-facts/person.schema.json",
         "maximumSerializedBytes":256
     });
     let project: project::EvidenceProject = serde_json::from_value(value).unwrap();
     let mut scripts = scripts();
     scripts.insert(
-        "schemas/source-response/person.schema.json".to_owned(),
+        "schemas/source-facts/person.schema.json".to_owned(),
         json!({
             "$id":"urn:example:schema:details",
             "type":"object",
@@ -801,7 +709,7 @@ fn an_authored_asset_cannot_replace_a_generated_artifact() {
         .to_string(),
     );
 
-    let findings = compile::compile(&project, &scripts).unwrap_err();
+    let findings = compile_project(&project, &scripts).unwrap_err();
 
     assert!(findings.iter().any(|finding| {
         finding.code == "artifact-path-collision"
@@ -846,7 +754,7 @@ fn generated_types_resolve_structured_schemas_and_exact_function_result_shapes()
     let project: project::EvidenceProject = serde_json::from_value(value).unwrap();
     let mut scripts = scripts();
     scripts.insert("schemas/details.json".to_owned(),json!({"$id":"urn:example:schema:details","type":"object","required":["active"],"additionalProperties":false,"properties":{"active":{"type":"boolean"},"status":{"type":"string","enum":["current","expired"]},"count":{"type":"integer","minimum":0,"maximum":100}}}).to_string());
-    let compiled = compile::compile(&project, &scripts).unwrap();
+    let compiled = compile_project(&project, &scripts).unwrap();
     let ts = project::typescript(&project, &compiled);
     assert!(ts.contains("\"details\": { \"fields\": { \"active\": boolean; \"count\"?: number; \"status\"?: \"current\" | \"expired\" }"),"{ts}");
     assert!(ts.contains("ReadonlyArray<{ \"output\": \"active\"; \"value\": boolean } | { \"output\": \"details\""),"{ts}");
@@ -857,9 +765,7 @@ fn generated_types_resolve_structured_schemas_and_exact_function_result_shapes()
             < ts.find("export interface AssertionOutputs").unwrap()
     );
     let py = project::python(&project, &compiled);
-    assert!(
-        py.contains("SourceResponses = TypedDict") && py.contains("FunctionBindings = TypedDict")
-    );
+    assert!(py.contains("SourceFacts = TypedDict") && py.contains("FunctionBindings = TypedDict"));
     assert!(py.contains("NotRequired[Literal[\"current\", \"expired\"]]"));
     assert!(py.contains("\"output\": Literal[\"details\"]"));
     let mut child=std::process::Command::new("python3").args(["-c","import ast,sys; source=sys.stdin.read(); ast.parse(source); exec(compile(source,'generated-evidence-types','exec'), {})"]).stdin(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().expect("python3 syntax checker");
@@ -878,7 +784,12 @@ fn generated_types_resolve_structured_schemas_and_exact_function_result_shapes()
 }
 
 #[test]
-fn derive_fact_closure_excludes_only_search_then_fetch_search_facts() {
+fn checked_pack_facts_replace_retired_search_then_fetch_fact_closure() {
+    let current = project();
+    let compiled = compile_project(&current, &scripts()).unwrap();
+    let ts = project::typescript(&current, &compiled);
+    assert!(ts.contains("\"facts\": { \"active\": boolean"));
+
     let mut value = serde_json::to_value(project()).unwrap();
     value["sources"]["fetch"] = value["sources"]["person"].clone();
     value["sources"]["person"]["facts"] = json!({"search_only":{"type":"boolean"}});
@@ -887,63 +798,7 @@ fn derive_fact_closure_excludes_only_search_then_fetch_search_facts() {
     value["sources"]["fetch"]["extract"] = json!({"function":"extract-fetch"});
     value["assertionDefinitions"]["active-status"]["acquisition"] =
         json!({"type":"search-then-fetch","search":"person","fetch":"fetch"});
-    let project: project::EvidenceProject = serde_json::from_value(value.clone()).unwrap();
-    let mut scripts = scripts();
-    scripts.insert(
-        "functions/extract.rhai".to_owned(),
-        "fn extract(response,selectors,context){#{outcome:\"match\",facts:#{search_only:true}}}"
-            .to_owned(),
-    );
-    scripts.insert(
-        "functions/fetch.rhai".to_owned(),
-        "fn extract(response,selectors,context){#{outcome:\"match\",facts:#{active:true}}}"
-            .to_owned(),
-    );
-    scripts.insert(
-        "functions/derive.rhai".to_owned(),
-        "fn derive(facts,selectors,context){[#{output:\"active\",value:facts.search_only}]}"
-            .to_owned(),
-    );
-    assert!(compile::compile(&project, &scripts)
-        .unwrap_err()
-        .iter()
-        .any(|finding| finding.code == "derivation-fact-undeclared"));
-    scripts.insert(
-        "functions/derive.rhai".to_owned(),
-        "fn derive(facts,selectors,context){[#{output:\"active\",value:facts.active}]}".to_owned(),
-    );
-    let compiled = compile::compile(&project, &scripts).unwrap();
-    let ts = project::typescript(&project, &compiled);
-    assert!(ts.contains("\"facts\": { \"active\": boolean }"));
-    assert_eq!(
-        project
-            .assertion_definitions
-            .values()
-            .next()
-            .unwrap()
-            .acquisition
-            .source_ids()
-            .len(),
-        2
-    );
-    value["acquisitionCapabilities"] = json!(["search-then-fetch-set"]);
-    value["sources"]["second-fetch"] = value["sources"]["fetch"].clone();
-    value["sources"]["second-fetch"]["facts"] = json!({"second":{"type":"boolean"}});
-    value["sources"]["second-fetch"]["extract"] = json!({"function":"extract-second"});
-    value["functions"].as_array_mut().unwrap().push(json!({"id":"extract-second","interface":"source-extract/v1","source":"functions/second.rhai"}));
-    scripts.insert(
-        "functions/second.rhai".to_owned(),
-        "fn extract(response,selectors,context){#{outcome:\"match\",facts:#{second:true}}}"
-            .to_owned(),
-    );
-    value["assertionDefinitions"]["active-status"]["acquisition"] = json!({"type":"search-then-fetch-set","search":"person","fetch":[{"source":"fetch","factInputs":["search_only"]},{"source":"second-fetch","factInputs":["search_only"]}],"maximumAcquisitionMilliseconds":3000});
-    let project: project::EvidenceProject = serde_json::from_value(value).unwrap();
-    scripts.insert(
-        "functions/derive.rhai".to_owned(),
-        "fn derive(facts,selectors,context){[#{output:\"active\",value:facts.search_only}]}"
-            .to_owned(),
-    );
-    compile::compile(&project, &scripts).expect("fetch-set retains search facts in the union");
+    assert!(serde_json::from_value::<project::EvidenceProject>(value).is_err());
 }
 
 #[test]
@@ -1035,7 +890,7 @@ fn unsupported_primitive_list_output_tags_are_never_accepted() {
         let mut value = serde_json::to_value(project()).unwrap();
         value["assertionDefinitions"]["active-status"]["outputs"]["active"]["type"] = json!(tag);
         let project = serde_json::from_value(value).unwrap();
-        assert!(compile::compile(&project, &scripts())
+        assert!(compile_project(&project, &scripts())
             .unwrap_err()
             .iter()
             .any(|finding| finding.code == "output-type"));
@@ -1043,7 +898,7 @@ fn unsupported_primitive_list_output_tags_are_never_accepted() {
 }
 
 #[test]
-fn reused_source_functions_have_definition_specific_prior_fact_contexts() {
+fn retired_reused_source_functions_and_prior_fact_contexts_are_refused() {
     let mut value = serde_json::to_value(project()).unwrap();
     value["sources"]["search"] = value["sources"]["person"].clone();
     value["sources"]["search"]["facts"] = json!({"reference":{"type":"string","maximumBytes":64}});
@@ -1055,34 +910,7 @@ fn reused_source_functions_have_definition_specific_prior_fact_contexts() {
         json!("urn:example:requirement:from-search");
     value["assertionDefinitions"]["from-search"]["acquisition"] =
         json!({"type":"search-then-fetch","search":"search","fetch":"person"});
-    let project: project::EvidenceProject = serde_json::from_value(value).unwrap();
-    let mut scripts = scripts();
-    scripts.insert("functions/search.rhai".to_owned(),"fn extract(response,selectors,context){#{outcome:\"match\",facts:#{reference:\"synthetic\"}}}".to_owned());
-    let compiled = compile::compile(&project, &scripts).unwrap();
-    let extraction = compiled
-        .functions
-        .iter()
-        .find(|function| function["id"] == "extract-person")
-        .unwrap();
-    let calls = extraction["bindings"].as_array().unwrap();
-    assert_eq!(calls.len(), 2);
-    let single = calls
-        .iter()
-        .find(|call| call["definition"] == "active-status")
-        .unwrap();
-    let fetch = calls
-        .iter()
-        .find(|call| call["definition"] == "from-search")
-        .unwrap();
-    assert_eq!(
-        single["inputs"]["context"]["properties"]["prior_facts"]["properties"],
-        json!({})
-    );
-    assert_eq!(
-        fetch["inputs"]["context"]["properties"]["prior_facts"]["properties"],
-        json!({"reference":{"type":"string","maxLength":64}})
-    );
-    assert_eq!(fetch["stage"], "fetch");
+    assert!(serde_json::from_value::<project::EvidenceProject>(value).is_err());
 }
 
 #[test]
@@ -1099,7 +927,7 @@ fn selector_semantic_bounds_remain_checked_after_typed_decoding() {
         let mut value = serde_json::to_value(project()).unwrap();
         value["selectorProfiles"]["person-by-id"]["fields"]["person-id"] = field;
         let project: project::EvidenceProject = serde_json::from_value(value).unwrap();
-        let findings = compile::compile(&project, &scripts()).unwrap_err();
+        let findings = compile_project(&project, &scripts()).unwrap_err();
         assert!(findings
             .iter()
             .any(|finding| finding.code == "selector-field-bounds"
@@ -1130,21 +958,18 @@ fn typed_selector_fields_round_trip_and_compile_without_presentation() {
         );
         let mut scripts = scripts();
         scripts.insert("codelists/codes.yaml".to_owned(), "apiVersion: id.registrystack.org/formats/evidence/codelist/v1alpha1\nkind: EvidenceCodelist\nuri: urn:example:codes\nversion: '1'\ntype: code-list\ncodes: [one, two]\n".to_owned());
-        let compiled = compile::compile(&project, &scripts).unwrap();
-        assert_eq!(
-            compiled.model["selectorProfiles"]["person-by-id"]["fields"]["person-id"],
-            field
-        );
-        assert!(!project::typescript(&project, &compiled).is_empty());
-        if field["type"] == "controlled-code" {
-            assert!(compiled.artifacts.contains_key("codelists/codes.yaml"));
-            let mismatched =
-                scripts["codelists/codes.yaml"].replace("version: '1'", "version: '2'");
-            scripts.insert("codelists/codes.yaml".to_owned(), mismatched);
-            assert!(compile::compile(&project, &scripts)
+        if field["type"] == "string" {
+            let compiled = compile_project(&project, &scripts).unwrap();
+            assert_eq!(
+                compiled.model["selectorProfiles"]["person-by-id"]["fields"]["person-id"],
+                field
+            );
+            assert!(!project::typescript(&project, &compiled).is_empty());
+        } else {
+            assert!(compile_project(&project, &scripts)
                 .unwrap_err()
                 .iter()
-                .any(|finding| finding.code == "codelist-identity"));
+                .any(|finding| finding.code == "source-route-input-type"));
         }
     }
 }

@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Runtime of the Registry Stack Adapter.
+//! Runtime host of the Registry Stack Adapter.
 //!
-//! This crate serves the Adapter's governed facade, executes call plans
-//! against declared upstreams, and owns its security surface and audit
+//! This crate serves the Adapter's governed facade around the listener-free
+//! engine in `registry-adapter-engine`, and owns its inbound security and audit
 //! journal (`products/adapter/CONCEPT.md` section 8.1). One execution per
 //! facade call validates the request against the declared model, resolves
 //! the operation binding, interprets the bound plan step by step, and
@@ -23,14 +23,8 @@
 //! `registry-adapter-core`; operator tooling lives in
 //! `registry-adapterctl`.
 //!
-//! The engine lives in the modules named for Camel's concepts
-//! (`products/adapter/CONCEPT.md` section 8.1): `exchange` and `route`
-//! hold the exchange and route models, `processor` one submodule per
-//! EIP with the aggregation strategies, `component` the `direct`,
-//! `http`, and `rest` components, `language` the expression languages,
-//! `errorhandler` the error classes and handlers, `journal` the
-//! journal's PostgreSQL store and migration, `notifier` the
-//! journal, and `idempotent` the idempotency store.
+//! The facade keeps its historical `registry_adapter::engine` surface as a
+//! public re-export while hosts migrate to the engine crate directly.
 //!
 //! The `auth` module is the outbound authentication layer
 //! (`products/adapter/CONCEPT.md` section 10.2): one endpoint's
@@ -44,7 +38,7 @@
 
 pub mod cli;
 pub mod custody;
-pub mod engine;
+pub use registry_adapter_engine as engine;
 pub mod facade;
 pub mod idempotent;
 pub mod journal;

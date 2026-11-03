@@ -19,15 +19,15 @@ use std::{hint::black_box, sync::Arc};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use registry_evidence::audit::{
     AuditAuthority, AuditDecision, AuditPhase, AuditSubject, AuthorityKind, EvidenceAuditEvent,
-    EvidenceAuditLog, ResponseProtection,
+    EvidenceAuditLog, EvidenceExecutionBounds, ResponseProtection,
 };
-use registry_evidence::config::AssuranceProfile;
+use registry_evidence::config::{AssuranceProfile, SourceAcquisitionConfig};
 use registry_platform_audit::{AuditDestination, FileDestination};
 use tokio::{runtime::Runtime, task::JoinSet};
 
 /// Far above anything an individual benchmark run appends, so rotation never
 /// interferes with the measurement.
-const BENCH_ROTATE_BYTES: u64 = 64 * 1024 * 1024 * 1024;
+const BENCH_ROTATE_BYTES: u64 = 4 * 1024 * 1024 * 1024 - 1;
 const BENCH_SECRET: [u8; 64] = [0x5a; 64];
 const BENCH_BUNDLE_REVISION: &str =
     "sha256:0000000000000000000000000000000000000000000000000000000000000000";
@@ -43,7 +43,8 @@ fn pseudonym(seed: u8) -> String {
 }
 
 fn sample_event() -> EvidenceAuditEvent {
-    EvidenceAuditEvent::new(
+    let bounds = SourceAcquisitionConfig::default();
+    let mut event = EvidenceAuditEvent::new(
         AssuranceProfile::EvidenceGrade,
         ulid::Ulid::generate().to_string(),
         AuditPhase::AccessAttempt,
@@ -64,7 +65,15 @@ fn sample_event() -> EvidenceAuditEvent {
         ResponseProtection::Signed,
         AuditDecision::Authorized,
         12,
-    )
+    );
+    event.source_id = Some("benchmark-source".to_owned());
+    event.adapter_id = Some("benchmark-pack".to_owned());
+    event.execution_bounds = Some(EvidenceExecutionBounds {
+        maximum_data_operations: bounds.maximum_data_operations,
+        deadline_milliseconds: bounds.deadline_milliseconds,
+        maximum_response_bytes: bounds.maximum_response_bytes,
+    });
+    event
 }
 
 fn runtime() -> Runtime {

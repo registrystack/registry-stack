@@ -30,7 +30,13 @@ pub(super) const MAX_STATE_BYTES: u64 = (MAX_PROJECT_BYTES * 4) as u64;
 pub(super) const MAX_JOURNAL_BYTES: u64 = MAX_STATE_BYTES * 2;
 pub(super) const STATE_PATH: &str = ".evidence/source-imports/state.json";
 pub(super) const JOURNAL_PATH: &str = ".evidence/source-imports/transaction.json";
-const AUTHORED_DIRECTORIES: &[&str] = &["functions", "fixtures", "codelists", "queries"];
+const AUTHORED_DIRECTORIES: &[&str] = &[
+    "functions",
+    "fixtures",
+    "codelists",
+    "queries",
+    "adapter-packs",
+];
 const AUTHORED_FILES: &[&str] = &["evidence.yaml", "source.openapi.yaml"];
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -220,6 +226,9 @@ pub(super) fn artifact_path(value: &str) -> Result<()> {
     if !safe_relative(value) {
         bail!("export artifact path must be a safe relative path");
     }
+    if let Some(pack_path) = value.strip_prefix("adapter-packs/") {
+        return adapter_pack_artifact_path(pack_path);
+    }
     let (directory, name) = value
         .split_once('/')
         .ok_or_else(|| anyhow!("artifact path needs its authoring directory"))?;
@@ -235,6 +244,48 @@ pub(super) fn artifact_path(value: &str) -> Result<()> {
     let stem = name
         .strip_suffix(suffix)
         .ok_or_else(|| anyhow!("artifact extension does not match its authoring directory"))?;
+    if stem.is_empty()
+        || stem.len() > 128
+        || !stem.as_bytes()[0].is_ascii_lowercase()
+        || !stem.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_' | b'.')
+        })
+    {
+        bail!("export artifact names must be bounded lowercase authoring names");
+    }
+    Ok(())
+}
+
+fn adapter_pack_artifact_path(value: &str) -> Result<()> {
+    let mut parts = value.split('/');
+    let pack = parts
+        .next()
+        .ok_or_else(|| anyhow!("Adapter pack artifact requires a pack id"))?;
+    let directory = parts
+        .next()
+        .ok_or_else(|| anyhow!("Adapter pack artifact requires a bounded pack path"))?;
+    let file = parts.next();
+    if parts.next().is_some() {
+        bail!("Adapter pack export artifacts may use one bounded pack subdirectory");
+    }
+    bounded_artifact_name(pack, "")?;
+    match (directory, file) {
+        ("pack.yaml", None) => Ok(()),
+        ("scripts", Some(file)) => bounded_artifact_name(file, ".rhai"),
+        ("schemas" | "protocols", Some(file)) => bounded_artifact_name(file, ".json"),
+        _ => bail!(
+            "source imports admit only the pack document and its bounded scripts, schemas, and public protocol configuration"
+        ),
+    }
+}
+
+fn bounded_artifact_name(name: &str, suffix: &str) -> Result<()> {
+    let stem = if suffix.is_empty() {
+        name
+    } else {
+        name.strip_suffix(suffix)
+            .ok_or_else(|| anyhow!("artifact extension does not match its pack directory"))?
+    };
     if stem.is_empty()
         || stem.len() > 128
         || !stem.as_bytes()[0].is_ascii_lowercase()
@@ -402,6 +453,28 @@ mod tests {
         assert_eq!(authored_bound(OPENAPI_FILE), MAX_OPENAPI_BYTES);
         assert_eq!(authored_bound(STATE_PATH), MAX_STATE_BYTES);
         assert_eq!(authored_bound(JOURNAL_PATH), MAX_JOURNAL_BYTES);
+    }
+
+    #[test]
+    fn adapter_pack_artifacts_use_the_closed_bounded_layout() {
+        for path in [
+            "adapter-packs/registry-status/pack.yaml",
+            "adapter-packs/registry-status/scripts/lookup.rhai",
+            "adapter-packs/registry-status/schemas/inputs.json",
+            "adapter-packs/registry-status/protocols/access-attribution.json",
+        ] {
+            artifact_path(path).unwrap_or_else(|error| panic!("{path}: {error}"));
+        }
+
+        for path in [
+            "adapter-packs/registry-status/extra.yaml",
+            "adapter-packs/registry-status/scripts/nested/lookup.rhai",
+            "adapter-packs/RegistryStatus/pack.yaml",
+            "adapter-packs/registry-status/scripts/lookup.json",
+            "adapter-packs/registry-status/credentials/secret.json",
+        ] {
+            assert!(artifact_path(path).is_err(), "{path}");
+        }
     }
 
     #[test]

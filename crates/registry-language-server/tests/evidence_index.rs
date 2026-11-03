@@ -19,7 +19,7 @@ fn named_sources_navigate_in_both_directions() {
     let p = Project::new(SOURCE);
     let index = p.index();
     let at = p.at(PROJECT, "person:\n");
-    let reference = after(SOURCE, "acquisition: {type: single, source: ");
+    let reference = after(SOURCE, "acquisition: {source: ");
     assert_eq!(
         index.definitions_at(&p.path(PROJECT), reference)[0]
             .range
@@ -51,13 +51,13 @@ fn named_functions_and_their_assets_navigate() {
     let _ = declaration;
 }
 #[test]
-fn selector_profiles_resolve_subjects_sources_and_bindings() {
+fn selector_profiles_resolve_subjects_and_source_inputs() {
     let p = Project::new(SOURCE);
     let index = p.index();
     let declared = p.at(PROJECT, "person-by-id:");
     assert_eq!(
         index.references_at(&p.path(PROJECT), declared, false).len(),
-        3
+        2
     );
 }
 #[test]

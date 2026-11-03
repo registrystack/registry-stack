@@ -28,7 +28,7 @@ ACTION_EXAMPLES_RUNNER = SCRIPT_DIR / "test-immediate-action-examples.sh"
 
 
 class PostgresRunnerTests(unittest.TestCase):
-    def run_lane(self, *arguments: str, database: bool = True, fail: bool = False, fail_build: bool = False, runner: Path = RUNNER, shell: Path | None = None):
+    def run_lane(self, *arguments: str, database: bool = True, fail: bool = False, fail_build: bool = False, preexisting_python: bool = False, runner: Path = RUNNER, shell: Path | None = None):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             log = root / "cargo.jsonl"
@@ -48,15 +48,20 @@ class PostgresRunnerTests(unittest.TestCase):
                 "    if package == 'registry-bregctl':\n"
                 "        target = 'bregctl'\n"
                 "        executable = os.environ['BREG_RUNNER_TEST_BREGCTL_BINARY']\n"
-                "    else:\n"
+                "    elif package == 'registry-evidence':\n"
                 "        target = 'evidence'\n"
-                "        executable = os.environ['BREG_RUNNER_TEST_BINARY']\n"
+                "        executable = os.environ['BREG_RUNNER_TEST_EVIDENCE_BINARY']\n"
+                "    else:\n"
+                "        assert package == 'registry-evidencectl'\n"
+                "        target = 'evidencectl'\n"
+                "        executable = os.environ['BREG_RUNNER_TEST_EVIDENCECTL_BINARY']\n"
                 "    print(json.dumps({'reason': 'compiler-artifact', 'target': {'name': target}, 'executable': executable}))\n"
                 "if '--test' in sys.argv and 'postgres_record_timer_operator' in sys.argv:\n"
                 "    assert os.environ.get('BREG_TEST_BREGCTL_BINARY') == os.environ['BREG_RUNNER_TEST_BREGCTL_BINARY']\n"
                 "if '--test' in sys.argv and 'postgres_action_evidence' in sys.argv:\n"
-                "    assert os.environ.get('BREG_TEST_EVIDENCE_BINARY') == os.environ['BREG_RUNNER_TEST_BINARY']\n"
-                "    assert os.environ.get('BREG_RUNNER_TEST_PYYAML') == '1'\n"
+                "    assert os.environ.get('BREG_TEST_EVIDENCE_BINARY') == os.environ['BREG_RUNNER_TEST_EVIDENCE_BINARY']\n"
+                "    assert os.environ.get('BREG_TEST_EVIDENCECTL_BINARY') == os.environ['BREG_RUNNER_TEST_EVIDENCECTL_BINARY']\n"
+                "    assert os.environ.get('BREG_TEST_PYTHON_BINARY') == os.environ['BREG_RUNNER_TEST_PYTHON_BINARY']\n"
                 "sys.exit(17 if"
             ))
             cargo.chmod(0o755)
@@ -64,23 +69,52 @@ class PostgresRunnerTests(unittest.TestCase):
             evidence.parent.mkdir(parents=True)
             evidence.write_text("#!/bin/sh\nexit 0\n")
             evidence.chmod(0o755)
+            evidencectl = root / "configured target with spaces" / "debug" / "evidencectl"
+            evidencectl.write_text("#!/bin/sh\nexit 0\n")
+            evidencectl.chmod(0o755)
             bregctl = root / "configured target with spaces" / "debug" / "bregctl"
             bregctl.write_text("#!/bin/sh\nexit 0\n")
             bregctl.chmod(0o755)
+            python_binary = root / "target with spaces" / "breg-test-python" / "bin" / "python"
+            if preexisting_python:
+                python_binary.parent.mkdir(parents=True)
+                python_binary.write_text(
+                    "#!/usr/bin/env python3\n"
+                    "import json, os, sys\n"
+                    "if sys.argv[1:2] != ['-c']:\n"
+                    "    with open(os.environ['BREG_RUNNER_TEST_LOG'], 'a') as log:\n"
+                    "        log.write(json.dumps(['python', *sys.argv[1:]]) + '\\n')\n"
+                )
+                python_binary.chmod(0o755)
             uv = root / "uv"
             uv.write_text(
                 "#!/usr/bin/env python3\n"
+                "from pathlib import Path\n"
                 "import os, sys\n"
-                "assert sys.argv[1:5] == ['run', '--no-project', '--with', 'PyYAML==6.0.2']\n"
-                "os.environ['BREG_RUNNER_TEST_PYYAML'] = '1'\n"
-                "os.execvp(sys.argv[5], sys.argv[5:])\n"
+                "if os.environ.get('BREG_RUNNER_TEST_FORBID_UV') == '1': raise SystemExit(23)\n"
+                "expected = Path(os.environ['BREG_RUNNER_TEST_PYTHON_BINARY'])\n"
+                "if sys.argv[1] == 'venv':\n"
+                "    assert Path(sys.argv[2]) == expected.parents[1]\n"
+                "    python = Path(sys.argv[2]) / 'bin' / 'python'\n"
+                "    python.parent.mkdir(parents=True)\n"
+                "    python.write_text(\"#!/usr/bin/env python3\\nimport json, os, sys\\nif sys.argv[1:2] != ['-c']:\\n    with open(os.environ['BREG_RUNNER_TEST_LOG'], 'a') as log:\\n        log.write(json.dumps(['python', *sys.argv[1:]]) + '\\\\n')\\n\")\n"
+                "    python.chmod(0o755)\n"
+                "else:\n"
+                "    assert sys.argv[1:3] == ['pip', 'install']\n"
+                "    assert sys.argv[3] == '--python'\n"
+                "    assert Path(sys.argv[4]) == expected\n"
+                "    assert sys.argv[5] == 'PyYAML==6.0.3'\n"
             )
             uv.chmod(0o755)
             environment = os.environ.copy()
             environment.update(
                 PATH=f"{root}{os.pathsep}{environment['PATH']}",
                 BREG_RUNNER_TEST_LOG=str(log),
-                BREG_RUNNER_TEST_BINARY=str(evidence),
+                CARGO_TARGET_DIR=str(root / "target with spaces"),
+                BREG_RUNNER_TEST_EVIDENCE_BINARY=str(evidence),
+                BREG_RUNNER_TEST_EVIDENCECTL_BINARY=str(evidencectl),
+                BREG_RUNNER_TEST_PYTHON_BINARY=str(python_binary),
+                BREG_RUNNER_TEST_FORBID_UV="1" if preexisting_python else "0",
                 BREG_RUNNER_TEST_BREGCTL_BINARY=str(bregctl),
                 BREG_RUNNER_TEST_FAIL="1" if fail else "0",
                 BREG_RUNNER_TEST_FAIL_BUILD="1" if fail_build else "0",
@@ -108,10 +142,20 @@ class PostgresRunnerTests(unittest.TestCase):
     def inventory(self, calls):
         commands = []
         for call in calls:
+            if call[0] == "python":
+                self.assertEqual(
+                    [
+                        "python",
+                        "products/breg/acceptance/farmer-landholding-evidence/evidence/tests/test-provider-pack.py",
+                    ],
+                    call,
+                )
+                continue
             if call[0] == "build":
                 self.assertIn(call, (
                     ["build", "--locked", "-p", "registry-bregctl", "--bin", "bregctl", "--features", "registry-breg/postgres-test", "--message-format=json"],
                     ["build", "--locked", "-p", "registry-evidence", "--bin", "evidence", "--message-format=json"],
+                    ["build", "--locked", "-p", "registry-evidencectl", "--bin", "evidencectl", "--message-format=json"],
                 ))
                 continue
             self.assertEqual(["test", "--locked", "-p"], call[:3])
@@ -151,27 +195,36 @@ class PostgresRunnerTests(unittest.TestCase):
         self.assertEqual(default, explicit)
         self.assertEqual(expected, self.inventory(ordinary) + self.inventory(actions))
         self.assertFalse(self.inventory(ordinary) & self.inventory(actions))
-        self.assertEqual(7, len(ordinary))
-        self.assertEqual(8, len(default))
+        self.assertEqual(9, len(ordinary))
+        self.assertEqual(10, len(default))
         self.assertEqual([shlex.split(
             "test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_immediate_actions"
         )], actions)
 
-    def test_real_operator_and_evidence_builds_precede_proofs_and_are_absent_from_action_lane(self):
+    def test_real_operator_evidence_compiler_and_python_precede_proofs_and_are_absent_from_action_lane(self):
         result, calls = self.run_lane("--lane", "postgres")
         self.assertEqual(0, result.returncode, result.stderr)
         builds = [index for index, call in enumerate(calls) if call[0] == "build"]
-        self.assertEqual(2, len(builds))
+        self.assertEqual(3, len(builds))
         operator = next(index for index, call in enumerate(calls) if "postgres_record_timer_operator" in call)
         proof = next(index for index, call in enumerate(calls) if "postgres_action_evidence" in call)
+        fixture_regression = next(index for index, call in enumerate(calls) if call[0] == "python")
         self.assertLess(builds[0], operator)
         self.assertLess(builds[0], proof)
         self.assertLess(builds[1], proof)
+        self.assertLess(builds[2], proof)
+        self.assertLess(builds[2], fixture_regression)
+        self.assertLess(fixture_regression, proof)
         self.assertIn("postgres_action_evidence_targets", calls[proof])
         self.assertIn("postgres_action_evidence_retention", calls[proof])
         result, calls = self.run_lane("--lane", "immediate-actions")
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertFalse(any(call[0] == "build" for call in calls))
+
+    def test_valid_python_environment_is_reused_without_uv_reprovision(self):
+        result, calls = self.run_lane("--lane", "postgres", preexisting_python=True)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(1, sum(call[0] == "python" for call in calls))
 
     def test_sharded_lanes_partition_every_owned_target_exactly_once(self):
         ci_changes = self.load_ci_changes()
@@ -199,7 +252,7 @@ class PostgresRunnerTests(unittest.TestCase):
                 command for command in inventory if "postgres_action_evidence" in command
             )
             if lane == shard_lanes[0]:
-                self.assertEqual(2, len(builds))
+                self.assertEqual(3, len(builds))
                 self.assertEqual(3, sum(evidence.values()))
                 self.assertTrue(any("postgres_record_timer_operator" in command for command in inventory))
             else:
@@ -297,7 +350,7 @@ class PostgresRunnerTests(unittest.TestCase):
             source + "\n cargo test --locked -p registry-breg --features schema --test stray_target\n",
             source + "\nFOO=1 cargo test --locked -p registry-breg --features schema --test stray_target\n",
             source + "\ncommand cargo test --locked -p registry-breg --features schema --test stray_target\n",
-            source + "\nuv run --no-project --with PyYAML==6.0.2 cargo test --locked -p registry-breg"
+            source + "\nuv run --with PyYAML==6.0.3 cargo test --locked -p registry-breg"
             " --features postgres-test,tooling,schema --test stray_target\n",
             source + "\ncargo test --locked -p registry-breg --features schema --test=stray_target\n",
             source.replace("      --test postgres_action_evidence_targets \\\n", ""),

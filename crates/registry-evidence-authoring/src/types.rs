@@ -1,7 +1,7 @@
 //! Types projected from the validated project and its compiled schema assets.
 use crate::{
     compile::CompiledProject,
-    project::{self, EvidenceProject, Output, Source},
+    project::{self, EvidenceProject, Output},
 };
 use serde_json::{json, Map, Value};
 
@@ -116,51 +116,35 @@ fn output_shape(output: &Output, compiled: &CompiledProject, authored: bool) -> 
         _ => unreachable!("compiled Output type is closed"),
     }
 }
-fn facts(source: &Source) -> Value {
-    fields(
-        source
-            .facts
-            .iter()
-            .map(|(id, value)| (id.to_string(), project::value_schema(value))),
-    )
+fn compiled_facts(compiled: &CompiledProject, source: &str) -> Value {
+    compiled.source_facts[source].clone()
 }
-fn selectors(
+
+fn selector_inputs(
     project: &EvidenceProject,
     compiled: &CompiledProject,
-    inputs: impl IntoIterator<Item = (String, Vec<(String, Vec<String>)>)>,
+    inputs: &[project::DeriveSelectorInput],
 ) -> Value {
-    fields(inputs.into_iter().map(|(role, alternatives)| {
+    fields(inputs.iter().map(|input| {
         (
-            role,
+            input.role.to_string(),
             union(
-                alternatives
-                    .into_iter()
-                    .map(|(profile, names)| {
-                        let shape = &project
-                            .selector_profiles
-                            .iter()
-                            .find(|(id, _)| id.as_str() == profile)
-                            .expect("validated selector profile")
-                            .1
-                            .fields;
+                input
+                    .alternatives
+                    .iter()
+                    .map(|alternative| {
+                        let profile = &project.selector_profiles[&alternative.profile];
                         fields([
-                            ("profile".to_owned(), literal(json!(profile))),
+                            ("profile".to_owned(), literal(json!(alternative.profile))),
                             (
                                 "values".to_owned(),
-                                fields(names.into_iter().map(|name| {
-                                    let value = shape
-                                        .iter()
-                                        .find(|(id, _)| id.as_str() == name)
-                                        .expect("validated selector field")
-                                        .1;
-                                    (
-                                        name,
-                                        if let Some((path, _)) = value.codelist() {
-                                            codelist_codes(path, compiled)
-                                        } else {
-                                            project::value_schema(&crate::selector::compiled(value))
-                                        },
-                                    )
+                                fields(alternative.fields.iter().map(|name| {
+                                    let field = &profile.fields[name];
+                                    let shape = field.codelist().map_or_else(
+                                        || project::value_schema(&crate::selector::compiled(field)),
+                                        |(path, _)| codelist_codes(path, compiled),
+                                    );
+                                    (name.to_string(), shape)
                                 })),
                             ),
                         ])
@@ -170,312 +154,18 @@ fn selectors(
         )
     }))
 }
-fn source_selectors(
-    project: &EvidenceProject,
-    compiled: &CompiledProject,
-    source: &Source,
-) -> Value {
-    selectors(
-        project,
-        compiled,
-        source.selectors.iter().map(|input| {
-            (
-                input.role.to_string(),
-                input
-                    .profiles
-                    .iter()
-                    .map(|id| {
-                        (
-                            id.to_string(),
-                            project.selector_profiles[id]
-                                .fields
-                                .keys()
-                                .map(ToString::to_string)
-                                .collect(),
-                        )
-                    })
-                    .collect(),
-            )
-        }),
-    )
-}
-fn derive_selectors(
-    project: &EvidenceProject,
-    compiled: &CompiledProject,
-    inputs: &[project::DeriveSelectorInput],
-) -> Value {
-    selectors(
-        project,
-        compiled,
-        inputs.iter().map(|input| {
-            (
-                input.role.to_string(),
-                input
-                    .alternatives
-                    .iter()
-                    .map(|alternative| {
-                        (
-                            alternative.profile.to_string(),
-                            alternative.fields.iter().map(ToString::to_string).collect(),
-                        )
-                    })
-                    .collect(),
-            )
-        }),
-    )
-}
-fn lookup(source: &Source) -> Value {
-    union(vec![
-        fields([
-            ("outcome".to_owned(), literal(json!("match"))),
-            ("facts".to_owned(), facts(source)),
-        ]),
-        fields([(
-            "outcome".to_owned(),
-            json!({"enum":["no_match","ambiguous"]}),
-        )]),
-    ])
-}
-fn request_parts(source: &Source) -> Value {
-    if source.source_type == project::SourceType::SqliteExtract {
-        fields([(
-            "parameters".to_owned(),
-            json!({"type":"object","additionalProperties":{"anyOf":[{"type":"string"},{"type":"integer"},{"type":"boolean"}]}}),
-        )])
-    } else {
-        fields([
-            (
-                "query".to_owned(),
-                array(fields([
-                    ("name".to_owned(), json!({"type":"string"})),
-                    ("value".to_owned(), json!({"type":"string"})),
-                ])),
-            ),
-            ("body".to_owned(), json!({"$ref":"#/$defs/JSONValue"})),
-        ])
-    }
-}
-struct SourceCall<'a> {
-    definition: &'a registry_platform_yaml::LocalId,
-    source: &'a registry_platform_yaml::LocalId,
-    stage: &'static str,
-    prior_facts: Value,
-}
-fn source_calls(project: &EvidenceProject) -> Vec<SourceCall<'_>> {
-    let mut calls = Vec::new();
-    for (id, definition) in &project.assertion_definitions {
-        match &definition.acquisition {
-            project::Acquisition::Single { source } => calls.push(SourceCall {
-                definition: id,
-                source,
-                stage: "single",
-                prior_facts: object(Map::new()),
-            }),
-            project::Acquisition::SearchThenFetch { search, fetch, .. } => {
-                calls.push(SourceCall {
-                    definition: id,
-                    source: search,
-                    stage: "search",
-                    prior_facts: object(Map::new()),
-                });
-                calls.push(SourceCall {
-                    definition: id,
-                    source: fetch,
-                    stage: "fetch",
-                    prior_facts: facts(&project.sources[search]),
-                });
-            }
-            project::Acquisition::SearchThenFetchSet { search, fetch, .. } => {
-                calls.push(SourceCall {
-                    definition: id,
-                    source: search,
-                    stage: "search",
-                    prior_facts: object(Map::new()),
-                });
-                for member in fetch {
-                    calls.push(SourceCall {
-                        definition: id,
-                        source: &member.source,
-                        stage: "fetch",
-                        prior_facts: fields(
-                            project.sources[search]
-                                .facts
-                                .iter()
-                                .filter(|(name, _)| {
-                                    member
-                                        .fact_inputs
-                                        .iter()
-                                        .any(|input| input == name.as_str())
-                                })
-                                .map(|(name, value)| {
-                                    (name.to_string(), project::value_schema(value))
-                                }),
-                        ),
-                    });
-                }
-            }
-        }
-    }
-    calls
-}
+
 pub(crate) fn function_shape(
     project: &EvidenceProject,
     compiled: &CompiledProject,
     function: &project::Function,
 ) -> Value {
     let mut calls = Vec::new();
-    let extraction_arity = compiled
-        .functions
-        .iter()
-        .find(|entry| entry["id"] == json!(function.id))
-        .and_then(|entry| entry["arity"].as_u64())
-        .unwrap_or(3);
-    for call in source_calls(project) {
-        let id = call.source;
-        let source = &project.sources[id];
-        let prior = call.prior_facts;
-        let parameters = source
-            .adapter_parameters_schema
-            .clone()
-            .unwrap_or_else(|| object(Map::new()));
-        let context = fields([
-            ("parameters".to_owned(), parameters.clone()),
-            ("prior_facts".to_owned(), prior.clone()),
-        ]);
-        for (mode, matches, inputs, outputs) in [
-            (
-                "prepare",
-                source
-                    .prepare
-                    .as_ref()
-                    .is_some_and(|call| call.function == function.id),
-                fields([
-                    (
-                        "selectors".to_owned(),
-                        source_selectors(project, compiled, source),
-                    ),
-                    ("context".to_owned(), context.clone()),
-                ]),
-                request_parts(source),
-            ),
-            (
-                "extract",
-                source.extract.function == function.id,
-                fields([
-                    (
-                        "response".to_owned(),
-                        project::value_schema(&source.response.shape),
-                    ),
-                    (
-                        "selectors".to_owned(),
-                        source_selectors(project, compiled, source),
-                    ),
-                    ("context".to_owned(), context),
-                ]),
-                lookup(source),
-            ),
-        ] {
-            if matches {
-                let mut inputs = inputs;
-                if mode == "extract" && extraction_arity == 2 {
-                    inputs["properties"]
-                        .as_object_mut()
-                        .expect("input object")
-                        .remove("selectors");
-                    inputs["required"]
-                        .as_array_mut()
-                        .expect("required inputs")
-                        .retain(|name| name != "selectors");
-                }
-                calls.push(fields([
-                    ("definition".to_owned(), literal(json!(call.definition))),
-                    ("stage".to_owned(), literal(json!(call.stage))),
-                    ("source".to_owned(), literal(json!(id))),
-                    ("mode".to_owned(), literal(json!(mode))),
-                    ("inputs".to_owned(), inputs),
-                    ("outputs".to_owned(), outputs),
-                ]));
-            }
-        }
-        if let Some(batch) = &source.batch {
-            let items = array(fields([
-                ("slot".to_owned(), json!({"type":"integer"})),
-                (
-                    "selectors".to_owned(),
-                    source_selectors(project, compiled, source),
-                ),
-            ]));
-            let results = array(union(vec![
-                fields([
-                    ("slot".to_owned(), json!({"type":"integer"})),
-                    ("outcome".to_owned(), literal(json!("match"))),
-                    ("facts".to_owned(), facts(source)),
-                ]),
-                fields([
-                    ("slot".to_owned(), json!({"type":"integer"})),
-                    (
-                        "outcome".to_owned(),
-                        json!({"enum":["no_match","ambiguous"]}),
-                    ),
-                ]),
-            ]));
-            for (mode, matches, inputs, outputs) in [
-                (
-                    "batch-prepare",
-                    batch.prepare.function == function.id,
-                    fields([
-                        ("items".to_owned(), items),
-                        (
-                            "context".to_owned(),
-                            fields([("parameters".to_owned(), parameters.clone())]),
-                        ),
-                    ]),
-                    request_parts(source),
-                ),
-                (
-                    "batch-extract",
-                    batch.extract.function == function.id,
-                    fields([
-                        (
-                            "response".to_owned(),
-                            project::value_schema(&batch.response.shape),
-                        ),
-                        (
-                            "context".to_owned(),
-                            fields([
-                                ("parameters".to_owned(), parameters),
-                                ("slots".to_owned(), array(json!({"type":"integer"}))),
-                            ]),
-                        ),
-                    ]),
-                    results,
-                ),
-            ] {
-                if matches {
-                    calls.push(fields([
-                        ("definition".to_owned(), literal(json!(call.definition))),
-                        ("stage".to_owned(), literal(json!(call.stage))),
-                        ("source".to_owned(), literal(json!(id))),
-                        ("mode".to_owned(), literal(json!(mode))),
-                        ("inputs".to_owned(), inputs),
-                        ("outputs".to_owned(), outputs),
-                    ]));
-                }
-            }
-        }
-    }
     for (id, definition) in &project.assertion_definitions {
         if definition.derive.function != function.id {
             continue;
         }
-        let facts = fields(
-            definition
-                .acquisition
-                .derivation_source_ids()
-                .into_iter()
-                .flat_map(|id| project.sources[id].facts.iter())
-                .map(|(id, shape)| (id.to_string(), project::value_schema(shape))),
-        );
+        let facts = compiled_facts(compiled, definition.acquisition.source.as_str());
         let context = fields([
             (
                 "parameters".to_owned(),
@@ -532,7 +222,7 @@ pub(crate) fn function_shape(
                     ("facts".to_owned(), facts),
                     (
                         "selectors".to_owned(),
-                        derive_selectors(project, compiled, &definition.derive.selector_inputs),
+                        selector_inputs(project, compiled, &definition.derive.selector_inputs),
                     ),
                     ("context".to_owned(), context),
                 ]),
@@ -765,14 +455,10 @@ pub fn typescript(project: &EvidenceProject, compiled: &CompiledProject) -> Stri
         result.push_str("  };\n");
     }
     result.push_str("}\n");
-    for (catalog, response) in [("SourceFacts", false), ("SourceResponses", true)] {
+    for catalog in ["SourceFacts"] {
         result.push_str(&format!("export interface {catalog} {{\n"));
-        for (id, source) in &project.sources {
-            let shape = if response {
-                project::value_schema(&source.response.shape)
-            } else {
-                facts(source)
-            };
+        for id in project.sources.keys() {
+            let shape = compiled_facts(compiled, id.as_str());
             result.push_str(&format!(
                 "  // evidence-source: {id}\n  {}: {};\n",
                 json!(id),
@@ -845,14 +531,10 @@ pub fn python(project: &EvidenceProject, compiled: &CompiledProject) -> String {
                 + "Outputs"
         ));
     }
-    for (catalog, response) in [("SourceFacts", false), ("SourceResponses", true)] {
+    for catalog in ["SourceFacts"] {
         let mut entries = Vec::new();
-        for (id, source) in &project.sources {
-            let shape = if response {
-                project::value_schema(&source.response.shape)
-            } else {
-                facts(source)
-            };
+        for id in project.sources.keys() {
+            let shape = compiled_facts(compiled, id.as_str());
             let name = renderer.shape(&shape, &shape, 0);
             result.push_str(&format!("# evidence-source: {id}\n"));
             result.push_str(&renderer.definitions);

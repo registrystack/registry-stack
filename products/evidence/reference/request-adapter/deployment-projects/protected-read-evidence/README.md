@@ -20,7 +20,7 @@ without changing evidence semantics.
 Before deployment, the operator changes only:
 
 - `.example` token-issuer and registry-API hosts;
-- the resource and field names in the request path and `providerFields`;
+- the reviewed pack route, request path and selected fields;
 - issuer, provider, trust-domain, framework, evidence-type, and concept URIs;
 - the codelist entries and disclosed region codes;
 - authority tags and purposes;
@@ -32,16 +32,15 @@ Before deployment, the operator changes only:
 The source performs one collection read filtered to exactly one record
 reference, projected to the two fields the requirement needs, with a page
 bound of two. A second page is never followed. That two-result ceiling is
-governed adapter policy declared by this reviewed bundle and rendered by
-`adapters/prepare.rhai`, so one bounded response separates a unique match from
+governed policy pinned by the pack route, so one bounded response separates a unique match from
 ambiguity. It is not a Rust domain rule and not a property of any registry
 product.
 
 The worked response preserves the historical Relay V2 JSON shape: every item carries its
 mandatory, non-selectable Registry Core fields, selected values are nested
 under `domainData`, the collection is under `items`, and `meta` accompanies
-`pageInfo.nextCursor`. The Evidence projection discards Registry Core and
-`meta` before extraction because this requirement needs only the exact
+`pageInfo.nextCursor`. The pack projection discards Registry Core and
+`meta` before schema validation and extraction because this requirement needs only the exact
 reference consistency check and region code.
 
 This envelope reports no total count, only a page of items and a flag saying
@@ -65,10 +64,11 @@ internal `derivation_input_error` category and collapses publicly into the same
 `evidence.unavailable` problem as an unresolved lookup, so the caller cannot
 learn that a record was found.
 
-`providerFields` and `pageSize` are strings because they become lexical URL
-query values, and both are pinned by the adapter-parameter schema: the field
-list is the projection this requirement is entitled to, and the page bound is
-the ambiguity signal, so neither is an operator dial.
+The pack pins `fields=recordReference,region` and `pageSize=2` as lexical URL
+query values. The field list is the projection this requirement is entitled to,
+and the page bound is the ambiguity signal, so neither is an operator dial.
+The source maps only the authorized reference to the route's `recordReference`
+input. Sealed fixture transcripts check the exact encoded query and headers.
 
 ## Residence region
 
@@ -77,8 +77,8 @@ The register's own region code never leaves the service: `codelists/`
 maps several register codes onto each disclosed region, and only the codes in
 `allowedOutputs` can pass the output gate. A register code with no reviewed
 mapping leaves the requirement unresolved rather than passing the precise code
-through, and a record carrying no region at all is refused by the fact schema
-before derivation runs, so an absent region can never be read as a region.
+through, and a record carrying no region at all settles as an explicit unresolved
+lookup before derivation runs, so an absent region can never be read as a region.
 
 ## Authentication
 
@@ -89,13 +89,13 @@ independently configured resource-server policies.
 Outbound, the source authenticates to the registry API with the OAuth 2.0
 client-credentials grant against that same issuer, placing the credentials in
 the form body and caching the token for at most a minute. A deployment whose
-registry API accepts a different credential kind changes only the source's
-`authentication` block.
+registry API accepts a different credential kind reviews the pack authentication
+kind and governed connection policy, then binds matching runtime credentials.
 
 The registry API here is presented over ordinary public TLS, so `runtime.yaml`
 declares no private trust profile and the source names none. A deployment whose
 registry API sits behind an internal CA adds a profile to `outboundTls` and
-names it on the source, the way the other reference projects do.
+names it in the governed endpoint policy and matching runtime endpoint binding.
 
 ## Secrets
 
@@ -122,3 +122,9 @@ Staging must verify the
 configured `at+jwt` header and claims, readiness, one approved synthetic source
 lookup, audit durability, and JWS verification. See the
 [authoring and production-build workflow](../CONFIG.md#authoring-and-production-build-workflow).
+
+The reviewed acquisition is captured under `bundle/adapter-packs/`, including
+its exact script and schema digests. `bundle/evidence.yaml` owns the source route,
+selector projection and connection authority; `runtime.yaml` binds credentials,
+finite limits and deployment resources. All examples and response recordings
+are synthetic. No live protected registry is claimed tested.

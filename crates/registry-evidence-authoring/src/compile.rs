@@ -2,17 +2,45 @@
 //! Bytes are supplied by the caller. No source data or secret is accepted here.
 use crate::{
     finding::{FieldPath, Finding},
-    project::{self, EvidenceProject, FunctionInterface, SourceType},
+    project::{self, AcquisitionPosture, EvidenceProject, PackReference},
 };
+use registry_platform_yaml::{ApiVersion, EnvelopeRule, Expect, FormatSpec, Reader};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
+
+const ADAPTER_PACK_FORMAT: FormatSpec<'static> = FormatSpec {
+    kind: "AdapterPack",
+    envelope: EnvelopeRule::ApiVersionKind {
+        api_versions: &[ApiVersion::current(
+            "id.registrystack.org/formats/adapter/pack/v1alpha1",
+        )],
+        retired_api_versions: &[],
+    },
+    removed_keys: &[],
+};
 
 #[derive(Debug)]
 pub struct CompiledProject {
     pub model: Value,
     pub artifacts: BTreeMap<String, Vec<u8>>,
     pub functions: Vec<Value>,
+    /// The checked route result contracts used by derivation/type projection.
+    pub source_facts: BTreeMap<String, Value>,
+}
+
+/// Exact, already-checked pack closure supplied by tooling or an in-memory
+/// editor host. This crate performs no pack loading and no I/O.
+#[derive(Clone, Debug)]
+pub struct CheckedPackRoute {
+    pub pack: PackReference,
+    pub route: registry_platform_yaml::LocalId,
+    pub digest: String,
+    pub inputs_schema: Value,
+    pub facts_schema: Value,
+    pub acquisition_posture: AcquisitionPosture,
+    pub pack_bytes: Vec<u8>,
+    pub artifacts: BTreeMap<String, Vec<u8>>,
 }
 
 /// Compile one validated project and reviewed function assets. Target bindings
@@ -20,6 +48,16 @@ pub struct CompiledProject {
 pub fn compile(
     project: &EvidenceProject,
     scripts: &BTreeMap<String, String>,
+) -> Result<CompiledProject, Vec<Finding>> {
+    compile_with_pack_routes(project, scripts, &[])
+}
+
+/// Compile against explicit checked pack/route closures. A Source without an
+/// exact closure is refused instead of being lowered to the retired executor.
+pub fn compile_with_pack_routes(
+    project: &EvidenceProject,
+    scripts: &BTreeMap<String, String>,
+    pack_routes: &[CheckedPackRoute],
 ) -> Result<CompiledProject, Vec<Finding>> {
     let mut findings = project::validate_project(project);
     if !findings.is_empty() {
@@ -46,72 +84,12 @@ pub fn compile(
                 }),
         );
         let mut sites = Vec::new();
-        for (id, source) in &project.sources {
-            if let Some(batch) = &source.batch {
-                for (field, call, interface) in [
-                    ("prepare", &batch.prepare, FunctionInterface::SourcePrepare),
-                    ("extract", &batch.extract, FunctionInterface::SourceExtract),
-                ] {
-                    if call.function == function.id {
-                        sites.push(format!("/sources/{id}/batch/{field}"));
-                        findings.extend(
-                            crate::derivation::validate_batch_function(script, interface)
-                                .into_iter()
-                                .map(|mut finding| {
-                                    finding.field = finding.field.under(
-                                        &FieldPath::root()
-                                            .key("sources")
-                                            .map_key(id.to_string())
-                                            .key("batch")
-                                            .key(field)
-                                            .key("function"),
-                                    );
-                                    finding
-                                }),
-                        );
-                    }
-                }
-            }
-            if source.extract.function == function.id {
-                sites.push(format!("/sources/{id}/extract"));
-            }
-            if source
-                .prepare
-                .as_ref()
-                .is_some_and(|call| call.function == function.id)
-            {
-                sites.push(format!("/sources/{id}/prepare"));
-            }
-        }
         for (id, definition) in &project.assertion_definitions {
             if definition.derive.function == function.id {
                 sites.push(format!("/assertionDefinitions/{id}/derive"));
             }
         }
         functions.push(json!({"id": function.id, "interface": function.interface, "arity": crate::derivation::function_arity(script,function.interface), "source": function.source, "label":function.label, "description":function.description, "capabilities": function.interface.capabilities(), "callSites": sites}));
-        let ordinary_source_call = project.sources.values().any(|source| {
-            source.extract.function == function.id
-                || source
-                    .prepare
-                    .as_ref()
-                    .is_some_and(|call| call.function == function.id)
-        });
-        if function.interface != FunctionInterface::AssertionDerive && ordinary_source_call {
-            insert_artifact(
-                &mut artifacts,
-                &format!("adapters/functions/{}.rhai", function.id),
-                format!(
-                    "// Evidence Function {} interface {}\n{script}",
-                    function.id,
-                    serde_json::to_value(function.interface)
-                        .expect("interface")
-                        .as_str()
-                        .expect("interface string")
-                )
-                .into_bytes(),
-                at.clone().key("source"),
-            )?;
-        }
     }
     if !findings.is_empty() {
         return Err(findings);
@@ -120,239 +98,155 @@ pub fn compile(
         project
             .functions
             .iter()
-            .find(|f| &f.id == id)
+            .find(|function| &function.id == id)
             .expect("validated Function reference")
     };
     let mut sources = Map::new();
+    let mut source_facts = BTreeMap::new();
     for (id, source) in &project.sources {
         let source_at = FieldPath::root().key("sources").map_key(id.to_string());
-        let response_path = format!("schemas/source-response/{id}.schema.json");
+        let matches = pack_routes
+            .iter()
+            .filter(|route| route.pack == source.pack && route.route == source.route)
+            .collect::<Vec<_>>();
+        let Some(route) = matches.first().copied() else {
+            findings.push(Finding::new(
+                source_at.clone().key("pack"),
+                "source-pack-closure-missing",
+                "supply the checked closure for this exact pack version and route",
+            ));
+            continue;
+        };
+        if matches.len() != 1 {
+            findings.push(Finding::new(
+                source_at.clone().key("pack"),
+                "source-pack-closure-ambiguous",
+                "supply exactly one checked closure for this pack version and route",
+            ));
+            continue;
+        }
+        findings.extend(verify_pack_closure(route, source_at.clone()));
+        let Some(route_inputs) = closed_schema_properties(&route.inputs_schema) else {
+            findings.push(Finding::new(
+                source_at.clone().key("route"),
+                "source-route-input-schema",
+                "the checked route input schema must be a closed object",
+            ));
+            continue;
+        };
+        let Some(route_facts) = closed_schema_properties(&route.facts_schema) else {
+            findings.push(Finding::new(
+                source_at.clone().key("route"),
+                "source-route-facts",
+                "the checked route facts schema must be a closed object",
+            ));
+            continue;
+        };
+        if route_facts.is_empty() || route_facts.len() > 64 {
+            findings.push(Finding::new(
+                source_at.clone().key("route"),
+                "source-route-facts",
+                "the checked route must declare between one and 64 typed final facts",
+            ));
+        }
+        if posture_rank(source.acquisition_posture) < posture_rank(route.acquisition_posture) {
+            findings.push(Finding::new(
+                source_at.clone().key("acquisitionPosture"),
+                "source-acquisition-posture",
+                "the binding cannot claim a stronger posture than the checked route contract",
+            ));
+        }
+        for required in route.inputs_schema["required"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+        {
+            if !source.inputs.keys().any(|input| input.as_str() == required) {
+                findings.push(Finding::new(
+                    source_at.clone().key("inputs"),
+                    "source-route-input-required",
+                    format!("map required route input {required}"),
+                ));
+            }
+        }
+        for (input_name, binding) in &source.inputs {
+            let input_at = source_at
+                .clone()
+                .key("inputs")
+                .map_key(input_name.to_string());
+            let Some(contract) = route_inputs.get(input_name.as_str()) else {
+                findings.push(Finding::new(
+                    input_at,
+                    "source-route-input-unknown",
+                    "map only inputs declared by the checked route contract",
+                ));
+                continue;
+            };
+            if let Some(field) = project
+                .selector_profiles
+                .get(&binding.selector.profile)
+                .and_then(|profile| profile.fields.get(&binding.selector.field))
+            {
+                let selector_schema = project::value_schema(&crate::selector::compiled(field));
+                if !input_schema_accepts(contract, &selector_schema) {
+                    findings.push(Finding::new(
+                        input_at.key("selector"),
+                        "source-route-input-type",
+                        "the authorized selector field does not fit the checked route input schema",
+                    ));
+                }
+            }
+        }
         let facts_path = format!("schemas/source-facts/{id}.schema.json");
-        let parameters_path = format!("schemas/source-parameters/{id}.schema.json");
-        let facts = json!({"type":"object", "additionalProperties":false, "required":source.facts.keys().collect::<Vec<_>>(), "properties":source.facts.iter().map(|(name, shape)| (name.to_string(), project::value_schema(shape))).collect::<Map<_, _>>()});
-        insert_json_artifact(
-            &mut artifacts,
-            &response_path,
-            &project::value_schema(&source.response.shape),
-            source_at.clone().key("response").key("shape"),
-        )?;
         insert_json_artifact(
             &mut artifacts,
             &facts_path,
-            &facts,
-            source_at.clone().key("facts"),
+            &route.facts_schema,
+            source_at.clone().key("route"),
         )?;
-        if source.source_type == SourceType::HttpJson || source.prepare.is_some() {
-            insert_json_artifact(
-                &mut artifacts,
-                &parameters_path,
-                &source.adapter_parameters_schema.clone().unwrap_or_else(|| {
-                    json!({"type":"object", "additionalProperties":false, "properties":{}, "required":[]})
-                }),
-                source_at.clone().key("adapterParametersSchema"),
-            )?;
-        }
-        let selector_inputs = source.selectors.iter().map(|selector| json!({"role":selector.role,"alternatives":selector.profiles.iter().map(|profile| json!({"profile":profile,"fields":project.selector_profiles[profile].fields.keys().collect::<Vec<_>>()})).collect::<Vec<_>>()})).collect::<Vec<_>>();
-        let mut request = source.request.clone();
-        let Some(request_map) = request.as_object_mut() else {
-            return Err(vec![Finding::new(
-                FieldPath::root()
-                    .key("sources")
-                    .map_key(id.to_string())
-                    .key("request"),
-                "source-request",
-                "Source request must be an object",
-            )]);
-        };
-        request_map.insert("selectorInputs".to_owned(), json!(selector_inputs));
-        request_map.insert("projection".to_owned(), json!(source.response.projection));
-        request_map.insert(
-            "attemptTimeoutMilliseconds".to_owned(),
-            json!(source.limits.attempt_timeout_milliseconds),
-        );
-        request_map.insert(
-            "maximumResponseBytes".to_owned(),
-            json!(source.response.maximum_bytes),
-        );
-        request_map.insert(
-            "maximumConcurrency".to_owned(),
-            json!(source.limits.maximum_concurrency),
-        );
-        if source.source_type == SourceType::SqliteExtract {
-            if let Some(Value::Object(bindings)) = request_map.get_mut("parameterBindings") {
-                lower_bindings(
-                    bindings,
-                    &FieldPath::root()
-                        .key("sources")
-                        .map_key(id.to_string())
-                        .key("request")
-                        .key("parameterBindings"),
-                    &["selector", "prepared"],
-                )?;
-            }
-            if let Some(call) = &source.prepare {
-                request_map.insert(
-                    "prepareScript".to_owned(),
-                    json!(format!(
-                        "adapters/functions/{}.rhai",
-                        function(&call.function).id
-                    )),
-                );
-                request_map.insert(
-                    "adapterParameters".to_owned(),
-                    source
-                        .adapter_parameters
-                        .clone()
-                        .unwrap_or_else(|| json!({})),
-                );
-                request_map.insert("adapterParametersSchema".to_owned(), json!(parameters_path));
-                if let Some(limits) = &source.preparation_limits {
-                    request_map.insert("preparationLimits".to_owned(), limits.clone());
-                }
-            }
-            if let Some(path) = request_map.get("statement").and_then(Value::as_str) {
-                let Some(sql) = scripts.get(path) else {
-                    return Err(vec![Finding::new(
-                        FieldPath::root()
-                            .key("sources")
-                            .map_key(id.to_string())
-                            .key("request")
-                            .key("statement"),
-                        "source-statement",
-                        "the reviewed SQL statement asset was not supplied",
-                    )]);
-                };
-                insert_artifact(
-                    &mut artifacts,
-                    path,
-                    sql.as_bytes().to_vec(),
-                    source_at.clone().key("request").key("statement"),
-                )?;
-            }
-        }
-        if source.source_type == SourceType::HttpJson {
-            let prepare_path = match &source.prepare {
-                Some(call) => format!("adapters/functions/{}.rhai", function(&call.function).id),
-                None => {
-                    let path = format!("adapters/source-prepare/{id}.rhai");
-                    insert_artifact(
-                        &mut artifacts,
-                        &path,
-                        b"fn prepare(selectors, context) { #{query: [], body: ()} }\n".to_vec(),
-                        source_at.clone().key("request"),
-                    )?;
-                    path
-                }
-            };
-            request_map.insert("prepareScript".to_owned(), json!(prepare_path));
-            request_map.insert(
-                "adapterParameters".to_owned(),
-                source
-                    .adapter_parameters
-                    .clone()
-                    .unwrap_or_else(|| json!({})),
-            );
-            request_map.insert("adapterParametersSchema".to_owned(), json!(parameters_path));
-            request_map.insert(
-                "preparationLimits".to_owned(),
-                source
-                    .preparation_limits
-                    .clone()
-                    .unwrap_or_else(default_preparation_limits),
-            );
-            request_map.insert("projection".to_owned(), json!(source.response.projection));
-            request_map.insert("redirects".to_owned(), json!("deny"));
-            request_map.insert(
-                "attemptTimeoutMilliseconds".to_owned(),
-                json!(source.limits.attempt_timeout_milliseconds),
-            );
-            request_map.insert(
-                "maximumResponseBytes".to_owned(),
-                json!(source.response.maximum_bytes),
-            );
-            request_map.insert(
-                "maximumConcurrency".to_owned(),
-                json!(source.limits.maximum_concurrency),
-            );
-            if let Some(Value::Object(bindings)) = request_map.get_mut("pathBindings") {
-                lower_bindings(
-                    bindings,
-                    &FieldPath::root()
-                        .key("sources")
-                        .map_key(id.to_string())
-                        .key("request")
-                        .key("pathBindings"),
-                    &["selector", "fact"],
-                )?;
-            }
-        }
-        let mut compiled = json!({"type":source.source_type,"posture":source.acquisition_posture,"request":request,"responseSchema":response_path,"extractScript":format!("adapters/functions/{}.rhai", function(&source.extract.function).id),"factSchema":facts_path});
-        if let Some(connection) = &source.connection {
-            compiled["connection"] = json!(connection);
-        }
-        if let Some(profile) = &source.extract_profile {
-            compiled["extractProfile"] = json!(profile);
-        }
-        if let Some(age) = &source.maximum_extract_age_seconds {
-            compiled["maximumExtractAgeSeconds"] = json!(age);
-        }
-        if let Some(batch) = &source.batch {
-            let response_path = format!("schemas/source-batch-response/{id}.schema.json");
-            insert_json_artifact(
-                &mut artifacts,
-                &response_path,
-                &project::value_schema(&batch.response.shape),
-                source_at.clone().key("batch").key("response").key("shape"),
-            )?;
-            let prepare = function(&batch.prepare.function);
-            let extract = function(&batch.extract.function);
-            let prepare_path = format!("adapters/source-batch-prepare/{id}.rhai");
-            let extract_path = format!("adapters/source-batch-extract/{id}.rhai");
+        let digest_path = route
+            .digest
+            .strip_prefix("sha256:")
+            .unwrap_or(&route.digest);
+        let artifact_prefix = format!("adapter-packs/{}/{digest_path}", source.pack.id);
+        if !route.pack_bytes.is_empty() {
             insert_artifact(
                 &mut artifacts,
-                &prepare_path,
-                format!(
-                    "// Evidence Function {} interface source-prepare/v1 batch\n{}",
-                    prepare.id,
-                    rename_entry(&scripts[&prepare.source], "prepare", "prepare_batch")
-                )
-                .into_bytes(),
-                source_at
-                    .clone()
-                    .key("batch")
-                    .key("prepare")
-                    .key("function"),
+                &format!("{artifact_prefix}/pack.yaml"),
+                route.pack_bytes.clone(),
+                source_at.clone().key("pack"),
             )?;
+        }
+        for (path, bytes) in &route.artifacts {
+            if !valid_pack_artifact_path(path) {
+                findings.push(Finding::new(
+                    source_at.clone().key("pack"),
+                    "source-pack-artifact-path",
+                    "checked pack artifact paths must be relative and traversal-free",
+                ));
+                continue;
+            }
             insert_artifact(
                 &mut artifacts,
-                &extract_path,
-                format!(
-                    "// Evidence Function {} interface source-extract/v1 batch\n{}",
-                    extract.id,
-                    rename_entry(&scripts[&extract.source], "extract", "extract_batch")
-                )
-                .into_bytes(),
-                source_at
-                    .clone()
-                    .key("batch")
-                    .key("extract")
-                    .key("function"),
+                &format!("{artifact_prefix}/{path}"),
+                bytes.clone(),
+                source_at.clone().key("pack"),
             )?;
-            compiled["batch"] = json!({"maximumItems":batch.maximum_items,"prepareScript":prepare_path,"extractScript":extract_path,"responseSchema":response_path,"projection":batch.response.projection});
         }
-        if let Some(evidence) = &source.evidence {
-            compiled["evidence"] = evidence.clone();
-        }
-        if let Some(problem) = &source.unresolved_problem {
-            compiled["unresolvedProblem"] = problem.clone();
-        }
-        if let Some(revision) = &source.behavior_revision {
-            compiled["behaviorRevision"] = json!(revision);
-        }
-        if source.forward_access_attribution {
-            compiled["forwardAccessAttribution"] = json!(true);
-        }
+        let compiled = json!({
+            "pack": {"id":source.pack.id,"version":source.pack.version,"digest":route.digest,"artifactPrefix":artifact_prefix},
+            "route": source.route,
+            "connection": source.connection,
+            "inputs": source.inputs,
+            "posture": source.acquisition_posture,
+            "factSchema": facts_path
+        });
+        source_facts.insert(id.to_string(), route.facts_schema.clone());
         sources.insert(id.to_string(), compiled);
+    }
+    if !findings.is_empty() {
+        return Err(findings);
     }
     for (id, profile) in &project.selector_profiles {
         for (name, field) in &profile.fields {
@@ -551,8 +445,9 @@ pub fn compile(
             .derivation_source_ids()
             .into_iter()
             .flat_map(|source| {
-                project.sources[source]
-                    .facts
+                source_facts[source.as_str()]["properties"]
+                    .as_object()
+                    .expect("checked facts schema properties")
                     .keys()
                     .map(ToString::to_string)
             })
@@ -604,7 +499,7 @@ pub fn compile(
         }
         requirements.push(requirement);
     }
-    let mut model = json!({"project":project.id,"acquisitionCapabilities":project.acquisition_capabilities,"maximumHolderBoundBatchSize":project.maximum_holder_bound_batch_size,"selectorProfiles":project.selector_profiles.iter().map(|(id,profile)|(id.to_string(),json!({"fields":profile.fields.iter().map(|(name,value)|(name.to_string(),crate::selector::compiled(value))).collect::<Map<_,_>>(),"maximumAggregateBytes":profile.maximum_aggregate_bytes}))).collect::<Map<_,_>>(),"sources":sources,"requirements":requirements});
+    let mut model = json!({"project":project.id,"maximumHolderBoundBatchSize":project.maximum_holder_bound_batch_size,"selectorProfiles":project.selector_profiles.iter().map(|(id,profile)|(id.to_string(),json!({"fields":profile.fields.iter().map(|(name,value)|(name.to_string(),crate::selector::compiled(value))).collect::<Map<_,_>>(),"maximumAggregateBytes":profile.maximum_aggregate_bytes}))).collect::<Map<_,_>>(),"sources":sources,"requirements":requirements});
     if project.maximum_holder_bound_batch_size.is_none() {
         model
             .as_object_mut()
@@ -615,6 +510,7 @@ pub fn compile(
         model,
         artifacts,
         functions,
+        source_facts,
     };
     // Inspection and declaration generation share the same typed ABI projection.
     // The authored program returns local Output names; wrappers alone lower URIs.
@@ -628,13 +524,18 @@ pub fn compile(
             .as_array()
             .cloned()
             .unwrap_or_default();
-        function["bindings"] = json!(calls.iter().map(|call| {
-            let properties=&call["properties"];
-            let definition=&properties["definition"]["enum"][0];
-            let source=&properties["source"]["enum"][0];
-            let mode=&properties["mode"]["enum"][0];
-            json!({"definition":definition,"source":source,"mode":mode,"stage":properties["stage"]["enum"][0],"inputs":properties["inputs"]["properties"],"outputs":properties["outputs"],"limits":source.as_str().and_then(|id|project.sources.iter().find(|(key,_)|key.as_str()==id).map(|(_,source)|json!(source.limits)))})
-        }).collect::<Vec<_>>());
+        function["bindings"] = json!(calls
+            .iter()
+            .map(|call| {
+                let properties = &call["properties"];
+                json!({
+                    "definition": properties["definition"]["enum"][0],
+                    "mode": properties["mode"]["enum"][0],
+                    "inputs": properties["inputs"]["properties"],
+                    "outputs": properties["outputs"]
+                })
+            })
+            .collect::<Vec<_>>());
         function["abi"] = interface;
     }
     Ok(compiled)
@@ -671,6 +572,395 @@ fn insert_artifact(
     }
     artifacts.entry(path.to_owned()).or_insert(bytes);
     Ok(())
+}
+
+fn posture_rank(posture: AcquisitionPosture) -> u8 {
+    match posture {
+        AcquisitionPosture::SourceDerived => 0,
+        AcquisitionPosture::FieldProjected => 1,
+        AcquisitionPosture::RecordTransformed => 2,
+    }
+}
+
+fn posture_wire(posture: AcquisitionPosture) -> &'static str {
+    match posture {
+        AcquisitionPosture::SourceDerived => "source-derived",
+        AcquisitionPosture::FieldProjected => "field-projected",
+        AcquisitionPosture::RecordTransformed => "record-transformed",
+    }
+}
+
+fn closed_schema_properties(schema: &Value) -> Option<&Map<String, Value>> {
+    (schema.get("type") == Some(&json!("object"))
+        && schema.get("additionalProperties") == Some(&json!(false)))
+    .then(|| schema.get("properties")?.as_object())?
+}
+
+fn input_schema_accepts(contract: &Value, selector: &Value) -> bool {
+    if contract.get("type") != selector.get("type") {
+        return false;
+    }
+    if let Some(allowed) = contract.get("enum").and_then(Value::as_array) {
+        let Some(values) = selector.get("enum").and_then(Value::as_array) else {
+            return false;
+        };
+        if values.iter().any(|value| !allowed.contains(value)) {
+            return false;
+        }
+    }
+    for (minimum, maximum) in [("minimum", "maximum"), ("minLength", "maxLength")] {
+        if contract
+            .get(minimum)
+            .and_then(Value::as_i64)
+            .is_some_and(|bound| {
+                selector
+                    .get(minimum)
+                    .and_then(Value::as_i64)
+                    .is_none_or(|value| value < bound)
+            })
+        {
+            return false;
+        }
+        if contract
+            .get(maximum)
+            .and_then(Value::as_i64)
+            .is_some_and(|bound| {
+                selector
+                    .get(maximum)
+                    .and_then(Value::as_i64)
+                    .is_none_or(|value| value > bound)
+            })
+        {
+            return false;
+        }
+    }
+    true
+}
+
+fn valid_pack_artifact_path(path: &str) -> bool {
+    !path.is_empty()
+        && !path.starts_with('/')
+        && !path.contains('\\')
+        && path
+            .split('/')
+            .all(|segment| !segment.is_empty() && segment != "." && segment != "..")
+}
+
+#[derive(Clone, Debug)]
+struct PackArtifactReference {
+    path: String,
+    digest: String,
+}
+
+fn verify_pack_closure(route: &CheckedPackRoute, at: FieldPath) -> Vec<Finding> {
+    let mut findings = Vec::new();
+    if route.pack_bytes.is_empty() {
+        findings.push(Finding::new(
+            at.key("pack"),
+            "source-pack-bytes-missing",
+            "the checked closure must include the exact pack document bytes",
+        ));
+        return findings;
+    }
+
+    if !valid_sha256_uri(&route.digest) || sha256_uri(&route.pack_bytes) != route.digest {
+        findings.push(Finding::new(
+            at.clone().key("pack"),
+            "source-pack-digest",
+            "the declared pack digest must equal the SHA-256 digest of the supplied pack bytes",
+        ));
+    }
+
+    let Ok(document) = Reader::new("pack.yaml")
+        .decode::<Value>(&route.pack_bytes, &Expect::one(&ADAPTER_PACK_FORMAT))
+        .map(|decoded| decoded.value)
+    else {
+        findings.push(Finding::new(
+            at.key("pack"),
+            "source-pack-document",
+            "the supplied bytes must satisfy the current AdapterPack contract",
+        ));
+        return findings;
+    };
+
+    if document.get("id").and_then(Value::as_str) != Some(route.pack.id.as_str())
+        || document.get("version").and_then(Value::as_str) != Some(route.pack.version.as_str())
+    {
+        findings.push(Finding::new(
+            at.clone().key("pack"),
+            "source-pack-identity",
+            "the supplied pack document id and version must match the Source pack reference",
+        ));
+    }
+
+    let mut references = BTreeMap::<String, String>::new();
+    collect_pack_references(&document, &mut references, &mut findings, &at);
+
+    let mut selected_routes = 0_usize;
+    let mut selected_evidence = Vec::new();
+    let Some(source_routes) = document.get("sourceRoutes").and_then(Value::as_array) else {
+        findings.push(Finding::new(
+            at.clone().key("route"),
+            "source-pack-route-contract",
+            "the supplied pack must declare the selected Evidence source route",
+        ));
+        return findings;
+    };
+    for source_route in source_routes {
+        if source_route.get("id").and_then(Value::as_str) == Some(route.route.as_str()) {
+            selected_routes += 1;
+            if let Some(evidence) = source_route.get("evidence") {
+                selected_evidence.push(evidence);
+            }
+        }
+    }
+    if selected_routes != 1 || selected_evidence.len() != 1 {
+        findings.push(Finding::new(
+            at.clone().key("route"),
+            "source-pack-route-contract",
+            "the supplied pack must declare exactly one selected route with an Evidence contract",
+        ));
+        return findings;
+    }
+
+    for (path, digest) in &references {
+        if !valid_pack_artifact_path(path) || !valid_sha256_uri(digest) {
+            findings.push(invalid_pack_reference(at.clone()));
+            continue;
+        }
+        let Some(bytes) = route.artifacts.get(path) else {
+            findings.push(Finding::new(
+                at.clone().key("pack"),
+                "source-pack-artifact-missing",
+                "supply every artifact referenced by the pack document",
+            ));
+            continue;
+        };
+        if sha256_uri(bytes) != *digest {
+            findings.push(Finding::new(
+                at.clone().key("pack"),
+                "source-pack-artifact-digest",
+                "every supplied pack artifact must match its digest-pinned reference",
+            ));
+        }
+    }
+    if route
+        .artifacts
+        .keys()
+        .any(|path| !references.contains_key(path))
+    {
+        findings.push(Finding::new(
+            at.clone().key("pack"),
+            "source-pack-artifact-unreferenced",
+            "the checked closure may contain only artifacts pinned by the supplied pack document",
+        ));
+    }
+
+    let evidence = selected_evidence[0];
+    let pinned_posture = evidence
+        .get("acquisitionPosture")
+        .map(Value::as_str)
+        .unwrap_or(Some("record-transformed"));
+    if pinned_posture != Some(posture_wire(route.acquisition_posture)) {
+        findings.push(Finding::new(
+            at.clone().key("route"),
+            "source-pack-posture-mismatch",
+            "the supplied checked posture must equal the posture pinned by the selected route",
+        ));
+    }
+    for (name, supplied) in [
+        ("inputsSchema", &route.inputs_schema),
+        ("factsSchema", &route.facts_schema),
+    ] {
+        let Some(reference) = evidence.get(name).and_then(pack_reference) else {
+            findings.push(invalid_pack_reference(at.clone()));
+            continue;
+        };
+        let artifact = route
+            .artifacts
+            .get(&reference.path)
+            .and_then(|bytes| serde_json::from_slice::<Value>(bytes).ok());
+        if artifact.as_ref() != Some(supplied) {
+            findings.push(Finding::new(
+                at.clone().key("route"),
+                "source-pack-schema-mismatch",
+                "the supplied checked schema must equal the schema artifact pinned by the selected route",
+            ));
+        }
+    }
+
+    findings
+}
+
+// The authoring library verifies supplied bytes without linking runtime
+// capabilities. File-based hosts additionally parse the owning Adapter DTO.
+fn collect_pack_references(
+    document: &Value,
+    references: &mut BTreeMap<String, String>,
+    findings: &mut Vec<Finding>,
+    at: &FieldPath,
+) {
+    for inventory in ["scripts", "queryFiles"] {
+        if let Some(values) = document.get(inventory) {
+            if let Some(values) = values.as_array() {
+                for reference in values {
+                    add_pack_reference(reference, references, findings, at.clone());
+                }
+            } else {
+                findings.push(invalid_pack_reference(at.clone()));
+            }
+        }
+    }
+    if let Some(reference) = document.get("openApi") {
+        add_pack_reference(reference, references, findings, at.clone());
+    }
+    if let Some(endpoints) = document.get("endpoints") {
+        if let Some(endpoints) = endpoints.as_array() {
+            for endpoint in endpoints {
+                for (member, artifact) in
+                    [("sqliteExtract", "statement"), ("hostProtocol", "config")]
+                {
+                    if let Some(declaration) = endpoint.get(member) {
+                        if let Some(reference) = declaration.get(artifact) {
+                            add_pack_reference(reference, references, findings, at.clone());
+                        } else {
+                            findings.push(invalid_pack_reference(at.clone()));
+                        }
+                    }
+                }
+            }
+        } else {
+            findings.push(invalid_pack_reference(at.clone()));
+        }
+    }
+    for collection in ["sourceRoutes", "routes", "routeTemplates"] {
+        if let Some(routes) = document.get(collection).and_then(Value::as_array) {
+            for route in routes {
+                if let Some(evidence) = route.get("evidence") {
+                    for name in ["inputsSchema", "factsSchema"] {
+                        if let Some(reference) = evidence.get(name) {
+                            add_pack_reference(reference, references, findings, at.clone());
+                        } else {
+                            findings.push(invalid_pack_reference(at.clone()));
+                        }
+                    }
+                }
+                if let Some(steps) = route.get("steps") {
+                    collect_step_schema_references(steps, references, findings, at);
+                }
+            }
+        }
+    }
+}
+
+fn collect_step_schema_references(
+    steps: &Value,
+    references: &mut BTreeMap<String, String>,
+    findings: &mut Vec<Finding>,
+    at: &FieldPath,
+) {
+    let Some(steps) = steps.as_array() else {
+        findings.push(invalid_pack_reference(at.clone()));
+        return;
+    };
+    for step in steps {
+        if let Some(reference) = step.get("validateSchema") {
+            add_pack_reference(reference, references, findings, at.clone());
+        }
+        // These are route control bodies. Literal request bodies, expressions
+        // and constants are data and never acquire pin authority by key name.
+        for kind in [
+            "choice",
+            "filter",
+            "split",
+            "loop",
+            "circuitBreaker",
+            "throttle",
+            "idempotentConsumer",
+            "doTry",
+            "onException",
+        ] {
+            if let Some(body) = step.get(kind) {
+                collect_control_schema_references(body, references, findings, at);
+            }
+        }
+    }
+}
+
+fn collect_control_schema_references(
+    body: &Value,
+    references: &mut BTreeMap<String, String>,
+    findings: &mut Vec<Finding>,
+    at: &FieldPath,
+) {
+    if let Some(steps) = body.get("steps") {
+        collect_step_schema_references(steps, references, findings, at);
+    }
+    for member in ["when", "otherwise", "doCatch", "doFinally", "onFallback"] {
+        if let Some(clauses) = body.get(member) {
+            if let Some(clauses) = clauses.as_array() {
+                for clause in clauses {
+                    collect_control_schema_references(clause, references, findings, at);
+                }
+            } else {
+                collect_control_schema_references(clauses, references, findings, at);
+            }
+        }
+    }
+}
+
+fn add_pack_reference(
+    value: &Value,
+    references: &mut BTreeMap<String, String>,
+    findings: &mut Vec<Finding>,
+    at: FieldPath,
+) {
+    let Some(reference) = pack_reference(value) else {
+        findings.push(invalid_pack_reference(at));
+        return;
+    };
+    if references
+        .insert(reference.path.clone(), reference.digest.clone())
+        .is_some_and(|existing| existing != reference.digest)
+    {
+        findings.push(invalid_pack_reference(at));
+    }
+}
+
+fn pack_reference(value: &Value) -> Option<PackArtifactReference> {
+    let object = value.as_object()?;
+    (object.len() == 2).then_some(())?;
+    Some(PackArtifactReference {
+        path: object.get("path")?.as_str()?.to_owned(),
+        digest: object.get("digest")?.as_str()?.to_owned(),
+    })
+}
+
+fn invalid_pack_reference(at: FieldPath) -> Finding {
+    Finding::new(
+        at.key("pack"),
+        "source-pack-artifact-reference",
+        "pack artifact references must contain only a safe relative path and lowercase SHA-256 digest",
+    )
+}
+
+fn valid_sha256_uri(value: &str) -> bool {
+    value.strip_prefix("sha256:").is_some_and(|hex| {
+        hex.len() == 64
+            && hex
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    })
+}
+
+fn sha256_uri(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    let mut hex = String::with_capacity(64);
+    for byte in digest {
+        use std::fmt::Write as _;
+        write!(&mut hex, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    format!("sha256:{hex}")
 }
 
 fn inline_codelist_path(definition: &str, output: &str) -> String {
@@ -782,18 +1072,7 @@ pub fn definition_dependencies(project: &EvidenceProject, id: &str) -> Option<Va
         .iter()
         .find_map(|(key, value)| (key.as_str() == id).then_some(value))?;
     let source_ids = definition.acquisition.source_ids();
-    let mut function_ids = BTreeSet::from([&definition.derive.function]);
-    for id in &source_ids {
-        let source = &project.sources[*id];
-        function_ids.insert(&source.extract.function);
-        if let Some(batch) = &source.batch {
-            function_ids.insert(&batch.prepare.function);
-            function_ids.insert(&batch.extract.function);
-        }
-        if let Some(prepare) = &source.prepare {
-            function_ids.insert(&prepare.function);
-        }
-    }
+    let function_ids = BTreeSet::from([&definition.derive.function]);
     let mut behavior = serde_json::to_value(definition).ok()?;
     behavior.as_object_mut()?.remove("question");
     let mut functions = project
@@ -810,9 +1089,6 @@ pub fn definition_dependencies(project: &EvidenceProject, id: &str) -> Option<Va
     ))
 }
 
-fn default_preparation_limits() -> Value {
-    json!({"query":"allowed", "jsonBody":"forbidden", "maximumNormalizedBytes":4096})
-}
 fn behavior_value(mut value: Value) -> Value {
     match &mut value {
         Value::Object(object) => {
@@ -830,32 +1106,4 @@ fn behavior_value(mut value: Value) -> Value {
         _ => {}
     }
     value
-}
-
-fn lower_bindings(
-    bindings: &mut Map<String, Value>,
-    path: &FieldPath,
-    allowed: &[&str],
-) -> Result<(), Vec<Finding>> {
-    for (name, binding) in bindings {
-        let Some(object) = binding.as_object().filter(|object| object.len() == 1) else {
-            return Err(vec![Finding::new(
-                path.clone().map_key(name.clone()),
-                "source-binding",
-                "declare exactly one named binding origin",
-            )]);
-        };
-        let (origin, body) = object.iter().next().expect("one origin");
-        if !allowed.contains(&origin.as_str()) || !body.is_object() {
-            return Err(vec![Finding::new(
-                path.clone().map_key(name.clone()),
-                "source-binding",
-                "declare a supported named binding origin with its typed fields",
-            )]);
-        }
-        let mut lowered = body.clone();
-        lowered["type"] = json!(origin);
-        *binding = lowered;
-    }
-    Ok(())
 }

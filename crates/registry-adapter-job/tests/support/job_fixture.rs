@@ -174,6 +174,22 @@ fn page(exchange) {
 }
 "#;
 
+/// The native direct-BReg fixture's reviewed mapping. It consumes only the
+/// declared projection and produces the closed start/submit shape the job
+/// runtime accepts. The target is fixture data, never runtime configuration.
+const DIRECT_BREG_SCRIPT: &str = r#"fn map_proposal(exchange) {
+    #{
+        startInput: #{
+            input: #{
+                targetId: exchange.body["answers.target"],
+                label: exchange.body["answers.age"]
+            }
+        },
+        submitBody: #{}
+    }
+}
+"#;
+
 /// The profile beside the pack: the same facade surface the workspace
 /// checks run over, with no operation the job would serve.
 const PROFILE_YAML: &str = r#"apiVersion: id.registrystack.org/formats/adapter/profile/v1alpha1
@@ -343,6 +359,14 @@ source:
     version: "1"
     digest: {pack_digest}
   route: submissions-page
+destination:
+  type: signed-coordinator-event
+  binding: coordinator-test
+  workflow: case-ingestion
+  trigger: submitted
+  source: urn:registry-adapter:job:case-daily
+  eventType: org.example.case-submitted.v1
+  dataSchema: urn:example:schema:case-submitted:v1
 projection:
   fields:
     - id
@@ -351,6 +375,44 @@ triggers:
   - kind: interval
     delayMilliseconds: 60000
 {}"#,
+        profile_block()
+    )
+}
+
+fn direct_breg_job_yaml(pack_digest: &str) -> String {
+    format!(
+        r#"apiVersion: id.registrystack.org/formats/adapter/job/v1alpha1
+kind: AdapterJob
+job:
+  id: case-daily
+  version: "1"
+source:
+  pack:
+    id: case-api-pack
+    version: "1"
+    digest: {pack_digest}
+  route: submissions-page
+destination:
+  type: direct-breg
+  binding: breg-test
+  accessProfile: writer
+  action: manual-item
+  mode: proposal
+  mapping:
+    file: mappings/direct-breg.rhai
+    entrypoint: map_proposal
+    digest: {}
+  receiptRetentionDays: 7
+projection:
+  fields:
+    - id
+    - answers.age
+    - answers.target
+triggers:
+  - kind: interval
+    delayMilliseconds: 60000
+{}"#,
+        registry_platform_config::sha256_uri(DIRECT_BREG_SCRIPT.as_bytes()),
         profile_block()
     )
 }
@@ -374,6 +436,43 @@ fn runtime_yaml(base_url: &str) -> String {
         }
     });
     serde_json::to_string_pretty(&config).expect("the runtime config renders")
+}
+
+fn direct_breg_runtime_yaml(
+    source_base_url: &str,
+    breg_base_url: &str,
+    token_endpoint: &str,
+) -> String {
+    let config = json!({
+        "apiVersion": "id.registrystack.org/formats/adapter/job-runtime/v1alpha1",
+        "kind": "AdapterJobRuntimeConfig",
+        "id": "job-deployment",
+        "endpoints": [
+            {
+                "endpoint": "submissions",
+                "baseUrl": source_base_url,
+                "credential": {"type": "none"}
+            }
+        ],
+        "allowedPrivateCidrs": ["192.168.0.0/16"],
+        "store": {
+            "runtimeUrlRef": "secret:env/JOB_TEST_DB",
+            "testOnlyPlaintext": true
+        },
+        "destinations": {
+            "breg-test": {
+                "type": "direct-breg",
+                "baseUrl": breg_base_url,
+                "tokenEndpoint": token_endpoint,
+                "clientId": "application-reader",
+                "privateKeyRef": "secret:env/BREG_CLIENT_KEY",
+                "scopes": ["applications:read"],
+                "resource": "urn:example:applications",
+                "attemptTimeoutMilliseconds": 3000
+            }
+        }
+    });
+    serde_json::to_string_pretty(&config).expect("the direct BReg runtime config renders")
 }
 
 /// One fixture workspace: the profile and project beside the pack, the
@@ -400,7 +499,25 @@ impl JobFixture {
     /// The fixture workspace over an `ongoing` source route, which holds
     /// its place at the tail with a cursor on every page.
     pub async fn start_ongoing(script: &str, replies: Vec<(u16, Value)>, edits: Edits) -> Self {
-        Self::build(script, replies, edits, Scan::Ongoing, "").await
+        Self::build(script, replies, edits, Scan::Ongoing, "", None).await
+    }
+
+    /// A fixture with the same source route plus the pinned direct-BReg
+    /// mapping and exact runtime binding used by the native CLI proof.
+    pub async fn start_direct_breg(
+        replies: Vec<(u16, Value)>,
+        breg_base_url: &str,
+        token_endpoint: &str,
+    ) -> Self {
+        Self::build(
+            PAGE_SCRIPT,
+            replies,
+            Edits::Ordered,
+            Scan::Finite,
+            "",
+            Some((breg_base_url.to_owned(), token_endpoint.to_owned())),
+        )
+        .await
     }
 
     /// The fixture workspace with more endpoint entries appended to the
@@ -411,7 +528,7 @@ impl JobFixture {
         edits: Edits,
         extra_endpoints: &str,
     ) -> Self {
-        Self::build(script, replies, edits, Scan::Finite, extra_endpoints).await
+        Self::build(script, replies, edits, Scan::Finite, extra_endpoints, None).await
     }
 
     async fn build(
@@ -420,6 +537,7 @@ impl JobFixture {
         edits: Edits,
         scan: Scan,
         extra_endpoints: &str,
+        direct_breg: Option<(String, String)>,
     ) -> Self {
         let double = UpstreamDouble::start(replies).await;
         let directory = tempfile::tempdir().expect("a scratch workspace");
@@ -427,6 +545,11 @@ impl JobFixture {
         std::fs::create_dir_all(root.join("scripts")).expect("the scripts directory");
         let pack_text = pack_yaml(script, edits, scan, extra_endpoints);
         std::fs::write(root.join("scripts/page.rhai"), script).expect("the page script");
+        if direct_breg.is_some() {
+            std::fs::create_dir_all(root.join("mappings")).expect("the mappings directory");
+            std::fs::write(root.join("mappings/direct-breg.rhai"), DIRECT_BREG_SCRIPT)
+                .expect("the direct BReg script");
+        }
         std::fs::write(root.join("pack.yaml"), &pack_text).expect("the pack");
         std::fs::write(root.join("profile.yaml"), PROFILE_YAML).expect("the profile");
         let profile_digest = registry_platform_config::sha256_uri(PROFILE_YAML.as_bytes());
@@ -437,10 +560,21 @@ impl JobFixture {
         )
         .expect("the project");
         let job = root.join("job.yaml");
-        std::fs::write(&job, job_yaml(&pack_digest)).expect("the job");
+        let job_text = if direct_breg.is_some() {
+            direct_breg_job_yaml(&pack_digest)
+        } else {
+            job_yaml(&pack_digest)
+        };
+        std::fs::write(&job, job_text).expect("the job");
         let runtime = root.join("runtime.yaml");
-        std::fs::write(&runtime, runtime_yaml(&format!("{}/", double.base_url)))
-            .expect("the runtime config");
+        let source_base_url = format!("{}/", double.base_url);
+        let runtime_text = match direct_breg {
+            Some((breg_base_url, token_endpoint)) => {
+                direct_breg_runtime_yaml(&source_base_url, &breg_base_url, &token_endpoint)
+            }
+            None => runtime_yaml(&source_base_url),
+        };
+        std::fs::write(&runtime, runtime_text).expect("the runtime config");
         Self {
             _directory: directory,
             pack: root.join("pack.yaml"),
@@ -471,4 +605,241 @@ pub fn reply_page_end() -> Value {
             {"id": "c", "answers": {"age": "042", "secret": "never-projected"}}
         ]
     })
+}
+
+/// A one-message RabbitMQ job workspace. The broker binding is inert during
+/// compile; tests register their own source seam so pass/store behavior can be
+/// exercised independently of the real-broker transport suite.
+pub struct RabbitJobFixture {
+    _directory: tempfile::TempDir,
+    pub pack: PathBuf,
+    pub job: PathBuf,
+    pub runtime: PathBuf,
+}
+
+impl RabbitJobFixture {
+    pub fn start() -> Self {
+        Self::start_for_broker(
+            5_672,
+            "fixture.source",
+            "fixture.dlx",
+            "fixture.dlq",
+            "fixture.refused",
+        )
+    }
+
+    pub fn start_for_broker(
+        port: u16,
+        queue: &str,
+        dead_letter_exchange: &str,
+        dead_letter_queue: &str,
+        dead_letter_routing_key: &str,
+    ) -> Self {
+        Self::build_rabbit(
+            port,
+            queue,
+            dead_letter_exchange,
+            dead_letter_queue,
+            dead_letter_routing_key,
+            None,
+        )
+    }
+
+    pub fn start_for_broker_with_field_bound(
+        port: u16,
+        queue: &str,
+        dead_letter_exchange: &str,
+        dead_letter_queue: &str,
+        dead_letter_routing_key: &str,
+        maximum_field_bytes: u64,
+    ) -> Self {
+        let fixture = Self::start_for_broker(
+            port,
+            queue,
+            dead_letter_exchange,
+            dead_letter_queue,
+            dead_letter_routing_key,
+        );
+        fixture.rewrite_rabbit_field_bound(maximum_field_bytes);
+        fixture
+    }
+
+    pub fn start_with_reviewed_normalization() -> Self {
+        const NORMALIZER: &str = r#"fn normalize(exchange) {
+    let page = exchange.body;
+    page.items[0].value.answers.age = "046";
+    page
+}
+"#;
+        Self::start_with_rabbit_route_script(NORMALIZER)
+    }
+
+    pub fn start_with_rabbit_route_script(script: &str) -> Self {
+        Self::build_rabbit(
+            5_672,
+            "fixture.source",
+            "fixture.dlx",
+            "fixture.dlq",
+            "fixture.refused",
+            Some(script),
+        )
+    }
+
+    pub fn start_with_rabbit_field_bound(maximum_field_bytes: u64) -> Self {
+        let fixture = Self::start();
+        fixture.rewrite_rabbit_field_bound(maximum_field_bytes);
+        fixture
+    }
+
+    fn rewrite_rabbit_field_bound(&self, maximum_field_bytes: u64) {
+        let job = std::fs::read_to_string(&self.job).expect("the RabbitMQ job is readable");
+        let job = job.replace(
+            "\"maximumFieldBytes\": 65536",
+            &format!("\"maximumFieldBytes\": {maximum_field_bytes}"),
+        );
+        std::fs::write(&self.job, job).expect("the bounded RabbitMQ job is written");
+    }
+
+    fn build_rabbit(
+        port: u16,
+        queue: &str,
+        dead_letter_exchange: &str,
+        dead_letter_queue: &str,
+        dead_letter_routing_key: &str,
+        route_script: Option<&str>,
+    ) -> Self {
+        let directory = tempfile::tempdir().expect("a RabbitMQ job workspace");
+        let root = directory.path().to_path_buf();
+        let normalizer_step = if route_script.is_some() {
+            r#"      - setBody:
+          rhai:
+            file: scripts/normalize.rhai
+            entrypoint: normalize
+"#
+        } else {
+            ""
+        };
+        let scripts = if let Some(route_script) = route_script {
+            format!(
+                "scripts:\n  - path: scripts/normalize.rhai\n    digest: {}\n",
+                registry_platform_config::sha256_uri(route_script.as_bytes())
+            )
+        } else {
+            String::new()
+        };
+        let pack_text = format!(
+            r#"apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: case-api-pack
+version: "1"
+testedVersions: []
+endpoints:
+  - id: broker-in
+    component: rabbitmq
+    authentication:
+      type: none
+    attemptTimeoutMilliseconds: 1000
+    maximumResponseBytes: 65536
+sourceRoutes:
+  - id: broker-page
+    scan: ongoing
+    edits: ordered
+    nextRecovery: key-deduplicated
+    steps:
+      - pollEnrich:
+          uri: rabbitmq:broker-in
+          timeoutMilliseconds: 1000
+          decoder: rabbitmq-json
+{normalizer_step}{scripts}capabilities: {{}}
+"#
+        );
+        if let Some(route_script) = route_script {
+            std::fs::create_dir_all(root.join("scripts")).expect("the RabbitMQ scripts directory");
+            std::fs::write(root.join("scripts/normalize.rhai"), route_script)
+                .expect("the reviewed normalization script");
+        }
+        std::fs::write(root.join("pack.yaml"), &pack_text).expect("the RabbitMQ pack");
+        std::fs::write(root.join("profile.yaml"), PROFILE_YAML).expect("the profile");
+        let profile_digest = registry_platform_config::sha256_uri(PROFILE_YAML.as_bytes());
+        let pack_digest = registry_platform_config::sha256_uri(pack_text.as_bytes());
+        std::fs::write(
+            root.join("project.yaml"),
+            project_yaml(&profile_digest, &pack_digest),
+        )
+        .expect("the project");
+        let job = root.join("job.yaml");
+        let job_text = format!(
+            r#"apiVersion: id.registrystack.org/formats/adapter/job/v1alpha1
+kind: AdapterJob
+job:
+  id: case-daily
+  version: "1"
+source:
+  pack:
+    id: case-api-pack
+    version: "1"
+    digest: {pack_digest}
+  route: broker-page
+destination:
+  type: signed-coordinator-event
+  binding: coordinator-test
+  workflow: case-ingestion
+  trigger: submitted
+  source: urn:registry-adapter:job:case-daily
+  eventType: org.example.case-submitted.v1
+  dataSchema: urn:example:schema:case-submitted:v1
+projection:
+  fields:
+    - id
+    - answers.age
+triggers:
+  - kind: interval
+    delayMilliseconds: 60000
+{}"#,
+            profile_block()
+        );
+        std::fs::write(&job, job_text).expect("the RabbitMQ job");
+        let runtime = root.join("runtime.yaml");
+        let runtime_text = json!({
+            "apiVersion": "id.registrystack.org/formats/adapter/job-runtime/v1alpha1",
+            "kind": "AdapterJobRuntimeConfig",
+            "id": "job-deployment",
+            "endpoints": [],
+            "sources": {
+                "rabbitmq": {
+                    "broker-in": {
+                        "host": "127.0.0.1",
+                        "port": port,
+                        "vhost": "/",
+                        "user": "adapter_fixture",
+                        "passwordRef": "secret:env/ADAPTER_RABBITMQ_FIXTURE_PASSWORD",
+                        "queue": queue,
+                        "deadLetterExchange": dead_letter_exchange,
+                        "deadLetterQueue": dead_letter_queue,
+                        "deadLetterRoutingKey": dead_letter_routing_key,
+                        "namespace": "institution-a",
+                        "maximumOutstandingDeliveries": 1,
+                        "connectionTimeoutMilliseconds": 1000,
+                        "heartbeatSeconds": 30,
+                        "tls": {"type": "plaintext-test"}
+                    }
+                }
+            },
+            "store": {
+                "runtimeUrlRef": "secret:env/JOB_TEST_DB",
+                "testOnlyPlaintext": true
+            }
+        });
+        std::fs::write(
+            &runtime,
+            serde_json::to_vec_pretty(&runtime_text).expect("the RabbitMQ runtime renders"),
+        )
+        .expect("the RabbitMQ runtime");
+        Self {
+            _directory: directory,
+            pack: root.join("pack.yaml"),
+            job,
+            runtime,
+        }
+    }
 }

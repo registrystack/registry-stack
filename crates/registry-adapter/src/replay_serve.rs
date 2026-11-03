@@ -37,7 +37,7 @@ use crate::engine::exchange::{
     Exchange, CONTINUATION_PROPERTY, FILTERS_PROPERTY, NEXT_CONTINUATION_PROPERTY, PAGE_SIZE_HEADER,
 };
 use crate::engine::load::{compile_authored_with, EndpointCompilation, LoadError};
-use crate::engine::route::{run_route_with_profile, RouteContext, RouteFailure};
+use crate::engine::route::{run_served_route, RouteContext, RouteFailure};
 
 /// The rendered facade result of one actual offline route execution.
 #[derive(Debug, PartialEq)]
@@ -355,7 +355,10 @@ pub async fn run(
         maximum_upstream_calls: operation.maximum_upstream_calls,
         job: crate::engine::job_sources::JobPageState::default(),
     };
-    let outcome = run_route_with_profile(&context, profile, &operation.steps, exchange).await;
+    // Fixture replay must enter through the same compiled served operation as
+    // the facade. In particular, linear resume keeps its checkpoint bindings
+    // in a private runtime map that a plain profile route run cannot create.
+    let outcome = run_served_route(&context, profile, operation, exchange).await;
     transcript.finish()?;
     let durability = if is_write {
         ReplayDurability::Simulated
@@ -636,9 +639,54 @@ async fn facade_result(
 #[cfg(test)]
 mod tests {
     use registry_adapter_core::ReplayMismatch;
-    use registry_adapter_core::{HttpMethod, RecordedBody};
+    use registry_adapter_core::{
+        HttpMethod, RecordedBody, ADAPTER_FIXTURE_API_VERSION, ADAPTER_FIXTURE_KIND,
+        ADAPTER_PACK_API_VERSION, ADAPTER_PACK_KIND, ADAPTER_PROFILE_API_VERSION,
+        ADAPTER_PROFILE_KIND, ADAPTER_PROJECT_API_VERSION, ADAPTER_PROJECT_KIND,
+    };
 
     use super::*;
+
+    /// The maintained `breg-records` profile with a one-route pack and a
+    /// project that binds `records-get` to two record types.
+    fn two_record_types_inputs() -> (AdapterProfile, AdapterPack, AdapterProject) {
+        let profile_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/adapter/profiles/breg-records/profile.yaml");
+        let (profile, _): (AdapterProfile, _) = crate::engine::load::read_artifact(
+            &profile_path,
+            ADAPTER_PROFILE_KIND,
+            ADAPTER_PROFILE_API_VERSION,
+        )
+        .expect("the maintained profile reads");
+        let pack: AdapterPack = serde_json::from_value(serde_json::json!({
+            "id": "records-pack",
+            "version": "1",
+            "testedVersions": ["1"],
+            "routes": [{"id": "fetch", "from": {"uri": "direct:fetch"}, "steps": [
+                {"setBody": {"constant": {"recordIdentifier": "r1", "domainData": {}}}}
+            ]}],
+        }))
+        .expect("the pack parses");
+        let project: AdapterProject = serde_json::from_value(serde_json::json!({
+            "project": {"id": "two-types", "version": "1"},
+            "profile": {"id": "breg-records", "version": "1", "digest": format!("sha256:{}", "0".repeat(64))},
+            "pack": {"id": "records-pack", "version": "1", "digest": format!("sha256:{}", "0".repeat(64))},
+            "recordTypes": [
+                {"name": "person", "fields": [{"name": "given_name", "type": "string"}]},
+                {"name": "household", "fields": [{"name": "size", "type": "integer"}]},
+            ],
+            "templatedRoutes": [],
+            "bindings": [
+                {"id": "person-get", "operation": "records-get", "recordType": "person",
+                 "route": "fetch", "maximumUpstreamCalls": 1},
+                {"id": "household-get", "operation": "records-get", "recordType": "household",
+                 "route": "fetch", "maximumUpstreamCalls": 1},
+            ],
+            "accessProfiles": [],
+        }))
+        .expect("the project parses");
+        (profile, pack, project)
+    }
 
     fn fixture(upstream: serde_json::Value) -> AdapterFixture {
         serde_json::from_value(serde_json::json!({
@@ -815,7 +863,7 @@ mod tests {
     /// Replay a `records-get` call on `path` against a project that binds
     /// `records-get` to two record types.
     async fn replay_two_record_types(path: &str) -> Result<ReplayFacade, ReplayRunFailure> {
-        let (profile, pack, project) = crate::engine::load::two_record_types_inputs();
+        let (profile, pack, project) = two_record_types_inputs();
         let fixture: AdapterFixture = serde_json::from_value(serde_json::json!({
             "id": "fixture",
             "pack": "records-pack",
@@ -855,6 +903,49 @@ mod tests {
             .await
             .expect_err("an unbound record type is refused");
         assert!(matches!(failure, ReplayRunFailure::Request), "{failure}");
+    }
+
+    #[tokio::test]
+    async fn replay_runs_the_compiled_linear_resume_operation() {
+        let example = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/adapter/examples/facade-recovery");
+        let profile_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/adapter/profiles/breg-records/profile.yaml");
+        let (profile, _): (AdapterProfile, _) = crate::engine::load::read_artifact(
+            &profile_path,
+            ADAPTER_PROFILE_KIND,
+            ADAPTER_PROFILE_API_VERSION,
+        )
+        .expect("the maintained profile reads");
+        let (pack, _): (AdapterPack, _) = crate::engine::load::read_artifact(
+            &example.join("pack.yaml"),
+            ADAPTER_PACK_KIND,
+            ADAPTER_PACK_API_VERSION,
+        )
+        .expect("the recovery pack reads");
+        let (project, _): (AdapterProject, _) = crate::engine::load::read_artifact(
+            &example.join("project.yaml"),
+            ADAPTER_PROJECT_KIND,
+            ADAPTER_PROJECT_API_VERSION,
+        )
+        .expect("the recovery project reads");
+        let (fixture, _): (AdapterFixture, _) = crate::engine::load::read_artifact(
+            &example.join("fixture.yaml"),
+            ADAPTER_FIXTURE_KIND,
+            ADAPTER_FIXTURE_API_VERSION,
+        )
+        .expect("the recovery fixture reads");
+
+        let replay = run(&project, &profile, &pack, &example, &fixture, 0)
+            .await
+            .expect("the resumable write replays through its served operation");
+
+        assert_eq!(replay.status, 201);
+        assert_eq!(replay.write_durability, ReplayDurability::Simulated);
+        assert_eq!(
+            replay.body.expect("the replay has a body")["data"]["name"],
+            "Example Person"
+        );
     }
 
     #[test]

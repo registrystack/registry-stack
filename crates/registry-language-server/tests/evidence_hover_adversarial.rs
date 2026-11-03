@@ -8,10 +8,7 @@ fn reference_hover_names_the_normalized_symbol_and_relative_file() {
     let p = Project::new(SOURCE);
     let hover = p
         .index()
-        .hover_at(
-            &p.path(PROJECT),
-            after(SOURCE, "acquisition: {type: single, source: "),
-        )
+        .hover_at(&p.path(PROJECT), after(SOURCE, "acquisition: {source: "))
         .unwrap();
     assert!(hover.markdown.contains("source"));
     assert!(hover.markdown.contains("evidence.yaml"));

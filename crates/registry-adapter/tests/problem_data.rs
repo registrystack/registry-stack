@@ -317,6 +317,8 @@ async fn declared_closed_typed_problem_data_is_rendered() {
         data: Some(json!({"accepted": 3, "rejected": 1})),
         auth: None,
         code: None,
+        record: None,
+        evidence_diagnostic: None,
     };
 
     let (status, rendered) = body(route_problem(problems, &failure, "case", "request-1")).await;
@@ -350,6 +352,8 @@ async fn invalid_problem_data_fails_closed_without_value_or_detail_fallback() {
             data: Some(data),
             auth: None,
             code: None,
+            record: None,
+            evidence_diagnostic: None,
         };
         let (status, rendered) =
             body(route_problem(problems, &failure, "case", "request-invalid")).await;
@@ -378,6 +382,8 @@ async fn data_for_a_problem_without_a_declaration_is_a_disclosure_violation() {
         data: Some(json!({"accepted": 3})),
         auth: None,
         code: None,
+        record: None,
+        evidence_diagnostic: None,
     };
     let (status, rendered) = body(route_problem(
         problems,
@@ -408,6 +414,13 @@ async fn whole_problem_data_remains_optional_and_plain_problems_are_unchanged() 
             data: None,
             auth: None,
             code: None,
+            record: None,
+            evidence_diagnostic: Some(Box::new(
+                registry_adapter::engine::route::EvidenceRouteDiagnostic::Http {
+                    endpoint: "governed-endpoint-private-canary".to_owned(),
+                    cause: registry_adapter::engine::route::EvidenceHttpDiagnostic::ServerError,
+                },
+            )),
         };
         let (status, rendered) =
             body(route_problem(problems, &failure, "case", "request-plain")).await;
@@ -415,5 +428,9 @@ async fn whole_problem_data_remains_optional_and_plain_problems_are_unchanged() 
         assert_eq!(status, StatusCode::CONFLICT);
         assert!(rendered.get("data").is_none());
         assert_eq!(rendered["detail"], "bounded public detail");
+        assert!(!rendered
+            .to_string()
+            .contains("governed-endpoint-private-canary"));
+        assert!(rendered.get("evidenceDiagnostic").is_none());
     }
 }

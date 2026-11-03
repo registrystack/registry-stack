@@ -1,15 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The parked BReg connector over the maintained client.
+//! Native Registry Stack destination connectors behind explicit,
+//! off-by-default features.
 //!
 //! A connector turns one prepared delivery attempt into exactly one typed
 //! call on `registry-breg-client`, and nothing else: never hand-authored
 //! HTTP, never a product database, never a product runtime or tooling
-//! crate. The crate is linked by no facade binary and by no job path: it
-//! is compiled only behind its off-by-default cargo feature, it is parked
-//! while the governed-ingestion delivery design is decided, and the
-//! dependency-direction gate in `products/adapter/scripts/` holds the
-//! boundary mechanically. No other product client may be linked here
-//! while it is parked.
+//! crate. The crate is linked by no facade binary and only by the job
+//! host's explicit destination features. The dependency-direction gate
+//! in `products/adapter/scripts/` holds that boundary mechanically.
 //!
 //! The [`operation`] module carries the operation contract a delivery
 //! path calls: a descriptor that names what an operation is and needs,
@@ -25,3 +23,10 @@ pub mod operation;
 
 #[cfg(feature = "breg")]
 pub mod breg;
+
+#[cfg(feature = "coordinator-event")]
+pub mod coordinator_event;
+
+#[cfg(feature = "native-test-support")]
+#[path = "../tests/support/breg_native_service.rs"]
+pub mod test_support;

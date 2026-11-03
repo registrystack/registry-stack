@@ -24,9 +24,13 @@ use crate::config::{AssuranceProfile, MAXIMUM_HOLDER_BOUND_BATCH_SIZE};
 use crate::model::EVIDENCE_REQUEST_BATCH_MAX_ITEMS;
 
 /// Envelope schema of an authorized-material event.
-pub const AUDIT_SCHEMA: &str = "registry.evidence.audit/v2";
+pub const AUDIT_SCHEMA: &str = "registry.evidence.audit/v3";
+/// The retained authorized-material schema accepted by local inspection.
+const LEGACY_AUDIT_SCHEMA: &str = "registry.evidence.audit/v2";
 /// Envelope schema of a request-batch event.
-pub const REQUEST_BATCH_AUDIT_SCHEMA: &str = "registry.evidence.audit.request-batch/v2";
+pub const REQUEST_BATCH_AUDIT_SCHEMA: &str = "registry.evidence.audit.request-batch/v3";
+/// The retained request-batch schema accepted by local inspection.
+const LEGACY_REQUEST_BATCH_AUDIT_SCHEMA: &str = "registry.evidence.audit.request-batch/v2";
 /// Envelope schema of an authenticated authorization refusal.
 pub const AUTHORIZATION_REFUSAL_AUDIT_SCHEMA: &str =
     "registry.evidence.audit.authorization-refusal/v2";
@@ -251,6 +255,39 @@ pub struct AuditSubject {
     pub selector_bundle_pseudonym: Option<String>,
 }
 
+/// The finite host-owned aggregate budget applied to one source acquisition.
+///
+/// This is a distinct audit type rather than the runtime configuration type:
+/// the durable record carries the effective non-secret bounds, not an
+/// operator-authored document or a new configuration surface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EvidenceExecutionBounds {
+    pub maximum_data_operations: u64,
+    #[serde(rename = "acquisitionDeadlineMilliseconds")]
+    pub deadline_milliseconds: u64,
+    pub maximum_response_bytes: u64,
+}
+
+impl EvidenceExecutionBounds {
+    fn is_valid(self) -> bool {
+        self.maximum_data_operations > 0
+            && self.deadline_milliseconds > 0
+            && self.maximum_response_bytes > 0
+    }
+}
+
+// A present bound object cannot collapse to absence: the schema forbids
+// explicit null on both current and retained entry shapes.
+fn deserialize_execution_bounds<'de, D>(
+    deserializer: D,
+) -> Result<Option<EvidenceExecutionBounds>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    EvidenceExecutionBounds::deserialize(deserializer).map(Some)
+}
+
 /// The closed phase vocabulary of one multi-subject request-batch operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -331,6 +368,12 @@ pub struct EvidenceRequestBatchAuditEvent {
     pub source_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub adapter_id: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_execution_bounds"
+    )]
+    pub execution_bounds: Option<EvidenceExecutionBounds>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub item_indices: Option<Vec<u8>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -390,6 +433,7 @@ impl EvidenceRequestBatchAuditEvent {
             reason: "authorization.allowed".to_owned(),
             source_id: None,
             adapter_id: None,
+            execution_bounds: None,
             item_indices: None,
             item_groups: None,
             disclosed_concepts: None,
@@ -401,6 +445,14 @@ impl EvidenceRequestBatchAuditEvent {
     }
 
     pub fn validate_phase_fields(&self) -> Result<(), EvidenceAuditError> {
+        self.validate_phase_fields_for_schema(false)
+    }
+
+    fn validate_legacy_phase_fields(&self) -> Result<(), EvidenceAuditError> {
+        self.validate_phase_fields_for_schema(true)
+    }
+
+    fn validate_phase_fields_for_schema(&self, legacy: bool) -> Result<(), EvidenceAuditError> {
         if self.authority_revision.is_some() != self.effective_grant_digest.is_some()
             || self
                 .authority_revision
@@ -453,6 +505,12 @@ impl EvidenceRequestBatchAuditEvent {
                     .adapter_id
                     .as_ref()
                     .is_some_and(|value| valid_local_name(value, 128))
+                && if legacy {
+                    self.execution_bounds.is_none()
+                } else {
+                    self.execution_bounds
+                        .is_some_and(EvidenceExecutionBounds::is_valid)
+                }
                 && self.disclosed_concepts.is_none()
                 && self.signing_key_id.is_none()
                 && self.outcomes.is_none()
@@ -461,6 +519,7 @@ impl EvidenceRequestBatchAuditEvent {
         let valid_release = || {
             self.source_id.is_none()
                 && self.adapter_id.is_none()
+                && self.execution_bounds.is_none()
                 && self.item_indices.is_none()
                 && self.item_groups.as_ref().is_some_and(|groups| {
                     self.outcomes.as_ref().is_some_and(|outcomes| {
@@ -492,6 +551,7 @@ impl EvidenceRequestBatchAuditEvent {
         let valid_abort = || {
             self.source_id.is_none()
                 && self.adapter_id.is_none()
+                && self.execution_bounds.is_none()
                 && self.item_indices.is_none()
                 && self.item_groups.is_none()
                 && self.disclosed_concepts.is_none()
@@ -630,6 +690,12 @@ pub struct EvidenceAuditEvent {
     pub source_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub adapter_id: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_execution_bounds"
+    )]
+    pub execution_bounds: Option<EvidenceExecutionBounds>,
     /// Every source executed by a multi-stage acquisition, in execution order,
     /// recorded only on the disclosure release that closed it. Absent for the
     /// frozen one and two stage kinds, whose release shape stays byte-identical:
@@ -714,6 +780,7 @@ impl EvidenceAuditEvent {
             response_protection,
             source_id: None,
             adapter_id: None,
+            execution_bounds: None,
             source_ids: None,
             adapter_ids: None,
             decision,
@@ -728,6 +795,14 @@ impl EvidenceAuditEvent {
     }
 
     pub fn validate_phase_fields(&self) -> Result<(), EvidenceAuditError> {
+        self.validate_phase_fields_for_schema(false)
+    }
+
+    fn validate_legacy_phase_fields(&self) -> Result<(), EvidenceAuditError> {
+        self.validate_phase_fields_for_schema(true)
+    }
+
+    fn validate_phase_fields_for_schema(&self, legacy: bool) -> Result<(), EvidenceAuditError> {
         if self.authority_revision.is_some() != self.effective_grant_digest.is_some()
             || self
                 .authority_revision
@@ -813,6 +888,16 @@ impl EvidenceAuditEvent {
                 && concepts.iter().all(|concept| valid_uri(concept))
                 && concepts.iter().collect::<BTreeSet<_>>().len() == concepts.len()
         });
+        let execution_bounds_are_valid = if self.phase == AuditPhase::AccessAttempt {
+            if legacy {
+                self.execution_bounds.is_none()
+            } else {
+                self.execution_bounds
+                    .is_some_and(EvidenceExecutionBounds::is_valid)
+            }
+        } else {
+            self.execution_bounds.is_none()
+        };
         if !phase_decision_is_native
             || !valid_uri(&self.event_id)
             || chrono::DateTime::parse_from_rfc3339(&self.occurred_at).is_err()
@@ -857,6 +942,7 @@ impl EvidenceAuditEvent {
                 .adapter_id
                 .as_ref()
                 .is_some_and(|value| !valid_local_name(value, 128))
+            || !execution_bounds_are_valid
             || !stage_arrays_are_valid
             || !concepts_are_valid
             || !evidence_ids_are_valid
@@ -1312,6 +1398,7 @@ impl LocalAuditInspectionBounds {
 struct PendingLocalOperation {
     event: EvidenceAuditEvent,
     view: LocalAuditOperationEvent,
+    legacy_schema: bool,
     /// Whether this entry was read from the oldest retained file.
     from_oldest_file: bool,
 }
@@ -1321,6 +1408,7 @@ struct PendingLocalOperation {
 struct PendingRequestBatch {
     last: EvidenceRequestBatchAuditEvent,
     items: BTreeMap<u8, (AuditAuthority, Vec<AuditSubject>)>,
+    legacy_schema: bool,
 }
 
 impl PendingRequestBatch {
@@ -1328,7 +1416,11 @@ impl PendingRequestBatch {
     /// context, follows the latest entry in time, and names every item under
     /// the authority and subjects it was accessed under.
     fn follow(&mut self, event: &EvidenceRequestBatchAuditEvent) -> Result<(), AuditError> {
-        if !coherent_request_batch_entries(&self.last, event) {
+        if (self.last.phase == EvidenceRequestBatchAuditPhase::AccessAttempt
+            && event.phase == EvidenceRequestBatchAuditPhase::AccessAttempt
+            && self.last.execution_bounds != event.execution_bounds)
+            || !coherent_request_batch_entries(&self.last, event)
+        {
             return Err(invalid_audit_data());
         }
         bind_request_batch_items(&mut self.items, event)
@@ -1411,7 +1503,20 @@ impl LocalAuditCollector {
                 if entry.phase != expected_phase || entry.correlation != event.operation {
                     return Err(invalid_audit_data());
                 }
-                self.collect_authorized(event)
+                self.collect_authorized(event, false)
+            }
+            LEGACY_AUDIT_SCHEMA => {
+                let event: EvidenceAuditEvent =
+                    serde_json::from_value(entry.record).map_err(|_| invalid_audit_data())?;
+                let expected_phase = if event.phase == AuditPhase::AccessAttempt {
+                    EntryPhase::Request
+                } else {
+                    EntryPhase::Response
+                };
+                if entry.phase != expected_phase || entry.correlation != event.operation {
+                    return Err(invalid_audit_data());
+                }
+                self.collect_authorized(event, true)
             }
             AUTHORIZATION_REFUSAL_AUDIT_SCHEMA => {
                 let event: EvidenceAuthorizationRefusalAuditEvent =
@@ -1433,7 +1538,21 @@ impl LocalAuditCollector {
                 if entry.phase != expected_phase || entry.correlation != event.operation {
                     return Err(invalid_audit_data());
                 }
-                self.collect_request_batch(event)
+                self.collect_request_batch(event, false)
+            }
+            LEGACY_REQUEST_BATCH_AUDIT_SCHEMA => {
+                let event: EvidenceRequestBatchAuditEvent =
+                    serde_json::from_value(entry.record).map_err(|_| invalid_audit_data())?;
+                let expected_phase = if event.phase == EvidenceRequestBatchAuditPhase::AccessAttempt
+                {
+                    EntryPhase::Request
+                } else {
+                    EntryPhase::Response
+                };
+                if entry.phase != expected_phase || entry.correlation != event.operation {
+                    return Err(invalid_audit_data());
+                }
+                self.collect_request_batch(event, true)
             }
             _ => Err(invalid_audit_data()),
         }
@@ -1446,10 +1565,14 @@ impl LocalAuditCollector {
     fn collect_request_batch(
         &mut self,
         event: EvidenceRequestBatchAuditEvent,
+        legacy_schema: bool,
     ) -> Result<(), AuditError> {
-        event
-            .validate_phase_fields()
-            .map_err(|_| invalid_audit_data())?;
+        if legacy_schema {
+            event.validate_legacy_phase_fields()
+        } else {
+            event.validate_phase_fields()
+        }
+        .map_err(|_| invalid_audit_data())?;
         let operation = event.operation.clone();
         // One operation identifier belongs to one record family.
         if self.pending.contains_key(&operation)
@@ -1468,13 +1591,20 @@ impl LocalAuditCollector {
             match self.pending_request_batches.entry(operation) {
                 std::collections::btree_map::Entry::Occupied(mut pending) => {
                     let pending = pending.get_mut();
+                    if pending.legacy_schema != legacy_schema {
+                        return Err(invalid_audit_data());
+                    }
                     pending.follow(&event)?;
                     pending.last = event;
                 }
                 std::collections::btree_map::Entry::Vacant(unopened) => {
                     let mut items = BTreeMap::new();
                     bind_request_batch_items(&mut items, &event)?;
-                    unopened.insert(PendingRequestBatch { last: event, items });
+                    unopened.insert(PendingRequestBatch {
+                        last: event,
+                        items,
+                        legacy_schema,
+                    });
                 }
             }
             return Ok(());
@@ -1482,6 +1612,9 @@ impl LocalAuditCollector {
         // A batch may end before any source call, so a terminal entry needs
         // no access entry before it, but an operation ends once.
         if let Some(mut pending) = self.pending_request_batches.remove(&operation) {
+            if pending.legacy_schema != legacy_schema {
+                return Err(invalid_audit_data());
+            }
             pending.follow(&event)?;
         }
         if !self.completed.insert(operation) {
@@ -1496,10 +1629,17 @@ impl LocalAuditCollector {
         }
     }
 
-    fn collect_authorized(&mut self, event: EvidenceAuditEvent) -> Result<(), AuditError> {
-        event
-            .validate_phase_fields()
-            .map_err(|_| invalid_audit_data())?;
+    fn collect_authorized(
+        &mut self,
+        event: EvidenceAuditEvent,
+        legacy_schema: bool,
+    ) -> Result<(), AuditError> {
+        if legacy_schema {
+            event.validate_legacy_phase_fields()
+        } else {
+            event.validate_phase_fields()
+        }
+        .map_err(|_| invalid_audit_data())?;
         let operation = event.operation.clone();
         if self.request_batches.contains(&operation) {
             return Err(invalid_audit_data());
@@ -1515,7 +1655,9 @@ impl LocalAuditCollector {
             // A multi-stage acquisition writes one access entry per source
             // call; each later stage shares the operation's context.
             if let Some(previous) = stages.last() {
-                if !occurred_in_order(&previous.event, &event)
+                if previous.legacy_schema != legacy_schema
+                    || previous.event.execution_bounds != event.execution_bounds
+                    || !occurred_in_order(&previous.event, &event)
                     || !same_operation_context(&previous.event, &event)
                 {
                     return Err(invalid_audit_data());
@@ -1524,6 +1666,7 @@ impl LocalAuditCollector {
             stages.push(PendingLocalOperation {
                 event,
                 view,
+                legacy_schema,
                 from_oldest_file: self.oldest_file,
             });
             return Ok(());
@@ -1543,7 +1686,8 @@ impl LocalAuditCollector {
         };
         // The terminal entry names the source of the last stage that ran.
         let last = stages.last().ok_or_else(invalid_audit_data)?;
-        if !coherent_operation_pair(&last.event, &event)
+        if last.legacy_schema != legacy_schema
+            || !coherent_operation_pair(&last.event, &event)
             || !self.completed.insert(operation.clone())
         {
             return Err(invalid_audit_data());
@@ -1937,7 +2081,7 @@ mod tests {
         phase: EvidenceRequestBatchAuditPhase,
         decision: EvidenceRequestBatchAuditDecision,
     ) -> EvidenceRequestBatchAuditEvent {
-        EvidenceRequestBatchAuditEvent::new(
+        let mut event = EvidenceRequestBatchAuditEvent::new(
             AssuranceProfile::EvidenceGrade,
             "operation-request-batch-audit".to_owned(),
             phase,
@@ -1948,7 +2092,120 @@ mod tests {
                 .to_owned(),
             decision,
             5,
-        )
+        );
+        if phase == EvidenceRequestBatchAuditPhase::AccessAttempt {
+            event.execution_bounds = Some(test_execution_bounds());
+        }
+        event
+    }
+
+    fn test_execution_bounds() -> EvidenceExecutionBounds {
+        EvidenceExecutionBounds {
+            maximum_data_operations: 5,
+            deadline_milliseconds: 30_000,
+            maximum_response_bytes: 1_048_576,
+        }
+    }
+
+    #[test]
+    fn execution_bounds_may_be_absent_but_never_explicitly_null() {
+        let mut single =
+            serde_json::to_value(event(&captured_log().0)).expect("singular event serializes");
+        single
+            .as_object_mut()
+            .expect("event is an object")
+            .remove("executionBounds");
+        let absent = serde_json::from_value::<EvidenceAuditEvent>(single.clone())
+            .expect("absent bounds remain representable for retained and terminal events");
+        assert!(absent.execution_bounds.is_none());
+        single["executionBounds"] = serde_json::Value::Null;
+        assert!(serde_json::from_value::<EvidenceAuditEvent>(single).is_err());
+
+        let mut batch = serde_json::to_value(request_batch_event(
+            EvidenceRequestBatchAuditPhase::AccessAttempt,
+            EvidenceRequestBatchAuditDecision::Authorized,
+        ))
+        .expect("batch event serializes");
+        batch
+            .as_object_mut()
+            .expect("event is an object")
+            .remove("executionBounds");
+        let absent = serde_json::from_value::<EvidenceRequestBatchAuditEvent>(batch.clone())
+            .expect("absent bounds remain representable for retained and terminal events");
+        assert!(absent.execution_bounds.is_none());
+        batch["executionBounds"] = serde_json::Value::Null;
+        assert!(serde_json::from_value::<EvidenceRequestBatchAuditEvent>(batch).is_err());
+    }
+
+    #[test]
+    fn execution_bounds_are_closed_nonzero_and_access_only() {
+        let expected = EvidenceExecutionBounds {
+            maximum_data_operations: 3,
+            deadline_milliseconds: 45_000,
+            maximum_response_bytes: 262_144,
+        };
+
+        let mut access = event(&captured_log().0);
+        access.execution_bounds = Some(expected);
+        access
+            .validate_phase_fields()
+            .expect("singular access carries the effective acquisition bounds");
+        assert_eq!(
+            serde_json::to_value(access.execution_bounds).expect("bounds serialize"),
+            serde_json::json!({
+                "maximumDataOperations": 3,
+                "acquisitionDeadlineMilliseconds": 45_000,
+                "maximumResponseBytes": 262_144
+            })
+        );
+
+        let mut batch = request_batch_event(
+            EvidenceRequestBatchAuditPhase::AccessAttempt,
+            EvidenceRequestBatchAuditDecision::Authorized,
+        );
+        batch.source_id = Some("source-a".to_owned());
+        batch.adapter_id = Some("adapter-a".to_owned());
+        batch.item_indices = Some(vec![0]);
+        batch.item_groups = Some(vec![request_batch_item_group(vec![0], '2')]);
+        batch.execution_bounds = Some(expected);
+        batch
+            .validate_phase_fields()
+            .expect("batch access carries the same closed bounds shape");
+
+        for invalid in [
+            EvidenceExecutionBounds {
+                maximum_data_operations: 0,
+                ..expected
+            },
+            EvidenceExecutionBounds {
+                deadline_milliseconds: 0,
+                ..expected
+            },
+            EvidenceExecutionBounds {
+                maximum_response_bytes: 0,
+                ..expected
+            },
+        ] {
+            let mut invalid_access = batch.clone();
+            invalid_access.execution_bounds = Some(invalid);
+            assert!(matches!(
+                invalid_access.validate_phase_fields(),
+                Err(EvidenceAuditError::InvalidEvent)
+            ));
+        }
+
+        let mut terminal = batch;
+        terminal.phase = EvidenceRequestBatchAuditPhase::TerminalFailure;
+        terminal.decision = EvidenceRequestBatchAuditDecision::Aborted;
+        terminal.source_id = None;
+        terminal.adapter_id = None;
+        terminal.item_indices = None;
+        terminal.item_groups = None;
+        terminal.safe_error_category = Some("source-status".to_owned());
+        assert!(matches!(
+            terminal.validate_phase_fields(),
+            Err(EvidenceAuditError::InvalidEvent)
+        ));
     }
 
     #[test]
@@ -2143,6 +2400,41 @@ mod tests {
             );
         }
 
+        let mut access_without_bounds =
+            serde_json::to_value(&access).expect("request-batch access serializes");
+        access_without_bounds
+            .as_object_mut()
+            .expect("request-batch access is an object")
+            .remove("executionBounds");
+        assert!(
+            !validator.is_valid(&access_without_bounds),
+            "schema accepts an access event without execution bounds"
+        );
+
+        let mut terminal_with_bounds =
+            serde_json::to_value(&abort).expect("request-batch terminal serializes");
+        terminal_with_bounds
+            .as_object_mut()
+            .expect("request-batch terminal is an object")
+            .insert(
+                "executionBounds".to_owned(),
+                serde_json::to_value(test_execution_bounds()).expect("bounds serialize"),
+            );
+        assert!(
+            !validator.is_valid(&terminal_with_bounds),
+            "schema accepts execution bounds on a terminal event"
+        );
+
+        let mut open_bounds = serde_json::to_value(&access).expect("access serializes");
+        open_bounds["executionBounds"]
+            .as_object_mut()
+            .expect("execution bounds are an object")
+            .insert("credentialLimit".to_owned(), serde_json::json!(1));
+        assert!(
+            !validator.is_valid(&open_bounds),
+            "schema accepts an uncontracted execution bound"
+        );
+
         let mut request_derived_canary =
             serde_json::to_value(access).expect("request-batch access serializes");
         request_derived_canary
@@ -2164,7 +2456,7 @@ mod tests {
     }
 
     fn event(log: &EvidenceAuditLog) -> EvidenceAuditEvent {
-        EvidenceAuditEvent::new(
+        let mut event = EvidenceAuditEvent::new(
             AssuranceProfile::EvidenceGrade,
             "01K1EXAMPLE0000000000000000".to_string(),
             AuditPhase::AccessAttempt,
@@ -2189,7 +2481,9 @@ mod tests {
             ResponseProtection::Signed,
             AuditDecision::Authorized,
             5,
-        )
+        );
+        event.execution_bounds = Some(test_execution_bounds());
+        event
     }
 
     /// Frozen shape of a release that closed a multi-stage acquisition: three
@@ -2250,7 +2544,7 @@ mod tests {
         .expect("frozen audit fixture parses");
         assert_eq!(
             fixture["fixture"],
-            serde_json::json!("registry.evidence.audit-events/v2")
+            serde_json::json!("registry.evidence.audit-events/v3")
         );
         assert_eq!(fixture["synthetic_only"], serde_json::json!(true));
 
@@ -2289,6 +2583,7 @@ mod tests {
             response_protection: ResponseProtection::Signed,
             source_id: Some("source-a".to_owned()),
             adapter_id: Some("adapter-a".to_owned()),
+            execution_bounds: Some(test_execution_bounds()),
             source_ids: None,
             adapter_ids: None,
             decision: AuditDecision::Authorized,
@@ -2313,6 +2608,7 @@ mod tests {
         release.occurred_at = "2026-08-02T00:00:01Z".to_owned();
         release.phase = AuditPhase::DisclosureRelease;
         release.decision = AuditDecision::Released;
+        release.execution_bounds = None;
         release.disclosed_concepts = Some(vec!["urn:example:fixture:concept:boolean-a".to_owned()]);
         release.evidence_id = Some("urn:example:fixture:evidence:001".to_owned());
         release.signing_key_id = Some("_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo".to_owned());
@@ -2487,6 +2783,10 @@ mod tests {
         unresolved["phase"] = serde_json::json!("denial");
         unresolved["decision"] = serde_json::json!("unresolved");
         unresolved["safeErrorCategory"] = serde_json::json!("unresolved");
+        unresolved
+            .as_object_mut()
+            .expect("denial fixture is an object")
+            .remove("executionBounds");
         assert!(
             validator.is_valid(&unresolved),
             "schema rejects the neutral declared-unresolved denial"
@@ -2577,6 +2877,19 @@ mod tests {
                 fixture["disclosure_release_fetch_set"]["sourceIds"].clone(),
             );
 
+        let mut access_without_bounds = fixture["access_attempt"].clone();
+        access_without_bounds
+            .as_object_mut()
+            .expect("access fixture is an object")
+            .remove("executionBounds");
+
+        let mut release_with_bounds = fixture["disclosure_release"].clone();
+        release_with_bounds["executionBounds"] =
+            fixture["access_attempt"]["executionBounds"].clone();
+
+        let mut access_with_open_bounds = fixture["access_attempt"].clone();
+        access_with_open_bounds["executionBounds"]["credentialLimit"] = serde_json::json!(1);
+
         for (name, candidate) in [
             ("refusal-with-record-schema", refusal_with_record_schema),
             (
@@ -2595,6 +2908,9 @@ mod tests {
             ("release-with-repeated-source", release_with_repeated_source),
             ("release-with-unequal-arrays", release_with_unequal_arrays),
             ("refusal-with-stage-arrays", refusal_with_stage_arrays),
+            ("access-without-bounds", access_without_bounds),
+            ("release-with-bounds", release_with_bounds),
+            ("access-with-open-bounds", access_with_open_bounds),
         ] {
             assert!(
                 !validator.is_valid(&candidate),
@@ -2987,6 +3303,24 @@ mod tests {
         }
     }
 
+    fn raw_authorized_entry(schema: &str, event: &EvidenceAuditEvent) -> AuditEntry {
+        let record = serde_json::to_value(event).expect("audit event serializes");
+        if event.phase == AuditPhase::AccessAttempt {
+            AuditEntry::request(schema, &event.operation, record)
+        } else {
+            AuditEntry::response(schema, &event.operation, record)
+        }
+    }
+
+    fn raw_request_batch_entry(schema: &str, event: &EvidenceRequestBatchAuditEvent) -> AuditEntry {
+        let record = serde_json::to_value(event).expect("batch audit event serializes");
+        if event.phase == EvidenceRequestBatchAuditPhase::AccessAttempt {
+            AuditEntry::request(schema, &event.operation, record)
+        } else {
+            AuditEntry::response(schema, &event.operation, record)
+        }
+    }
+
     /// Seal the active file under the next sequence, as rotation does, so a
     /// test can build history across files without writing a whole rotation's
     /// worth of entries.
@@ -3374,6 +3708,7 @@ mod tests {
         );
         event.source_id = Some("source-private-canary".to_owned());
         event.adapter_id = Some("adapter-private-canary".to_owned());
+        event.execution_bounds = Some(test_execution_bounds());
         event
     }
 
@@ -3386,6 +3721,7 @@ mod tests {
             .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
         release.phase = AuditPhase::DisclosureRelease;
         release.decision = AuditDecision::Released;
+        release.execution_bounds = None;
         release.disclosed_concepts = Some(vec!["urn:example:concept:age-bracket".to_owned()]);
         release.evidence_id = Some(format!("urn:example:evidence:{}", ulid::Ulid::generate()));
         release.signing_key_id = Some("local-signing-key-1".to_owned());
@@ -3574,6 +3910,60 @@ mod tests {
         vec![first, second, release]
     }
 
+    #[tokio::test]
+    async fn local_inspection_reads_retained_v2_and_refuses_cross_version_bounds_shapes() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("audit.jsonl");
+        let (log, _) = captured_log();
+
+        let mut legacy_access = local_access(&log, "legacy-operation-000000000000001");
+        legacy_access.execution_bounds = None;
+        let legacy_release = local_release(&legacy_access);
+        let mut legacy_batch = local_two_item_request_batch("legacy-batch-operation-00000001");
+        for event in &mut legacy_batch {
+            event.execution_bounds = None;
+        }
+        let current_access = local_access(&log, "current-operation-00000000000001");
+        let current_release = local_release(&current_access);
+
+        let mut entries = vec![
+            raw_authorized_entry(LEGACY_AUDIT_SCHEMA, &legacy_access),
+            raw_authorized_entry(LEGACY_AUDIT_SCHEMA, &legacy_release),
+        ];
+        entries.extend(
+            legacy_batch
+                .iter()
+                .map(|event| raw_request_batch_entry(LEGACY_REQUEST_BATCH_AUDIT_SCHEMA, event)),
+        );
+        entries.extend([
+            raw_authorized_entry(AUDIT_SCHEMA, &current_access),
+            raw_authorized_entry(AUDIT_SCHEMA, &current_release),
+        ]);
+        append_raw_entries(&path, entries).await;
+
+        let view = last_local_audit_operation(&path)
+            .expect("retained v2 entries and current v3 entries read together");
+        assert_eq!(view.operation, current_access.operation);
+
+        let legacy_with_bounds = directory.path().join("legacy-with-bounds.jsonl");
+        append_raw_entries(
+            &legacy_with_bounds,
+            vec![raw_authorized_entry(LEGACY_AUDIT_SCHEMA, &current_access)],
+        )
+        .await;
+        assert!(last_local_audit_operation(&legacy_with_bounds).is_err());
+
+        let mut current_without_bounds = current_access;
+        current_without_bounds.execution_bounds = None;
+        let current_without_bounds_path = directory.path().join("current-without-bounds.jsonl");
+        append_raw_entries(
+            &current_without_bounds_path,
+            vec![raw_authorized_entry(AUDIT_SCHEMA, &current_without_bounds)],
+        )
+        .await;
+        assert!(last_local_audit_operation(&current_without_bounds_path).is_err());
+    }
+
     async fn read_after_request_batch(
         batch: Vec<EvidenceRequestBatchAuditEvent>,
     ) -> Result<LocalAuditOperationView, EvidenceAuditError> {
@@ -3603,7 +3993,7 @@ mod tests {
     #[tokio::test]
     async fn local_inspection_refuses_a_request_batch_whose_entries_disagree() {
         type Mutation = fn(&mut [EvidenceRequestBatchAuditEvent]);
-        let incoherent: [(&str, Mutation); 10] = [
+        let incoherent: [(&str, Mutation); 11] = [
             ("requirement", |batch| {
                 batch[2].requirement = "urn:example:requirement:other:v1".to_owned();
             }),
@@ -3634,6 +4024,13 @@ mod tests {
                     request_batch_item_group(vec![0], '2'),
                     request_batch_item_group(vec![1], '4'),
                 ]);
+            }),
+            ("execution-bounds", |batch| {
+                batch[1].execution_bounds = Some(EvidenceExecutionBounds {
+                    maximum_data_operations: 7,
+                    deadline_milliseconds: 42_000,
+                    maximum_response_bytes: 262_144,
+                });
             }),
         ];
         for (name, mutate) in incoherent {
@@ -4782,6 +5179,7 @@ mod tests {
         access.signing_key_id = None;
         access.source_ids = None;
         access.adapter_ids = None;
+        access.execution_bounds = Some(test_execution_bounds());
         access.authority_revision = Some(revision.clone());
         access.effective_grant_digest = Some(digest.clone());
         assert!(access.validate_phase_fields().is_ok());

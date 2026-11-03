@@ -84,9 +84,9 @@ authority:
 
 ## Bind SQLite extracts
 
-Skip this step unless a source in your bundle has `type: sqlite-extract`. Each such source names
-an `extractProfile`, and the candidate's `runtime.yaml` carries a `sourceExtracts` binding for
-each one, with host paths. Carry every binding into the container runtime file under the same
+Skip this step unless a source pack uses a `sqlite-extract` endpoint. Each such endpoint names
+`sqliteExtract.extractProfile`, and the candidate's `runtime.yaml` carries a `sourceExtracts` binding
+for each profile, with host paths. Carry every binding into the container runtime file under the same
 names, pointing at container paths:
 
 ```yaml

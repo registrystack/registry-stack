@@ -32,9 +32,13 @@ authentication:
     maximumTokenLifetimeSeconds: 300
 connections:
   fhir-read-through:
-    origin: http://127.0.0.1:8000
-    authentication:
-      type: none
+    endpoints:
+      fhir:
+        origin: http://127.0.0.1:8000
+        authentication:
+          type: none
+        attemptTimeoutMilliseconds: 30000
+        maximumResponseBytes: 65536
 secretProviders:
   file:
     root: .generated/secrets

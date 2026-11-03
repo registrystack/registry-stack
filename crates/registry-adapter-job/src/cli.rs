@@ -12,7 +12,7 @@ use std::path::PathBuf;
 #[command(
     name = "adapter-job",
     version,
-    about = "Run a governed-ingestion job: check, bounded pass, status, inspect, rescan.",
+    about = "Run a governed-ingestion job: initialize its store, check, bounded pass, status, inspect, rescan.",
     after_help = "Output is value-free by default. Pass --show-values to include the projected values a dry-run pass would hand off; status, inspect, and check never carry item values."
 )]
 pub struct Cli {
@@ -38,6 +38,13 @@ pub struct WorkspaceArgs {
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// Initialize or migrate the job store without running a job.
+    InitStore {
+        /// The operator runtime config file, whose store block alone is
+        /// resolved. Source and destination credentials are not activated.
+        #[arg(long)]
+        runtime: PathBuf,
+    },
     /// Compile a job the way a pass would, with the value-free findings.
     Check {
         /// The job definition file.
@@ -147,4 +154,43 @@ pub enum Command {
 #[must_use]
 pub fn command() -> clap::Command {
     Cli::command()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Cli;
+    use clap::Parser as _;
+
+    #[test]
+    fn init_store_requires_an_explicit_runtime() {
+        let error = match Cli::try_parse_from(["adapter-job", "init-store"]) {
+            Ok(_) => panic!("initialization requires an explicit store runtime"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::MissingRequiredArgument
+        );
+    }
+
+    #[test]
+    fn init_store_refuses_job_and_delivery_arguments() {
+        for extra in [
+            vec!["job.yaml"],
+            vec!["--pack", "pack.yaml"],
+            vec!["--dry-run"],
+            vec![
+                "--fixture",
+                "--fixture-url",
+                "http://127.0.0.1:9000/deliver",
+            ],
+        ] {
+            let mut arguments = vec!["adapter-job", "init-store", "--runtime", "runtime.yaml"];
+            arguments.extend(extra);
+            assert!(
+                Cli::try_parse_from(arguments).is_err(),
+                "store initialization accepts no job or delivery options"
+            );
+        }
+    }
 }

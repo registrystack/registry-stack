@@ -22,19 +22,21 @@
 //! 6. A deployment-level answer stops the pass with the position
 //!    unchanged.
 //! 7. A fully settled page saves the page's next cursor, or clears the
-//!    position at a finite end, and calls the destination's settle
-//!    contract.
+//!    position at a finite end. A queue receipt is source-owned and settles
+//!    only after its matching durable item outcome.
 
 use std::collections::BTreeMap;
 use std::time::{Duration, SystemTime};
 
 use deadpool_postgres::Pool;
-use registry_adapter::engine::job::{run_job_page, JobPageFailure, JobProgram};
-use registry_adapter_core::SourceScan;
+use registry_adapter_core::{RecordLocator, SourceScan};
+use registry_adapter_engine::job::{run_job_page, JobPageFailure, JobProgram};
+#[cfg(feature = "job-rabbitmq")]
+use registry_platform_config::sha256_uri;
 use serde_json::Value;
 
 use crate::destination::{
-    DeliverableItem, HandOffOutcome, JobDestination, SettledPage, DESTINATION_ANSWER_INVALID,
+    DeliverableItem, HandOffOutcome, JobDestination, DESTINATION_ANSWER_INVALID,
     MAXIMUM_ANSWER_BYTES,
 };
 use crate::projection;
@@ -51,6 +53,35 @@ pub const DEFAULT_REFUSAL_LIMIT: u32 = 20;
 /// The longest stop text the job state row holds, in bytes: the
 /// `last_pass_stop` column's own bound.
 pub const MAXIMUM_STOP_TEXT_BYTES: usize = 256;
+
+/// AMQP 0-9-1 has no side-effect-free peek, and even requeueing can consume a
+/// delivery attempt, so a queue preview refuses before broker acquisition.
+pub const RABBITMQ_DRY_RUN_REFUSED: &str = "adapter.job.rabbitmq-dry-run-refused";
+
+/// The broker could not confirm the source-owned acknowledgement or rejection.
+pub const RABBITMQ_SETTLEMENT_UNCERTAIN: &str = "adapter.job.rabbitmq-settlement-uncertain";
+
+/// A durable held row deliberately leaves its broker delivery unsettled.
+pub const RABBITMQ_HELD: &str = "adapter.job.rabbitmq-held";
+
+/// A publisher reused one immutable message identity for a different raw body
+/// or reviewed normalized projection. The new digest is retained as held, but
+/// it is never delivered or acknowledged automatically.
+pub const RABBITMQ_EVENT_CHANGED: &str = "adapter.job.rabbitmq-event-changed";
+
+/// A pending signed delivery selected a receiver other than the public
+/// authority/configuration frozen for the sequence, or predates that fence.
+/// The pass stops before any recipient call and leaves the position unchanged.
+pub const COORDINATOR_RECEIVER_CHANGED: &str = "adapter.job.coordinator-receiver-changed";
+
+/// The positive durable delivery-attempt counter cannot advance without
+/// leaving PostgreSQL's signed bigint domain. The pass stops with its source
+/// position unchanged rather than panicking or wrapping the counter.
+pub const DELIVERY_ATTEMPT_EXHAUSTED: &str = "adapter.job.delivery-attempt-exhausted";
+
+/// The governed file/SFTP item identity cannot be adopted over non-empty
+/// legacy state or changed in place. An operator must migrate or retire it.
+pub const ITEM_IDENTITY_MIGRATION_REQUIRED: &str = "adapter.job.identity-migration-required";
 
 /// The options one pass runs under.
 #[derive(Clone, Debug)]
@@ -94,6 +125,8 @@ pub enum StopReason {
     PageFault {
         /// The closed code of the failure.
         code: String,
+        /// The source record ordinal when a decoder identified one.
+        record: Option<RecordLocator>,
     },
     /// The destination answered for the deployment, not the item.
     DestinationStop {
@@ -115,7 +148,10 @@ impl StopReason {
     pub fn stop_text(&self) -> String {
         let mut text = match self {
             StopReason::LeaseHeld => "lease-held".to_string(),
-            StopReason::PageFault { code } => format!("page-fault:{code}"),
+            StopReason::PageFault { code, record } => match record {
+                Some(record) => format!("page-fault:{code}:record:{}", record.ordinal),
+                None => format!("page-fault:{code}"),
+            },
             StopReason::DestinationStop { code } => format!("destination-stop:{code}"),
             StopReason::RefusalLimit { code } => format!("refusal-limit:{code}"),
         };
@@ -152,8 +188,12 @@ pub struct PassReport {
     pub items_acknowledged: u32,
     /// Hand-offs the destination refused, item-scoped.
     pub items_refused: u32,
+    /// Hand-offs the destination held for an operator.
+    pub items_held: u32,
     /// The item-scoped refusals by the destination's own code.
     pub refusals_by_code: BTreeMap<String, u32>,
+    /// Held items by the destination's value-free reason code.
+    pub holds_by_code: BTreeMap<String, u32>,
     /// Malformed input lines the page's decoders skipped, value-free.
     pub malformed_lines: u32,
     /// Why the pass stopped before the page settled, when it did.
@@ -192,6 +232,13 @@ pub async fn run_pass(
     let job = &program.job;
     let job_id = job.job.id.as_str();
     let mut report = PassReport::default();
+    if options.dry_run && program.has_rabbitmq_source() {
+        report.stopped = Some(StopReason::PageFault {
+            code: RABBITMQ_DRY_RUN_REFUSED.to_owned(),
+            record: None,
+        });
+        return report;
+    }
     let mut client = match db.get().await {
         Ok(client) => client,
         Err(error) => return store_refused(report, &error.to_string()),
@@ -209,6 +256,27 @@ pub async fn run_pass(
     // The dry run writes nothing, so it carries no token; every fenced
     // write below runs only in a leased pass.
     let lease_token = state.token.unwrap_or(0);
+    if !options.dry_run {
+        let identity = program.item_identity_digest();
+        if let Err(error) = store::bind_item_identity(
+            &mut client,
+            job_id,
+            identity.as_ref(),
+            lease_token,
+            lease_ttl(program),
+        )
+        .await
+        {
+            let reason = match error {
+                store::StoreError::ItemIdentityMigrationRequired => StopReason::PageFault {
+                    code: ITEM_IDENTITY_MIGRATION_REQUIRED.to_owned(),
+                    record: None,
+                },
+                error => store_refused_reason(&error),
+            };
+            return finish_stopped(db, job_id, &options, lease_token, report, reason).await;
+        }
+    }
     // A traversal the last pass left between pages keeps its rescan
     // mode and saved cursor. Only a newly requested rescan starts from
     // the first page; every real pass that continues it still retries
@@ -226,10 +294,10 @@ pub async fn run_pass(
     } else {
         state.position.clone()
     };
-    let page = match run_job_page(program, cursor).await {
+    let page_result = match run_job_page(program, cursor).await {
         Ok(result) => {
             report.malformed_lines = result.malformed_lines;
-            result.page
+            result
         }
         Err(failure) => {
             return finish_stopped(
@@ -243,13 +311,35 @@ pub async fn run_pass(
             .await;
         }
     };
+    #[cfg(feature = "job-rabbitmq")]
+    let source_receipt = page_result.source_receipt;
+    let page = page_result.page;
     report.items_read = page.items.len() as u32;
     // Steps 3 to 6: per item, compare, stage, deliver, record.
     let mut consecutive = ConsecutiveRefusals::new(options.refusal_limit);
     for item in &page.items {
+        #[cfg(feature = "job-rabbitmq")]
+        let digest = {
+            let projected_digest = projection::item_digest(&job.projection, &item.value);
+            source_receipt
+                .as_ref()
+                .map_or(projected_digest.clone(), |receipt| {
+                    rabbitmq_item_digest(receipt.expected_revision(), &projected_digest)
+                })
+        };
+        #[cfg(not(feature = "job-rabbitmq"))]
         let digest = projection::item_digest(&job.projection, &item.value);
+        let staged_at = SystemTime::now();
         let staged = if options.dry_run {
-            store::peek_item(&client, job_id, &item.key, &digest, options.rescan).await
+            store::peek_item(
+                &client,
+                job_id,
+                &item.key,
+                &digest,
+                options.rescan,
+                staged_at,
+            )
+            .await
         } else {
             store::stage_item(
                 &mut client,
@@ -257,7 +347,7 @@ pub async fn run_pass(
                 &item.key,
                 &digest,
                 options.rescan,
-                SystemTime::now(),
+                staged_at,
                 lease_token,
                 lease_ttl(program),
             )
@@ -265,6 +355,19 @@ pub async fn run_pass(
         };
         let staged = match staged {
             Ok(staged) => staged,
+            Err(store::StoreError::DeliveryAttemptExhausted) => {
+                return finish_stopped(
+                    db,
+                    job_id,
+                    &options,
+                    lease_token,
+                    report,
+                    StopReason::DestinationStop {
+                        code: DELIVERY_ATTEMPT_EXHAUSTED.to_owned(),
+                    },
+                )
+                .await;
+            }
             Err(error) => {
                 return finish_stopped(
                     db,
@@ -279,6 +382,74 @@ pub async fn run_pass(
         };
         let Some(staged) = staged else {
             report.items_skipped += 1;
+            #[cfg(feature = "job-rabbitmq")]
+            if let Some(receipt) = source_receipt.as_ref() {
+                let stored = match store::inspect_item(&client, job_id, &item.key).await {
+                    Ok(Some(stored)) if stored.last_digest == digest => stored,
+                    Ok(_) => {
+                        return finish_stopped(
+                            db,
+                            job_id,
+                            &options,
+                            lease_token,
+                            report,
+                            rabbitmq_settlement_reason(),
+                        )
+                        .await;
+                    }
+                    Err(error) => {
+                        return finish_stopped(
+                            db,
+                            job_id,
+                            &options,
+                            lease_token,
+                            report,
+                            store_refused_reason(&error),
+                        )
+                        .await;
+                    }
+                };
+                let settled = match stored.status {
+                    store::ItemStatus::Acknowledged => receipt.accept().await,
+                    store::ItemStatus::Refused => receipt.refuse().await,
+                    store::ItemStatus::Held => {
+                        return finish_stopped(
+                            db,
+                            job_id,
+                            &options,
+                            lease_token,
+                            report,
+                            StopReason::PageFault {
+                                code: RABBITMQ_HELD.to_owned(),
+                                record: None,
+                            },
+                        )
+                        .await;
+                    }
+                    store::ItemStatus::Pending => {
+                        return finish_stopped(
+                            db,
+                            job_id,
+                            &options,
+                            lease_token,
+                            report,
+                            rabbitmq_settlement_reason(),
+                        )
+                        .await;
+                    }
+                };
+                if settled.is_err() {
+                    return finish_stopped(
+                        db,
+                        job_id,
+                        &options,
+                        lease_token,
+                        report,
+                        rabbitmq_settlement_reason(),
+                    )
+                    .await;
+                }
+            }
             continue;
         };
         match staged.classification {
@@ -286,15 +457,120 @@ pub async fn run_pass(
             StagedClassification::Changed => report.items_changed += 1,
             StagedClassification::Redelivered => report.items_redelivered += 1,
         }
+        #[cfg(feature = "job-rabbitmq")]
+        if source_receipt.is_some() && staged.classification == StagedClassification::Changed {
+            if let Err(error) = store::record_held(
+                &mut client,
+                job_id,
+                &staged.key,
+                RABBITMQ_EVENT_CHANGED,
+                None,
+                SystemTime::now(),
+                lease_token,
+                lease_ttl(program),
+            )
+            .await
+            {
+                return finish_stopped(
+                    db,
+                    job_id,
+                    &options,
+                    lease_token,
+                    report,
+                    store_refused_reason(&error),
+                )
+                .await;
+            }
+            report.items_held += 1;
+            *report
+                .holds_by_code
+                .entry(RABBITMQ_EVENT_CHANGED.to_owned())
+                .or_insert(0) += 1;
+            return finish_stopped(
+                db,
+                job_id,
+                &options,
+                lease_token,
+                report,
+                StopReason::PageFault {
+                    code: RABBITMQ_HELD.to_owned(),
+                    record: None,
+                },
+            )
+            .await;
+        }
         let deliverable = DeliverableItem {
             key: staged.key.clone(),
             sequence: staged.sequence,
             digest: staged.digest.clone(),
-            prior_run_id: staged.prior_run_id,
+            prior_run_id: staged.prior_run_id.clone(),
             admitted_before: staged.admitted_before,
+            first_seen: staged.first_seen,
+            event_time: staged.event_time,
+            delivery_attempt: staged.delivery_attempt,
             projected: projection::project(&job.projection, &item.value),
         };
-        let outcome = destination.deliver(&job.job, &deliverable).await;
+        if !options.dry_run {
+            if let Some(identity) = destination.receiver_identity(&job.job, &deliverable) {
+                let body_identity =
+                    match destination.canonical_body_identity(&job.job, &deliverable) {
+                        Some(Ok(identity)) => Some(identity),
+                        Some(Err(())) | None if staged.receipt_uncertain => {
+                            return finish_stopped(
+                                db,
+                                job_id,
+                                &options,
+                                lease_token,
+                                report,
+                                StopReason::DestinationStop {
+                                    code: COORDINATOR_RECEIVER_CHANGED.to_owned(),
+                                },
+                            )
+                            .await;
+                        }
+                        Some(Err(())) | None => None,
+                    };
+                if let Some(body_identity) = body_identity {
+                    let allow_rebind = staged.classification == StagedClassification::Redelivered
+                        && !staged.receipt_uncertain;
+                    if let Err(error) = store::bind_delivery_identity(
+                        &mut client,
+                        job_id,
+                        &staged.key,
+                        &identity,
+                        &body_identity,
+                        staged.delivery_attempt,
+                        allow_rebind,
+                        lease_token,
+                        lease_ttl(program),
+                    )
+                    .await
+                    {
+                        let reason = match error {
+                            store::StoreError::ReceiverIdentityUnknown
+                            | store::StoreError::ReceiverIdentityChanged
+                            | store::StoreError::CanonicalBodyIdentityUnknown
+                            | store::StoreError::CanonicalBodyIdentityChanged => {
+                                StopReason::DestinationStop {
+                                    code: COORDINATOR_RECEIVER_CHANGED.to_owned(),
+                                }
+                            }
+                            error => store_refused_reason(&error),
+                        };
+                        return finish_stopped(db, job_id, &options, lease_token, report, reason)
+                            .await;
+                    }
+                }
+            }
+        }
+        let outcome = if direct_receipt_expired(&job.destination, &staged, staged_at) {
+            HandOffOutcome::Held {
+                code: "adapter.job.breg-receipt-horizon".to_string(),
+                run_id: None,
+            }
+        } else {
+            destination.deliver(&job.job, &deliverable).await
+        };
         if !answer_fits(&outcome) {
             // An answer the item table cannot hold is the destination's
             // fault, not the item's: the row stays pending and the pass
@@ -338,6 +614,20 @@ pub async fn run_pass(
                         .await;
                     }
                 }
+                #[cfg(feature = "job-rabbitmq")]
+                if let Some(receipt) = source_receipt.as_ref() {
+                    if receipt.accept().await.is_err() {
+                        return finish_stopped(
+                            db,
+                            job_id,
+                            &options,
+                            lease_token,
+                            report,
+                            rabbitmq_settlement_reason(),
+                        )
+                        .await;
+                    }
+                }
             }
             HandOffOutcome::Refused { code } => {
                 report.items_refused += 1;
@@ -368,6 +658,20 @@ pub async fn run_pass(
                         .await;
                     }
                 }
+                #[cfg(feature = "job-rabbitmq")]
+                if let Some(receipt) = source_receipt.as_ref() {
+                    if receipt.refuse().await.is_err() {
+                        return finish_stopped(
+                            db,
+                            job_id,
+                            &options,
+                            lease_token,
+                            report,
+                            rabbitmq_settlement_reason(),
+                        )
+                        .await;
+                    }
+                }
                 if let Some(limit_code) = consecutive.refused(code.clone()) {
                     return finish_stopped(
                         db,
@@ -376,6 +680,50 @@ pub async fn run_pass(
                         lease_token,
                         report,
                         StopReason::RefusalLimit { code: limit_code },
+                    )
+                    .await;
+                }
+            }
+            HandOffOutcome::Held { code, run_id } => {
+                report.items_held += 1;
+                *report.holds_by_code.entry(code.clone()).or_insert(0) += 1;
+                consecutive.reset();
+                if !options.dry_run {
+                    if let Err(error) = store::record_held(
+                        &mut client,
+                        job_id,
+                        &staged.key,
+                        &code,
+                        run_id.as_deref(),
+                        SystemTime::now(),
+                        lease_token,
+                        lease_ttl(program),
+                    )
+                    .await
+                    {
+                        return finish_stopped(
+                            db,
+                            job_id,
+                            &options,
+                            lease_token,
+                            report,
+                            store_refused_reason(&error),
+                        )
+                        .await;
+                    }
+                }
+                #[cfg(feature = "job-rabbitmq")]
+                if source_receipt.is_some() {
+                    return finish_stopped(
+                        db,
+                        job_id,
+                        &options,
+                        lease_token,
+                        report,
+                        StopReason::PageFault {
+                            code: RABBITMQ_HELD.to_owned(),
+                            record: None,
+                        },
                     )
                     .await;
                 }
@@ -394,11 +742,11 @@ pub async fn run_pass(
         }
     }
     // Step 7: the page settled. Save the position, stamp the schedule,
-    // release the lease, and call the destination's settle contract. A
-    // page without a cursor is the finite end: the position clears (the
-    // page reader reads a JSON null cursor as absent). An ongoing scan
-    // holds its place at the tail with a cursor even on an empty page, so
-    // its rescan ends at the first empty page, where it has caught up.
+    // release the lease. A page without a cursor is the finite end: the
+    // position clears (the page reader reads a JSON null cursor as
+    // absent). An ongoing scan holds its place at the tail with a cursor
+    // even on an empty page, so its rescan ends at the first empty page,
+    // where it has caught up.
     let next = page.next.as_ref();
     let ongoing = program.source_route.scan == Some(SourceScan::Ongoing);
     let traversal_ended = next.is_none() || (ongoing && report.items_read == 0);
@@ -430,16 +778,44 @@ pub async fn run_pass(
             .await;
         }
     }
-    destination
-        .settle(
-            &job.job,
-            &SettledPage {
-                next: next.cloned(),
-                items_read: report.items_read,
-            },
-        )
-        .await;
     report
+}
+
+#[cfg(feature = "job-rabbitmq")]
+fn rabbitmq_settlement_reason() -> StopReason {
+    StopReason::PageFault {
+        code: RABBITMQ_SETTLEMENT_UNCERTAIN.to_owned(),
+        record: None,
+    }
+}
+
+/// The queue item's stored digest covers both immutable broker bytes and the
+/// declared projection after reviewed route normalization. Domain separation
+/// prevents this combination from colliding with ordinary projection digests;
+/// no payload or projection bytes enter the store.
+#[cfg(feature = "job-rabbitmq")]
+fn rabbitmq_item_digest(source_revision: &str, projected_digest: &str) -> String {
+    let material =
+        format!("registry-adapter:rabbitmq-item-digest:v1\0{source_revision}\0{projected_digest}");
+    sha256_uri(material.as_bytes())
+}
+
+fn direct_receipt_expired(
+    destination: &registry_adapter_core::JobDestination,
+    staged: &store::StagedItem,
+    now: SystemTime,
+) -> bool {
+    let registry_adapter_core::JobDestination::DirectBreg {
+        receipt_retention_days,
+        ..
+    } = destination
+    else {
+        return false;
+    };
+    staged.receipt_uncertain
+        && now.duration_since(staged.first_seen).is_ok_and(|age| {
+            age >= Duration::from_secs(u64::from(*receipt_retention_days) * 86_400)
+        })
 }
 
 /// The stopped-pass ending: record the stop with the position untouched
@@ -478,6 +854,7 @@ fn answer_fits(outcome: &HandOffOutcome) -> bool {
     let fits = |text: &str| !text.is_empty() && text.len() <= MAXIMUM_ANSWER_BYTES;
     match outcome {
         HandOffOutcome::Acknowledged { run_id } => run_id.as_deref().is_none_or(fits),
+        HandOffOutcome::Held { code, run_id } => fits(code) && run_id.as_deref().is_none_or(fits),
         HandOffOutcome::Refused { code } | HandOffOutcome::StopPass { code } => fits(code),
     }
 }
@@ -487,6 +864,7 @@ fn answer_fits(outcome: &HandOffOutcome) -> bool {
 fn store_refused_reason(error: &store::StoreError) -> StopReason {
     StopReason::PageFault {
         code: format!("adapter.job.store-refused:{error}"),
+        record: None,
     }
 }
 
@@ -495,6 +873,7 @@ fn store_refused_reason(error: &store::StoreError) -> StopReason {
 fn store_refused(mut report: PassReport, reason: &str) -> PassReport {
     report.stopped = Some(StopReason::PageFault {
         code: format!("adapter.job.store-refused:{reason}"),
+        record: None,
     });
     report
 }
@@ -592,6 +971,7 @@ fn page_failure_reason(failure: &JobPageFailure) -> StopReason {
     if let Some(code) = failure.code {
         return StopReason::PageFault {
             code: code.to_string(),
+            record: failure.record,
         };
     }
     StopReason::PageFault {
@@ -599,6 +979,7 @@ fn page_failure_reason(failure: &JobPageFailure) -> StopReason {
             .class
             .map(|class| class.class().to_owned())
             .unwrap_or_else(|| "adapter.job.page-failure".to_string()),
+        record: failure.record,
     }
 }
 
@@ -675,10 +1056,19 @@ mod tests {
         assert_eq!(StopReason::LeaseHeld.stop_text(), "lease-held");
         assert_eq!(
             StopReason::PageFault {
-                code: "adapter.job.page-key".to_string()
+                code: "adapter.job.page-key".to_string(),
+                record: None,
             }
             .stop_text(),
             "page-fault:adapter.job.page-key"
+        );
+        assert_eq!(
+            StopReason::PageFault {
+                code: "adapter.job.file-row".to_string(),
+                record: Some(RecordLocator { ordinal: 7 }),
+            }
+            .stop_text(),
+            "page-fault:adapter.job.file-row:record:7"
         );
         assert_eq!(
             StopReason::DestinationStop {
@@ -697,9 +1087,26 @@ mod tests {
     }
 
     #[test]
+    fn page_failure_preserves_the_typed_record_locator() {
+        let reason = page_failure_reason(&JobPageFailure {
+            class: None,
+            code: Some("adapter.job.file-key-invalid"),
+            record: Some(RecordLocator { ordinal: 12 }),
+        });
+        assert_eq!(
+            reason,
+            StopReason::PageFault {
+                code: "adapter.job.file-key-invalid".to_string(),
+                record: Some(RecordLocator { ordinal: 12 }),
+            }
+        );
+    }
+
+    #[test]
     fn a_stop_text_stays_within_the_state_row_bound_on_a_char_boundary() {
         let long = StopReason::PageFault {
             code: format!("adapter.job.store-refused:{}", "\u{e9}".repeat(300)),
+            record: None,
         };
         let text = long.stop_text();
         assert!(text.len() <= MAXIMUM_STOP_TEXT_BYTES, "{}", text.len());
@@ -735,5 +1142,49 @@ mod tests {
     fn a_limit_of_one_stops_at_the_first_refusal() {
         let mut consecutive = ConsecutiveRefusals::new(1);
         assert_eq!(consecutive.refused("a".to_string()), Some("a".to_string()));
+    }
+
+    #[test]
+    fn only_an_uncertain_pending_retry_past_the_direct_receipt_horizon_expires() {
+        let destination = serde_json::from_value(serde_json::json!({
+            "type": "direct-breg",
+            "binding": "breg-main",
+            "accessProfile": "writer",
+            "action": "register-household",
+            "mode": "proposal",
+            "mapping": {"file": "map.rhai", "entrypoint": "map_item", "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"},
+            "receiptRetentionDays": 7
+        }))
+        .expect("a direct destination");
+        let first_seen = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
+        let mut staged = store::StagedItem {
+            key: "submission/a".to_string(),
+            sequence: 1,
+            digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+                .to_string(),
+            prior_run_id: None,
+            admitted_before: false,
+            first_seen,
+            event_time: first_seen,
+            delivery_attempt: 2,
+            receipt_uncertain: true,
+            classification: StagedClassification::Redelivered,
+        };
+        assert!(!direct_receipt_expired(
+            &destination,
+            &staged,
+            first_seen + Duration::from_secs(7 * 86_400 - 1)
+        ));
+        assert!(direct_receipt_expired(
+            &destination,
+            &staged,
+            first_seen + Duration::from_secs(7 * 86_400)
+        ));
+        staged.receipt_uncertain = false;
+        assert!(!direct_receipt_expired(
+            &destination,
+            &staged,
+            first_seen + Duration::from_secs(8 * 86_400)
+        ));
     }
 }

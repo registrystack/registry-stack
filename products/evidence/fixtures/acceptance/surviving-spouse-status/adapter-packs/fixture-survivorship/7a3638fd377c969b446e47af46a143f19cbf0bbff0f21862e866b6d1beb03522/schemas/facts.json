@@ -1,0 +1,40 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "civil_record_reference",
+    "reference_namespace",
+    "union_events",
+    "union_set_contract",
+    "union_set_complete",
+    "death_subject_reference",
+    "death_recorded",
+    "death_record_contract",
+    "death_record_complete"
+  ],
+  "properties": {
+    "civil_record_reference": {"type": "string", "minLength": 1, "maxLength": 96},
+    "reference_namespace": {"const": "urn:example:fixture:civil-record"},
+    "union_events": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["union_start_date", "union_end_reason", "union_recognized"],
+        "properties": {
+          "union_start_date": {"type": "string", "format": "date"},
+          "union_end_reason": {"type": "string", "enum": ["death-of-other-party", "dissolution", "annulment", "ongoing"]},
+          "union_recognized": {"type": "boolean"}
+        }
+      }
+    },
+    "union_set_contract": {"const": "urn:example:fixture:union-set:v1"},
+    "union_set_complete": {"type": "boolean"},
+    "death_subject_reference": {"type": "string", "minLength": 1, "maxLength": 96},
+    "death_recorded": {"type": "boolean"},
+    "death_record_contract": {"const": "urn:example:fixture:death-register:v1"},
+    "death_record_complete": {"type": "boolean"}
+  }
+}

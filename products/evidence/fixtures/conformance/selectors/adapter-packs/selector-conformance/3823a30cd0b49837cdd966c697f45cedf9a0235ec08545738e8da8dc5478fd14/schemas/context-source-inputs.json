@@ -1,0 +1,25 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "context_given_name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "context_family_name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "context_birth_date": {
+      "type": "string",
+      "format": "date"
+    }
+  },
+  "required": [
+    "context_given_name",
+    "context_family_name",
+    "context_birth_date"
+  ]
+}

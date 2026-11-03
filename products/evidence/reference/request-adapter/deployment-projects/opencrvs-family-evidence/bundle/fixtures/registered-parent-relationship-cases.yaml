@@ -6,20 +6,25 @@ common:
   selectors:
     child:
       profile: opencrvs-tracking-id-v1
-      values: {tracking_id: TRACKING-SYNTHETIC-001}
+      values:
+        tracking_id: TRACKING-SYNTHETIC-001
     candidate-parent:
       profile: civil-person-reference-v1
-      values: {person_reference: PERSON-SYNTHETIC-A}
+      values:
+        person_reference: PERSON-SYNTHETIC-A
   derivationSelectorInputs:
     child:
       profile: opencrvs-tracking-id-v1
-      values: {tracking_id: TRACKING-SYNTHETIC-001}
+      values:
+        tracking_id: TRACKING-SYNTHETIC-001
     candidate-parent:
       profile: civil-person-reference-v1
-      values: {person_reference: PERSON-SYNTHETIC-A}
+      values:
+        person_reference: PERSON-SYNTHETIC-A
   verifiedTokenClaims:
     grant:
-      candidate_parent: {person_reference: PERSON-SYNTHETIC-A}
+      candidate_parent:
+        person_reference: PERSON-SYNTHETIC-A
   expectedRequestParts:
     query: []
     body:
@@ -42,150 +47,543 @@ common:
         value: application/json
 cases:
   - id: positive
-    response:
-      total: 1
-      results:
-        - type: birth
-          status: REGISTERED
-          trackingId: TRACKING-SYNTHETIC-001
-          declaration:
-            mother.personReference: PERSON-SYNTHETIC-A
-            father.personReference: PERSON-SYNTHETIC-B
-            unrelated.field: SOURCE-UNRELATED-CANARY
     expected:
       lookup: match
       value: true
       derivationRuns: true
       signed: true
+    acquisition:
+      intercepts:
+        - type: endpoint
+          endpoint: events
+        - type: token-endpoint
+          endpoint: events
+      exchanges:
+        - request:
+            endpoint: events
+            tokenRequest: true
+            method: POST
+            path: /token
+          response:
+            status: 200
+            body:
+              access_token: synthetic-opencrvs-replay-token
+              token_type: Bearer
+              expires_in: 300
+        - request:
+            endpoint: events
+            method: POST
+            path: /events/search
+            headers:
+              accept: application/json
+            body:
+              query:
+                type: and
+                clauses:
+                  - eventType: birth
+                    status:
+                      type: exact
+                      term: REGISTERED
+                    trackingId:
+                      type: exact
+                      term: TRACKING-SYNTHETIC-001
+              limit: 2
+              offset: 0
+          response:
+            status: 200
+            body:
+              total: 1
+              results:
+                - type: birth
+                  status: REGISTERED
+                  trackingId: TRACKING-SYNTHETIC-001
+                  declaration:
+                    mother.personReference: PERSON-SYNTHETIC-A
+                    father.personReference: PERSON-SYNTHETIC-B
+                    unrelated.field: SOURCE-UNRELATED-CANARY
   - id: negative-false-is-success
-    response:
-      total: 1
-      results:
-        - type: birth
-          status: REGISTERED
-          trackingId: TRACKING-SYNTHETIC-001
-          declaration: {father.personReference: PERSON-SYNTHETIC-B}
     expected:
       lookup: match
       derivationRuns: true
       facts:
         record_tracking_id: TRACKING-SYNTHETIC-001
-        parent_references: [PERSON-SYNTHETIC-B]
+        parent_references:
+          - PERSON-SYNTHETIC-B
         reference_namespace: urn:gov:example:opencrvs:person
         relationship_set_contract: urn:gov:example:opencrvs:registered-parent-set:v1
         relationship_set_complete: true
       value: false
       signed: true
+    acquisition:
+      intercepts:
+        - type: endpoint
+          endpoint: events
+        - type: token-endpoint
+          endpoint: events
+      exchanges:
+        - request:
+            endpoint: events
+            tokenRequest: true
+            method: POST
+            path: /token
+          response:
+            status: 200
+            body:
+              access_token: synthetic-opencrvs-replay-token
+              token_type: Bearer
+              expires_in: 300
+        - request:
+            endpoint: events
+            method: POST
+            path: /events/search
+            headers:
+              accept: application/json
+            body:
+              query:
+                type: and
+                clauses:
+                  - eventType: birth
+                    status:
+                      type: exact
+                      term: REGISTERED
+                    trackingId:
+                      type: exact
+                      term: TRACKING-SYNTHETIC-001
+              limit: 2
+              offset: 0
+          response:
+            status: 200
+            body:
+              total: 1
+              results:
+                - type: birth
+                  status: REGISTERED
+                  trackingId: TRACKING-SYNTHETIC-001
+                  declaration:
+                    father.personReference: PERSON-SYNTHETIC-B
   - id: boundary-one-parent
-    response:
-      total: 1
-      results:
-        - type: birth
-          status: REGISTERED
-          trackingId: TRACKING-SYNTHETIC-001
-          declaration: {mother.personReference: PERSON-SYNTHETIC-A}
     expected:
       lookup: match
       value: true
       derivationRuns: true
       signed: true
+    acquisition:
+      intercepts:
+        - type: endpoint
+          endpoint: events
+        - type: token-endpoint
+          endpoint: events
+      exchanges:
+        - request:
+            endpoint: events
+            tokenRequest: true
+            method: POST
+            path: /token
+          response:
+            status: 200
+            body:
+              access_token: synthetic-opencrvs-replay-token
+              token_type: Bearer
+              expires_in: 300
+        - request:
+            endpoint: events
+            method: POST
+            path: /events/search
+            headers:
+              accept: application/json
+            body:
+              query:
+                type: and
+                clauses:
+                  - eventType: birth
+                    status:
+                      type: exact
+                      term: REGISTERED
+                    trackingId:
+                      type: exact
+                      term: TRACKING-SYNTHETIC-001
+              limit: 2
+              offset: 0
+          response:
+            status: 200
+            body:
+              total: 1
+              results:
+                - type: birth
+                  status: REGISTERED
+                  trackingId: TRACKING-SYNTHETIC-001
+                  declaration:
+                    mother.personReference: PERSON-SYNTHETIC-A
   - id: no-match
-    response:
-      total: 0
-      results: []
     expected:
       lookup: no_match
       publicProblem: evidence.unavailable
       derivationRuns: false
       signed: false
+    acquisition:
+      intercepts:
+        - type: endpoint
+          endpoint: events
+        - type: token-endpoint
+          endpoint: events
+      exchanges:
+        - request:
+            endpoint: events
+            tokenRequest: true
+            method: POST
+            path: /token
+          response:
+            status: 200
+            body:
+              access_token: synthetic-opencrvs-replay-token
+              token_type: Bearer
+              expires_in: 300
+        - request:
+            endpoint: events
+            method: POST
+            path: /events/search
+            headers:
+              accept: application/json
+            body:
+              query:
+                type: and
+                clauses:
+                  - eventType: birth
+                    status:
+                      type: exact
+                      term: REGISTERED
+                    trackingId:
+                      type: exact
+                      term: TRACKING-SYNTHETIC-001
+              limit: 2
+              offset: 0
+          response:
+            status: 200
+            body:
+              total: 0
+              results: []
   - id: ambiguous-child
-    # The second record carries no leaf at all, only the declaration the
-    # projection insists on. An ambiguous page is refused before any record is
-    # read, so a response shape that demanded a complete record here would turn
-    # an ordinary ambiguous lookup into a source-protocol failure.
-    response:
-      total: 2
-      results:
-        - type: birth
-          status: REGISTERED
-          trackingId: TRACKING-SYNTHETIC-001
-          declaration: {mother.personReference: PERSON-SYNTHETIC-A}
-        - declaration: {}
     expected:
       lookup: ambiguous
       publicProblem: evidence.unavailable
       derivationRuns: false
       signed: false
+    acquisition:
+      intercepts:
+        - type: endpoint
+          endpoint: events
+        - type: token-endpoint
+          endpoint: events
+      exchanges:
+        - request:
+            endpoint: events
+            tokenRequest: true
+            method: POST
+            path: /token
+          response:
+            status: 200
+            body:
+              access_token: synthetic-opencrvs-replay-token
+              token_type: Bearer
+              expires_in: 300
+        - request:
+            endpoint: events
+            method: POST
+            path: /events/search
+            headers:
+              accept: application/json
+            body:
+              query:
+                type: and
+                clauses:
+                  - eventType: birth
+                    status:
+                      type: exact
+                      term: REGISTERED
+                    trackingId:
+                      type: exact
+                      term: TRACKING-SYNTHETIC-001
+              limit: 2
+              offset: 0
+          response:
+            status: 200
+            body:
+              total: 2
+              results:
+                - type: birth
+                  status: REGISTERED
+                  trackingId: TRACKING-SYNTHETIC-001
+                  declaration:
+                    mother.personReference: PERSON-SYNTHETIC-A
+                - declaration: {}
   - id: matched-record-without-tracking-id
-    # The other side of the same rule: what a page need not carry, a single
-    # matched record must, and the script is what says so.
-    response:
-      total: 1
-      results:
-        - type: birth
-          status: REGISTERED
-          declaration: {mother.personReference: PERSON-SYNTHETIC-A}
     expected:
       error: source_protocol_error
       derivationRuns: false
       signed: false
+    acquisition:
+      intercepts:
+        - type: endpoint
+          endpoint: events
+        - type: token-endpoint
+          endpoint: events
+      exchanges:
+        - request:
+            endpoint: events
+            tokenRequest: true
+            method: POST
+            path: /token
+          response:
+            status: 200
+            body:
+              access_token: synthetic-opencrvs-replay-token
+              token_type: Bearer
+              expires_in: 300
+        - request:
+            endpoint: events
+            method: POST
+            path: /events/search
+            headers:
+              accept: application/json
+            body:
+              query:
+                type: and
+                clauses:
+                  - eventType: birth
+                    status:
+                      type: exact
+                      term: REGISTERED
+                    trackingId:
+                      type: exact
+                      term: TRACKING-SYNTHETIC-001
+              limit: 2
+              offset: 0
+          response:
+            status: 200
+            body:
+              total: 1
+              results:
+                - type: birth
+                  status: REGISTERED
+                  declaration:
+                    mother.personReference: PERSON-SYNTHETIC-A
   - id: missing-parent-set
-    response:
-      total: 1
-      results:
-        - type: birth
-          status: REGISTERED
-          trackingId: TRACKING-SYNTHETIC-001
-          declaration: {unrelated.field: SOURCE-UNRELATED-CANARY}
     expected:
       error: source_protocol_error
       derivationRuns: false
       signed: false
+    acquisition:
+      intercepts:
+        - type: endpoint
+          endpoint: events
+        - type: token-endpoint
+          endpoint: events
+      exchanges:
+        - request:
+            endpoint: events
+            tokenRequest: true
+            method: POST
+            path: /token
+          response:
+            status: 200
+            body:
+              access_token: synthetic-opencrvs-replay-token
+              token_type: Bearer
+              expires_in: 300
+        - request:
+            endpoint: events
+            method: POST
+            path: /events/search
+            headers:
+              accept: application/json
+            body:
+              query:
+                type: and
+                clauses:
+                  - eventType: birth
+                    status:
+                      type: exact
+                      term: REGISTERED
+                    trackingId:
+                      type: exact
+                      term: TRACKING-SYNTHETIC-001
+              limit: 2
+              offset: 0
+          response:
+            status: 200
+            body:
+              total: 1
+              results:
+                - type: birth
+                  status: REGISTERED
+                  trackingId: TRACKING-SYNTHETIC-001
+                  declaration:
+                    unrelated.field: SOURCE-UNRELATED-CANARY
   - id: duplicate-parent-reference
-    response:
-      total: 1
-      results:
-        - type: birth
-          status: REGISTERED
-          trackingId: TRACKING-SYNTHETIC-001
-          declaration:
-            mother.personReference: PERSON-SYNTHETIC-A
-            father.personReference: PERSON-SYNTHETIC-A
     expected:
       error: source_protocol_error
       derivationRuns: false
       signed: false
+    acquisition:
+      intercepts:
+        - type: endpoint
+          endpoint: events
+        - type: token-endpoint
+          endpoint: events
+      exchanges:
+        - request:
+            endpoint: events
+            tokenRequest: true
+            method: POST
+            path: /token
+          response:
+            status: 200
+            body:
+              access_token: synthetic-opencrvs-replay-token
+              token_type: Bearer
+              expires_in: 300
+        - request:
+            endpoint: events
+            method: POST
+            path: /events/search
+            headers:
+              accept: application/json
+            body:
+              query:
+                type: and
+                clauses:
+                  - eventType: birth
+                    status:
+                      type: exact
+                      term: REGISTERED
+                    trackingId:
+                      type: exact
+                      term: TRACKING-SYNTHETIC-001
+              limit: 2
+              offset: 0
+          response:
+            status: 200
+            body:
+              total: 1
+              results:
+                - type: birth
+                  status: REGISTERED
+                  trackingId: TRACKING-SYNTHETIC-001
+                  declaration:
+                    mother.personReference: PERSON-SYNTHETIC-A
+                    father.personReference: PERSON-SYNTHETIC-A
   - id: wrong-parent-reference-type
-    response:
-      total: 1
-      results:
-        - type: birth
-          status: REGISTERED
-          trackingId: TRACKING-SYNTHETIC-001
-          declaration: {mother.personReference: 123}
     expected:
       error: source_protocol_error
       derivationRuns: false
       signed: false
+    acquisition:
+      intercepts:
+        - type: endpoint
+          endpoint: events
+        - type: token-endpoint
+          endpoint: events
+      exchanges:
+        - request:
+            endpoint: events
+            tokenRequest: true
+            method: POST
+            path: /token
+          response:
+            status: 200
+            body:
+              access_token: synthetic-opencrvs-replay-token
+              token_type: Bearer
+              expires_in: 300
+        - request:
+            endpoint: events
+            method: POST
+            path: /events/search
+            headers:
+              accept: application/json
+            body:
+              query:
+                type: and
+                clauses:
+                  - eventType: birth
+                    status:
+                      type: exact
+                      term: REGISTERED
+                    trackingId:
+                      type: exact
+                      term: TRACKING-SYNTHETIC-001
+              limit: 2
+              offset: 0
+          response:
+            status: 200
+            body:
+              total: 1
+              results:
+                - type: birth
+                  status: REGISTERED
+                  trackingId: TRACKING-SYNTHETIC-001
+                  declaration:
+                    mother.personReference: 123
   - id: namespace-mismatch
-    derivationParameterMutation: {candidate_reference_namespace: urn:gov:example:other:person}
+    derivationParameterMutation:
+      candidate_reference_namespace: urn:gov:example:other:person
     expected:
       signed: false
       error: derivation_input_error
       derivationRuns: true
   - id: returned-child-mismatch
-    response:
-      total: 1
-      results:
-        - type: birth
-          status: REGISTERED
-          trackingId: TRACKING-SYNTHETIC-OTHER
-          declaration: {mother.personReference: PERSON-SYNTHETIC-A}
     expected:
       lookup: match
       error: derivation_input_error
       derivationRuns: true
       signed: false
+    acquisition:
+      intercepts:
+        - type: endpoint
+          endpoint: events
+        - type: token-endpoint
+          endpoint: events
+      exchanges:
+        - request:
+            endpoint: events
+            tokenRequest: true
+            method: POST
+            path: /token
+          response:
+            status: 200
+            body:
+              access_token: synthetic-opencrvs-replay-token
+              token_type: Bearer
+              expires_in: 300
+        - request:
+            endpoint: events
+            method: POST
+            path: /events/search
+            headers:
+              accept: application/json
+            body:
+              query:
+                type: and
+                clauses:
+                  - eventType: birth
+                    status:
+                      type: exact
+                      term: REGISTERED
+                    trackingId:
+                      type: exact
+                      term: TRACKING-SYNTHETIC-001
+              limit: 2
+              offset: 0
+          response:
+            status: 200
+            body:
+              total: 1
+              results:
+                - type: birth
+                  status: REGISTERED
+                  trackingId: TRACKING-SYNTHETIC-OTHER
+                  declaration:
+                    mother.personReference: PERSON-SYNTHETIC-A
   - id: swapped-roles
     requestMutation: swap-subject-roles
     expected:
@@ -205,8 +603,18 @@ cases:
       signed: false
   - id: anti-reconstruction
     bundleMutation: duplicate-disclosure-family
-    expected: {bundle: rejected}
+    expected:
+      bundle: rejected
 privacyExpectation:
-  evidenceContains: [urn:gov:example:concept:registered-parent-relationship-confirmed]
-  evidenceExcludes: [parent_references, tracking_id, person_reference, relationship_set_contract]
-  diagnosticsExclude: [TRACKING-SYNTHETIC-001, PERSON-SYNTHETIC-A, PERSON-SYNTHETIC-B, SOURCE-UNRELATED-CANARY]
+  evidenceContains:
+    - urn:gov:example:concept:registered-parent-relationship-confirmed
+  evidenceExcludes:
+    - parent_references
+    - tracking_id
+    - person_reference
+    - relationship_set_contract
+  diagnosticsExclude:
+    - TRACKING-SYNTHETIC-001
+    - PERSON-SYNTHETIC-A
+    - PERSON-SYNTHETIC-B
+    - SOURCE-UNRELATED-CANARY

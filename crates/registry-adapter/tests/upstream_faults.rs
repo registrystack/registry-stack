@@ -45,7 +45,7 @@ fn endpoint() -> Endpoint {
         id: local("source"),
         component: ComponentKind::Http,
         authentication: EndpointAuthentication::None {},
-        attempt_timeout_milliseconds: BoundedU64::new(5_000).expect("attempt bound"),
+        attempt_timeout_milliseconds: Some(BoundedU64::new(5_000).expect("attempt bound")),
         maximum_response_bytes: BoundedU64::new(65_536).expect("response bound"),
         response_headers: UniqueList::new(Vec::new()).expect("empty headers"),
         request_headers: UniqueList::new(Vec::new()).expect("empty headers"),
@@ -54,6 +54,10 @@ fn endpoint() -> Endpoint {
         query_file: None,
         operation_name: None,
         variables: None,
+        sqlite_extract: None,
+        key_column: None,
+        parameter_order: None,
+        host_protocol: None,
     }
 }
 
@@ -69,6 +73,7 @@ fn runtime_config(base_url: &str) -> AdapterEndpointBindings {
             mtls_identity: None,
             attempt_timeout_milliseconds: None,
             maximum_response_bytes: None,
+            maximum_concurrency: BoundedU64::new(8).expect("concurrency"),
         }])
         .expect("one endpoint"),
         allowed_private_cidrs: UniqueList::new(vec![

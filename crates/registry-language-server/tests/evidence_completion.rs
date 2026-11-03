@@ -10,31 +10,78 @@ fn sources_complete_with_the_declared_names() {
         labels(
             &p.index(),
             &p.path(PROJECT),
-            after(SOURCE, "acquisition: {type: single, source: ")
+            after(SOURCE, "acquisition: {source: ")
         ),
         vec!["person"]
     );
 }
 #[test]
 fn functions_complete_only_the_matching_interface() {
-    let p = Project::new(SOURCE);
+    let source = SOURCE.replace(
+        "functions:\n",
+        "functions:\n  - {id: retired-extract, interface: source-extract/v1, source: functions/retired.rhai}\n",
+    );
+    let p = Project::new(&source);
+    p.write(
+        "functions/retired.rhai",
+        "fn extract(response, selectors, context) { response }\n",
+    );
     let index = p.index();
     assert_eq!(
         labels(
             &index,
             &p.path(PROJECT),
-            after(SOURCE, "derive: {function: ")
+            after(&source, "derive: {function: ")
         ),
         vec!["derive-status"]
     );
-    assert_eq!(
-        labels(
-            &index,
-            &p.path(PROJECT),
-            after(SOURCE, "extract: {function: ")
-        ),
-        vec!["extract-person"]
+}
+#[test]
+fn retired_acquisition_channels_offer_no_sources_or_functions() {
+    let source = SOURCE
+        .replace(
+            "functions:\n",
+            "functions:\n  - {id: retired-extract, interface: source-extract/v1, source: functions/retired.rhai}\n",
+        )
+        .replace(
+            "    connection: population\n",
+            "    connection: population\n    extract: {function: retired-extract}\n    prepare: {function: retired-extract}\n    selectors: [{role: person, profiles: [person-by-id]}]\n    request: {pathBindings: {id: {selector: {role: person, profile: person-by-id, field: person-id}}}}\n",
+        )
+        .replace(
+            "acquisition: {source: person}",
+            "acquisition: {source: person, search: person, fetch: person}",
+        );
+    let p = Project::new(&source);
+    p.write(
+        "functions/retired.rhai",
+        "fn extract(response, selectors, context) { response }\n",
     );
+    let index = p.index();
+    for prefix in [
+        "extract: {function: ",
+        "prepare: {function: ",
+        "profiles: [",
+        "request: {pathBindings: {id: {selector: {role: person, profile: ",
+        "search: ",
+        "fetch: ",
+    ] {
+        let position = after(&source, prefix);
+        assert!(
+            labels(&index, &p.path(PROJECT), position).is_empty(),
+            "retired channel {prefix} must not offer declarations"
+        );
+        assert!(index.definitions_at(&p.path(PROJECT), position).is_empty());
+    }
+    assert!(
+        !index.diagnostics().is_empty(),
+        "the shared reader refuses retired members"
+    );
+    let source = source.replace("fetch: person", "fetch: [{source: person}]");
+    p.write(PROJECT, &source);
+    let index = p.index();
+    let position = after(&source, "fetch: [{source: ");
+    assert!(labels(&index, &p.path(PROJECT), position).is_empty());
+    assert!(index.definitions_at(&p.path(PROJECT), position).is_empty());
 }
 #[test]
 fn output_completion_is_definition_scoped() {

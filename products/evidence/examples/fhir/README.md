@@ -1,20 +1,21 @@
 # FHIR Evidence example
 
 This normalized local project returns two fixed administrative assertions from
-FHIR R4 resources through a bounded read-through adapter. It uses the ordinary
-HTTP source and Rhai Function contracts, without a FHIR-specific runtime fork.
+FHIR R4 resources through one bounded, reviewed Adapter pack. Its two read-only
+routes use the ordinary Evidence pack-source contract and derive-only Rhai
+Functions, without a FHIR-specific runtime fork.
 
 | Definition | Purpose | Boolean Output |
 | --- | --- | --- |
 | `fhir-coverage-status` | `coverage-record-verification` | The selected Coverage reports active and names the selected Patient as beneficiary. |
 | `fhir-healthcare-establishment` | `healthcare-establishment-verification` | The selected Organization is active and has exactly one coding with the standard organization-type system and code `prov`. |
 
-The project owns the reviewed GET paths, selector profiles, response bounds and
-projection, private Facts, Functions, and Outputs. The local target owns the
-loopback connection and process resources. `dev-authority.yaml` grants each
-complete request shape, including both subject roles for coverage and both
-permitted signed representations. Client registration selects an existing
-profile and does not create authority.
+The project owns the reviewed GET paths, selector profiles, response bounds,
+raw-resource projection, private Facts, derivation Functions, and Outputs. The
+local target owns the nested loopback endpoint binding and process resources.
+`dev-authority.yaml` grants each complete request shape, including both subject
+roles for coverage and both permitted signed representations. Client
+registration selects an existing profile and does not create authority.
 
 Start from a writable copy in the matching Registry Stack source archive. Use an
 active `rstack` installation that includes the Evidence component. Use `evidence`
@@ -48,11 +49,11 @@ pairs, so values from unrelated codings cannot form a provider match.
 Local success proves only the declared cases. Production and evidence-grade
 bundles require complete fixture categories, reviewed authenticated HTTPS source
 transport, an appropriate signer, and the remaining deployment requirements.
-The credential-free source is numeric loopback under local assurance. The
-adapter validates resource identity, denies redirects and ambient proxies,
-uses system TLS for the public upstream, bounds responses, and suppresses
-request logging. `source.openapi.yaml` retains the narrow FHIR reference; the
-compiled source contract comes from `evidence.yaml`.
+The credential-free source is numeric loopback under local assurance. The pack
+validates resource identity, denies redirects and ambient proxies, uses system
+TLS for a public upstream, bounds responses, and suppresses request logging.
+`source.openapi.yaml` retains the narrow FHIR reference; the compiled source
+contract comes from the pack routes selected by `evidence.yaml`.
 
 An active Coverage record does not establish insurance eligibility. An active
 provider Organization does not establish accreditation or professional

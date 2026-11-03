@@ -2,9 +2,12 @@
 
 use clap::Parser;
 use registry_adapter_job::cli::Cli;
+#[cfg(all(feature = "direct-breg", feature = "signed-coordinator-event"))]
 use std::path::PathBuf;
+#[cfg(any(feature = "direct-breg", feature = "signed-coordinator-event"))]
 use std::process::Command;
 
+#[cfg(feature = "signed-coordinator-event")]
 #[path = "support/job_fixture.rs"]
 mod job_fixture;
 
@@ -48,6 +51,7 @@ fn pass_and_rescan_accept_explicit_workspace_artifacts() {
 }
 
 #[test]
+#[cfg(all(feature = "direct-breg", feature = "signed-coordinator-event"))]
 fn check_compiles_the_maintained_job_examples_with_explicit_artifacts() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     for source in ["kobotoolbox", "odk-central"] {
@@ -85,6 +89,7 @@ fn check_compiles_the_maintained_job_examples_with_explicit_artifacts() {
 /// build that unifies the engine's source features with another binary's
 /// still never reads a file or a database from this executable.
 #[tokio::test]
+#[cfg(feature = "signed-coordinator-event")]
 async fn check_refuses_a_pack_with_a_source_this_host_does_not_serve() {
     for component in ["file", "sftp", "postgres"] {
         let endpoint = format!(

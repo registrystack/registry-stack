@@ -93,6 +93,7 @@ endpoints:
       type: oauth2-client-credentials
     attemptTimeoutMilliseconds: 10000
     maximumResponseBytes: 1048576
+    requestHeaders: [accept]
     operations:
       - id: events-search
         safeUpstream: true
@@ -238,11 +239,13 @@ scripts:
   - path: scripts/shape-records.rhai
     digest: sha256:a2ed4e5ce768555fca5c388028e9549fb751e9bf588b74ec22f5ce83f3fd3f00
   - path: scripts/get-query.rhai
-    digest: sha256:892f252e9a97304ebb78ca2e16eaad79e22680581428f1ab7f24d84521d9d6fa
+    digest: sha256:5ad2655dc29b2e4f6746a9d7aa9301e3ba49260cd864dce5a31398a37d9bf358
   - path: scripts/get-outcome.rhai
     digest: sha256:1774b3c858f51e32305ae56f2915d63f3e4865dafa94bd29d1f9ce57e526234e
   - path: scripts/to-record.rhai
     digest: sha256:d42ba86e4c85f9b692b4a086c97c15c9cedb50f8dd02bc658d6f15519a4d1414
+  - path: scripts/evidence.rhai
+    digest: sha256:6b6b2d8a93bc3c41e7eca8f054c12f93416a461b3813b2261e3a871aebaf894a
 capabilities:
   components:
     - http
@@ -253,6 +256,87 @@ capabilities:
     - choice
     - onException
     - setBody
+    - setHeader
     - setProperty
     - throwException
     - to
+
+sourceRoutes:
+- id: evidence-birth-date
+  evidence:
+    inputsSchema:
+      path: schemas/evidence-inputs.json
+      digest: sha256:ce79387497147e18832c6f0a491f3f553262c36fb7cbb7916f5b6ea840029e2d
+    factsSchema:
+      path: schemas/evidence-adult-facts.json
+      digest: sha256:1ffb942fe9e9f2b7ccdc8630c0f1ff8a7d95177e86852d322cd8e1969942c750
+    acquisitionPosture: record-transformed
+  steps:
+  - setHeader:
+      name: Accept
+      value:
+        constant: application/json
+  - setProperty:
+      name: opencrvsEventType
+      value:
+        constant: birth
+  - to:
+      uri: http:events
+      parameters:
+        httpMethod: POST
+        path: "/events/search"
+        operation: events-search
+        body:
+          rhai:
+            file: scripts/get-query.rhai
+            entrypoint: source_query
+  - setBody:
+      rhai:
+        file: scripts/evidence.rhai
+        entrypoint: project_date
+  - validateSchema:
+      path: schemas/evidence-adult-provider.json
+      digest: sha256:17c6e4a98204ac95c314c36901dc3046e4ee93357a6294edf8698126499c99d1
+  - setBody:
+      rhai:
+        file: scripts/evidence.rhai
+        entrypoint: lookup_date
+- id: evidence-birth-parents
+  evidence:
+    inputsSchema:
+      path: schemas/evidence-inputs.json
+      digest: sha256:ce79387497147e18832c6f0a491f3f553262c36fb7cbb7916f5b6ea840029e2d
+    factsSchema:
+      path: schemas/evidence-parents-facts.json
+      digest: sha256:62b66e4427928b18f9f561c42723b6f2dce3f8975bc3c81a8230d11064596ccc
+    acquisitionPosture: record-transformed
+  steps:
+  - setHeader:
+      name: Accept
+      value:
+        constant: application/json
+  - setProperty:
+      name: opencrvsEventType
+      value:
+        constant: birth
+  - to:
+      uri: http:events
+      parameters:
+        httpMethod: POST
+        path: "/events/search"
+        operation: events-search
+        body:
+          rhai:
+            file: scripts/get-query.rhai
+            entrypoint: source_query
+  - setBody:
+      rhai:
+        file: scripts/evidence.rhai
+        entrypoint: project_parents
+  - validateSchema:
+      path: schemas/evidence-parents-provider.json
+      digest: sha256:fc90a07d485647bebcb28ef0b8a97ac89d0f8f100e9ee52ed330ecefc81b9519
+  - setBody:
+      rhai:
+        file: scripts/evidence.rhai
+        entrypoint: lookup_parents

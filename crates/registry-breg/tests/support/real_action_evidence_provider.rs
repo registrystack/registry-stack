@@ -33,14 +33,20 @@ impl RealEvidenceProvider {
     pub async fn start() -> Self {
         let binary = std::env::var("BREG_TEST_EVIDENCE_BINARY")
             .expect("BREG_TEST_EVIDENCE_BINARY is required for real Evidence/PG proof");
+        let compiler = std::env::var("BREG_TEST_EVIDENCECTL_BINARY")
+            .expect("BREG_TEST_EVIDENCECTL_BINARY is required for real Evidence/PG proof");
+        let python = std::env::var("BREG_TEST_PYTHON_BINARY")
+            .expect("BREG_TEST_PYTHON_BINARY is required for real Evidence/PG proof");
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../products/breg/acceptance/farmer-landholding-evidence/evidence");
         let scratch = tempfile::tempdir().unwrap();
         let mut child = FixtureChild(
-            Command::new("python3")
+            Command::new(python)
                 .arg(root.join("run-provider.py"))
                 .arg("--evidence")
                 .arg(binary)
+                .arg("--evidencectl")
+                .arg(compiler)
                 .arg("--output")
                 .arg(scratch.path())
                 .stdin(Stdio::piped())

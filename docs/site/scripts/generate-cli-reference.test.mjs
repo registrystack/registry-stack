@@ -3,6 +3,8 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
+import YAML from 'yaml';
 
 import {
   catalogDigest,
@@ -80,6 +82,21 @@ async function fixtureRepository(catalog, version = catalog.source_version) {
   );
   return root;
 }
+
+test('renders the committed catalogue while keeping the job host unreviewed and source-only', async () => {
+  const repoRoot = fileURLToPath(new URL('../../../', import.meta.url));
+  const docsRoot = fileURLToPath(new URL('../', import.meta.url));
+  const catalog = validateCatalog(await loadCatalog(repoRoot));
+  const metadata = YAML.parse(await readFile(join(docsRoot, 'src/data/cli-reference.yaml'), 'utf8'));
+  assert.ok(metadata.unreviewed_binaries.includes('adapter-job'));
+  assert.ok(metadata.source_build_only_binaries.includes('adapter-job'));
+  const pages = renderCatalog(catalog, metadata);
+  const page = pages.get('adapter-job.mdx');
+  assert.match(page, /status: draft\ndraft: true/u);
+  assert.match(page, /last_reviewed: "unreviewed"/u);
+  assert.match(page, /It has no numbered-release asset, installer component, \x60rstack\x60 component, or container image\./u);
+  assert.doesNotMatch(pages.get('index.mdx'), /\(\.\/adapter-job\/\)/u);
+});
 
 test('renders one linked page for every nested public command', () => {
   const pages = renderCatalog(fixtureCatalog(), fixtureReviewMetadata());

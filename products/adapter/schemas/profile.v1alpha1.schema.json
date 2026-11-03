@@ -1,5 +1,9 @@
 {
   "$defs": {
+    "AsyncStatusPath": {
+      "description": "One profile-owned caller path for asynchronous write status. The path\nremains inside the facade and carries exactly one opaque status handle;\nit never accepts a source URL or caller-selected path member.",
+      "type": "string"
+    },
     "EnvelopeTemplate": {
       "description": "An envelope template: a JSON template whose string members carry\n`{{slot}}` placeholders from the closed vocabulary\n(`products/adapter/CONCEPT.md` section 7). The template is data; the\nengine fills it.",
       "type": "string"
@@ -176,10 +180,41 @@
       ],
       "type": "object"
     },
+    "ProfileAsyncCompletion": {
+      "additionalProperties": false,
+      "description": "The caller-visible asynchronous completion contract of one write.",
+      "properties": {
+        "acceptedEnvelope": {
+          "$ref": "#/$defs/EnvelopeTemplate",
+          "description": "The exact accepted response shape, over the three async slots and\noptional profile parameterized parts."
+        },
+        "completedStatus": {
+          "description": "The status returned after the source proves successful completion.",
+          "format": "uint32",
+          "maximum": 299,
+          "minimum": 200,
+          "type": "integer"
+        },
+        "statusPath": {
+          "$ref": "#/$defs/AsyncStatusPath",
+          "description": "The profile-owned facade path that receives the opaque status id."
+        }
+      },
+      "required": [
+        "completedStatus",
+        "statusPath",
+        "acceptedEnvelope"
+      ],
+      "type": "object"
+    },
     "ProfileOperation": {
       "additionalProperties": false,
       "description": "One facade operation, declared by id\n(`products/adapter/CONCEPT.md` sections 6 and 7). The id is a\nprofile-declared bounded string (CFG-ID-5), never an engine enum.",
       "properties": {
+        "asyncCompletion": {
+          "$ref": "#/$defs/ProfileAsyncCompletion",
+          "description": "The explicit asynchronous completion contract of a 202 write."
+        },
         "id": {
           "$ref": "#/$defs/LocalId",
           "description": "The profile-declared operation id a binding names."

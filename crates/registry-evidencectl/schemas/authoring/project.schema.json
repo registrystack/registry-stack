@@ -1,85 +1,23 @@
 {
   "$defs": {
     "Acquisition": {
-      "oneOf": [
-        {
-          "additionalProperties": false,
-          "properties": {
-            "source": {
-              "$ref": "#/$defs/LocalId"
-            },
-            "type": {
-              "const": "single",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "source"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "fetch": {
-              "$ref": "#/$defs/LocalId"
-            },
-            "onFetchNoMatch": {
-              "$ref": "#/$defs/FetchNoMatchPolicy"
-            },
-            "search": {
-              "$ref": "#/$defs/LocalId"
-            },
-            "type": {
-              "const": "search-then-fetch",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "search",
-            "fetch"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "fetch": {
-              "items": {
-                "$ref": "#/$defs/FetchMember"
-              },
-              "type": "array"
-            },
-            "maximumAcquisitionMilliseconds": {
-              "format": "uint64",
-              "maximum": 30000,
-              "minimum": 1,
-              "type": "integer"
-            },
-            "search": {
-              "$ref": "#/$defs/LocalId"
-            },
-            "type": {
-              "const": "search-then-fetch-set",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "search",
-            "fetch",
-            "maximumAcquisitionMilliseconds"
-          ],
-          "type": "object"
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/LocalId",
+          "description": "One reviewed route owns the complete bounded provider interaction."
         }
-      ]
+      },
+      "required": [
+        "source"
+      ],
+      "type": "object"
     },
-    "AcquisitionCapability": {
+    "AcquisitionPosture": {
       "enum": [
-        "search-then-fetch-set",
-        "source-batch"
+        "source-derived",
+        "field-projected",
+        "record-transformed"
       ],
       "type": "string"
     },
@@ -209,24 +147,6 @@
       ],
       "type": "string"
     },
-    "BatchResponse": {
-      "additionalProperties": false,
-      "description": "The batch response uses the Source's byte and transport ceilings.",
-      "properties": {
-        "projection": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "shape": true
-      },
-      "required": [
-        "projection",
-        "shape"
-      ],
-      "type": "object"
-    },
     "BindingMode": {
       "enum": [
         "audience-scoped",
@@ -262,31 +182,11 @@
       },
       "type": "string"
     },
-    "FetchMember": {
-      "additionalProperties": false,
-      "properties": {
-        "factInputs": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array",
-          "uniqueItems": true
-        },
-        "source": {
-          "$ref": "#/$defs/LocalId"
-        }
-      },
-      "required": [
-        "source",
-        "factInputs"
-      ],
-      "type": "object"
-    },
-    "FetchNoMatchPolicy": {
-      "enum": [
-        "dependency-failure",
-        "unavailable"
-      ],
+    "ExternalId": {
+      "description": "An identifier another system issues, written exactly as its issuer gives it.",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
       "type": "string"
     },
     "Field": {
@@ -601,8 +501,6 @@
     },
     "FunctionInterface": {
       "enum": [
-        "source-prepare/v1",
-        "source-extract/v1",
         "assertion-derive/v1"
       ],
       "type": "string"
@@ -880,6 +778,22 @@
       ],
       "type": "object"
     },
+    "PackReference": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "version"
+      ],
+      "type": "object"
+    },
     "ProjectionDisclosure": {
       "enum": [
         "top-level"
@@ -996,37 +910,10 @@
       "additionalProperties": false,
       "properties": {
         "acquisitionPosture": {
-          "type": "string"
-        },
-        "adapterParameters": true,
-        "adapterParametersSchema": {
-          "x-registry-foreign": "json-schema-2020-12"
-        },
-        "batch": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/SourceBatch"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "behaviorRevision": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "$ref": "#/$defs/AcquisitionPosture"
         },
         "connection": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/LocalId"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/$defs/LocalId"
         },
         "description": {
           "anyOf": [
@@ -1039,31 +926,14 @@
           ],
           "description": "Human explanation for authors and reviewers; excluded from behavior revisions."
         },
-        "evidence": true,
-        "extract": {
-          "$ref": "#/$defs/SourceFunctionRef"
-        },
-        "extractProfile": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/LocalId"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "facts": {
-          "additionalProperties": true,
-          "propertyNames": {
-            "$ref": "#/$defs/LocalId"
+        "inputs": {
+          "additionalProperties": {
+            "$ref": "#/$defs/SourceInput"
           },
-          "type": "object",
-          "x-registry-passthrough": "Reviewed bounded private fact schemas, normalized by the Evidence compiler and checked by the kernel."
-        },
-        "forwardAccessAttribution": {
-          "default": false,
-          "type": "boolean"
+          "propertyNames": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "type": "object"
         },
         "label": {
           "anyOf": [
@@ -1076,152 +946,41 @@
           ],
           "description": "Optional presentation label. Stable references use the identifier."
         },
-        "limits": {
-          "$ref": "#/$defs/SourceLimits"
+        "pack": {
+          "$ref": "#/$defs/PackReference"
         },
-        "maximumExtractAgeSeconds": {
-          "format": "uint64",
-          "maximum": 2592000,
-          "minimum": 1,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "preparationLimits": true,
-        "prepare": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/SourceFunctionRef"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "request": true,
-        "response": {
-          "$ref": "#/$defs/SourceResponse"
-        },
-        "selectors": {
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/SourceSelector"
-          },
-          "type": "array"
-        },
-        "type": {
-          "$ref": "#/$defs/SourceType"
-        },
-        "unresolvedProblem": true
-      },
-      "required": [
-        "type",
-        "acquisitionPosture",
-        "request",
-        "response",
-        "extract",
-        "facts",
-        "limits"
-      ],
-      "type": "object"
-    },
-    "SourceBatch": {
-      "additionalProperties": false,
-      "description": "A bounded physical Source call serving independent slotted logical lookups.\nThe same reviewed Function interfaces are used with their batch call-site types.",
-      "properties": {
-        "extract": {
-          "$ref": "#/$defs/SourceFunctionRef"
-        },
-        "maximumItems": {
-          "format": "uint64",
-          "maximum": 16,
-          "minimum": 1,
-          "type": "integer"
-        },
-        "prepare": {
-          "$ref": "#/$defs/SourceFunctionRef"
-        },
-        "response": {
-          "$ref": "#/$defs/BatchResponse"
-        }
-      },
-      "required": [
-        "maximumItems",
-        "prepare",
-        "extract",
-        "response"
-      ],
-      "type": "object"
-    },
-    "SourceFunctionRef": {
-      "additionalProperties": false,
-      "description": "Source preparation and extraction share the Source's declared adapter\nparameters and minimized selector inputs. Call sites cannot override them.",
-      "properties": {
-        "function": {
+        "route": {
           "$ref": "#/$defs/LocalId"
         }
       },
       "required": [
-        "function"
+        "pack",
+        "route",
+        "connection",
+        "acquisitionPosture"
       ],
       "type": "object"
     },
-    "SourceLimits": {
+    "SourceInput": {
       "additionalProperties": false,
       "properties": {
-        "attemptTimeoutMilliseconds": {
-          "format": "uint64",
-          "maximum": 30000,
-          "minimum": 1,
-          "type": "integer"
-        },
-        "maximumConcurrency": {
-          "format": "uint64",
-          "maximum": 256,
-          "minimum": 1,
-          "type": "integer"
+        "selector": {
+          "$ref": "#/$defs/SourceInputSelector"
         }
       },
       "required": [
-        "attemptTimeoutMilliseconds",
-        "maximumConcurrency"
+        "selector"
       ],
       "type": "object"
     },
-    "SourceResponse": {
+    "SourceInputSelector": {
       "additionalProperties": false,
       "properties": {
-        "maximumBytes": {
-          "format": "uint64",
-          "maximum": 1048576,
-          "minimum": 1,
-          "type": "integer"
+        "field": {
+          "$ref": "#/$defs/LocalId"
         },
-        "projection": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "shape": true
-      },
-      "required": [
-        "projection",
-        "shape",
-        "maximumBytes"
-      ],
-      "type": "object"
-    },
-    "SourceSelector": {
-      "additionalProperties": false,
-      "properties": {
-        "profiles": {
-          "items": {
-            "$ref": "#/$defs/LocalId"
-          },
-          "type": "array",
-          "uniqueItems": true
+        "profile": {
+          "$ref": "#/$defs/LocalId"
         },
         "role": {
           "$ref": "#/$defs/LocalId"
@@ -1229,16 +988,10 @@
       },
       "required": [
         "role",
-        "profiles"
+        "profile",
+        "field"
       ],
       "type": "object"
-    },
-    "SourceType": {
-      "enum": [
-        "http-json",
-        "sqlite-extract"
-      ],
-      "type": "string"
     },
     "Subject": {
       "additionalProperties": false,
@@ -1273,14 +1026,6 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
-    "acquisitionCapabilities": {
-      "description": "Package opt-in ceilings. Operators must separately enable these acquisitions.",
-      "items": {
-        "$ref": "#/$defs/AcquisitionCapability"
-      },
-      "type": "array",
-      "uniqueItems": true
-    },
     "apiVersion": {
       "const": "id.registrystack.org/formats/evidence/project/v1alpha1",
       "type": "string"

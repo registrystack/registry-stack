@@ -107,33 +107,6 @@ pub fn validate_function(
     Vec::new()
 }
 
-/// Source-batch call sites use the existing source interface with exactly two
-/// arguments. This only inspects the reviewed program; it never evaluates it.
-#[must_use]
-pub fn validate_batch_function(
-    source: &str,
-    interface: crate::project::FunctionInterface,
-) -> Vec<Finding> {
-    let findings = validate_function(source, interface);
-    if !findings.is_empty() {
-        return findings;
-    }
-    let ast = parser().compile(source).expect("validated Function");
-    let (entry, _) = interface.entry_point();
-    if ast
-        .iter_functions()
-        .find(|function| function.name == entry)
-        .is_none_or(|function| function.params.len() != 2)
-    {
-        return vec![Finding::new(
-            FieldPath::root(),
-            "batch-function-signature",
-            "source batch Functions must expose the two-argument source interface",
-        )];
-    }
-    Vec::new()
-}
-
 /// Check named assertion Function reads against its acquired private FactSet.
 #[must_use]
 pub fn validate_derive_fact_reads(source: &str, declared: &BTreeSet<String>) -> Vec<Finding> {

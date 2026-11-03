@@ -12,14 +12,15 @@
 use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
+use std::process::{Child, Command, Output, Stdio};
 use std::str::FromStr as _;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
-use registry_adapter::engine::job::compile_job;
 use registry_adapter_core::{AdapterJob, JobIdentity};
+use registry_adapter_engine::job::compile_job;
 use registry_adapter_job::destination::{
     DeliverableItem, HandOffOutcome, JobDestination, NullDestination,
 };
@@ -29,12 +30,17 @@ use registry_adapter_job::trigger::{self, JobState};
 use serde_json::{json, Value};
 use tokio_postgres::{Config as PgConfig, NoTls};
 
+#[path = "support/fixture_receiver.rs"]
+mod fixture_receiver;
 #[path = "support/job_fixture.rs"]
 mod job_fixture;
 
+use fixture_receiver::{FixtureReceiver, Scripted};
 use job_fixture::{reply_page, reply_page_end, JobFixture};
 
 static NEXT_SCHEMA: AtomicU32 = AtomicU32::new(0);
+
+const SOURCE_SECRET_MARKER: &str = "never-projected";
 
 /// One isolated schema, the pooled client that reaches it, and the
 /// scoped URL the `adapter-job` binary connects with.
@@ -117,6 +123,179 @@ async fn run_job(url: &str, args: Vec<std::ffi::OsString>) -> std::process::Outp
     .expect("the adapter-job run joins")
 }
 
+/// Run the job binary with named ambient variables removed. Bootstrap
+/// coverage uses this to prove that source and destination references are
+/// parsed but not resolved by the store-only command.
+async fn run_job_without_env(
+    url: &str,
+    args: Vec<std::ffi::OsString>,
+    removed: &[&str],
+) -> std::process::Output {
+    let url = url.to_string();
+    let removed = removed
+        .iter()
+        .map(|name| name.to_string())
+        .collect::<Vec<_>>();
+    tokio::task::spawn_blocking(move || {
+        let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_adapter-job"));
+        command.env("JOB_TEST_DB", url).args(args);
+        for name in removed {
+            command.env_remove(name);
+        }
+        command.output().expect("run adapter-job")
+    })
+    .await
+    .expect("the adapter-job run joins")
+}
+
+/// A child whose failure path cannot leave the interval loop running.
+/// Successful tests consume the child through `output`; every earlier
+/// return or panic kills and waits for it here.
+struct ManagedChild {
+    child: Option<Child>,
+}
+
+impl ManagedChild {
+    fn spawn(url: &str, args: Vec<std::ffi::OsString>) -> Self {
+        let child = Command::new(env!("CARGO_BIN_EXE_adapter-job"))
+            .env("JOB_TEST_DB", url)
+            .args(args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn adapter-job interval loop");
+        Self { child: Some(child) }
+    }
+
+    fn try_wait(&mut self) -> Option<std::process::ExitStatus> {
+        self.child
+            .as_mut()
+            .expect("the managed child is present")
+            .try_wait()
+            .expect("poll adapter-job interval loop")
+    }
+
+    fn interrupt(&mut self) {
+        let pid = self
+            .child
+            .as_ref()
+            .expect("the managed child is present")
+            .id()
+            .to_string();
+        let signal = Command::new("kill")
+            .args(["-INT", pid.as_str()])
+            .output()
+            .expect("send SIGINT to adapter-job interval loop");
+        assert!(
+            signal.status.success(),
+            "sending SIGINT failed: {}",
+            String::from_utf8_lossy(&signal.stderr)
+        );
+    }
+
+    fn output(&mut self) -> Output {
+        self.child
+            .take()
+            .expect("the managed child is present")
+            .wait_with_output()
+            .expect("collect adapter-job interval loop output")
+    }
+}
+
+impl Drop for ManagedChild {
+    fn drop(&mut self) {
+        let Some(mut child) = self.child.take() else {
+            return;
+        };
+        match child.try_wait() {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                if let Err(error) = child.kill() {
+                    eprintln!("failed to kill adapter-job test child: {error}");
+                }
+            }
+            Err(error) => eprintln!("failed to poll adapter-job test child: {error}"),
+        }
+        if let Err(error) = child.wait() {
+            eprintln!("failed to wait for adapter-job test child: {error}");
+        }
+    }
+}
+
+/// Wait generously for one pass to persist after `after`, while still
+/// failing early if the real child exits. The assertions use persisted
+/// scheduler state, not an in-process trigger simulation.
+async fn wait_for_persisted_pass(
+    child: &mut ManagedChild,
+    pool: &Pool,
+    after: Option<SystemTime>,
+) -> SystemTime {
+    tokio::time::timeout(Duration::from_secs(45), async {
+        loop {
+            if let Some(status) = child.try_wait() {
+                panic!("adapter-job exited before the expected pass persisted: {status}");
+            }
+            let persisted = state(pool, "case-daily").await.last_pass_at;
+            if let Some(persisted) = persisted {
+                if after.is_none_or(|prior| persisted > prior) {
+                    return persisted;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("adapter-job persisted the scheduled pass within 45 seconds")
+}
+
+async fn wait_for_clean_exit(child: &mut ManagedChild) {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if child.try_wait().is_some() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("adapter-job exits promptly after SIGINT");
+}
+
+fn set_acceptance_interval(fixture: &JobFixture) {
+    let authored = std::fs::read_to_string(&fixture.job).expect("read the fixture job");
+    let scheduled = authored.replace(
+        "    delayMilliseconds: 60000",
+        "    delayMilliseconds: 3000\n    initialDelayMilliseconds: 1000",
+    );
+    assert_ne!(scheduled, authored, "the fixture interval was replaced");
+    std::fs::write(&fixture.job, scheduled).expect("write the acceptance interval");
+}
+
+fn fixture_pass_args(fixture: &JobFixture, receiver: &FixtureReceiver) -> Vec<std::ffi::OsString> {
+    let mut args = job_args("pass", fixture, &["--fixture"]);
+    args.push("--fixture-url".into());
+    args.push(receiver.url.clone().into());
+    args
+}
+
+fn assert_value_free_output(label: &str, output: &Output) {
+    for bytes in [&output.stdout, &output.stderr] {
+        let text = String::from_utf8_lossy(bytes);
+        assert!(
+            !text.contains(SOURCE_SECRET_MARKER)
+                && !text.contains("\"answers\"")
+                && !text.contains("\"age\"")
+                && !text.contains("\"045\""),
+            "{label} exposed a source-only canary"
+        );
+    }
+    assert!(
+        output.stderr.is_empty(),
+        "{label} wrote stderr after the output passed source-canary checks: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 /// A destination whose answers the test scripts, and whose deliveries
 /// the test inspects.
 #[derive(Clone, Default)]
@@ -161,6 +340,39 @@ impl JobDestination for ScriptedDestination {
     }
 }
 
+#[derive(Clone)]
+struct IdentifiedDestination {
+    identity: [u8; 32],
+    scripted: ScriptedDestination,
+}
+
+impl IdentifiedDestination {
+    fn script(identity: [u8; 32], outcomes: Vec<HandOffOutcome>) -> Self {
+        Self {
+            identity,
+            scripted: ScriptedDestination::script(outcomes),
+        }
+    }
+
+    fn delivered(&self) -> Vec<DeliverableItem> {
+        self.scripted.delivered()
+    }
+}
+
+impl JobDestination for IdentifiedDestination {
+    fn receiver_identity(&self, _job: &JobIdentity, _item: &DeliverableItem) -> Option<[u8; 32]> {
+        Some(self.identity)
+    }
+
+    fn deliver<'a>(
+        &'a self,
+        job: &'a JobIdentity,
+        item: &'a DeliverableItem,
+    ) -> Pin<Box<dyn Future<Output = HandOffOutcome> + Send + 'a>> {
+        self.scripted.deliver(job, item)
+    }
+}
+
 fn acknowledged(run_id: &str) -> HandOffOutcome {
     HandOffOutcome::Acknowledged {
         run_id: Some(run_id.to_string()),
@@ -170,6 +382,13 @@ fn acknowledged(run_id: &str) -> HandOffOutcome {
 fn refused(code: &str) -> HandOffOutcome {
     HandOffOutcome::Refused {
         code: code.to_string(),
+    }
+}
+
+fn held(code: &str, run_id: Option<&str>) -> HandOffOutcome {
+    HandOffOutcome::Held {
+        code: code.to_string(),
+        run_id: run_id.map(str::to_string),
     }
 }
 
@@ -199,7 +418,7 @@ async fn pass_fixture() -> (JobFixture, Pool) {
     (fixture, isolated.pool)
 }
 
-async fn compile(fixture: &JobFixture) -> registry_adapter::engine::job::JobProgram {
+async fn compile(fixture: &JobFixture) -> registry_adapter_engine::job::JobProgram {
     compile_job(&fixture.pack, &fixture.job, &fixture.runtime).expect("the job compiles")
 }
 
@@ -241,12 +460,16 @@ async fn the_item_table_holds_no_column_that_can_carry_a_payload() {
     let expected: Vec<(String, String)> = [
         ("admitted_before", "boolean"),
         ("code", "text"),
+        ("delivery_attempt", "bigint"),
+        ("event_time", "timestamp with time zone"),
         ("first_seen", "timestamp with time zone"),
         ("item_key", "text"),
         ("job_id", "text"),
         ("last_digest", "text"),
         ("last_seen", "timestamp with time zone"),
         ("prior_run_id", "text"),
+        ("receiver_identity", "bytea"),
+        ("receiver_identity_known", "boolean"),
         ("run_id", "text"),
         ("sequence", "bigint"),
         ("status", "text"),
@@ -425,7 +648,7 @@ async fn a_crash_before_the_answer_replays_identical_bytes() {
     store::ensure_state(&client, "case-daily")
         .await
         .expect("the state row exists");
-    let items = registry_adapter::engine::job::run_job_page(&program, None)
+    let items = registry_adapter_engine::job::run_job_page(&program, None)
         .await
         .expect("the page runs")
         .page;
@@ -489,6 +712,55 @@ async fn a_crash_before_the_answer_replays_identical_bytes() {
     let row = item(&pool, &first.key).await.expect("the settled row");
     assert_eq!(row.status, ItemStatus::Acknowledged);
     assert_eq!(row.run_id.as_deref(), Some("run-recovered"));
+}
+
+/// A maybe-admitted delivery cannot be redirected under the same event id.
+/// Deployment drift stops before a second recipient call, leaves the position
+/// unchanged, and restoring the frozen identity resumes the pending attempt.
+#[tokio::test]
+async fn a_pending_delivery_stops_on_receiver_drift_and_recovers_on_equality() {
+    let (fixture, pool) = pass_fixture().await;
+    let program = compile(&fixture).await;
+    let original = IdentifiedDestination::script(
+        [0x11; 32],
+        vec![HandOffOutcome::StopPass {
+            code: "coordinator.event.outcome-uncertain".to_string(),
+        }],
+    );
+    let first = run_pass(&pool, &program, &original, options(20)).await;
+    assert_eq!(original.delivered().len(), 1);
+    assert!(matches!(
+        first.stopped,
+        Some(StopReason::DestinationStop { .. })
+    ));
+
+    let changed = IdentifiedDestination::script([0x22; 32], vec![]);
+    let drifted = run_pass(&pool, &program, &changed, options(20)).await;
+    assert_eq!(
+        drifted.stopped,
+        Some(StopReason::DestinationStop {
+            code: registry_adapter_job::pass::COORDINATOR_RECEIVER_CHANGED.to_string(),
+        })
+    );
+    assert!(
+        changed.delivered().is_empty(),
+        "receiver drift stops before a second recipient call"
+    );
+    assert!(state(&pool, "case-daily").await.position.is_none());
+
+    let restored = IdentifiedDestination::script(
+        [0x11; 32],
+        vec![acknowledged("run-recovered"), acknowledged("run-b")],
+    );
+    let recovered = run_pass(&pool, &program, &restored, options(20)).await;
+    assert_eq!(recovered.items_redelivered, 1);
+    let delivered = restored.delivered();
+    assert_eq!(delivered[0].delivery_attempt, 2);
+    assert_eq!(
+        delivered[0].event_time,
+        original.delivered()[0].event_time,
+        "the sequence event time remains frozen across the stopped drift"
+    );
 }
 
 /// The stop rule: a run of consecutive refusals with one code stops the
@@ -573,6 +845,298 @@ async fn a_deployment_stop_leaves_the_position_unchanged() {
     );
 }
 
+/// An item-scoped hold is a settled answer, not a deployment stop and
+/// not a refusal. It advances the page, preserves the destination
+/// reference, skips on ordinary and rescan passes while unchanged, and
+/// a later source edit reaches the destination as a revision rather
+/// than another first registration.
+#[tokio::test]
+async fn a_held_item_settles_and_stays_held_until_the_source_changes() {
+    let mut changed = reply_page();
+    changed["data"][0]["answers"]["age"] = json!("046");
+    let fixture = JobFixture::start(
+        job_fixture::PAGE_SCRIPT,
+        vec![
+            (200, reply_page()),
+            (200, reply_page()),
+            (200, changed.clone()),
+            (200, changed),
+        ],
+        job_fixture::Edits::Rescan(60),
+    )
+    .await;
+    let pool = isolated().await.pool;
+    let program = compile(&fixture).await;
+    let destination = ScriptedDestination::script(vec![
+        held("idempotency.key-reused", Some("proposal-a")),
+        acknowledged("proposal-b"),
+        held("adapter.job.revised-item", None),
+    ]);
+
+    let first = run_pass(&pool, &program, &destination, options(20)).await;
+    assert_eq!(first.stopped, None, "a held item settles its page");
+    assert_eq!(first.items_held, 1);
+    assert_eq!(first.items_acknowledged, 1);
+    assert_eq!(state(&pool, "case-daily").await.position, Some(json!("p2")));
+    let held_row = item(&pool, "submissions/a").await.expect("the held row");
+    assert_eq!(held_row.status, ItemStatus::Held);
+    assert_eq!(held_row.code.as_deref(), Some("idempotency.key-reused"));
+    assert_eq!(held_row.run_id.as_deref(), Some("proposal-a"));
+    assert!(
+        held_row.admitted_before,
+        "a hold fences a later edit as possibly admitted"
+    );
+
+    let unchanged = run_pass(&pool, &program, &destination, options(20)).await;
+    assert_eq!(unchanged.items_skipped, 2);
+    assert_eq!(
+        destination.delivered().len(),
+        2,
+        "an unchanged held row is not handed off again"
+    );
+
+    let revised = run_pass(
+        &pool,
+        &program,
+        &destination,
+        PassOptions {
+            refusal_limit: 20,
+            rescan: true,
+            dry_run: false,
+        },
+    )
+    .await;
+    assert_eq!(revised.items_changed, 1);
+    assert_eq!(revised.items_held, 1);
+    let deliveries = destination.delivered();
+    let revision = deliveries.last().expect("the revision was handed off");
+    assert_eq!(revision.key, "submissions/a");
+    assert_eq!(revision.sequence, 2);
+    assert!(revision.admitted_before);
+    assert_eq!(revision.prior_run_id.as_deref(), Some("proposal-a"));
+    let revised_row = item(&pool, "submissions/a")
+        .await
+        .expect("the revised held row");
+    assert_eq!(revised_row.status, ItemStatus::Held);
+    assert_eq!(
+        revised_row.code.as_deref(),
+        Some("adapter.job.revised-item")
+    );
+    assert_eq!(revised_row.prior_run_id.as_deref(), Some("proposal-a"));
+
+    let still_held = run_pass(&pool, &program, &destination, options(20)).await;
+    assert_eq!(still_held.items_skipped, 2);
+    assert_eq!(destination.delivered().len(), 3);
+
+    let client = pool.get().await.expect("a pooled client");
+    let counts = store::item_counts(&client, "case-daily")
+        .await
+        .expect("status counts read");
+    assert_eq!(counts.held, 1);
+    assert_eq!(
+        counts.holds_by_code.get("adapter.job.revised-item"),
+        Some(&1)
+    );
+}
+
+/// A source revert is still a change: A is accepted at sequence 1, B is
+/// held as a revision at sequence 2, and byte-identical A is held as a
+/// new revision at sequence 3. The original destination reference stays
+/// beside both revisions, and unchanged ordinary and rescan passes do
+/// not create another destination effect.
+#[tokio::test]
+async fn a_source_revert_advances_the_sequence_and_stays_held() {
+    let original = reply_page();
+    let mut changed = original.clone();
+    changed["data"][0]["answers"]["age"] = json!("046");
+    let empty = json!({"data": []});
+    let fixture = JobFixture::start(
+        job_fixture::PAGE_SCRIPT,
+        vec![
+            (200, original.clone()),
+            (200, changed),
+            (200, empty.clone()),
+            (200, original.clone()),
+            (200, empty),
+            (200, original.clone()),
+            (200, original),
+        ],
+        job_fixture::Edits::Rescan(60),
+    )
+    .await;
+    let pool = isolated().await.pool;
+    let program = compile(&fixture).await;
+    let destination = ScriptedDestination::script(vec![
+        acknowledged("proposal-a"),
+        acknowledged("proposal-b"),
+        held("adapter.job.revised-item", None),
+        held("adapter.job.revised-item", None),
+    ]);
+
+    let accepted = run_pass(&pool, &program, &destination, options(20)).await;
+    assert_eq!(accepted.items_new, 2);
+    assert_eq!(accepted.items_acknowledged, 2);
+    assert_eq!(accepted.items_changed, 0);
+    assert_eq!(accepted.items_held, 0);
+    assert_eq!(state(&pool, "case-daily").await.position, Some(json!("p2")));
+    let accepted_row = item(&pool, "submissions/a")
+        .await
+        .expect("the accepted A row");
+    let original_digest = accepted_row.last_digest.clone();
+    assert_eq!(accepted_row.sequence, 1);
+    assert_eq!(accepted_row.status, ItemStatus::Acknowledged);
+    assert_eq!(accepted_row.run_id.as_deref(), Some("proposal-a"));
+    assert_eq!(accepted_row.prior_run_id, None);
+    let original_delivery = destination
+        .delivered()
+        .into_iter()
+        .find(|delivery| delivery.key == "submissions/a")
+        .expect("the original A delivery");
+    assert_eq!(original_delivery.sequence, 1);
+    assert_eq!(original_delivery.digest, original_digest);
+    assert_eq!(original_delivery.prior_run_id, None);
+
+    let revised = run_pass(
+        &pool,
+        &program,
+        &destination,
+        PassOptions {
+            refusal_limit: 20,
+            rescan: true,
+            dry_run: false,
+        },
+    )
+    .await;
+    assert_eq!(revised.items_new, 0);
+    assert_eq!(revised.items_changed, 1);
+    assert_eq!(revised.items_held, 1);
+    assert_eq!(revised.items_skipped, 1);
+    assert_eq!(state(&pool, "case-daily").await.position, Some(json!("p2")));
+    let revised_delivery = destination
+        .delivered()
+        .last()
+        .cloned()
+        .expect("the B revision delivery");
+    assert_eq!(revised_delivery.key, "submissions/a");
+    assert_eq!(revised_delivery.sequence, 2);
+    assert_ne!(revised_delivery.digest, original_digest);
+    assert_eq!(revised_delivery.prior_run_id.as_deref(), Some("proposal-a"));
+    assert!(revised_delivery.admitted_before);
+    let revised_row = item(&pool, "submissions/a").await.expect("the held B row");
+    assert_eq!(revised_row.last_digest, revised_delivery.digest);
+    assert_eq!(revised_row.sequence, 2);
+    assert_eq!(revised_row.status, ItemStatus::Held);
+    assert_eq!(
+        revised_row.code.as_deref(),
+        Some("adapter.job.revised-item")
+    );
+    assert_eq!(revised_row.run_id, None);
+    assert_eq!(revised_row.prior_run_id.as_deref(), Some("proposal-a"));
+
+    let completed_revision_rescan = run_pass(&pool, &program, &destination, options(20)).await;
+    assert_eq!(completed_revision_rescan.items_read, 0);
+    let revision_state = state(&pool, "case-daily").await;
+    assert_eq!(revision_state.position, None);
+    assert!(!revision_state.rescan_active);
+
+    let reverted = run_pass(
+        &pool,
+        &program,
+        &destination,
+        PassOptions {
+            refusal_limit: 20,
+            rescan: true,
+            dry_run: false,
+        },
+    )
+    .await;
+    assert_eq!(
+        reverted.items_new, 0,
+        "the reverted A is not registered anew"
+    );
+    assert_eq!(reverted.items_changed, 1);
+    assert_eq!(reverted.items_held, 1);
+    assert_eq!(reverted.items_skipped, 1);
+    assert_eq!(state(&pool, "case-daily").await.position, Some(json!("p2")));
+    let reverted_delivery = destination
+        .delivered()
+        .last()
+        .cloned()
+        .expect("the reverted A delivery");
+    assert_eq!(reverted_delivery.key, "submissions/a");
+    assert_eq!(reverted_delivery.sequence, 3);
+    assert_eq!(reverted_delivery.digest, original_digest);
+    assert_eq!(
+        reverted_delivery.prior_run_id.as_deref(),
+        Some("proposal-a")
+    );
+    assert!(reverted_delivery.admitted_before);
+    let reverted_row = item(&pool, "submissions/a")
+        .await
+        .expect("the held reverted A row");
+    assert_eq!(reverted_row.last_digest, original_digest);
+    assert_eq!(reverted_row.sequence, 3);
+    assert_eq!(reverted_row.status, ItemStatus::Held);
+    assert_eq!(
+        reverted_row.code.as_deref(),
+        Some("adapter.job.revised-item")
+    );
+    assert_eq!(reverted_row.run_id, None);
+    assert_eq!(reverted_row.prior_run_id.as_deref(), Some("proposal-a"));
+
+    let completed_revert_rescan = run_pass(&pool, &program, &destination, options(20)).await;
+    assert_eq!(completed_revert_rescan.items_read, 0);
+    assert_eq!(state(&pool, "case-daily").await.position, None);
+
+    let unchanged = run_pass(&pool, &program, &destination, options(20)).await;
+    assert_eq!(unchanged.items_skipped, 2);
+    assert_eq!(unchanged.items_changed, 0);
+    assert_eq!(unchanged.items_held, 0);
+    assert_eq!(destination.delivered().len(), 4);
+    assert_eq!(state(&pool, "case-daily").await.position, Some(json!("p2")));
+
+    let unchanged_rescan = run_pass(
+        &pool,
+        &program,
+        &destination,
+        PassOptions {
+            refusal_limit: 20,
+            rescan: true,
+            dry_run: false,
+        },
+    )
+    .await;
+    assert_eq!(unchanged_rescan.items_skipped, 2);
+    assert_eq!(unchanged_rescan.items_changed, 0);
+    assert_eq!(unchanged_rescan.items_held, 0);
+    assert_eq!(destination.delivered().len(), 4);
+    let final_state = state(&pool, "case-daily").await;
+    assert_eq!(final_state.position, Some(json!("p2")));
+    assert!(final_state.rescan_active);
+    let final_row = item(&pool, "submissions/a")
+        .await
+        .expect("the unchanged held A row");
+    assert_eq!(final_row.last_digest, original_digest);
+    assert_eq!(final_row.sequence, 3);
+    assert_eq!(final_row.status, ItemStatus::Held);
+    assert_eq!(final_row.code.as_deref(), Some("adapter.job.revised-item"));
+    assert_eq!(final_row.run_id, None);
+    assert_eq!(final_row.prior_run_id.as_deref(), Some("proposal-a"));
+
+    let client = pool.get().await.expect("a pooled client");
+    let counts = store::item_counts(&client, "case-daily")
+        .await
+        .expect("status counts read");
+    assert_eq!(counts.pending, 0);
+    assert_eq!(counts.acknowledged, 1);
+    assert_eq!(counts.refused, 0);
+    assert_eq!(counts.held, 1);
+    assert_eq!(
+        counts.holds_by_code.get("adapter.job.revised-item"),
+        Some(&1)
+    );
+}
+
 /// A page fault stops the pass under its closed code with the position
 /// unchanged.
 #[tokio::test]
@@ -590,7 +1154,8 @@ async fn a_page_fault_stops_under_its_page_code() {
     assert_eq!(
         report.stopped,
         Some(StopReason::PageFault {
-            code: "adapter.job.page-key".to_string()
+            code: "adapter.job.page-key".to_string(),
+            record: None,
         }),
         "the empty-key page refuses under its own code"
     );
@@ -1221,6 +1786,272 @@ async fn changed_staging_preserves_the_last_accepted_reference_for_recovery() {
     );
 }
 
+#[tokio::test]
+async fn receiver_identity_and_event_metadata_freeze_per_sequence() {
+    let pool = isolated().await.pool;
+    let mut client = pool.get().await.expect("a pooled client");
+    store::ensure_state(&client, "case-daily")
+        .await
+        .expect("the state row exists");
+    let ttl = Duration::from_secs(60);
+    let lease = store::take_lease(&client, "case-daily", ttl)
+        .await
+        .expect("the lease answers")
+        .expect("the lease grants");
+    let first_time = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
+    let retry_time = first_time + Duration::from_secs(30);
+    let changed_time = retry_time + Duration::from_secs(30);
+    let digest_a = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let digest_b = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    let first = store::stage_item(
+        &mut client,
+        "case-daily",
+        "submissions/a",
+        digest_a,
+        false,
+        first_time,
+        lease.token,
+        ttl,
+    )
+    .await
+    .expect("the first sequence stages")
+    .expect("the item is new");
+    store::bind_delivery_identity(
+        &mut client,
+        "case-daily",
+        "submissions/a",
+        &[0x11; 32],
+        &[0x31; 32],
+        first.delivery_attempt,
+        false,
+        lease.token,
+        ttl,
+    )
+    .await
+    .expect("the first receiver binds");
+    assert!(matches!(
+        store::bind_delivery_identity(
+            &mut client,
+            "case-daily",
+            "submissions/a",
+            &[0x22; 32],
+            &[0x31; 32],
+            2,
+            false,
+            lease.token,
+            ttl,
+        )
+        .await,
+        Err(store::StoreError::ReceiverIdentityChanged)
+    ));
+    store::record_refused(
+        &mut client,
+        "case-daily",
+        "submissions/a",
+        "event.invalid",
+        first_time,
+        lease.token,
+        ttl,
+    )
+    .await
+    .expect("the no-effect refusal records");
+    let retry = store::stage_item(
+        &mut client,
+        "case-daily",
+        "submissions/a",
+        digest_a,
+        true,
+        retry_time,
+        lease.token,
+        ttl,
+    )
+    .await
+    .expect("the refused row restages")
+    .expect("the explicit rescan retries it");
+    assert_eq!(retry.event_time, first_time);
+    assert_eq!(retry.delivery_attempt, 2);
+    store::bind_delivery_identity(
+        &mut client,
+        "case-daily",
+        "submissions/a",
+        &[0x22; 32],
+        &[0x32; 32],
+        retry.delivery_attempt,
+        true,
+        lease.token,
+        ttl,
+    )
+    .await
+    .expect("a reviewed no-effect refusal can rebind");
+
+    let changed = store::stage_item(
+        &mut client,
+        "case-daily",
+        "submissions/a",
+        digest_b,
+        false,
+        changed_time,
+        lease.token,
+        ttl,
+    )
+    .await
+    .expect("the changed digest stages")
+    .expect("the digest is a new sequence");
+    assert_eq!(changed.sequence, 2);
+    assert_eq!(changed.event_time, changed_time);
+    assert_eq!(changed.delivery_attempt, 1);
+}
+
+#[tokio::test]
+async fn a_delivery_attempt_at_i64_max_stops_without_wrapping_or_mutating_the_row() {
+    let pool = isolated().await.pool;
+    let mut client = pool.get().await.expect("a pooled client");
+    store::ensure_state(&client, "case-daily")
+        .await
+        .expect("the state row exists");
+    let ttl = Duration::from_secs(60);
+    let lease = store::take_lease(&client, "case-daily", ttl)
+        .await
+        .expect("the lease answers")
+        .expect("the lease grants");
+    let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
+    let digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    store::stage_item(
+        &mut client,
+        "case-daily",
+        "submissions/a",
+        digest,
+        false,
+        now,
+        lease.token,
+        ttl,
+    )
+    .await
+    .expect("the first delivery stages")
+    .expect("the item is new");
+    client
+        .execute(
+            "UPDATE adapter_job_items SET delivery_attempt = $3 \
+             WHERE job_id = $1 AND item_key = $2",
+            &[&"case-daily", &"submissions/a", &i64::MAX],
+        )
+        .await
+        .expect("the boundary attempt installs");
+
+    assert!(matches!(
+        store::stage_item(
+            &mut client,
+            "case-daily",
+            "submissions/a",
+            digest,
+            false,
+            now + Duration::from_secs(1),
+            lease.token,
+            ttl,
+        )
+        .await,
+        Err(store::StoreError::DeliveryAttemptExhausted)
+    ));
+    let row = client
+        .query_one(
+            "SELECT status, delivery_attempt FROM adapter_job_items \
+             WHERE job_id = $1 AND item_key = $2",
+            &[&"case-daily", &"submissions/a"],
+        )
+        .await
+        .expect("the boundary row reads");
+    assert_eq!(row.get::<_, &str>(0), "pending");
+    assert_eq!(row.get::<_, i64>(1), i64::MAX);
+}
+
+#[tokio::test]
+async fn file_item_identity_adopts_only_empty_state_and_fences_every_transition() {
+    let pool = isolated().await.pool;
+    let mut client = pool.get().await.expect("a pooled client");
+    store::ensure_state(&client, "file-daily")
+        .await
+        .expect("the state row exists");
+    let ttl = Duration::from_secs(60);
+    let lease = store::take_lease(&client, "file-daily", ttl)
+        .await
+        .expect("the lease answers")
+        .expect("the lease grants");
+    store::bind_item_identity(
+        &mut client,
+        "file-daily",
+        Some(&[0x31; 32]),
+        lease.token,
+        ttl,
+    )
+    .await
+    .expect("empty state adopts the row identity");
+    store::bind_item_identity(
+        &mut client,
+        "file-daily",
+        Some(&[0x31; 32]),
+        lease.token,
+        ttl,
+    )
+    .await
+    .expect("the stable digest remains usable");
+    for changed in [Some([0x32; 32]), None] {
+        assert!(matches!(
+            store::bind_item_identity(
+                &mut client,
+                "file-daily",
+                changed.as_ref(),
+                lease.token,
+                ttl,
+            )
+            .await,
+            Err(store::StoreError::ItemIdentityMigrationRequired)
+        ));
+    }
+
+    store::ensure_state(&client, "http-daily")
+        .await
+        .expect("the non-row state exists");
+    let raw_lease = store::take_lease(&client, "http-daily", ttl)
+        .await
+        .expect("the raw lease answers")
+        .expect("the raw lease grants");
+    store::bind_item_identity(&mut client, "http-daily", None, raw_lease.token, ttl)
+        .await
+        .expect("an ordinary non-row job needs no identity migration");
+
+    store::ensure_state(&client, "legacy-file")
+        .await
+        .expect("the legacy state exists");
+    client
+        .execute(
+            "INSERT INTO adapter_job_items \
+             (job_id, item_key, last_digest, sequence, status, first_seen, last_seen, \
+              event_time, delivery_attempt, receiver_identity_known) \
+             VALUES ('legacy-file', 'row/a', \
+             'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', \
+             1, 'acknowledged', now(), now(), now(), 1, true)",
+            &[],
+        )
+        .await
+        .expect("the legacy item inserts");
+    let legacy_lease = store::take_lease(&client, "legacy-file", ttl)
+        .await
+        .expect("the legacy lease answers")
+        .expect("the legacy lease grants");
+    assert!(matches!(
+        store::bind_item_identity(
+            &mut client,
+            "legacy-file",
+            Some(&[0x41; 32]),
+            legacy_lease.token,
+            ttl,
+        )
+        .await,
+        Err(store::StoreError::ItemIdentityMigrationRequired)
+    ));
+}
+
 /// The interval trigger and the schedule read the state row the pass
 /// wrote, the shape the loop mode sleeps on.
 #[tokio::test]
@@ -1273,6 +2104,15 @@ fn job_with_trigger(trigger: Value) -> AdapterJob {
                 "digest": "sha256:678260a56715cba21db1f0687e5a2c5e5efb2ea0b8eea687b5f3ee8723c5f6c9"},
             "route": "submissions-page"
         },
+        "destination": {
+            "type": "signed-coordinator-event",
+            "binding": "coordinator-test",
+            "workflow": "case-ingestion",
+            "trigger": "submitted",
+            "source": "urn:registry-adapter:job:case-daily",
+            "eventType": "org.example.case-submitted.v1",
+            "dataSchema": "urn:example:schema:case-submitted:v1"
+        },
         "projection": {"fields": ["id"]},
         "triggers": [trigger],
         "profile": {
@@ -1316,6 +2156,123 @@ async fn table_present(pool: &Pool, table: &str) -> bool {
         .await
         .expect("the catalog reads")
         .get(0)
+}
+
+/// Count rows in one of the fixed job-store tables named by the tests.
+async fn table_rows(pool: &Pool, table: &str) -> i64 {
+    assert!(
+        matches!(
+            table,
+            "adapter_job_schema_migrations" | "adapter_job_state" | "adapter_job_items"
+        ),
+        "the test queries only a fixed job-store table"
+    );
+    let client = pool.get().await.expect("a pooled client");
+    client
+        .query_one(&format!("SELECT count(*) FROM {table}"), &[])
+        .await
+        .expect("the fixed job-store table reads")
+        .get(0)
+}
+
+/// Install the first maintained store version exactly, so the command-level
+/// upgrade test starts from a supported historical schema without copying its
+/// SQL into the test.
+async fn install_schema_100(pool: &Pool) {
+    let client = pool.get().await.expect("a pooled client");
+    client
+        .batch_execute(
+            "CREATE TABLE adapter_job_schema_migrations (\
+             version bigint PRIMARY KEY CHECK (version > 0),\
+             applied_at timestamptz NOT NULL)",
+        )
+        .await
+        .expect("create the migration ledger");
+    client
+        .batch_execute(include_str!("../src/store/migrations/0100_job_items.sql"))
+        .await
+        .expect("apply maintained schema version 100");
+    client
+        .execute(
+            "INSERT INTO adapter_job_schema_migrations(version, applied_at) VALUES (100, now())",
+            &[],
+        )
+        .await
+        .expect("record maintained schema version 100");
+}
+
+/// Install the last schema that predates receiver identity, for the migration
+/// test proving an already-pending hand-off never silently binds a new target.
+async fn install_schema_102(pool: &Pool) {
+    install_schema_100(pool).await;
+    let client = pool.get().await.expect("a pooled client");
+    for (version, migration) in [
+        (
+            101_i64,
+            include_str!("../src/store/migrations/0101_rescan_active.sql"),
+        ),
+        (
+            102_i64,
+            include_str!("../src/store/migrations/0102_held_items.sql"),
+        ),
+    ] {
+        client
+            .batch_execute(migration)
+            .await
+            .expect("the maintained historical migration applies");
+        client
+            .execute(
+                "INSERT INTO adapter_job_schema_migrations(version, applied_at) VALUES ($1, now())",
+                &[&version],
+            )
+            .await
+            .expect("the historical schema version records");
+    }
+}
+
+#[tokio::test]
+async fn migration_keeps_a_legacy_pending_receiver_identity_unknown() {
+    let isolated = unmigrated().await;
+    install_schema_102(&isolated.pool).await;
+    let mut client = isolated.pool.get().await.expect("a pooled client");
+    let now = SystemTime::now();
+    client
+        .execute(
+            "INSERT INTO adapter_job_items \
+             (job_id, item_key, last_digest, sequence, status, first_seen, last_seen) \
+             VALUES ('case-daily', 'submissions/a', \
+             'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', \
+             1, 'pending', $1, $1)",
+            &[&now],
+        )
+        .await
+        .expect("the legacy pending row inserts");
+    store::migrate(&client)
+        .await
+        .expect("schema 103 migrates the legacy row");
+    store::ensure_state(&client, "case-daily")
+        .await
+        .expect("the state row exists");
+    let ttl = Duration::from_secs(60);
+    let lease = store::take_lease(&client, "case-daily", ttl)
+        .await
+        .expect("the lease answers")
+        .expect("the lease grants");
+    assert!(matches!(
+        store::bind_delivery_identity(
+            &mut client,
+            "case-daily",
+            "submissions/a",
+            &[0x11; 32],
+            &[0x31; 32],
+            2,
+            false,
+            lease.token,
+            ttl,
+        )
+        .await,
+        Err(store::StoreError::ReceiverIdentityUnknown)
+    ));
 }
 
 /// A migration and its version row commit together: a failure after the
@@ -1363,7 +2320,7 @@ async fn a_failed_migration_records_no_version_and_retries_whole() {
     store::migrate(&client)
         .await
         .expect("the retried migration applies whole");
-    assert_eq!(applied_versions(&client).await, vec![100, 101]);
+    assert_eq!(applied_versions(&client).await, vec![100, 101, 102, 103]);
 }
 
 /// The fixture's operator arguments for one command over the binary.
@@ -1377,6 +2334,287 @@ fn job_args(command: &str, fixture: &JobFixture, extra: &[&str]) -> Vec<std::ffi
     args.push(fixture.runtime.clone().into());
     args.extend(extra.iter().map(Into::into));
     args
+}
+
+/// The store bootstrap takes only the runtime artifact: no job, pack,
+/// profile, project, source activation, or destination activation belongs to
+/// this command.
+fn init_store_args(fixture: &JobFixture) -> Vec<std::ffi::OsString> {
+    vec![
+        "init-store".into(),
+        "--runtime".into(),
+        fixture.runtime.clone().into(),
+    ]
+}
+
+fn inspect_args(fixture: &JobFixture, key: &str) -> Vec<std::ffi::OsString> {
+    vec![
+        "inspect".into(),
+        fixture.job.clone().into(),
+        "--runtime".into(),
+        fixture.runtime.clone().into(),
+        "--key".into(),
+        key.into(),
+    ]
+}
+
+/// Add syntactically valid source and destination secret references to the
+/// fixture runtime. The bootstrap test removes these variables from its child
+/// process, while leaving the store reference available as `JOB_TEST_DB`.
+fn add_unresolved_non_store_secrets(fixture: &JobFixture) {
+    let mut runtime: Value =
+        serde_json::from_slice(&std::fs::read(&fixture.runtime).expect("read the fixture runtime"))
+            .expect("the fixture runtime is JSON");
+    runtime["endpoints"][0]["credential"] = json!({
+        "type": "basic",
+        "usernameRef": "secret:env/JOB_UNRESOLVED_SOURCE_USERNAME",
+        "passwordRef": "secret:env/JOB_UNRESOLVED_SOURCE_PASSWORD"
+    });
+    runtime["destinations"] = json!({
+        "coordinator-test": {
+            "type": "signed-coordinator-event",
+            "baseUrl": "https://coordinator.example.invalid",
+            "signingKeyRef": "secret:env/JOB_UNRESOLVED_DESTINATION_KEY",
+            "attemptTimeoutMilliseconds": 3000
+        }
+    });
+    std::fs::write(
+        &fixture.runtime,
+        serde_json::to_vec_pretty(&runtime).expect("render the fixture runtime"),
+    )
+    .expect("write the fixture runtime");
+}
+
+/// Store bootstrap is a complete command with only the runtime artifact. It
+/// resolves the store reference, applies the maintained schema, and does not
+/// resolve or act through source and destination bindings.
+#[tokio::test]
+async fn init_store_bootstraps_only_the_store_from_the_runtime_reference() {
+    let fixture = JobFixture::start(
+        job_fixture::PAGE_SCRIPT,
+        vec![(200, reply_page())],
+        job_fixture::Edits::Ordered,
+    )
+    .await;
+    add_unresolved_non_store_secrets(&fixture);
+    let isolated = unmigrated().await;
+    // The global output option affects only a dry-run pass; initialization
+    // remains value-free just like status, inspect, and check.
+    let mut arguments = init_store_args(&fixture);
+    arguments.push("--show-values".into());
+    let output = run_job_without_env(
+        &isolated.url,
+        arguments,
+        &[
+            "JOB_UNRESOLVED_SOURCE_USERNAME",
+            "JOB_UNRESOLVED_SOURCE_PASSWORD",
+            "JOB_UNRESOLVED_DESTINATION_KEY",
+        ],
+    )
+    .await;
+    assert!(
+        output.status.success(),
+        "init-store failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        output.stderr.is_empty(),
+        "store initialization logs no errors"
+    );
+    assert!(
+        fixture.double.requests().is_empty(),
+        "store initialization never reads the source endpoint"
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("init-store prints JSON");
+    assert_eq!(report["ok"], true);
+    assert_eq!(report["schemaVersion"], 103);
+    assert_eq!(
+        report
+            .as_object()
+            .expect("init-store prints an object")
+            .len(),
+        2,
+        "the bootstrap report carries no runtime, source, destination, or secret material"
+    );
+
+    let client = isolated.pool.get().await.expect("a pooled client");
+    assert_eq!(applied_versions(&client).await, vec![100, 101, 102, 103]);
+    drop(client);
+    for table in [
+        "adapter_job_schema_migrations",
+        "adapter_job_state",
+        "adapter_job_items",
+    ] {
+        assert!(table_present(&isolated.pool, table).await, "{table} exists");
+    }
+    assert_eq!(table_rows(&isolated.pool, "adapter_job_state").await, 0);
+    assert_eq!(table_rows(&isolated.pool, "adapter_job_items").await, 0);
+}
+
+/// Bootstrap is safe to repeat and advances an older supported store through
+/// the same embedded migration sequence used by an operational pass.
+#[tokio::test]
+async fn init_store_repeats_unchanged_and_advances_a_supported_schema() {
+    let fixture = JobFixture::start(
+        job_fixture::PAGE_SCRIPT,
+        vec![(200, reply_page())],
+        job_fixture::Edits::Ordered,
+    )
+    .await;
+    let current = unmigrated().await;
+    let first = run_job(&current.url, init_store_args(&fixture)).await;
+    assert!(
+        first.status.success(),
+        "first init-store failed: {}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let client = current.pool.get().await.expect("a pooled client");
+    let before = client
+        .query(
+            "SELECT version, applied_at FROM adapter_job_schema_migrations ORDER BY version",
+            &[],
+        )
+        .await
+        .expect("read the first migration records")
+        .into_iter()
+        .map(|row| (row.get::<_, i64>(0), row.get::<_, SystemTime>(1)))
+        .collect::<Vec<_>>();
+    drop(client);
+    let repeated = run_job(&current.url, init_store_args(&fixture)).await;
+    assert!(
+        repeated.status.success(),
+        "repeated init-store failed: {}",
+        String::from_utf8_lossy(&repeated.stderr)
+    );
+    let client = current.pool.get().await.expect("a pooled client");
+    let after = client
+        .query(
+            "SELECT version, applied_at FROM adapter_job_schema_migrations ORDER BY version",
+            &[],
+        )
+        .await
+        .expect("read the repeated migration records")
+        .into_iter()
+        .map(|row| (row.get::<_, i64>(0), row.get::<_, SystemTime>(1)))
+        .collect::<Vec<_>>();
+    assert_eq!(after, before, "repeat records no migration twice");
+    drop(client);
+
+    let older = unmigrated().await;
+    install_schema_100(&older.pool).await;
+    let upgraded = run_job(&older.url, init_store_args(&fixture)).await;
+    assert!(
+        upgraded.status.success(),
+        "supported schema upgrade failed: {}",
+        String::from_utf8_lossy(&upgraded.stderr)
+    );
+    let client = older.pool.get().await.expect("a pooled client");
+    assert_eq!(applied_versions(&client).await, vec![100, 101, 102, 103]);
+    store::schema_current(&client)
+        .await
+        .expect("the upgraded schema is current");
+    drop(client);
+    assert_eq!(table_rows(&older.pool, "adapter_job_state").await, 0);
+    assert_eq!(table_rows(&older.pool, "adapter_job_items").await, 0);
+}
+
+/// A future store belongs to the newer release. Bootstrap refuses it without
+/// rewriting its migration ledger or creating job data.
+#[tokio::test]
+async fn init_store_refuses_a_future_schema_without_mutation() {
+    let fixture = JobFixture::start(
+        job_fixture::PAGE_SCRIPT,
+        vec![(200, reply_page())],
+        job_fixture::Edits::Ordered,
+    )
+    .await;
+    let isolated = unmigrated().await;
+    let initialized = run_job(&isolated.url, init_store_args(&fixture)).await;
+    assert!(
+        initialized.status.success(),
+        "the current schema initializes"
+    );
+    let client = isolated.pool.get().await.expect("a pooled client");
+    client
+        .execute(
+            "INSERT INTO adapter_job_schema_migrations(version, applied_at) VALUES (999, now())",
+            &[],
+        )
+        .await
+        .expect("record the future version");
+    let before = applied_versions(&client).await;
+    drop(client);
+
+    let output = run_job(&isolated.url, init_store_args(&fixture)).await;
+    assert!(!output.status.success(), "a future schema refuses");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("schema version 999") && stderr.contains("newer"),
+        "the refusal names the incompatible future schema: {stderr}"
+    );
+    let client = isolated.pool.get().await.expect("a pooled client");
+    assert_eq!(applied_versions(&client).await, before);
+    drop(client);
+    assert_eq!(table_rows(&isolated.pool, "adapter_job_state").await, 0);
+    assert_eq!(table_rows(&isolated.pool, "adapter_job_items").await, 0);
+}
+
+/// After explicit bootstrap, all observational and preview commands work in
+/// fresh processes without creating the absent job or item rows.
+#[tokio::test]
+async fn initialized_fresh_store_supports_status_inspect_and_dry_run_without_writes() {
+    let fixture = JobFixture::start(
+        job_fixture::PAGE_SCRIPT,
+        vec![(200, reply_page())],
+        job_fixture::Edits::Ordered,
+    )
+    .await;
+    let isolated = unmigrated().await;
+    let initialized = run_job(&isolated.url, init_store_args(&fixture)).await;
+    assert!(
+        initialized.status.success(),
+        "init-store failed: {}",
+        String::from_utf8_lossy(&initialized.stderr)
+    );
+
+    let status = run_job(&isolated.url, job_args("status", &fixture, &[])).await;
+    assert!(
+        status.status.success(),
+        "fresh status failed: {}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+    let status_report: Value = serde_json::from_slice(&status.stdout).expect("status prints JSON");
+    assert_eq!(status_report["items"]["pending"], 0);
+    assert_eq!(status_report["items"]["acknowledged"], 0);
+    assert_eq!(status_report["items"]["refused"], 0);
+    assert_eq!(status_report["items"]["held"], 0);
+    assert_eq!(status_report["schedule"]["overdue"], false);
+
+    let inspect = run_job(&isolated.url, inspect_args(&fixture, "submissions/missing")).await;
+    assert!(
+        inspect.status.success(),
+        "fresh inspect failed: {}",
+        String::from_utf8_lossy(&inspect.stderr)
+    );
+    let inspect_report: Value =
+        serde_json::from_slice(&inspect.stdout).expect("inspect prints JSON");
+    assert_eq!(inspect_report["found"], false);
+    assert_eq!(inspect_report["key"], "submissions/missing");
+
+    let preview = run_job(&isolated.url, job_args("pass", &fixture, &["--dry-run"])).await;
+    assert!(
+        preview.status.success(),
+        "fresh dry run failed: {}",
+        String::from_utf8_lossy(&preview.stderr)
+    );
+    let preview_report: Value =
+        serde_json::from_slice(&preview.stdout).expect("dry run prints JSON");
+    assert_eq!(preview_report["dryRun"], true);
+    assert_eq!(preview_report["itemsRead"], 2);
+    assert_eq!(table_rows(&isolated.pool, "adapter_job_state").await, 0);
+    assert_eq!(table_rows(&isolated.pool, "adapter_job_items").await, 0);
+    let client = isolated.pool.get().await.expect("a pooled client");
+    assert_eq!(applied_versions(&client).await, vec![100, 101, 102, 103]);
 }
 
 /// Status is a read: it reports a job with no state row and writes none.
@@ -1403,6 +2641,259 @@ async fn status_reads_without_writing_the_state_row() {
             .is_none(),
         "status wrote no state row"
     );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("status prints JSON");
+    assert_eq!(
+        report.pointer("/schedule/overdue"),
+        Some(&json!(false)),
+        "a never-run job is due now, not overdue"
+    );
+}
+
+/// Once a job has run, status distinguishes an interval whose due time
+/// passed from a fresh job whose first pass is merely due now.
+#[tokio::test]
+async fn status_reports_an_existing_late_job_overdue() {
+    let fixture = JobFixture::start(
+        job_fixture::PAGE_SCRIPT,
+        vec![(200, reply_page())],
+        job_fixture::Edits::Ordered,
+    )
+    .await;
+    let isolated = isolated().await;
+    let client = isolated.pool.get().await.expect("a pooled client");
+    store::ensure_state(&client, "case-daily")
+        .await
+        .expect("the state row exists");
+    client
+        .execute(
+            "UPDATE adapter_job_state SET last_pass_at = now() - interval '2 minutes' \
+             WHERE job_id = 'case-daily'",
+            &[],
+        )
+        .await
+        .expect("the job becomes late");
+    drop(client);
+
+    let output = run_job(&isolated.url, job_args("status", &fixture, &[])).await;
+    assert!(
+        output.status.success(),
+        "status failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("status prints JSON");
+    assert_eq!(
+        report.pointer("/schedule/overdue"),
+        Some(&json!(true)),
+        "the existing job is overdue after two minutes"
+    );
+}
+
+/// Aggregate status names every hold without pretending it knows an
+/// item's destination reference or offering an Adapter-side release.
+#[tokio::test]
+async fn status_explains_aggregate_holds_without_promising_release() {
+    let fixture = JobFixture::start_direct_breg(
+        vec![(200, reply_page())],
+        "http://127.0.0.1:9",
+        "http://127.0.0.1:9/token",
+    )
+    .await;
+    let isolated = isolated().await;
+    let client = isolated.pool.get().await.expect("a pooled client");
+    for (key, code) in [
+        ("submissions/a", "idempotency.expired"),
+        ("submissions/b", "idempotency.expired"),
+        ("submissions/c", "adapter.job.breg-receipt-horizon"),
+        ("submissions/d", "adapter.job.rabbitmq-event-changed"),
+    ] {
+        client
+            .execute(
+                "INSERT INTO adapter_job_items \
+                 (job_id, item_key, last_digest, sequence, status, code, run_id, prior_run_id, \
+                  admitted_before, first_seen, last_seen, event_time, delivery_attempt, \
+                  receiver_identity_known) \
+                 VALUES ('case-daily', $1, $2, 1, 'held', $3, NULL, NULL, true, now(), now(), \
+                         now(), 1, true)",
+                &[&key, &format!("sha256:{}", "0".repeat(64)), &code],
+            )
+            .await
+            .expect("the value-free held row inserts");
+    }
+    drop(client);
+
+    let output = run_job(&isolated.url, job_args("status", &fixture, &[])).await;
+    assert!(
+        output.status.success(),
+        "status failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("status prints JSON");
+    assert_eq!(report.pointer("/items/held"), Some(&json!(4)));
+    assert_eq!(
+        report.pointer("/holdsByCode/idempotency.expired"),
+        Some(&json!(2))
+    );
+    assert_eq!(
+        report.pointer("/holdsByCode/adapter.job.breg-receipt-horizon"),
+        Some(&json!(1))
+    );
+    assert_eq!(
+        report.pointer("/holdsByCode/adapter.job.rabbitmq-event-changed"),
+        Some(&json!(1))
+    );
+    let guidance = report["holdGuidance"]
+        .as_array()
+        .expect("status prints aggregate hold guidance");
+    assert_eq!(guidance.len(), 3);
+    for (code, count, owner) in [
+        ("idempotency.expired", 2, "breg"),
+        ("adapter.job.breg-receipt-horizon", 1, "breg"),
+        ("adapter.job.rabbitmq-event-changed", 1, "broker-operator"),
+    ] {
+        let item = guidance
+            .iter()
+            .find(|item| item["code"] == code)
+            .unwrap_or_else(|| panic!("status explains {code}"));
+        assert_eq!(item["count"], count);
+        assert_eq!(item["actionOwner"], owner);
+        assert_eq!(item["destinationReference"], Value::Null);
+        let action = item["nextAction"]
+            .as_str()
+            .expect("the aggregate guidance names an action");
+        assert!(action.contains("Use inspect on each held item"));
+        assert!(!action.contains("referenced"));
+        assert!(!action.contains("retry"));
+        if code == "adapter.job.rabbitmq-event-changed" {
+            assert!(action.contains("destination's own authority"));
+            assert!(action.contains("broker operator"));
+            assert!(action.contains("under approved broker policy"));
+            assert!(action.contains("publisher/source operator"));
+            assert!(action.contains("legitimate future work"));
+            assert!(action.contains("Do not rekey uncertain or already accepted work"));
+            assert!(action.contains("Publishing a new message ID alone does not clear"));
+            assert!(action.contains("Adapter keeps the row held"));
+            assert!(action.contains("does not acknowledge or release it"));
+            assert!(action.contains("can block later messages at the queue head"));
+            assert!(!action.contains("remains head-blocking"));
+        } else {
+            assert!(action.contains("under BReg's own authority"));
+            assert!(action.contains("keeps held items held"));
+            assert!(action.contains("unchanged rescans skip them"));
+        }
+    }
+}
+
+/// Inspect derives recovery ownership from the authored destination and
+/// prints only the stored destination reference plus static guidance.
+#[tokio::test]
+async fn inspect_explains_direct_and_coordinator_holds_without_item_values() {
+    let coordinator = JobFixture::start(
+        job_fixture::PAGE_SCRIPT,
+        vec![(200, reply_page())],
+        job_fixture::Edits::Ordered,
+    )
+    .await;
+    let direct = JobFixture::start_direct_breg(
+        vec![(200, reply_page())],
+        "http://127.0.0.1:9",
+        "http://127.0.0.1:9/token",
+    )
+    .await;
+
+    for (fixture, code, run_id, prior_run_id, owner, reference, authority) in [
+        (
+            &direct,
+            "idempotency.expired",
+            Some("proposal-a"),
+            None,
+            "breg",
+            Some("proposal-a"),
+            "BReg's own authority",
+        ),
+        (
+            &direct,
+            "adapter.job.breg-receipt-horizon",
+            None,
+            None,
+            "breg",
+            None,
+            "BReg's own authority",
+        ),
+        (
+            &coordinator,
+            "adapter.job.revised-item",
+            None,
+            Some("run-a"),
+            "coordinator",
+            Some("run-a"),
+            "Coordinator's own authority",
+        ),
+    ] {
+        let isolated = isolated().await;
+        let client = isolated.pool.get().await.expect("a pooled client");
+        client
+            .execute(
+                "INSERT INTO adapter_job_items \
+                 (job_id, item_key, last_digest, sequence, status, code, run_id, prior_run_id, \
+                  admitted_before, first_seen, last_seen, event_time, delivery_attempt, \
+                  receiver_identity_known) \
+                 VALUES ('case-daily', 'submissions/a', $1, 2, 'held', $2, $3, $4, true, \
+                         now(), now(), now(), 1, true)",
+                &[
+                    &format!("sha256:{}", "0".repeat(64)),
+                    &code,
+                    &run_id,
+                    &prior_run_id,
+                ],
+            )
+            .await
+            .expect("the value-free held row inserts");
+        drop(client);
+        let output = run_job(
+            &isolated.url,
+            vec![
+                "inspect".into(),
+                fixture.job.clone().into(),
+                "--runtime".into(),
+                fixture.runtime.clone().into(),
+                "--key".into(),
+                "submissions/a".into(),
+            ],
+        )
+        .await;
+        assert!(
+            output.status.success(),
+            "inspect failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report: Value = serde_json::from_slice(&output.stdout).expect("inspect prints JSON");
+        assert_eq!(report.pointer("/item/hold/code"), Some(&json!(code)));
+        assert_eq!(
+            report.pointer("/item/hold/destinationReference"),
+            Some(&json!(reference))
+        );
+        assert_eq!(
+            report.pointer("/item/hold/actionOwner"),
+            Some(&json!(owner))
+        );
+        let action = report
+            .pointer("/item/hold/nextAction")
+            .and_then(Value::as_str)
+            .filter(|action| !action.is_empty())
+            .expect("inspect names an operator action");
+        assert!(action.contains(authority));
+        assert!(action.contains("keeps this item held"));
+        assert!(action.contains("unchanged rescans skip it"));
+        assert!(!action.contains("retry"));
+        if reference.is_none() {
+            assert!(action.contains("No destination reference is established"));
+            assert!(action.contains("admission"));
+            assert!(action.contains("idempotency records"));
+        }
+        let rendered = serde_json::to_string(&report).expect("the report renders");
+        assert!(!rendered.contains("never-projected"));
+        assert!(!rendered.contains("mark-accepted"));
+    }
 }
 
 /// A dry run never migrates: an unmigrated store refuses it with the
@@ -1421,8 +2912,8 @@ async fn a_dry_run_refuses_an_unmigrated_store_without_migrating_it() {
         assert!(!output.status.success(), "{command} --dry-run refused");
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
-            stderr.contains("without --dry-run"),
-            "{command} --dry-run names the missing migration: {stderr}"
+            stderr.contains("init-store"),
+            "{command} --dry-run names the store bootstrap: {stderr}"
         );
     }
     assert!(
@@ -1430,6 +2921,41 @@ async fn a_dry_run_refuses_an_unmigrated_store_without_migrating_it() {
         "the dry run created no migration table"
     );
     assert!(!table_present(&isolated.pool, "adapter_job_state").await);
+}
+
+/// Status and inspect remain reads on an uninitialized store. They refuse
+/// with the explicit bootstrap recovery and create no migration or job table.
+#[tokio::test]
+async fn status_and_inspect_name_init_store_without_bootstrapping() {
+    let fixture = JobFixture::start(
+        job_fixture::PAGE_SCRIPT,
+        vec![(200, reply_page())],
+        job_fixture::Edits::Ordered,
+    )
+    .await;
+    let isolated = unmigrated().await;
+    for (command, args) in [
+        ("status", job_args("status", &fixture, &[])),
+        ("inspect", inspect_args(&fixture, "submissions/missing")),
+    ] {
+        let output = run_job(&isolated.url, args).await;
+        assert!(!output.status.success(), "uninitialized {command} refuses");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("init-store"),
+            "{command} names the store bootstrap: {stderr}"
+        );
+    }
+    for table in [
+        "adapter_job_schema_migrations",
+        "adapter_job_state",
+        "adapter_job_items",
+    ] {
+        assert!(
+            !table_present(&isolated.pool, table).await,
+            "{table} was not created by an observational command"
+        );
+    }
 }
 
 /// A dry run refuses a store behind this release's schema, and runs
@@ -1451,7 +2977,7 @@ async fn a_dry_run_reads_only_a_store_at_this_release_schema() {
     );
     let client = isolated.pool.get().await.expect("a pooled client");
     client
-        .batch_execute("DELETE FROM adapter_job_schema_migrations WHERE version = 101")
+        .batch_execute("DELETE FROM adapter_job_schema_migrations WHERE version = 103")
         .await
         .expect("the version row deletes");
     let output = run_job(&isolated.url, job_args("pass", &fixture, &["--dry-run"])).await;
@@ -1461,12 +2987,12 @@ async fn a_dry_run_reads_only_a_store_at_this_release_schema() {
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("without --dry-run"),
-        "the refusal names the migration: {stderr}"
+        stderr.contains("init-store"),
+        "the refusal names the store bootstrap: {stderr}"
     );
     assert_eq!(
         applied_versions(&client).await,
-        vec![100],
+        vec![100, 101, 102],
         "the dry run applied nothing"
     );
 }
@@ -1644,6 +3170,20 @@ async fn a_stale_lease_epoch_refuses_every_fenced_write() {
         )
         .await,
         "record_refused",
+    );
+    lost(
+        store::record_held(
+            &mut client,
+            "case-daily",
+            "submissions/a",
+            "idempotency.expired",
+            None,
+            SystemTime::now(),
+            stale,
+            ttl,
+        )
+        .await,
+        "record_held",
     );
     lost(
         store::complete_pass(
@@ -1826,6 +3366,8 @@ async fn an_answer_code_over_its_bound_stops_under_the_invalid_answer_code() {
         HandOffOutcome::StopPass {
             code: "y".repeat(300),
         },
+        held(&"z".repeat(300), None),
+        held("idempotency.expired", Some(&"r".repeat(300))),
         acknowledged(&"r".repeat(300)),
     ] {
         let (fixture, pool) = pass_fixture().await;
@@ -1853,4 +3395,169 @@ async fn an_answer_code_over_its_bound_stops_under_the_invalid_answer_code() {
             "the item stays pending for the next pass"
         );
     }
+}
+
+/// Status can warn on the last day of BReg's declared receipt horizon and
+/// distinguish rows already past it, without reading or storing a payload.
+#[tokio::test]
+async fn pending_receipt_horizon_counts_are_bounded_and_value_free() {
+    let isolated = isolated().await;
+    let client = isolated.pool.get().await.expect("a pooled client");
+    store::ensure_state(&client, "receipt-job")
+        .await
+        .expect("the state row exists");
+    let now = UNIX_EPOCH + Duration::from_secs(20 * 86_400);
+    for (key, age) in [
+        ("near", 6 * 86_400 + 43_200),
+        ("expired", 8 * 86_400),
+        ("fresh", 2 * 86_400),
+    ] {
+        let first_seen = now - Duration::from_secs(age);
+        client
+            .execute(
+                "INSERT INTO adapter_job_items \
+                 (job_id, item_key, last_digest, sequence, status, first_seen, last_seen, \
+                  event_time, delivery_attempt, receiver_identity_known) \
+                 VALUES ('receipt-job', $1, $2, 1, 'pending', $3, $3, $3, 1, true)",
+                &[&key, &format!("sha256:{}", "0".repeat(64)), &first_seen],
+            )
+            .await
+            .expect("the pending row inserts");
+    }
+    let counts = store::receipt_horizon_counts(&client, "receipt-job", now, 7)
+        .await
+        .expect("the horizon counts read");
+    assert_eq!(counts.nearing, 1);
+    assert_eq!(counts.expired, 1);
+}
+
+/// The owned synthetic operator journey: the default command runs one page,
+/// while `pass --loop` honours its initial and fixed delays from PostgreSQL
+/// state, runs a second page, and accepts SIGINT while waiting without any
+/// later source read or destination hand-off.
+#[tokio::test]
+async fn actual_cli_interval_loop_runs_two_persisted_passes_and_stops_cleanly() {
+    // First hold the default: absent --loop, one child runs one bounded page
+    // even though the source has another page available.
+    let bounded_fixture = JobFixture::start(
+        job_fixture::PAGE_SCRIPT,
+        vec![(200, reply_page()), (200, reply_page_end())],
+        job_fixture::Edits::Ordered,
+    )
+    .await;
+    let bounded_store = isolated().await;
+    let bounded_receiver = FixtureReceiver::start(vec![
+        Scripted::Acknowledge {
+            run_id: Some("bounded-a".to_string()),
+        },
+        Scripted::Acknowledge {
+            run_id: Some("bounded-b".to_string()),
+        },
+    ])
+    .await;
+    let bounded = run_job(
+        &bounded_store.url,
+        fixture_pass_args(&bounded_fixture, &bounded_receiver),
+    )
+    .await;
+    assert_value_free_output("bounded pass", &bounded);
+    assert!(bounded.status.success(), "the bounded pass failed");
+    let bounded_report: Value =
+        serde_json::from_slice(&bounded.stdout).expect("the bounded pass prints one JSON report");
+    assert_eq!(bounded_report["itemsRead"], 2);
+    assert_eq!(
+        bounded_fixture.double.requests().len(),
+        1,
+        "the default pass reads exactly one page"
+    );
+    assert_eq!(bounded_receiver.requests().len(), 2);
+
+    // Then run the actual long-lived operator command on a fresh store. Two
+    // distinct pages make both scheduled passes externally observable.
+    let fixture = JobFixture::start(
+        job_fixture::PAGE_SCRIPT,
+        vec![(200, reply_page()), (200, reply_page_end())],
+        job_fixture::Edits::Ordered,
+    )
+    .await;
+    set_acceptance_interval(&fixture);
+    let isolated = isolated().await;
+    let receiver = FixtureReceiver::start(vec![
+        Scripted::Acknowledge {
+            run_id: Some("loop-a".to_string()),
+        },
+        Scripted::Acknowledge {
+            run_id: Some("loop-b".to_string()),
+        },
+        Scripted::Acknowledge {
+            run_id: Some("loop-c".to_string()),
+        },
+    ])
+    .await;
+    let mut args = fixture_pass_args(&fixture, &receiver);
+    args.push("--loop".into());
+    let child_started = SystemTime::now();
+    let mut child = ManagedChild::spawn(&isolated.url, args);
+
+    let first = wait_for_persisted_pass(&mut child, &isolated.pool, None).await;
+    assert!(
+        first.duration_since(child_started).unwrap_or_default() >= Duration::from_secs(1),
+        "the first pass cannot precede the declared one-second initial delay"
+    );
+    assert_eq!(fixture.double.requests().len(), 1);
+    assert_eq!(receiver.requests().len(), 2);
+
+    let second = wait_for_persisted_pass(&mut child, &isolated.pool, Some(first)).await;
+    assert!(
+        second.duration_since(first).unwrap_or_default() >= Duration::from_secs(3),
+        "the second pass cannot precede the declared three-second fixed delay"
+    );
+    assert_eq!(fixture.double.requests().len(), 2);
+    assert_eq!(receiver.requests().len(), 3);
+    assert_eq!(state(&isolated.pool, "case-daily").await.position, None);
+
+    // The persisted completion precedes the process returning to its wait.
+    // Give that short control path room, then interrupt well inside the next
+    // three-second delay. This avoids any startup or pass-duration upper bound.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(fixture.double.requests().len(), 2);
+    assert_eq!(receiver.requests().len(), 3);
+    child.interrupt();
+    wait_for_clean_exit(&mut child).await;
+    let loop_output = child.output();
+    assert_value_free_output("interval loop", &loop_output);
+    assert!(
+        loop_output.status.success(),
+        "SIGINT during the interval wait was not a clean exit"
+    );
+
+    let source_effects = fixture.double.requests().len();
+    let destination_effects = receiver.requests().len();
+    let persisted_after_exit = state(&isolated.pool, "case-daily").await.last_pass_at;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(fixture.double.requests().len(), source_effects);
+    assert_eq!(receiver.requests().len(), destination_effects);
+    assert_eq!(
+        state(&isolated.pool, "case-daily").await.last_pass_at,
+        persisted_after_exit,
+        "the exited child creates no later persisted pass"
+    );
+
+    // Observational commands read the persisted outcome without source
+    // fields, values, or the source-only secret marker.
+    let status = run_job(&isolated.url, job_args("status", &fixture, &[])).await;
+    assert!(status.status.success(), "status reads the loop's store");
+    assert_value_free_output("status", &status);
+    let status_report: Value =
+        serde_json::from_slice(&status.stdout).expect("status prints one JSON report");
+    assert_eq!(status_report["items"]["acknowledged"], 3);
+
+    let inspect = run_job(&isolated.url, inspect_args(&fixture, "submissions/a")).await;
+    assert!(inspect.status.success(), "inspect reads the loop's item");
+    assert_value_free_output("inspect", &inspect);
+    let inspect_report: Value =
+        serde_json::from_slice(&inspect.stdout).expect("inspect prints one JSON report");
+    assert_eq!(inspect_report["found"], true);
+    assert_eq!(inspect_report["item"]["key"], "submissions/a");
+    assert_eq!(inspect_report["item"]["status"], "acknowledged");
 }

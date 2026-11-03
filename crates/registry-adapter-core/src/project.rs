@@ -68,6 +68,33 @@ impl registry_platform_yaml::Identified for RecordType {
     }
 }
 
+/// How one asynchronous binding answers while the source operation remains
+/// pending. Both modes use the same profile-owned status link; bounded wait
+/// spends only the declared finite interval and poll count first.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    remote = "Self",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum BindingAsyncCompletion {
+    /// Return the committed accepted response immediately.
+    StatusLink {},
+    /// Poll within all three authored bounds, then return either a proven
+    /// terminal response or the same committed accepted response.
+    BoundedWait {
+        wait_timeout_milliseconds: registry_platform_yaml::BoundedU64<1, 30_000>,
+        poll_interval_milliseconds: registry_platform_yaml::BoundedU64<10, 10_000>,
+        maximum_polls: registry_platform_yaml::BoundedU64<1, 100>,
+    },
+}
+
+registry_platform_yaml::tagged_union!(BindingAsyncCompletion, tag = "type");
+crate::model::serialize_tagged_union!(BindingAsyncCompletion, tag = "type");
+
 /// One binding of a concrete contract operation to a route
 /// (`products/adapter/CONCEPT.md` section 7): one concrete operation per
 /// (profile operation, record type) pair, with the static worst-case
@@ -97,6 +124,10 @@ pub struct Binding {
     /// The declared budget of upstream sends per exchange; the static
     /// worst-case count must stay within it.
     pub maximum_upstream_calls: registry_platform_yaml::BoundedU64<1, 100_000>,
+    /// The asynchronous response policy, absent for every synchronous
+    /// binding.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub async_completion: Option<BindingAsyncCompletion>,
 }
 
 /// A filter list is omitted from the wire when empty, the shape `Vec`'s
@@ -247,6 +278,7 @@ mod tests {
                 filters: registry_platform_yaml::UniqueList::new(Vec::new()).expect("unique"),
                 maximum_upstream_calls: registry_platform_yaml::BoundedU64::<1, 100_000>::new(30)
                     .expect("budget"),
+                async_completion: None,
             }])
             .expect("unique"),
             access_profiles: UniqueIdList::new(vec![AccessProfile {
@@ -387,5 +419,64 @@ mod tests {
             read(&["cases:read"], &["cases-find"], &["case", "case"]).is_err(),
             "a repeated record type is refused"
         );
+    }
+
+    #[test]
+    fn binding_async_completion_modes_are_closed_and_bounded() {
+        let binding = |completion: &str| {
+            format!(
+                r#"{{"id":"create-case","operation":"cases-create","recordType":"case","route":"create-case","maximumUpstreamCalls":30{completion}}}"#
+            )
+        };
+        let sync = serde_json::from_str::<Binding>(&binding("")).expect("sync binding");
+        assert!(sync.async_completion.is_none());
+        assert!(!serde_json::to_string(&sync)
+            .expect("serialize")
+            .contains("asyncCompletion"));
+
+        let linked = serde_json::from_str::<Binding>(&binding(
+            r#", "asyncCompletion":{"type":"status-link"}"#,
+        ))
+        .expect("status link");
+        assert!(matches!(
+            linked.async_completion,
+            Some(BindingAsyncCompletion::StatusLink {})
+        ));
+        assert_eq!(
+            serde_json::to_value(linked.async_completion.expect("completion"))
+                .expect("serialize completion"),
+            serde_json::json!({"type": "status-link"})
+        );
+
+        let waited = serde_json::from_str::<Binding>(&binding(
+            r#", "asyncCompletion":{"type":"bounded-wait","waitTimeoutMilliseconds":30000,"pollIntervalMilliseconds":10,"maximumPolls":100}"#,
+        ))
+        .expect("bounded wait");
+        assert!(matches!(
+            waited.async_completion,
+            Some(BindingAsyncCompletion::BoundedWait {
+                wait_timeout_milliseconds,
+                poll_interval_milliseconds,
+                maximum_polls,
+            }) if wait_timeout_milliseconds.get() == 30_000
+                && poll_interval_milliseconds.get() == 10
+                && maximum_polls.get() == 100
+        ));
+
+        for refused in [
+            r#", "asyncCompletion":{"mode":"status-link"}"#,
+            r#", "asyncCompletion":{"type":"status-link","maximumPolls":1}"#,
+            r#", "asyncCompletion":{"type":"bounded-wait","waitTimeoutMilliseconds":1,"pollIntervalMilliseconds":10}"#,
+            r#", "asyncCompletion":{"type":"bounded-wait","waitTimeoutMilliseconds":0,"pollIntervalMilliseconds":10,"maximumPolls":1}"#,
+            r#", "asyncCompletion":{"type":"bounded-wait","waitTimeoutMilliseconds":30001,"pollIntervalMilliseconds":10,"maximumPolls":1}"#,
+            r#", "asyncCompletion":{"type":"bounded-wait","waitTimeoutMilliseconds":1,"pollIntervalMilliseconds":9,"maximumPolls":1}"#,
+            r#", "asyncCompletion":{"type":"bounded-wait","waitTimeoutMilliseconds":1,"pollIntervalMilliseconds":10001,"maximumPolls":1}"#,
+            r#", "asyncCompletion":{"type":"bounded-wait","waitTimeoutMilliseconds":1,"pollIntervalMilliseconds":10,"maximumPolls":0}"#,
+            r#", "asyncCompletion":{"type":"bounded-wait","waitTimeoutMilliseconds":1,"pollIntervalMilliseconds":10,"maximumPolls":101}"#,
+            r#", "asyncCompletion":{"type":"bounded-wait","waitTimeoutMilliseconds":1,"pollIntervalMilliseconds":10,"maximumPolls":1,"bogus":true}"#,
+            r#", "asyncCompletion":{"type":"forever"}"#,
+        ] {
+            assert!(serde_json::from_str::<Binding>(&binding(refused)).is_err());
+        }
     }
 }

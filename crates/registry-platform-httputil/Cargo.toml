@@ -46,6 +46,6 @@ getrandom.workspace = true
 p256.workspace = true
 proptest.workspace = true
 rcgen.workspace = true
-tokio = { workspace = true, features = ["io-util"] }
+tokio = { workspace = true, features = ["io-util", "test-util"] }
 tokio-rustls.workspace = true
 wiremock.workspace = true

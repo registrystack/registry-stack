@@ -11,6 +11,7 @@
 )]
 
 use registry_evidence_authoring::openapi::types;
+use registry_platform_yaml::{ApiVersion, EnvelopeRule, Expect, FormatSpec, Reader};
 
 #[allow(dead_code)]
 #[path = "../src/evidence_binary.rs"]
@@ -20,18 +21,29 @@ mod evidence_binary;
 #[path = "../src/suggest/emit.rs"]
 mod emit;
 
-use std::path::{Path, PathBuf};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use serde_json::json;
-
-use registry_evidence::rhai_runtime::{
-    RequestPartRequirement, RequestPartsBounds, RequestPartsLimits, RhaiRuntime,
-};
 
 use emit::{CheckClassification, EmitInputs};
 use types::{
     BoundKind, BoundNeed, BoundValues, NarrowOutcome, OperationKey, Provenance, RequestMapping,
     RequestTarget, SelectorReference, SelectorScalarType, SpecSource, SuggestedBound,
+};
+
+const ADAPTER_PACK_FORMAT: FormatSpec<'static> = FormatSpec {
+    kind: registry_adapter_core::ADAPTER_PACK_KIND,
+    envelope: EnvelopeRule::ApiVersionKind {
+        api_versions: &[ApiVersion::current(
+            registry_adapter_core::ADAPTER_PACK_API_VERSION,
+        )],
+        retired_api_versions: &[],
+    },
+    removed_keys: &[],
 };
 
 /// A schema exercising every case the response-schema renderer must handle:
@@ -135,6 +147,8 @@ fn base_inputs() -> EmitInputs {
         narrowed: narrow_outcome_fixture(),
         needs: needs_fixture(),
         openapi: SpecSource::File(PathBuf::from("tests/fixtures/openapi/example.yaml")),
+        openapi_document: "openapi: 3.1.0\ninfo: {title: Example, version: '1'}\npaths: {}\n"
+            .to_owned(),
         sample_path: None,
         project: None,
         request_mappings: Vec::new(),
@@ -142,7 +156,52 @@ fn base_inputs() -> EmitInputs {
 }
 
 #[test]
-fn explicit_path_and_query_mappings_generate_an_ordinary_source_request() {
+fn draft_emits_a_pinned_pack_closure_and_only_a_thin_source_binding() {
+    let artifacts = emit::draft(&base_inputs()).expect("pack-backed draft");
+    let source: serde_json::Value =
+        serde_json::from_str(&artifacts.authoring_source).expect("normalized Source JSON");
+    assert_eq!(source["pack"], json!({"id":"search-a","version":"0.1.0"}));
+    assert_eq!(source["route"], "search-a");
+    assert_eq!(source["connection"], "search-a");
+    assert!(source.get("request").is_none());
+    assert!(source.get("prepare").is_none());
+    assert!(source.get("extract").is_none());
+
+    let pack = file_contents(&artifacts, "adapter-packs/search-a/pack.yaml");
+    let typed_pack = typed_pack(pack);
+    let findings = registry_adapter_core::check_pack(&typed_pack);
+    assert!(
+        findings.is_empty(),
+        "generated pack must pass current structural admission: {findings:#?}"
+    );
+    let pack = serde_json::to_value(typed_pack).expect("AdapterPack JSON");
+    assert_eq!(pack["openApi"]["path"], "openapi/source.openapi.yaml");
+    assert_eq!(pack["sourceRoutes"][0]["id"], "search-a");
+    assert!(pack["sourceRoutes"][0].get("evidence").is_some());
+    assert_eq!(pack["endpoints"][0]["requestHeaders"], json!(["accept"]));
+    for reference in [
+        &pack["openApi"],
+        &pack["sourceRoutes"][0]["evidence"]["inputsSchema"],
+        &pack["sourceRoutes"][0]["evidence"]["factsSchema"],
+    ] {
+        let path = reference["path"].as_str().expect("pinned path");
+        let expected = reference["digest"].as_str().expect("pinned digest");
+        let actual = registry_platform_config::sha256_uri(
+            file_contents(&artifacts, &format!("adapter-packs/search-a/{path}")).as_bytes(),
+        );
+        assert_eq!(actual, expected);
+    }
+    let all = artifacts
+        .files
+        .iter()
+        .map(|file| file.contents.as_str())
+        .collect::<String>();
+    assert!(!all.contains("source-prepare/v1"));
+    assert!(!all.contains("source-extract/v1"));
+}
+
+#[test]
+fn explicit_path_and_query_mappings_generate_pack_bindings_and_thin_source_inputs() {
     let mut inputs = base_inputs();
     inputs.operation.path = "/v1/records/{record_id}".to_owned();
     let selector = SelectorReference {
@@ -167,32 +226,30 @@ fn explicit_path_and_query_mappings_generate_an_ordinary_source_request() {
     let source: serde_json::Value =
         serde_json::from_str(&artifacts.authoring_source).expect("normalized Source JSON");
     assert_eq!(
-        source["selectors"],
-        json!([{"role":"subject","profiles":["subject-reference-v1"]}])
-    );
-    assert_eq!(
-        source["request"]["pathBindings"]["record_id"],
+        source["inputs"],
         json!({
-            "selector": {
-                "role":"subject",
-                "profile":"subject-reference-v1",
-                "field":"reference"
-            }
+            "input1":{"selector":{"role":"subject","profile":"subject-reference-v1","field":"reference"}},
+            "input2":{"selector":{"role":"subject","profile":"subject-reference-v1","field":"reference"}}
         })
     );
-    let prepare = file_contents(&artifacts, "functions/search-a-prepare.rhai");
-    assert!(
-        prepare.contains(
-            r#"query.push(query_pair("reference", selectors["subject"]["values"]["reference"]));"#
-        ),
-        "generated prepare Function was:\n{prepare}"
+    let pack: serde_json::Value = serde_norway::from_str(file_contents(
+        &artifacts,
+        "adapter-packs/search-a/pack.yaml",
+    ))
+    .expect("AdapterPack YAML");
+    assert_eq!(to_parameters(&pack)["path"], "/v1/records/{{record_id}}");
+    assert_eq!(
+        to_parameters(&pack)["pathParameters"]["record_id"]["jsonpath"],
+        "$.input1"
     );
-    assert!(!prepare.contains("TODO(evidencectl)"), "{prepare}");
+    assert_eq!(
+        to_parameters(&pack)["query"]["reference"]["jsonpath"],
+        "$.input2"
+    );
 }
 
 #[test]
-fn mapped_rendered_path_guard_agrees_with_runtime_admission() {
-    use registry_evidence::config::EvidenceConfig;
+fn mapped_rendered_path_guard_agrees_with_current_pack_admission() {
     let maximum = format!("/{}", "a".repeat(2047));
     let overlong = format!("/{}", "a".repeat(2048));
     let cases = [
@@ -217,7 +274,11 @@ fn mapped_rendered_path_guard_agrees_with_runtime_admission() {
         ("/v1/records/{record_id}", "/api//v2"),
         ("/v1/records/{record_id}", "/api/%2F"),
     ];
-    for (case, (path, prefix)) in cases.into_iter().enumerate() {
+    let expected = [
+        true, true, true, true, true, false, false, false, false, false, false, false, false,
+        false, false, false, false, false, false, false,
+    ];
+    for (case, ((path, prefix), expected)) in cases.into_iter().zip(expected).enumerate() {
         let mut inputs = base_inputs();
         inputs.operation.path = path.to_owned();
         inputs.base_url_suggestion =
@@ -233,39 +294,29 @@ fn mapped_rendered_path_guard_agrees_with_runtime_admission() {
             selector: selector.clone(),
             target: RequestTarget::Query("reference".to_owned()),
         }];
-        let mut bindings = serde_json::Map::new();
         if path.contains("{record_id}") {
             inputs.request_mappings.push(RequestMapping {
                 selector,
                 target: RequestTarget::Path("record_id".to_owned()),
             });
-            bindings.insert("record_id".to_owned(), json!({"type":"selector", "role":"subject", "profile":"person-demographics-v1", "field":"given_name"}));
         }
         let rendered = format!("{prefix}{path}");
-        let mut bundle: serde_json::Value = serde_norway::from_str(include_str!(
-            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
-        ))
-        .expect("runtime acceptance bundle");
-        let request = &mut bundle["sources"]["source-a"]["request"];
-        request["path"] = json!(rendered);
-        if !bindings.is_empty() {
-            request["pathBindings"] = json!(bindings);
-        }
-        let runtime =
-            EvidenceConfig::parse_yaml(&serde_json::to_vec(&bundle).expect("runtime bundle"));
         let draft = emit::draft(&inputs);
         assert_eq!(
             draft.is_ok(),
-            runtime.is_ok(),
-            "path case {case} ({} bytes): draft {:?}, runtime {:?}",
+            expected,
+            "path case {case} ({} bytes): draft {:?}",
             rendered.len(),
             draft.as_ref().err(),
-            runtime.as_ref().err()
         );
         if let Ok(draft) = draft {
-            let source: serde_json::Value =
-                serde_json::from_str(&draft.authoring_source).expect("Source JSON");
-            assert_eq!(source["request"]["path"], rendered);
+            let pack: serde_json::Value =
+                serde_norway::from_str(file_contents(&draft, "adapter-packs/search-a/pack.yaml"))
+                    .expect("AdapterPack YAML");
+            assert_eq!(
+                to_parameters(&pack)["path"],
+                rendered.replace('{', "{{").replace('}', "}}")
+            );
         }
     }
 }
@@ -275,7 +326,11 @@ fn unmapped_incomplete_path_drafts_remain_available() {
     let mut inputs = base_inputs();
     inputs.operation.path = "/v1/records/{RecordId}/".to_owned();
     let draft = emit::draft(&inputs).expect("unmapped authoring draft");
-    assert!(file_contents(&draft, "functions/search-a-prepare.rhai").contains("TODO(evidencectl)"));
+    assert!(file_contents(
+        &draft,
+        "adapter-packs/search-a/scripts/search-a-prepare.rhai"
+    )
+    .contains("TODO(evidencectl)"));
 }
 
 #[test]
@@ -307,22 +362,25 @@ fn explicit_post_body_mappings_generate_a_closed_json_object() {
     ];
 
     let artifacts = emit::draft(&inputs).expect("mapped draft");
-    let prepare = file_contents(&artifacts, "functions/search-a-prepare.rhai");
-    assert!(prepare.contains("body: #{"), "{prepare}");
+    let prepare = file_contents(
+        &artifacts,
+        "adapter-packs/search-a/scripts/search-a-prepare.rhai",
+    );
+    assert!(prepare.contains("#{"), "{prepare}");
     assert!(prepare.contains(r#""subject": #{"#), "{prepare}");
     assert!(
-        prepare.contains(r#""reference": selectors["subject"]["values"]["reference"]"#),
+        prepare.contains(r#""reference": inputs["input1"]"#),
         "{prepare}"
     );
     assert!(
-        prepare.contains(r#""active": selectors["subject"]["values"]["active"]"#),
+        prepare.contains(r#""active": inputs["input2"]"#),
         "{prepare}"
     );
     assert!(!prepare.contains("TODO(evidencectl)"), "{prepare}");
 }
 
 #[test]
-fn generated_prepare_executes_with_scalar_queries_and_an_escaped_json_body() {
+fn generated_pack_maps_scalar_queries_and_executes_escaped_json_body_script() {
     let mut inputs = base_inputs();
     inputs.operation.method = "POST".to_owned();
     let quoted_name = "trace\"'\\name";
@@ -389,54 +447,47 @@ fn generated_prepare_executes_with_scalar_queries_and_an_escaped_json_body() {
         },
     ];
     let artifacts = emit::draft(&inputs).expect("draft");
-    let prepare = file_contents(&artifacts, "functions/search-a-prepare.rhai");
-    let runtime = RhaiRuntime::new();
-    let compiled = runtime
-        .compile_preparation(prepare)
-        .expect("generated Function compiles in the real runtime");
-    let limits = RequestPartsLimits::new(
-        RequestPartRequirement::Required,
-        RequestPartRequirement::Required,
-        RequestPartsBounds {
-            maximum_query_pairs: 4,
-            maximum_query_name_bytes: 64,
-            maximum_query_value_bytes: 256,
-            maximum_json_depth: 8,
-            maximum_collection_items: 16,
-            maximum_string_bytes: 256,
-            maximum_normalized_bytes: 4096,
-        },
-    )
-    .expect("valid limits");
-    let prepared = runtime
-        .prepare(
-            &compiled,
-            &json!({
-                "subject": {
-                    "profile": "person-v1",
-                    "values": {"reference": "a&b=c", "count": 42, "active": true}
-                }
-            }),
-            &json!({}),
-            &limits,
-        )
-        .expect("generated Function prepares through the real ABI");
+    let pack_root = tempfile::tempdir().expect("pack root");
+    emit::write_into_project(pack_root.path(), &artifacts.files).expect("write pack closure");
+    let pack_directory = pack_root.path().join("adapter-packs/search-a");
+    let pack_text = std::fs::read_to_string(pack_directory.join("pack.yaml")).expect("pack YAML");
+    let pack = typed_pack(&pack_text);
+    let pack_value = serde_json::to_value(&pack).expect("pack JSON");
+    let parameters = to_parameters(&pack_value);
     assert_eq!(
-        prepared
-            .query
-            .iter()
-            .map(|pair| (pair.name.as_str(), pair.value.as_str()))
-            .collect::<Vec<_>>(),
-        vec![
-            ("external-reference", "a&b=c"),
-            ("count", "42"),
-            ("active", "true"),
-            (quoted_name, "a&b=c"),
-        ]
+        parameters["query"]["external-reference"]["jsonpath"],
+        "$.input1"
     );
+    assert_eq!(parameters["query"]["count"]["jsonpath"], "$.input2");
+    assert_eq!(parameters["query"]["active"]["jsonpath"], "$.input3");
+    assert_eq!(parameters["query"][quoted_name]["jsonpath"], "$.input4");
+    let mut scripts = registry_adapter_engine::scripts::ScriptSet::default();
+    scripts
+        .add(
+            &pack,
+            &pack_directory,
+            "scripts/search-a-prepare.rhai",
+            "prepare",
+        )
+        .expect("generated pack script compiles in the current engine");
+    let prepared = scripts
+        .call(
+            &Arc::new(BTreeMap::new()),
+            "scripts/search-a-prepare.rhai",
+            "prepare",
+            &json!({
+                "body": {
+                    "input1":"a&b=c", "input2":42, "input3":true,
+                    "input4":"a&b=c", "input5":"a&b=c", "input6":true
+                },
+                "headers": {},
+                "properties": {}
+            }),
+        )
+        .expect("generated pack body script executes through the current ABI");
     assert_eq!(
-        prepared.body,
-        Some(json!({"lookup/key": {"required~flag": true, "value~text": "a&b=c"}}))
+        prepared,
+        json!({"lookup/key": {"required~flag": true, "value~text": "a&b=c"}})
     );
     let request_schema = json!({
         "type": "object",
@@ -459,56 +510,52 @@ fn generated_prepare_executes_with_scalar_queries_and_an_escaped_json_body() {
         .compile(&request_schema)
         .expect("request schema compiles");
     assert!(
-        validator.is_valid(prepared.body.as_ref().expect("body is present")),
+        validator.is_valid(&prepared),
         "generated request body satisfies the resolved OpenAPI request schema"
     );
 }
 
 fn file_contents<'a>(artifacts: &'a types::DraftArtifacts, bundle_relative_path: &str) -> &'a str {
-    if let Some(file) = artifacts
+    artifacts
         .files
         .iter()
         .find(|file| file.bundle_relative_path == bundle_relative_path)
-    {
-        return file.contents.as_str();
-    }
-    if let Some(name) = bundle_relative_path.strip_prefix("adapters/") {
-        let normalized = format!("functions/{name}");
-        return artifacts
-            .files
-            .iter()
-            .find(|file| file.bundle_relative_path == normalized)
-            .unwrap_or_else(|| panic!("expected a normalized Function asset at {normalized}"))
-            .contents
-            .as_str();
-    }
-    let source: serde_json::Value =
-        serde_norway::from_str(&artifacts.source_block).expect("source block parses");
-    let source = &source["sources"]["search-a"];
-    let inline = if bundle_relative_path.ends_with("-response.schema.yaml") {
-        &source["response"]["shape"]
-    } else if bundle_relative_path.ends_with("-parameters.schema.yaml") {
-        &source["adapterParametersSchema"]
-    } else if bundle_relative_path.ends_with("-facts.schema.yaml") {
-        &source["facts"]
-    } else {
-        panic!("expected a draft file at {bundle_relative_path}")
-    };
-    Box::leak(
-        serde_norway::to_string(inline)
-            .expect("inline schema renders")
-            .into_boxed_str(),
-    )
+        .unwrap_or_else(|| panic!("expected a pack artifact at {bundle_relative_path}"))
+        .contents
+        .as_str()
+}
+
+fn typed_pack(document: &str) -> registry_adapter_core::AdapterPack {
+    Reader::new("generated Adapter pack")
+        .decode::<registry_adapter_core::AdapterPack>(
+            document.as_bytes(),
+            &Expect::one(&ADAPTER_PACK_FORMAT),
+        )
+        .expect("typed AdapterPack YAML")
+        .value
+}
+
+fn to_parameters(pack: &serde_json::Value) -> &serde_json::Value {
+    pack["sourceRoutes"][0]["steps"]
+        .as_array()
+        .expect("route steps")
+        .iter()
+        .find_map(|step| step.get("to"))
+        .map(|to| &to["parameters"])
+        .expect("route to parameters")
 }
 
 #[test]
 fn response_schema_parses_and_carries_adjacent_annotations() {
     let artifacts = emit::draft(&base_inputs()).expect("draft");
-    let response_schema = file_contents(&artifacts, "schemas/search-a-response.schema.yaml");
+    let response_schema = file_contents(
+        &artifacts,
+        "adapter-packs/search-a/schemas/search-a-facts.schema.json",
+    );
 
-    let parsed: serde_norway::Value =
-        serde_norway::from_str(response_schema).expect("response schema parses as YAML");
-    assert!(parsed.is_mapping());
+    let parsed: serde_json::Value =
+        serde_json::from_str(response_schema).expect("facts schema parses as JSON");
+    assert!(parsed.is_object());
 
     assert!(artifacts.report.contains("/results"));
     assert!(artifacts.report.contains("/results/*/status"));
@@ -543,22 +590,23 @@ fn a_flow_list_member_containing_a_comma_stays_one_member() {
     inputs.selection = vec!["/status".to_owned(), "/a,b".to_owned()];
 
     let artifacts = emit::draft(&inputs).expect("draft");
-    let response_schema = file_contents(&artifacts, "schemas/search-a-response.schema.yaml");
-    let parsed: serde_norway::Value =
-        serde_norway::from_str(response_schema).expect("response schema parses as YAML");
+    let response_schema = file_contents(
+        &artifacts,
+        "adapter-packs/search-a/schemas/search-a-facts.schema.json",
+    );
+    let parsed: serde_json::Value =
+        serde_json::from_str(response_schema).expect("facts schema parses as JSON");
     let enumeration = parsed["properties"]["status"]["enum"]
-        .as_sequence()
-        .expect("enum is a sequence");
+        .as_array()
+        .expect("enum is an array");
     assert_eq!(enumeration.len(), 2, "got {enumeration:?}");
     assert_eq!(enumeration[0].as_str(), Some("pending, review"));
 
-    let block: serde_norway::Value =
-        serde_norway::from_str(&artifacts.source_block).expect("source block parses as YAML");
-    let projection = block["sources"]["search-a"]["response"]["projection"]
-        .as_sequence()
-        .expect("projection is a sequence");
-    assert_eq!(projection.len(), 2, "got {projection:?}");
-    assert_eq!(projection[1].as_str(), Some("/a,b"));
+    let extract = file_contents(
+        &artifacts,
+        "adapter-packs/search-a/scripts/search-a-extract.rhai",
+    );
+    assert!(extract.contains(r#"if "status" in value"#), "{extract}");
 }
 
 /// A bound demanded of an array's items node belongs above `items:`; without
@@ -592,10 +640,13 @@ fn a_bound_on_an_array_items_node_is_annotated_above_items() {
     inputs.selection = vec!["/tags/*".to_owned()];
 
     let artifacts = emit::draft(&inputs).expect("draft");
-    let response_schema = file_contents(&artifacts, "schemas/search-a-response.schema.yaml");
+    let response_schema = file_contents(
+        &artifacts,
+        "adapter-packs/search-a/schemas/search-a-facts.schema.json",
+    );
     assert_eq!(
-        serde_norway::from_str::<serde_norway::Value>(response_schema).unwrap()["properties"]
-            ["tags"]["items"]["type"]
+        serde_json::from_str::<serde_json::Value>(response_schema).unwrap()["properties"]["tags"]
+            ["items"]["type"]
             .as_str(),
         Some("string")
     );
@@ -630,75 +681,78 @@ fn an_array_keeps_unique_items_and_a_constant() {
     inputs.selection = vec!["/tags/*".to_owned()];
 
     let artifacts = emit::draft(&inputs).expect("draft");
-    let response_schema = file_contents(&artifacts, "schemas/search-a-response.schema.yaml");
-    let parsed: serde_norway::Value =
-        serde_norway::from_str(response_schema).expect("response schema parses as YAML");
+    let response_schema = file_contents(
+        &artifacts,
+        "adapter-packs/search-a/schemas/search-a-facts.schema.json",
+    );
+    let parsed: serde_json::Value =
+        serde_json::from_str(response_schema).expect("facts schema parses as JSON");
     assert_eq!(
         parsed["properties"]["tags"]["uniqueItems"].as_bool(),
         Some(true)
     );
     assert_eq!(
         parsed["properties"]["tags"]["const"]
-            .as_sequence()
+            .as_array()
             .map(Vec::len),
         Some(2)
     );
 }
 
 #[test]
-fn facts_schema_stub_is_minimal_and_parses() {
+fn facts_schema_is_the_closed_selected_projection_and_parses() {
     let artifacts = emit::draft(&base_inputs()).expect("draft");
-    let facts_schema = file_contents(&artifacts, "schemas/search-a-facts.schema.yaml");
-
-    let parsed: serde_norway::Value =
-        serde_norway::from_str(facts_schema).expect("facts schema parses as YAML");
-    let mapping = parsed.as_mapping().expect("facts schema is a mapping");
-    assert_eq!(mapping.len(), 1);
-    assert_eq!(
-        mapping[&serde_norway::Value::String("placeholder-fact".to_owned())]["type"].as_str(),
-        Some("boolean")
+    let facts_schema = file_contents(
+        &artifacts,
+        "adapter-packs/search-a/schemas/search-a-facts.schema.json",
     );
+
+    let parsed: serde_json::Value =
+        serde_json::from_str(facts_schema).expect("facts schema parses as JSON");
+    assert_eq!(parsed, narrow_outcome_fixture().schema);
     assert!(artifacts.report.contains("private fact"));
 }
 
-/// The normalized Source keeps its fixed adapter parameters and their closed
-/// schema together so the generated project has no second schema artifact.
+/// The pack owns a closed input schema whose properties are exactly the thin
+/// Source's minimized selector bindings.
 #[test]
-fn parameters_schema_is_closed_and_inline() {
+fn inputs_schema_is_closed_and_matches_source_bindings() {
     let artifacts = emit::draft(&base_inputs()).expect("draft");
-    let parameters_schema = file_contents(&artifacts, "schemas/search-a-parameters.schema.yaml");
-
-    assert!(artifacts.report.contains("preparation"));
-
-    let parsed: serde_norway::Value =
-        serde_norway::from_str(parameters_schema).expect("parameters schema parses as YAML");
-    let mapping = parsed.as_mapping().expect("parameters schema is a mapping");
-    let properties = mapping
-        .get(serde_norway::Value::String("properties".to_owned()))
-        .and_then(|v| v.as_mapping())
-        .expect("properties is a mapping");
-    assert!(
-        properties.is_empty(),
-        "the draft must stay a must-edit stub, not a placeholder property"
+    let inputs_schema = file_contents(
+        &artifacts,
+        "adapter-packs/search-a/schemas/search-a-inputs.schema.json",
     );
+
+    assert!(artifacts.report.contains("pack request mapping"));
+
+    let parsed: serde_json::Value =
+        serde_json::from_str(inputs_schema).expect("inputs schema parses as JSON");
+    assert_eq!(parsed["additionalProperties"], false);
+    assert_eq!(parsed["properties"], json!({}));
+    assert_eq!(parsed["required"], json!([]));
 }
 
 #[test]
-fn extract_script_uses_get_path_for_every_selected_leaf_with_wildcard_substitution() {
+fn extract_script_projects_every_selected_leaf_and_array_without_raw_path_helpers() {
     let artifacts = emit::draft(&base_inputs()).expect("draft");
-    let script = file_contents(&artifacts, "adapters/search-a-extract.rhai");
+    let script = file_contents(
+        &artifacts,
+        "adapter-packs/search-a/scripts/search-a-extract.rhai",
+    );
 
-    assert!(script.contains(r#"get_path(source_response, "/total")"#));
-    assert!(script.contains(r#"get_path(source_response, "/event_date")"#));
-    // The extended pointer's `*` becomes `0` in the plain get_path pointer.
-    assert!(script.contains(r#"get_path(source_response, "/results/0/status")"#));
-    assert_eq!(script.matches("is_missing(leaf_").count(), 3);
-
-    // A selection under an array gets a commented loop sketch.
-    assert!(script.contains("for element_1 in items_1 {"));
-    assert!(!script.contains(r#"source_response["total"]"#));
-
-    assert!(script.contains("fn extract(source_response, context) {"));
+    for field in ["total", "event_date", "results", "status"] {
+        assert!(
+            script.contains(&format!(r#"if "{field}" in value"#)),
+            "{script}"
+        );
+    }
+    assert!(script.contains("for item in value"), "{script}");
+    assert!(!script.contains("get_path"), "{script}");
+    assert!(script.contains("fn extract(exchange) {"), "{script}");
+    assert!(
+        script.contains(r#"#{lookup: "matched", facts:"#),
+        "{script}"
+    );
 }
 
 /// The commented loop sketch is read by an operator and then pasted, so it may
@@ -706,9 +760,12 @@ fn extract_script_uses_get_path_for_every_selected_leaf_with_wildcard_substituti
 /// (`..`) are disabled, `len` is a property getter rather than a method, and
 /// no operator concatenates a string with an integer.
 #[test]
-fn the_array_loop_sketch_uses_only_constructs_the_runtime_registers() {
+fn the_array_projector_uses_only_constructs_the_runtime_registers() {
     let artifacts = emit::draft(&base_inputs()).expect("draft");
-    let script = file_contents(&artifacts, "adapters/search-a-extract.rhai");
+    let script = file_contents(
+        &artifacts,
+        "adapter-packs/search-a/scripts/search-a-extract.rhai",
+    );
 
     assert!(!script.contains("0.."), "ranges are disabled: {script}");
     assert!(!script.contains(".len()"), "len is a getter: {script}");
@@ -716,42 +773,44 @@ fn the_array_loop_sketch_uses_only_constructs_the_runtime_registers() {
         !script.contains("+ index"),
         "string + integer has no operator: {script}"
     );
-    // The array is reached by its own pointer and iterated directly.
-    assert!(
-        script.contains(r#"//     let items_1 = get_path(source_response, "/results");"#),
-        "the sketch must read the array by its own pointer: {script}"
-    );
-    assert!(
-        script.contains(r#"//     if !is_missing(items_1) {"#),
-        "the sketch must guard an absent array: {script}"
-    );
-    assert!(
-        script.contains(r#"//             let value = get_path(element_1, "/status");"#),
-        "the sketch must read the leaf from each element: {script}"
-    );
+    assert!(script.contains("for item in value"), "{script}");
+    assert!(script.contains("out.push(project_"), "{script}");
 }
 
 /// A pointer crossing two arrays names each array by its own pointer: the
 /// segment before the first `*` says nothing about the inner one.
 #[test]
-fn a_nested_array_loop_sketch_names_every_array_it_crosses() {
+fn a_nested_array_projector_names_and_calls_every_array_it_crosses() {
     let mut inputs = base_inputs();
     inputs.selection = vec!["/results/*/tags/*".to_owned()];
+    inputs.narrowed = NarrowOutcome {
+        schema: json!({
+            "type":"object","additionalProperties":false,"properties":{
+                "results":{"type":"array","maxItems":8,"items":{
+                    "type":"object","additionalProperties":false,"properties":{
+                        "tags":{"type":"array","maxItems":8,"items":{"type":"string","maxLength":64}}
+                    }
+                }}
+            }
+        }),
+        unresolved: Vec::new(),
+    };
+    inputs.needs = Vec::new();
     let artifacts = emit::draft(&inputs).expect("draft");
-    let script = file_contents(&artifacts, "adapters/search-a-extract.rhai");
+    let script = file_contents(
+        &artifacts,
+        "adapter-packs/search-a/scripts/search-a-extract.rhai",
+    );
 
+    assert_eq!(script.matches("let out = [];").count(), 2, "{script}");
+    assert_eq!(script.matches("for item in value").count(), 2, "{script}");
     assert!(
-        script.contains(r#"let items_1 = get_path(source_response, "/results");"#),
-        "the outer array is /results: {script}"
+        script.contains(r#"project_1(value["results"])"#),
+        "{script}"
     );
-    assert!(
-        script.contains(r#"let items_2 = get_path(element_1, "/tags");"#),
-        "the inner array is /tags, reached from an outer element: {script}"
-    );
-    assert!(
-        script.contains("element_2 is the value at /results/*/tags/*"),
-        "the innermost element is the selected value: {script}"
-    );
+    assert!(script.contains(r#"project_3(value["tags"])"#), "{script}");
+    assert!(script.contains("out.push(project_2(item))"), "{script}");
+    assert!(script.contains("out.push(item)"), "{script}");
 }
 
 #[test]
@@ -781,7 +840,7 @@ fn get_path_segment_ceiling_is_enforced_and_names_the_pointer() {
 }
 
 #[test]
-fn source_block_parses_and_carries_only_mechanical_source_facts() {
+fn source_block_parses_as_a_thin_pack_route_and_connection_binding() {
     let artifacts = emit::draft(&base_inputs()).expect("draft");
 
     let parsed: serde_norway::Value =
@@ -789,58 +848,80 @@ fn source_block_parses_and_carries_only_mechanical_source_facts() {
     assert!(parsed.is_mapping());
 
     assert!(artifacts.source_block.contains("search-a:"));
-    assert!(artifacts.source_block.contains("method: GET"));
-    assert!(artifacts.source_block.contains("path: /v1/records"));
-    assert!(artifacts.source_block.contains("value: application/json"));
     assert_eq!(
-        parsed["sources"]["search-a"]["response"]["projection"]
-            .as_sequence()
-            .map(Vec::len),
-        Some(3)
+        parsed["sources"]["search-a"]["pack"]["id"].as_str(),
+        Some("search-a")
     );
     assert_eq!(
-        parsed["sources"]["search-a"]["extract"]["function"].as_str(),
-        Some("search-a-extract")
+        parsed["sources"]["search-a"]["route"].as_str(),
+        Some("search-a")
     );
-    assert_eq!(parsed["functions"].as_sequence().map(Vec::len), Some(2));
+    assert_eq!(
+        parsed["sources"]["search-a"]["connection"].as_str(),
+        Some("search-a")
+    );
+    assert_eq!(
+        parsed["sources"]["search-a"]["acquisitionPosture"].as_str(),
+        Some("record-transformed")
+    );
+    assert_eq!(
+        parsed["sources"]["search-a"]["inputs"]
+            .as_mapping()
+            .map(|inputs| inputs.len()),
+        Some(0)
+    );
 
     let source = &parsed["sources"]["search-a"];
     for governed in [
         "baseUrl",
         "posture",
         "authentication",
-        "selectorInputs",
-        "prepareScript",
-        "preparationLimits",
+        "request",
+        "prepare",
+        "extract",
+        "limits",
     ] {
         assert!(source.get(governed).is_none(), "draft invented {governed}");
     }
 }
 
-/// OpenAPI establishes the method, but it does not establish the adopter's
-/// bounded preparation policy.
+/// OpenAPI establishes a safe GET request, but it does not establish query or
+/// body bindings that the author did not map.
 #[test]
-fn a_get_source_omits_request_channel_policy() {
+fn an_unmapped_get_pack_omits_uninvented_request_channels() {
     let artifacts = emit::draft(&base_inputs()).expect("draft");
-    let block = &artifacts.source_block;
+    let pack: serde_json::Value = serde_norway::from_str(file_contents(
+        &artifacts,
+        "adapter-packs/search-a/pack.yaml",
+    ))
+    .expect("AdapterPack YAML");
+    let parameters = to_parameters(&pack);
 
-    assert!(block.contains("method: GET"), "{block}");
-    assert!(!block.contains("query:"), "{block}");
-    assert!(!block.contains("jsonBody:"), "{block}");
-    assert!(!block.contains("maximumQueryPairs:"), "{block}");
+    assert_eq!(parameters["httpMethod"], "GET");
+    assert!(parameters.get("query").is_none());
+    assert!(parameters.get("body").is_none());
+    assert!(parameters.get("maximumQueryPairs").is_none());
 }
 
 #[test]
-fn a_post_source_omits_request_channel_policy() {
+fn an_unmapped_post_pack_uses_the_reviewable_body_script_without_query_policy() {
     let mut inputs = base_inputs();
     inputs.operation.method = "POST".to_owned();
     let artifacts = emit::draft(&inputs).expect("draft");
-    let block = &artifacts.source_block;
+    let pack: serde_json::Value = serde_norway::from_str(file_contents(
+        &artifacts,
+        "adapter-packs/search-a/pack.yaml",
+    ))
+    .expect("AdapterPack YAML");
+    let parameters = to_parameters(&pack);
 
-    assert!(block.contains("method: POST"), "{block}");
-    assert!(!block.contains("query:"), "{block}");
-    assert!(!block.contains("jsonBody:"), "{block}");
-    assert!(!block.contains("maximumQueryPairs:"), "{block}");
+    assert_eq!(parameters["httpMethod"], "POST");
+    assert_eq!(
+        parameters["body"]["rhai"]["file"],
+        "scripts/search-a-prepare.rhai"
+    );
+    assert!(parameters.get("query").is_none());
+    assert!(parameters.get("maximumQueryPairs").is_none());
 }
 
 /// The runtime's fixed-request method admits GET and POST only.
@@ -858,22 +939,22 @@ fn a_method_outside_the_runtime_enum_is_refused_by_name() {
     );
 }
 
-/// A templated OpenAPI path is written as the `path:` it is, a template the
-/// author still has to bind: the draft invents no bindings.
+/// A templated OpenAPI path is written as the pack request template it is. The
+/// draft invents no bindings.
 #[test]
 fn a_templated_path_becomes_a_path_template_without_bindings() {
     let mut inputs = base_inputs();
     inputs.operation.path = "/v1/records/{id}".to_owned();
     let artifacts = emit::draft(&inputs).expect("draft");
-    let block = &artifacts.source_block;
+    let pack: serde_json::Value = serde_norway::from_str(file_contents(
+        &artifacts,
+        "adapter-packs/search-a/pack.yaml",
+    ))
+    .expect("AdapterPack YAML");
+    let parameters = to_parameters(&pack);
 
-    let parsed: serde_norway::Value =
-        serde_norway::from_str(block).expect("source block parses as YAML");
-    assert!(parsed.is_mapping());
-
-    assert!(block.contains("path: /v1/records/{id}"), "{block}");
-    assert!(!block.contains("pathTemplate"), "{block}");
-    assert!(!block.contains("pathBindings:"), "{block}");
+    assert_eq!(parameters["path"], "/v1/records/{{id}}");
+    assert!(parameters.get("pathParameters").is_none());
 }
 
 /// `baseUrl` is validated as an origin: any path the OpenAPI server URL
@@ -884,10 +965,14 @@ fn a_server_path_prefix_moves_onto_the_request_path() {
     inputs.base_url_suggestion = emit::split_server_url("https://api.example.invalid:8443/v1/");
     inputs.operation.path = "/records".to_owned();
     let artifacts = emit::draft(&inputs).expect("draft");
-    let block = &artifacts.source_block;
+    let pack: serde_json::Value = serde_norway::from_str(file_contents(
+        &artifacts,
+        "adapter-packs/search-a/pack.yaml",
+    ))
+    .expect("AdapterPack YAML");
 
-    assert!(!block.contains("baseUrl:"), "{block}");
-    assert!(block.contains("path: /v1/records"), "{block}");
+    assert_eq!(to_parameters(&pack)["path"], "/v1/records");
+    assert!(!artifacts.source_block.contains("baseUrl:"));
 }
 
 #[test]
@@ -896,12 +981,13 @@ fn a_server_path_prefix_moves_onto_a_path_template_too() {
     inputs.base_url_suggestion = emit::split_server_url("https://api.example.invalid/v1");
     inputs.operation.path = "/records/{id}".to_owned();
     let artifacts = emit::draft(&inputs).expect("draft");
+    let pack: serde_json::Value = serde_norway::from_str(file_contents(
+        &artifacts,
+        "adapter-packs/search-a/pack.yaml",
+    ))
+    .expect("AdapterPack YAML");
 
-    assert!(
-        artifacts.source_block.contains("path: /v1/records/{id}"),
-        "{}",
-        artifacts.source_block
-    );
+    assert_eq!(to_parameters(&pack)["path"], "/v1/records/{{id}}");
 }
 
 /// A server URL with template variables names no single origin, so the draft
@@ -916,13 +1002,24 @@ fn a_server_url_with_variables_yields_no_base_url_suggestion() {
     assert_eq!(split.path_prefix, "");
 }
 
-/// Acquisition posture is a governed decision that OpenAPI cannot make.
+/// The generated Source and its pack evidence contract must agree on the
+/// explicit posture the author is asked to review.
 #[test]
-fn the_draft_omits_acquisition_posture() {
+fn the_draft_carries_one_consistent_acquisition_posture() {
     let artifacts = emit::draft(&base_inputs()).expect("draft");
-    let block = &artifacts.source_block;
+    let source: serde_json::Value =
+        serde_json::from_str(&artifacts.authoring_source).expect("normalized Source JSON");
+    let pack: serde_json::Value = serde_norway::from_str(file_contents(
+        &artifacts,
+        "adapter-packs/search-a/pack.yaml",
+    ))
+    .expect("AdapterPack YAML");
 
-    assert!(!block.contains("posture:"), "{block}");
+    assert_eq!(source["acquisitionPosture"], "record-transformed");
+    assert_eq!(
+        pack["sourceRoutes"][0]["evidence"]["acquisitionPosture"],
+        "record-transformed"
+    );
 }
 
 #[test]
@@ -964,7 +1061,7 @@ fn write_into_project_creates_directories_and_writes_every_file() {
     let artifacts = emit::draft(&base_inputs()).expect("draft");
 
     let written = emit::write_into_project(&project, &artifacts.files).expect("write");
-    assert_eq!(written.len(), 2);
+    assert_eq!(written.len(), 6);
 
     for file in &artifacts.files {
         let path = project.join(&file.bundle_relative_path);
@@ -980,8 +1077,8 @@ fn write_into_project_refuses_all_collisions_and_writes_nothing() {
     let project = temp.path().join("project");
     let artifacts = emit::draft(&base_inputs()).expect("draft");
 
-    let response_path = project.join("functions/search-a-prepare.rhai");
-    let facts_path = project.join("functions/search-a-extract.rhai");
+    let response_path = project.join("adapter-packs/search-a/scripts/search-a-prepare.rhai");
+    let facts_path = project.join("adapter-packs/search-a/scripts/search-a-extract.rhai");
     std::fs::create_dir_all(response_path.parent().unwrap()).expect("mkdir");
     std::fs::write(&response_path, b"pre-existing\n").expect("seed collision file 1");
     std::fs::write(&facts_path, b"pre-existing\n").expect("seed collision file 2");
@@ -992,7 +1089,7 @@ fn write_into_project_refuses_all_collisions_and_writes_nothing() {
     assert!(message.contains(&response_path.display().to_string()));
     assert!(message.contains(&facts_path.display().to_string()));
 
-    let extract_path = project.join("functions/unrelated.rhai");
+    let extract_path = project.join("adapter-packs/search-a/pack.yaml");
     assert!(
         !extract_path.exists(),
         "a non-colliding file must not be written when any file collides"
@@ -1001,6 +1098,183 @@ fn write_into_project_refuses_all_collisions_and_writes_nothing() {
     assert_eq!(
         std::fs::read_to_string(&response_path).unwrap(),
         "pre-existing\n"
+    );
+}
+
+fn authoring_project(root: &Path) -> PathBuf {
+    let project = root.join("project");
+    std::fs::create_dir(&project).expect("create project");
+    std::fs::write(
+        project.join("evidence.yaml"),
+        include_bytes!("../../../products/evidence/examples/standalone/evidence.yaml"),
+    )
+    .expect("write evidence.yaml");
+    project
+}
+
+#[test]
+fn write_into_authoring_project_creates_missing_pack_directories() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let project = authoring_project(temp.path());
+    let artifacts = emit::draft(&base_inputs()).expect("draft");
+
+    let written = emit::write_into_authoring_project(&project, &artifacts).expect("write draft");
+
+    assert_eq!(written.len(), 7);
+    for file in &artifacts.files {
+        let path = project.join(&file.bundle_relative_path);
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read written file"),
+            file.contents
+        );
+    }
+    let project_text = std::fs::read_to_string(project.join("evidence.yaml")).expect("project");
+    assert!(project_text.contains("search-a:"), "{project_text}");
+}
+
+#[test]
+fn write_into_authoring_project_refuses_a_collision_without_mutation() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let project = authoring_project(temp.path());
+    let artifacts = emit::draft(&base_inputs()).expect("draft");
+    let project_before = std::fs::read(project.join("evidence.yaml")).expect("project before");
+    let collision = project.join("adapter-packs/search-a/pack.yaml");
+    std::fs::create_dir_all(collision.parent().expect("pack parent")).expect("create pack parent");
+    std::fs::write(&collision, b"operator-owned\n").expect("seed collision");
+
+    let error = emit::write_into_authoring_project(&project, &artifacts)
+        .expect_err("must refuse to overwrite");
+
+    assert!(error.to_string().contains(&collision.display().to_string()));
+    assert_eq!(
+        std::fs::read(&collision).expect("collision"),
+        b"operator-owned\n"
+    );
+    assert_eq!(
+        std::fs::read(project.join("evidence.yaml")).expect("project after"),
+        project_before
+    );
+    assert!(!project.join("adapter-packs/search-a/scripts").exists());
+}
+
+#[test]
+fn write_into_authoring_project_refuses_a_non_directory_parent_before_mutation() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let project = authoring_project(temp.path());
+    let artifacts = emit::draft(&base_inputs()).expect("draft");
+    let project_before = std::fs::read(project.join("evidence.yaml")).expect("project before");
+    let pack_root = project.join("adapter-packs/search-a");
+    std::fs::create_dir_all(&pack_root).expect("create pack root");
+    let blocked_parent = pack_root.join("schemas");
+    std::fs::write(&blocked_parent, b"operator-owned\n").expect("seed non-directory parent");
+
+    let error = emit::write_into_authoring_project(&project, &artifacts)
+        .expect_err("a file cannot be an asset parent");
+
+    assert!(
+        error
+            .to_string()
+            .contains(&blocked_parent.display().to_string()),
+        "{error:#}"
+    );
+    assert_eq!(
+        std::fs::read(project.join("evidence.yaml")).expect("project after"),
+        project_before
+    );
+    assert_eq!(
+        std::fs::read(&blocked_parent).expect("existing parent marker"),
+        b"operator-owned\n"
+    );
+    assert!(!pack_root.join("pack.yaml").exists());
+    assert!(!pack_root.join("scripts").exists());
+}
+
+#[test]
+fn write_into_authoring_project_rolls_back_all_new_assets_after_a_late_duplicate() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let project = authoring_project(temp.path());
+    let mut artifacts = emit::draft(&base_inputs()).expect("draft");
+    artifacts.files.push(artifacts.files[0].clone());
+    let project_before = std::fs::read(project.join("evidence.yaml")).expect("project before");
+    let existing_root = project.join("adapter-packs");
+    std::fs::create_dir(&existing_root).expect("create existing pack root");
+
+    let error = emit::write_into_authoring_project(&project, &artifacts)
+        .expect_err("the final duplicate must be refused by create_new");
+
+    assert!(error.to_string().contains("pack.yaml"), "{error:#}");
+    assert_eq!(
+        std::fs::read(project.join("evidence.yaml")).expect("project after"),
+        project_before
+    );
+    assert!(
+        existing_root.is_dir(),
+        "the existing directory is preserved"
+    );
+    assert_eq!(
+        std::fs::read_dir(&existing_root)
+            .expect("existing pack root")
+            .count(),
+        0,
+        "every asset and directory created by the failed write is removed"
+    );
+}
+
+#[test]
+fn write_into_authoring_project_refuses_a_symlink_parent_without_following_it() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let project = authoring_project(temp.path());
+    let artifacts = emit::draft(&base_inputs()).expect("draft");
+    let project_before = std::fs::read(project.join("evidence.yaml")).expect("project before");
+    let pack_root = project.join("adapter-packs/search-a");
+    std::fs::create_dir_all(&pack_root).expect("create pack root");
+    let outside = temp.path().join("outside");
+    std::fs::create_dir(&outside).expect("create outside directory");
+    let linked_parent = pack_root.join("scripts");
+    symlink(&outside, &linked_parent).expect("create parent symlink");
+
+    let error = emit::write_into_authoring_project(&project, &artifacts)
+        .expect_err("a symlink cannot be an asset parent");
+
+    assert!(
+        error
+            .to_string()
+            .contains(&linked_parent.display().to_string()),
+        "{error:#}"
+    );
+    assert_eq!(
+        std::fs::read(project.join("evidence.yaml")).expect("project after"),
+        project_before
+    );
+    assert!(!pack_root.join("pack.yaml").exists());
+    assert_eq!(
+        std::fs::read_dir(&outside)
+            .expect("outside directory")
+            .count(),
+        0,
+        "the symlink target must remain untouched"
+    );
+}
+
+#[test]
+fn write_into_authoring_project_refuses_relative_path_escapes_before_writing() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let project = authoring_project(temp.path());
+    let mut artifacts = emit::draft(&base_inputs()).expect("draft");
+    artifacts.files[5].bundle_relative_path = "../escaped.openapi.yaml".to_owned();
+    let project_before = std::fs::read(project.join("evidence.yaml")).expect("project before");
+
+    let error = emit::write_into_authoring_project(&project, &artifacts)
+        .expect_err("a draft path must remain inside the project");
+
+    assert!(error.to_string().contains("project-relative"), "{error:#}");
+    assert!(!temp.path().join("escaped.openapi.yaml").exists());
+    assert!(!project.join("adapter-packs").exists());
+    assert_eq!(
+        std::fs::read(project.join("evidence.yaml")).expect("project after"),
+        project_before
     );
 }
 
@@ -1023,10 +1297,13 @@ fn an_operator_chosen_bound_is_reported_as_chosen_not_derived() {
     }];
 
     let artifacts = emit::draft(&inputs).expect("draft");
-    let response_schema = file_contents(&artifacts, "schemas/search-a-response.schema.yaml");
+    let response_schema = file_contents(
+        &artifacts,
+        "adapter-packs/search-a/schemas/search-a-facts.schema.json",
+    );
     assert_eq!(
-        serde_norway::from_str::<serde_norway::Value>(response_schema).unwrap()["properties"]
-            ["total"]["maximum"]
+        serde_json::from_str::<serde_json::Value>(response_schema).unwrap()["properties"]["total"]
+            ["maximum"]
             .as_i64(),
         Some(1_000_000)
     );
@@ -1092,24 +1369,33 @@ fn only_an_edited_or_invented_bound_is_reattributed_to_the_operator() {
     );
 }
 
-/// An unmapped draft already carries a posture, a preparation Function, and
-/// default Source limits. The report must ask the adopter to complete and
+/// An unmapped draft already carries a posture, a preparation script, and
+/// default endpoint limits. The report must ask the adopter to complete and
 /// review those artifacts rather than claiming that they are absent.
 #[test]
 fn the_unmapped_report_distinguishes_generated_shells_from_remaining_work() {
     let artifacts = emit::draft(&base_inputs()).expect("draft");
     let source: serde_json::Value =
         serde_json::from_str(&artifacts.authoring_source).expect("normalized Source JSON");
-    let prepare = file_contents(&artifacts, "functions/search-a-prepare.rhai");
+    let prepare = file_contents(
+        &artifacts,
+        "adapter-packs/search-a/scripts/search-a-prepare.rhai",
+    );
+    let pack: serde_json::Value = serde_norway::from_str(file_contents(
+        &artifacts,
+        "adapter-packs/search-a/pack.yaml",
+    ))
+    .expect("AdapterPack YAML");
 
     assert_eq!(source["acquisitionPosture"], json!("record-transformed"));
-    assert_eq!(source["prepare"]["function"], json!("search-a-prepare"));
     assert_eq!(
-        source["limits"],
-        json!({"attemptTimeoutMilliseconds": 3000, "maximumConcurrency": 8})
+        pack["endpoints"][0]["attemptTimeoutMilliseconds"],
+        json!(3000)
     );
-    assert_eq!(source["selectors"], json!([]));
-    assert!(source.get("preparationLimits").is_none());
+    assert_eq!(pack["endpoints"][0]["maximumResponseBytes"], json!(65536));
+    assert_eq!(source["inputs"], json!({}));
+    assert!(source.get("prepare").is_none());
+    assert!(source.get("limits").is_none());
     assert!(prepare.contains("TODO(evidencectl)"), "{prepare}");
 
     assert!(
@@ -1127,7 +1413,7 @@ fn the_unmapped_report_distinguishes_generated_shells_from_remaining_work() {
     assert!(
         artifacts
             .report
-            .contains("Complete selector bindings, the preparation Function, and request limits."),
+            .contains("Complete selector bindings and the pack request mapping."),
         "{}",
         artifacts.report
     );
@@ -1139,7 +1425,9 @@ fn the_unmapped_report_distinguishes_generated_shells_from_remaining_work() {
         artifacts.report
     );
     assert!(
-        artifacts.report.contains("functions/search-a-extract.rhai")
+        artifacts
+            .report
+            .contains("adapter-packs/search-a/scripts/search-a-extract.rhai")
             && artifacts.report.contains("target authority"),
         "{}",
         artifacts.report
@@ -1151,9 +1439,9 @@ fn the_unmapped_report_distinguishes_generated_shells_from_remaining_work() {
     );
 }
 
-/// Explicit mappings generate the selector bindings, executable preparation,
-/// and the request-channel limits. With a chosen origin, all of those inputs
-/// exist and the report's remaining work is review, not completion or absence.
+/// Explicit mappings generate the selector inputs and pack request mapping.
+/// With a chosen origin, all of those inputs exist and the report's remaining
+/// work is review, not completion or absence.
 #[test]
 fn the_mapped_report_names_generated_request_artifacts_as_review_work() {
     let mut inputs = base_inputs();
@@ -1172,20 +1460,32 @@ fn the_mapped_report_names_generated_request_artifacts_as_review_work() {
     let artifacts = emit::draft(&inputs).expect("mapped draft");
     let source: serde_json::Value =
         serde_json::from_str(&artifacts.authoring_source).expect("normalized Source JSON");
-    let prepare = file_contents(&artifacts, "functions/search-a-prepare.rhai");
+    let prepare = file_contents(
+        &artifacts,
+        "adapter-packs/search-a/scripts/search-a-prepare.rhai",
+    );
+    let pack: serde_json::Value = serde_norway::from_str(file_contents(
+        &artifacts,
+        "adapter-packs/search-a/pack.yaml",
+    ))
+    .expect("AdapterPack YAML");
 
     assert_eq!(
-        source["selectors"],
-        json!([{"role": "subject", "profiles": ["subject-reference-v1"]}])
+        source["inputs"],
+        json!({"input1":{"selector":{
+            "role":"subject","profile":"subject-reference-v1","field":"reference"
+        }}})
     );
-    assert_eq!(source["preparationLimits"]["query"], json!("required"));
-    assert_eq!(source["preparationLimits"]["maximumQueryPairs"], json!(1));
+    assert_eq!(
+        to_parameters(&pack)["query"]["reference"]["jsonpath"],
+        "$.input1"
+    );
     assert!(!prepare.contains("TODO(evidencectl)"), "{prepare}");
 
     assert!(
-        artifacts.report.contains(
-            "Review the generated selector bindings and preparation Function, plus the applicable request limits."
-        ),
+        artifacts
+            .report
+            .contains("Review the generated selector bindings and pack request mapping."),
         "{}",
         artifacts.report
     );
@@ -1444,17 +1744,33 @@ fn the_reproduce_line_quotes_shell_expansion_characters() {
 fn the_extract_script_escapes_quotes_in_a_pointer() {
     let mut inputs = base_inputs();
     inputs.selection = vec![r#"/say"hi"#.to_owned(), r"/back\slash".to_owned()];
+    inputs.narrowed = NarrowOutcome {
+        schema: json!({
+            "type":"object",
+            "additionalProperties":false,
+            "properties":{
+                "say\"hi":{"type":"string","maxLength":64},
+                "back\\slash":{"type":"string","maxLength":64}
+            }
+        }),
+        unresolved: Vec::new(),
+    };
+    inputs.needs = Vec::new();
     let artifacts = emit::draft(&inputs).expect("draft");
-    let extract = file_contents(&artifacts, "adapters/search-a-extract.rhai");
+    let extract = file_contents(
+        &artifacts,
+        "adapter-packs/search-a/scripts/search-a-extract.rhai",
+    );
 
     assert!(
-        extract.contains(r#"get_path(source_response, "/say\"hi")"#),
+        extract.contains(r#"if "say\"hi" in value"#),
         "a double quote must be escaped in the Rhai literal:\n{extract}"
     );
     assert!(
-        extract.contains(r#"get_path(source_response, "/back\\slash")"#),
+        extract.contains(r#"if "back\\slash" in value"#),
         "a backslash must be escaped in the Rhai literal:\n{extract}"
     );
+    assert!(!extract.contains("get_path"), "{extract}");
 }
 
 /// The same applies to the drafted YAML: a double-quoted scalar carrying a raw
@@ -1464,20 +1780,20 @@ fn drafted_yaml_escapes_control_characters_in_a_scalar() {
     let mut inputs = base_inputs();
     inputs.media_type = "application/json\nx-injected: true".to_owned();
     let artifacts = emit::draft(&inputs).expect("draft");
-    let source_block = artifacts
-        .files
+    let pack_text = file_contents(&artifacts, "adapter-packs/search-a/pack.yaml");
+    let parsed: serde_json::Value = serde_norway::from_str(pack_text).unwrap();
+    let accept = parsed["sourceRoutes"][0]["steps"]
+        .as_array()
+        .expect("route steps")
         .iter()
-        .find(|file| file.bundle_relative_path.ends_with(".yaml"))
-        .map(|file| file.contents.clone())
-        .unwrap_or_default();
-    let combined = format!("{}\n{}", artifacts.source_block, source_block);
-
-    let parsed: serde_norway::Value = serde_norway::from_str(&artifacts.source_block).unwrap();
+        .find_map(|step| step.get("setHeader"))
+        .expect("static Accept header");
     assert_eq!(
-        parsed["sources"]["search-a"]["request"]["fixedHeaders"][0]["value"].as_str(),
+        accept["value"]["constant"].as_str(),
         Some("application/json\nx-injected: true"),
-        "the scalar must round-trip without becoming a sibling key:\n{combined}"
+        "the scalar must round-trip without becoming a sibling key:\n{pack_text}"
     );
+    assert_eq!(accept["name"], "Accept");
 }
 
 /// Emitted paths are project-relative and never refer to removed source-tree
@@ -1494,8 +1810,11 @@ fn emitted_paths_are_project_relative() {
             text
         });
 
-    assert!(all.contains("functions/search-a-prepare.rhai"));
-    assert!(all.contains("functions/search-a-extract.rhai"));
+    assert!(all.contains("scripts/search-a-prepare.rhai"));
+    assert!(all.contains("scripts/search-a-extract.rhai"));
+    assert!(artifacts.files.iter().all(|file| file
+        .bundle_relative_path
+        .starts_with("adapter-packs/search-a/")));
     assert!(!all.contains("schemas/search-a-response.schema.yaml"));
     assert!(!all.contains("adapters/search-a-extract.rhai"));
     assert!(
@@ -1534,10 +1853,13 @@ fn a_root_level_array_carries_its_own_bound_annotation() {
     }];
 
     let artifacts = emit::draft(&inputs).expect("draft");
-    let response_schema = file_contents(&artifacts, "schemas/search-a-response.schema.yaml");
+    let response_schema = file_contents(
+        &artifacts,
+        "adapter-packs/search-a/schemas/search-a-facts.schema.json",
+    );
 
     assert_eq!(
-        serde_norway::from_str::<serde_norway::Value>(response_schema).unwrap()["type"].as_str(),
+        serde_json::from_str::<serde_json::Value>(response_schema).unwrap()["type"].as_str(),
         Some("array")
     );
     assert!(artifacts.report.contains("response root"));

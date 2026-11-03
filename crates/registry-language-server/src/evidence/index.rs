@@ -98,16 +98,9 @@ pub(crate) fn build_index(
             &path,
             &source.key,
         );
-        for (call, interface) in [
-            ("prepare", "source-prepare/v1"),
-            ("extract", "source-extract/v1"),
-        ] {
-            builder.function_call(&path, source.value.get(call), interface);
+        if let Some(inputs) = source.value.get("inputs") {
+            builder.selector_fields(&path, inputs);
         }
-        for selector in sequence(source.value.get("selectors")) {
-            builder.profiles(&path, selector.get("profiles"));
-        }
-        builder.selector_fields(&path, &source.value);
     }
     let mut derive_uses: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for definition in mapping(value.get("assertionDefinitions")) {
@@ -131,27 +124,17 @@ pub(crate) fn build_index(
         for subject in sequence(definition.value.get("subjects")) {
             builder.profiles(&path, subject.get("selectors"));
         }
-        if let Some(acquisition) = definition.value.get("acquisition") {
-            for field in ["source", "search", "fetch"] {
-                if let Some(at) = acquisition.get_scalar(field) {
-                    builder.reference(
-                        SymbolQuery::global(EvidenceKind::Source, &at.value),
-                        &path,
-                        at,
-                        None,
-                    );
-                }
-            }
-            for fetch in sequence(acquisition.get("fetch")) {
-                if let Some(at) = fetch.get_scalar("source") {
-                    builder.reference(
-                        SymbolQuery::global(EvidenceKind::Source, &at.value),
-                        &path,
-                        at,
-                        None,
-                    );
-                }
-            }
+        if let Some(at) = definition
+            .value
+            .get("acquisition")
+            .and_then(|acquisition| acquisition.get_scalar("source"))
+        {
+            builder.reference(
+                SymbolQuery::global(EvidenceKind::Source, &at.value),
+                &path,
+                at,
+                None,
+            );
         }
         builder.function_call(&path, definition.value.get("derive"), "assertion-derive/v1");
         if let Some(function) = definition

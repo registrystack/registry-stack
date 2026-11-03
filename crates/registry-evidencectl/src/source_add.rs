@@ -435,6 +435,7 @@ fn configure(
     add_pair(&mut generate, "--fields", selection.fields.join(","));
     add_pair(&mut generate, "--source-id", &selection.source_id);
     add_pair(&mut generate, "--connection", &args.connection);
+    add_pair(&mut generate, "--authentication", "oauth2-private-key-jwt");
     add_pair(&mut generate, "--output", &export);
     let generated = invoke(&generate)?;
     report["selectorProfiles"] = generated["explanation"]["selectorProfiles"].clone();
@@ -885,23 +886,27 @@ fn validate_endpoints(endpoints: &Endpoints) -> Result<()> {
 
 fn connection(endpoints: &Endpoints, scope: Option<&str>, name: &str) -> Value {
     let mut binding = json!({
-        "origin": endpoints.breg_url,
-        "authentication": {
-            "type": "oauth2-private-key-jwt", "tokenEndpoint": endpoints.token_endpoint,
-            "clientIdRef": format!("secret:file/{name}-client-id"),
-            "clientAssertionKeyRef": format!("secret:file/{name}-client-key"),
-            "audience": endpoints.audience, "maximumCacheSeconds": 60,
+        "endpoints": {
+            "registry": {
+                "origin": endpoints.breg_url,
+                "authentication": {
+                    "type": "oauth2-private-key-jwt", "tokenEndpoint": endpoints.token_endpoint,
+                    "clientIdRef": format!("secret:file/{name}-client-id"),
+                    "clientAssertionKeyRef": format!("secret:file/{name}-client-key"),
+                    "audience": endpoints.audience, "maximumCacheSeconds": 60,
+                },
+            },
         },
-        "maximumConcurrency": 4, "admissionTimeoutMilliseconds": 5000, "tokenTimeoutMilliseconds": 5000,
     });
+    let authentication = &mut binding["endpoints"]["registry"]["authentication"];
     if let Some(resource) = &endpoints.resource {
-        binding["authentication"]["resource"] = json!(resource);
+        authentication["resource"] = json!(resource);
     }
     if let Some(audience) = &endpoints.client_assertion_audience {
-        binding["authentication"]["clientAssertionAudience"] = json!(audience);
+        authentication["clientAssertionAudience"] = json!(audience);
     }
     if let Some(scope) = scope {
-        binding["authentication"]["scope"] = json!(scope);
+        authentication["scope"] = json!(scope);
     }
     binding
 }
@@ -1201,6 +1206,10 @@ mod tests {
                 return Ok(report);
             }
             if arguments.iter().any(|arg| arg == "generate") {
+                assert_eq!(
+                    option(arguments, "--authentication"),
+                    "oauth2-private-key-jwt"
+                );
                 let output = PathBuf::from(option(arguments, "--output"));
                 assert_eq!(
                     fs::canonicalize(output.parent().unwrap())?,
@@ -1252,40 +1261,119 @@ mod tests {
         }
     }
 
-    fn write_export(root: &Path, id: &str, connection: &str) -> Result<()> {
-        let source = format!("apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1\nkind: EvidenceSource\ntype: http-json\nposture: record-transformed\nconnection: {connection}\nrequest:\n  method: GET\n  path: /lookup\n  selectorInputs:\n    - role: subject\n      alternatives: [{{profile: record-code, fields: [code]}}]\n  projection: [/matched]\n  prepareScript: adapters/{id}-prepare.rhai\n  adapterParameters: {{}}\n  adapterParametersSchema: schemas/{id}-parameters.yaml\n  redirects: deny\n  attemptTimeoutMilliseconds: 1000\n  maximumResponseBytes: 1024\nresponseSchema: schemas/{id}-response.yaml\nfactSchema: schemas/{id}-facts.yaml\nextractScript: adapters/{id}-extract.rhai\n");
-        let artifacts = BTreeMap::from([
-            (format!("sources/{id}.yaml"), source),
+    fn lookup_script(marker: &str) -> String {
+        format!(
+            "fn lookup(exchange) {{\n    let response = exchange.body;\n    if response.type_of() != \"map\" || !response.contains(\"matched\") {{ throw \"source_protocol_error\"; }}\n    if response[\"matched\"] == false {{ return #{{lookup: \"no-match\"}}; }}\n    #{{lookup: \"matched\", facts: #{{matched: response[\"matched\"]}}}}\n}} // {marker}\n"
+        )
+    }
+
+    struct TestPack<'a> {
+        id: &'a str,
+        version: &'a str,
+        endpoint: &'a str,
+        authentication: Value,
+        input: &'a str,
+        method: &'a str,
+        path: &'a str,
+        script: &'a str,
+    }
+
+    fn test_pack_artifacts(pack: TestPack<'_>) -> Result<BTreeMap<String, String>> {
+        let digest = |bytes: &[u8]| format!("sha256:{}", hex::encode(Sha256::digest(bytes)));
+        let inputs = serde_json::to_string_pretty(&json!({
+            "type":"object","additionalProperties":false,"required":[pack.input],
+            "properties":{(pack.input):{"type":"string","minLength":1,"maxLength":128}}
+        }))?;
+        let facts = serde_json::to_string_pretty(&json!({
+            "type":"object","additionalProperties":false,"required":["matched"],
+            "properties":{"matched":{"type":"boolean"}}
+        }))?;
+        let mut parameters = json!({
+            "httpMethod":pack.method,"path":pack.path,"operation":"lookup"
+        });
+        if pack.method == "GET" {
+            parameters["query"] = json!({
+                "value":{"jsonpath":format!("$.{}", pack.input)}
+            });
+        } else {
+            parameters["body"] = json!({"jsonpath":"$"});
+        }
+        let document = serde_json::to_string_pretty(&json!({
+            "apiVersion":"id.registrystack.org/formats/adapter/pack/v1alpha1",
+            "kind":"AdapterPack","id":pack.id,"version":pack.version,"testedVersions":["test"],
+            "endpoints":[{
+                "id":pack.endpoint,"component":"http","authentication":pack.authentication.clone(),
+                "attemptTimeoutMilliseconds":5000,"maximumResponseBytes":65536,
+                "requestHeaders":["accept"],"responseHeaders":[],
+                "operations":[{"id":"lookup","safeUpstream":true}],"testedVersions":["test"]
+            }],
+            "sourceRoutes":[{
+                "id":"lookup","scan":"finite","nextRecovery":"exact-replay","edits":"ordered",
+                "evidence":{
+                    "inputsSchema":{"path":"schemas/inputs.json","digest":digest(inputs.as_bytes())},
+                    "factsSchema":{"path":"schemas/facts.json","digest":digest(facts.as_bytes())},
+                    "acquisitionPosture":"record-transformed"
+                },
+                "steps":[
+                    {"setHeader":{"name":"Accept","value":{"constant":"application/json"}}},
+                    {"to":{"uri":format!("http:{}", pack.endpoint),"parameters":parameters}},
+                    {"setBody":{"rhai":{"file":"scripts/lookup.rhai","entrypoint":"lookup"}}}
+                ]
+            }],
+            "scripts":[{"path":"scripts/lookup.rhai","digest":digest(pack.script.as_bytes())}],
+            "capabilities":{
+                "components":["http"],"languages":["constant","jsonpath","rhai"],
+                "eips":["setBody","setHeader","to"]
+            }
+        }))?;
+        Ok(BTreeMap::from([
             (
-                "selectors/record-code.yaml".to_owned(),
-                "apiVersion: id.registrystack.org/formats/evidence/selector/v1alpha1\nkind: EvidenceSelector\nmaximumAggregateBytes: 128\nfields: {code: {type: string, minimumBytes: 1, maximumBytes: 128}}\n".to_owned(),
+                format!("adapter-packs/{}/schemas/inputs.json", pack.id),
+                inputs,
             ),
             (
-                format!("schemas/{id}-parameters.yaml"),
-                "type: object\nrequired: [matched]\nproperties: {matched: {type: boolean}}\nadditionalProperties: false\n".to_owned(),
+                format!("adapter-packs/{}/schemas/facts.json", pack.id),
+                facts,
             ),
             (
-                format!("schemas/{id}-response.yaml"),
-                "type: object\nproperties: {}\nadditionalProperties: false\n".to_owned(),
+                format!("adapter-packs/{}/scripts/lookup.rhai", pack.id),
+                pack.script.to_owned(),
             ),
-            (
-                format!("schemas/{id}-facts.yaml"),
-                "type: object\nrequired: [matched]\nproperties: {matched: {type: boolean}}\nadditionalProperties: false\n".to_owned(),
-            ),
-            (
-                format!("adapters/{id}-prepare.rhai"),
-                "fn prepare(selectors, context) { #{query: [], body: ()} }\n".to_owned(),
-            ),
-            (
-                format!("adapters/{id}-extract.rhai"),
-                "fn extract(response, context) { #{outcome: \"no_match\"} }\n".to_owned(),
-            ),
-        ]);
-        for (relative, text) in &artifacts {
+            (format!("adapter-packs/{}/pack.yaml", pack.id), document),
+        ]))
+    }
+
+    fn write_pack_artifacts(root: &Path, artifacts: &BTreeMap<String, String>) -> Result<()> {
+        for (relative, text) in artifacts {
             let path = root.join(relative);
             fs::create_dir_all(path.parent().unwrap())?;
             fs::write(path, text)?;
         }
+        Ok(())
+    }
+
+    fn write_export(root: &Path, id: &str, connection: &str) -> Result<()> {
+        let version = format!("sha256:{}", hex::encode(Sha256::digest(id.as_bytes())));
+        let script = lookup_script("source-add-export");
+        let mut artifacts = test_pack_artifacts(TestPack {
+            id,
+            version: &version,
+            endpoint: "registry",
+            authentication: json!({"type":"oauth2-private-key-jwt"}),
+            input: "recordCode",
+            method: "POST",
+            path: "/v1/records/record:lookup",
+            script: &script,
+        })?;
+        artifacts.insert(
+            format!("sources/{id}.yaml"),
+            format!("apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1\nkind: EvidenceSource\npack: {{id: {id}, version: {version}}}\nroute: lookup\nconnection: {connection}\ninputs:\n  recordCode: {{selector: {{role: subject, profile: record-code, field: code}}}}\nacquisitionPosture: record-transformed\n"),
+        );
+        artifacts.insert(
+            "selectors/record-code.yaml".to_owned(),
+            "apiVersion: id.registrystack.org/formats/evidence/selector/v1alpha1\nkind: EvidenceSelector\nmaximumAggregateBytes: 128\nfields: {code: {type: string, minimumBytes: 1, maximumBytes: 128}}\n".to_owned(),
+        );
+        write_pack_artifacts(root, &artifacts)?;
         fs::write(
             root.join("source-export.json"),
             serde_json::to_vec(&json!({
@@ -1332,25 +1420,36 @@ mod tests {
         assert!(authored_source(&project, "registry-name").is_some());
         let (connections, _) =
             crate::build::local_dev_target_inputs(&project.join("local-target.yaml")).unwrap();
-        assert_eq!(connections["registry"]["baseUrl"], "http://127.0.0.1:19090");
         assert_eq!(
-            connections["registry"]["authentication"]["tokenEndpoint"],
+            connections["registry"]["endpoints"][0]["endpoint"],
+            "registry"
+        );
+        assert_eq!(
+            connections["registry"]["endpoints"][0]["baseUrl"],
+            "http://127.0.0.1:19090"
+        );
+        assert_eq!(
+            connections["registry"]["endpoints"][0]["authentication"]["type"],
+            "oauth2-private-key-jwt"
+        );
+        assert_eq!(
+            connections["registry"]["endpoints"][0]["authentication"]["tokenEndpoint"],
             "http://127.0.0.1:19091/oauth2/token"
         );
         assert_eq!(
-            connections["registry"]["authentication"]["audience"],
+            connections["registry"]["endpoints"][0]["authentication"]["audience"],
             "urn:test:retained-session"
         );
         assert_eq!(
-            connections["registry"]["authentication"]["resource"],
+            connections["registry"]["endpoints"][0]["authentication"]["resource"],
             "urn:test:retained-session"
         );
         assert_eq!(
-            connections["registry"]["authentication"]["clientAssertionAudience"],
+            connections["registry"]["endpoints"][0]["authentication"]["clientAssertionAudience"],
             "http://127.0.0.1:19091"
         );
         assert_eq!(
-            connections["registry"]["authentication"]["scope"],
+            connections["registry"]["endpoints"][0]["authentication"]["scope"],
             "registry:registry-name:lookup"
         );
         let signing =
@@ -1426,19 +1525,15 @@ selectorProfiles:
     maximumAggregateBytes: 64
     fields: {value: {type: string, minimumBytes: 1, maximumBytes: 64}}
 functions:
-  - {id: baseline-extract, interface: source-extract/v1, source: functions/baseline-extract.rhai}
   - {id: baseline-derive, interface: assertion-derive/v1, source: functions/baseline-derive.rhai}
 sources:
   baseline:
-    type: http-json
+    pack: {id: baseline-pack, version: '1'}
+    route: lookup
     connection: baseline
     acquisitionPosture: record-transformed
-    selectors: [{role: subject, profiles: [baseline-reference]}]
-    request: {method: GET, path: /baseline}
-    response: {projection: [/matched], shape: {type: object, properties: {matched: {type: boolean}}}, maximumBytes: 1024}
-    extract: {function: baseline-extract}
-    facts: {matched: {type: boolean}}
-    limits: {attemptTimeoutMilliseconds: 1000, maximumConcurrency: 1}
+    inputs:
+      value: {selector: {role: subject, profile: baseline-reference, field: value}}
 assertionDefinitions:
   baseline:
     question: Is the synthetic baseline matched?
@@ -1446,7 +1541,7 @@ assertionDefinitions:
     purpose: source-add-preview
     grantCeiling: {authorities: [organizational], actorKinds: [service], valueOrigins: [request], audiences: ["urn:test:audience"]}
     subjects: [{role: subject, selectors: [baseline-reference]}]
-    acquisition: {type: single, source: baseline}
+    acquisition: {source: baseline}
     derive: {function: baseline-derive}
     outputs: {matched: {concept: "urn:test:concept:matched", type: boolean}}
     validitySeconds: 60
@@ -1454,12 +1549,20 @@ assertionDefinitions:
     representations: [signed-jws]
 "#;
         fs::write(project.join("evidence.yaml"), project_document).unwrap();
-        fs::create_dir(project.join("functions")).unwrap();
-        fs::write(
-            project.join("functions/baseline-extract.rhai"),
-            "fn extract(response, context) { #{outcome: \"match\", facts: #{matched: response[\"matched\"]}} }\n",
-        )
+        let script = lookup_script("source-add-clean-project");
+        let pack = test_pack_artifacts(TestPack {
+            id: "baseline-pack",
+            version: "1",
+            endpoint: "baseline",
+            authentication: json!({"type":"none"}),
+            input: "value",
+            method: "GET",
+            path: "/baseline",
+            script: &script,
+        })
         .unwrap();
+        write_pack_artifacts(&project, &pack).unwrap();
+        fs::create_dir(project.join("functions")).unwrap();
         fs::write(
             project.join("functions/baseline-derive.rhai"),
             "fn derive(facts, selectors, context) { [#{output: \"matched\", value: facts[\"matched\"]}] }\n",
@@ -1495,7 +1598,11 @@ assertionDefinitions:
             .collect();
         assert_eq!(
             entries,
-            BTreeSet::from([OsString::from("evidence.yaml"), OsString::from("functions")])
+            BTreeSet::from([
+                OsString::from("adapter-packs"),
+                OsString::from("evidence.yaml"),
+                OsString::from("functions"),
+            ])
         );
         assert_eq!(
             fs::read(project.join("evidence.yaml")).unwrap(),
@@ -1553,7 +1660,8 @@ assertionDefinitions:
         let governance = project.join("local-target.yaml");
         let mut document: Value =
             serde_norway::from_slice(&fs::read(&governance).unwrap()).unwrap();
-        document["connections"]["registry"]["origin"] = json!("http://127.0.0.1:29090");
+        document["connections"]["registry"]["endpoints"]["registry"]["origin"] =
+            json!("http://127.0.0.1:29090");
         fs::write(&governance, serde_norway::to_string(&document).unwrap()).unwrap();
         let before = fs::read(&governance).unwrap();
         provider.calls.clear();
@@ -1804,7 +1912,15 @@ assertionDefinitions:
         .unwrap();
         assert!(validate_endpoints(&endpoints).is_ok());
         assert_eq!(prepared_client_scope(&json!({})).unwrap(), None);
-        let authentication = connection(&endpoints, None, "registry")["authentication"].clone();
+        let binding = connection(&endpoints, None, "registry");
+        assert!(binding.get("origin").is_none());
+        assert!(binding.get("authentication").is_none());
+        assert_eq!(
+            binding["endpoints"]["registry"]["origin"],
+            "http://127.0.0.1:19090/"
+        );
+        let authentication = binding["endpoints"]["registry"]["authentication"].clone();
+        assert_eq!(authentication["type"], "oauth2-private-key-jwt");
         assert!(authentication.get("resource").is_none());
         assert!(authentication.get("clientAssertionAudience").is_none());
         assert!(authentication.get("scope").is_none());
@@ -2086,6 +2202,7 @@ assertionDefinitions:
         ] {
             add_pair(&mut generate, flag, value);
         }
+        add_pair(&mut generate, "--authentication", "oauth2-private-key-jwt");
         add_pair(&mut generate, "--output", &export);
         let mut export_client = public("dev", "export-client");
         add_pair(&mut export_client, "--client", "registry-name");

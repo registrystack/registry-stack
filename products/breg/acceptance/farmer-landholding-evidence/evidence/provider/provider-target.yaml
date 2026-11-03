@@ -1,0 +1,62 @@
+apiVersion: id.registrystack.org/formats/evidence/target/v1alpha1
+kind: EvidenceTarget
+id: provider
+project: farmer-provider
+package:
+  root: .generated/package
+authority: provider-authority.yaml
+service:
+  providerId: urn:example:farmer-registry
+  issuer: urn:example:farmer-authority
+  publicOrigin: http://127.0.0.1:9
+  trustDomain: urn:example:farmer:trial
+listener:
+  bind: 127.0.0.1:9
+  trustProxyIdentityHeaders: false
+  maximumRequestBytes: 65536
+  maximumConcurrentRequests: 16
+  requestTimeoutMilliseconds: 10000
+  shutdownGraceMilliseconds: 1000
+authentication:
+  oidc:
+    issuer: http://127.0.0.1:9
+    audience: farmer-evidence-trial
+    tokenTypes: [at+jwt]
+    algorithms: [ES256]
+    jwksSource:
+      type: uri
+      uri: http://127.0.0.1:9/.well-known/jwks.json
+    principalClaim: sub
+    requesterTagsClaim: evidence_tags
+    evidenceAudienceClaim: evidence_audience
+    allowedClients: unrestricted
+    requiredScopes: unrestricted
+    maximumTokenLifetimeSeconds: 300
+connections:
+  farmer-facts:
+    endpoints:
+      provider:
+        origin: http://127.0.0.1:9
+        authentication:
+          type: static-authorization
+          tokenRef: secret:file/source-a-token
+secretProviders:
+  file:
+    root: .generated/secrets
+signer:
+  type: local-jwk
+  algorithm: ES256
+  privateKeyRef: secret:file/signing-key
+  publicJwkFile: public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json
+subjectBinding:
+  secretRef: secret:file/subject-binding-key
+  keyVersion: 1
+audit:
+  path: .generated/audit.jsonl
+  hashKeyRef: secret:file/audit-hash-key
+  hashKeyVersion: 1
+rateLimits:
+  requestsPerPrincipalPerMinute: 60
+  burstPerPrincipal: 10
+  failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 10
+assuranceProfile: local

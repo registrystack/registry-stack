@@ -16,14 +16,156 @@ mod fixture_receiver;
 
 use fixture_receiver::{FixtureReceiver, Scripted};
 use job_fixture::{reply_page, JobFixture};
-use registry_adapter::engine::job::{compile_job, run_job_page};
-use registry_adapter_core::JobIdentity;
+use registry_adapter_core::{JobDestination as AuthoredDestination, JobIdentity};
+use registry_adapter_engine::job::{compile_job, compile_job_with, run_job_page, JobProgram};
 use registry_adapter_job::destination::{
     DeliverableItem, FixtureDestination, HandOffOutcome, JobDestination, DESTINATION_UNREACHABLE,
 };
 use registry_adapter_job::projection;
 use serde_json::{json, Value};
-use std::time::Duration;
+use std::{ffi::OsString, path::PathBuf, sync::Mutex, time::Duration};
+
+static KOBO_ENVIRONMENT: Mutex<()> = Mutex::new(());
+
+struct RestoreEnvironment {
+    name: &'static str,
+    prior: Option<OsString>,
+}
+
+impl Drop for RestoreEnvironment {
+    fn drop(&mut self) {
+        match &self.prior {
+            Some(value) => std::env::set_var(self.name, value),
+            None => std::env::remove_var(self.name),
+        }
+    }
+}
+
+fn kobotoolbox_program() -> JobProgram {
+    let _environment = KOBO_ENVIRONMENT.lock().expect("the environment lock holds");
+    let _restore_username = RestoreEnvironment {
+        name: "KOBO_USERNAME",
+        prior: std::env::var_os("KOBO_USERNAME"),
+    };
+    let _restore_password = RestoreEnvironment {
+        name: "KOBO_PASSWORD",
+        prior: std::env::var_os("KOBO_PASSWORD"),
+    };
+    std::env::set_var("KOBO_USERNAME", "synthetic-kobo-user");
+    std::env::set_var("KOBO_PASSWORD", "synthetic-kobo-password");
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let example = root.join("products/adapter/examples/kobotoolbox-job");
+    compile_job_with(
+        &root.join("products/adapter/packs/kobotoolbox/pack.yaml"),
+        &example.join("job.yaml"),
+        &example.join("job-runtime.example.yaml"),
+        &example.join("profile.yaml"),
+        &example.join("project.yaml"),
+    )
+    .expect("the maintained KoboToolbox direct-BReg job compiles")
+}
+
+fn map_kobotoolbox(program: &JobProgram, body: Value) -> Result<Value, String> {
+    let AuthoredDestination::DirectBreg { mapping, .. } = &program.job.destination else {
+        panic!("the maintained KoboToolbox job uses direct BReg")
+    };
+    program
+        .map_destination(
+            mapping,
+            &json!({"body": body, "headers": {}, "properties": {}}),
+        )
+        .map_err(|failure| failure.to_string())
+}
+
+#[test]
+fn kobotoolbox_mapping_accepts_authentic_numeric_strings() {
+    let program = kobotoolbox_program();
+    let mapped = map_kobotoolbox(
+        &program,
+        json!({
+            "_id": 102,
+            "respondent_name": "Fictional Respondent 102",
+            "household.household_size": "2"
+        }),
+    )
+    .expect("the authentic Kobo projection maps");
+
+    assert_eq!(
+        mapped,
+        json!({
+            "startInput": {"input": {
+                "sourceSubmissionId": "102",
+                "respondentName": "Fictional Respondent 102",
+                "householdSize": 2
+            }},
+            "submitBody": {}
+        })
+    );
+}
+
+#[test]
+fn kobotoolbox_mapping_preserves_offline_fixture_values() {
+    let program = kobotoolbox_program();
+    let mapped = map_kobotoolbox(
+        &program,
+        json!({
+            "_id": "opaque-submission-001",
+            "respondent_name": "Fictional Respondent 001",
+            "household.household_size": 3
+        }),
+    )
+    .expect("the maintained offline fixture shape maps");
+
+    assert_eq!(
+        mapped["startInput"]["input"]["sourceSubmissionId"],
+        "opaque-submission-001"
+    );
+    assert_eq!(
+        mapped["startInput"]["input"]["respondentName"],
+        "Fictional Respondent 001"
+    );
+    assert_eq!(mapped["startInput"]["input"]["householdSize"], 3);
+}
+
+#[test]
+fn kobotoolbox_mapping_refuses_invalid_ids_and_household_sizes() {
+    let program = kobotoolbox_program();
+    for invalid_id in [json!(null), json!(true), json!(2.0), json!([]), json!({})] {
+        assert!(
+            map_kobotoolbox(
+                &program,
+                json!({
+                    "_id": invalid_id,
+                    "respondent_name": "Fictional Respondent",
+                    "household.household_size": "2"
+                }),
+            )
+            .is_err(),
+            "an invalid submission id must refuse"
+        );
+    }
+    for invalid_size in [
+        json!(null),
+        json!(true),
+        json!(2.0),
+        json!("two"),
+        json!("2.5"),
+        json!("9223372036854775808"),
+    ] {
+        assert!(
+            map_kobotoolbox(
+                &program,
+                json!({
+                    "_id": 102,
+                    "respondent_name": "Fictional Respondent",
+                    "household.household_size": invalid_size
+                }),
+            )
+            .is_err(),
+            "an invalid household size must refuse"
+        );
+    }
+}
 
 fn job_identity() -> JobIdentity {
     JobIdentity {
@@ -40,6 +182,9 @@ fn deliverable(projected: Value) -> DeliverableItem {
             .to_string(),
         prior_run_id: None,
         admitted_before: false,
+        first_seen: std::time::SystemTime::UNIX_EPOCH,
+        event_time: std::time::SystemTime::UNIX_EPOCH,
+        delivery_attempt: 1,
         projected,
     }
 }
@@ -94,13 +239,17 @@ async fn a_refused_answer_maps_onto_the_seam_refusal() {
     assert_eq!(members["sequence"], 1);
 }
 
-/// A stopped answer maps onto the pass stop, and an acknowledged answer
-/// carries the destination's reference through.
+/// Stopped, held and acknowledged answers remain distinct at the seam,
+/// and item-scoped answers carry their destination reference through.
 #[tokio::test]
-async fn the_stop_and_acknowledged_answers_map_onto_the_seam() {
+async fn stop_held_and_acknowledged_answers_map_onto_the_seam() {
     let receiver = FixtureReceiver::start(vec![
         Scripted::Stop {
             code: "deployment.held".to_string(),
+        },
+        Scripted::Hold {
+            code: "idempotency.expired".to_string(),
+            run_id: Some("proposal-6".to_string()),
         },
         Scripted::Acknowledge {
             run_id: Some("proposal-7".to_string()),
@@ -116,6 +265,16 @@ async fn the_stop_and_acknowledged_answers_map_onto_the_seam() {
         stopped,
         HandOffOutcome::StopPass {
             code: "deployment.held".to_string()
+        }
+    );
+    let held = destination
+        .deliver(&job_identity(), &deliverable(projected.clone()))
+        .await;
+    assert_eq!(
+        held,
+        HandOffOutcome::Held {
+            code: "idempotency.expired".to_string(),
+            run_id: Some("proposal-6".to_string())
         }
     );
     let acknowledged = destination
@@ -248,6 +407,9 @@ async fn the_projection_rides_the_compiled_engine_path() {
             digest: digest.clone(),
             prior_run_id: None,
             admitted_before: false,
+            first_seen: std::time::SystemTime::UNIX_EPOCH,
+            event_time: std::time::SystemTime::UNIX_EPOCH,
+            delivery_attempt: 1,
             projected,
         };
         let outcome = destination.deliver(&program.job.job, &deliverable).await;

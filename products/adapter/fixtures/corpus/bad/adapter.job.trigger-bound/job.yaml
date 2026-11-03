@@ -16,8 +16,16 @@ source:
   pack:
     id: case-api-pack
     version: "1"
-    digest: sha256:2d7a36c03de642d4bb8b0a9fffbd4806f5d8c37dbb792b13123c59ed25ebd6de
+    digest: sha256:c39a585303c34d62aea6bc92f9fe0240678507c6c33e1eb173f1bec8d1f2bc47
   route: kobo-submissions
+destination:
+  type: signed-coordinator-event
+  binding: coordinator-test
+  workflow: case-ingestion
+  trigger: submitted
+  source: urn:registry-adapter:job:kobo-daily
+  eventType: org.example.case-submitted.v1
+  dataSchema: urn:example:schema:case-submitted:v1
 projection:
   fields:
     - submission.id

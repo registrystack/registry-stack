@@ -155,6 +155,7 @@ fn governed_ingestion_members_refuse_with_exactly_their_code() {
         "adapter.job.poll-endpoint-unknown",
         "adapter.job.poll-facade-refused",
         "adapter.job.poll-timeout",
+        "adapter.job.postgres-key-required",
         "adapter.job.postgres-parameters-unbounded",
         "adapter.job.profile-bound",
         "adapter.job.profile-endpoint-bound",

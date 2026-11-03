@@ -58,7 +58,7 @@ fn fixture(name: &str) -> PathBuf {
 /// Opens a fixture through the same entry point the CLI uses, naming it as a
 /// local file. Fetching over HTTP is covered in `suggest_fetch.rs`.
 fn open_fixture(path: &Path) -> anyhow::Result<openapi::Spec> {
-    load::open(&SpecSource::File(path.to_path_buf()))
+    load::open_retained(&SpecSource::File(path.to_path_buf())).map(|(spec, _)| spec)
 }
 
 fn operation(method: &str, path: &str) -> OperationKey {
@@ -68,7 +68,7 @@ fn operation(method: &str, path: &str) -> OperationKey {
     }
 }
 
-// --- load::open -----------------------------------------------------------
+// --- load::open_retained --------------------------------------------------
 
 #[test]
 fn open_accepts_openapi_3_0_yaml() {

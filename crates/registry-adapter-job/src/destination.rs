@@ -10,7 +10,10 @@
 //! - [`JobDestination::deliver`] is called once per new or changed item,
 //!   and once more per unchanged `pending` item the pass re-delivers.
 //!   An item-scoped refusal returns [`HandOffOutcome::Refused`] and the
-//!   pass continues with the next item. A deployment-level failure
+//!   pass continues with the next item. An item that cannot safely be
+//!   delivered again returns [`HandOffOutcome::Held`] and waits for an operator
+//!   without another automatic attempt. A queue-shaped source keeps its
+//!   delivery unsettled because it is the only payload buffer. A deployment-level failure
 //!   (authentication, a held deployment, an unavailable service)
 //!   returns [`HandOffOutcome::StopPass`] and the pass stops with the
 //!   source position unchanged. An accepted item returns
@@ -23,16 +26,11 @@
 //!   delivery recovers the earlier effect instead of duplicating it.
 //!   This is the plug-in point the direct destination builds on; the
 //!   signed-event destination derives its event id the same way.
-//! - [`JobDestination::settle`] is the contract for the step that
-//!   acknowledges a fully settled page to a queue-shaped source. It
-//!   defaults to doing nothing and no destination in this release
-//!   implements it: it is a later step, and the trait carries it so the
-//!   seam does not grow a second shape later.
 
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use registry_adapter_core::JobIdentity;
 use serde_json::Value;
@@ -70,6 +68,17 @@ pub enum HandOffOutcome {
         /// The destination's own item-scoped refusal code.
         code: String,
     },
+    /// The item cannot safely be handed off again without an operator's
+    /// decision. The pass records the code and optional destination
+    /// reference and skips this digest on ordinary and rescan passes. A
+    /// queue delivery remains unsettled; a later digest is still surfaced as
+    /// a revision.
+    Held {
+        /// The destination's value-free reason for the hold.
+        code: String,
+        /// The destination reference an operator follows, when known.
+        run_id: Option<String>,
+    },
     /// The destination refused the deployment, not the item. The pass
     /// stops with the source position unchanged.
     StopPass {
@@ -100,21 +109,17 @@ pub struct DeliverableItem {
     /// digest beside `admitted_before` as a question for an operator,
     /// never as a license to write again.
     pub admitted_before: bool,
+    /// The persisted time this item key first entered the item table.
+    pub first_seen: SystemTime,
+    /// The event time frozen for this sequence. A retry never replaces it
+    /// with the current clock; a changed digest receives a new event time.
+    pub event_time: SystemTime,
+    /// The positive, persisted delivery attempt for this sequence.
+    pub delivery_attempt: i64,
     /// The job's declared projection of the item value: one member per
     /// declared field, missing fields as `null`. A destination never
     /// sees more of the item than this.
     pub projected: Value,
-}
-
-/// One settled page, the input of the settle contract: the position the
-/// page produced and whether the pass stopped before every item
-/// settled.
-#[derive(Clone, Debug)]
-pub struct SettledPage {
-    /// The page's next cursor, absent at a finite end.
-    pub next: Option<Value>,
-    /// How many items the page carried.
-    pub items_read: u32,
 }
 
 /// The destination seam. Implementations are shared across passes, so
@@ -123,6 +128,27 @@ pub struct SettledPage {
 /// trait an object, which the pass takes as `&dyn JobDestination`, so a
 /// destination is a configuration choice and not a compile-time one.
 pub trait JobDestination: Send + Sync {
+    /// The digest of the selected public governed receiver authority and
+    /// configuration, when the destination sends signed Coordinator events.
+    /// The pass freezes it before calling [`Self::deliver`], so a pending
+    /// retry cannot silently move the same event identity to another target.
+    fn receiver_identity(&self, _job: &JobIdentity, _item: &DeliverableItem) -> Option<[u8; 32]> {
+        None
+    }
+
+    /// The SHA-256 digest of the exact canonical event envelope bytes a
+    /// signed destination would send. `None` means this destination does not
+    /// use the signed-event fence. `Some(Err(()))` means the current item
+    /// cannot form canonical bytes and therefore must never recover an
+    /// uncertain pending attempt by changing or discarding its frozen body.
+    fn canonical_body_identity(
+        &self,
+        _job: &JobIdentity,
+        _item: &DeliverableItem,
+    ) -> Option<Result<[u8; 32], ()>> {
+        None
+    }
+
     /// Deliver one item. Called after the item row is already written as
     /// `pending`, so a crash after this call leaves a pending row whose
     /// next pass re-delivers identical bytes: the at-least-once hand-off
@@ -133,17 +159,6 @@ pub trait JobDestination: Send + Sync {
         job: &'a JobIdentity,
         item: &'a DeliverableItem,
     ) -> Pin<Box<dyn Future<Output = HandOffOutcome> + Send + 'a>>;
-
-    /// The settle contract for a queue-shaped source: acknowledge the
-    /// page after every item settled. The default does nothing, and no
-    /// destination in this release overrides it.
-    fn settle<'a>(
-        &'a self,
-        _job: &'a JobIdentity,
-        _settled: &'a SettledPage,
-    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
-        Box::pin(async {})
-    }
 }
 
 /// The operator-preview destination of `pass --dry-run`: it acknowledges
@@ -189,7 +204,7 @@ impl JobDestination for NullDestination {
     }
 }
 
-/// The built-in fixture destination of `pass --destination fixture`:
+/// The built-in fixture destination of `pass --fixture`:
 /// it posts one deliverable to a fixture receiver over plain HTTP and
 /// maps the receiver's scripted answer back onto the seam's outcomes.
 /// It speaks loopback HTTP only, because the exchange is unauthenticated
@@ -287,6 +302,15 @@ impl JobDestination for FixtureDestination {
                             code: DESTINATION_UNREACHABLE.to_string(),
                         },
                     },
+                    "held" => match answer.code {
+                        Some(code) => HandOffOutcome::Held {
+                            code,
+                            run_id: answer.run_id,
+                        },
+                        None => HandOffOutcome::StopPass {
+                            code: DESTINATION_UNREACHABLE.to_string(),
+                        },
+                    },
                     "stop" => match answer.code {
                         Some(code) => HandOffOutcome::StopPass { code },
                         None => HandOffOutcome::StopPass {
@@ -328,7 +352,8 @@ async fn post_json(url: &str, body: &[u8], timeout: Duration) -> Result<FixtureA
         use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
         write.write_all(request.as_bytes()).await.map_err(|_| ())?;
         write.write_all(body).await.map_err(|_| ())?;
-        write.shutdown().await.map_err(|_| ())?;
+        // Content-Length delimits the request; keep the write side open while
+        // the receiver prepares its response, including its in-flight work.
         let mut head = Vec::new();
         let mut byte = [0u8; 1];
         // Read the header block to its blank line.
@@ -384,5 +409,64 @@ mod tests {
         let refused = FixtureDestination::new("http://kobo.example.invalid/deliver");
         assert!(refused.is_err(), "a non-loopback fixture url refuses");
         assert!(FixtureDestination::new("https://127.0.0.1:9000/deliver").is_err());
+    }
+
+    #[tokio::test]
+    async fn fixture_waits_for_response_without_half_closing() {
+        use std::io::{Read as _, Write as _};
+        let listener =
+            std::net::TcpListener::bind("127.0.0.1:0").expect("bind the owned fixture receiver");
+        let address = listener.local_addr().expect("read the fixture address");
+        let receiver = tokio::task::spawn_blocking(move || {
+            let (mut socket, _) = listener.accept().expect("accept the fixture request");
+            socket
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .expect("bound the fixture request read");
+            let mut head = Vec::new();
+            let mut byte = [0u8; 1];
+            while !head.ends_with(b"\r\n\r\n") {
+                socket.read_exact(&mut byte).expect("read the request head");
+                head.push(byte[0]);
+                assert!(head.len() <= 16_384);
+            }
+            let mut body = [0u8; 2];
+            socket
+                .read_exact(&mut body)
+                .expect("read the complete request body");
+            assert_eq!(&body, b"{}");
+            // A receiver need not support client half-closure while its
+            // response is pending. Content-Length already delimits the request.
+            match socket.read(&mut byte) {
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) => {}
+                Ok(0) => panic!("the fixture client closed its write side before the response"),
+                Ok(_) => panic!("the fixture client sent undeclared request bytes"),
+                Err(error) => panic!("the bounded fixture read failed: {error}"),
+            }
+            let answer = br#"{"outcome":"acknowledged"}"#;
+            write!(
+                socket,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                answer.len()
+            )
+            .expect("write the fixture response head");
+            socket
+                .write_all(answer)
+                .expect("write the fixture response body");
+        });
+        let answer = post_json(
+            &format!("http://{address}/deliver"),
+            b"{}",
+            Duration::from_secs(5),
+        )
+        .await
+        .expect("the fixture client waits for the receiver's response");
+        assert_eq!(answer.outcome, "acknowledged");
+        receiver
+            .await
+            .expect("the owned fixture receiver completes");
     }
 }

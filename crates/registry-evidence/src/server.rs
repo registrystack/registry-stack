@@ -315,12 +315,17 @@ where
     // evaluation that reads it, and republishing it is the only cure, so the
     // operator is told while the deploy is still in front of them rather than
     // through a dependency failure per request.
-    for source_id in startup_runtime.stale_extract_sources() {
-        tracing::warn!(
-            target: "registry_evidence::startup",
-            source_id,
-            "the mounted extract is older than this source allows"
-        );
+    for (source_id, issue) in startup_runtime.source_freshness_issues() {
+        match issue {
+            crate::runtime::SourceFreshnessIssue::Stale => tracing::warn!(
+                target: "registry_evidence::startup", source_id,
+                "the mounted extract is older than this source allows"
+            ),
+            crate::runtime::SourceFreshnessIssue::Unavailable => tracing::warn!(
+                target: "registry_evidence::startup", source_id,
+                "the mounted extract metadata or reviewed statement is unavailable"
+            ),
+        }
     }
     let (stop_metrics, metrics_stopped) = tokio::sync::watch::channel(());
     let metrics_server = metrics_listener.map(|listener| {

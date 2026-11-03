@@ -1,0 +1,36 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.project.async-declaration-mismatch: the checker must emit this exact code. All data is synthetic.
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-api-example
+  version: '1'
+profile:
+  id: case-api
+  version: '1'
+  digest: sha256:1c5c389a3ee9a2dc5696e6f800dcab94ba5bc566a4f05c7fd5ca4cd5d159b4dc
+pack:
+  id: case-api-pack
+  version: '1'
+  digest: sha256:f21777a79dbff2cb961fc968e12490c04879549efa64277c995ff8736fe7b289
+recordTypes:
+- name: case
+  fields:
+  - name: case_type
+    type: string
+    required: true
+bindings:
+- id: case-create
+  operation: cases-create
+  recordType: case
+  route: create-case
+  maximumUpstreamCalls: 4
+accessProfiles:
+- id: case-reader
+  scopes:
+  - cases.read
+  operations:
+  - cases-create
+  recordTypes:
+  - case

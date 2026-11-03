@@ -255,11 +255,13 @@ impl ReadOnlyStatement {
         profile: DatabaseProfile,
         contract: StatementContract,
     ) -> Result<Self, SqliteError> {
+        let caller_deadline = deadline(contract.limits.timeout)?;
         Self::open_with_response_budget_accounting(
             profile,
             contract,
             ResponseBudgetAccounting::SerializedResult,
             true,
+            caller_deadline,
         )
     }
 
@@ -278,11 +280,24 @@ impl ReadOnlyStatement {
         profile: DatabaseProfile,
         contract: StatementContract,
     ) -> Result<Self, SqliteError> {
+        let caller_deadline = deadline(contract.limits.timeout)?;
+        Self::open_with_text_value_response_budget_before(profile, contract, caller_deadline)
+    }
+
+    /// Open the immutable-extract compatibility path before the caller's
+    /// absolute deadline. The reviewed statement timeout still applies when it
+    /// is earlier, so callers can narrow but never widen the work bound.
+    pub fn open_with_text_value_response_budget_before(
+        profile: DatabaseProfile,
+        contract: StatementContract,
+        caller_deadline: Instant,
+    ) -> Result<Self, SqliteError> {
         Self::open_with_response_budget_accounting(
             profile,
             contract,
             ResponseBudgetAccounting::TextValuesOnly,
             false,
+            caller_deadline,
         )
     }
 
@@ -291,7 +306,10 @@ impl ReadOnlyStatement {
         contract: StatementContract,
         response_budget_accounting: ResponseBudgetAccounting,
         verify_snapshot_digest_each_execution: bool,
+        caller_deadline: Instant,
     ) -> Result<Self, SqliteError> {
+        let deadline = bounded_deadline(contract.limits.timeout, caller_deadline)?;
+        ensure_before(deadline)?;
         contract.limits.validate()?;
         if let Some(schema) = &contract.schema {
             schema.validate(&contract.limits)?;
@@ -303,17 +321,23 @@ impl ReadOnlyStatement {
             return Err(SqliteError::new(ErrorKind::InvalidPlan));
         }
         profile.confirm()?;
-        let connections = open_connection_pool(&profile, contract.limits.concurrency)?;
+        ensure_before(deadline)?;
+        let connections =
+            open_connection_pool_before(&profile, contract.limits.concurrency, Some(deadline))?;
         let first = connections
             .first()
             .ok_or_else(|| SqliteError::new(ErrorKind::InvalidPlan))?;
+        ensure_before(deadline)?;
         let parameters = verify_statement(first, &contract)?;
-        verify_schema_at_open(first, contract.schema.as_ref(), &contract.limits)?;
+        ensure_before(deadline)?;
+        verify_schema_at_open(first, contract.schema.as_ref(), &contract.limits, deadline)?;
+        ensure_before(deadline)?;
         profile.confirm()?;
         confirm_connection_pool_still_bound(&connections)?;
         if !verify_snapshot_digest_each_execution {
-            profile.verify_execution_binding(deadline(contract.limits.timeout)?)?;
+            profile.verify_execution_binding(deadline)?;
         }
+        ensure_before(deadline)?;
         let permits = contract.limits.concurrency;
         let statement_digest = statement_digest(&contract.sql);
         Ok(Self {
@@ -338,7 +362,19 @@ impl ReadOnlyStatement {
         &self,
         values: &BTreeMap<String, Value>,
     ) -> Result<ResultSet, SqliteError> {
-        let deadline = deadline(self.plan.limits.timeout)?;
+        let caller_deadline = deadline(self.plan.limits.timeout)?;
+        self.execute_before(values, caller_deadline).await
+    }
+
+    /// Execute before the caller's absolute deadline without widening the
+    /// statement's reviewed queue-and-engine timeout.
+    pub async fn execute_before(
+        &self,
+        values: &BTreeMap<String, Value>,
+        caller_deadline: Instant,
+    ) -> Result<ResultSet, SqliteError> {
+        let deadline = bounded_deadline(self.plan.limits.timeout, caller_deadline)?;
+        ensure_before(deadline)?;
         self.execute_until(values, deadline).await
     }
 
@@ -392,8 +428,19 @@ impl ReadOnlyStatement {
         &self,
         values: &BTreeMap<String, Value>,
     ) -> Result<ResultSet, SqliteError> {
+        let caller_deadline = deadline(self.plan.limits.timeout)?;
+        self.execute_at_open_before(values, caller_deadline)
+    }
+
+    /// Startup-only execution before the caller's absolute deadline.
+    pub fn execute_at_open_before(
+        &self,
+        values: &BTreeMap<String, Value>,
+        caller_deadline: Instant,
+    ) -> Result<ResultSet, SqliteError> {
         let bindings = bind_values(&self.plan.parameters, values)?;
-        let deadline = deadline(self.plan.limits.timeout)?;
+        let deadline = bounded_deadline(self.plan.limits.timeout, caller_deadline)?;
+        ensure_before(deadline)?;
         let connection = self
             .connections
             .lock()
@@ -491,13 +538,28 @@ fn open_connection(profile: &DatabaseProfile) -> Result<Connection, SqliteError>
     Ok(connection)
 }
 
+#[cfg(test)]
 fn open_connection_pool(
     profile: &DatabaseProfile,
     concurrency: usize,
 ) -> Result<Vec<Connection>, SqliteError> {
+    open_connection_pool_before(profile, concurrency, None)
+}
+
+fn open_connection_pool_before(
+    profile: &DatabaseProfile,
+    concurrency: usize,
+    deadline: Option<Instant>,
+) -> Result<Vec<Connection>, SqliteError> {
     let mut connections = Vec::with_capacity(concurrency);
     for _ in 0..concurrency {
+        if let Some(deadline) = deadline {
+            ensure_before(deadline)?;
+        }
         connections.push(open_connection(profile)?);
+    }
+    if let Some(deadline) = deadline {
+        ensure_before(deadline)?;
     }
     Ok(connections)
 }
@@ -980,11 +1042,11 @@ fn verify_schema_at_open(
     connection: &Connection,
     binding: Option<&SchemaBinding>,
     limits: &StatementLimits,
+    deadline: Instant,
 ) -> Result<(), SqliteError> {
     let Some(binding) = binding else {
         return Ok(());
     };
-    let deadline = deadline(limits.timeout)?;
     let outcome = begin_read_transaction(connection).and_then(|()| {
         let budget =
             install_progress_handler(connection, limits.maximum_statement_steps, deadline)?;
@@ -1203,6 +1265,18 @@ fn deadline(timeout: Duration) -> Result<Instant, SqliteError> {
         .ok_or_else(|| SqliteError::new(ErrorKind::InvalidPlan))
 }
 
+fn bounded_deadline(timeout: Duration, caller_deadline: Instant) -> Result<Instant, SqliteError> {
+    Ok(deadline(timeout)?.min(caller_deadline))
+}
+
+fn ensure_before(deadline: Instant) -> Result<(), SqliteError> {
+    if Instant::now() >= deadline {
+        Err(SqliteError::new(ErrorKind::TimeBudgetExceeded))
+    } else {
+        Ok(())
+    }
+}
+
 fn valid_sha256_label(value: &str) -> bool {
     value.len() == 71
         && value.starts_with("sha256:")
@@ -1278,6 +1352,73 @@ mod tests {
             .expect("engine limit installs");
         install_authorizer(&connection).expect("reviewed authorizer installs");
         connection
+    }
+
+    fn caller_deadline_contract(sql: &str) -> StatementContract {
+        StatementContract {
+            sql: sql.to_owned(),
+            columns: vec![ColumnContract {
+                name: "id".to_owned(),
+                value_type: ColumnType::String,
+            }],
+            parameters: Vec::new(),
+            limits: StatementLimits {
+                maximum_rows: 2,
+                maximum_cell_bytes: 64,
+                maximum_response_bytes: 256,
+                maximum_statement_steps: 1_000_000_000,
+                timeout: Duration::from_secs(5),
+                concurrency: 1,
+            },
+            schema: None,
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn caller_deadline_caps_open_startup_execution_and_async_execution() {
+        let temporary = tempfile::tempdir().expect("temporary root");
+        let path = temporary.path().join("source.sqlite");
+        database(&path, "governed");
+        let profile =
+            DatabaseProfile::Snapshot(CapturedSnapshot::capture(&path).expect("snapshot captures"));
+        let expired_open = ReadOnlyStatement::open_with_text_value_response_budget_before(
+            profile.clone(),
+            caller_deadline_contract("SELECT id FROM records"),
+            Instant::now(),
+        )
+        .err()
+        .expect("an expired caller deadline starts no open work");
+        assert_eq!(expired_open.kind(), ErrorKind::TimeBudgetExceeded);
+
+        let statement = ReadOnlyStatement::open_with_text_value_response_budget_before(
+            profile,
+            caller_deadline_contract(
+                "WITH RECURSIVE counter(n) AS (\
+                     SELECT 1 UNION ALL SELECT n + 1 FROM counter WHERE n < 50000000\
+                 ) SELECT printf('%d', COUNT(*)) AS id FROM counter",
+            ),
+            Instant::now() + Duration::from_secs(5),
+        )
+        .expect("statement opens within caller deadline");
+        let startup = statement
+            .execute_at_open_before(&BTreeMap::new(), Instant::now())
+            .expect_err("expired startup deadline starts no statement");
+        assert_eq!(startup.kind(), ErrorKind::TimeBudgetExceeded);
+        let startup = statement
+            .execute_at_open_before(&BTreeMap::new(), Instant::now() + Duration::from_millis(1))
+            .expect_err("caller deadline interrupts startup statement work");
+        assert_eq!(startup.kind(), ErrorKind::TimeBudgetExceeded);
+        let asynchronous = statement
+            .execute_before(&BTreeMap::new(), Instant::now())
+            .await
+            .expect_err("expired async deadline starts no statement");
+        assert_eq!(asynchronous.kind(), ErrorKind::TimeBudgetExceeded);
+        let asynchronous = statement
+            .execute_before(&BTreeMap::new(), Instant::now() + Duration::from_millis(1))
+            .await
+            .expect_err("caller deadline interrupts async statement work");
+        assert_eq!(asynchronous.kind(), ErrorKind::TimeBudgetExceeded);
     }
 
     fn assert_failure_leaves_connection_reusable(

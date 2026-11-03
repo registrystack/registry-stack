@@ -14,12 +14,13 @@ use registry_adapter::engine::effective_contract::{
     PIN_PROBLEM_CODE, REQUEST_ID_PATTERN, UNAVAILABLE_PROBLEM_CODE,
 };
 use registry_adapter_core::{
-    derive_binding_result_schema, derive_operation_request_schema, derive_problem_envelope_schema,
-    AdapterProfile, AdapterProject, Binding, HttpMethod, ParameterizedPart, Problem,
-    ProfileOperation, RecordField,
+    derive_binding_accepted_schema, derive_binding_result_schema, derive_operation_request_schema,
+    derive_problem_envelope_schema, facade_path_shape, AdapterProfile, AdapterProject, Binding,
+    HttpMethod, ParameterizedPart, Problem, ProfileOperation, RecordField,
 };
 use registry_platform_yaml::Diagnostic;
 use serde_json::{json, Map, Value};
+use std::collections::BTreeMap;
 
 /// The OpenAPI version every compiled contract declares.
 const OPENAPI_VERSION: &str = "3.1.0";
@@ -40,6 +41,16 @@ fn bearer_scheme() -> Value {
 /// because the schema already says exactly what the body is.
 const SUCCESS_DESCRIPTION: &str = "The operation's response envelope for the bound record type.";
 
+/// One caller-status contract shared by every record binding of its original
+/// profile operation. Source identifiers and new authorization names never
+/// enter this document.
+struct AsyncStatusDocument {
+    operation: String,
+    responses: Map<String, Value>,
+    terminal_status: String,
+    terminal_schemas: Vec<Value>,
+}
+
 /// Assemble the deployment's concrete OpenAPI document. Errors are
 /// value-free findings; the caller refuses the compile on any of them
 /// instead of writing a document.
@@ -50,6 +61,7 @@ pub(crate) fn assemble(
     let parts: Vec<ParameterizedPart> = profile.parameterized_parts.iter().cloned().collect();
     let mut findings = Vec::new();
     let mut paths = Map::new();
+    let mut statuses: BTreeMap<String, AsyncStatusDocument> = BTreeMap::new();
     for binding in project.bindings.iter() {
         let Some(operation) = profile.operations.get(binding.operation.as_str()) else {
             findings.push(assembly_refusal(
@@ -137,6 +149,51 @@ pub(crate) fn assemble(
             "The Adapter could not durably record or verify protocol readiness.",
             "ContractUnavailableProblem",
         );
+        if let Some(completion) = &operation.async_completion {
+            let mut accepted = match derive_binding_accepted_schema(profile, project, binding) {
+                Ok(schema) => schema,
+                Err(reason) => {
+                    findings.push(derivation_refusal(binding, &reason));
+                    continue;
+                }
+            };
+            unpin_parameterized_parts(&mut accepted, &parts);
+            responses.insert(
+                "202".to_owned(),
+                json!({
+                    "description": "The accepted write's profile-owned status link and expiry.",
+                    "content": {"application/json": {"schema": accepted}},
+                }),
+            );
+            let terminal_status = success_status(operation).to_string();
+            let terminal_schema =
+                responses[&terminal_status]["content"]["application/json"]["schema"].clone();
+            let path = completion.status_path.as_str().to_owned();
+            match statuses.get_mut(&path) {
+                Some(status) if status.operation != operation.id.as_str() => {
+                    findings.push(assembly_refusal(
+                        "adapterctl.compile.path-collision",
+                        "different asynchronous operations declare the same status path",
+                    ));
+                }
+                Some(status) => {
+                    if !status.terminal_schemas.contains(&terminal_schema) {
+                        status.terminal_schemas.push(terminal_schema);
+                    }
+                }
+                None => {
+                    statuses.insert(
+                        path,
+                        AsyncStatusDocument {
+                            operation: operation.id.as_str().to_owned(),
+                            responses: responses.clone(),
+                            terminal_status,
+                            terminal_schemas: vec![terminal_schema],
+                        },
+                    );
+                }
+            }
+        }
         members.insert("responses".to_owned(), Value::Object(responses));
         members.insert("security".to_owned(), json!([{"bearerAuth": []}]));
         let Some(path_object) = path_item.as_object_mut() else {
@@ -145,6 +202,37 @@ pub(crate) fn assemble(
         path_object.insert(method, Value::Object(members));
     }
     let well_known_path = registry_adapter::engine::effective_contract::WELL_KNOWN_PATH;
+    for (path, mut status) in statuses {
+        let shape = facade_path_shape(&path);
+        if shape == facade_path_shape(well_known_path)
+            || paths
+                .keys()
+                .any(|ordinary| facade_path_shape(ordinary) == shape)
+        {
+            findings.push(assembly_refusal(
+                "adapterctl.compile.path-collision",
+                "an asynchronous status path collides with another facade route",
+            ));
+            continue;
+        }
+        if status.terminal_schemas.len() > 1 {
+            status.responses[&status.terminal_status]["content"]["application/json"]["schema"] =
+                json!({"anyOf": status.terminal_schemas});
+        }
+        paths.insert(path, json!({
+            "get": {
+                "operationId": format!("{}.status", status.operation),
+                "description": "Read the accepted write's result under the initiating operation's current authorization.",
+                "parameters": [
+                    {"name":"statusId", "in":"path", "required":true,
+                     "schema":{"type":"string", "pattern":REQUEST_ID_PATTERN}},
+                    contract_pin_parameter(),
+                ],
+                "responses": status.responses,
+                "security": [{"bearerAuth": []}],
+            }
+        }));
+    }
     if paths.contains_key(well_known_path) {
         findings.push(assembly_refusal(
             "adapterctl.compile.reserved-path",
@@ -364,7 +452,10 @@ fn record_type_parameter(operation: &ProfileOperation) -> Option<&str> {
 /// The success status the compiled contract answers with: the operation's
 /// declared `successStatus`, two hundreds only (CFG-QTY-4).
 fn success_status(operation: &ProfileOperation) -> u32 {
-    operation.success_status.get()
+    operation.async_completion.as_ref().map_or_else(
+        || operation.success_status.get(),
+        |completion| completion.completed_status.get(),
+    )
 }
 
 /// The OpenAPI method name of a facade method.
@@ -884,6 +975,101 @@ mod tests {
             find["responses"].get("200").is_none(),
             "no uniform 200 shadows the declared status: {}",
             find["responses"]
+        );
+    }
+
+    fn async_profile() -> AdapterProfile {
+        let mut value = profile_value();
+        let write = &mut value["operations"][1];
+        write["successStatus"] = json!(202);
+        write
+            .as_object_mut()
+            .expect("write operation")
+            .remove("pagination");
+        write["asyncCompletion"] = json!({
+            "completedStatus": 200,
+            "statusPath": "/v2/write-status/{statusId}",
+            "acceptedEnvelope": r#"{"state":"accepted","link":"{{statusLink}}","expiresAt":"{{statusExpiresAt}}","requestId":"{{requestId}}"}"#,
+        });
+        serde_json::from_value(value).expect("the async profile decodes")
+    }
+
+    #[test]
+    fn async_write_declares_distinct_accepted_and_terminal_responses_and_status_get() {
+        let document = assemble(&async_profile(), &project(both_bindings()))
+            .expect("the asynchronous contract assembles");
+        let write = &document["paths"]["/v2/cases/case"]["post"];
+        let accepted = &write["responses"]["202"]["content"]["application/json"]["schema"];
+        assert_eq!(accepted["properties"]["state"]["const"], "accepted");
+        assert_eq!(accepted["properties"]["link"]["type"], "string");
+        assert_eq!(accepted["properties"]["expiresAt"]["type"], "string");
+        assert_eq!(accepted["properties"]["requestId"]["type"], "string");
+        assert_eq!(accepted["additionalProperties"], false);
+        assert!(accepted["properties"].get("cases").is_none());
+        assert!(
+            write["responses"]["200"]["content"]["application/json"]["schema"]["properties"]
+                .get("cases")
+                .is_some()
+        );
+        let status = &document["paths"]["/v2/write-status/{statusId}"]["get"];
+        assert_eq!(status["security"], json!([{"bearerAuth": []}]));
+        let parameters = status["parameters"].as_array().expect("status parameters");
+        assert_eq!(parameters.iter().filter(|p| p["in"] == "path").count(), 1);
+        assert!(parameters.iter().all(|p| p["in"] != "query"));
+        let handle = parameters
+            .iter()
+            .find(|p| p["name"] == "statusId")
+            .expect("the opaque status handle is the only path input");
+        assert_eq!(handle["required"], true);
+        assert_eq!(
+            handle["schema"],
+            json!({"type":"string","pattern":REQUEST_ID_PATTERN})
+        );
+        assert_eq!(status["responses"]["202"], write["responses"]["202"]);
+        assert_eq!(status["responses"]["200"], write["responses"]["200"]);
+        assert!(status.get("requestBody").is_none());
+        assert!(status["responses"].get("404").is_some());
+        assert!(status["responses"].get("412").is_some());
+    }
+
+    #[test]
+    fn async_status_path_is_shared_across_record_bindings_with_exact_terminal_schema_union() {
+        let mut value = serde_json::to_value(project(both_bindings())).expect("project JSON");
+        let mut second = value["recordTypes"][0].clone();
+        second["name"] = json!("appeal");
+        second["fields"] = json!([{"name":"reason","type":"string","required":true}]);
+        value["recordTypes"]
+            .as_array_mut()
+            .expect("record types")
+            .push(second);
+        value["bindings"]
+            .as_array_mut()
+            .expect("bindings")
+            .push(json!({
+                "id":"appeal-find", "operation":"cases-find", "recordType":"appeal",
+                "route":"case-find", "maximumUpstreamCalls":11,
+            }));
+        let project: AdapterProject = serde_json::from_value(value).expect("project decodes");
+        let document = assemble(&async_profile(), &project).expect("shared status GET assembles");
+        let status = &document["paths"]["/v2/write-status/{statusId}"]["get"];
+        let variants = status["responses"]["200"]["content"]["application/json"]["schema"]["anyOf"]
+            .as_array()
+            .expect("both bound record schemas are declared");
+        assert_eq!(variants.len(), 2);
+        for path in ["/v2/cases/case", "/v2/cases/appeal"] {
+            let expected = &document["paths"][path]["post"]["responses"]["200"]["content"]
+                ["application/json"]["schema"];
+            assert!(
+                variants.contains(expected),
+                "each original terminal schema is preserved"
+            );
+        }
+        assert_eq!(
+            document["paths"]["/v2/write-status/{statusId}"]
+                .as_object()
+                .expect("one status path")
+                .len(),
+            1
         );
     }
 

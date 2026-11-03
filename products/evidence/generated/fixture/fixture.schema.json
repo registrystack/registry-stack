@@ -18,6 +18,10 @@
         "expected": {
           "type": "string"
         },
+        "expectedFacts": {
+          "description": "Exact final facts from the selected pack route, before derivation.",
+          "x-registry-foreign": "json"
+        },
         "expectedLookup": {
           "type": "string"
         },
@@ -205,6 +209,10 @@
     "ReferenceCase": {
       "additionalProperties": false,
       "properties": {
+        "acquisition": {
+          "description": "Exact recorded sends and responses, checked by the pack replay host.",
+          "x-registry-foreign": "json"
+        },
         "audience": {
           "type": "string"
         },
@@ -342,8 +350,9 @@
           "type": "boolean"
         },
         "sourceRequestCount": {
+          "description": "Expected data sends exclude OAuth work and cannot exceed the offline budget.",
           "format": "uint64",
-          "maximum": 2,
+          "maximum": 5,
           "minimum": 0,
           "type": "integer"
         },

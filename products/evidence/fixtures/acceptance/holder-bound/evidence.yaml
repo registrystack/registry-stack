@@ -1,36 +1,29 @@
 apiVersion: id.registrystack.org/formats/evidence/bundle/v1
 kind: EvidenceBundle
 assuranceProfile: evidence-grade
-# The holder-bound twin of ../all-definitions. Every coequal definition is
-# declared under the holder-bound subject binding mode here, and nothing else
-# about the deployment moves: the same selector profiles, the same sources and
-# postures, the same preparation and extraction adapters, the same derivations,
-# the same concepts, and the same case fixtures. Binding mode is the only
-# variable between the two bundles, which is what makes a difference in
-# behaviour attributable to the mode rather than to the definition.
-#
-# Two consequences of the mode are declared rather than chosen, and they are
-# the only other differences from the audience-scoped twin:
-#
-#   - A holder-bound assertion may only travel in a serialization that carries
-#     the holder key confirmation a verifier checks possession against, so the
-#     bundle and every matched grant permit the SD-JWT VC serializations and
-#     nothing else beyond the mandatory signed flattened JWS.
-#   - SD-JWT VC names its issuer by origin outside the local assurance profile,
-#     so the provider identifier is an HTTPS origin rather than a URN.
 service:
   providerId: https://provider.invalid
   publicOrigin: https://provider.invalid
   trustDomain: urn:example:fixture:trust-domain:acceptance
-issuer: {uri: urn:example:fixture:issuer:authority}
-publication: {serviceId: urn:example:fixture:service:evidence, title: Synthetic Evidence service, description: Synthetic minimum-disclosure assertions for acceptance testing, endpointUrl: https://evidence.example.invalid, jurisdictions: [urn:example:jurisdiction:acceptance]}
+issuer:
+  uri: urn:example:fixture:issuer:authority
+publication:
+  serviceId: urn:example:fixture:service:evidence
+  title: Synthetic Evidence service
+  description: Synthetic minimum-disclosure assertions for acceptance testing
+  endpointUrl: https://evidence.example.invalid
+  jurisdictions:
+    - urn:example:jurisdiction:acceptance
 authentication:
   oidc:
     issuer: https://identity.invalid
     audience: evidence-fixture
-    allowedClients: [evidence-task-agent]
-    tokenTypes: [at+jwt]
-    algorithms: [ES256]
+    allowedClients:
+      - evidence-task-agent
+    tokenTypes:
+      - at+jwt
+    algorithms:
+      - ES256
     jwksSource:
       type: uri
       uri: https://identity.invalid/.well-known/jwks.json
@@ -40,10 +33,16 @@ authentication:
     requiredScopes: unrestricted
     maximumTokenLifetimeSeconds: 300
     revokedKeyIds: []
-audit: {hashKeyRef: secret:file/audit-hash-key, hashKeyVersion: 1}
-subjectBinding: {secretRef: secret:file/subject-binding-key, keyVersion: 1}
-rateLimits: {requestsPerPrincipalPerMinute: 60, burstPerPrincipal: 10, failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 10}
-
+audit:
+  hashKeyRef: secret:file/audit-hash-key
+  hashKeyVersion: 1
+subjectBinding:
+  secretRef: secret:file/subject-binding-key
+  keyVersion: 1
+rateLimits:
+  requestsPerPrincipalPerMinute: 60
+  burstPerPrincipal: 10
+  failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 10
 signing:
   format: flattened-jws-json
   algorithm: ES256
@@ -53,221 +52,253 @@ signing:
   jwksPath: /.well-known/evidence/jwks.json
   maximumAssertionValiditySeconds: 300
   verifierClockSkewSeconds: 30
-
-# The governed unsigned format the audience-scoped twin enables is absent here:
-# it carries no holder key confirmation, so no requirement in this bundle could
-# be served over it. The batch container is enabled so a holder may collect
-# several independently bound assertions from one authorized acquisition.
-responseFormats: [signed-jws, sd-jwt-vc, sd-jwt-vc-batch]
+responseFormats:
+  - signed-jws
+  - sd-jwt-vc
+  - sd-jwt-vc-batch
 maximumHolderBoundBatchSize: 4
-
 selectorProfiles:
   person-demographics-v1:
     maximumAggregateBytes: 420
     fields:
-      given_name: {type: string, minimumBytes: 1, maximumBytes: 200}
-      family_name: {type: string, minimumBytes: 1, maximumBytes: 200}
-      birth_date: {type: date}
+      given_name:
+        type: string
+        minimumBytes: 1
+        maximumBytes: 200
+      family_name:
+        type: string
+        minimumBytes: 1
+        maximumBytes: 200
+      birth_date:
+        type: date
   residence-record-v1:
     maximumAggregateBytes: 96
     fields:
-      record_reference: {type: string, minimumBytes: 1, maximumBytes: 96}
+      record_reference:
+        type: string
+        minimumBytes: 1
+        maximumBytes: 96
   licence-register-v1:
     maximumAggregateBytes: 128
     fields:
-      licence_reference: {type: string, minimumBytes: 1, maximumBytes: 96}
-      registry_region: {type: controlled-code, codelist: codelists/professional-registry-regions.yaml, codelistVersion: '1', maximumBytes: 16}
+      licence_reference:
+        type: string
+        minimumBytes: 1
+        maximumBytes: 96
+      registry_region:
+        type: controlled-code
+        codelist: codelists/professional-registry-regions.yaml
+        codelistVersion: "1"
+        maximumBytes: 16
   civil-record-reference-v1:
     maximumAggregateBytes: 96
     fields:
-      record_reference: {type: string, minimumBytes: 1, maximumBytes: 96}
+      record_reference:
+        type: string
+        minimumBytes: 1
+        maximumBytes: 96
   person-reference-v1:
     maximumAggregateBytes: 128
     fields:
-      person_reference: {type: string, minimumBytes: 1, maximumBytes: 128}
-
+      person_reference:
+        type: string
+        minimumBytes: 1
+        maximumBytes: 128
 sources:
   source-a:
-    type: http-json
-    baseUrl: https://source.invalid
+    pack:
+      id: fixture-adult
+      version: "1"
+      digest: sha256:c103a586cb16cc65d0a780e302b2369f568b8f0eec3027e6cfdf6e958ad7bb47
+      artifactPrefix: adapter-packs/fixture-adult/c103a586cb16cc65d0a780e302b2369f568b8f0eec3027e6cfdf6e958ad7bb47
+    route: lookup
+    connection: source-a
+    inputs:
+      given_name:
+        selector:
+          role: subject
+          profile: person-demographics-v1
+          field: given_name
+      family_name:
+        selector:
+          role: subject
+          profile: person-demographics-v1
+          field: family_name
+      birth_date:
+        selector:
+          role: subject
+          profile: person-demographics-v1
+          field: birth_date
     posture: field-projected
-    authentication: {type: static-authorization, tokenRef: secret:file/source-a-token}
-    request:
-      method: POST
-      path: /v1/facts
-      fixedHeaders: [{name: Accept, value: application/json}]
-      selectorInputs:
-        - role: subject
-          alternatives: [{profile: person-demographics-v1, fields: [given_name, family_name, birth_date]}]
-      prepareScript: adapters/adult-status-prepare.rhai
-      adapterParameters: {requestedFields: [date_of_birth], resultLimit: 2}
-      adapterParametersSchema: schemas/adult-status-adapter-parameters.schema.yaml
-      preparationLimits: {query: forbidden, jsonBody: required, maximumJsonDepth: 8, maximumCollectionItems: 16, maximumStringBytes: 256, maximumNormalizedBytes: 4096}
-      projection: [/total, /date_of_birth]
-      redirects: deny
-      attemptTimeoutMilliseconds: 3000
-      maximumResponseBytes: 65536
-      maximumConcurrency: 8
-    responseSchema: schemas/adult-status-response.schema.yaml
-    extractScript: adapters/adult-status-source.rhai
     factSchema: schemas/adult-status-facts.schema.yaml
   source-b:
-    type: http-json
-    baseUrl: https://source.invalid
+    pack:
+      id: fixture-residence
+      version: "1"
+      digest: sha256:6682b1acce2398b314b62fa0c1647a0427c392b178fe1ef8547b8052c79c4839
+      artifactPrefix: adapter-packs/fixture-residence/6682b1acce2398b314b62fa0c1647a0427c392b178fe1ef8547b8052c79c4839
+    route: lookup
+    connection: source-b
+    inputs:
+      record_reference:
+        selector:
+          role: subject
+          profile: residence-record-v1
+          field: record_reference
     posture: field-projected
-    authentication: {type: static-authorization, tokenRef: secret:file/source-b-token}
-    request:
-      method: POST
-      path: /v1/facts
-      fixedHeaders: [{name: Accept, value: application/json}]
-      selectorInputs:
-        - role: subject
-          alternatives: [{profile: residence-record-v1, fields: [record_reference]}]
-      prepareScript: adapters/residence-region-prepare.rhai
-      adapterParameters: {requestedFields: [official_residence_code], resultLimit: 2}
-      adapterParametersSchema: schemas/residence-region-adapter-parameters.schema.yaml
-      preparationLimits: {query: forbidden, jsonBody: required, maximumJsonDepth: 8, maximumCollectionItems: 16, maximumStringBytes: 256, maximumNormalizedBytes: 4096}
-      projection: [/total, /official_residence_code]
-      redirects: deny
-      attemptTimeoutMilliseconds: 3000
-      maximumResponseBytes: 65536
-      maximumConcurrency: 8
-    responseSchema: schemas/residence-region-response.schema.yaml
-    extractScript: adapters/residence-region-source.rhai
     factSchema: schemas/residence-region-facts.schema.yaml
   source-c:
-    type: http-json
-    baseUrl: https://source.invalid
+    pack:
+      id: fixture-licence
+      version: "1"
+      digest: sha256:159712f1794e124927a831d713d9fc0df4fb01f9fb3a7da4e4514989d0f60bee
+      artifactPrefix: adapter-packs/fixture-licence/159712f1794e124927a831d713d9fc0df4fb01f9fb3a7da4e4514989d0f60bee
+    route: lookup
+    connection: source-c
+    inputs:
+      licence_reference:
+        selector:
+          role: subject
+          profile: licence-register-v1
+          field: licence_reference
+      registry_region:
+        selector:
+          role: subject
+          profile: licence-register-v1
+          field: registry_region
     posture: record-transformed
-    authentication:
-      type: basic
-      usernameRef: secret:file/source-c-username
-      passwordRef: secret:file/source-c-password
-    request:
-      method: GET
-      path: /v1/records
-      fixedHeaders: [{name: Accept, value: application/json}]
-      selectorInputs:
-        - role: subject
-          alternatives: [{profile: licence-register-v1, fields: [licence_reference, registry_region]}]
-      prepareScript: adapters/professional-licence-prepare.rhai
-      adapterParameters: {requestedFields: "licence_state,valid_from,valid_until", resultLimit: "2"}
-      adapterParametersSchema: schemas/professional-licence-adapter-parameters.schema.yaml
-      preparationLimits: {query: required, jsonBody: forbidden, maximumQueryPairs: 4, maximumQueryNameBytes: 64, maximumQueryValueBytes: 256, maximumNormalizedBytes: 4096}
-      projection: [/total, /records/*/licence_state, /records/*/valid_from, /records/*/valid_until]
-      redirects: deny
-      attemptTimeoutMilliseconds: 3000
-      maximumResponseBytes: 131072
-      maximumConcurrency: 8
-    responseSchema: schemas/professional-licence-response.schema.yaml
-    extractScript: adapters/professional-licence-source.rhai
     factSchema: schemas/professional-licence-facts.schema.yaml
   source-d:
-    type: http-json
-    baseUrl: https://source.invalid
+    pack:
+      id: fixture-parents
+      version: "1"
+      digest: sha256:9508cf0ec06ad80a75955aae0db1689eed85363d51c12acf06c5c3e99539d72d
+      artifactPrefix: adapter-packs/fixture-parents/9508cf0ec06ad80a75955aae0db1689eed85363d51c12acf06c5c3e99539d72d
+    route: lookup
+    connection: source-d
+    inputs:
+      record_reference:
+        selector:
+          role: child
+          profile: civil-record-reference-v1
+          field: record_reference
     posture: field-projected
-    authentication: {type: static-authorization, tokenRef: secret:file/source-d-token}
-    request:
-      method: POST
-      path: /v1/child-relationships
-      fixedHeaders: [{name: Accept, value: application/json}]
-      selectorInputs:
-        - role: child
-          alternatives: [{profile: civil-record-reference-v1, fields: [record_reference]}]
-      prepareScript: adapters/legal-parent-relationship-prepare.rhai
-      adapterParameters:
-        requestedFields: [returned_child_reference, parent_references, reference_namespace, relationship_set_contract, relationship_set_complete]
-        resultLimit: 2
-        referenceNamespace: urn:example:fixture:person-reference
-        relationshipSetContract: urn:example:fixture:legal-parent-set:v1
-        relationshipSetComplete: true
-      adapterParametersSchema: schemas/legal-parent-relationship-adapter-parameters.schema.yaml
-      preparationLimits: {query: forbidden, jsonBody: required, maximumJsonDepth: 8, maximumCollectionItems: 16, maximumStringBytes: 256, maximumNormalizedBytes: 4096}
-      projection: [/total, /records/*/returned_child_reference, /records/*/parent_references, /records/*/reference_namespace, /records/*/relationship_set_contract, /records/*/relationship_set_complete]
-      redirects: deny
-      attemptTimeoutMilliseconds: 3000
-      maximumResponseBytes: 65536
-      maximumConcurrency: 8
-    responseSchema: schemas/legal-parent-relationship-response.schema.yaml
-    extractScript: adapters/legal-parent-relationship-source.rhai
     factSchema: schemas/legal-parent-relationship-facts.schema.yaml
-
 authorityProfiles:
   statutory-caseworker-v1:
-    requesterClients: [evidence-task-agent]
+    requesterClients:
+      - evidence-task-agent
     grantSourceIssuer: https://casework.invalid
     kind: statutory
-    requesterTags: [fixture-agency]
+    requesterTags:
+      - fixture-agency
     grants:
       - requirement: urn:example:fixture:requirement:adult-status:v1
         purpose: fixture-eligibility
         audienceFrom: authenticated-requester
-        responseFormats: [signed-jws, sd-jwt-vc, sd-jwt-vc-batch]
-        subjectBindingModes: [holder-bound]
+        responseFormats:
+          - signed-jws
+          - sd-jwt-vc
+          - sd-jwt-vc-batch
+        subjectBindingModes:
+          - holder-bound
         subjects:
-          - {role: subject, selectorProfile: person-demographics-v1, valueOrigin: request}
+          - role: subject
+            selectorProfile: person-demographics-v1
+            valueOrigin: request
       - requirement: urn:example:fixture:requirement:residence-region:v1
         purpose: fixture-routing
         audienceFrom: authenticated-requester
-        responseFormats: [signed-jws, sd-jwt-vc, sd-jwt-vc-batch]
-        subjectBindingModes: [holder-bound]
+        responseFormats:
+          - signed-jws
+          - sd-jwt-vc
+          - sd-jwt-vc-batch
+        subjectBindingModes:
+          - holder-bound
         subjects:
-          - {role: subject, selectorProfile: residence-record-v1, valueOrigin: request}
+          - role: subject
+            selectorProfile: residence-record-v1
+            valueOrigin: request
       - requirement: urn:example:fixture:requirement:professional-licence-status:v1
         purpose: fixture-registration
         audienceFrom: authenticated-requester
-        responseFormats: [signed-jws, sd-jwt-vc, sd-jwt-vc-batch]
-        subjectBindingModes: [holder-bound]
+        responseFormats:
+          - signed-jws
+          - sd-jwt-vc
+          - sd-jwt-vc-batch
+        subjectBindingModes:
+          - holder-bound
         subjects:
-          - {role: subject, selectorProfile: licence-register-v1, valueOrigin: request}
+          - role: subject
+            selectorProfile: licence-register-v1
+            valueOrigin: request
       - requirement: urn:example:fixture:requirement:legal-parent-relationship:v1
         purpose: fixture-enrolment
         audienceFrom: authenticated-requester
-        responseFormats: [signed-jws, sd-jwt-vc, sd-jwt-vc-batch]
-        subjectBindingModes: [holder-bound]
+        responseFormats:
+          - signed-jws
+          - sd-jwt-vc
+          - sd-jwt-vc-batch
+        subjectBindingModes:
+          - holder-bound
         subjects:
-          - {role: child, selectorProfile: civil-record-reference-v1, valueOrigin: request}
+          - role: child
+            selectorProfile: civil-record-reference-v1
+            valueOrigin: request
           - role: candidate-parent
             selectorProfile: person-reference-v1
             valueOrigin: authenticated-grant
             valueClaims:
               person_reference: grant.candidate_parent.person_reference
-
 requirements:
   - handle: adult-status
     uri: urn:example:fixture:requirement:adult-status:v1
     kind: criterion
     subjectBinding: holder-bound
     acquisition:
-      type: single
       source: source-a
-    purposes: [fixture-eligibility]
+    purposes:
+      - fixture-eligibility
     subjectRoles:
-      - {role: subject, cardinality: one, selectorProfiles: [person-demographics-v1]}
-    referenceFrameworks: [urn:example:fixture:framework:adult-status:v1]
+      - role: subject
+        cardinality: one
+        selectorProfiles:
+          - person-demographics-v1
+    referenceFrameworks:
+      - urn:example:fixture:framework:adult-status:v1
     evidenceType: urn:example:fixture:evidence-type:adult-status:v1
     observationTimezone: Asia/Bangkok
     validitySeconds: 300
     derivation:
       script: derivations/adult-status.rhai
-      parameters: {minimum_age_years: 18}
+      parameters:
+        minimum_age_years: 18
     concepts:
-      - {handle: is_adult, uri: urn:example:fixture:concept:adult-status, type: boolean, required: true, constraints: {}}
+      - handle: is_adult
+        uri: urn:example:fixture:concept:adult-status
+        type: boolean
+        required: true
+        constraints: {}
     fixtures: fixtures/adult-status-cases.yaml
     disclosureGuard:
-      families: [urn:example:fixture:disclosure-family:adult-status]
+      families:
+        - urn:example:fixture:disclosure-family:adult-status
     existenceDisclosure: collapse-unresolved
   - handle: residence-region
     uri: urn:example:fixture:requirement:residence-region:v1
     kind: information-requirement
     subjectBinding: holder-bound
     acquisition:
-      type: single
       source: source-b
-    purposes: [fixture-routing]
+    purposes:
+      - fixture-routing
     subjectRoles:
-      - {role: subject, cardinality: one, selectorProfiles: [residence-record-v1]}
-    referenceFrameworks: [urn:example:fixture:framework:residence-region:v1]
+      - role: subject
+        cardinality: one
+        selectorProfiles:
+          - residence-record-v1
+    referenceFrameworks:
+      - urn:example:fixture:framework:residence-region:v1
     evidenceType: urn:example:fixture:evidence-type:residence-region:v1
     validitySeconds: 300
     derivation:
@@ -278,22 +309,30 @@ requirements:
         uri: urn:example:fixture:concept:residence-region
         type: controlled-code
         required: true
-        constraints: {codelist: codelists/residence-region-map.yaml, codelistVersion: '2026-01', maximumBytes: 32}
+        constraints:
+          codelist: codelists/residence-region-map.yaml
+          codelistVersion: 2026-01
+          maximumBytes: 32
     fixtures: fixtures/residence-region-cases.yaml
     disclosureGuard:
-      families: [urn:example:fixture:disclosure-family:residence-region]
+      families:
+        - urn:example:fixture:disclosure-family:residence-region
     existenceDisclosure: collapse-unresolved
   - handle: professional-licence-status
     uri: urn:example:fixture:requirement:professional-licence-status:v1
     kind: criterion
     subjectBinding: holder-bound
     acquisition:
-      type: single
       source: source-c
-    purposes: [fixture-registration]
+    purposes:
+      - fixture-registration
     subjectRoles:
-      - {role: subject, cardinality: one, selectorProfiles: [licence-register-v1]}
-    referenceFrameworks: [urn:example:fixture:framework:professional-licence:v1]
+      - role: subject
+        cardinality: one
+        selectorProfiles:
+          - licence-register-v1
+    referenceFrameworks:
+      - urn:example:fixture:framework:professional-licence:v1
     evidenceType: urn:example:fixture:evidence-type:professional-licence-status:v1
     observationTimezone: Africa/Nairobi
     validitySeconds: 300
@@ -302,50 +341,130 @@ requirements:
       parameters:
         active_state: CURRENT
         expiry_buckets:
-          - {minimumInclusive: {type: decimal, value: '-365000'}, maximumExclusive: {type: decimal, value: '0'}, code: expired}
-          - {minimumInclusive: {type: decimal, value: '0'}, maximumExclusive: {type: decimal, value: '31'}, code: within-30-days}
-          - {minimumInclusive: {type: decimal, value: '31'}, maximumExclusive: {type: decimal, value: '91'}, code: within-90-days}
-          - {minimumInclusive: {type: decimal, value: '91'}, maximumExclusive: {type: decimal, value: '365001'}, code: later}
+          - minimumInclusive:
+              type: decimal
+              value: "-365000"
+            maximumExclusive:
+              type: decimal
+              value: "0"
+            code: expired
+          - minimumInclusive:
+              type: decimal
+              value: "0"
+            maximumExclusive:
+              type: decimal
+              value: "31"
+            code: within-30-days
+          - minimumInclusive:
+              type: decimal
+              value: "31"
+            maximumExclusive:
+              type: decimal
+              value: "91"
+            code: within-90-days
+          - minimumInclusive:
+              type: decimal
+              value: "91"
+            maximumExclusive:
+              type: decimal
+              value: "365001"
+            code: later
     concepts:
-      - {handle: licence-active, uri: urn:example:fixture:concept:licence-active, type: boolean, required: true, constraints: {}}
+      - handle: licence-active
+        uri: urn:example:fixture:concept:licence-active
+        type: boolean
+        required: true
+        constraints: {}
       - handle: licence-expiry-category
         uri: urn:example:fixture:concept:licence-expiry-category
         type: controlled-category
         required: true
-        constraints: {categoryScheme: urn:example:fixture:scheme:licence-expiry, schemeVersion: '1', maximumBytes: 32, codelist: codelists/professional-expiry-categories.yaml}
+        constraints:
+          categoryScheme: urn:example:fixture:scheme:licence-expiry
+          schemeVersion: "1"
+          maximumBytes: 32
+          codelist: codelists/professional-expiry-categories.yaml
     fixtures: fixtures/professional-licence-cases.yaml
     disclosureGuard:
-      families: [urn:example:fixture:disclosure-family:professional-licence]
+      families:
+        - urn:example:fixture:disclosure-family:professional-licence
     existenceDisclosure: collapse-unresolved
   - handle: legal-parent-relationship
     uri: urn:example:fixture:requirement:legal-parent-relationship:v1
     kind: criterion
     subjectBinding: holder-bound
     acquisition:
-      type: single
       source: source-d
-    purposes: [fixture-enrolment]
+    purposes:
+      - fixture-enrolment
     subjectRoles:
-      - {role: child, cardinality: one, selectorProfiles: [civil-record-reference-v1]}
-      - {role: candidate-parent, cardinality: one, selectorProfiles: [person-reference-v1]}
-    referenceFrameworks: [urn:example:fixture:framework:legal-parent-relationship:v1]
+      - role: child
+        cardinality: one
+        selectorProfiles:
+          - civil-record-reference-v1
+      - role: candidate-parent
+        cardinality: one
+        selectorProfiles:
+          - person-reference-v1
+    referenceFrameworks:
+      - urn:example:fixture:framework:legal-parent-relationship:v1
     evidenceType: urn:example:fixture:evidence-type:legal-parent-relationship:v1
     validitySeconds: 300
     derivation:
       script: derivations/legal-parent-relationship.rhai
       selectorInputs:
         - role: child
-          alternatives: [{profile: civil-record-reference-v1, fields: [record_reference]}]
+          alternatives:
+            - profile: civil-record-reference-v1
+              fields:
+                - record_reference
         - role: candidate-parent
-          alternatives: [{profile: person-reference-v1, fields: [person_reference]}]
+          alternatives:
+            - profile: person-reference-v1
+              fields:
+                - person_reference
       parameters:
         matching_policy: exact-opaque-reference-membership-v1
         candidate_reference_namespace: urn:example:fixture:person-reference
         relationship_set_contract: urn:example:fixture:legal-parent-set:v1
         legal_authority_attestation: urn:example:fixture:governance:legal-parent-register:v1
     concepts:
-      - {handle: relationship-confirmed, uri: urn:example:fixture:concept:legal-parent-relationship-confirmed, type: boolean, required: true, constraints: {}}
+      - handle: relationship-confirmed
+        uri: urn:example:fixture:concept:legal-parent-relationship-confirmed
+        type: boolean
+        required: true
+        constraints: {}
     fixtures: fixtures/legal-parent-relationship-cases.yaml
     disclosureGuard:
-      families: [urn:example:fixture:disclosure-family:legal-parent-relationship]
+      families:
+        - urn:example:fixture:disclosure-family:legal-parent-relationship
     existenceDisclosure: collapse-unresolved
+sourceConnections:
+  source-a:
+    endpoints:
+      - endpoint: provider
+        baseUrl: https://source.invalid
+        authentication:
+          type: static-authorization
+        clientIdentity: forbidden
+  source-b:
+    endpoints:
+      - endpoint: provider
+        baseUrl: https://source.invalid
+        authentication:
+          type: static-authorization
+        clientIdentity: forbidden
+  source-c:
+    endpoints:
+      - endpoint: provider
+        baseUrl: https://source.invalid
+        authentication:
+          type: basic
+        clientIdentity: forbidden
+  source-d:
+    endpoints:
+      - endpoint: provider
+        baseUrl: https://source.invalid
+        authentication:
+          type: static-authorization
+        clientIdentity: forbidden

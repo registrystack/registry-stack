@@ -7,7 +7,6 @@ Write a newline to stdin (or close it) to stop the service and its source.
 import argparse
 import base64
 import hashlib
-import importlib.util
 import json
 import os
 from pathlib import Path
@@ -27,22 +26,51 @@ import yaml
 
 
 sys.dont_write_bytecode = True
-PACKAGE_SUMS_PATH = (
-    Path(__file__).resolve().parents[5]
-    / "products/evidence/scripts/generate-package-sums.py"
-)
-PACKAGE_SUMS_SPEC = importlib.util.spec_from_file_location("evidence_package_sums", PACKAGE_SUMS_PATH)
-assert PACKAGE_SUMS_SPEC is not None and PACKAGE_SUMS_SPEC.loader is not None
-PACKAGE_SUMS = importlib.util.module_from_spec(PACKAGE_SUMS_SPEC)
-PACKAGE_SUMS_SPEC.loader.exec_module(PACKAGE_SUMS)
-
-
 def b64(data):
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
 
 
-def command(*args, data=None):
-    return subprocess.run(args, input=data, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True).stdout
+def command(*args, data=None, env=None):
+    return subprocess.run(
+        args,
+        input=data,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+        env=env,
+    ).stdout
+
+
+def compile_package(evidencectl, evidence, project, target_path, candidate):
+    compiler_env = {**os.environ, "EVIDENCE_BIN": str(evidence)}
+    command(
+        str(evidencectl),
+        "package",
+        str(project),
+        "--target",
+        str(target_path),
+        "--output",
+        str(candidate),
+        env=compiler_env,
+    )
+
+
+def prepare_output_root(requested):
+    output = Path(os.path.abspath(requested))
+    if output.is_symlink():
+        raise RuntimeError("output directory must not be a symbolic link")
+    if output.exists():
+        if not output.is_dir():
+            raise RuntimeError("output path must be a directory")
+        owner = getattr(os, "geteuid", None)
+        if owner is not None and output.stat().st_uid != owner():
+            raise RuntimeError("output directory must be owned by the current user")
+        if any(output.iterdir()):
+            raise RuntimeError("output directory must be empty")
+    else:
+        output.mkdir(parents=True, mode=0o700)
+    output.chmod(0o700)
+    return output.resolve()
 
 
 def der_value(data, offset=0):
@@ -94,17 +122,15 @@ def write_json(path, value):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--evidence", type=Path, required=True)
+    parser.add_argument("--evidencectl", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     os.umask(0o077)
-    output = args.output.resolve()
-    output.mkdir(parents=True, exist_ok=True)
-    if (output / "ready.json").exists():
-        raise RuntimeError("use a fresh output directory")
+    output = prepare_output_root(args.output)
     secrets = output / "secrets"
     secrets.mkdir()
-    bundle = output / "bundle"
-    shutil.copytree(Path(__file__).parent / "provider", bundle)
+    project = output / "project"
+    shutil.copytree(Path(__file__).parent / "provider", project)
     issuer_pem, issuer_public, _ = make_key(secrets, "issuer")
     _, signing_public, signing_private = make_key(secrets, "signer")
     write_json(secrets / "signing-key", signing_private)
@@ -165,28 +191,45 @@ def main():
     reservation.bind(("127.0.0.1", 0))
     port = reservation.getsockname()[1]
     origin = "http://127.0.0.1:" + str(port)
-    config = yaml.safe_load((bundle / "evidence.yaml").read_text())
-    config["service"]["publicOrigin"] = origin
-    config["authentication"]["oidc"]["issuer"] = issuer
-    config["authentication"]["oidc"]["jwksSource"] = {"type": "uri", "uri": issuer + "/.well-known/jwks.json"}
-    for source_config in config["sources"].values():
-        source_config["baseUrl"] = issuer
-    for path in (bundle / "public-keys").iterdir():
+    candidate = output / "candidate"
+    bundle = output / "installed-package"
+    target_path = project / "provider-target.yaml"
+    target = yaml.safe_load(target_path.read_text())
+    target["package"]["root"] = str(bundle)
+    target["service"]["publicOrigin"] = origin
+    target["listener"]["bind"] = "127.0.0.1:" + str(port)
+    target["authentication"]["oidc"]["issuer"] = issuer
+    target["authentication"]["oidc"]["jwksSource"] = {
+        "type": "uri",
+        "uri": issuer + "/.well-known/jwks.json",
+    }
+    target["connections"]["farmer-facts"]["endpoints"]["provider"]["origin"] = issuer
+    target["secretProviders"]["file"]["root"] = str(secrets)
+    target["audit"]["path"] = str(output / "audit.jsonl")
+    for path in (project / "public-keys").iterdir():
         path.unlink()
     public_path = "public-keys/" + signing_public["kid"] + ".jwk.json"
-    write_json(bundle / public_path, signing_public)
-    config["signing"]["activePublicJwkFile"] = public_path
-    (bundle / "evidence.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
-    # Publish the dynamically authored package through the maintained checksum renderer.
-    (bundle / "SHA256SUMS").write_bytes(PACKAGE_SUMS.rendered_sum(bundle))
-    runtime = {"apiVersion": "id.registrystack.org/formats/evidence/runtime/v1alpha1", "kind": "EvidenceRuntimeConfig",
-        "package": {"root": str(bundle)}, "listener": {
-        "bind": "127.0.0.1:" + str(port), "tlsTermination": "operator-controlled-upstream", "trustProxyIdentityHeaders": False,
-        "maximumRequestBytes": 65536, "maximumConcurrentRequests": 16, "requestTimeoutMilliseconds": 10000, "shutdownGraceMilliseconds": 1000},
-        "secretProviders": {"file": {"root": str(secrets)}}, "signer": {"type": "local-jwk", "privateKeyRef": "secret:file/signing-key"},
-        "audit": {"path": str(output / "audit.jsonl")}, "outboundTls": {"systemRoots": True, "trustProfiles": {}}}
-    runtime_path = output / "runtime.yaml"
-    runtime_path.write_text(yaml.safe_dump(runtime, sort_keys=False))
+    write_json(project / public_path, signing_public)
+    target["signer"]["publicJwkFile"] = public_path
+    target_path.write_text(yaml.safe_dump(target, sort_keys=False))
+    evidencectl = args.evidencectl.resolve()
+    if not evidencectl.is_file():
+        raise RuntimeError("matching evidencectl binary is required through --evidencectl")
+    evidence = args.evidence.resolve()
+    compile_package(evidencectl, evidence, project, target_path, candidate)
+    shutil.copytree(candidate / "bundle", bundle)
+    runtime_path = candidate / "runtime.yaml"
+    command(
+        str(evidence),
+        "authority",
+        "activate",
+        "--runtime-config",
+        str(runtime_path),
+        "--document",
+        str(candidate / "compiled-authority.yaml"),
+        "--operator-reference",
+        "synthetic-farmer-provider",
+    )
     runtime_path.chmod(0o444)
     for path in bundle.rglob("*"):
         if path.is_file():
@@ -215,7 +258,7 @@ def main():
         stop.set()
     threading.Thread(target=stdin_stop, daemon=True).start()
     with (output / "service.log").open("wb") as log:
-        process = subprocess.Popen([str(args.evidence.resolve()), "serve", "--runtime-config", str(runtime_path)], stdout=log, stderr=log)
+        process = subprocess.Popen([str(evidence), "serve", "--runtime-config", str(runtime_path)], stdout=log, stderr=log)
         try:
             deadline = time.monotonic() + 15
             while True:

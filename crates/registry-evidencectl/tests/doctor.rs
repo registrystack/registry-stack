@@ -24,28 +24,23 @@ const SECRET_FILES: [&str; 2] = ["audit-hmac-key", "subject-binding-hmac-key"];
 /// echoing document values fails loudly here instead of quietly.
 const CANARY: &str = "s3cr3t-canary-value";
 
-/// The three acquisition forms a bundle can declare, one requirement each.
+/// Three current single-Source acquisitions, one requirement each.
 ///
-/// Source names and the fact names a member is allowed to read are
-/// configuration an adopter writes and a report may state. The derivation
-/// parameter beside them is not part of the acquisition, and carries the
-/// canary that proves the projection stays narrow.
+/// Source names are configuration an adopter writes and a report may state.
+/// The derivation parameter beside them is not part of the acquisition, and
+/// carries the canary that proves the projection stays narrow.
 const DECLARED_ACQUISITIONS: &str = r#"requirements:
   - uri: urn:example:doctor:requirement:one-call:v1
-    acquisition: {type: single, source: registry-lookup}
-  - uri: urn:example:doctor:requirement:two-call:v1
-    acquisition: {type: search-then-fetch, search: person-search, fetch: person-record}
-  - uri: urn:example:doctor:requirement:fetch-set:v1
-    acquisition:
-      type: search-then-fetch-set
-      search: civil-record-search
-      fetch:
-        - {source: union-register, factInputs: [civil_record_reference]}
-        - {source: death-register, factInputs: [civil_record_reference]}
-      maximumAcquisitionMilliseconds: 8000
+    acquisition: {source: registry-lookup}
+  - uri: urn:example:doctor:requirement:person-record:v1
+    acquisition: {source: person-record}
+  - uri: urn:example:doctor:requirement:civil-record:v1
+    acquisition: {source: civil-record}
     derivation:
       parameters: {survivorship_policy: s3cr3t-canary-value}
 "#;
+
+const CURRENT_SOURCE_ACQUISITION: &str = "requirements:\n  - uri: urn:example:doctor:requirement:one-call:v1\n    acquisition: {source: registry-lookup}\n";
 
 #[test]
 fn doctor_passes_a_frozen_project_and_leaves_the_public_key_beside_it_alone() {
@@ -360,9 +355,9 @@ fn declare_rate_limits(project: &Path, burst: u32, extra: &str) {
     fs::write(&path, document).expect("declare rate limits");
 }
 
-const AUDIENCE_SCOPED_REQUIREMENT: &str = "requirements:\n  - uri: urn:example:doctor:requirement:one-call:v1\n    acquisition: {type: single, source: registry-lookup}\n";
+const AUDIENCE_SCOPED_REQUIREMENT: &str = "requirements:\n  - uri: urn:example:doctor:requirement:one-call:v1\n    acquisition: {source: registry-lookup}\n";
 
-const HOLDER_BOUND_RELEASE: &str = "responseFormats: [signed-jws, sd-jwt-vc, sd-jwt-vc-batch]\nmaximumHolderBoundBatchSize: 12\nrequirements:\n  - uri: urn:example:doctor:requirement:holder:v1\n    subjectBinding: holder-bound\n    acquisition: {type: single, source: registry-lookup}\n";
+const HOLDER_BOUND_RELEASE: &str = "responseFormats: [signed-jws, sd-jwt-vc, sd-jwt-vc-batch]\nmaximumHolderBoundBatchSize: 12\nrequirements:\n  - uri: urn:example:doctor:requirement:holder:v1\n    subjectBinding: holder-bound\n    acquisition: {source: registry-lookup}\n";
 
 /// Run doctor in both output forms over a frozen project.
 fn doctor_both_forms(project: &Path) -> (Output, Output) {
@@ -496,50 +491,16 @@ fn retired_mint_compatibility_option_is_not_accepted() {
     }
 }
 
-/// A bundle declaring a gated acquisition kind states what it needs; the
-/// deployment that will serve it decides separately, in a file the bundle
-/// author does not write. Evidence refuses the pair with a value-free sentence
-/// that names no file, which is correct for a refusal and useless as
-/// instructions, so doctor names the file and the entry to add.
+/// A current acquisition selects one governed Source whose pinned pack route
+/// may perform several bounded operations. It requires no retired capability
+/// switch in either the bundle or runtime file.
 #[test]
-fn doctor_reports_a_gated_acquisition_kind_the_deployment_did_not_enable() {
+fn doctor_accepts_a_current_pack_route_without_a_runtime_capability_switch() {
     let workspace = tempfile::tempdir().expect("tempdir");
     let project = workspace.path().join("project");
     provision(&project);
     provision_bearer_token(&project);
-    declare_acquisitions(&project);
-
-    freeze(&project);
-    let output = doctor(&project, &[]);
-    unfreeze(&project);
-
-    let stdout = stdout_of(&output);
-    assert!(
-        !output.status.success(),
-        "doctor passed a project the runtime would refuse:\n{stdout}"
-    );
-    assert!(
-        stdout.contains(
-            "runtime.yaml: does not enable the search-then-fetch-set acquisition capability"
-        ) && stdout.contains("acquisitionCapabilities: [search-then-fetch-set]"),
-        "doctor did not name the file and the entry to add:\n{stdout}"
-    );
-    assert!(
-        !stdout.contains(CANARY),
-        "doctor echoed a document value:\n{stdout}"
-    );
-}
-
-/// The same project, once the operator has made the decision. The frozen
-/// Version 1 forms beside it never needed one.
-#[test]
-fn doctor_passes_once_the_deployment_enables_the_kind_the_bundle_requires() {
-    let workspace = tempfile::tempdir().expect("tempdir");
-    let project = workspace.path().join("project");
-    provision(&project);
-    provision_bearer_token(&project);
-    declare_acquisitions(&project);
-    enable_acquisition_capability(&project);
+    declare_acquisition_document(&project, CURRENT_SOURCE_ACQUISITION);
 
     freeze(&project);
     let output = doctor(&project, &[]);
@@ -548,25 +509,61 @@ fn doctor_passes_once_the_deployment_enables_the_kind_the_bundle_requires() {
     let stdout = stdout_of(&output);
     assert!(
         output.status.success(),
-        "doctor failed a project the runtime would accept:\n{stdout}{}",
+        "doctor refused a current pack-route acquisition:\n{stdout}{}",
         stderr_of(&output)
     );
     assert!(
-        stdout.contains("0 failed"),
-        "unexpected doctor summary: {stdout}"
+        stdout.contains("PLAN: urn:example:doctor:requirement:one-call:v1 (pack-route)")
+            && stdout.contains("1. registry-lookup (source) reads no prior fact"),
+        "doctor did not render the selected logical Source:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("acquisitionCapabilities"),
+        "doctor advised adding a retired capability switch:\n{stdout}"
     );
 }
 
+/// JSON preserves the report envelope while naming the current pack-route
+/// projection and its one logical selected Source.
 #[test]
-fn doctor_reports_both_halves_of_the_source_batch_capability_gate() {
+fn doctor_json_projects_one_current_pack_route_source() {
     let workspace = tempfile::tempdir().expect("tempdir");
     let project = workspace.path().join("project");
     provision(&project);
     provision_bearer_token(&project);
-    let bundle_path = project.join("bundle/evidence.yaml");
-    let mut bundle = fs::read_to_string(&bundle_path).expect("Evidence configuration");
-    bundle.push_str("sources:\n  registry-lookup:\n    batch: {}\n");
-    fs::write(&bundle_path, bundle).expect("declare a source batch block");
+    declare_acquisition_document(&project, CURRENT_SOURCE_ACQUISITION);
+
+    freeze(&project);
+    let output = doctor(&project, &["--json"]);
+    unfreeze(&project);
+
+    let report: serde_json::Value =
+        serde_json::from_str(stdout_of(&output).trim()).expect("parse the JSON report");
+    assert!(
+        output.status.success(),
+        "doctor refused a current pack-route acquisition:\n{}{}",
+        stdout_of(&output),
+        stderr_of(&output)
+    );
+    assert_eq!(
+        report["acquisitionPlans"],
+        serde_json::json!([{
+            "requirement": "urn:example:doctor:requirement:one-call:v1",
+            "kind": "pack-route",
+            "stages": [{"source": "registry-lookup", "role": "source", "inputs": "none"}]
+        }])
+    );
+}
+
+/// Every requirement independently selects one logical Source. No bundle-wide
+/// capability or cross-requirement source sequence is inferred.
+#[test]
+fn doctor_keeps_multiple_current_pack_route_sources_independent_and_ordered() {
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let project = workspace.path().join("project");
+    provision(&project);
+    provision_bearer_token(&project);
+    declare_acquisitions(&project);
 
     freeze(&project);
     let output = doctor(&project, &[]);
@@ -574,98 +571,31 @@ fn doctor_reports_both_halves_of_the_source_batch_capability_gate() {
 
     let stdout = stdout_of(&output);
     assert!(
-        !output.status.success(),
-        "doctor passed a source batch block without its two-author gate:\n{stdout}"
+        output.status.success(),
+        "doctor refused independent current Source selections:\n{stdout}{}",
+        stderr_of(&output)
     );
-    for expected in [
-        "bundle/evidence.yaml: does not declare the source-batch acquisition capability a source batch block in it uses",
-        "runtime.yaml: does not enable the source-batch acquisition capability a source batch block in this bundle needs",
-    ] {
+    for expected in ["registry-lookup", "person-record", "civil-record"] {
         assert!(
             stdout.contains(expected),
-            "doctor did not report {expected:?}:\n{stdout}"
+            "doctor omitted current Source {expected:?}:\n{stdout}"
         );
     }
+    assert!(!stdout.contains("acquisitionCapabilities"), "{stdout}");
 }
 
-/// A capability named twice enables nothing a single naming does not, so it
-/// reads as harmless. The runtime does not read it that way: it refuses the
-/// deployment because the list must be unique. Doctor reporting PASS on a
-/// project that will not start is the one outcome this check exists to
-/// prevent.
+/// A Source is one local identifier, never an array whose members could turn
+/// caller or source data into an undeclared route sequence.
 #[test]
-fn doctor_reports_an_acquisition_capability_the_deployment_listed_twice() {
+fn doctor_refuses_an_acquisition_whose_source_is_not_one_name() {
     let workspace = tempfile::tempdir().expect("tempdir");
     let project = workspace.path().join("project");
     provision(&project);
     provision_bearer_token(&project);
-    declare_acquisitions(&project);
-    enable_acquisition_capability_twice(&project);
-
-    freeze(&project);
-    let output = doctor(&project, &[]);
-    unfreeze(&project);
-
-    let stdout = stdout_of(&output);
-    assert!(
-        !output.status.success(),
-        "doctor passed a project the runtime would refuse:\n{stdout}"
-    );
-    assert!(
-        stdout.contains("runtime.yaml: lists the same acquisition capability twice"),
-        "doctor did not name the repeated capability entry:\n{stdout}"
-    );
-}
-
-/// The gate has two halves and the bundle writes one of them. A requirement
-/// using the gated kind in a bundle that never declared it is refused at
-/// startup even on a deployment that enabled the kind, so a doctor reading only
-/// the deployment's half passes a project that will not start.
-#[test]
-fn doctor_reports_a_gated_acquisition_kind_the_bundle_did_not_declare() {
-    let workspace = tempfile::tempdir().expect("tempdir");
-    let project = workspace.path().join("project");
-    provision(&project);
-    provision_bearer_token(&project);
-    declare_acquisitions_stating(&project, "");
-    enable_acquisition_capability(&project);
-
-    freeze(&project);
-    let output = doctor(&project, &[]);
-    unfreeze(&project);
-
-    let stdout = stdout_of(&output);
-    assert!(
-        !output.status.success(),
-        "doctor passed a project the runtime would refuse:\n{stdout}"
-    );
-    assert!(
-        stdout.contains(
-            "bundle/evidence.yaml: does not declare the search-then-fetch-set acquisition capability"
-        ) && stdout.contains("acquisitionCapabilities: [search-then-fetch-set]"),
-        "doctor did not name the file and the entry to add:\n{stdout}"
-    );
-    assert!(
-        !stdout.contains(CANARY),
-        "doctor echoed a document value:\n{stdout}"
-    );
-}
-
-/// A misspelled declaration is the same defect twice over: the name the bundle
-/// states is not one this release defines, and the kind its requirement uses
-/// stays undeclared. The runtime refuses on the first; an author reading a
-/// report that mentioned only the second would go looking in the wrong file.
-#[test]
-fn doctor_reports_a_bundle_acquisition_capability_this_release_does_not_define() {
-    let workspace = tempfile::tempdir().expect("tempdir");
-    let project = workspace.path().join("project");
-    provision(&project);
-    provision_bearer_token(&project);
-    declare_acquisitions_stating(
+    declare_acquisition_document(
         &project,
-        "acquisitionCapabilities:\n  - search-then-fetch-sets\n",
+        "requirements:\n  - uri: urn:example:doctor:requirement:malformed:v1\n    acquisition: {source: [registry-lookup, alternate]}\n",
     );
-    enable_acquisition_capability(&project);
 
     freeze(&project);
     let output = doctor(&project, &[]);
@@ -674,34 +604,85 @@ fn doctor_reports_a_bundle_acquisition_capability_this_release_does_not_define()
     let stdout = stdout_of(&output);
     assert!(
         !output.status.success(),
-        "doctor passed a project the runtime would refuse:\n{stdout}"
+        "doctor projected a non-scalar Source selection:\n{stdout}"
     );
     assert!(
-        stdout.contains(
-            "bundle/evidence.yaml: declares an acquisition capability this release does not define"
-        ),
-        "doctor did not name the undefined capability:\n{stdout}"
-    );
-    assert!(
-        stdout.contains(
-            "bundle/evidence.yaml: does not declare the search-then-fetch-set acquisition capability"
-        ),
-        "doctor did not report the requirement left ungated:\n{stdout}"
+        stdout.contains("declares a requirement acquisition this check does not recognize")
+            && !stdout.contains("acquisitionCapabilities")
+            && !stdout.contains("alternate"),
+        "doctor did not keep the malformed value closed:\n{stdout}"
     );
 }
 
-/// An adopter reading a bundle needs to know what it will call before anything
-/// is running: which sources, in what order, and which facts one call hands to
-/// the next. All of that is configuration. A fact value is not: it is acquired
-/// at request time, and doctor neither holds one nor asks for one.
+/// A requirement with no Source cannot be rendered as an empty plan that might
+/// be mistaken for a valid acquisition.
 #[test]
-fn doctor_renders_every_call_each_declared_acquisition_will_make() {
+fn doctor_refuses_an_acquisition_that_omits_its_source() {
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let project = workspace.path().join("project");
+    provision(&project);
+    provision_bearer_token(&project);
+    declare_acquisition_document(
+        &project,
+        "requirements:\n  - uri: urn:example:doctor:requirement:missing-source:v1\n    acquisition: {}\n",
+    );
+
+    freeze(&project);
+    let output = doctor(&project, &[]);
+    unfreeze(&project);
+
+    let stdout = stdout_of(&output);
+    assert!(
+        !output.status.success(),
+        "doctor projected an acquisition with no Source:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("declares a requirement acquisition this check does not recognize")
+            && !stdout.contains("acquisitionCapabilities"),
+        "doctor gave obsolete remediation for a missing Source:\n{stdout}"
+    );
+}
+
+/// A retired multistage shape is not projected as a current Source plan, and
+/// the refusal never tells an adopter to restore its retired capability gate.
+#[test]
+fn doctor_refuses_a_retired_multistage_acquisition_without_obsolete_advice() {
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let project = workspace.path().join("project");
+    provision(&project);
+    provision_bearer_token(&project);
+    declare_acquisition_document(
+        &project,
+        "requirements:\n  - uri: urn:example:doctor:requirement:retired:v1\n    acquisition: {type: search-then-fetch, search: person-search, fetch: person-record}\n    derivation: {parameters: {private_policy: s3cr3t-canary-value}}\n",
+    );
+
+    freeze(&project);
+    let output = doctor(&project, &[]);
+    unfreeze(&project);
+
+    let stdout = stdout_of(&output);
+    assert!(
+        !output.status.success(),
+        "doctor projected a retired multistage acquisition:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("declares a requirement acquisition this check does not recognize")
+            && !stdout.contains("acquisitionCapabilities")
+            && !stdout.contains(CANARY),
+        "doctor disclosed a value or gave obsolete remediation:\n{stdout}"
+    );
+}
+
+/// An adopter reading a bundle needs to know which logical Source each
+/// requirement selected. The pack route owns its bounded physical operations;
+/// doctor reports neither those as a guessed call count nor unrelated values.
+#[test]
+fn doctor_renders_each_logical_source_selected_by_current_acquisitions() {
     let workspace = tempfile::tempdir().expect("tempdir");
     let project = workspace.path().join("project");
     provision(&project);
     provision_bearer_token(&project);
     declare_acquisitions(&project);
-    enable_acquisition_capability(&project);
 
     freeze(&project);
     let human = doctor(&project, &[]);
@@ -715,15 +696,12 @@ fn doctor_renders_every_call_each_declared_acquisition_will_make() {
         stderr_of(&output)
     );
     for line in [
-        "PLAN: urn:example:doctor:requirement:one-call:v1 (single)",
-        "    1. registry-lookup (search) reads no prior fact",
-        "PLAN: urn:example:doctor:requirement:two-call:v1 (search-then-fetch)",
-        "    1. person-search (search) reads no prior fact",
-        "    2. person-record (member) reads every fact the search produced",
-        "PLAN: urn:example:doctor:requirement:fetch-set:v1 (search-then-fetch-set)",
-        "    1. civil-record-search (search) reads no prior fact",
-        "    2. union-register (member) reads civil_record_reference",
-        "    3. death-register (member) reads civil_record_reference",
+        "PLAN: urn:example:doctor:requirement:one-call:v1 (pack-route)",
+        "    1. registry-lookup (source) reads no prior fact",
+        "PLAN: urn:example:doctor:requirement:person-record:v1 (pack-route)",
+        "    1. person-record (source) reads no prior fact",
+        "PLAN: urn:example:doctor:requirement:civil-record:v1 (pack-route)",
+        "    1. civil-record (source) reads no prior fact",
     ] {
         assert!(
             rendered.contains(line),
@@ -738,34 +716,23 @@ fn doctor_renders_every_call_each_declared_acquisition_will_make() {
         serde_json::json!([
             {
                 "requirement": "urn:example:doctor:requirement:one-call:v1",
-                "kind": "single",
+                "kind": "pack-route",
                 "stages": [
-                    {"source": "registry-lookup", "role": "search", "inputs": "none"}
+                    {"source": "registry-lookup", "role": "source", "inputs": "none"}
                 ]
             },
             {
-                "requirement": "urn:example:doctor:requirement:two-call:v1",
-                "kind": "search-then-fetch",
+                "requirement": "urn:example:doctor:requirement:person-record:v1",
+                "kind": "pack-route",
                 "stages": [
-                    {"source": "person-search", "role": "search", "inputs": "none"},
-                    {"source": "person-record", "role": "member", "inputs": "every-prior-fact"}
+                    {"source": "person-record", "role": "source", "inputs": "none"}
                 ]
             },
             {
-                "requirement": "urn:example:doctor:requirement:fetch-set:v1",
-                "kind": "search-then-fetch-set",
+                "requirement": "urn:example:doctor:requirement:civil-record:v1",
+                "kind": "pack-route",
                 "stages": [
-                    {"source": "civil-record-search", "role": "search", "inputs": "none"},
-                    {
-                        "source": "union-register",
-                        "role": "member",
-                        "inputs": {"declared": ["civil_record_reference"]}
-                    },
-                    {
-                        "source": "death-register",
-                        "role": "member",
-                        "inputs": {"declared": ["civil_record_reference"]}
-                    }
+                    {"source": "civil-record", "role": "source", "inputs": "none"}
                 ]
             }
         ])
@@ -855,43 +822,17 @@ sourceToken: secret:file/source-bearer-token
     }
 }
 
-/// Give the fixture bundle one requirement per acquisition form, and the
-/// bundle half of the gate the gated form needs.
+/// Give the fixture bundle several current single-Source acquisitions.
 fn declare_acquisitions(project: &Path) {
-    declare_acquisitions_stating(
-        project,
-        "acquisitionCapabilities:\n  - search-then-fetch-set\n",
-    );
+    declare_acquisition_document(project, DECLARED_ACQUISITIONS);
 }
 
-/// The same requirements, with the bundle half of the gate exactly as written.
-///
-/// That half is a parameter because the runtime reads it under the same rules
-/// as the deployment half, and doctor has to restate both.
-fn declare_acquisitions_stating(project: &Path, capabilities: &str) {
+/// Append requirement declarations to the filesystem-only doctor fixture.
+fn declare_acquisition_document(project: &Path, declarations: &str) {
     let path = project.join("bundle/evidence.yaml");
     let mut document = fs::read_to_string(&path).expect("Evidence configuration");
-    document.push_str(DECLARED_ACQUISITIONS);
-    document.push_str(capabilities);
+    document.push_str(declarations);
     fs::write(&path, document).expect("declare the acquisitions");
-}
-
-/// Record the operator's half of the acquisition gate in the runtime file.
-fn enable_acquisition_capability(project: &Path) {
-    let path = project.join("runtime.yaml");
-    let mut document = fs::read_to_string(&path).expect("runtime configuration");
-    document.push_str("acquisitionCapabilities:\n  - search-then-fetch-set\n");
-    fs::write(&path, document).expect("enable the acquisition capability");
-}
-
-/// Record the same decision twice, which the runtime refuses.
-fn enable_acquisition_capability_twice(project: &Path) {
-    let path = project.join("runtime.yaml");
-    let mut document = fs::read_to_string(&path).expect("runtime configuration");
-    document.push_str(
-        "acquisitionCapabilities:\n  - search-then-fetch-set\n  - search-then-fetch-set\n",
-    );
-    fs::write(&path, document).expect("enable the acquisition capability twice");
 }
 
 fn provision_bearer_token(project: &Path) {

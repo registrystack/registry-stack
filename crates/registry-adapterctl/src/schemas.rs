@@ -43,7 +43,7 @@ pub const DEFAULT_OUTPUT_DIR: &str = "products/adapter/schemas";
 /// components and the job sources the authoring checks read through
 /// `pollEnrich` or refuse as sends. Pinned to the parser by the
 /// generator's own test.
-const SEND_URI_PATTERN: &str = "^(direct|http|graphql|postgres|file|sftp):.+$";
+const SEND_URI_PATTERN: &str = "^(direct|http|graphql|postgres|file|sftp|sqlite-extract):.+$";
 
 #[derive(Debug, Args)]
 pub struct SchemasArgs {
@@ -284,6 +284,14 @@ fn apply_manual_wire_forms(schema: &mut Value, file: &str) {
         .and_then(Value::as_object_mut)
         .expect("schemars derives the format's definitions");
     match file {
+        "job.v1alpha1.schema.json" => {
+            internally_tagged(
+                definitions
+                    .get_mut("JobDestination")
+                    .expect("the job schema defines its governed destination"),
+                "type",
+            );
+        }
         "pack.v1alpha1.schema.json" => {
             rewrite_send_uri(definitions);
             rewrite_error_class(definitions);
@@ -659,6 +667,10 @@ mod tests {
             ("direct:fetchCase", true),
             ("http:case-api", true),
             ("graphql:list", true),
+            ("postgres:rows", true),
+            ("file:drop", true),
+            ("sftp:drop", true),
+            ("sqlite-extract:people", true),
             ("rest:fetchCase", false),
             ("direct:", false),
             ("fetchCase", false),
@@ -692,6 +704,71 @@ mod tests {
         assert_eq!(classes.len(), registry_adapter_core::ErrorClass::ALL.len());
         for class in registry_adapter_core::ErrorClass::ALL {
             assert!(classes.contains(&serde_json::json!(class.class())));
+        }
+    }
+
+    /// Destination schemas accept the same tagged wire forms as the reader,
+    /// including the receipt horizon's semantic bounds.
+    #[test]
+    fn job_destination_schema_matches_reader_and_receipt_bounds() {
+        let job: Value =
+            serde_json::from_str(&documents().unwrap()["job.v1alpha1.schema.json"]).unwrap();
+        let schema = serde_json::json!({
+            "$defs": job["$defs"],
+            "$ref": "#/$defs/JobDestination",
+        });
+        let validator = jsonschema::JSONSchema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .compile(&schema)
+            .unwrap();
+        let direct = serde_json::json!({
+            "type": "direct-breg",
+            "binding": "household-registry",
+            "accessProfile": "ingestion",
+            "action": "register-household",
+            "mode": "proposal",
+            "mapping": {
+                "file": "mappings/register-household.rhai",
+                "entrypoint": "map_submission",
+                "digest": format!("sha256:{}", "a".repeat(64)),
+            },
+            "receiptRetentionDays": 7,
+        });
+        let coordinator = serde_json::json!({
+            "type": "signed-coordinator-event",
+            "binding": "workflow",
+            "workflow": "submission-review",
+            "trigger": "submission",
+            "source": "urn:example:source",
+            "eventType": "submission.created",
+            "dataSchema": "urn:example:schema",
+        });
+        for destination in [&direct, &coordinator] {
+            let parsed: registry_adapter_core::JobDestination =
+                serde_json::from_value(destination.clone()).expect("the reader accepts this form");
+            assert_eq!(serde_json::to_value(parsed).unwrap(), *destination);
+            assert!(
+                validator.validate(destination).is_ok(),
+                "the generated schema must accept the reader's tagged destination"
+            );
+        }
+        for refused in [
+            serde_json::json!({"direct-breg": direct}),
+            serde_json::json!({"signed-coordinator-event": coordinator}),
+            serde_json::json!({"type": "imagined"}),
+        ] {
+            assert!(validator.validate(&refused).is_err());
+        }
+        for days in [
+            0,
+            u64::from(registry_adapter_core::MAXIMUM_RECEIPT_RETENTION_DAYS) + 1,
+        ] {
+            let mut refused = direct.clone();
+            refused["receiptRetentionDays"] = serde_json::json!(days);
+            assert!(
+                validator.validate(&refused).is_err(),
+                "the schema must refuse a receipt horizon outside the checked job bound"
+            );
         }
     }
 

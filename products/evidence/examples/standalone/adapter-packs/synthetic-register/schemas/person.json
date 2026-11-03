@@ -1,0 +1,27 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "birth-date",
+    "residence-region",
+    "address-canary"
+  ],
+  "properties": {
+    "birth-date": {
+      "type": "string",
+      "format": "date"
+    },
+    "residence-region": {
+      "type": "string",
+      "enum": [
+        "north",
+        "south"
+      ]
+    },
+    "address-canary": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    }
+  }
+}

@@ -1,0 +1,234 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/coordinator/project/project.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/coordinator/project/v1alpha1
+kind: CoordinatorProject
+project:
+  id: register-household
+  version: "1"
+types:
+  event-data:
+    type: object
+    additionalProperties: false
+    required: [job, key, sequence, digest, item]
+    properties:
+      job:
+        type: object
+        additionalProperties: false
+        required: [id, version]
+        properties:
+          id: {type: string, minLength: 1, maxLength: 256}
+          version: {type: string, minLength: 1, maxLength: 64}
+      key: {type: string, minLength: 1, maxLength: 512}
+      sequence: {type: integer, minimum: 1}
+      digest: {type: string, pattern: '^sha256:[0-9a-f]{64}$'}
+      priorRunId: {type: string, format: uuid}
+      item:
+        type: object
+        additionalProperties: false
+        required: [_id, respondent_name, household.household_size]
+        properties:
+          _id: {anyOf: [{type: string}, {type: integer}]}
+          respondent_name: {type: string, minLength: 1, maxLength: 256}
+          household.household_size: {anyOf: [{type: string}, {type: integer}]}
+  workflow-input:
+    type: object
+    additionalProperties: false
+    required: [kind, event]
+    properties:
+      kind: {type: string, enum: [first-seen, revised]}
+      event: {typeRef: event-data}
+contracts:
+  households:
+    type: breg
+    source: generated/households.contract.json
+functions:
+  proposal-request:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: proposal_request
+    inputs:
+      event: {typeRef: event-data}
+    output: {operationInput: submit-household}
+  lookup-request:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: lookup_request
+    inputs:
+      event: {typeRef: event-data}
+    output: {operationInput: lookup-household}
+  resolved-review-request:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: resolved_review_request
+    inputs:
+      event: {typeRef: event-data}
+      lookup: {operationOutput: lookup-household}
+    output: {operationInput: submit-review}
+  unresolved-review-request:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: unresolved_review_request
+    inputs:
+      event: {typeRef: event-data}
+    output: {operationInput: submit-review}
+  returned-review-request:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: returned_review_request
+    inputs:
+      event: {typeRef: event-data}
+    output: {operationInput: submit-review}
+operations:
+  submit-household:
+    uses: breg.submit-proposal/v1
+    connection: households
+    action: {contract: households, id: register-household}
+  lookup-household:
+    uses: breg.lookup-record/v1
+    connection: households
+  submit-review:
+    uses: casework.submit-review-request/v1
+    connection: review
+workflow:
+  input: {typeRef: workflow-input}
+  eventTriggers:
+    submission-received:
+      source: adapter
+      eventType: org.openspp.registry.household-submitted.v1
+      dataSchema: urn:registry-adapter:schema:household-submitted:v1
+      event:
+        type: object
+        required: [data]
+        properties:
+          data: {type: object}
+      input:
+        type: fields
+        fields:
+          kind: {type: literal, value: first-seen}
+          event: {type: input, path: /data}
+    submission-revised:
+      source: adapter
+      eventType: org.openspp.registry.household-revised.v1
+      dataSchema: urn:registry-adapter:schema:household-revised:v1
+      event:
+        type: object
+        required: [data]
+        properties:
+          data: {type: object}
+      input:
+        type: fields
+        fields:
+          kind: {type: literal, value: revised}
+          event: {type: input, path: /data}
+  deadlineSeconds: 2592000
+  start: choose-kind
+  steps:
+    choose-kind:
+      type: choose
+      choose: {type: input, path: /kind}
+      cases:
+        first-seen: submit-first
+        revised: lookup-revised
+    submit-first:
+      type: call
+      operation: submit-household
+      input:
+        type: function
+        function: proposal-request
+        inputs:
+          event: {type: input, path: /event}
+      next: await-proposal
+    await-proposal:
+      type: wait-for
+      completion: {step: submit-first, name: proposal}
+      timeoutSeconds: 1209600
+      next: decide-proposal
+      onTimeout: proposal-timeout
+    decide-proposal:
+      type: choose
+      choose: {type: step, step: await-proposal, path: /outcome}
+      cases:
+        applied: proposal-applied
+        rejected: proposal-rejected
+        cancelled: proposal-cancelled
+        returned: review-returned
+    lookup-revised:
+      type: call
+      operation: lookup-household
+      input:
+        type: function
+        function: lookup-request
+        inputs:
+          event: {type: input, path: /event}
+      next: review-resolved
+      onDeclaredRefusal: review-unresolved
+    review-resolved:
+      type: call
+      operation: submit-review
+      input:
+        type: function
+        function: resolved-review-request
+        inputs:
+          event: {type: input, path: /event}
+          lookup: {type: step, step: lookup-revised}
+      next: await-resolved-review
+    await-resolved-review:
+      type: wait-for
+      completion: {step: review-resolved, name: result}
+      timeoutSeconds: 1209600
+      next: revised-reviewed
+      onTimeout: review-timeout
+    review-unresolved:
+      type: call
+      operation: submit-review
+      input:
+        type: function
+        function: unresolved-review-request
+        inputs:
+          event: {type: input, path: /event}
+      next: await-unresolved-review
+    await-unresolved-review:
+      type: wait-for
+      completion: {step: review-unresolved, name: result}
+      timeoutSeconds: 1209600
+      next: unresolved-reviewed
+      onTimeout: review-timeout
+    review-returned:
+      type: call
+      operation: submit-review
+      input:
+        type: function
+        function: returned-review-request
+        inputs:
+          event: {type: input, path: /event}
+      next: await-returned-review
+    await-returned-review:
+      type: wait-for
+      completion: {step: review-returned, name: result}
+      timeoutSeconds: 1209600
+      next: returned-reviewed
+      onTimeout: review-timeout
+    proposal-applied: {type: finish, outcome: proposal-applied}
+    proposal-rejected: {type: finish, outcome: proposal-rejected}
+    proposal-cancelled: {type: finish, outcome: proposal-cancelled}
+    proposal-timeout: {type: finish, outcome: proposal-timeout}
+    revised-reviewed:
+      type: finish
+      outcome: revised-reviewed
+      output: {type: step, step: await-resolved-review}
+    unresolved-reviewed:
+      type: finish
+      outcome: revised-reviewed
+      output: {type: step, step: await-unresolved-review}
+    returned-reviewed:
+      type: finish
+      outcome: returned-reviewed
+      output: {type: step, step: await-returned-review}
+    review-timeout: {type: finish, outcome: review-timeout}
+  outcomes:
+    proposal-applied: {type: 'null'}
+    proposal-rejected: {type: 'null'}
+    proposal-cancelled: {type: 'null'}
+    proposal-timeout: {type: 'null'}
+    revised-reviewed: {completionOutput: {operation: submit-review, name: result}}
+    returned-reviewed: {completionOutput: {operation: submit-review, name: result}}
+    review-timeout: {type: 'null'}

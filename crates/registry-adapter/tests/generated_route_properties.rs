@@ -181,7 +181,7 @@ fn endpoint() -> Endpoint {
         id: local("source"),
         component: ComponentKind::Http,
         authentication: EndpointAuthentication::None {},
-        attempt_timeout_milliseconds: BoundedU64::new(10_000).expect("attempt bound"),
+        attempt_timeout_milliseconds: Some(BoundedU64::new(10_000).expect("attempt bound")),
         maximum_response_bytes: BoundedU64::new(65_536).expect("response bound"),
         response_headers: UniqueList::new(Vec::new()).expect("empty headers"),
         request_headers: UniqueList::new(Vec::new()).expect("empty headers"),
@@ -190,6 +190,10 @@ fn endpoint() -> Endpoint {
         query_file: None,
         operation_name: None,
         variables: None,
+        sqlite_extract: None,
+        key_column: None,
+        parameter_order: None,
+        host_protocol: None,
     }
 }
 
@@ -219,6 +223,7 @@ fn pack(case: &GeneratedRoute) -> AdapterPack {
         code_maps: UniqueIdList::new(Vec::new()).expect("empty maps"),
         scripts: UniqueList::new(Vec::new()).expect("empty scripts"),
         query_files: UniqueList::new(Vec::new()).expect("empty queries"),
+        open_api: None,
         capabilities: Capabilities::default(),
     }
 }
@@ -238,6 +243,7 @@ fn profile() -> AdapterProfile {
         id: local("generated-profile"),
         version: "1".to_owned(),
         operations: UniqueIdList::new(vec![ProfileOperation {
+            async_completion: None,
             id: local("records-find"),
             method: HttpMethod::Get,
             path: "/records/{type}".to_owned(),
@@ -303,6 +309,7 @@ fn project(budget: u64) -> AdapterProject {
         .expect("one record type"),
         templated_routes: UniqueIdList::new(Vec::new()).expect("empty instantiations"),
         bindings: UniqueIdList::new(vec![Binding {
+            async_completion: None,
             id: local("find-people"),
             operation: external("records-find"),
             record_type: local("person"),
@@ -371,6 +378,7 @@ fn runtime_config(base_url: &str) -> AdapterEndpointBindings {
             mtls_identity: None,
             attempt_timeout_milliseconds: None,
             maximum_response_bytes: None,
+            maximum_concurrency: BoundedU64::new(8).expect("concurrency"),
         }])
         .expect("one endpoint"),
         allowed_private_cidrs: UniqueList::new(vec![

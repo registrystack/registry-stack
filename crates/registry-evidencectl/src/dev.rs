@@ -1996,14 +1996,17 @@ fn source_local_serving_cannot_bind(project: &Path) -> Option<String> {
         "Evidence project",
     )
     .ok()?;
-    let project = registry_evidence_authoring::project::read_project(
+    let decoded = registry_evidence_authoring::project::read_project(
         registry_evidence_authoring::project::PROJECT_FILE,
         &bytes,
     )
     .ok()?
     .value;
-    project.sources.into_iter().find_map(|(id, source)| {
-        (source.source_type == registry_evidence_authoring::project::SourceType::SqliteExtract)
+    decoded.sources.into_iter().find_map(|(id, source)| {
+        crate::normalized::source_route_operations(project, &source)
+            .ok()?
+            .iter()
+            .any(|operation| operation.component == "sqlite-extract")
             .then(|| id.to_string())
     })
 }

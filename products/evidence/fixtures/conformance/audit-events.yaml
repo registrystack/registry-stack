@@ -1,4 +1,4 @@
-fixture: registry.evidence.audit-events/v2
+fixture: registry.evidence.audit-events/v3
 synthetic_only: true
 access_attempt:
   assuranceProfile: evidence-grade
@@ -19,6 +19,10 @@ access_attempt:
   responseProtection: signed
   sourceId: source-a
   adapterId: adapter-a
+  executionBounds:
+    maximumDataOperations: 5
+    acquisitionDeadlineMilliseconds: 30000
+    maximumResponseBytes: 1048576
   decision: authorized
   reason: authorization.allowed
   durationMilliseconds: 2

@@ -3,64 +3,296 @@ kind: EvidenceFixture
 coequalAcceptanceDefinition: true
 syntheticOnly: true
 common:
-  observedAt: '2026-08-02T00:00:00Z'
-  legalLocalDate: '2026-08-02'
-  selector: {licence_reference: synthetic-licence-001, registry_region: RR-A}
+  observedAt: "2026-08-02T00:00:00Z"
+  legalLocalDate: "2026-08-02"
+  selector:
+    licence_reference: synthetic-licence-001
+    registry_region: RR-A
   selectors:
-    subject: {profile: licence-register-v1, values: {licence_reference: synthetic-licence-001, registry_region: RR-A}}
+    subject:
+      profile: licence-register-v1
+      values:
+        licence_reference: synthetic-licence-001
+        registry_region: RR-A
   expectedRequestParts:
-    query: [{name: licence_reference, value: synthetic-licence-001}, {name: registry_region, value: RR-A}, {name: fields, value: "licence_state,valid_from,valid_until"}, {name: limit, value: "2"}]
+    query:
+      - name: licence_reference
+        value: synthetic-licence-001
+      - name: registry_region
+        value: RR-A
+      - name: fields
+        value: licence_state,valid_from,valid_until
+      - name: limit
+        value: "2"
     body: null
-  expectedTransport: {path: /v1/records, fixedHeaders: [{name: Accept, value: application/json}]}
+  expectedTransport:
+    path: /v1/records
+    fixedHeaders:
+      - name: Accept
+        value: application/json
 cases:
   - id: positive
-    source: {total: 1, records: [{licence_state: CURRENT, valid_from: '2025-01-01', valid_until: '2026-08-20', historical_states: [PENDING]}]}
-    expectedValues: {licence-active: true, licence-expiry-category: within-30-days}
+    source:
+      intercepts:
+        - type: endpoint
+          endpoint: provider
+      exchanges:
+        - request:
+            endpoint: provider
+            method: GET
+            path: /v1/records
+            headers:
+              accept: application/json
+            query: fields=licence_state%2Cvalid_from%2Cvalid_until&licence_reference=synthetic-licence-001&limit=2&registry_region=RR-A
+          response:
+            status: 200
+            body:
+              total: 1
+              records:
+                - licence_state: CURRENT
+                  valid_from: "2025-01-01"
+                  valid_until: "2026-08-20"
+                  historical_states:
+                    - PENDING
+    expectedValues:
+      licence-active: true
+      licence-expiry-category: within-30-days
     expectedLookup: match
     derivationRuns: true
     signedSuccess: true
   - id: negative-inactive-is-success
-    source: {total: 1, records: [{licence_state: SUSPENDED, valid_from: '2025-01-01', valid_until: '2026-12-31', historical_states: [CURRENT]}]}
-    expectedValues: {licence-active: false, licence-expiry-category: later}
+    source:
+      intercepts:
+        - type: endpoint
+          endpoint: provider
+      exchanges:
+        - request:
+            endpoint: provider
+            method: GET
+            path: /v1/records
+            headers:
+              accept: application/json
+            query: fields=licence_state%2Cvalid_from%2Cvalid_until&licence_reference=synthetic-licence-001&limit=2&registry_region=RR-A
+          response:
+            status: 200
+            body:
+              total: 1
+              records:
+                - licence_state: SUSPENDED
+                  valid_from: "2025-01-01"
+                  valid_until: "2026-12-31"
+                  historical_states:
+                    - CURRENT
+    expectedValues:
+      licence-active: false
+      licence-expiry-category: later
     expectedLookup: match
     derivationRuns: true
     signedSuccess: true
   - id: boundary-valid-from
-    source: {total: 1, records: [{licence_state: CURRENT, valid_from: '2026-08-02', valid_until: '2026-12-31', historical_states: []}]}
-    expectedValues: {licence-active: true, licence-expiry-category: later}
+    source:
+      intercepts:
+        - type: endpoint
+          endpoint: provider
+      exchanges:
+        - request:
+            endpoint: provider
+            method: GET
+            path: /v1/records
+            headers:
+              accept: application/json
+            query: fields=licence_state%2Cvalid_from%2Cvalid_until&licence_reference=synthetic-licence-001&limit=2&registry_region=RR-A
+          response:
+            status: 200
+            body:
+              total: 1
+              records:
+                - licence_state: CURRENT
+                  valid_from: "2026-08-02"
+                  valid_until: "2026-12-31"
+                  historical_states: []
+    expectedValues:
+      licence-active: true
+      licence-expiry-category: later
     expectedLookup: match
     derivationRuns: true
     signedSuccess: true
   - id: boundary-valid-until
-    source: {total: 1, records: [{licence_state: CURRENT, valid_from: '2025-01-01', valid_until: '2026-08-02', historical_states: []}]}
-    expectedValues: {licence-active: true, licence-expiry-category: within-30-days}
+    source:
+      intercepts:
+        - type: endpoint
+          endpoint: provider
+      exchanges:
+        - request:
+            endpoint: provider
+            method: GET
+            path: /v1/records
+            headers:
+              accept: application/json
+            query: fields=licence_state%2Cvalid_from%2Cvalid_until&licence_reference=synthetic-licence-001&limit=2&registry_region=RR-A
+          response:
+            status: 200
+            body:
+              total: 1
+              records:
+                - licence_state: CURRENT
+                  valid_from: "2025-01-01"
+                  valid_until: "2026-08-02"
+                  historical_states: []
+    expectedValues:
+      licence-active: true
+      licence-expiry-category: within-30-days
     expectedLookup: match
     derivationRuns: true
     signedSuccess: true
   - id: boundary-after-valid-until
-    legalLocalDate: '2026-08-03'
-    source: {total: 1, records: [{licence_state: CURRENT, valid_from: '2025-01-01', valid_until: '2026-08-02', historical_states: []}]}
-    expectedValues: {licence-active: false, licence-expiry-category: expired}
+    legalLocalDate: "2026-08-03"
+    source:
+      intercepts:
+        - type: endpoint
+          endpoint: provider
+      exchanges:
+        - request:
+            endpoint: provider
+            method: GET
+            path: /v1/records
+            headers:
+              accept: application/json
+            query: fields=licence_state%2Cvalid_from%2Cvalid_until&licence_reference=synthetic-licence-001&limit=2&registry_region=RR-A
+          response:
+            status: 200
+            body:
+              total: 1
+              records:
+                - licence_state: CURRENT
+                  valid_from: "2025-01-01"
+                  valid_until: "2026-08-02"
+                  historical_states: []
+    expectedValues:
+      licence-active: false
+      licence-expiry-category: expired
     expectedLookup: match
     derivationRuns: true
     signedSuccess: true
   - id: missing-fact
-    source: {total: 1, records: [{licence_state: CURRENT, valid_from: '2025-01-01', historical_states: []}]}
+    source:
+      intercepts:
+        - type: endpoint
+          endpoint: provider
+      exchanges:
+        - request:
+            endpoint: provider
+            method: GET
+            path: /v1/records
+            headers:
+              accept: application/json
+            query: fields=licence_state%2Cvalid_from%2Cvalid_until&licence_reference=synthetic-licence-001&limit=2&registry_region=RR-A
+          response:
+            status: 200
+            body:
+              total: 1
+              records:
+                - licence_state: CURRENT
+                  valid_from: "2025-01-01"
+                  historical_states: []
     expectedPublicProblem: evidence.unavailable
     derivationRuns: false
     signedSuccess: false
-  - {id: missing-record, source: {total: 0, records: []}, expectedLookup: no_match, expectedPublicProblem: evidence.unavailable, derivationRuns: false, signedSuccess: false}
-  - {id: no-match, source: {total: 0, records: []}, expectedLookup: no_match, expectedPublicProblem: evidence.unavailable, derivationRuns: false, signedSuccess: false}
-  - {id: ambiguous, source: {total: 2, records: [{}, {}]}, expectedLookup: ambiguous, expectedPublicProblem: evidence.unavailable, derivationRuns: false, signedSuccess: false}
-  - {id: source-failure, sourceFailure: wrong-media-type, expectedPublicProblem: source.unavailable, signedSuccess: false}
+  - id: missing-record
+    source:
+      intercepts:
+        - type: endpoint
+          endpoint: provider
+      exchanges:
+        - request:
+            endpoint: provider
+            method: GET
+            path: /v1/records
+            headers:
+              accept: application/json
+            query: fields=licence_state%2Cvalid_from%2Cvalid_until&licence_reference=synthetic-licence-001&limit=2&registry_region=RR-A
+          response:
+            status: 200
+            body:
+              total: 0
+              records: []
+    expectedLookup: no_match
+    expectedPublicProblem: evidence.unavailable
+    derivationRuns: false
+    signedSuccess: false
+  - id: no-match
+    source:
+      intercepts:
+        - type: endpoint
+          endpoint: provider
+      exchanges:
+        - request:
+            endpoint: provider
+            method: GET
+            path: /v1/records
+            headers:
+              accept: application/json
+            query: fields=licence_state%2Cvalid_from%2Cvalid_until&licence_reference=synthetic-licence-001&limit=2&registry_region=RR-A
+          response:
+            status: 200
+            body:
+              total: 0
+              records: []
+    expectedLookup: no_match
+    expectedPublicProblem: evidence.unavailable
+    derivationRuns: false
+    signedSuccess: false
+  - id: ambiguous
+    source:
+      intercepts:
+        - type: endpoint
+          endpoint: provider
+      exchanges:
+        - request:
+            endpoint: provider
+            method: GET
+            path: /v1/records
+            headers:
+              accept: application/json
+            query: fields=licence_state%2Cvalid_from%2Cvalid_until&licence_reference=synthetic-licence-001&limit=2&registry_region=RR-A
+          response:
+            status: 200
+            body:
+              total: 2
+              records:
+                - {}
+                - {}
+    expectedLookup: ambiguous
+    expectedPublicProblem: evidence.unavailable
+    derivationRuns: false
+    signedSuccess: false
+  - id: source-failure
+    sourceFailure: wrong-media-type
+    expectedPublicProblem: source.unavailable
+    signedSuccess: false
   - id: negative-exact-date-leak
     injectedDerivation:
-      - {concept_id: urn:example:fixture:concept:licence-active, value: true}
-      - {concept_id: urn:example:fixture:concept:licence-expiry-category, value: '2026-08-20'}
+      - concept_id: urn:example:fixture:concept:licence-active
+        value: true
+      - concept_id: urn:example:fixture:concept:licence-expiry-category
+        value: "2026-08-20"
     expected: output-gate-rejection
-  - {id: anti-reconstruction, companionBundle: coexisting-revisions, expected: bundle-rejection}
+  - id: anti-reconstruction
+    companionBundle: coexisting-revisions
+    expected: bundle-rejection
 privacyExpectation:
-  evidenceContains: [urn:example:fixture:concept:licence-active, urn:example:fixture:concept:licence-expiry-category]
-  evidenceExcludes: [valid_from, valid_until, historical_states, licence_reference, registry_region]
-  diagnosticsExclude: [synthetic-licence-001, '2026-08-20', PENDING, CURRENT]
+  evidenceContains:
+    - urn:example:fixture:concept:licence-active
+    - urn:example:fixture:concept:licence-expiry-category
+  evidenceExcludes:
+    - valid_from
+    - valid_until
+    - historical_states
+    - licence_reference
+    - registry_region
+  diagnosticsExclude:
+    - synthetic-licence-001
+    - "2026-08-20"
+    - PENDING
+    - CURRENT
   minimizationClaim: disclosure minimization only

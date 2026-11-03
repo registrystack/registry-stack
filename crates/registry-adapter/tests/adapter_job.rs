@@ -545,6 +545,8 @@ endpoints:
     attemptTimeoutMilliseconds: 10000
     maximumResponseBytes: 65536
     queryFile: queries/ledger.sql
+    keyColumn: id
+    parameterOrder: [offset]
 queryFiles:
   - path: queries/ledger.sql
     digest: {digest}

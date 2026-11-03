@@ -14,7 +14,7 @@
     subjects:
     - role: subject
       selectors: [dhis2-tracked-entity-id-v1]
-    acquisition: {type: single, source: dhis2-tracker}
+    acquisition: {source: dhis2-tracker}
     derive: {function: derive-active-status}
     outputs:
       active:

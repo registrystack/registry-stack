@@ -1,7 +1,7 @@
 # yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/job/job.v1alpha1.schema.json
 #
 # Bad-corpus member adapter.job.trigger-hook-unserved: this artifact set must be refused with
-# exactly adapter.job.trigger-hook-unserved. The job declares a hook trigger, the contract-only seam no engine serves yet.
+# exactly adapter.job.trigger-hook-unserved. The clean hook has no runtime authentication and rate binding.
 #
 # The job definition is refused by the job compiler's check_job over the
 # pinned pack beside this file (the workspace itself stays clean):
@@ -16,15 +16,25 @@ source:
   pack:
     id: case-api-pack
     version: "1"
-    digest: sha256:6f7f60b98182428b3144c371ca1b28041f6243cd4177de825702b8b938110505
+    digest: sha256:a5dafe4e4235f5e939a69878803c2fe9dbfb5569e0db0d663047b17c437e6066
   route: kobo-submissions
+destination:
+  type: signed-coordinator-event
+  binding: coordinator-test
+  workflow: case-ingestion
+  trigger: submitted
+  source: urn:registry-adapter:job:kobo-daily
+  eventType: org.example.case-submitted.v1
+  dataSchema: urn:example:schema:case-submitted:v1
 projection:
   fields:
     - submission.id
     - submission.status
 triggers:
+  - kind: interval
+    delayMilliseconds: 60000
   - kind: hook
-    path: submissions
+    path: /hooks/submissions
 profile:
   pageDeadlineMilliseconds: 300000
   maximumResponseBytes: 16777216

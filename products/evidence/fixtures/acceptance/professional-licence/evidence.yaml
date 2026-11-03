@@ -1,87 +1,184 @@
 apiVersion: id.registrystack.org/formats/evidence/bundle/v1
 kind: EvidenceBundle
 assuranceProfile: evidence-grade
-service: {providerId: urn:example:fixture:provider:evidence, publicOrigin: https://evidence.invalid, trustDomain: urn:example:fixture:trust-domain:acceptance}
-issuer: {uri: urn:example:fixture:issuer:authority}
-publication: {serviceId: urn:example:fixture:service:evidence, title: Synthetic Evidence service, description: Synthetic minimum-disclosure assertions for acceptance testing, endpointUrl: https://evidence.example.invalid, jurisdictions: [urn:example:jurisdiction:acceptance]}
+service:
+  providerId: urn:example:fixture:provider:evidence
+  publicOrigin: https://evidence.invalid
+  trustDomain: urn:example:fixture:trust-domain:acceptance
+issuer:
+  uri: urn:example:fixture:issuer:authority
+publication:
+  serviceId: urn:example:fixture:service:evidence
+  title: Synthetic Evidence service
+  description: Synthetic minimum-disclosure assertions for acceptance testing
+  endpointUrl: https://evidence.example.invalid
+  jurisdictions:
+  - urn:example:jurisdiction:acceptance
 authentication:
-  oidc: {issuer: https://identity.invalid, audience: evidence-fixture, tokenTypes: [at+jwt], algorithms: [ES256], jwksSource: {type: uri, uri: https://identity.invalid/.well-known/jwks.json}, principalClaim: sub, requesterTagsClaim: evidence_tags, evidenceAudienceClaim: evidence_audience, allowedClients: unrestricted, requiredScopes: unrestricted, maximumTokenLifetimeSeconds: 300, revokedKeyIds: []}
-audit: {hashKeyRef: secret:file/audit-hash-key, hashKeyVersion: 1}
-subjectBinding: {secretRef: secret:file/subject-binding-key, keyVersion: 1}
-rateLimits: {requestsPerPrincipalPerMinute: 60, burstPerPrincipal: 10, failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 10}
-signing: {format: flattened-jws-json, algorithm: ES256, activePublicJwkFile: public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json, publishedPublicJwkFiles: [], revokedKeyIds: [], jwksPath: /.well-known/evidence/jwks.json, maximumAssertionValiditySeconds: 300, verifierClockSkewSeconds: 30}
-responseFormats: [signed-jws]
-
+  oidc:
+    issuer: https://identity.invalid
+    audience: evidence-fixture
+    tokenTypes:
+    - at+jwt
+    algorithms:
+    - ES256
+    jwksSource:
+      type: uri
+      uri: https://identity.invalid/.well-known/jwks.json
+    principalClaim: sub
+    requesterTagsClaim: evidence_tags
+    evidenceAudienceClaim: evidence_audience
+    allowedClients: unrestricted
+    requiredScopes: unrestricted
+    maximumTokenLifetimeSeconds: 300
+    revokedKeyIds: []
+audit:
+  hashKeyRef: secret:file/audit-hash-key
+  hashKeyVersion: 1
+subjectBinding:
+  secretRef: secret:file/subject-binding-key
+  keyVersion: 1
+rateLimits:
+  requestsPerPrincipalPerMinute: 60
+  burstPerPrincipal: 10
+  failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 10
+signing:
+  format: flattened-jws-json
+  algorithm: ES256
+  activePublicJwkFile: public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json
+  publishedPublicJwkFiles: []
+  revokedKeyIds: []
+  jwksPath: "/.well-known/evidence/jwks.json"
+  maximumAssertionValiditySeconds: 300
+  verifierClockSkewSeconds: 30
+responseFormats:
+- signed-jws
 selectorProfiles:
   licence-register-v1:
     maximumAggregateBytes: 128
     fields:
-      licence_reference: {type: string, minimumBytes: 1, maximumBytes: 96}
-      registry_region: {type: controlled-code, codelist: codelists/registry-regions.yaml, codelistVersion: '1', maximumBytes: 16}
+      licence_reference:
+        type: string
+        minimumBytes: 1
+        maximumBytes: 96
+      registry_region:
+        type: controlled-code
+        codelist: codelists/registry-regions.yaml
+        codelistVersion: '1'
+        maximumBytes: 16
 sources:
   source-c:
-    type: http-json
-    baseUrl: https://source.invalid
+    pack:
+      id: fixture-licence
+      version: '1'
+      digest: sha256:159712f1794e124927a831d713d9fc0df4fb01f9fb3a7da4e4514989d0f60bee
+      artifactPrefix: adapter-packs/fixture-licence/159712f1794e124927a831d713d9fc0df4fb01f9fb3a7da4e4514989d0f60bee
+    route: lookup
+    connection: provider
+    inputs:
+      licence_reference:
+        selector:
+          role: subject
+          profile: licence-register-v1
+          field: licence_reference
+      registry_region:
+        selector:
+          role: subject
+          profile: licence-register-v1
+          field: registry_region
     posture: record-transformed
-    authentication: {type: basic, usernameRef: secret:file/source-c-username, passwordRef: secret:file/source-c-password}
-    request:
-      method: GET
-      path: /v1/records
-      fixedHeaders: [{name: Accept, value: application/json}]
-      selectorInputs:
-        - role: subject
-          alternatives: [{profile: licence-register-v1, fields: [licence_reference, registry_region]}]
-      prepareScript: adapters/source-c-prepare.rhai
-      adapterParameters: {requestedFields: "licence_state,valid_from,valid_until", resultLimit: "2"}
-      adapterParametersSchema: schemas/adapter-parameters.schema.yaml
-      preparationLimits: {query: required, jsonBody: forbidden, maximumQueryPairs: 4, maximumQueryNameBytes: 64, maximumQueryValueBytes: 256, maximumNormalizedBytes: 4096}
-      projection: [/total, /records/*/licence_state, /records/*/valid_from, /records/*/valid_until]
-      redirects: deny
-      attemptTimeoutMilliseconds: 3000
-      maximumResponseBytes: 131072
-      maximumConcurrency: 8
-    responseSchema: schemas/response.schema.yaml
-    extractScript: adapters/source-c.rhai
     factSchema: schemas/facts.schema.yaml
 authorityProfiles:
   statutory-caseworker-v1:
     kind: statutory
-    requesterTags: [fixture-agency]
+    requesterTags:
+    - fixture-agency
     grants:
-      - requirement: urn:example:fixture:requirement:professional-licence-status:v1
-        purpose: fixture-registration
-        audienceFrom: authenticated-requester
-        responseFormats: [signed-jws]
-        subjects: [{role: subject, selectorProfile: licence-register-v1, valueOrigin: request}]
+    - requirement: urn:example:fixture:requirement:professional-licence-status:v1
+      purpose: fixture-registration
+      audienceFrom: authenticated-requester
+      responseFormats:
+      - signed-jws
+      subjects:
+      - role: subject
+        selectorProfile: licence-register-v1
+        valueOrigin: request
 requirements:
-  - handle: professional-licence-status
-    uri: urn:example:fixture:requirement:professional-licence-status:v1
-    kind: criterion
-    acquisition:
-      type: single
-      source: source-c
-    purposes: [fixture-registration]
-    subjectRoles: [{role: subject, cardinality: one, selectorProfiles: [licence-register-v1]}]
-    referenceFrameworks: [urn:example:fixture:framework:professional-licence:v1]
-    evidenceType: urn:example:fixture:evidence-type:professional-licence-status:v1
-    observationTimezone: Africa/Nairobi
-    validitySeconds: 300
-    derivation:
-      script: derivations/professional-licence.rhai
-      parameters:
-        active_state: CURRENT
-        expiry_buckets:
-          - {minimumInclusive: {type: decimal, value: '-365000'}, maximumExclusive: {type: decimal, value: '0'}, code: expired}
-          - {minimumInclusive: {type: decimal, value: '0'}, maximumExclusive: {type: decimal, value: '31'}, code: within-30-days}
-          - {minimumInclusive: {type: decimal, value: '31'}, maximumExclusive: {type: decimal, value: '91'}, code: within-90-days}
-          - {minimumInclusive: {type: decimal, value: '91'}, maximumExclusive: {type: decimal, value: '365001'}, code: later}
-    concepts:
-      - {handle: licence-active, uri: urn:example:fixture:concept:licence-active, type: boolean, required: true, constraints: {}}
-      - handle: licence-expiry-category
-        uri: urn:example:fixture:concept:licence-expiry-category
-        type: controlled-category
-        required: true
-        constraints: {categoryScheme: urn:example:fixture:scheme:licence-expiry, schemeVersion: '1', maximumBytes: 32, codelist: codelists/expiry-categories.yaml}
-    fixtures: fixtures/cases.yaml
-    disclosureGuard: {families: [urn:example:fixture:disclosure-family:professional-licence]}
-    existenceDisclosure: collapse-unresolved
+- handle: professional-licence-status
+  uri: urn:example:fixture:requirement:professional-licence-status:v1
+  kind: criterion
+  acquisition:
+    source: source-c
+  purposes:
+  - fixture-registration
+  subjectRoles:
+  - role: subject
+    cardinality: one
+    selectorProfiles:
+    - licence-register-v1
+  referenceFrameworks:
+  - urn:example:fixture:framework:professional-licence:v1
+  evidenceType: urn:example:fixture:evidence-type:professional-licence-status:v1
+  observationTimezone: Africa/Nairobi
+  validitySeconds: 300
+  derivation:
+    script: derivations/professional-licence.rhai
+    parameters:
+      active_state: CURRENT
+      expiry_buckets:
+      - minimumInclusive:
+          type: decimal
+          value: "-365000"
+        maximumExclusive:
+          type: decimal
+          value: '0'
+        code: expired
+      - minimumInclusive:
+          type: decimal
+          value: '0'
+        maximumExclusive:
+          type: decimal
+          value: '31'
+        code: within-30-days
+      - minimumInclusive:
+          type: decimal
+          value: '31'
+        maximumExclusive:
+          type: decimal
+          value: '91'
+        code: within-90-days
+      - minimumInclusive:
+          type: decimal
+          value: '91'
+        maximumExclusive:
+          type: decimal
+          value: '365001'
+        code: later
+  concepts:
+  - handle: licence-active
+    uri: urn:example:fixture:concept:licence-active
+    type: boolean
+    required: true
+    constraints: {}
+  - handle: licence-expiry-category
+    uri: urn:example:fixture:concept:licence-expiry-category
+    type: controlled-category
+    required: true
+    constraints:
+      categoryScheme: urn:example:fixture:scheme:licence-expiry
+      schemeVersion: '1'
+      maximumBytes: 32
+      codelist: codelists/expiry-categories.yaml
+  fixtures: fixtures/cases.yaml
+  disclosureGuard:
+    families:
+    - urn:example:fixture:disclosure-family:professional-licence
+  existenceDisclosure: collapse-unresolved
+sourceConnections:
+  provider:
+    endpoints:
+    - endpoint: provider
+      baseUrl: https://source.invalid
+      authentication:
+        type: basic
+      clientIdentity: forbidden

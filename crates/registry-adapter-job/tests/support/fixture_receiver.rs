@@ -30,6 +30,14 @@ pub enum Scripted {
         /// The refusal code.
         code: String,
     },
+    /// Answer an item-scoped `held` with its code and optional
+    /// destination reference.
+    Hold {
+        /// The hold reason.
+        code: String,
+        /// The reference an operator follows, when known.
+        run_id: Option<String>,
+    },
     /// Answer a deployment-level `stop` with its code.
     Stop {
         /// The stop code.
@@ -122,6 +130,15 @@ async fn deliver(
             },
         ),
         Scripted::Refuse { code } => (200, serde_json::json!({"outcome": "refused", "code": code})),
+        Scripted::Hold { code, run_id } => (
+            200,
+            match run_id {
+                Some(run_id) => {
+                    serde_json::json!({"outcome": "held", "code": code, "runId": run_id})
+                }
+                None => serde_json::json!({"outcome": "held", "code": code}),
+            },
+        ),
         Scripted::Stop { code } => (200, serde_json::json!({"outcome": "stop", "code": code})),
         Scripted::Hang => {
             // Never answer: the delivery hangs until the caller's

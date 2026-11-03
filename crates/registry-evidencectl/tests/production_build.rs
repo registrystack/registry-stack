@@ -335,12 +335,16 @@ fn successful_package_excludes_runtime_local_state_and_validation_secrets() {
 
     assert_success(&output, "production package");
     let snapshot = snapshot(&fixture.output);
+    let pack_prefix = captured_pack_prefix(&fixture.project);
     assert_eq!(
         snapshot.keys().cloned().collect::<Vec<_>>(),
         vec![
             PathBuf::from("bundle/SHA256SUMS"),
-            PathBuf::from("bundle/adapters/functions/source-extract.rhai"),
-            PathBuf::from("bundle/adapters/functions/source-prepare.rhai"),
+            pack_prefix.join("pack.yaml"),
+            pack_prefix.join("schemas/facts.json"),
+            pack_prefix.join("schemas/inputs.json"),
+            pack_prefix.join("schemas/response.json"),
+            pack_prefix.join("scripts/lookup.rhai"),
             PathBuf::from("bundle/catalog.jsonld"),
             PathBuf::from("bundle/derivations/answer.rhai"),
             PathBuf::from("bundle/evidence.yaml"),
@@ -349,8 +353,6 @@ fn successful_package_excludes_runtime_local_state_and_validation_secrets() {
                 "bundle/public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json"
             ),
             PathBuf::from("bundle/schemas/source-facts/registry.schema.json"),
-            PathBuf::from("bundle/schemas/source-parameters/registry.schema.json"),
-            PathBuf::from("bundle/schemas/source-response/registry.schema.json"),
             PathBuf::from("compiled-authority.yaml"),
             PathBuf::from("runtime.yaml"),
         ]
@@ -413,8 +415,10 @@ fn package_accepts_local_targets_with_the_same_complete_grant_model() {
         let fixture = Fixture::new();
         edit_json(&fixture.target, |target| {
             target["assuranceProfile"] = json!("local");
-            target["connections"]["registry-http"]["origin"] = json!("http://127.0.0.1:8088");
-            target["connections"]["registry-http"]["authentication"] = json!({"type":"none"});
+            target["connections"]["registry-http"]["endpoints"]["registry-http"]["origin"] =
+                json!("http://127.0.0.1:8088");
+            target["connections"]["registry-http"]["endpoints"]["registry-http"]
+                ["authentication"] = json!({"type":"none"});
         });
         let output = fixture.package(format);
         assert_success(&output, "local candidate with explicit grants");
@@ -432,15 +436,34 @@ fn provisioning_reports_the_bundle_and_runtime_secret_union_once() {
     let expected = [
         "audit-hmac-key",
         "signing-p256-private-jwk",
-        "source-token",
+        "source-client-assertion-key",
+        "source-client-id",
+        "source-mtls-certificate",
+        "source-mtls-key",
         "subject-binding-hmac-key",
     ];
     for format in ["human", "json"] {
         let fixture = Fixture::new();
         fixture.use_default_local_signer();
+        edit_json(
+            &fixture.project.join("adapter-packs/registry/pack.yaml"),
+            |pack| {
+                pack["endpoints"][0]["authentication"] = json!({"type":"oauth2-private-key-jwt"});
+            },
+        );
         edit_json(&fixture.target, |target| {
-            target["connections"]["registry-http"]["authentication"] =
-                json!({"type":"bearer","tokenRef":"secret:file/source-token"});
+            target["connections"]["registry-http"]["endpoints"]["registry-http"]
+                ["authentication"] = json!({
+                "type":"oauth2-private-key-jwt",
+                "tokenEndpoint":"https://issuer.invalid/oauth2/token",
+                "clientIdRef":"secret:file/source-client-id",
+                "clientAssertionKeyRef":"secret:file/source-client-assertion-key",
+                "maximumCacheSeconds":60
+            });
+            target["connections"]["registry-http"]["endpoints"]["registry-http"]["mtlsIdentity"] = json!({
+                "certificateRef":"secret:file/source-mtls-certificate",
+                "keyRef":"secret:file/source-mtls-key"
+            });
         });
 
         let output = fixture.package(format);
@@ -836,29 +859,45 @@ fn sqlite_extract_build_copies_the_statement_without_http_only_artifacts() {
     let output = fixture.build();
 
     assert_success(&output, "SQLite extract production build");
+    let pack_prefix = captured_pack_prefix(&fixture.project);
     assert_eq!(
-        fs::read_to_string(fixture.output.join("bundle/queries/source.sql")).unwrap(),
+        fs::read_to_string(fixture.output.join(&pack_prefix).join("queries/source.sql")).unwrap(),
         "SELECT :reference <> '' AS allowed;\n"
     );
     assert!(fixture
         .output
-        .join("bundle/adapters/functions/source-extract.rhai")
+        .join(&pack_prefix)
+        .join("scripts/lookup.rhai")
         .is_file());
-    assert!(!fixture
+    assert!(fixture
         .output
-        .join("bundle/adapters/functions/source-prepare.rhai")
-        .exists());
+        .join(&pack_prefix)
+        .join("schemas/response.json")
+        .is_file());
+    let pack: Value = serde_json::from_slice(
+        &fs::read(fixture.output.join(&pack_prefix).join("pack.yaml")).unwrap(),
+    )
+    .expect("captured SQLite Adapter pack");
+    assert_eq!(pack["endpoints"][0]["component"], "sqlite-extract");
+    assert!(pack["endpoints"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|endpoint| endpoint["component"] != "http"));
     let bundle = registry_platform_yaml::Reader::new("bundle/evidence.yaml")
         .scan(&fs::read(fixture.output.join("bundle/evidence.yaml")).unwrap())
         .expect("compiled bundle")
         .expect("nonempty compiled bundle")
         .to_json_value();
-    assert!(bundle["sources"]["registry"]["request"]
-        .get("prepareScript")
-        .is_none());
-    assert!(bundle["sources"]["registry"]["request"]
-        .get("adapterParametersSchema")
-        .is_none());
+    let source = &bundle["sources"]["registry"];
+    assert_eq!(source["route"], "lookup");
+    assert_eq!(source["connection"], "registry-http");
+    assert_eq!(source["posture"], "field-projected");
+    assert_eq!(
+        source["factSchema"],
+        "schemas/source-facts/registry.schema.json"
+    );
+    assert!(source.get("request").is_none());
     assert_eq!(fixture.steps(), ["check", "evaluate:fixtures/answer.yaml"]);
     fixture.assert_no_staging_residue();
 }
@@ -947,7 +986,7 @@ fn invalid_target_scalars_refuse_check_and_package_without_effects() {
         ("/subjectBinding/secretRef", json!(SECRET_CANARY)),
         ("/audit/hashKeyRef", json!("secret:file/../escape")),
         (
-            "/connections/registry-http/authentication/tokenRef",
+            "/connections/registry-http/endpoints/registry-http/authentication/tokenRef",
             json!(SECRET_CANARY),
         ),
         ("/assuranceProfile", json!([SECRET_CANARY])),
@@ -1056,7 +1095,10 @@ fn unsafe_function_sources_refuse_inspection_before_missing_dependencies() {
         }
         edit_json(&fixture.project.join("evidence.yaml"), |project| {
             project["functions"][0]["source"] = json!(source);
-            project["functions"][1]["source"] = json!("functions/missing.rhai");
+            project["functions"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({"id":"missing","interface":"assertion-derive/v1","source":"functions/missing.rhai"}));
         });
         let project_before = fs::read(fixture.project.join("evidence.yaml")).unwrap();
         for format in ["human", "json"] {
@@ -1203,11 +1245,12 @@ fn plain_http_and_unauthenticated_production_connections_fail_before_runtime_del
     for field in ["origin", "authentication"] {
         let fixture = Fixture::new();
         edit_json(&fixture.target, |target| {
-            target["connections"]["registry-http"][field] = if field == "origin" {
-                json!("http://127.0.0.1:8088")
-            } else {
-                json!({"type":"none"})
-            };
+            target["connections"]["registry-http"]["endpoints"]["registry-http"][field] =
+                if field == "origin" {
+                    json!("http://127.0.0.1:8088")
+                } else {
+                    json!({"type":"none"})
+                };
         });
         let output = fixture.build();
         assert_failed(&output, "insecure source");
@@ -1605,8 +1648,10 @@ impl Fixture {
     fn use_default_local_signer(&self) {
         edit_json(&self.target, |target| {
             target["assuranceProfile"] = json!("local");
-            target["connections"]["registry-http"]["origin"] = json!("http://127.0.0.1:8088");
-            target["connections"]["registry-http"]["authentication"] = json!({"type":"none"});
+            target["connections"]["registry-http"]["endpoints"]["registry-http"]["origin"] =
+                json!("http://127.0.0.1:8088");
+            target["connections"]["registry-http"]["endpoints"]["registry-http"]
+                ["authentication"] = json!({"type":"none"});
             target["secretProviders"]["file"]["root"] = json!(".generated/secrets");
             target["signer"] = json!({"type":"local-jwk", "algorithm":"ES256", "privateKeyRef":"secret:file/signing-p256-private-jwk", "publicJwkFile":".generated/secrets/signing-p256-public.jwk.json"});
         });
@@ -1628,18 +1673,17 @@ impl Fixture {
         }
         fs::create_dir_all(target_directory.join("public-keys")).expect("target directory");
         write_json(&project.join("evidence.yaml"), &project_document());
+        write_http_source_pack(&project);
         fs::write(
             target_directory.join("public-keys/active.jwk.json"),
             r#"{"kty":"EC","crv":"P-256","x":"3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4","y":"GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU","alg":"ES256","kid":"_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo"}"#,
         )
         .expect("governed public key");
-        for (name, script) in [
-            ("source-prepare", "fn prepare(selectors, context) { #{query: [], body: #{reference: selectors[\"subject\"][\"values\"][\"reference\"]}} }\n"),
-            ("source-extract", "fn extract(source_response, context) { #{outcome: \"match\", facts: #{allowed: source_response[\"allowed\"]}} }\n"),
-            ("answer", "fn derive(facts, selectors, context) { [#{output: \"allowed\", value: facts[\"allowed\"]}] }\n"),
-        ] {
-            fs::write(project.join(format!("functions/{name}.rhai")), script).expect("named Function");
-        }
+        fs::write(
+            project.join("functions/answer.rhai"),
+            "fn derive(facts, selectors, context) { [#{output: \"allowed\", value: facts[\"allowed\"]}] }\n",
+        )
+        .expect("named Function");
         fs::write(
             project.join("fixtures/answer.yaml"),
             "fixture: neutral.answer/v1\n",
@@ -1813,42 +1857,13 @@ impl Fixture {
     }
 
     fn use_sqlite_source(&self) {
-        fs::create_dir(self.project.join("queries")).expect("query directory");
-        fs::write(
-            self.project.join("queries/source.sql"),
-            "SELECT :reference <> '' AS allowed;\n",
-        )
-        .expect("statement");
-        edit_json(&self.project.join("evidence.yaml"), |project| {
-            project["functions"]
-                .as_array_mut()
-                .unwrap()
-                .retain(|function| function["id"] != "source-prepare");
-            let source = &mut project["sources"]["registry"];
-            source["type"] = json!("sqlite-extract");
-            source["acquisitionPosture"] = json!("source-derived");
-            source["extractProfile"] = json!("registry-snapshot");
-            source["maximumExtractAgeSeconds"] = json!(86400);
-            for key in [
-                "connection",
-                "prepare",
-                "adapterParameters",
-                "adapterParametersSchema",
-                "preparationLimits",
-            ] {
-                source.as_object_mut().unwrap().remove(key);
-            }
-            source["request"] = json!({"statement":"queries/source.sql","columns":[{"name":"allowed","type":"boolean"}],"parameterBindings":{"reference":{"selector":{"role":"subject","profile":"subject-reference-v1","field":"reference"}}},"maximumRows":1,"maximumCellBytes":8,"maximumStatementSteps":10000});
-            source["response"] = json!({"projection":["/rows/*/allowed"],"shape":{"type":"object","required":["rows"],"properties":{"rows":{"type":"array","minimumItems":1,"maximumItems":1,"items":{"type":"object","required":["allowed"],"properties":{"allowed":{"type":"boolean"}}}}}},"maximumBytes":4096});
+        write_sqlite_source_pack(&self.project);
+        edit_json(&self.target, |target| {
+            target["connections"]["registry-http"]["endpoints"] = json!({});
+            target["extracts"] = json!({
+                "registry-snapshot":{"path":"/var/lib/evidence/registry.sqlite"}
+            });
         });
-        fs::write(self.project.join("functions/source-extract.rhai"), "fn extract(source_response, context) { #{outcome: \"match\", facts: #{allowed: source_response[\"rows\"][0][\"allowed\"]}} }\n").expect("SQLite extract Function");
-        edit_json(
-            &self.target,
-            |target| {
-                target["extracts"] =
-                    json!({"registry-snapshot":{"path":"/var/lib/evidence/registry.sqlite"}})
-            },
-        );
     }
 
     /// Publication remains an optional deployment contract.
@@ -1937,26 +1952,189 @@ fn make_tree_writable(path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+fn captured_pack_prefix(project: &Path) -> PathBuf {
+    let bytes =
+        fs::read(project.join("adapter-packs/registry/pack.yaml")).expect("captured Adapter pack");
+    let digest = registry_platform_config::sha256_uri(&bytes);
+    PathBuf::from(format!(
+        "bundle/adapter-packs/registry/{}",
+        digest.strip_prefix("sha256:").expect("SHA-256 URI")
+    ))
+}
+
+fn pinned(path: &str, bytes: &[u8]) -> Value {
+    json!({"path":path,"digest":registry_platform_config::sha256_uri(bytes)})
+}
+
+fn write_pack_artifact(project: &Path, relative: &str, bytes: &[u8]) {
+    let path = project.join("adapter-packs/registry").join(relative);
+    fs::create_dir_all(path.parent().expect("pack artifact parent"))
+        .expect("pack artifact directory");
+    fs::write(path, bytes).expect("pack artifact");
+}
+
+fn source_inputs_schema() -> Vec<u8> {
+    serde_json::to_vec_pretty(&json!({
+        "type":"object", "additionalProperties":false, "required":["recordReference"],
+        "properties":{"recordReference":{"type":"string","minLength":1,"maxLength":128}}
+    }))
+    .expect("source inputs schema")
+}
+
+fn source_facts_schema() -> Vec<u8> {
+    serde_json::to_vec_pretty(&json!({
+        "type":"object", "additionalProperties":false, "required":["allowed"],
+        "properties":{"allowed":{"type":"boolean"}}
+    }))
+    .expect("source facts schema")
+}
+
+fn write_http_source_pack(project: &Path) {
+    let inputs = source_inputs_schema();
+    let facts = source_facts_schema();
+    let response = serde_json::to_vec_pretty(&json!({
+        "type":"object", "additionalProperties":false, "required":["allowed"],
+        "properties":{"allowed":{"type":"boolean"}}
+    }))
+    .expect("source response schema");
+    let script = br#"fn lookup(exchange) {
+    let response = exchange.body;
+    if response.type_of() != "map" || !response.contains("allowed") {
+        throw "source_protocol_error";
+    }
+    #{lookup: "matched", facts: #{allowed: response["allowed"]}}
+}
+"#;
+    let pack = serde_json::to_vec_pretty(&json!({
+        "apiVersion":registry_adapter_core::ADAPTER_PACK_API_VERSION,
+        "kind":registry_adapter_core::ADAPTER_PACK_KIND,
+        "id":"registry", "version":"1", "testedVersions":[],
+        "endpoints":[{
+            "id":"registry-http", "component":"http",
+            "authentication":{"type":"static-authorization"},
+            "attemptTimeoutMilliseconds":1000, "maximumResponseBytes":4096,
+            "requestHeaders":["accept"], "responseHeaders":[]
+        }],
+        "scripts":[pinned("scripts/lookup.rhai",script)],
+        "sourceRoutes":[{
+            "id":"lookup",
+            "evidence":{
+                "inputsSchema":pinned("schemas/inputs.json",&inputs),
+                "factsSchema":pinned("schemas/facts.json",&facts),
+                "acquisitionPosture":"field-projected"
+            },
+            "steps":[
+                {"setProperty":{"name":"record-reference","value":{"jsonpath":"$.recordReference"}}},
+                {"setHeader":{"name":"Accept","value":{"constant":"application/json"}}},
+                {"to":{"uri":"http:registry-http","parameters":{
+                    "httpMethod":"GET", "path":"/v1/facts/{{record-reference}}",
+                    "pathParameters":{"record-reference":{"exchangeProperty":"record-reference"}}
+                }}},
+                {"validateSchema":pinned("schemas/response.json",&response)},
+                {"setBody":{"rhai":{"file":"scripts/lookup.rhai","entrypoint":"lookup"}}}
+            ]
+        }],
+        "capabilities":{
+            "components":["http"], "languages":["constant","jsonpath","rhai"],
+            "eips":["setBody","setHeader","setProperty","to","validate"]
+        }
+    }))
+    .expect("HTTP Adapter pack");
+    for (path, bytes) in [
+        ("schemas/inputs.json", inputs.as_slice()),
+        ("schemas/facts.json", facts.as_slice()),
+        ("schemas/response.json", response.as_slice()),
+        ("scripts/lookup.rhai", script.as_slice()),
+        ("pack.yaml", pack.as_slice()),
+    ] {
+        write_pack_artifact(project, path, bytes);
+    }
+}
+
+fn write_sqlite_source_pack(project: &Path) {
+    let inputs = source_inputs_schema();
+    let facts = source_facts_schema();
+    let response = serde_json::to_vec_pretty(&json!({
+        "type":"object", "additionalProperties":false, "required":["rows"],
+        "properties":{"rows":{"type":"array","minItems":0,"maxItems":1,"items":{
+            "type":"object", "additionalProperties":false, "required":["allowed"],
+            "properties":{"allowed":{"type":"boolean"}}
+        }}}
+    }))
+    .expect("SQLite response schema");
+    let statement = b"SELECT :reference <> '' AS allowed;\n";
+    let script = br#"fn lookup(exchange) {
+    let rows = exchange.body.rows;
+    if rows.len() == 0 { return #{lookup: "no-match"}; }
+    if rows.len() > 1 { return #{lookup: "ambiguous"}; }
+    #{lookup: "matched", facts: #{allowed: rows[0]["allowed"]}}
+}
+"#;
+    let pack = serde_json::to_vec_pretty(&json!({
+        "apiVersion":registry_adapter_core::ADAPTER_PACK_API_VERSION,
+        "kind":registry_adapter_core::ADAPTER_PACK_KIND,
+        "id":"registry", "version":"1", "testedVersions":[],
+        "endpoints":[{
+            "id":"registry-http", "component":"sqlite-extract",
+            "authentication":{"type":"none"},
+            "attemptTimeoutMilliseconds":1000, "maximumResponseBytes":4096,
+            "sqliteExtract":{
+                "extractProfile":"registry-snapshot",
+                "statement":pinned("queries/source.sql",statement),
+                "columns":[{"name":"allowed","type":"boolean"}],
+                "parameters":[{"name":"reference","required":true}],
+                "maximumExtractAgeSeconds":86400, "maximumRows":1,
+                "maximumCellBytes":8, "maximumStatementSteps":10000, "concurrency":1
+            }
+        }],
+        "scripts":[pinned("scripts/lookup.rhai",script)],
+        "sourceRoutes":[{
+            "id":"lookup",
+            "evidence":{
+                "inputsSchema":pinned("schemas/inputs.json",&inputs),
+                "factsSchema":pinned("schemas/facts.json",&facts),
+                "acquisitionPosture":"field-projected"
+            },
+            "steps":[
+                {"setProperty":{"name":"record-reference","value":{"jsonpath":"$.recordReference"}}},
+                {"to":{"uri":"sqlite-extract:registry-http","parameters":{
+                    "queryParameters":{"reference":{"exchangeProperty":"record-reference"}}
+                }}},
+                {"validateSchema":pinned("schemas/response.json",&response)},
+                {"setBody":{"rhai":{"file":"scripts/lookup.rhai","entrypoint":"lookup"}}}
+            ]
+        }],
+        "capabilities":{
+            "components":["sqlite-extract"], "languages":["jsonpath","rhai"],
+            "eips":["setBody","setProperty","to","validate"]
+        }
+    }))
+    .expect("SQLite Adapter pack");
+    for (path, bytes) in [
+        ("schemas/inputs.json", inputs.as_slice()),
+        ("schemas/facts.json", facts.as_slice()),
+        ("schemas/response.json", response.as_slice()),
+        ("queries/source.sql", statement.as_slice()),
+        ("scripts/lookup.rhai", script.as_slice()),
+        ("pack.yaml", pack.as_slice()),
+    ] {
+        write_pack_artifact(project, path, bytes);
+    }
+}
+
 fn project_document() -> Value {
     json!({
         "apiVersion":"id.registrystack.org/formats/evidence/project/v1alpha1",
         "kind":"EvidenceProject", "id":"production-fixture",
         "selectorProfiles":{"subject-reference-v1":{"maximumAggregateBytes":128,"fields":{"reference":{"type":"string","minimumBytes":1,"maximumBytes":128}}}},
         "functions":[
-            {"id":"source-prepare","interface":"source-prepare/v1","source":"functions/source-prepare.rhai"},
-            {"id":"source-extract","interface":"source-extract/v1","source":"functions/source-extract.rhai"},
             {"id":"answer","interface":"assertion-derive/v1","source":"functions/answer.rhai"}
         ],
         "sources":{"registry":{
-            "type":"http-json", "connection":"registry-http", "acquisitionPosture":"field-projected",
-            "selectors":[{"role":"subject","profiles":["subject-reference-v1"]}],
-            "request":{"method":"POST","path":"/v1/facts","fixedHeaders":[{"name":"Accept","value":"application/json"}]},
-            "prepare":{"function":"source-prepare"}, "extract":{"function":"source-extract"},
-            "response":{"projection":["/allowed"],"shape":{"type":"object","required":["allowed"],"properties":{"allowed":{"type":"boolean"}}},"maximumBytes":4096},
-            "facts":{"allowed":{"type":"boolean"}},
-            "limits":{"attemptTimeoutMilliseconds":1000,"maximumConcurrency":1},
-            "adapterParameters":{},"adapterParametersSchema":{"type":"object","additionalProperties":false,"required":[],"properties":{}},
-            "preparationLimits":{"query":"forbidden","jsonBody":"required","maximumJsonDepth":4,"maximumCollectionItems":8,"maximumStringBytes":128,"maximumNormalizedBytes":1024}
+            "pack":{"id":"registry","version":"1"},
+            "route":"lookup", "connection":"registry-http",
+            "inputs":{"recordReference":{"selector":{"role":"subject","profile":"subject-reference-v1","field":"reference"}}},
+            "acquisitionPosture":"field-projected"
         }},
         "assertionDefinitions":{"answer":definition_document("answer")}
     })
@@ -1969,7 +2147,7 @@ fn definition_document(id: &str) -> Value {
         "purpose":"eligibility",
         "grantCeiling":{"authorities":["statutory"],"actorKinds":["service"],"valueOrigins":["request"],"audiences":["urn:example:audience:relying"]},
         "subjects":[{"role":"subject","selectors":["subject-reference-v1"]}],
-        "acquisition":{"type":"single","source":"registry"},"derive":{"function":"answer"},
+        "acquisition":{"source":"registry"},"derive":{"function":"answer"},
         "outputs":{"allowed":{"concept":"urn:example:concepts:allowed","type":"boolean"}},
         "validitySeconds":300,"observationTimezone":"UTC","subjectBinding":"audience-scoped","representations":["signed-jws"],
         "disclosureGuard":{"families":["urn:example:disclosure-families:allowed"]},
@@ -1995,7 +2173,7 @@ fn target_document() -> Value {
         "package":{"root":"/srv/evidence/candidate/bundle"},
         "service":{"providerId":"urn:example:providers:evidence","issuer":"urn:example:issuers:evidence","publicOrigin":"https://evidence.invalid","trustDomain":"urn:example:trust-domains:evidence"},
         "authentication":{"oidc":{"issuer":"https://issuer.invalid","audience":"evidence","jwksSource":{"type":"uri","uri":"https://issuer.invalid/.well-known/jwks.json"},"tokenTypes":["at+jwt"],"algorithms":["ES256"],"principalClaim":"sub","requesterTagsClaim":"evidence_tags","evidenceAudienceClaim":"evidence_audience","allowedClients":"unrestricted","requiredScopes":"unrestricted","maximumTokenLifetimeSeconds":300,"revokedKeyIds":[]}},
-        "connections":{"registry-http":{"origin":"https://registry.invalid","authentication":{"type":"bearer","tokenRef":"secret:file/source-token"}}},
+        "connections":{"registry-http":{"endpoints":{"registry-http":{"origin":"https://registry.invalid","authentication":{"type":"bearer","tokenRef":"secret:file/source-token"}}}}},
         "secretProviders":{"file":{"root":"/run/secrets/evidence"}},
         "signer":{"type":"transit","algorithm":"ES256","publicJwkFile":"public-keys/active.jwk.json","unixSocketPath":"/run/registry-evidence/transit-proxy.sock","mount":"transit","keyName":"evidence-signing","keyVersion":7,"attemptTimeoutMilliseconds":2000},
         "listener":{"bind":"127.0.0.1:8080","tlsTermination":"operator-controlled-upstream","trustProxyIdentityHeaders":false,"maximumRequestBytes":65536,"maximumConcurrentRequests":8,"requestTimeoutMilliseconds":10000,"shutdownGraceMilliseconds":10000},

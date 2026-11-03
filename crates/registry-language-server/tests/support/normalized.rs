@@ -6,7 +6,6 @@ use std::{
 };
 use tower_lsp_server::ls_types::Position;
 pub const PROJECT: &str = "evidence.yaml";
-pub const EXTRACT: &str = "functions/extract.rhai";
 pub const DERIVE: &str = "functions/derive.rhai";
 pub const SOURCE: &str = r#"apiVersion: id.registrystack.org/formats/evidence/project/v1alpha1
 kind: EvidenceProject
@@ -14,19 +13,15 @@ id: synthetic
 selectorProfiles:
   person-by-id: {maximumAggregateBytes: 64, fields: {person-id: {type: string, minimumBytes: 1, maximumBytes: 64}}}
 functions:
-  - {id: extract-person, interface: source-extract/v1, source: functions/extract.rhai}
   - {id: derive-status, interface: assertion-derive/v1, source: functions/derive.rhai}
 sources:
   person:
-    type: http-json
+    pack: {id: population, version: '1'}
+    route: person-lookup
     connection: population
+    inputs:
+      personId: {selector: {role: person, profile: person-by-id, field: person-id}}
     acquisitionPosture: record-transformed
-    selectors: [{role: person, profiles: [person-by-id]}]
-    request: {method: GET, path: '/people/{person-id}', pathBindings: {person-id: {selector: {role: person, profile: person-by-id, field: person-id}}}, fixedHeaders: []}
-    response: {projection: [/active], shape: {type: object, required: [active], properties: {active: {type: boolean}}}, maximumBytes: 4096}
-    extract: {function: extract-person}
-    facts: {active: {type: boolean}}
-    limits: {attemptTimeoutMilliseconds: 2000, maximumConcurrency: 4}
 assertionDefinitions:
   active-status:
     question: Is the person active?
@@ -34,7 +29,7 @@ assertionDefinitions:
     purpose: status-verification
     grantCeiling: {authorities: [organizational], actorKinds: [service], valueOrigins: [request], audiences: ['urn:example:audience:consumer']}
     subjects: [{role: person, selectors: [person-by-id]}]
-    acquisition: {type: single, source: person}
+    acquisition: {source: person}
     derive: {function: derive-status}
     outputs:
       active: {concept: 'urn:example:concept:active', type: boolean}
@@ -69,7 +64,6 @@ impl Project {
         let root = temp.path().canonicalize().unwrap();
         let this = Self { _temp: temp, root };
         this.write(PROJECT, source);
-        this.write(EXTRACT,"fn extract(response, selectors, context) { #{outcome: \"match\", facts: #{active: response.active}} }\n");
         this.write(DERIVE,"fn derive(facts, selectors, context) { [#{output: \"active\", value: facts.active}] }\n");
         this
     }

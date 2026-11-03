@@ -90,6 +90,7 @@ members = [
     "crates/registry-documentsctl",
     "crates/registry-documents-client",
     "crates/registry-adapter-core",
+    "crates/registry-adapter-engine",
     "crates/registry-adapter",
     "crates/registry-adapterctl",
     "crates/registry-adapter-connectors",
@@ -165,6 +166,7 @@ registry-documentsctl = { path = "crates/registry-documentsctl", version = "0.45
 registry-documents-client = { path = "crates/registry-documents-client", version = "0.45.0" }
 registry-adapter = { path = "crates/registry-adapter", version = "0.45.0" }
 registry-adapter-core = { path = "crates/registry-adapter-core", version = "0.45.0" }
+registry-adapter-engine = { path = "crates/registry-adapter-engine", version = "0.45.0" }
 registry-adapterctl = { path = "crates/registry-adapterctl", version = "0.45.0" }
 registry-adapter-connectors = { path = "crates/registry-adapter-connectors", version = "0.45.0", default-features = false }
 registry-adapter-job = { path = "crates/registry-adapter-job", version = "0.45.0", default-features = false }
@@ -235,6 +237,8 @@ ipnet = { version = "2" }
 # line parser for the bundled CLI. Every consumer here compiles schemas it
 # already holds in memory, so neither belongs in the dependency graph.
 jsonschema = { version = "0.18", default-features = false, features = ["draft202012"] }
+# Optional ingestion hosts only; reviewed exact transport clients.
+lapin = { version = "=4.12.3", default-features = false, features = ["tokio", "rustls--aws_lc_rs", "rustls-native-certs"] }
 # Adapter expressions. Version 1.x is the RFC 9535 rewrite; the selector AST
 # is what the singular-query rule of CONCEPT.md 8.11.8 is checked against.
 jsonpath-rust = { version = "1" }
@@ -269,6 +273,7 @@ rand_core = { version = "0.6", features = ["std"] }
 # row). Already in Cargo.lock through registry-render's typst, so adopting
 # it adds no new crate to the dependency graph.
 csv = "1.4"
+csv-core = "=0.1.13"
 rcgen = { version = "0.14", default-features = false, features = ["ring", "zeroize"] }
 # Pattern evaluation for encrypted fields happens in Rust before sealing, so
 # no regex engine besides this one ever sees the plaintext. The default
@@ -288,6 +293,9 @@ rustls = { version = "0.23", default-features = false, features = ["std", "ring"
 # are the statement source's safety boundary and its only real cancellation.
 rusqlite = { version = "0.40", default-features = false, features = ["bundled", "hooks", "limits"] }
 rustix = { version = "1", features = ["fs", "process"] }
+# SSH uses AWS-LC ciphers and RustCrypto KEX/signatures, not whole-session FIPS.
+russh = { version = "=0.65.0", default-features = false, features = ["aws-lc-rs"] }
+russh-sftp = { version = "=3.0.1" }
 rustls-native-certs = { version = "0.8.4" }
 ryu-js = { version = "=1.0.3" }
 saphyr-parser = { version = "=0.1.0" }

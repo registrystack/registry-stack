@@ -1,0 +1,80 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "role_a_record_reference": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 96
+    },
+    "role_a_alpha": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80
+    },
+    "role_a_delta": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 999999
+    },
+    "role_a_kappa": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 16
+    },
+    "role_b_given_name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "role_b_family_name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "role_b_birth_date": {
+      "type": "string",
+      "format": "date"
+    },
+    "role_b_event_given_name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "role_b_event_family_name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "role_b_event_birth_date": {
+      "type": "string",
+      "format": "date"
+    },
+    "role_b_event_event_reference": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 96
+    }
+  },
+  "oneOf": [
+    {
+      "required": [
+        "role_a_record_reference",
+        "role_b_given_name",
+        "role_b_family_name",
+        "role_b_birth_date"
+      ]
+    },
+    {
+      "required": [
+        "role_a_alpha",
+        "role_a_delta",
+        "role_a_kappa",
+        "role_b_event_given_name",
+        "role_b_event_family_name",
+        "role_b_event_birth_date",
+        "role_b_event_event_reference"
+      ]
+    }
+  ]
+}

@@ -51,6 +51,7 @@ fn link_endpoints(base_url: &str, resolver: &SecretResolver) -> BTreeMap<String,
         mtls_identity: None,
         attempt_timeout_milliseconds: None,
         maximum_response_bytes: None,
+        maximum_concurrency: BoundedU64::new(8).expect("concurrency"),
     };
     let endpoint = Endpoint {
         id: LocalId::new("tracker").expect("endpoint id"),
@@ -58,7 +59,7 @@ fn link_endpoints(base_url: &str, resolver: &SecretResolver) -> BTreeMap<String,
         authentication: EndpointAuthentication::StaticApiKey {
             header_name: "x-api-key".to_owned(),
         },
-        attempt_timeout_milliseconds: BoundedU64::new(10_000).expect("attempt timeout"),
+        attempt_timeout_milliseconds: Some(BoundedU64::new(10_000).expect("attempt timeout")),
         maximum_response_bytes: BoundedU64::new(65_536).expect("response bound"),
         response_headers: UniqueList::new(Vec::new()).expect("response headers"),
         request_headers: UniqueList::new(Vec::new()).expect("request headers"),
@@ -67,6 +68,10 @@ fn link_endpoints(base_url: &str, resolver: &SecretResolver) -> BTreeMap<String,
         query_file: None,
         operation_name: None,
         variables: None,
+        sqlite_extract: None,
+        key_column: None,
+        parameter_order: None,
+        host_protocol: None,
     };
     let config = AdapterEndpointBindings {
         id: LocalId::new("links").expect("deployment id"),

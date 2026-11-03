@@ -3,28 +3,346 @@ kind: EvidenceFixture
 coequalAcceptanceDefinition: true
 syntheticOnly: true
 common:
-  observedAt: '2026-08-02T00:00:00Z'
-  legalLocalDate: '2026-08-02'
-  selector: {given_name: Amina, family_name: Diallo, birth_date: '2000-01-01'}
+  observedAt: "2026-08-02T00:00:00Z"
+  legalLocalDate: "2026-08-02"
+  selector:
+    given_name: Amina
+    family_name: Diallo
+    birth_date: "2000-01-01"
   selectors:
-    subject: {profile: person-demographics-v1, values: {given_name: Amina, family_name: Diallo, birth_date: '2000-01-01'}}
-  expectedRequestParts: {query: [], body: {lookup: {given_name: Amina, family_name: Diallo, birth_date: '2000-01-01'}, fields: [date_of_birth], limit: 2}}
-  expectedTransport: {path: /v1/facts, fixedHeaders: [{name: Accept, value: application/json}]}
+    subject:
+      profile: person-demographics-v1
+      values:
+        given_name: Amina
+        family_name: Diallo
+        birth_date: "2000-01-01"
+  expectedRequestParts:
+    query: []
+    body:
+      lookup:
+        given_name: Amina
+        family_name: Diallo
+        birth_date: "2000-01-01"
+      fields:
+        - date_of_birth
+      limit: 2
+  expectedTransport:
+    path: /v1/facts
+    fixedHeaders:
+      - name: Accept
+        value: application/json
 cases:
-  - {id: positive, source: {total: 1, date_of_birth: '2000-01-01'}, expectedValue: true, expectedLookup: match, derivationRuns: true, signedSuccess: true}
-  - {id: negative-false-is-success, source: {total: 1, date_of_birth: '2010-01-01'}, expectedValue: false, expectedLookup: match, derivationRuns: true, signedSuccess: true}
-  - {id: boundary-before, legalLocalDate: '2026-08-01', source: {total: 1, date_of_birth: '2008-08-02'}, expectedValue: false, expectedLookup: match, derivationRuns: true, signedSuccess: true}
-  - {id: boundary-on, legalLocalDate: '2026-08-02', source: {total: 1, date_of_birth: '2008-08-02'}, expectedValue: true, expectedLookup: match, derivationRuns: true, signedSuccess: true}
-  - {id: boundary-after, legalLocalDate: '2026-08-03', source: {total: 1, date_of_birth: '2008-08-02'}, expectedValue: true, expectedLookup: match, derivationRuns: true, signedSuccess: true}
-  - {id: boundary-leap-day, legalLocalDate: '2026-02-28', source: {total: 1, date_of_birth: '2008-02-29'}, expectedValue: true, expectedLookup: match, derivationRuns: true, signedSuccess: true}
-  - {id: missing-fact, source: {total: 1}, expectedPublicProblem: evidence.unavailable, derivationRuns: false, signedSuccess: false}
-  - {id: missing-record, source: {total: 0}, expectedLookup: no_match, expectedPublicProblem: evidence.unavailable, derivationRuns: false, signedSuccess: false}
-  - {id: no-match, source: {total: 0}, expectedLookup: no_match, expectedPublicProblem: evidence.unavailable, derivationRuns: false, signedSuccess: false}
-  - {id: ambiguous, source: {total: 2}, expectedLookup: ambiguous, expectedPublicProblem: evidence.unavailable, derivationRuns: false, signedSuccess: false}
-  - {id: source-failure, sourceFailure: timeout, expectedPublicProblem: source.unavailable, signedSuccess: false}
-  - {id: negative-wrong-derived-type, injectedDerivation: [{concept_id: urn:example:fixture:concept:adult-status, value: 'true'}], expected: output-gate-rejection}
-  - {id: anti-reconstruction, companionBundle: threshold-ladder, expected: bundle-rejection}
+  - id: positive
+    source:
+      intercepts:
+        - type: endpoint
+          endpoint: provider
+      exchanges:
+        - request:
+            endpoint: provider
+            method: POST
+            path: /v1/facts
+            headers:
+              accept: application/json
+            body:
+              lookup:
+                given_name: Amina
+                family_name: Diallo
+                birth_date: "2000-01-01"
+              fields:
+                - date_of_birth
+              limit: 2
+          response:
+            status: 200
+            body:
+              total: 1
+              date_of_birth: "2000-01-01"
+    expectedValue: true
+    expectedLookup: match
+    derivationRuns: true
+    signedSuccess: true
+  - id: negative-false-is-success
+    source:
+      intercepts:
+        - type: endpoint
+          endpoint: provider
+      exchanges:
+        - request:
+            endpoint: provider
+            method: POST
+            path: /v1/facts
+            headers:
+              accept: application/json
+            body:
+              lookup:
+                given_name: Amina
+                family_name: Diallo
+                birth_date: "2000-01-01"
+              fields:
+                - date_of_birth
+              limit: 2
+          response:
+            status: 200
+            body:
+              total: 1
+              date_of_birth: "2010-01-01"
+    expectedValue: false
+    expectedLookup: match
+    derivationRuns: true
+    signedSuccess: true
+  - id: boundary-before
+    legalLocalDate: "2026-08-01"
+    source:
+      intercepts:
+        - type: endpoint
+          endpoint: provider
+      exchanges:
+        - request:
+            endpoint: provider
+            method: POST
+            path: /v1/facts
+            headers:
+              accept: application/json
+            body:
+              lookup:
+                given_name: Amina
+                family_name: Diallo
+                birth_date: "2000-01-01"
+              fields:
+                - date_of_birth
+              limit: 2
+          response:
+            status: 200
+            body:
+              total: 1
+              date_of_birth: "2008-08-02"
+    expectedValue: false
+    expectedLookup: match
+    derivationRuns: true
+    signedSuccess: true
+  - id: boundary-on
+    legalLocalDate: "2026-08-02"
+    source:
+      intercepts:
+        - type: endpoint
+          endpoint: provider
+      exchanges:
+        - request:
+            endpoint: provider
+            method: POST
+            path: /v1/facts
+            headers:
+              accept: application/json
+            body:
+              lookup:
+                given_name: Amina
+                family_name: Diallo
+                birth_date: "2000-01-01"
+              fields:
+                - date_of_birth
+              limit: 2
+          response:
+            status: 200
+            body:
+              total: 1
+              date_of_birth: "2008-08-02"
+    expectedValue: true
+    expectedLookup: match
+    derivationRuns: true
+    signedSuccess: true
+  - id: boundary-after
+    legalLocalDate: "2026-08-03"
+    source:
+      intercepts:
+        - type: endpoint
+          endpoint: provider
+      exchanges:
+        - request:
+            endpoint: provider
+            method: POST
+            path: /v1/facts
+            headers:
+              accept: application/json
+            body:
+              lookup:
+                given_name: Amina
+                family_name: Diallo
+                birth_date: "2000-01-01"
+              fields:
+                - date_of_birth
+              limit: 2
+          response:
+            status: 200
+            body:
+              total: 1
+              date_of_birth: "2008-08-02"
+    expectedValue: true
+    expectedLookup: match
+    derivationRuns: true
+    signedSuccess: true
+  - id: boundary-leap-day
+    legalLocalDate: "2026-02-28"
+    source:
+      intercepts:
+        - type: endpoint
+          endpoint: provider
+      exchanges:
+        - request:
+            endpoint: provider
+            method: POST
+            path: /v1/facts
+            headers:
+              accept: application/json
+            body:
+              lookup:
+                given_name: Amina
+                family_name: Diallo
+                birth_date: "2000-01-01"
+              fields:
+                - date_of_birth
+              limit: 2
+          response:
+            status: 200
+            body:
+              total: 1
+              date_of_birth: "2008-02-29"
+    expectedValue: true
+    expectedLookup: match
+    derivationRuns: true
+    signedSuccess: true
+  - id: missing-fact
+    source:
+      intercepts:
+        - type: endpoint
+          endpoint: provider
+      exchanges:
+        - request:
+            endpoint: provider
+            method: POST
+            path: /v1/facts
+            headers:
+              accept: application/json
+            body:
+              lookup:
+                given_name: Amina
+                family_name: Diallo
+                birth_date: "2000-01-01"
+              fields:
+                - date_of_birth
+              limit: 2
+          response:
+            status: 200
+            body:
+              total: 1
+    expectedPublicProblem: evidence.unavailable
+    derivationRuns: false
+    signedSuccess: false
+  - id: missing-record
+    source:
+      intercepts:
+        - type: endpoint
+          endpoint: provider
+      exchanges:
+        - request:
+            endpoint: provider
+            method: POST
+            path: /v1/facts
+            headers:
+              accept: application/json
+            body:
+              lookup:
+                given_name: Amina
+                family_name: Diallo
+                birth_date: "2000-01-01"
+              fields:
+                - date_of_birth
+              limit: 2
+          response:
+            status: 200
+            body:
+              total: 0
+    expectedLookup: no_match
+    expectedPublicProblem: evidence.unavailable
+    derivationRuns: false
+    signedSuccess: false
+  - id: no-match
+    source:
+      intercepts:
+        - type: endpoint
+          endpoint: provider
+      exchanges:
+        - request:
+            endpoint: provider
+            method: POST
+            path: /v1/facts
+            headers:
+              accept: application/json
+            body:
+              lookup:
+                given_name: Amina
+                family_name: Diallo
+                birth_date: "2000-01-01"
+              fields:
+                - date_of_birth
+              limit: 2
+          response:
+            status: 200
+            body:
+              total: 0
+    expectedLookup: no_match
+    expectedPublicProblem: evidence.unavailable
+    derivationRuns: false
+    signedSuccess: false
+  - id: ambiguous
+    source:
+      intercepts:
+        - type: endpoint
+          endpoint: provider
+      exchanges:
+        - request:
+            endpoint: provider
+            method: POST
+            path: /v1/facts
+            headers:
+              accept: application/json
+            body:
+              lookup:
+                given_name: Amina
+                family_name: Diallo
+                birth_date: "2000-01-01"
+              fields:
+                - date_of_birth
+              limit: 2
+          response:
+            status: 200
+            body:
+              total: 2
+    expectedLookup: ambiguous
+    expectedPublicProblem: evidence.unavailable
+    derivationRuns: false
+    signedSuccess: false
+  - id: source-failure
+    sourceFailure: timeout
+    expectedPublicProblem: source.unavailable
+    signedSuccess: false
+  - id: negative-wrong-derived-type
+    injectedDerivation:
+      - concept_id: urn:example:fixture:concept:adult-status
+        value: "true"
+    expected: output-gate-rejection
+  - id: anti-reconstruction
+    companionBundle: threshold-ladder
+    expected: bundle-rejection
 privacyExpectation:
-  evidenceContains: [urn:example:fixture:concept:adult-status]
-  evidenceExcludes: [date_of_birth, given_name, family_name, selector-profile]
-  diagnosticsExclude: [Amina, Diallo, '2000-01-01', fixture-source-canary]
+  evidenceContains:
+    - urn:example:fixture:concept:adult-status
+  evidenceExcludes:
+    - date_of_birth
+    - given_name
+    - family_name
+    - selector-profile
+  diagnosticsExclude:
+    - Amina
+    - Diallo
+    - "2000-01-01"
+    - fixture-source-canary

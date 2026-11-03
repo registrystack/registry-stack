@@ -42,10 +42,16 @@ for recipe_name in dhis2-tracker opencrvs-event-search; do
 	fi
 
 	cp -R "$recipe_dir/fixture-validation" "$project_dir"
-
 	"$evidencectl_bin" source import "$recipe_dir" --project "$project_dir" >/dev/null
+	assertion_map_count=$(awk '/^assertionDefinitions:$/ { count += 1 } END { print count + 0 }' "$project_dir/evidence.yaml")
+	if [[ "$assertion_map_count" -ne 1 ]]; then
+		printf 'Imported recipe %s requires exactly one assertionDefinitions map, found %s.\n' "$recipe_name" "$assertion_map_count" >&2
+		exit 1
+	fi
+
 	awk -v definition_file="$project_dir/assertion-definitions.yaml" '
-    /^# SOURCE_RECIPE_ASSERTION_DEFINITIONS$/ {
+    /^assertionDefinitions:$/ {
+      print
       while ((getline line < definition_file) > 0) print line
       close(definition_file)
       next

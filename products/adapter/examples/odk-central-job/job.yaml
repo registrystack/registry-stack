@@ -34,6 +34,14 @@ source:
     version: "1"
     digest: sha256:070300cfce78200e2d967aebcef76f40348e305ab15de42374049c334993f324
   route: odk-submissions
+destination:
+  type: signed-coordinator-event
+  binding: submissions-workflow
+  workflow: register-household
+  trigger: submission-received
+  source: urn:registry-adapter:job:odk-central-submissions-example
+  eventType: org.openspp.registry.household-submitted.v1
+  dataSchema: urn:registry-adapter:schema:household-submitted:v1
 # The projection names members every submission entity carries: the
 # OData key, a top-level answer, and an answer inside a group.
 projection:

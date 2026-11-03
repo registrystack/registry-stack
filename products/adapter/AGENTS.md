@@ -17,10 +17,11 @@ verification scripts. Read the workspace `AGENTS.md`, this file,
 | Area | Owns |
 |---|---|
 | `crates/registry-adapter-core` | Source-neutral Adapter model, wire DTOs, `adapter.*` problem codes, and pure authoring checks; no I/O (it depends on `registry-platform-httputil` only for its pure header predicates and bounds) |
-| `crates/registry-adapter` | Adapter runtime: the governed facade, the Camel-port engine (exchange, routes, EIP processors, components), the security surface, the audit journal, and the idempotency store |
+| `crates/registry-adapter-engine` | Bounded route engine, components, compilation and replay shared by facade, jobs and Evidence; no listener or PostgreSQL client |
+| `crates/registry-adapter` | Governed facade, caller security, audit journal and idempotency custody over the shared engine |
 | `crates/registry-adapterctl` | Adapter authoring and operator tooling and the `adapterctl` binary |
-| `crates/registry-adapter-job` | The ingestion-job host and the `adapter-job` binary: the item table, the pass, the interval trigger, and the destination seam; it keeps identity and position only, never payloads (`CONCEPT.md` section 17) |
-| `crates/registry-adapter-connectors` | The parked BReg connector over `registry-breg-client`, behind an off-by-default cargo feature; linked by no facade binary and no job path while the governed-ingestion delivery design is decided. The dependency gate names exactly what it may reach |
+| `crates/registry-adapter-job` | The ingestion-job host and the `adapter-job` binary: the item table, the pass, interval and authenticated hook triggers, and the destination seam; it keeps identity and position only, never payloads (`CONCEPT.md` section 17) |
+| `crates/registry-adapter-connectors` | BReg connector over `registry-breg-client`, behind the job host's off-by-default `direct-breg` feature. Engine and facade cannot reach it; the dependency gate names the exact permitted path |
 | `products/adapter/` | `README.md`, `CONCEPT.md`, schemas, profiles, packs, examples, fixtures (including the source-shape fixtures and the bad-authoring corpus), and product scripts |
 
 `CONCEPT.md` section 8.1 fixes the platform reuse: the runtime reaches
@@ -30,9 +31,11 @@ product's runtime, tooling, or protocol types. Product logic (routes, EIP
 processors, mapping, disclosure) never moves into a platform crate. The
 generic primitives under `throttle`, `circuitBreaker`, and redelivery live in
 `registry-platform-ratelimit` and `registry-platform-resilience` (D13); the
-processors and the redelivery loop stay here. This program changes no
-Evidence crate; its other platform edits are format registration in
-`products/platform/` and additive constructors accepted in review.
+processors and the redelivery loop stay in the Adapter engine. The engine is
+shared by facade, jobs and Evidence through named execution profiles. Evidence
+links only Adapter core and engine; its authorization, assertion meaning,
+signing and access/disclosure audit remain Evidence-owned. Shared platform
+changes preserve each consuming product's policy and have consumer proof.
 `[ingestion]` The one exception to "never another product's protocol
 types" is the connector crate above: it reaches `registry-breg-client`
 only, behind a feature, never a product runtime, CLI, or database crate, and
@@ -55,8 +58,9 @@ products/adapter/scripts/test-postgres.sh
 `test_dependency_direction.py` unittest, then
 `check_dependency_direction.py`), and the CI Adapter job runs it through
 this script. It then runs the verification floor: `cargo fmt --check`
-over the workspace plus clippy and tests over the adapter crates
-(`-p registry-adapter -p registry-adapter-core -p registry-adapterctl`),
+over the workspace plus clippy and tests over the facade, core, shared
+engine, job host, connectors and authoring crates, including the explicit
+source, destination and hook features,
 the `adapterctl verify --live` synthetic TLS proof under the `tls-test`
 feature, the generated schemas held to their generator, the platform
 configuration-format lint, `check-port-table.py`, the example checks and
@@ -79,5 +83,5 @@ Every adapter diagnostic is value-free under an `adapter.*` code
 JSON Pointer, and the code, never a value that could carry secret or
 environment material. Configuration formats follow
 `products/platform/CONFIG-CONVENTIONS.md`; the `Adapter` envelope prefix
-and the five v1alpha1 format kinds are registered in
+and the v1alpha1 format kinds are registered in
 `products/platform/config-formats.yaml`.

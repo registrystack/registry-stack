@@ -1,3 +1,9 @@
+# Inbound callers present access tokens from the deployment's operated OIDC
+# issuer. Evidence and the protected registry API verify that issuer under
+# their independently configured resource-server policies.
+# The protected read already restricts the response to the fields named in
+# the request, and this deployment's projection keeps only two of them.
+# Shape contract for the projected response, checked before extraction runs.
 apiVersion: id.registrystack.org/formats/evidence/bundle/v1
 kind: EvidenceBundle
 assuranceProfile: evidence-grade
@@ -7,15 +13,14 @@ service:
   trustDomain: urn:gov:example:trust-domain:social-protection
 issuer:
   uri: urn:gov:example:issuer:residence-authority
-# Inbound callers present access tokens from the deployment's operated OIDC
-# issuer. Evidence and the protected registry API verify that issuer under
-# their independently configured resource-server policies.
 authentication:
   oidc:
     issuer: https://tokens.gov.example
     audience: registry-evidence
-    tokenTypes: [at+jwt]
-    algorithms: [ES256]
+    tokenTypes:
+    - at+jwt
+    algorithms:
+    - ES256
     jwksSource:
       type: uri
       uri: https://tokens.gov.example/.well-known/jwks.json
@@ -42,11 +47,11 @@ signing:
   activePublicJwkFile: public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json
   publishedPublicJwkFiles: []
   revokedKeyIds: []
-  jwksPath: /.well-known/evidence/jwks.json
+  jwksPath: "/.well-known/evidence/jwks.json"
   maximumAssertionValiditySeconds: 300
   verifierClockSkewSeconds: 30
-responseFormats: [signed-jws]
-
+responseFormats:
+- signed-jws
 selectorProfiles:
   residence-record-v1:
     maximumAggregateBytes: 96
@@ -57,100 +62,84 @@ selectorProfiles:
         maximumBytes: 64
 sources:
   residence-register:
-    type: http-json
-    baseUrl: https://registry-api.gov.example
-    # The protected read already restricts the response to the fields named in
-    # the request, and this deployment's projection keeps only two of them.
+    pack:
+      id: protected-registry-read
+      version: '1'
+      digest: sha256:293f543219200ab950672bf77b6744b955b0c86ab353d5ce8970dd14a33f2e8a
+      artifactPrefix: adapter-packs/protected-registry-read/293f543219200ab950672bf77b6744b955b0c86ab353d5ce8970dd14a33f2e8a
+    route: residence-region
+    connection: residence-register
+    inputs:
+      recordReference:
+        selector:
+          role: subject
+          profile: residence-record-v1
+          field: record_reference
     posture: field-projected
-    authentication:
-      type: oauth2-client-credentials
-      tokenEndpoint: https://tokens.gov.example/oauth2/token
-      clientIdRef: secret:file/registry-api-client-id
-      clientSecretRef: secret:file/registry-api-client-secret
-      scope: registry.read
-      credentialPlacement: form-body
-      maximumCacheSeconds: 60
-    request:
-      method: GET
-      path: /v2/resources/residence-record/records
-      fixedHeaders:
-        - name: Accept
-          value: application/json
-      selectorInputs:
-        - role: subject
-          alternatives:
-            - profile: residence-record-v1
-              fields: [record_reference]
-      prepareScript: adapters/prepare.rhai
-      adapterParameters:
-        providerFields: recordReference,region
-        pageSize: "2"
-      adapterParametersSchema: schemas/residence-region-adapter-parameters.schema.yaml
-      preparationLimits:
-        query: required
-        jsonBody: forbidden
-        maximumQueryPairs: 8
-        maximumQueryNameBytes: 64
-        maximumQueryValueBytes: 1024
-        maximumNormalizedBytes: 4096
-      projection:
-        - /items/*/domainData/recordReference
-        - /items/*/domainData/region
-        - /pageInfo/nextCursor
-      redirects: deny
-      attemptTimeoutMilliseconds: 3000
-      maximumResponseBytes: 65536
-      maximumConcurrency: 8
-    # Shape contract for the projected response, checked before extraction runs.
-    responseSchema: schemas/residence-region-response.schema.yaml
-    extractScript: adapters/residence-region-extract.rhai
     factSchema: schemas/residence-region-facts.schema.yaml
 authorityProfiles:
   residence-verifier-v1:
     kind: statutory
-    requesterTags: [residence-verifier]
+    requesterTags:
+    - residence-verifier
     grants:
-      - requirement: urn:gov:example:requirement:residence-region:v1
-        purpose: residence-verification
-        audienceFrom: authenticated-requester
-        responseFormats: [signed-jws]
-        subjects:
-          - role: subject
-            selectorProfile: residence-record-v1
-            valueOrigin: request
-requirements:
-  - handle: residence-region
-    uri: urn:gov:example:requirement:residence-region:v1
-    kind: information-requirement
-    acquisition:
-      type: single
-      source: residence-register
-    purposes: [residence-verification]
-    subjectRoles:
+    - requirement: urn:gov:example:requirement:residence-region:v1
+      purpose: residence-verification
+      audienceFrom: authenticated-requester
+      responseFormats:
+      - signed-jws
+      subjects:
       - role: subject
-        cardinality: one
-        selectorProfiles: [residence-record-v1]
-    referenceFrameworks: [urn:gov:example:framework:residence-region:v1]
-    evidenceType: urn:gov:example:evidence-type:residence-region:v1
-    validitySeconds: 300
-    derivation:
-      script: derivations/residence-region.rhai
-      selectorInputs:
-        - role: subject
-          alternatives:
-            - profile: residence-record-v1
-              fields: [record_reference]
-      parameters: {}
-    concepts:
-      - handle: residence-region
-        uri: urn:gov:example:concept:residence-region
-        type: controlled-code
-        required: true
-        constraints:
-          codelist: codelists/residence-regions.yaml
-          codelistVersion: '2026-01'
-          maximumBytes: 32
-    fixtures: fixtures/residence-region-cases.yaml
-    disclosureGuard:
-      families: [urn:gov:example:disclosure-family:residence-region]
-    existenceDisclosure: collapse-unresolved
+        selectorProfile: residence-record-v1
+        valueOrigin: request
+requirements:
+- handle: residence-region
+  uri: urn:gov:example:requirement:residence-region:v1
+  kind: information-requirement
+  acquisition:
+    source: residence-register
+  purposes:
+  - residence-verification
+  subjectRoles:
+  - role: subject
+    cardinality: one
+    selectorProfiles:
+    - residence-record-v1
+  referenceFrameworks:
+  - urn:gov:example:framework:residence-region:v1
+  evidenceType: urn:gov:example:evidence-type:residence-region:v1
+  validitySeconds: 300
+  derivation:
+    script: derivations/residence-region.rhai
+    selectorInputs:
+    - role: subject
+      alternatives:
+      - profile: residence-record-v1
+        fields:
+        - record_reference
+    parameters: {}
+  concepts:
+  - handle: residence-region
+    uri: urn:gov:example:concept:residence-region
+    type: controlled-code
+    required: true
+    constraints:
+      codelist: codelists/residence-regions.yaml
+      codelistVersion: 2026-01
+      maximumBytes: 32
+  fixtures: fixtures/residence-region-cases.yaml
+  disclosureGuard:
+    families:
+    - urn:gov:example:disclosure-family:residence-region
+  existenceDisclosure: collapse-unresolved
+sourceConnections:
+  residence-register:
+    endpoints:
+    - endpoint: records
+      baseUrl: https://registry-api.gov.example
+      clientIdentity: forbidden
+      authentication:
+        type: oauth2-client-credentials
+        tokenEndpoint: https://tokens.gov.example/oauth2/token
+        scope: registry.read
+        credentialPlacement: form-body

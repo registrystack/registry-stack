@@ -1,124 +1,14 @@
 contract: registry.evidence.rhai-abi/v1
 status: frozen
+acquisition_contract: ../../adapter/CONCEPT.md
 trust_model:
   scripts: Reviewed, trusted, immutable bundle artifacts compiled at startup.
-  boundary: Trust permits scripts to implement provider and requirement semantics, but never grants transport, credential, authorization, signing, audit, or evidence-construction authority.
+  boundary: Trust permits derivation scripts to implement reviewed requirement semantics, but never grants transport, credential, authorization, signing, audit, or evidence-construction authority. Provider semantics belong to the separate Adapter pack contract.
 functions:
-  preparation:
-    signature: prepare(source_required_selectors, adapter_context) -> RequestParts
-    input:
-      source_required_selectors: Exact role, profile, and field map selected from the source request selectorInputs after validation and authorization; the map is empty for a fetch source with no selectorInputs.
-      adapter_context:
-        exact_keys: [parameters, prior_facts]
-        parameters: Closed non-secret JSON parameters validated at startup against adapterParametersSchema.
-        prior_facts: Empty for single and search calls; for a fetch call, exactly the prior facts the acquisition kind gives that stage. Under search-then-fetch that is the whole closed schema-validated FactSet returned by the search extraction. Under search-then-fetch-set it is that FactSet projected onto the member's own declared factInputs allowlist, which startup has proven names only required search facts. The projection is what a script receives, not a rule it is asked to obey, so a member cannot name a search fact outside its allowlist through the request body it builds any more than through a declared binding.
-      prohibited:
-        - requester, actor, purpose, audience, authority, entitlement, or grant objects
-        - source origin, method, path, path bindings, headers, credentials, TLS, proxy, timeout, redirect, pagination, concurrency, or request-count controls
-    output:
-      exact_keys: [query, body]
-      query:
-        representation: ordered array of exact maps with string keys name and value
-        maximum_items: 64
-        rules:
-          - Names and values are logical lexical strings; Rust percent-encodes each component exactly once.
-          - Pair order and duplicate names are preserved.
-          - Empty names, CR, LF, implicit value-to-string conversion, and non-string values are rejected.
-      body:
-        representation: one bounded JSON value or unit for no body
-        maximum_depth: 32
-      validation: Rust applies the source preparationLimits and validates the complete normalized RequestParts before credential resolution.
-    core_owned_transport:
-      - source and fixed origin selected by the requirement acquisition, never by a script or response
-      - fixed method and fixed path, a literal or a complete-segment template whose pathBindings are bound to authorized selectors or, on a fetch source only, a scalar prior fact that stage receives
-      - fixed non-secret headers and every authentication header
-      - credentials, TLS trust, hostname verification, redirect denial, proxy denial, timeout, response limit, concurrency, and one request per source stage
-  extraction:
-    signature: extract(projected_source_response, adapter_context) -> LookupResult
-    optional_signature: extract(projected_source_response, source_required_selectors, adapter_context) -> LookupResult
-    compatibility: Each extraction artifact declares exactly one extract function, at arity two or three. Both together are refused. Existing extract/2 keeps exactly its existing input and requires no configuration change.
-    input:
-      source_required_selectors: Only extract/3 receives the same freshly copied minimized role/profile/field object supplied to preparation from this source request.selectorInputs, after validation and authorization. Omitted source selectorInputs yield an empty map. Derivation inputs remain independently minimized.
-      projected_source_response: Parsed JSON from the completed source stage after pre-projection response bounds, the Rust-enforced extended JSON Pointer allowlist, and validation against the source's declared responseSchema, so a response outside its declared shape never reaches this script. The projected tree handed to extraction is limited to 65536 serialized bytes; the 1 MiB wire-response maximum bounds the pre-projection response and the two limits are compatible layers. Integer tokens outside the signed 64-bit range fail before Rhai rather than converting to a precision-losing float; provider identifiers outside that range must be represented as strings.
-      adapter_context:
-        exact_keys: [parameters, prior_facts]
-        parameters: A fresh copy of the same closed non-secret parameters supplied to preparation.
-        prior_facts: Exactly the same empty, whole, or allowlist-projected prior FactSet supplied to preparation for this stage; extraction never sees more of an earlier stage than preparation did.
-      prohibited:
-        - selectors outside request.selectorInputs, or any prepared request parts
-        - unprojected response fields
-        - request metadata, credentials, authority context, or a source client
-    output:
-      tagged_union:
-        match:
-          exact_keys: [outcome, facts]
-          outcome: match
-          facts: Closed FactSet declared by the source binding.
-        no_match:
-          exact_keys: [outcome]
-          outcome: no_match
-        ambiguous:
-          exact_keys: [outcome]
-          outcome: ambiguous
-      prohibited: [candidates, count, scores, confidence, hints, diagnostics, comparisons]
-    rules:
-      - Facts are legal only on match and must exactly satisfy the declared fact schema.
-      - A selector-aware source adapter may require exact scalar type and value equality between the selected profile's authorized fields and the returned unique record before producing reusable facts. It never normalizes identities, chooses a profile from values, retries an alternative, or signs a false concept on identity mismatch.
-      - Overlapping alternatives and composite selectors retain their explicit profile and complete selected field set. Identity fields may be checked and discarded before emitting a fixed FactSet.
-      - A source declaring extract/3 cannot also declare batch. Startup refuses this combination so optimized extraction cannot bypass the reusable identity check; omit batch to execute ordinary requests sequentially.
-      - Search no-match and ambiguous stop evaluation; derivation and fetch are not invoked.
-      - 'Fetch no-match or ambiguous after a unique search match is a dependency inconsistency, never a signed absence claim. Where the acquisition kind declares more than one fetch stage, it also ends the acquisition: the stages the bundle declares after it are not invoked, so an execution is always a prefix of the declared sequence.'
-      - Extraction may map provider-owned cardinality from a count plus one minimized record, or at most two minimally projected records solely to detect ambiguity.
-      - Extraction never chooses a candidate and never turns protocol inconsistency into a closed lookup outcome.
-  batch_preparation:
-    signature: prepare_batch(items, adapter_context) -> RequestParts
-    input:
-      items:
-        representation: ordered array of exact maps with keys slot and selectors
-        minimum_items: 1
-        maximum_items: 16
-        slot: A Rust-issued non-negative integer opaque to the script. Slots are unique, bounded, and supplied in increasing order. They correlate results only and carry no subject, requester, grant, or source meaning.
-        selectors: The ordinary minimized authorized selector object for that logical item, with exactly the roles, profiles, and fields declared by the source selectorInputs.
-      adapter_context:
-        exact_keys: [parameters]
-        parameters: A fresh copy of the same closed non-secret parameters supplied to ordinary preparation.
-      prohibited:
-        - request nonce, requester, actor, purpose, audience, authority, entitlement, or grant objects
-        - source origin, method, path, headers, credentials, TLS, proxy, timeout, redirect, pagination, concurrency, or request-count controls
-    output:
-      shape: The same exact RequestParts shape as prepare/2, with keys query and body.
-      validation: Rust applies the source request's ordinary preparationLimits and validates the complete normalized RequestParts before credential resolution.
-    rules:
-      - The script receives the complete item set selected before I/O and cannot split it, add an item, omit an item, or choose a second call.
-      - The complete serialized items plus context input is bounded by the ordinary 1048576-byte preparation input ceiling.
-      - Fixed method, origin, path, headers, authentication, TLS, redirect denial, response limit, timeout, concurrency semaphore, and request-count authority remain core-owned.
-  batch_extraction:
-    signature: extract_batch(projected_source_response, adapter_context) -> BatchLookupResults
-    input:
-      projected_source_response: Parsed JSON from the one completed optimized source call after the ordinary wire-response bound, the batch block's Rust-enforced projection, its responseSchema, and the 65536-byte projected-input bound have all passed.
-      adapter_context:
-        exact_keys: [parameters, slots]
-        parameters: A fresh copy of the same closed non-secret parameters supplied to batch preparation.
-        slots: The exact ordered array of opaque Rust-issued slots supplied to batch preparation. No selectors or prepared request parts are present.
-      prohibited:
-        - selectors, request nonces, or prepared request parts
-        - unprojected response fields
-        - request metadata, credentials, authority context, or a source client
-    output:
-      representation: array of exact maps with keys slot and result
-      minimum_items: 1
-      maximum_items: 16
-      slot: One opaque integer from adapter_context.slots.
-      result: The ordinary closed LookupResult union, exactly the match, no_match, or ambiguous shape defined for extract/2.
-      exact_bijection: Rust requires every input slot exactly once. Array order is not significant because Rust restores input order. A missing, duplicate, extra, negative, non-integer, or out-of-range slot rejects the complete optimized response as source_protocol_error.
-    rules:
-      - A match FactSet is validated independently against the ordinary source factSchema.
-      - no_match and ambiguous remain singular unavailable outcomes for their slots. A malformed member, invalid fact, or protocol inconsistency aborts the outer request.
-      - The script cannot create a retry, fanout, sequential fallback, partial release, or another source call.
   derivation:
     signature: derive(facts, declared_authorized_selectors, evaluation_context) -> ConceptValueSet
     input:
-      facts: 'Immutable validated FactSet from one unique match, or, for a multi-stage acquisition kind, the union of one such FactSet per executed stage. The union is lossless and order-free because startup has proven the stage fact names pairwise disjoint, and it is only ever complete: a stage that does not resolve stops the acquisition before derivation runs, so derivation is never handed a partial acquisition and cannot read a missing stage as a fact. Integer tokens outside the signed 64-bit range fail before Rhai rather than converting to a precision-losing float.'
+      facts: 'The complete closed FactSet from one matched Adapter pack lookup, validated against the Evidence Source factSchema. The pack may compose bounded reviewed operations internally; partial, no-match, ambiguous, unresolved, and invalid results never reach derivation. Integer tokens outside the signed 64-bit range fail before Rhai rather than converting to a precision-losing float.'
       declared_authorized_selectors: Exact role, profile, and field map declared by derivation.selectorInputs, resolved from already authorized requirement subjects; omission yields an empty map.
       evaluation_context:
         exact_keys: [observed_at, legal_local_date, legal_local_time, parameters, codelists]
@@ -130,7 +20,7 @@ functions:
     output:
       representation: array of exact maps with keys concept_id and value
       maximum_items: 16
-      validation: Concept identifiers must equal the requirement output set; duplicates, missing required values, extra fields, and invalid values are rejected. An ordinary Rhai float is never a public derived value; exact numbers use the declared integer or Rust-owned Decimal forms. Ordinary f64 remains available only inside the preparation and extraction adapter surfaces.
+      validation: Concept identifiers must equal the requirement output set; duplicates, missing required values, extra fields, and invalid values are rejected. An ordinary Rhai float is never a public derived value; exact numbers use the declared integer or Rust-owned Decimal forms. Finite ordinary floats may occur in input facts or local computation but cannot cross the public derived-value gate.
       protected_types:
         Decimal:
           construction: decimal(canonical_text) or parse_decimal(canonical_text)
@@ -170,14 +60,10 @@ capabilities:
     - raw string literals, block and if expressions in operand position, and negative array indexing
   syntax_contract: The detailed pinned Rhai 1.27.0 syntax surface and forbidden constructs are defined by the trusted request-adapter API and enforced by startup compilation tests. Startup review also rewrites every index operand through a host-owned guard that rejects a negative index whether it is written literally or computed. The lexical restriction is an enforceable reviewed-language contract; the raw engine capability set remains the isolation boundary.
 lifecycle:
-  compilation: Startup only; each ordinary script must expose exactly one public entry point at the required arity before readiness; extraction alone permits either arity two or three, never both. Each batch block names distinct preparation and extraction scripts exposing exactly prepare_batch/2 and extract_batch/2 respectively.
-  state: 'Fresh invocation state and fresh input copies; only the immutable schema-validated search FactSet crosses into a fetch stage, whole or projected onto the allowlist that stage declares, with no cross-request or cross-definition mutable state. One fetch stage never observes another fetch stage: facts flow forward from the search into each member and forward again into derivation, never sideways.'
+  compilation: Startup only; each derivation artifact must expose exactly one public derive function at arity three before readiness. Pack scripts compile separately under the Adapter engine script contract.
+  state: Fresh invocation state and fresh input copies; no cross-request or cross-definition mutable state. Derivation receives only the completed validated lookup facts and its separately minimized authorized selectors.
   identity: Script path and exact bytes are listed in the governed package's SHA256SUMS file.
 failure:
-  preparation: adapter_input_error
-  extraction: source_protocol_error
-  batch_preparation: adapter_input_error
-  batch_extraction: source_protocol_error
   derivation: derivation_input_error
   unavailable: Host-private, unforgeable, and uncatchable required-value termination.
   observability: All failures map to closed value-free classes; raw Rhai errors and protected input or output material are absent from public problems and diagnostics.

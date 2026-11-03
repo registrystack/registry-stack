@@ -1,0 +1,16 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "active",
+    "provider-type"
+  ],
+  "properties": {
+    "active": {
+      "type": "boolean"
+    },
+    "provider-type": {
+      "type": "boolean"
+    }
+  }
+}

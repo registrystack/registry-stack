@@ -1,7 +1,7 @@
 # yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/pack/pack.v1alpha1.schema.json
 #
 # Bad-corpus member adapter.job.trigger-hook-unserved: this artifact set must be refused with
-# exactly adapter.job.trigger-hook-unserved. Clean baseline pack; the job definition beside it carries the defect.
+# exactly adapter.job.trigger-hook-unserved. Clean baseline pack; the job's hook has no runtime binding.
 #
 # Refuse with:
 #   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.job.trigger-hook-unserved/project.yaml
@@ -57,4 +57,5 @@ sourceRoutes:
           uri: file:submissions
           timeoutMilliseconds: 5000
           decoder: csv
+          keyPointer: /id
 capabilities: {}

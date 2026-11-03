@@ -1,0 +1,86 @@
+{
+  "apiVersion": "id.registrystack.org/formats/adapter/pack/v1alpha1",
+  "kind": "AdapterPack",
+  "id": "record-status-extract",
+  "version": "1",
+  "testedVersions": [],
+  "endpoints": [
+    {
+      "id": "record-status-extract",
+      "component": "sqlite-extract",
+      "authentication": {"type": "none"},
+      "attemptTimeoutMilliseconds": 2000,
+      "maximumResponseBytes": 8192,
+      "sqliteExtract": {
+        "extractProfile": "record-status-extract",
+        "statement": {
+          "path": "queries/record-status.sql",
+          "digest": "sha256:a971f5e386ec1c175430b60efd25aa5d2a12fc59e2289bb904ce5e4dac3cedc6"
+        },
+        "columns": [{"name": "status", "type": "string"}],
+        "parameters": [{"name": "code", "required": true}],
+        "maximumExtractAgeSeconds": 604800,
+        "maximumRows": 2,
+        "maximumCellBytes": 64,
+        "maximumStatementSteps": 100000,
+        "concurrency": 8
+      }
+    }
+  ],
+  "scripts": [
+    {
+      "path": "scripts/extract.rhai",
+      "digest": "sha256:423721755aea30f0f63001e1389788f4aa1ff6eaf31d266adff456503cedcc5f"
+    }
+  ],
+  "sourceRoutes": [
+    {
+      "id": "lookup",
+      "evidence": {
+        "inputsSchema": {
+          "path": "schemas/inputs.json",
+          "digest": "sha256:325cd791002192f6b148eff86c6ad255a0e5952f6647893457e6e22c66afd4c2"
+        },
+        "factsSchema": {
+          "path": "schemas/facts.json",
+          "digest": "sha256:48a447022cda0889bd20f97aed4dac292aeb1aaf829593c6ed3438e94bf2461d"
+        },
+        "acquisitionPosture": "source-derived"
+      },
+      "steps": [
+        {
+          "setProperty": {
+            "name": "code",
+            "value": {"jsonpath": "$.code"}
+          }
+        },
+        {
+          "to": {
+            "uri": "sqlite-extract:record-status-extract",
+            "parameters": {
+              "queryParameters": {
+                "code": {"exchangeProperty": "code"}
+              }
+            }
+          }
+        },
+        {
+          "validateSchema": {
+            "path": "schemas/response.json",
+            "digest": "sha256:c22add375c848e1849ad881c92f995482d07f0eb28d86e953b9a7306d5e40566"
+          }
+        },
+        {
+          "setBody": {
+            "rhai": {"file": "scripts/extract.rhai", "entrypoint": "extract"}
+          }
+        }
+      ]
+    }
+  ],
+  "capabilities": {
+    "components": ["sqlite-extract"],
+    "languages": ["jsonpath", "rhai"],
+    "eips": ["setBody", "setProperty", "to"]
+  }
+}

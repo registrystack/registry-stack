@@ -254,6 +254,10 @@ impl ReferenceProject {
         fs::write(&path, text.replacen(from, to, 1)).expect("write staged project file");
     }
 
+    fn mutate_yaml(&self, relative: &str, mutate: impl FnOnce(&mut Value)) {
+        mutate_yaml_file(&self.root.path().join(relative), mutate);
+    }
+
     /// Run against the project with the immutable modes the runtime demands.
     ///
     /// The modes are restored before the caller asserts anything, so a failed
@@ -424,7 +428,7 @@ fn check_reports_every_runtime_finding_with_its_position_in_one_run() {
     assert_eq!(
         lines[3],
         format!(
-            "error[config.unknown-key] {}:25:1 /unknownField",
+            "error[config.unknown-key] {}:60:1 /unknownField",
             runtime.display()
         )
     );
@@ -487,7 +491,7 @@ fn check_as_json_reports_the_envelope_on_success_and_refusal() {
     assert_eq!(diagnostic["path"], "/unknownField");
     assert_eq!(
         diagnostic["source"],
-        json!({"file": runtime.display().to_string(), "line": 24, "column": 1})
+        json!({"file": runtime.display().to_string(), "line": 59, "column": 1})
     );
     assert!(diagnostic["suggestedAction"].is_string(), "{report}");
 }
@@ -743,26 +747,29 @@ fn check_reports_an_unsafe_package_entry_at_the_package_directory() {
     assert!(diagnostic["source"].get("line").is_none(), "{diagnostic}");
 }
 
-/// A package file the bundle names that is a link out of the package is still
-/// refused, and the refusal points at the bundle member that names the file
+/// A package file a captured source pack names that is a link out of the
+/// package is still refused, and the refusal points at the pack member that
+/// names the file
 /// (CFG-VAL-8, CFG-DIAG-1), so the author sees which path to repair. The file
 /// the link resolves to is never read.
 #[test]
 fn check_reports_a_linked_package_file_at_the_bundle_member_that_names_it() {
     let deployment = Deployment::stage("all-definitions");
     let bundle = deployment.path("bundle");
-    let script = bundle.join("adapters/adult-status-source.rhai");
+    let pack = source_pack_root(&bundle, "source-a");
+    let pack_document = pack.join("pack.yaml");
+    let script = pack.join("scripts/provider.rhai");
     let outside = deployment.path("outside.rhai");
     fs::rename(&script, &outside).expect("move the script out of the package");
     std::os::unix::fs::symlink(&outside, &script).expect("link the script back in");
-    let document = fs::read_to_string(bundle.join("evidence.yaml")).expect("read bundle");
+    let document = fs::read_to_string(&pack_document).expect("read source pack");
     let (line, text) = document
         .lines()
         .enumerate()
-        .find(|(_, text)| text.contains("extractScript: adapters/adult-status-source.rhai"))
-        .expect("the bundle names the script");
+        .find(|(_, text)| text.contains("\"path\": \"scripts/provider.rhai\""))
+        .expect("the source pack names the script");
     let column = text
-        .find("adapters/")
+        .find("\"scripts/provider.rhai\"")
         .expect("the value starts on the line")
         + 1;
 
@@ -778,11 +785,11 @@ fn check_reports_a_linked_package_file_at_the_bundle_member_that_names_it() {
     let diagnostic = &diagnostics[0];
     assert_eq!(diagnostic["severity"], "error", "{diagnostic}");
     assert_eq!(diagnostic["code"], "evidence.package.unsafe-entry");
-    assert_eq!(diagnostic["artifact"], "EvidenceBundle", "{diagnostic}");
-    assert_eq!(diagnostic["path"], "/sources/source-a/extractScript");
+    assert_eq!(diagnostic["artifact"], "AdapterPack", "{diagnostic}");
+    assert_eq!(diagnostic["path"], "/scripts/0/path");
     assert_eq!(
         diagnostic["source"]["file"],
-        bundle.join("evidence.yaml").display().to_string(),
+        pack_document.display().to_string(),
         "{diagnostic}"
     );
     assert_eq!(diagnostic["source"]["line"], line + 1, "{diagnostic}");
@@ -1327,6 +1334,123 @@ fn check_refuses_an_already_stale_bound_extract_with_only_the_governed_source() 
     assert!(!diagnostic.contains(extract_path.to_string_lossy().as_ref()));
 }
 
+#[test]
+fn check_reports_a_current_over_budget_extract_as_unavailable_not_stale() {
+    let root = tempfile::tempdir().expect("temporary deployment");
+    let project = Path::new(env!("CARGO_MANIFEST_DIR")).join(
+        "../../products/evidence/reference/request-adapter/deployment-projects/sqlite-extract-evidence",
+    );
+    let bundle = root.path().join("bundle");
+    copy_tree(&project.join("bundle"), &bundle);
+    let bundle_configuration = bundle.join("evidence.yaml");
+    let bundle_document = fs::read_to_string(&bundle_configuration).expect("read bundle document");
+    fs::write(
+        &bundle_configuration,
+        bundle_document.replacen(
+            "assuranceProfile: evidence-grade",
+            "assuranceProfile: local",
+            1,
+        ),
+    )
+    .expect("select local assurance");
+
+    let secret_root = root.path().join("secrets");
+    fs::create_dir(&secret_root).expect("create private secret root");
+    fs::set_permissions(&secret_root, fs::Permissions::from_mode(0o700))
+        .expect("set private secret-root mode");
+    stage_reference_secrets(&secret_root);
+
+    let fixture: serde_json::Value = serde_norway::from_slice(
+        &fs::read(bundle.join("fixtures/professional-licence-cases.yaml"))
+            .expect("read statement fixture"),
+    )
+    .expect("parse statement fixture");
+    let published_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let mut seed = fixture
+        .pointer("/common/extract")
+        .and_then(serde_json::Value::as_str)
+        .expect("fixture carries extract seed")
+        .replacen("2026-08-01T00:00:00Z", &published_at, 1);
+    seed.push_str(
+        "DROP TABLE evidence_extract;\n\
+         CREATE VIEW evidence_extract AS\n\
+         WITH RECURSIVE counter(n) AS (\n\
+             SELECT 1 UNION ALL SELECT n + 1 FROM counter WHERE n < 50000000\n\
+         )\n\
+         SELECT '",
+    );
+    seed.push_str(&published_at);
+    seed.push_str(
+        "' AS published_at,\n\
+         'urn:gov:example:publisher:licence-authority' AS publisher,\n\
+         'current-over-budget-extract' AS extract_id\n\
+         FROM counter WHERE n = 50000000;\n",
+    );
+    let extract_path = root.path().join("licence-register.sqlite");
+    rusqlite::Connection::open(&extract_path)
+        .expect("create extract")
+        .execute_batch(&seed)
+        .expect("materialize extract");
+    fs::set_permissions(&extract_path, fs::Permissions::from_mode(0o444)).expect("seal extract");
+
+    let runtime = fs::read_to_string(project.join("runtime.yaml")).expect("read runtime template");
+    let runtime = runtime
+        .replacen(
+            "/etc/registry-evidence/bundle",
+            bundle.to_str().expect("bundle path is UTF-8"),
+            1,
+        )
+        .replacen(
+            "/run/secrets/registry-evidence",
+            secret_root.to_str().expect("secret path is UTF-8"),
+            1,
+        )
+        .replacen(
+            "/var/lib/registry-evidence/audit/evidence.jsonl",
+            root.path()
+                .join("audit.jsonl")
+                .to_str()
+                .expect("audit path is UTF-8"),
+            1,
+        )
+        .replacen(
+            "/var/lib/registry-evidence/extracts/licence-register-2026-08-01.sqlite",
+            extract_path.to_str().expect("extract path is UTF-8"),
+            1,
+        )
+        .replacen(
+            "signer:\n  type: transit\n  unixSocketPath: /run/registry-evidence/transit-proxy.sock\n  mount: transit\n  keyName: evidence-signing\n  keyVersion: 7\n  attemptTimeoutMilliseconds: 2000",
+            "signer:\n  type: local-jwk\n  privateKeyRef: secret:file/evidence-signing",
+            1,
+        )
+        .replacen(
+            "sourceExtracts:",
+            "sourceAcquisition:\n  maximumDataOperations: 5\n  acquisitionDeadlineMilliseconds: 1\n  maximumResponseBytes: 1048576\nsourceExtracts:",
+            1,
+        );
+    let runtime_path = root.path().join("runtime.yaml");
+    fs::write(&runtime_path, runtime).expect("stage runtime");
+    refresh_package_envelope(&bundle);
+    set_tree_mode(&bundle, 0o555, 0o444);
+    fs::set_permissions(&runtime_path, fs::Permissions::from_mode(0o444)).expect("seal runtime");
+
+    let output = invoke(&runtime_path, &["check", "--require-runtime-dependencies"]);
+
+    set_tree_mode(&bundle, 0o755, 0o644);
+    fs::set_permissions(&runtime_path, fs::Permissions::from_mode(0o644)).expect("unseal runtime");
+    fs::set_permissions(&extract_path, fs::Permissions::from_mode(0o644)).expect("unseal extract");
+    assert_one_check_error(
+        &output,
+        3,
+        "evidence.deployment.dependency-unavailable",
+        "a required runtime dependency is unavailable",
+    );
+    let diagnostic = String::from_utf8_lossy(&output.stderr);
+    assert!(!diagnostic.contains("stale-extract"));
+    assert!(!diagnostic.contains("current-over-budget-extract"));
+    assert!(!diagnostic.contains(extract_path.to_string_lossy().as_ref()));
+}
+
 /// The reference path has to explain itself as well as the acceptance path does.
 ///
 /// A reference case that records only the form it was written in says a case
@@ -1358,38 +1482,53 @@ fn explaining_a_reference_project_fixture_traces_how_far_each_case_reached() {
     assert_eq!(report["passed"], json!(true));
 
     let cases = report["cases"].as_array().expect("cases is an array");
-    assert!(!cases.is_empty(), "the document carried no case");
-    for case in cases {
-        let reached = stage_names(case);
-        assert!(
-            reached.len() > 1,
-            "case {} recorded only {reached:?}, so the trace never says how far it got",
-            case["id"]
-        );
-    }
+    assert_eq!(cases.len(), 11, "the trace keeps every reference case");
 
-    // The cases that run the pipeline record the pipeline, so a reader is
-    // promised no stage the reference path declines to report.
+    // One complete pack acquisition is one stage, even when the pack performs
+    // more than one internal exchange. The OAuth token exchange is not an
+    // Evidence data-operation attempt.
     let resolved = cases
         .iter()
         .find(|case| case["id"] == json!("positive"))
         .expect("the fixture states a resolving case");
-    for stage in [
-        "prepare", "acquire", "extract", "derive", "validate", "sign",
-    ] {
-        assert!(
-            stage_names(resolved).contains(&stage),
-            "a resolving reference case never recorded {stage}: {:?}",
-            stage_names(resolved)
-        );
-    }
+    assert_eq!(
+        stage_outcomes(resolved),
+        vec![
+            ("prepare", "ok"),
+            ("acquire", "ok"),
+            ("extract", "ok"),
+            ("derive", "ok"),
+            ("validate", "ok"),
+            ("sign", "ok"),
+        ]
+    );
+    let acquired = resolved["stages"]
+        .as_array()
+        .expect("stages is an array")
+        .iter()
+        .find(|stage| stage["stage"] == json!("acquire"))
+        .expect("the resolving case records its pack acquisition");
+    assert!(
+        acquired["note"]
+            .as_str()
+            .is_some_and(|note| note.contains("1 data-operation attempt(s)")),
+        "the acquisition did not report its admitted data-operation attempts: {acquired}"
+    );
 
-    // An unresolved case reports the unresolved outcome on the stage that
-    // reached it, exactly as the acceptance path does.
+    // An ordinary no-match reaches extraction after one successful complete
+    // pack acquisition.
     let unresolved = cases
         .iter()
         .find(|case| case["id"] == json!("no-match"))
         .expect("the fixture states an unresolved case");
+    assert_eq!(
+        stage_outcomes(unresolved),
+        vec![
+            ("prepare", "ok"),
+            ("acquire", "ok"),
+            ("extract", "no-match"),
+        ]
+    );
     let extract = unresolved["stages"]
         .as_array()
         .expect("stages is an array")
@@ -1397,6 +1536,23 @@ fn explaining_a_reference_project_fixture_traces_how_far_each_case_reached() {
         .find(|stage| stage["stage"] == json!("extract"))
         .expect("an unresolved case records its extraction");
     assert_eq!(extract["status"], json!("no-match"));
+
+    // A provider response the selected pack route refuses failed during the
+    // complete acquisition. It never produced a lookup for extraction.
+    let refused = cases
+        .iter()
+        .find(|case| case["id"] == json!("missing-fact"))
+        .expect("the fixture states a refused provider response");
+    assert_eq!(
+        stage_outcomes(refused),
+        vec![("prepare", "ok"), ("acquire", "failed")]
+    );
+    assert!(
+        refused["stages"][1]["note"]
+            .as_str()
+            .is_some_and(|note| note.contains("1 data-operation attempt(s)")),
+        "the refused acquisition did not report its admitted attempt: {refused}"
+    );
 }
 
 /// A reference case that fails at its source says so on the acquisition.
@@ -1408,11 +1564,31 @@ fn explaining_a_reference_project_fixture_traces_how_far_each_case_reached() {
 #[test]
 fn a_reference_case_whose_response_is_refused_records_a_failed_acquisition() {
     let project = ReferenceProject::stage();
-    project.replace(
-        "bundle/fixtures/adult-status-cases.yaml",
-        "  - id: positive\n    response:\n      total: 1\n",
-        "  - id: positive\n    response:\n      errors: [source-refused]\n      total: 1\n",
-    );
+    project.mutate_yaml("bundle/fixtures/adult-status-cases.yaml", |fixture| {
+        let excluded = fixture["privacyExpectation"]["diagnosticsExclude"]
+            .as_array_mut()
+            .expect("the reference fixture carries diagnostic canaries");
+        assert!(!excluded.contains(&json!("source-refused")));
+        excluded.push(json!("source-refused"));
+        let case = fixture_case_mut(fixture, "positive");
+        let exchange = case["acquisition"]["exchanges"]
+            .as_array_mut()
+            .expect("the reference case carries acquisition exchanges")
+            .iter_mut()
+            .find(|exchange| {
+                exchange
+                    .pointer("/request/endpoint")
+                    .and_then(Value::as_str)
+                    == Some("events")
+                    && exchange.pointer("/request/tokenRequest").is_none()
+            })
+            .expect("the reference case carries its source exchange");
+        let body = exchange["response"]["body"]
+            .as_object_mut()
+            .expect("the source exchange carries a response body");
+        assert_eq!(body.get("total"), Some(&json!(1)));
+        body.insert("total".to_owned(), json!("source-refused"));
+    });
     let output = project.sealed(|runtime| {
         invoke(
             runtime,
@@ -1434,8 +1610,8 @@ fn a_reference_case_whose_response_is_refused_records_a_failed_acquisition() {
     assert_eq!(
         std::str::from_utf8(&output.stderr).expect("stderr is UTF-8"),
         concat!(
-            "case positive: reference fixture source projection failed\n",
-            "evidence: reference fixture source projection failed\n",
+            "case positive: reference failing case has no exact expectation (expected class boolean-true, observed absent)\n",
+            "evidence: reference failing case has no exact expectation\n",
         )
     );
     let stdout = std::str::from_utf8(&output.stdout).expect("stdout is UTF-8");
@@ -1446,13 +1622,20 @@ fn a_reference_case_whose_response_is_refused_records_a_failed_acquisition() {
         .iter()
         .find(|case| case["id"] == json!("positive"))
         .expect("the refused case is traced");
-    let acquire = refused["stages"]
-        .as_array()
-        .expect("stages is an array")
-        .iter()
-        .find(|stage| stage["stage"] == json!("acquire"))
-        .expect("a case refused at its source records its acquisition");
-    assert_eq!(acquire["status"], json!("failed"));
+    assert_eq!(
+        stage_outcomes(refused),
+        vec![("prepare", "ok"), ("acquire", "failed")]
+    );
+    let acquire = &refused["stages"][1];
+    assert!(
+        acquire["note"]
+            .as_str()
+            .is_some_and(|note| note.contains("1 data-operation attempt(s)")),
+        "the refused acquisition did not report its admitted attempt: {acquire}"
+    );
+    assert_eq!(refused["reasonCode"], json!("source-protocol-refused"));
+    assert!(!stdout.contains("source-refused"));
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("source-refused"));
 }
 
 /// A reference case whose scalar expectation misses by class says so, and the
@@ -1538,15 +1721,28 @@ fn a_reference_scalar_mismatch_names_the_case_and_the_value_classes() {
 #[test]
 fn a_structured_value_naming_an_undeclared_key_fails_the_fixture_and_names_the_key() {
     let deployment = Deployment::stage("adult-status");
-    deployment.replace(
-        "bundle/evidence.yaml",
-        "concepts: [{handle: is_adult, uri: urn:example:fixture:concept:adult-status, type: boolean, required: true, constraints: {}}]",
-        concat!(
-            "concepts: [",
-            "{handle: is_adult, uri: urn:example:fixture:concept:adult-status, type: boolean, required: true, constraints: {}}, ",
-            "{handle: record_note, uri: urn:example:fixture:concept:record-note, type: reviewed-structured-value, required: false, constraints: {schema: urn:example:fixture:schema:record-note:v1, maximumSerializedBytes: 512}}]",
-        ),
-    );
+    deployment.mutate_yaml("bundle/evidence.yaml", |bundle| {
+        let requirement = bundle["requirements"]
+            .as_array_mut()
+            .expect("the bundle carries requirements")
+            .iter_mut()
+            .find(|requirement| requirement["handle"] == json!("adult-status"))
+            .expect("the bundle carries the adult-status requirement");
+        let concepts = requirement["concepts"]
+            .as_array_mut()
+            .expect("the requirement carries concepts");
+        assert_eq!(concepts.len(), 1, "the requirement starts with one concept");
+        concepts.push(json!({
+            "handle": "record_note",
+            "uri": "urn:example:fixture:concept:record-note",
+            "type": "reviewed-structured-value",
+            "required": false,
+            "constraints": {
+                "schema": "urn:example:fixture:schema:record-note:v1",
+                "maximumSerializedBytes": 512
+            }
+        }));
+    });
     deployment.write(
         "bundle/schemas/record-note.schema.yaml",
         concat!(
@@ -1619,101 +1815,88 @@ fn a_structured_value_naming_an_undeclared_key_fails_the_fixture_and_names_the_k
     );
 }
 
-/// A chained acquisition is traced stage by stage, not as one acquisition.
+/// A reviewed multi-operation route reports one acquisition and its stop point.
 ///
-/// The whole reason this acquisition kind exists is that it makes several calls
-/// in a fixed order, each reading only what an earlier one produced. A trace
-/// that reported the chain as a single step would drop exactly the fact a
-/// reader needs from it: which call the case got to, and which one stopped it.
+/// The admitted attempt count distinguishes which provider operation the pack
+/// reached without inventing separate Evidence Sources for internal calls.
 #[test]
-fn explaining_a_chained_acquisition_traces_every_planned_stage() {
+fn explaining_a_multi_operation_pack_reports_its_acquisition_stop_and_attempt_count() {
     let deployment = Deployment::stage("surviving-spouse-status");
-    // The operator half of the acquisition gate. The bundle names the kind it
-    // needs; without this the deployment is refused before any case runs.
     deployment.append(
         "runtime.yaml",
-        "acquisitionCapabilities: [search-then-fetch-set]\n",
+        "sourceAcquisition:\n  maximumDataOperations: 3\n  acquisitionDeadlineMilliseconds: 30000\n  maximumResponseBytes: 1048576\n",
     );
     let output = deployment.evaluate(&["--explain", "--explain-format", "json"]);
-
     assert!(
         output.status.success(),
         "explained evaluation failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let stdout = std::str::from_utf8(&output.stdout).expect("stdout is UTF-8");
-    let report: Value = serde_json::from_str(stdout).expect("stdout is one JSON document");
+    let report: Value =
+        serde_json::from_slice(&output.stdout).expect("stdout is one JSON document");
     let cases = report["cases"].as_array().expect("cases is an array");
-
-    // The search and both members, each acquired and each extracted, before the
-    // one derivation that sees them together.
     let resolved = cases
         .iter()
-        .find(|case| case["id"] == json!("positive"))
-        .expect("the fixture states a resolving case");
+        .find(|case| case["id"] == "positive")
+        .expect("positive case");
     assert_eq!(
-        stage_names(resolved),
-        vec![
-            "prepare", "acquire", "extract", "acquire", "extract", "acquire", "extract", "derive",
-            "validate", "expect", "sign",
-        ],
-        "a resolving chained case did not record every planned stage"
-    );
-
-    // A member whose response the declared projection refuses stops the chain at
-    // its acquisition, so the trace names the call that was refused and never
-    // reports the stages after it as reached.
-    let refused = cases
-        .iter()
-        .find(|case| case["id"] == json!("negative-union-register-unresolved"))
-        .expect("the fixture states a case whose first member answers nothing");
-    assert_eq!(
-        stage_outcomes(refused),
+        stage_outcomes(resolved),
         vec![
             ("prepare", "ok"),
             ("acquire", "ok"),
             ("extract", "ok"),
-            ("acquire", "failed"),
+            ("derive", "ok"),
+            ("validate", "ok"),
             ("expect", "ok"),
-        ],
-        "the chain did not stop on the member whose response was refused"
+            ("sign", "ok"),
+        ]
     );
-
-    // A member that answers, but resolves no unique record for the reference the
-    // search produced, stops the chain one stage later: the response is acquired
-    // and the extraction is what fails.
-    let stopped = cases
+    assert_pack_acquisition_attempts(resolved, 3);
+    for (id, attempts) in [
+        ("negative-union-register-unresolved", 2),
+        ("negative-death-register-unresolved", 3),
+    ] {
+        let refused = cases
+            .iter()
+            .find(|case| case["id"] == id)
+            .expect("refused member case");
+        assert_eq!(
+            stage_outcomes(refused),
+            vec![("prepare", "ok"), ("acquire", "failed"), ("expect", "ok")]
+        );
+        assert_pack_acquisition_attempts(refused, attempts);
+    }
+    let ambiguous = cases
         .iter()
-        .find(|case| case["id"] == json!("negative-death-register-unresolved"))
-        .expect("the fixture states a case whose second member does not resolve");
+        .find(|case| case["id"] == "ambiguous")
+        .expect("ambiguous search case");
     assert_eq!(
-        stage_outcomes(stopped),
+        stage_outcomes(ambiguous),
         vec![
             ("prepare", "ok"),
             ("acquire", "ok"),
-            ("extract", "ok"),
-            ("acquire", "ok"),
-            ("extract", "ok"),
-            ("acquire", "ok"),
-            ("extract", "failed"),
-            ("expect", "ok"),
-        ],
-        "the chain did not stop on the member that resolved nothing"
+            ("extract", "ambiguous"),
+            ("expect", "ok")
+        ]
     );
+    assert_pack_acquisition_attempts(ambiguous, 1);
+}
 
-    // An unresolved search is a settled outcome rather than an inconsistency,
-    // and it is reported as one on the stage that reached it.
-    let unresolved = cases
-        .iter()
-        .find(|case| case["id"] == json!("ambiguous"))
-        .expect("the fixture states an unresolved search");
-    let extract = unresolved["stages"]
+fn assert_pack_acquisition_attempts(case: &Value, attempts: u64) {
+    let acquire = case["stages"]
         .as_array()
-        .expect("stages is an array")
+        .expect("stage array")
         .iter()
-        .find(|stage| stage["stage"] == json!("extract"))
-        .expect("an unresolved search records its extraction");
-    assert_eq!(extract["status"], json!("ambiguous"));
+        .find(|stage| stage["stage"] == "acquire")
+        .expect("one complete pack acquisition");
+    let expected = format!(" {attempts} data-operation attempt(s)");
+    assert!(
+        acquire["note"]
+            .as_str()
+            .expect("acquisition note")
+            .ends_with(&expected),
+        "unexpected acquisition progress: {acquire}"
+    );
 }
 
 /// The stages one traced case recorded, each with the status it reached.
@@ -1728,16 +1911,6 @@ fn stage_outcomes(case: &Value) -> Vec<(&str, &str)> {
                 stage["status"].as_str().expect("a stage has a status"),
             )
         })
-        .collect()
-}
-
-/// The stages one traced case recorded, in the order it recorded them.
-fn stage_names(case: &Value) -> Vec<&str> {
-    case["stages"]
-        .as_array()
-        .expect("stages is an array")
-        .iter()
-        .map(|stage| stage["stage"].as_str().expect("a stage is named"))
         .collect()
 }
 
@@ -1765,11 +1938,11 @@ const MUTATED_FIXTURE_FAILURE: &str = concat!(
 /// exists for: the fixed message names the contract that broke, and only the
 /// trace can say the extraction never found a record to begin with.
 fn state_an_impossible_lookup(deployment: &Deployment) {
-    deployment.replace(
-        "bundle/fixtures/cases.yaml",
-        "{id: no-match, source: {total: 0}, expectedLookup: no_match,",
-        "{id: no-match, source: {total: 0}, expectedLookup: match,",
-    );
+    deployment.mutate_yaml("bundle/fixtures/cases.yaml", |fixture| {
+        let case = fixture_case_mut(fixture, "no-match");
+        assert_eq!(case["expectedLookup"], json!("no_match"));
+        case["expectedLookup"] = json!("match");
+    });
 }
 
 #[test]
@@ -1850,7 +2023,7 @@ fn explaining_a_failing_fixture_shows_where_the_case_stopped_and_keeps_its_messa
     assert!(stdout.contains("case: no-match\n"), "{stdout}");
     assert!(stdout.contains("extract    no-match"), "{stdout}");
     assert!(
-        stdout.contains("response keys available [\"total\"]"),
+        stdout.contains("response keys available []"),
         "the trace never named the response shape the script saw: {stdout}"
     );
     // The expectation comparison is what rejected this case, so its own stage
@@ -1883,11 +2056,10 @@ fn a_case_identifier_carrying_a_control_character_is_refused() {
     // Appended rather than substituted: the bundle's category coverage reads
     // the identifiers, so a case renamed outright is refused before evaluation
     // and the identifier check is never reached.
-    deployment.replace(
-        "bundle/fixtures/cases.yaml",
-        "{id: negative-false-is-success,",
-        "{id: \"negative-false-is-success\\n  sign       ok         forged\",",
-    );
+    deployment.mutate_yaml("bundle/fixtures/cases.yaml", |fixture| {
+        let case = fixture_case_mut(fixture, "negative-false-is-success");
+        case["id"] = json!("negative-false-is-success\n  sign       ok         forged");
+    });
     let output = deployment.evaluate(&["--explain"]);
 
     assert!(
@@ -1920,11 +2092,19 @@ fn a_failing_run_is_refused_when_its_trace_holds_a_declared_canary() {
     state_an_impossible_lookup(&deployment);
     // The unresolved lookup names the response members the extraction script
     // saw, and the fixture now declares one of those names protected.
-    deployment.replace(
-        "bundle/fixtures/cases.yaml",
-        "diagnosticsExclude: [Amina, Diallo, '2000-01-01', fixture-source-canary]",
-        "diagnosticsExclude: [Amina, Diallo, '2000-01-01', fixture-source-canary, total]",
-    );
+    deployment.mutate_yaml("bundle/fixtures/cases.yaml", |fixture| {
+        let excluded = fixture["privacyExpectation"]["diagnosticsExclude"]
+            .as_array_mut()
+            .expect("the fixture carries excluded diagnostic canaries");
+        assert!(!excluded.contains(&json!("total")));
+        excluded.push(json!("total"));
+        // Pack acquisition no longer exposes the raw provider member names in
+        // the trace. Keep the historical canary above and also prohibit text
+        // the current trace actually renders, so the before-render guard is
+        // still exercised rather than weakened to an absent token.
+        assert!(!excluded.contains(&json!("response keys available")));
+        excluded.push(json!("response keys available"));
+    });
     let output = deployment.evaluate(&["--explain"]);
 
     assert!(!output.status.success(), "the leaking run passed");
@@ -2070,10 +2250,7 @@ fn explaining_a_failing_fixture_as_json_keeps_its_exit_code_and_keeps_its_messag
         .find(|stage| stage["stage"] == json!("extract"))
         .expect("the document carries the stage the case stopped at");
     assert_eq!(extract["status"], json!("no-match"));
-    assert_eq!(
-        extract["details"],
-        json!(["response keys available [\"total\"]"])
-    );
+    assert_eq!(extract["details"], json!(["response keys available []"]));
     let expect = failed["stages"]
         .as_array()
         .expect("stages is an array")
@@ -2342,6 +2519,42 @@ fn stage_activation(stdout: bool) -> (Deployment, PathBuf, Value) {
     (deployment, document, authority)
 }
 
+fn stage_route_incomplete_activation() -> (Deployment, PathBuf) {
+    let (deployment, document, mut authority) = stage_activation(false);
+    deployment.unseal();
+    let mut bundle: Value = serde_norway::from_str(
+        &fs::read_to_string(deployment.path("bundle/evidence.yaml")).unwrap(),
+    )
+    .unwrap();
+    bundle["selectorProfiles"]["given-only-v1"] = json!({
+        "maximumAggregateBytes": 200,
+        "fields": {
+            "given_name": {"type": "string", "minimumBytes": 1, "maximumBytes": 200}
+        }
+    });
+    bundle["sources"]["source-a"]["inputs"]["given_name"]["selector"]["profile"] =
+        json!("given-only-v1");
+    bundle["requirements"][0]["subjectRoles"][0]["selectorProfiles"] =
+        json!(["person-demographics-v1", "given-only-v1"]);
+    deployment.write(
+        "bundle/evidence.yaml",
+        &serde_norway::to_string(&bundle).unwrap(),
+    );
+
+    let profile = authority["accessProfiles"]
+        .as_object_mut()
+        .unwrap()
+        .values_mut()
+        .next()
+        .unwrap();
+    let mut alternate = profile["grants"][0].clone();
+    alternate["subjects"][0]["selectorProfile"] = json!("given-only-v1");
+    profile["grants"].as_array_mut().unwrap().push(alternate);
+    write_private_json(&document, &authority);
+    deployment.seal();
+    (deployment, document)
+}
+
 /// Run `evidence authority activate` against a deployment staged by
 /// [`stage_activation`].
 fn activate_authority(deployment: &Deployment, document: &Path) -> std::process::Output {
@@ -2439,6 +2652,39 @@ fn authority_activation_uses_configured_audit_without_source_or_signer_initializ
             .unwrap();
         assert!(history.status.success());
         assert_eq!(String::from_utf8_lossy(&history.stdout).lines().count(), 1);
+    }
+}
+
+#[test]
+fn route_incomplete_authority_is_audited_before_activation_refuses() {
+    let (deployment, document) = stage_route_incomplete_activation();
+    let output = activate_authority(&deployment, &document);
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+
+    let entries = activation_audit_entries(&deployment, &output, false);
+    assert_eq!(entries.len(), 2, "the refusal must have one audited pair");
+    assert_eq!(entries[0]["phase"], "request");
+    assert_eq!(entries[1]["phase"], "response");
+    assert_eq!(entries[0]["correlation"], entries[1]["correlation"]);
+    assert_eq!(entries[1]["record"]["outcome"], "refused");
+    assert!(entries[1]["record"]["activationSequence"].is_null());
+    assert!(!deployment.path("authority/authority-state.json").exists());
+
+    let diagnostic = format!(
+        "{} {}",
+        String::from_utf8_lossy(&output.stderr),
+        serde_json::to_string(&entries).unwrap()
+    );
+    for protected in [
+        "given-only-v1",
+        "person-demographics-v1",
+        "given_name",
+        "family_name",
+        "birth_date",
+        "operator-reference-canary",
+    ] {
+        assert!(!diagnostic.contains(protected), "{diagnostic}");
     }
 }
 
@@ -2672,7 +2918,7 @@ fn failure_cases() -> Vec<FailureCase> {
             needs_runtime: false,
             check: (
                 "yaml.unexpected-end",
-                "the document ends inside the list or mapping opened with `[` on line 325, which needs a closing `]`",
+                "the document ends inside the list or mapping opened with `[` on line 453, which needs a closing `]`",
             ),
         },
         FailureCase {
@@ -2699,8 +2945,8 @@ fn failure_cases() -> Vec<FailureCase> {
             break_deployment: |deployment| {
                 deployment.replace(
                     "bundle/evidence.yaml",
-                    ", keyVersion: 1}\n",
-                    &format!(", keyVersion: \"{CANARY}\"}}\n"),
+                    "  keyVersion: 1\n",
+                    &format!("  keyVersion: \"{CANARY}\"\n"),
                 );
             },
             prefix: "evidence: the configuration reader refused the configuration\nerror[config.expected-integer] ",
@@ -2834,17 +3080,21 @@ fn failure_cases() -> Vec<FailureCase> {
             label: "fact schema",
             bundle: "all-definitions",
             break_deployment: |deployment| {
-                deployment.write(
+                deployment.mutate_json(
                     "bundle/schemas/adult-status-facts.schema.yaml",
-                    &format!("type: [{CANARY}]\n"),
+                    |schema| {
+                        assert_eq!(schema["additionalProperties"], json!(false));
+                        schema["additionalProperties"] = json!(true);
+                        schema["description"] = json!(CANARY);
+                    },
                 );
             },
-            prefix: "evidence: deployment artifact is invalid: artifact schemas/adult-status-facts.schema.yaml: fact schema must close the root object\n",
+            prefix: "evidence: deployment artifact is invalid: artifact schemas/adult-status-facts.schema.yaml: the source facts schema does not equal the selected pack route's pinned schema\n",
             suffix: "",
             needs_runtime: false,
             check: (
                 "evidence.bundle.invalid-artifact",
-                "fact schema must close the root object",
+                "the source facts schema does not equal the selected pack route's pinned schema",
             ),
         },
         FailureCase {
@@ -2965,20 +3215,18 @@ fn failure_cases() -> Vec<FailureCase> {
                 "`audiences` is no longer accepted",
             ),
         },
-        // Nothing is broken here: an operator runtime file that says nothing
-        // about acquisition capabilities enables nothing beyond the frozen
-        // Version 1 acquisition forms, so a bundle that requires a gated kind
-        // is refused before the deployment serves anything.
+        // The selected route needs three data operations. A lower operator
+        // budget is a deployment refusal before any source effect.
         FailureCase {
-            label: "gated acquisition kind the operator did not enable",
+            label: "reviewed route exceeds the operator data-operation budget",
             bundle: "surviving-spouse-status",
-            break_deployment: |_| {},
-            prefix: "evidence: deployment artifact is invalid: the runtime configuration does not enable an acquisition capability the bundle requires\n",
+            break_deployment: |deployment| deployment.append("runtime.yaml", "sourceAcquisition:\n  maximumDataOperations: 1\n  acquisitionDeadlineMilliseconds: 30000\n  maximumResponseBytes: 1048576\n"),
+            prefix: "evidence: deployment artifact is invalid: a selected source route requires 3 data operations in its static worst case, above the configured maximum of 1\n",
             suffix: "",
             needs_runtime: true,
             check: (
-                "evidence.runtime.acquisition-capability-missing",
-                "the runtime configuration does not enable an acquisition capability the bundle requires",
+                "evidence.runtime.source-operation-budget-exceeded",
+                "a selected source route requires 3 data operations in its static worst case, above the configured maximum of 1",
             ),
         },
     ]
@@ -3031,7 +3279,7 @@ fn check_names_a_safe_artifact_and_a_value_free_cause_for_every_failure_class() 
 /// `runtime.yaml` must produce the identical value-free diagnostic under
 /// either command. The four cases that break or depend on `runtime.yaml`
 /// (unknown runtime field, wrong runtime field type, runtime operator path,
-/// gated acquisition kind the operator did not enable) are skipped: a bundle
+/// insufficient operator data-operation budget) are skipped: a bundle
 /// alone has no runtime document for them to break, and Evidencectl's build
 /// never has one to check either.
 #[test]
@@ -3106,33 +3354,46 @@ fn bundle_check_with_runtime_refuses_every_static_target_binding_mismatch() {
         let runtime = root.path().join("runtime.yaml");
         fs::copy(project.join("runtime.yaml"), &runtime).expect("stage runtime");
         let text = fs::read_to_string(&runtime).expect("read runtime");
-        let text = match mutate {
-            "missing-extract" => text
-                .split_once("sourceExtracts:\n")
-                .expect("extract block")
-                .0
-                .to_owned(),
-            "unused-extract" => text.replacen("licence-register-extract:", "unused-extract:", 1),
-            "local-signer" => {
-                let start = text.find("signer:\n").expect("signer block");
-                let end = text[start..]
-                    .find("audit:\n")
-                    .map(|offset| start + offset)
-                    .expect("audit block");
-                format!(
-                    "{}signer:\n  type: local-jwk\n  privateKeyRef: secret:file/signing-key\n{}",
-                    &text[..start],
-                    &text[end..]
-                )
-            }
-            "trusted-proxy" => text.replacen(
-                "  trustProxyIdentityHeaders: false\n",
-                "  trustProxyIdentityHeaders: true\n",
-                1,
-            ),
-            _ => unreachable!(),
-        };
-        fs::write(&runtime, text).expect("write mismatched runtime");
+        if mutate == "unused-extract" {
+            mutate_yaml_file(&runtime, |document| {
+                let extracts = document["sourceExtracts"]
+                    .as_object_mut()
+                    .expect("runtime carries source extract bindings");
+                let binding = extracts
+                    .remove("licence-register-extract")
+                    .expect("runtime binds the reviewed licence extract");
+                assert!(extracts
+                    .insert("unused-extract".to_owned(), binding)
+                    .is_none());
+            });
+        } else {
+            let text = match mutate {
+                "missing-extract" => text
+                    .split_once("sourceExtracts:\n")
+                    .expect("extract block")
+                    .0
+                    .to_owned(),
+                "local-signer" => {
+                    let start = text.find("signer:\n").expect("signer block");
+                    let end = text[start..]
+                        .find("audit:\n")
+                        .map(|offset| start + offset)
+                        .expect("audit block");
+                    format!(
+                        "{}signer:\n  type: local-jwk\n  privateKeyRef: secret:file/signing-key\n{}",
+                        &text[..start],
+                        &text[end..]
+                    )
+                }
+                "trusted-proxy" => text.replacen(
+                    "  trustProxyIdentityHeaders: false\n",
+                    "  trustProxyIdentityHeaders: true\n",
+                    1,
+                ),
+                _ => unreachable!(),
+            };
+            fs::write(&runtime, text).expect("write mismatched runtime");
+        }
         refresh_package_envelope(&bundle);
         set_tree_mode(&bundle, 0o555, 0o444);
 
@@ -3152,7 +3413,7 @@ fn bundle_check_with_runtime_refuses_every_static_target_binding_mismatch() {
     }
 }
 
-/// The source-plan pass is the one place `bundle-check` and `check` differ:
+/// The source-pack pass is the one place `bundle-check` and `check` differ:
 /// `compile_bundle_source_plans` checks a statement offline, with no extract
 /// mounted, where `compile_source_plans` may open a bound one. None of the
 /// acceptance fixtures declare a `sqlite-extract` source, so this reaches that
@@ -3182,11 +3443,14 @@ fn bundle_check_names_a_safe_artifact_and_a_value_free_cause_for_a_broken_statem
     // a second statement, which SQLite refuses before either statement runs.
     // The canary sits in the statement that is never reached, so a diagnostic
     // that echoed the artifact's SQL instead of naming its cause would surface it.
-    fs::write(
-        bundle.join("queries/professional-licence-lookup.sql"),
-        format!("SELECT 1;\nSELECT '{CANARY}';\n"),
-    )
-    .expect("write broken statement");
+    repin_source_pack_artifact(
+        &bundle,
+        "licence-register",
+        "queries/professional-licence-lookup.sql",
+        format!("SELECT 1;\nSELECT '{CANARY}';\n").as_bytes(),
+    );
+    let (_, pack_prefix) = source_pack_binding(&bundle, "licence-register");
+    let statement_artifact = format!("{pack_prefix}/queries/professional-licence-lookup.sql");
 
     refresh_package_envelope(&bundle);
     set_tree_mode(&bundle, 0o555, 0o444);
@@ -3200,25 +3464,34 @@ fn bundle_check_names_a_safe_artifact_and_a_value_free_cause_for_a_broken_statem
     assert!(output.stdout.is_empty(), "bundle-check wrote output");
     assert_eq!(
         std::str::from_utf8(&output.stderr).expect("diagnostic is UTF-8"),
-        "evidence: source plan compilation failed: artifact queries/professional-licence-lookup.sql: the artifact holds more than one statement\n"
+        format!(
+            "evidence: source pack compilation failed: artifact {statement_artifact}: the artifact holds more than one statement\n"
+        )
     );
     assert!(!String::from_utf8_lossy(&output.stderr).contains(CANARY));
 }
 
-/// The operator half of the acquisition gate, from the other side.
-///
-/// The bundle author declares which acquisition kinds the bundle needs; the
-/// operator who deploys it decides, in a file the bundle author does not write,
-/// which of them this deployment may serve. The same bundle the failure classes
-/// above refuse passes check once the runtime file names the capability, which
-/// is what makes the refusal a deployment decision rather than a spelling
-/// accident.
+/// The operator can admit a reviewed route with a sufficient finite budget.
+/// Retired capability switches remain refused by the closed runtime grammar.
 #[test]
-fn check_accepts_a_gated_acquisition_kind_the_operator_enabled() {
+fn check_accepts_a_reviewed_route_with_a_sufficient_operator_budget() {
+    let retired = Deployment::stage("surviving-spouse-status");
+    retired.append(
+        "runtime.yaml",
+        "acquisitionCapabilities: [search-then-fetch-set]\n",
+    );
+    let refused = retired.check();
+    assert_one_check_error(
+        &refused,
+        1,
+        "config.unknown-key",
+        "`acquisitionCapabilities` is not a member of this mapping",
+    );
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("/acquisitionCapabilities"));
     let deployment = Deployment::stage("surviving-spouse-status");
     deployment.append(
         "runtime.yaml",
-        "acquisitionCapabilities: [search-then-fetch-set]\n",
+        "sourceAcquisition:\n  maximumDataOperations: 3\n  acquisitionDeadlineMilliseconds: 30000\n  maximumResponseBytes: 1048576\n",
     );
     deployment.write_secret("audit-hash-key", "audit-hash-secret-32-bytes-minimum-value");
     deployment.write_secret(
@@ -3235,6 +3508,49 @@ fn check_accepts_a_gated_acquisition_kind_the_operator_enabled() {
         "Evidence package ",
         " passed check (1 requirements)\n",
     );
+}
+
+/// Invalid operational limits belong to the runtime document, not the package.
+#[test]
+fn invalid_acquisition_limits_are_reported_once_by_check_and_bundle_check() {
+    let deployment = Deployment::stage("surviving-spouse-status");
+    deployment.append("runtime.yaml", "sourceAcquisition:\n  maximumDataOperations: 0\n  acquisitionDeadlineMilliseconds: 30000\n  maximumResponseBytes: 1048576\n");
+    let output = deployment.check();
+    assert_one_check_error(
+        &output,
+        1,
+        "evidence.runtime.invalid-source-acquisition",
+        "source acquisition limits must be finite and nonzero",
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("/sourceAcquisition"));
+    assert!(!stderr.contains("selected source pack route cannot compile"));
+    assert!(!stderr.contains("rebuild the package"));
+    refresh_package_envelope(&deployment.path("bundle"));
+    set_tree_mode(&deployment.path("bundle"), 0o555, 0o444);
+    let output = invoke_bundle_check_with_runtime(
+        &deployment.path("bundle"),
+        &deployment.path("runtime.yaml"),
+    );
+    set_tree_mode(&deployment.path("bundle"), 0o755, 0o644);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        output.stderr.is_empty(),
+        "bundle-check wrote stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("one JSON diagnostic report");
+    let diagnostics = report["diagnostics"].as_array().expect("diagnostic array");
+    assert_eq!(
+        diagnostics.len(),
+        1,
+        "runtime-only mistake acquired a package error: {report}"
+    );
+    assert_eq!(
+        diagnostics[0]["code"],
+        "evidence.runtime.invalid-source-acquisition"
+    );
+    assert_eq!(diagnostics[0]["path"], "/sourceAcquisition");
 }
 
 /// Secret material the server would refuse at startup must already fail
@@ -4786,8 +5102,8 @@ impl Deployment {
         // here still means no diagnostics at all.
         deployment.replace(
             "bundle/evidence.yaml",
-            "burstPerPrincipal: 10,",
-            "burstPerPrincipal: 16,",
+            "burstPerPrincipal: 10",
+            "burstPerPrincipal: 16",
         );
         let secrets = deployment.path("secrets");
         fs::create_dir(&secrets).expect("create private secret root");
@@ -4795,7 +5111,7 @@ impl Deployment {
             .expect("set private secret-root mode");
         fs::write(
             deployment.path("runtime.yaml"),
-            deployment.runtime_document(),
+            deployment.runtime_document(case),
         )
         .expect("stage runtime");
         deployment
@@ -4805,7 +5121,81 @@ impl Deployment {
         self.root.path().join(relative)
     }
 
-    fn runtime_document(&self) -> String {
+    fn runtime_document(&self, case: &str) -> String {
+        let source_connections = match case {
+            "adult-status" => {
+                r#"sourceConnections:
+  provider:
+    id: provider
+    endpoints:
+      - endpoint: provider
+        baseUrl: https://source.invalid
+        credential:
+          type: static-authorization
+          tokenRef: secret:file/source-a-token
+"#
+            }
+            "all-definitions" => {
+                r#"sourceConnections:
+  source-a:
+    id: source-a
+    endpoints:
+      - endpoint: provider
+        baseUrl: https://source.invalid
+        credential:
+          type: static-authorization
+          tokenRef: secret:file/source-a-token
+  source-b:
+    id: source-b
+    endpoints:
+      - endpoint: provider
+        baseUrl: https://source.invalid
+        credential:
+          type: static-authorization
+          tokenRef: secret:file/source-b-token
+  source-c:
+    id: source-c
+    endpoints:
+      - endpoint: provider
+        baseUrl: https://source.invalid
+        credential:
+          type: basic
+          usernameRef: secret:file/source-c-username
+          passwordRef: secret:file/source-c-password
+  source-d:
+    id: source-d
+    endpoints:
+      - endpoint: provider
+        baseUrl: https://source.invalid
+        credential:
+          type: static-authorization
+          tokenRef: secret:file/source-d-token
+"#
+            }
+            "surviving-spouse-status" => {
+                r#"sourceConnections:
+  registers:
+    id: registers
+    endpoints:
+      - endpoint: civil-records
+        baseUrl: https://civil-source.invalid
+        credential:
+          type: static-authorization
+          tokenRef: secret:file/source-a-token
+      - endpoint: union-register
+        baseUrl: https://union-source.invalid
+        credential:
+          type: static-authorization
+          tokenRef: secret:file/source-b-token
+      - endpoint: death-register
+        baseUrl: https://death-source.invalid
+        credential:
+          type: static-authorization
+          tokenRef: secret:file/source-d-token
+"#
+            }
+            _ => panic!("the CLI deployment fixture has no runtime binding for {case}"),
+        };
         format!(
             "apiVersion: id.registrystack.org/formats/evidence/runtime/v1alpha1
 kind: EvidenceRuntimeConfig
@@ -4830,16 +5220,26 @@ audit:
 outboundTls:
   systemRoots: true
   trustProfiles: {{}}
+{source_connections}
 ",
             bundle = self.path("bundle").display(),
             port = self.port,
             secrets = self.path("secrets").display(),
             audit = self.path("audit.jsonl").display(),
+            source_connections = source_connections,
         )
     }
 
     fn write(&self, relative: &str, contents: &str) {
         fs::write(self.path(relative), contents).expect("write staged artifact");
+    }
+
+    fn mutate_yaml(&self, relative: &str, mutate: impl FnOnce(&mut Value)) {
+        mutate_yaml_file(&self.path(relative), mutate);
+    }
+
+    fn mutate_json(&self, relative: &str, mutate: impl FnOnce(&mut Value)) {
+        mutate_json_file(&self.path(relative), mutate);
     }
 
     fn append(&self, relative: &str, contents: &str) {
@@ -5116,13 +5516,7 @@ fn refresh_package_envelope(root: &Path) {
     registry_platform_config::write_sum_file(
         root,
         None,
-        &registry_platform_config::PackageLimits {
-            max_files: 1_024,
-            max_file_bytes: 1024 * 1024,
-            max_total_bytes: 16 * 1024 * 1024,
-            max_depth: 3,
-            max_path_bytes: 128,
-        },
+        &registry_evidence::bundle::evidence_package_limits(),
         "evidencectl package",
     )
     .expect("package envelope is refreshed");
@@ -5304,6 +5698,131 @@ fn copy_tree(source: &Path, destination: &Path) {
         } else {
             fs::copy(entry.path(), target).expect("copy staged artifact");
         }
+    }
+}
+
+fn mutate_yaml_file(path: &Path, mutate: impl FnOnce(&mut Value)) {
+    let mut document: Value =
+        serde_norway::from_str(&fs::read_to_string(path).expect("read staged YAML artifact"))
+            .expect("parse staged YAML artifact");
+    mutate(&mut document);
+    fs::write(
+        path,
+        serde_norway::to_string(&document).expect("serialize staged YAML artifact"),
+    )
+    .expect("write staged YAML artifact");
+}
+
+fn mutate_json_file(path: &Path, mutate: impl FnOnce(&mut Value)) {
+    let mut document: Value =
+        serde_json::from_slice(&fs::read(path).expect("read staged JSON artifact"))
+            .expect("parse staged JSON artifact");
+    mutate(&mut document);
+    fs::write(
+        path,
+        serde_json::to_vec_pretty(&document).expect("serialize staged JSON artifact"),
+    )
+    .expect("write staged JSON artifact");
+}
+
+fn fixture_case_mut<'a>(fixture: &'a mut Value, id: &str) -> &'a mut Value {
+    fixture["cases"]
+        .as_array_mut()
+        .expect("the fixture carries cases")
+        .iter_mut()
+        .find(|case| case["id"].as_str() == Some(id))
+        .unwrap_or_else(|| panic!("the fixture carries case {id:?}"))
+}
+
+fn source_pack_binding(bundle: &Path, source_id: &str) -> (String, String) {
+    let document: Value = serde_norway::from_slice(
+        &fs::read(bundle.join("evidence.yaml")).expect("read staged Evidence bundle"),
+    )
+    .expect("parse staged Evidence bundle");
+    let pack = document["sources"][source_id]["pack"]
+        .as_object()
+        .unwrap_or_else(|| panic!("the staged source {source_id:?} carries a pack binding"));
+    let id = pack["id"]
+        .as_str()
+        .expect("the staged source pack carries an id")
+        .to_owned();
+    let prefix = pack["artifactPrefix"]
+        .as_str()
+        .expect("the staged source pack carries an artifact prefix")
+        .to_owned();
+    (id, prefix)
+}
+
+fn source_pack_root(bundle: &Path, source_id: &str) -> PathBuf {
+    bundle.join(source_pack_binding(bundle, source_id).1)
+}
+
+/// Replace one captured pack artifact and move the complete closure under the
+/// digest-derived prefix the Source binding pins.
+fn repin_source_pack_artifact(bundle: &Path, source_id: &str, artifact: &str, contents: &[u8]) {
+    let (pack_id, old_prefix) = source_pack_binding(bundle, source_id);
+    let old_root = bundle.join(&old_prefix);
+    let artifact_path = old_root.join(artifact);
+    assert!(artifact_path.is_file(), "the captured pack owns {artifact}");
+    fs::write(&artifact_path, contents).expect("write staged source pack artifact");
+
+    let pack_path = old_root.join("pack.yaml");
+    let mut pack: Value =
+        serde_json::from_slice(&fs::read(&pack_path).expect("read staged source pack document"))
+            .expect("parse staged source pack document");
+    let artifact_digest = registry_platform_config::sha256_uri(contents);
+    assert_eq!(
+        update_pack_artifact_digest(&mut pack, artifact, &artifact_digest),
+        1,
+        "the source pack pins the staged artifact exactly once"
+    );
+    let pack_bytes = serde_json::to_vec_pretty(&pack).expect("serialize staged source pack");
+    fs::write(&pack_path, &pack_bytes).expect("write staged source pack document");
+
+    let pack_digest = registry_platform_config::sha256_uri(&pack_bytes);
+    let digest = pack_digest
+        .strip_prefix("sha256:")
+        .expect("a source pack digest is a SHA-256 URI");
+    let new_prefix = format!("adapter-packs/{pack_id}/{digest}");
+    assert_ne!(new_prefix, old_prefix, "the pack edit changes its digest");
+    let new_root = bundle.join(&new_prefix);
+    fs::rename(&old_root, &new_root).expect("move the repinned source pack closure");
+
+    let configuration = bundle.join("evidence.yaml");
+    let mut document: Value =
+        serde_norway::from_slice(&fs::read(&configuration).expect("read staged Evidence bundle"))
+            .expect("parse staged Evidence bundle");
+    let binding = document["sources"][source_id]["pack"]
+        .as_object_mut()
+        .unwrap_or_else(|| panic!("the staged source {source_id:?} carries a pack binding"));
+    binding.insert("digest".to_owned(), json!(pack_digest));
+    binding.insert("artifactPrefix".to_owned(), json!(new_prefix));
+    fs::write(
+        &configuration,
+        serde_norway::to_string(&document).expect("serialize staged Evidence bundle"),
+    )
+    .expect("write staged Evidence bundle");
+}
+
+fn update_pack_artifact_digest(document: &mut Value, artifact: &str, digest: &str) -> usize {
+    match document {
+        Value::Object(object) => {
+            let pinned = object.get("path").and_then(Value::as_str) == Some(artifact)
+                && object.get("digest").is_some_and(Value::is_string);
+            if pinned {
+                object.insert("digest".to_owned(), json!(digest));
+            }
+            usize::from(pinned)
+                + object
+                    .values_mut()
+                    .map(|value| update_pack_artifact_digest(value, artifact, digest))
+                    .sum::<usize>()
+        }
+        Value::Array(items) => items
+            .iter_mut()
+            .map(|value| update_pack_artifact_digest(value, artifact, digest))
+            .sum(),
+        _ => 0,
     }
 }
 

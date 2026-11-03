@@ -1,12 +1,5 @@
 {
   "$defs": {
-    "AcquisitionCapability": {
-      "enum": [
-        "search-then-fetch-set",
-        "source-batch"
-      ],
-      "type": "string"
-    },
     "Digest": {
       "description": "A SHA-256 digest: `sha256:` followed by 64 lowercase hex digits.",
       "pattern": "^sha256:[0-9a-f]{64}$",
@@ -253,49 +246,24 @@
     "TargetConnection": {
       "additionalProperties": false,
       "properties": {
-        "admissionTimeoutMilliseconds": {
-          "format": "uint64",
-          "maximum": 30000,
-          "minimum": 1,
-          "type": [
-            "integer",
-            "null"
-          ]
+        "allowedPrivateCidrs": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
-        "authentication": {
-          "$ref": "#/$defs/TargetConnectionAuthentication"
-        },
-        "maximumConcurrency": {
-          "format": "uint32",
-          "maximum": 256,
-          "minimum": 1,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "origin": {
-          "$ref": "#/$defs/Url"
-        },
-        "tlsTrustProfile": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "tokenTimeoutMilliseconds": {
-          "format": "uint64",
-          "maximum": 30000,
-          "minimum": 1,
-          "type": [
-            "integer",
-            "null"
-          ]
+        "endpoints": {
+          "additionalProperties": {
+            "$ref": "#/$defs/TargetEndpointBinding"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "object"
         }
       },
       "required": [
-        "origin",
-        "authentication"
+        "endpoints"
       ],
       "type": "object"
     },
@@ -539,6 +507,56 @@
       ],
       "type": "string"
     },
+    "TargetEndpointBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "attemptTimeoutMilliseconds": {
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "authentication": {
+          "$ref": "#/$defs/TargetConnectionAuthentication"
+        },
+        "maximumResponseBytes": {
+          "format": "uint64",
+          "maximum": 1048576,
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "mtlsIdentity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TargetMtlsIdentity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "origin": {
+          "$ref": "#/$defs/Url"
+        },
+        "tlsTrustProfile": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "origin",
+        "authentication"
+      ],
+      "type": "object"
+    },
     "TargetEnvironmentSecretProvider": {
       "additionalProperties": false,
       "type": "object"
@@ -665,6 +683,22 @@
       "required": [
         "bind",
         "trustProxyIdentityHeaders"
+      ],
+      "type": "object"
+    },
+    "TargetMtlsIdentity": {
+      "additionalProperties": false,
+      "properties": {
+        "certificateRef": {
+          "$ref": "#/$defs/SecretReference"
+        },
+        "keyRef": {
+          "$ref": "#/$defs/SecretReference"
+        }
+      },
+      "required": [
+        "certificateRef",
+        "keyRef"
       ],
       "type": "object"
     },
@@ -1070,6 +1104,35 @@
       ],
       "type": "string"
     },
+    "TargetSourceAcquisition": {
+      "additionalProperties": false,
+      "properties": {
+        "acquisitionDeadlineMilliseconds": {
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "maximumDataOperations": {
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "maximumResponseBytes": {
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "maximumDataOperations",
+        "acquisitionDeadlineMilliseconds",
+        "maximumResponseBytes"
+      ],
+      "type": "object"
+    },
     "TargetSubjectBinding": {
       "additionalProperties": false,
       "properties": {
@@ -1119,14 +1182,6 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
-    "acquisitionCapabilities": {
-      "description": "Operator opt-ins, intersected with the package's acquisition capabilities.",
-      "items": {
-        "$ref": "#/$defs/AcquisitionCapability"
-      },
-      "type": "array",
-      "uniqueItems": true
-    },
     "apiVersion": {
       "const": "id.registrystack.org/formats/evidence/target/v1alpha1",
       "type": "string"
@@ -1154,7 +1209,7 @@
       "additionalProperties": {
         "$ref": "#/$defs/TargetConnection"
       },
-      "description": "Explicit HTTP source bindings. An empty mapping grants no HTTP bindings;\nit is valid for extract-only projects. Every declared HTTP Source must\nstill resolve its named connection when the project is checked.",
+      "description": "Explicit endpoint bindings and their reviewed connection policies. An\nempty mapping grants no outbound endpoint authority.",
       "propertyNames": {
         "$ref": "#/$defs/LocalId"
       },
@@ -1239,6 +1294,17 @@
           "type": "null"
         }
       ]
+    },
+    "sourceAcquisition": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TargetSourceAcquisition"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Optional operational acquisition budget projected only into runtime\nconfiguration. Omission uses the Evidence engine defaults."
     },
     "subjectBinding": {
       "$ref": "#/$defs/TargetSubjectBinding"

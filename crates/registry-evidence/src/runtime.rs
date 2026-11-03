@@ -11,6 +11,7 @@ use std::{
 
 use async_trait::async_trait;
 use chrono::{SubsecRound as _, Utc};
+use registry_adapter_engine::route::EvidenceHttpDiagnostic;
 use registry_platform_audit::{AuditDestination, AuditError, AuditProfile};
 use registry_platform_crypto::{
     LocalJwkSigner, PrivateJwk, SigningProvider, TransitInitializationError, TransitSigner,
@@ -24,7 +25,7 @@ use crate::{
     audit::{
         AuditAuthority, AuditDecision, AuditPhase, AuditSubject,
         AuthorityKind as AuditAuthorityKind, EvidenceAuditError, EvidenceAuditEvent,
-        EvidenceAuditLog, EvidenceAuthorizationRefusalAuditEvent,
+        EvidenceAuditLog, EvidenceAuthorizationRefusalAuditEvent, EvidenceExecutionBounds,
         EvidenceRequestBatchAuditDecision, EvidenceRequestBatchAuditEvent,
         EvidenceRequestBatchAuditItemGroup, EvidenceRequestBatchAuditOutcome,
         EvidenceRequestBatchAuditOutcomeKind, EvidenceRequestBatchAuditPhase, ResponseProtection,
@@ -32,10 +33,10 @@ use crate::{
     auth::{AuthenticatedContext, AuthenticationError, Authenticator},
     bundle::{Bundle, DeploymentInputs, RuntimeDocument},
     config::{
-        subject_binding_permits_response_format, AcquisitionConfig, AssuranceProfile,
-        AuthorityKind, ConceptForm, RequirementKind, ResponseFormat, RuntimeConfig,
-        RuntimeSignerConfig, SelectorField, SelectorInput, SourceBatchPlan, StageRole,
-        SubjectBindingMode, SubjectCardinality, ValueOrigin, MAXIMUM_HOLDER_BOUND_BATCH_SIZE,
+        subject_binding_permits_response_format, AssuranceProfile, AuthorityKind, ConceptForm,
+        RequirementKind, ResponseFormat, RuntimeConfig, RuntimeSignerConfig, SelectorField,
+        SelectorInput, SubjectBindingMode, SubjectCardinality, ValueOrigin,
+        MAXIMUM_HOLDER_BOUND_BATCH_SIZE,
     },
     contracts::definitions_contract_accepts,
     kernel::{EvidenceConstruction, EvidenceScope, KernelError, OfflineKernel, ValueProjection},
@@ -44,11 +45,12 @@ use crate::{
         EvidenceDefinitionForm, EvidenceDefinitionListItemForm, EvidenceDefinitionSelector,
         EvidenceDefinitionSubject, EvidenceDefinitions, EvidenceRequest, EvidenceRequestBatch,
         EvidenceSelectorField, FlattenedJws, JwksDocument, LookupResult, RequestedSelector,
-        RequestedSubject, SdJwtVcBatchEnvelope, SdJwtVcBatchEnvelopeType, SelectorValue,
-        SubjectBinding, UnsignedEnvelopeType, UnsignedEnvelopeWarning, UnsignedEvidenceEnvelope,
+        RequestedSubject, SdJwtVcBatchEnvelope, SdJwtVcBatchEnvelopeType, SubjectBinding,
+        UnsignedEnvelopeType, UnsignedEnvelopeWarning, UnsignedEvidenceEnvelope,
         UnsignedIntegrityProtection, EVIDENCE_REQUEST_BATCH_MAX_ITEMS,
     },
     observability::SourceDiagnostics,
+    pack_source::{PackSourceError, PackSourceExecutor, PackSourceFailure},
     problem::ProblemCode,
     rate_limit::{EvidenceRateLimiter, RateLimitConfig, RateLimitError},
     sdjwt_vc,
@@ -56,13 +58,9 @@ use crate::{
     selector::{
         match_entitlement, resolve_selectors, validate_entitlement_context,
         validate_subject_binding_key, AuthorizationError, MatchedEntitlement,
-        ResolvedAuthorization, ResolvedSelectorValue, ResolvedSubjectScope,
+        ResolvedAuthorization, ResolvedSubjectScope,
     },
     signing::{EvidenceSigner, EvidenceSigningError},
-    source::{
-        statement_inputs, ResolvedSourceSelector, SourceAccessAttribution, SourceError,
-        SourceExecutor, SourceResponse,
-    },
     EVIDENCE_DEFINITIONS_SCHEMA_V1, EVIDENCE_JWS_MEDIA_TYPE, EVIDENCE_REQUEST_BATCH_MEDIA_TYPE,
     EVIDENCE_REQUEST_BATCH_SCHEMA_V1, EVIDENCE_SD_JWT_VC_BATCH_MEDIA_TYPE,
     EVIDENCE_SD_JWT_VC_MEDIA_TYPE, EVIDENCE_UNSIGNED_ENVELOPE_SCHEMA_V1,
@@ -436,12 +434,19 @@ impl std::fmt::Debug for ReleasedEvidence {
     }
 }
 
+/// A value-free operator diagnosis over a captured extract's publication metadata.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SourceFreshnessIssue {
+    Stale,
+    Unavailable,
+}
+
 /// All runtime state is derived from one captured immutable package.
 pub struct EvidenceRuntime {
     kernel: OfflineKernel,
     runtime_config: RuntimeConfig,
     authenticator: Arc<dyn RuntimeAuthenticator>,
-    sources: BTreeMap<String, SourceExecutor>,
+    sources: BTreeMap<String, PackSourceExecutor>,
     audit: Arc<EvidenceAuditLog>,
     signer: EvidenceSigner,
     jwks: JwksDocument,
@@ -503,39 +508,11 @@ fn build_sources(
     runtime_document: &RuntimeDocument,
     secrets: &Arc<SecretResolver>,
     diagnostics: &Arc<SourceDiagnostics>,
-) -> Result<BTreeMap<String, SourceExecutor>, RuntimeInitializationError> {
-    let runtime_config = &runtime_document.config;
-    let connection_pool = crate::source::SourceConnectionPool::new(
-        &bundle.config,
-        &runtime_config.outbound_tls,
-        &runtime_document.ca_bundles,
-        Arc::clone(secrets),
-    )
-    .map_err(|_| RuntimeInitializationError::Source)?;
-    let mut sources = BTreeMap::new();
-    for (source_id, source) in bundle.config.sources.iter() {
-        let allowed_selector_sets = bundle.config.source_selector_sets(source_id);
-        // A serving deployment has a runtime document, so a statement
-        // source is compiled against the file it will actually read. The
-        // statement's strong check runs here, at startup, rather than on
-        // the first request that needs it.
-        let statement = statement_inputs(source, bundle, Some(&runtime_document.source_extracts))
-            .map_err(|_| RuntimeInitializationError::Source)?;
-        let executor = SourceExecutor::new_with_selector_sets_and_connection_pool(
-            source,
-            &allowed_selector_sets,
-            &runtime_config.outbound_tls,
-            &runtime_document.ca_bundles,
-            statement,
-            Arc::clone(secrets),
-            &connection_pool,
-        )
+) -> Result<BTreeMap<String, PackSourceExecutor>, RuntimeInitializationError> {
+    let mut sources = crate::pack_source::build_sources(bundle, runtime_document, secrets)
         .map_err(|_| RuntimeInitializationError::Source)?;
-        let executor = match diagnostics.observer(source_id) {
-            Some(observer) => executor.observed_by(observer),
-            None => executor,
-        };
-        sources.insert(source_id.to_owned(), executor);
+    for (id, source) in &mut sources {
+        source.observe(diagnostics.observer(id));
     }
     Ok(sources)
 }
@@ -587,7 +564,7 @@ struct Startup<A> {
     kernel: OfflineKernel,
     runtime_config: RuntimeConfig,
     authenticator: Arc<dyn RuntimeAuthenticator>,
-    sources: BTreeMap<String, SourceExecutor>,
+    sources: BTreeMap<String, PackSourceExecutor>,
     audit: A,
     material: ValidatedSecretMaterial,
     rate_limiter: EvidenceRateLimiter,
@@ -669,7 +646,7 @@ async fn dependencies_ready(
     bundle: &Bundle,
     subject_binding_secret: &ProtectedSecret,
     signer: &EvidenceSigner,
-    sources: &BTreeMap<String, SourceExecutor>,
+    sources: &BTreeMap<String, PackSourceExecutor>,
 ) -> bool {
     if validate_subject_binding_key(
         subject_binding_secret.expose_secret(),
@@ -762,6 +739,28 @@ impl EvidenceRuntime {
         &self.runtime_config
     }
 
+    fn source_execution_bounds(&self) -> EvidenceExecutionBounds {
+        let bounds = self.runtime_config.source_acquisition;
+        EvidenceExecutionBounds {
+            maximum_data_operations: bounds.maximum_data_operations,
+            deadline_milliseconds: bounds.deadline_milliseconds,
+            maximum_response_bytes: bounds.maximum_response_bytes,
+        }
+    }
+
+    /// Test-only, value-free diagnosis of each compiled source credential.
+    /// Production readiness remains the aggregate boolean contract.
+    #[cfg(test)]
+    pub(crate) async fn source_credential_readiness(
+        &self,
+    ) -> BTreeMap<String, Result<(), PackSourceError>> {
+        let mut readiness = BTreeMap::new();
+        for (source_id, source) in &self.sources {
+            readiness.insert(source_id.clone(), source.credentials_ready().await);
+        }
+        readiness
+    }
+
     pub fn jwks(&self) -> &JwksDocument {
         &self.jwks
     }
@@ -786,6 +785,11 @@ impl EvidenceRuntime {
     pub(crate) fn replace_signer_for_test(&mut self, mut signer: EvidenceSigner) {
         signer.observe(self.source_diagnostics.signer());
         self.signer = signer;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn replace_audit_for_test(&mut self, audit: EvidenceAuditLog) {
+        self.audit = Arc::new(audit);
     }
 
     /// Readiness proves all locally required material and source credentials.
@@ -853,22 +857,18 @@ impl EvidenceRuntime {
         self.authenticator.announce_key_source().await;
     }
 
-    /// The sources whose mounted extract is already older than they allow.
-    ///
-    /// Startup names these for the same reason it names an unusable `jwksSource.uri`,
-    /// and with the same standing: it reports, it does not refuse to start, and
-    /// it does not decide readiness. Age is an evaluation-time question, asked
-    /// against the instant each evaluation carries, so this is a startup
-    /// snapshot rather than a second authority over it. An extract that goes
-    /// stale later, or one republished under the running process, is answered
-    /// by that per-evaluation check and by the `source-extract-stale` audit
-    /// category, never by this.
-    pub fn stale_extract_sources(&self) -> Vec<&str> {
+    /// Operator-only extract diagnostics. Freshness does not decide readiness;
+    /// a stale snapshot is refused by the acquisition that reads it. Probe
+    /// failures remain visible and never become a false current result.
+    pub fn source_freshness_issues(&self) -> Vec<(&str, SourceFreshnessIssue)> {
         let instant = Utc::now();
         self.sources
             .iter()
-            .filter(|(_, source)| source.extract_is_stale(instant))
-            .map(|(source_id, _)| source_id.as_str())
+            .filter_map(|(id, source)| match source.extract_is_stale(instant) {
+                Ok(false) => None,
+                Ok(true) => Some((id.as_str(), SourceFreshnessIssue::Stale)),
+                Err(_) => Some((id.as_str(), SourceFreshnessIssue::Unavailable)),
+            })
             .collect()
     }
 
@@ -1466,8 +1466,6 @@ impl EvidenceRuntime {
                 audit,
             });
         }
-        let source_access_attribution =
-            SourceAccessAttribution::new(context.principal(), &batch.purpose);
 
         let audit_material = RequestBatchAuditMaterial {
             assurance_profile: self.bundle().config.assurance_profile,
@@ -1486,82 +1484,35 @@ impl EvidenceRuntime {
         let mut response_items = Vec::with_capacity(authorized.len());
         let mut audit_outcomes = Vec::with_capacity(authorized.len());
         let mut disclosed_concepts = BTreeSet::new();
-        let mut optimized_lookups = match self.bundle().config.source_batch_plan(
-            &self.runtime_config,
-            &batch.requirement,
-            authorized.len(),
-        ) {
-            SourceBatchPlan::Sequential => None,
-            SourceBatchPlan::Optimized { source_id } => {
-                let outcomes = match self
-                    .execute_optimized_request_batch(
-                        &audit_material,
-                        &source_access_attribution,
-                        &authorized,
-                        operation,
-                        &source_id,
-                        started,
-                    )
-                    .await
-                {
-                    Ok(outcomes) => outcomes,
-                    Err(error) => {
-                        return self
-                            .abort_request_batch(&audit_material, operation, started, error)
-                            .await;
-                    }
-                };
-                Some(outcomes.into_iter())
-            }
-        };
-
-        // Mandatory fallback execution is sequential in input order. The
-        // optional one-call lane above is selected before any source I/O and
-        // never falls back after preparation or execution begins.
+        let mut release_deadline: Option<tokio::time::Instant> = None;
+        // Each logical lookup has one complete, bounded pack acquisition.
+        // Authorization of every item completes before any source is called.
         for (index, item) in authorized.iter().enumerate() {
             let item_index = u8::try_from(index)
                 .map_err(|_| failure(ProblemCode::ServiceUnavailable, "request-batch-size"))?;
-            let evaluated = if let Some(lookups) = optimized_lookups.as_mut() {
-                match lookups.next() {
-                    Some(LookupResult::Match(facts)) => {
-                        self.complete_request_batch_item(
-                            item,
-                            &AcquiredFacts {
-                                values: facts,
-                                valid_until: None,
-                            },
-                            observed_at,
-                            issued_at,
-                        )
-                        .await
-                    }
-                    Some(LookupResult::NoMatch | LookupResult::Ambiguous) => {
-                        Ok(RequestBatchItemEvaluation::EvidenceNotAvailable)
-                    }
-                    None => Err(failure(
-                        ProblemCode::DependencyUnavailable,
-                        "source-batch-cardinality",
-                    )),
-                }
-            } else {
-                self.evaluate_request_batch_item(
+            let evaluated = self
+                .evaluate_request_batch_item(
                     &audit_material,
-                    &source_access_attribution,
                     item_index,
                     item,
+                    context.principal(),
                     operation,
                     started,
                     observed_at,
                     issued_at,
                 )
-                .await
-            };
+                .await;
             match evaluated {
                 Ok(RequestBatchItemEvaluation::Evidence {
                     evidence,
                     evidence_id,
                     concepts,
+                    acquisition_deadline,
                 }) => {
+                    release_deadline =
+                        Some(release_deadline.map_or(acquisition_deadline, |current| {
+                            current.min(acquisition_deadline)
+                        }));
                     disclosed_concepts.extend(concepts);
                     response_items.push(EvidenceRequestBatchResponseItem::Evidence { evidence });
                     audit_outcomes.push(EvidenceRequestBatchAuditOutcome {
@@ -1570,7 +1521,13 @@ impl EvidenceRuntime {
                         evidence_id: Some(evidence_id),
                     });
                 }
-                Ok(RequestBatchItemEvaluation::EvidenceNotAvailable) => {
+                Ok(RequestBatchItemEvaluation::EvidenceNotAvailable {
+                    acquisition_deadline,
+                }) => {
+                    release_deadline =
+                        Some(release_deadline.map_or(acquisition_deadline, |current| {
+                            current.min(acquisition_deadline)
+                        }));
                     response_items.push(EvidenceRequestBatchResponseItem::EvidenceNotAvailable);
                     audit_outcomes.push(EvidenceRequestBatchAuditOutcome {
                         item_index,
@@ -1605,6 +1562,12 @@ impl EvidenceRuntime {
             }
         };
 
+        let release_deadline = release_deadline.ok_or_else(|| {
+            failure(
+                ProblemCode::ServiceUnavailable,
+                "request-batch-acquisition-deadline",
+            )
+        })?;
         let mut release = audit_material.event(
             operation,
             EvidenceRequestBatchAuditPhase::DisclosureRelease,
@@ -1627,6 +1590,21 @@ impl EvidenceRuntime {
             release.signing_key_id = Some(self.signer.key_id().to_owned());
         }
         release.outcomes = Some(audit_outcomes);
+        // Admission to the terminal release append is the disclosure-begin
+        // boundary. Once admitted, the append remains deliberately outside
+        // the acquisition timeout: durability cannot be cancelled halfway,
+        // and the audited bytes may return after expiry.
+        if tokio::time::Instant::now() >= release_deadline {
+            return self
+                .abort_request_batch(
+                    &audit_material,
+                    operation,
+                    started,
+                    failure(ProblemCode::DependencyUnavailable, "acquisition-budget"),
+                )
+                .await;
+        }
+
         if self.audit.append_request_batch(release).await.is_err() {
             return self
                 .abort_request_batch(
@@ -1945,8 +1923,6 @@ impl EvidenceRuntime {
                 return Err(map_authority(error));
             }
         };
-        let source_access_attribution =
-            SourceAccessAttribution::new(context.principal(), &request.purpose);
 
         // A holder-bound operation is scoped to no relying party, so the audit
         // pseudonyms of what it releases cannot be derived under one. Its scope
@@ -2005,375 +1981,41 @@ impl EvidenceRuntime {
             .kernel
             .requirement(&request.requirement)
             .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "requirement"))?;
-        let acquisition = requirement.acquisition.clone();
-        let empty_facts = BTreeMap::new();
-        // The stages an acquisition executed, for the release event of the
-        // forms that make more calls than the two scalars below can name. The
-        // one and two stage forms leave it unset, because their scalars already
-        // name every source they reached.
-        let mut executed_stages: Option<(Vec<String>, Vec<String>)> = None;
-        let (facts, source_id, adapter_id, source_valid_until) = match acquisition {
-            AcquisitionConfig::Single { source } => {
-                let stage = self
-                    .execute_source_stage(
-                        &material,
-                        &source_access_attribution,
-                        operation,
-                        &source,
-                        &resolved,
-                        &empty_facts,
-                        None,
-                        started,
-                        observed_at,
-                    )
-                    .await?;
-                match stage.lookup {
-                    SourceStageLookup::Lookup(LookupResult::Match(facts)) => {
-                        (facts, stage.source_id, stage.adapter_id, stage.valid_until)
-                    }
-                    SourceStageLookup::DeclaredUnresolved => {
-                        self.append_failure(
-                            &material,
-                            operation,
-                            AuditDecision::Unresolved,
-                            "unresolved",
-                            &stage.source_id,
-                            &stage.adapter_id,
-                            started,
-                        )
-                        .await?;
-                        return Err(evidence_unavailable_failure());
-                    }
-                    SourceStageLookup::Lookup(LookupResult::NoMatch) => {
-                        self.append_failure(
-                            &material,
-                            operation,
-                            AuditDecision::NoMatch,
-                            "no-match",
-                            &stage.source_id,
-                            &stage.adapter_id,
-                            started,
-                        )
-                        .await?;
-                        return Err(evidence_unavailable_failure());
-                    }
-                    SourceStageLookup::Lookup(LookupResult::Ambiguous) => {
-                        self.append_failure(
-                            &material,
-                            operation,
-                            AuditDecision::Ambiguous,
-                            "ambiguous",
-                            &stage.source_id,
-                            &stage.adapter_id,
-                            started,
-                        )
-                        .await?;
-                        return Err(evidence_unavailable_failure());
-                    }
-                }
-            }
-            AcquisitionConfig::SearchThenFetch {
-                search,
-                fetch,
-                on_fetch_no_match,
-            } => {
-                let search_stage = self
-                    .execute_source_stage(
-                        &material,
-                        &source_access_attribution,
-                        operation,
-                        &search,
-                        &resolved,
-                        &empty_facts,
-                        None,
-                        started,
-                        observed_at,
-                    )
-                    .await?;
-                let search_facts = match search_stage.lookup {
-                    SourceStageLookup::Lookup(LookupResult::Match(facts)) => facts,
-                    SourceStageLookup::DeclaredUnresolved => {
-                        self.append_failure(
-                            &material,
-                            operation,
-                            AuditDecision::Unresolved,
-                            "unresolved",
-                            &search_stage.source_id,
-                            &search_stage.adapter_id,
-                            started,
-                        )
-                        .await?;
-                        return Err(evidence_unavailable_failure());
-                    }
-                    SourceStageLookup::Lookup(LookupResult::NoMatch) => {
-                        self.append_failure(
-                            &material,
-                            operation,
-                            AuditDecision::NoMatch,
-                            "no-match",
-                            &search_stage.source_id,
-                            &search_stage.adapter_id,
-                            started,
-                        )
-                        .await?;
-                        return Err(evidence_unavailable_failure());
-                    }
-                    SourceStageLookup::Lookup(LookupResult::Ambiguous) => {
-                        self.append_failure(
-                            &material,
-                            operation,
-                            AuditDecision::Ambiguous,
-                            "ambiguous",
-                            &search_stage.source_id,
-                            &search_stage.adapter_id,
-                            started,
-                        )
-                        .await?;
-                        return Err(evidence_unavailable_failure());
-                    }
+        let stage = self
+            .execute_source_stage(
+                &material,
+                operation,
+                &resolved,
+                context.principal(),
+                started,
+                observed_at,
+            )
+            .await?;
+        let (source_id, adapter_id, source_valid_until, acquisition_deadline) = (
+            stage.source_id,
+            stage.adapter_id,
+            stage.valid_until,
+            stage.acquisition_deadline,
+        );
+        let facts = match stage.lookup {
+            LookupResult::Match(facts) => facts,
+            LookupResult::NoMatch | LookupResult::Ambiguous | LookupResult::Unresolved => {
+                let (decision, category) = match stage.lookup {
+                    LookupResult::NoMatch => (AuditDecision::NoMatch, "no-match"),
+                    LookupResult::Unresolved => (AuditDecision::Unresolved, "unresolved"),
+                    _ => (AuditDecision::Ambiguous, "ambiguous"),
                 };
-                let search_valid_until = search_stage.valid_until;
-                let fetch_stage = self
-                    .execute_source_stage(
-                        &material,
-                        &source_access_attribution,
-                        operation,
-                        &fetch,
-                        &resolved,
-                        &search_facts,
-                        None,
-                        started,
-                        observed_at,
-                    )
-                    .await?;
-                match fetch_stage.lookup {
-                    SourceStageLookup::Lookup(LookupResult::Match(facts)) => (
-                        facts,
-                        fetch_stage.source_id,
-                        fetch_stage.adapter_id,
-                        earliest_deadline(search_valid_until, fetch_stage.valid_until),
-                    ),
-                    SourceStageLookup::DeclaredUnresolved
-                    | SourceStageLookup::Lookup(LookupResult::NoMatch)
-                        if on_fetch_no_match == crate::config::FetchNoMatchPolicy::Unavailable =>
-                    {
-                        self.append_failure(
-                            &material,
-                            operation,
-                            AuditDecision::Unresolved,
-                            "unresolved",
-                            &fetch_stage.source_id,
-                            &fetch_stage.adapter_id,
-                            started,
-                        )
-                        .await?;
-                        return Err(evidence_unavailable_failure());
-                    }
-                    SourceStageLookup::DeclaredUnresolved
-                    | SourceStageLookup::Lookup(LookupResult::NoMatch | LookupResult::Ambiguous) => {
-                        // A unique search match that cannot be fetched through
-                        // the fixed second source is a dependency inconsistency,
-                        // not evidence that the subject is unresolved.
-                        self.append_failure(
-                            &material,
-                            operation,
-                            AuditDecision::DependencyFailure,
-                            "fetch-result",
-                            &fetch_stage.source_id,
-                            &fetch_stage.adapter_id,
-                            started,
-                        )
-                        .await?;
-                        return Err(failure(ProblemCode::DependencyUnavailable, "fetch-result"));
-                    }
-                }
-            }
-            AcquisitionConfig::SearchThenFetchSet { .. } => {
-                // The order this executes and the order adopter tooling prints
-                // are read from one derivation, so neither can describe an
-                // acquisition the other would not perform.
-                let plan = requirement.acquisition.plan();
-                // The declared budget covers the whole acquisition, so it is
-                // fixed once, here, rather than per call. Every source keeps
-                // its own request timeout as well: whichever ceiling is
-                // reached first refuses, under its own category.
-                let deadline = plan
-                    .budget_milliseconds
-                    .map(|budget| Instant::now() + Duration::from_millis(budget));
-                let mut search_facts = BTreeMap::new();
-                let mut merged: BTreeMap<String, Value> = BTreeMap::new();
-                let mut source_ids: Vec<String> = Vec::new();
-                let mut adapter_ids: Vec<String> = Vec::new();
-                let mut last_stage: Option<(String, String)> = None;
-                let mut source_valid_until = None;
-                for stage in &plan.stages {
-                    if let Some((source_id, adapter_id)) = last_stage.as_ref() {
-                        if acquisition_budget_exhausted(deadline, Instant::now()) {
-                            // A budget exhausted between stages names the last
-                            // source this process actually reached. Naming the
-                            // stage that was about to run would assert an
-                            // access attempt against a source nothing ever
-                            // contacted, which is an audit-integrity defect
-                            // rather than a more precise diagnostic.
-                            self.append_failure(
-                                &material,
-                                operation,
-                                AuditDecision::DependencyFailure,
-                                "acquisition-budget",
-                                source_id,
-                                adapter_id,
-                                started,
-                            )
-                            .await?;
-                            return Err(failure(
-                                ProblemCode::DependencyUnavailable,
-                                "acquisition-budget",
-                            ));
-                        }
-                    }
-                    // Each member reads only the search facts it declared, so
-                    // a resolved reference reaches exactly the requests that
-                    // named it and no others.
-                    let stage_facts = stage.inputs.project(&search_facts);
-                    let SourceStageOutcome {
-                        lookup,
-                        source_id,
-                        adapter_id,
-                        valid_until,
-                    } = self
-                        .execute_source_stage(
-                            &material,
-                            &source_access_attribution,
-                            operation,
-                            &stage.source,
-                            &resolved,
-                            &stage_facts,
-                            deadline,
-                            started,
-                            observed_at,
-                        )
-                        .await?;
-                    source_ids.push(source_id.clone());
-                    adapter_ids.push(adapter_id.clone());
-                    last_stage = Some((source_id.clone(), adapter_id.clone()));
-                    source_valid_until = earliest_deadline(source_valid_until, valid_until);
-                    match (stage.role, lookup) {
-                        (
-                            StageRole::Search,
-                            SourceStageLookup::Lookup(LookupResult::Match(facts)),
-                        ) => {
-                            search_facts.clone_from(&facts);
-                            merged = facts;
-                        }
-                        (
-                            StageRole::Member,
-                            SourceStageLookup::Lookup(LookupResult::Match(facts)),
-                        ) => {
-                            // The bundle proved every stage of this set
-                            // declares disjoint fact names, so extending the
-                            // union cannot overwrite an earlier stage's fact.
-                            merged.extend(facts);
-                        }
-                        (StageRole::Search, SourceStageLookup::DeclaredUnresolved) => {
-                            self.append_failure(
-                                &material,
-                                operation,
-                                AuditDecision::Unresolved,
-                                "unresolved",
-                                &source_id,
-                                &adapter_id,
-                                started,
-                            )
-                            .await?;
-                            return Err(evidence_unavailable_failure());
-                        }
-                        (StageRole::Search, SourceStageLookup::Lookup(LookupResult::NoMatch)) => {
-                            self.append_failure(
-                                &material,
-                                operation,
-                                AuditDecision::NoMatch,
-                                "no-match",
-                                &source_id,
-                                &adapter_id,
-                                started,
-                            )
-                            .await?;
-                            return Err(evidence_unavailable_failure());
-                        }
-                        (StageRole::Search, SourceStageLookup::Lookup(LookupResult::Ambiguous)) => {
-                            self.append_failure(
-                                &material,
-                                operation,
-                                AuditDecision::Ambiguous,
-                                "ambiguous",
-                                &source_id,
-                                &adapter_id,
-                                started,
-                            )
-                            .await?;
-                            return Err(evidence_unavailable_failure());
-                        }
-                        (StageRole::Member, SourceStageLookup::DeclaredUnresolved)
-                        | (
-                            StageRole::Member,
-                            SourceStageLookup::Lookup(
-                                LookupResult::NoMatch | LookupResult::Ambiguous,
-                            ),
-                        ) => {
-                            // A unique search match a declared member cannot
-                            // resolve is a dependency inconsistency, not
-                            // evidence that the subject is unresolved. The
-                            // acquisition stops here, so no later member's
-                            // source is contacted at all.
-                            self.append_failure(
-                                &material,
-                                operation,
-                                AuditDecision::DependencyFailure,
-                                "fetch-result",
-                                &source_id,
-                                &adapter_id,
-                                started,
-                            )
-                            .await?;
-                            return Err(failure(
-                                ProblemCode::DependencyUnavailable,
-                                "fetch-result",
-                            ));
-                        }
-                    }
-                }
-                let (source_id, adapter_id) = last_stage
-                    .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "source-plan"))?;
-                // Each stage's extraction was bounded on its own, and the count
-                // of declared facts is bounded when the bundle loads, but the
-                // serialized size of the union is bounded by neither. The
-                // derivation applies that bound to its own input, so reading it
-                // here keeps the outcome a named acquisition refusal instead of
-                // an unnamed script failure. Serializing the map is exactly
-                // what the derivation serializes: both are sorted JSON objects
-                // over the same entries.
-                let merged_bytes = match serde_json::to_vec(&merged) {
-                    Ok(bytes) => bytes.len(),
-                    Err(_) => usize::MAX,
-                };
-                if merged_bytes > crate::rhai_runtime::MAXIMUM_RESULT_BYTES {
-                    self.append_failure(
-                        &material,
-                        operation,
-                        AuditDecision::EvaluationFailure,
-                        "acquisition-fact-size",
-                        &source_id,
-                        &adapter_id,
-                        started,
-                    )
-                    .await?;
-                    return Err(failure(
-                        ProblemCode::ServiceUnavailable,
-                        "acquisition-fact-size",
-                    ));
-                }
-                executed_stages = Some((source_ids, adapter_ids));
-                (merged, source_id, adapter_id, source_valid_until)
+                self.append_failure(
+                    &material,
+                    operation,
+                    decision,
+                    category,
+                    &source_id,
+                    &adapter_id,
+                    started,
+                )
+                .await?;
+                return Err(evidence_unavailable_failure());
             }
         };
         let derivation_selectors =
@@ -2752,12 +2394,8 @@ impl EvidenceRuntime {
             AuditDecision::Released,
             elapsed_millis(started),
         );
-        release.source_id = Some(source_id);
-        release.adapter_id = Some(adapter_id);
-        if let Some((source_ids, adapter_ids)) = executed_stages {
-            release.source_ids = Some(source_ids);
-            release.adapter_ids = Some(adapter_ids);
-        }
+        release.source_id = Some(source_id.clone());
+        release.adapter_id = Some(adapter_id.clone());
         release.disclosed_concepts = Some(disclosed_concepts);
         // Exactly one terminal release event names the complete released set.
         // A release of one assertion keeps the singular member every release
@@ -2771,6 +2409,28 @@ impl EvidenceRuntime {
             release.evidence_ids = Some(evidence_ids);
         }
         release.signing_key_id = signing_key_id;
+        // Admission to the terminal release append is the disclosure-begin
+        // boundary. This final guard prevents admission after expiry. The
+        // append itself is not wrapped in the acquisition timeout: once
+        // admitted it must complete, and its exact audited bytes may return
+        // after expiry.
+        if tokio::time::Instant::now() >= acquisition_deadline {
+            self.append_failure(
+                &material,
+                operation,
+                AuditDecision::DependencyFailure,
+                "acquisition-budget",
+                &source_id,
+                &adapter_id,
+                started,
+            )
+            .await?;
+            return Err(failure(
+                ProblemCode::DependencyUnavailable,
+                "acquisition-budget",
+            ));
+        }
+
         self.audit
             .append(release)
             .await
@@ -2827,29 +2487,31 @@ impl EvidenceRuntime {
     async fn evaluate_request_batch_item(
         &self,
         audit_material: &RequestBatchAuditMaterial,
-        source_access_attribution: &SourceAccessAttribution,
         item_index: u8,
         item: &AuthorizedRequestBatchItem,
+        requester: &str,
         operation: &str,
         started: Instant,
         observed_at: chrono::DateTime<Utc>,
         issued_at: chrono::DateTime<Utc>,
     ) -> Result<RequestBatchItemEvaluation, RuntimeFailure> {
-        let Some(facts) = self
+        let (facts, acquisition_deadline) = self
             .acquire_request_batch_item(
                 audit_material,
-                source_access_attribution,
                 item_index,
                 &item.resolved,
+                requester,
                 operation,
                 started,
                 observed_at,
             )
-            .await?
-        else {
-            return Ok(RequestBatchItemEvaluation::EvidenceNotAvailable);
+            .await?;
+        let Some(facts) = facts else {
+            return Ok(RequestBatchItemEvaluation::EvidenceNotAvailable {
+                acquisition_deadline,
+            });
         };
-        self.complete_request_batch_item(item, &facts, observed_at, issued_at)
+        self.complete_request_batch_item(item, &facts, observed_at, issued_at, acquisition_deadline)
             .await
     }
 
@@ -2859,6 +2521,7 @@ impl EvidenceRuntime {
         facts: &AcquiredFacts,
         observed_at: chrono::DateTime<Utc>,
         issued_at: chrono::DateTime<Utc>,
+        acquisition_deadline: tokio::time::Instant,
     ) -> Result<RequestBatchItemEvaluation, RuntimeFailure> {
         let requirement = self
             .kernel
@@ -2879,7 +2542,9 @@ impl EvidenceRuntime {
         ) {
             Ok(values) => values,
             Err(error) if kernel_failure_problem(&error) == ProblemCode::EvidenceNotAvailable => {
-                return Ok(RequestBatchItemEvaluation::EvidenceNotAvailable);
+                return Ok(RequestBatchItemEvaluation::EvidenceNotAvailable {
+                    acquisition_deadline,
+                });
             }
             Err(error) => {
                 return Err(failure(
@@ -2923,334 +2588,47 @@ impl EvidenceRuntime {
             evidence,
             evidence_id,
             concepts,
+            acquisition_deadline,
         })
-    }
-
-    async fn execute_optimized_request_batch(
-        &self,
-        audit_material: &RequestBatchAuditMaterial,
-        source_access_attribution: &SourceAccessAttribution,
-        items: &[AuthorizedRequestBatchItem],
-        operation: &str,
-        source_id: &str,
-        started: Instant,
-    ) -> Result<Vec<LookupResult>, RuntimeFailure> {
-        let source = self
-            .bundle()
-            .config
-            .sources
-            .get(source_id)
-            .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "source-plan"))?;
-        let selector_items = items
-            .iter()
-            .map(|item| source_selector_input_value(&item.resolved, source.selector_inputs()))
-            .collect::<Result<Vec<_>, _>>()?;
-        // Preparation validates every minimized logical selector object and
-        // fixes the complete transport request before credentials or source
-        // I/O. Once this succeeds, no sequential fallback is available.
-        let prepared = self
-            .kernel
-            .prepare_source_batch(source_id, &selector_items)
-            .map_err(|error| {
-                failure(
-                    kernel_failure_problem(&error),
-                    kernel_failure_category(&error),
-                )
-            })?;
-        if prepared.item_count() != items.len() {
-            return Err(failure(
-                ProblemCode::DependencyUnavailable,
-                "source-batch-cardinality",
-            ));
-        }
-        let item_indices = (0..items.len())
-            .map(|index| {
-                u8::try_from(index)
-                    .map_err(|_| failure(ProblemCode::ServiceUnavailable, "request-batch-audit"))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let mut access = audit_material.event(
-            operation,
-            EvidenceRequestBatchAuditPhase::AccessAttempt,
-            EvidenceRequestBatchAuditDecision::Authorized,
-            elapsed_millis(started),
-        );
-        access.source_id = Some(prepared.source_id().to_owned());
-        access.adapter_id = Some(prepared.adapter_id().to_owned());
-        access.item_indices = Some(item_indices.clone());
-        access.item_groups = Some(audit_material.item_groups_for_indices(&item_indices)?);
-        self.audit
-            .append_request_batch(access)
-            .await
-            .map_err(|_| failure(ProblemCode::ServiceUnavailable, "access-audit"))?;
-
-        let executor = self
-            .sources
-            .get(source_id)
-            .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "source-plan"))?;
-        let response = executor
-            .execute_batch_attributed(prepared.request(), source_access_attribution)
-            .await
-            .map_err(|error| {
-                failure(
-                    source_failure_problem(&error),
-                    source_failure_category(&error),
-                )
-            })?;
-        let response = match response {
-            SourceResponse::Data(response) if response.valid_until.is_none() => response.value,
-            // Signed Evidence sources cannot declare the optimized source-batch
-            // block. Refuse rather than discard a deadline if startup
-            // validation and execution ever disagree.
-            SourceResponse::Data(_) => {
-                return Err(failure(
-                    ProblemCode::DependencyUnavailable,
-                    "source-protocol",
-                ));
-            }
-            // Bundle validation rejects this combination. Keep the optimized
-            // physical batch fail-closed because it cannot attribute one
-            // transport outcome to a logical item.
-            SourceResponse::DeclaredUnresolved => {
-                return Err(failure(
-                    ProblemCode::DependencyUnavailable,
-                    "source-protocol",
-                ));
-            }
-        };
-        let lookups = self
-            .kernel
-            .extract_source_batch(&prepared, &response)
-            .map_err(|error| {
-                failure(
-                    kernel_failure_problem(&error),
-                    kernel_failure_category(&error),
-                )
-            })?;
-        if lookups.len() != items.len() {
-            return Err(failure(
-                ProblemCode::DependencyUnavailable,
-                "source-batch-cardinality",
-            ));
-        }
-        Ok(lookups)
     }
 
     #[allow(clippy::too_many_arguments)]
     async fn acquire_request_batch_item(
         &self,
         audit_material: &RequestBatchAuditMaterial,
-        source_access_attribution: &SourceAccessAttribution,
         item_index: u8,
         resolved: &ResolvedAuthorization,
+        requester: &str,
         operation: &str,
         started: Instant,
         observed_at: chrono::DateTime<Utc>,
-    ) -> Result<Option<AcquiredFacts>, RuntimeFailure> {
+    ) -> Result<(Option<AcquiredFacts>, tokio::time::Instant), RuntimeFailure> {
         let requirement = self
             .kernel
             .requirement(&resolved.requirement)
             .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "requirement"))?;
-        let empty_facts = BTreeMap::new();
-        match requirement.acquisition.clone() {
-            AcquisitionConfig::Single { source } => {
-                let stage = self
-                    .execute_request_batch_source_stage(
-                        audit_material,
-                        source_access_attribution,
-                        item_index,
-                        operation,
-                        &source,
-                        resolved,
-                        &empty_facts,
-                        None,
-                        started,
-                        observed_at,
-                    )
-                    .await;
-                let stage = match stage {
-                    Ok(stage) => stage,
-                    Err(error) if error.problem() == ProblemCode::EvidenceNotAvailable => {
-                        return Ok(None);
-                    }
-                    Err(error) => return Err(error),
-                };
-                match stage.lookup {
-                    SourceStageLookup::Lookup(LookupResult::Match(facts)) => {
-                        Ok(Some(AcquiredFacts {
-                            values: facts,
-                            valid_until: stage.valid_until,
-                        }))
-                    }
-                    SourceStageLookup::DeclaredUnresolved
-                    | SourceStageLookup::Lookup(LookupResult::NoMatch | LookupResult::Ambiguous) => {
-                        Ok(None)
-                    }
-                }
-            }
-            AcquisitionConfig::SearchThenFetch {
-                search,
-                fetch,
-                on_fetch_no_match,
-            } => {
-                let search_stage = self
-                    .execute_request_batch_source_stage(
-                        audit_material,
-                        source_access_attribution,
-                        item_index,
-                        operation,
-                        &search,
-                        resolved,
-                        &empty_facts,
-                        None,
-                        started,
-                        observed_at,
-                    )
-                    .await;
-                let search_stage = match search_stage {
-                    Ok(stage) => stage,
-                    Err(error) if error.problem() == ProblemCode::EvidenceNotAvailable => {
-                        return Ok(None);
-                    }
-                    Err(error) => return Err(error),
-                };
-                let search_facts = match search_stage.lookup {
-                    SourceStageLookup::Lookup(LookupResult::Match(facts)) => facts,
-                    SourceStageLookup::DeclaredUnresolved
-                    | SourceStageLookup::Lookup(LookupResult::NoMatch | LookupResult::Ambiguous) => {
-                        return Ok(None);
-                    }
-                };
-                let search_valid_until = search_stage.valid_until;
-                let fetch_stage = self
-                    .execute_request_batch_source_stage(
-                        audit_material,
-                        source_access_attribution,
-                        item_index,
-                        operation,
-                        &fetch,
-                        resolved,
-                        &search_facts,
-                        None,
-                        started,
-                        observed_at,
-                    )
-                    .await;
-                let fetch_stage = match fetch_stage {
-                    Ok(stage) => stage,
-                    Err(error) if error.problem() == ProblemCode::EvidenceNotAvailable => {
-                        return Ok(None);
-                    }
-                    Err(error) => return Err(error),
-                };
-                match fetch_stage.lookup {
-                    SourceStageLookup::Lookup(LookupResult::Match(facts)) => {
-                        Ok(Some(AcquiredFacts {
-                            values: facts,
-                            valid_until: earliest_deadline(
-                                search_valid_until,
-                                fetch_stage.valid_until,
-                            ),
-                        }))
-                    }
-                    SourceStageLookup::DeclaredUnresolved
-                    | SourceStageLookup::Lookup(LookupResult::NoMatch)
-                        if on_fetch_no_match == crate::config::FetchNoMatchPolicy::Unavailable =>
-                    {
-                        Ok(None)
-                    }
-                    SourceStageLookup::DeclaredUnresolved
-                    | SourceStageLookup::Lookup(LookupResult::NoMatch | LookupResult::Ambiguous) => {
-                        Err(failure(ProblemCode::DependencyUnavailable, "fetch-result"))
-                    }
-                }
-            }
-            AcquisitionConfig::SearchThenFetchSet { .. } => {
-                let plan = requirement.acquisition.plan();
-                let deadline = plan
-                    .budget_milliseconds
-                    .map(|budget| Instant::now() + Duration::from_millis(budget));
-                let mut search_facts = BTreeMap::new();
-                let mut merged: BTreeMap<String, Value> = BTreeMap::new();
-                let mut source_valid_until = None;
-                for stage in &plan.stages {
-                    if acquisition_budget_exhausted(deadline, Instant::now()) {
-                        return Err(failure(
-                            ProblemCode::DependencyUnavailable,
-                            "acquisition-budget",
-                        ));
-                    }
-                    let stage_facts = stage.inputs.project(&search_facts);
-                    let outcome = self
-                        .execute_request_batch_source_stage(
-                            audit_material,
-                            source_access_attribution,
-                            item_index,
-                            operation,
-                            &stage.source,
-                            resolved,
-                            &stage_facts,
-                            deadline,
-                            started,
-                            observed_at,
-                        )
-                        .await;
-                    let outcome = match outcome {
-                        Ok(outcome) => outcome,
-                        Err(error) if error.problem() == ProblemCode::EvidenceNotAvailable => {
-                            return Ok(None);
-                        }
-                        Err(error) => return Err(error),
-                    };
-                    source_valid_until = earliest_deadline(source_valid_until, outcome.valid_until);
-                    match (stage.role, outcome.lookup) {
-                        (
-                            StageRole::Search,
-                            SourceStageLookup::Lookup(LookupResult::Match(facts)),
-                        ) => {
-                            search_facts.clone_from(&facts);
-                            merged = facts;
-                        }
-                        (
-                            StageRole::Member,
-                            SourceStageLookup::Lookup(LookupResult::Match(facts)),
-                        ) => merged.extend(facts),
-                        (StageRole::Search, SourceStageLookup::DeclaredUnresolved)
-                        | (
-                            StageRole::Search,
-                            SourceStageLookup::Lookup(
-                                LookupResult::NoMatch | LookupResult::Ambiguous,
-                            ),
-                        ) => {
-                            return Ok(None);
-                        }
-                        (StageRole::Member, SourceStageLookup::DeclaredUnresolved)
-                        | (
-                            StageRole::Member,
-                            SourceStageLookup::Lookup(
-                                LookupResult::NoMatch | LookupResult::Ambiguous,
-                            ),
-                        ) => {
-                            return Err(failure(
-                                ProblemCode::DependencyUnavailable,
-                                "fetch-result",
-                            ));
-                        }
-                    }
-                }
-                let merged_bytes = serde_json::to_vec(&merged)
-                    .map(|bytes| bytes.len())
-                    .unwrap_or(usize::MAX);
-                if merged_bytes > crate::rhai_runtime::MAXIMUM_RESULT_BYTES {
-                    return Err(failure(
-                        ProblemCode::ServiceUnavailable,
-                        "acquisition-fact-size",
-                    ));
-                }
-                Ok(Some(AcquiredFacts {
-                    values: merged,
-                    valid_until: source_valid_until,
-                }))
+        let stage = self
+            .execute_request_batch_source_stage(
+                audit_material,
+                item_index,
+                operation,
+                &requirement.acquisition.source,
+                resolved,
+                requester,
+                started,
+                observed_at,
+            )
+            .await?;
+        match stage.lookup {
+            LookupResult::Match(values) => Ok((
+                Some(AcquiredFacts {
+                    values,
+                    valid_until: stage.valid_until,
+                }),
+                stage.acquisition_deadline,
+            )),
+            LookupResult::NoMatch | LookupResult::Ambiguous | LookupResult::Unresolved => {
+                Ok((None, stage.acquisition_deadline))
             }
         }
     }
@@ -3259,13 +2637,11 @@ impl EvidenceRuntime {
     async fn execute_request_batch_source_stage(
         &self,
         audit_material: &RequestBatchAuditMaterial,
-        source_access_attribution: &SourceAccessAttribution,
         item_index: u8,
         operation: &str,
         source_id: &str,
         resolved: &ResolvedAuthorization,
-        prior_facts: &BTreeMap<String, Value>,
-        deadline: Option<Instant>,
+        requester: &str,
         started: Instant,
         observed_at: chrono::DateTime<Utc>,
     ) -> Result<SourceStageOutcome, RuntimeFailure> {
@@ -3274,28 +2650,8 @@ impl EvidenceRuntime {
             .sources
             .get(&source_id)
             .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "source-plan"))?;
-        let source = self
-            .bundle()
-            .config
-            .sources
-            .get(&source_id)
-            .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "source-plan"))?;
-        let preparation_selector_value =
-            source_selector_input_value(resolved, source.selector_inputs())?;
-        let selectors = source_selectors(resolved, source.selector_inputs())?;
-        let request = self
-            .kernel
-            .prepare_source(&source_id, &preparation_selector_value, prior_facts)
-            .map_err(|error| {
-                failure(
-                    kernel_failure_problem(&error),
-                    kernel_failure_category(&error),
-                )
-            })?;
-        // The fixed request is prepared without credentials or I/O. Record
-        // access only once a physical call is ready to begin, while still
-        // gating credential resolution and the source future on durable
-        // acceptance of this event.
+        let inputs = executor.inputs(resolved).map_err(pack_source_failure)?;
+        let attribution = source_attribution(executor, requester, &resolved.purpose)?;
         let mut access = audit_material.event(
             operation,
             EvidenceRequestBatchAuditPhase::AccessAttempt,
@@ -3304,68 +2660,24 @@ impl EvidenceRuntime {
         );
         access.source_id = Some(source_id.clone());
         access.adapter_id = Some(adapter_id.clone());
+        access.execution_bounds = Some(self.source_execution_bounds());
         access.item_indices = Some(vec![item_index]);
         access.item_groups = Some(vec![audit_material.item_group(item_index)?]);
-        self.audit
-            .append_request_batch(access)
+        let hooks = Arc::new(SourceAccessIntent::new(
+            Arc::clone(&self.audit),
+            SourceAccessEvent::Batch(access),
+            executor.intent(),
+        ));
+        let lookup = executor
+            .execute_with_attribution(inputs, observed_at, hooks, attribution)
             .await
-            .map_err(|_| failure(ProblemCode::ServiceUnavailable, "access-audit"))?;
-
-        let execution = executor.execute_with_prior_facts_attributed(
-            &selectors,
-            prior_facts,
-            &request,
-            observed_at,
-            source_access_attribution,
-        );
-        let executed = match deadline {
-            Some(deadline) => {
-                let Some(remaining) = stage_time_budget(deadline, Instant::now()) else {
-                    return Err(failure(
-                        ProblemCode::DependencyUnavailable,
-                        "acquisition-budget",
-                    ));
-                };
-                tokio::time::timeout(remaining, execution)
-                    .await
-                    .map_err(|_| {
-                        failure(ProblemCode::DependencyUnavailable, "acquisition-budget")
-                    })?
-            }
-            None => execution.await,
-        };
-        let source_response = executed.map_err(|error| {
-            failure(
-                source_failure_problem(&error),
-                source_failure_category(&error),
-            )
-        })?;
-        let (lookup, valid_until) = match source_response {
-            SourceResponse::Data(source_response) => (
-                SourceStageLookup::Lookup(
-                    self.kernel
-                        .extract_source_for_request_batch_with_selectors(
-                            &source_id,
-                            &source_response.value,
-                            &preparation_selector_value,
-                            prior_facts,
-                        )
-                        .map_err(|error| {
-                            failure(
-                                kernel_failure_problem(&error),
-                                kernel_failure_category(&error),
-                            )
-                        })?,
-                ),
-                source_response.valid_until,
-            ),
-            SourceResponse::DeclaredUnresolved => (SourceStageLookup::DeclaredUnresolved, None),
-        };
+            .map_err(pack_source_diagnosed_failure)?;
         Ok(SourceStageOutcome {
-            lookup,
+            lookup: lookup.lookup,
             source_id,
             adapter_id,
-            valid_until,
+            valid_until: lookup.valid_until,
+            acquisition_deadline: lookup.acquisition_deadline,
         })
     }
 
@@ -3390,179 +2702,70 @@ impl EvidenceRuntime {
         Err(error)
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn execute_source_stage(
         &self,
         material: &AuditMaterial,
-        source_access_attribution: &SourceAccessAttribution,
         operation: &str,
-        source_id: &str,
         resolved: &ResolvedAuthorization,
-        prior_facts: &BTreeMap<String, Value>,
-        deadline: Option<Instant>,
+        requester: &str,
         started: Instant,
         observed_at: chrono::DateTime<Utc>,
     ) -> Result<SourceStageOutcome, RuntimeFailure> {
+        let requirement = self
+            .kernel
+            .requirement(&resolved.requirement)
+            .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "requirement"))?;
+        let source_id = &requirement.acquisition.source;
         let (source_id, adapter_id) = self.source_identity(source_id)?;
-        // Every actual evidence-data call has its own durable access event,
-        // written before preparation can acquire credentials or start I/O.
-        let mut access_event = material.event(
+        let executor = self
+            .sources
+            .get(&source_id)
+            .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "source-plan"))?;
+        let inputs = executor.inputs(resolved).map_err(pack_source_failure)?;
+        let attribution = source_attribution(executor, requester, &resolved.purpose)?;
+        let mut access = material.event(
             operation,
             AuditPhase::AccessAttempt,
             AuditDecision::Authorized,
             elapsed_millis(started),
         );
-        access_event.source_id = Some(source_id.clone());
-        access_event.adapter_id = Some(adapter_id.clone());
-        self.audit
-            .append(access_event)
+        access.source_id = Some(source_id.clone());
+        access.adapter_id = Some(adapter_id.clone());
+        access.execution_bounds = Some(self.source_execution_bounds());
+        let hooks = Arc::new(SourceAccessIntent::new(
+            Arc::clone(&self.audit),
+            SourceAccessEvent::Single(access),
+            executor.intent(),
+        ));
+        let lookup = match executor
+            .execute_with_attribution(inputs, observed_at, hooks, attribution)
             .await
-            .map_err(|_| failure(ProblemCode::ServiceUnavailable, "access-audit"))?;
-
-        let executor = self
-            .sources
-            .get(&source_id)
-            .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "source-plan"))?;
-        let source = self
-            .bundle()
-            .config
-            .sources
-            .get(&source_id)
-            .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "source-plan"))?;
-        let preparation_selector_value =
-            source_selector_input_value(resolved, source.selector_inputs())?;
-        let selectors = source_selectors(resolved, source.selector_inputs())?;
-        let request =
-            match self
-                .kernel
-                .prepare_source(&source_id, &preparation_selector_value, prior_facts)
-            {
-                Ok(prepared) => prepared,
-                Err(error) => {
-                    let category = kernel_failure_category(&error);
+        {
+            Ok(lookup) => lookup,
+            Err(error) => {
+                let category = error.category();
+                let failure = pack_source_diagnosed_failure(error);
+                if category != PackSourceError::Audit {
                     self.append_failure(
                         material,
                         operation,
-                        AuditDecision::EvaluationFailure,
-                        category,
+                        AuditDecision::DependencyFailure,
+                        failure.category(),
                         &source_id,
                         &adapter_id,
                         started,
                     )
                     .await?;
-                    return Err(failure(kernel_failure_problem(&error), category));
                 }
-            };
-        // Only the source round-trip is bounded by the acquisition deadline.
-        // `SourceExecutor::execute_with_prior_facts` mutates nothing before the
-        // awaited send, so abandoning it abandons an in-flight request and
-        // nothing else.
-        //
-        // No audit append is ever wrapped. An append is a durability
-        // boundary: it returns once the entry is synced or the writer has
-        // stopped. A deadline that abandoned it would leave the runtime not
-        // knowing whether the entry is on disk, so it could neither answer as
-        // the entry records nor report the entry missing. That is why the
-        // timeout never crosses an append.
-        let execution = executor.execute_with_prior_facts_attributed(
-            &selectors,
-            prior_facts,
-            &request,
-            observed_at,
-            source_access_attribution,
-        );
-        let executed = match deadline {
-            Some(deadline) => {
-                // A ceiling already spent by the durable append above, or by
-                // preparation, is answered before the source future is polled
-                // at all; see `stage_time_budget`.
-                let bounded = match stage_time_budget(deadline, Instant::now()) {
-                    Some(remaining) => tokio::time::timeout(remaining, execution).await.ok(),
-                    None => None,
-                };
-                match bounded {
-                    Some(executed) => executed,
-                    None => {
-                        self.append_failure(
-                            material,
-                            operation,
-                            AuditDecision::DependencyFailure,
-                            "acquisition-budget",
-                            &source_id,
-                            &adapter_id,
-                            started,
-                        )
-                        .await?;
-                        return Err(failure(
-                            ProblemCode::DependencyUnavailable,
-                            "acquisition-budget",
-                        ));
-                    }
-                }
-            }
-            None => execution.await,
-        };
-        let source_response = match executed {
-            Ok(response) => response,
-            Err(error) => {
-                let category = source_failure_category(&error);
-                self.append_failure(
-                    material,
-                    operation,
-                    AuditDecision::DependencyFailure,
-                    category,
-                    &source_id,
-                    &adapter_id,
-                    started,
-                )
-                .await?;
-                return Err(failure(source_failure_problem(&error), category));
+                return Err(failure);
             }
         };
-        let (lookup, valid_until) = match source_response {
-            SourceResponse::DeclaredUnresolved => (SourceStageLookup::DeclaredUnresolved, None),
-            SourceResponse::Data(source_response) => {
-                match self.kernel.extract_source_with_selectors(
-                    &source_id,
-                    &source_response.value,
-                    &preparation_selector_value,
-                    prior_facts,
-                ) {
-                    Ok(lookup) => (
-                        SourceStageLookup::Lookup(lookup),
-                        source_response.valid_until,
-                    ),
-                    Err(error) => {
-                        let category = kernel_failure_category(&error);
-                        let problem = kernel_failure_problem(&error);
-                        let decision = match error {
-                            KernelError::Extraction | KernelError::DerivationInput => {
-                                AuditDecision::FactMissing
-                            }
-                            KernelError::SourceProtocol => AuditDecision::DependencyFailure,
-                            _ => AuditDecision::EvaluationFailure,
-                        };
-                        self.append_failure(
-                            material,
-                            operation,
-                            decision,
-                            category,
-                            &source_id,
-                            &adapter_id,
-                            started,
-                        )
-                        .await?;
-                        return Err(failure(problem, category));
-                    }
-                }
-            }
-        };
-
         Ok(SourceStageOutcome {
-            lookup,
+            lookup: lookup.lookup,
             source_id,
             adapter_id,
-            valid_until,
+            valid_until: lookup.valid_until,
+            acquisition_deadline: lookup.acquisition_deadline,
         })
     }
 
@@ -3573,12 +2776,7 @@ impl EvidenceRuntime {
             .sources
             .get(source_id)
             .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "source-plan"))?;
-        let adapter_id = Path::new(source.extract_script().as_str())
-            .file_stem()
-            .and_then(|name| name.to_str())
-            .filter(|name| !name.is_empty() && name.len() <= 128)
-            .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "adapter-id"))?;
-        Ok((source_id.to_owned(), adapter_id.to_owned()))
+        Ok((source_id.to_owned(), source.pack.id.as_str().to_owned()))
     }
 
     fn audit_material(
@@ -3775,6 +2973,22 @@ impl EvidenceRuntime {
     }
 }
 
+fn source_attribution(
+    executor: &PackSourceExecutor,
+    requester: &str,
+    purpose: &str,
+) -> Result<
+    Option<Arc<registry_adapter_engine::host_protocol::HostAccessAttribution>>,
+    RuntimeFailure,
+> {
+    if !executor.requires_access_attribution() {
+        return Ok(None);
+    }
+    registry_adapter_engine::host_protocol::HostAccessAttribution::try_new(requester, purpose)
+        .map(|context| Some(Arc::new(context)))
+        .map_err(|_| failure(ProblemCode::ServiceUnavailable, "source-attribution"))
+}
+
 struct AuthorizedRequestBatchItem {
     request: EvidenceRequest,
     resolved: ResolvedAuthorization,
@@ -3786,8 +3000,11 @@ enum RequestBatchItemEvaluation {
         evidence: FlattenedJws,
         evidence_id: String,
         concepts: Vec<String>,
+        acquisition_deadline: tokio::time::Instant,
     },
-    EvidenceNotAvailable,
+    EvidenceNotAvailable {
+        acquisition_deadline: tokio::time::Instant,
+    },
 }
 
 #[derive(Clone)]
@@ -3891,32 +3108,132 @@ impl RequestBatchAuditMaterial {
     }
 }
 
+enum SourceAccessEvent {
+    Single(EvidenceAuditEvent),
+    Batch(EvidenceRequestBatchAuditEvent),
+}
+
+/// One complete authorization's durable acquisition intent. Taking the event
+/// once prevents the same audit entry being reused for another acquisition.
+struct SourceAccessIntent {
+    audit: Arc<EvidenceAuditLog>,
+    event: tokio::sync::Mutex<Option<SourceAccessEvent>>,
+    expected: registry_adapter_engine::evidence::EvidenceAcquisitionIntent,
+}
+
+impl SourceAccessIntent {
+    fn new(
+        audit: Arc<EvidenceAuditLog>,
+        event: SourceAccessEvent,
+        expected: registry_adapter_engine::evidence::EvidenceAcquisitionIntent,
+    ) -> Self {
+        Self {
+            audit,
+            event: tokio::sync::Mutex::new(Some(event)),
+            expected,
+        }
+    }
+}
+
+impl registry_adapter_engine::evidence::EvidenceHostHooks for SourceAccessIntent {
+    fn before_acquisition<'a>(
+        &'a self,
+        intent: registry_adapter_engine::evidence::EvidenceAcquisitionIntent,
+    ) -> registry_adapter_engine::evidence::EvidenceHookFuture<'a> {
+        Box::pin(async move {
+            use registry_adapter_engine::evidence::EvidenceHookError;
+            if intent != self.expected {
+                return Err(EvidenceHookError::Authority);
+            }
+            let event = self
+                .event
+                .lock()
+                .await
+                .take()
+                .ok_or(EvidenceHookError::Authority)?;
+            match event {
+                SourceAccessEvent::Single(event) => self.audit.append(event).await,
+                SourceAccessEvent::Batch(event) => self.audit.append_request_batch(event).await,
+            }
+            .map_err(|_| EvidenceHookError::Audit)
+        })
+    }
+}
+
+/// The shared value-free source failure classification used by serving and offline tooling.
+pub fn pack_source_failure(error: PackSourceError) -> RuntimeFailure {
+    let (problem, category) = match error {
+        PackSourceError::Plan => (ProblemCode::ServiceUnavailable, "source-plan"),
+        PackSourceError::Inputs => (ProblemCode::ServiceUnavailable, "source-inputs"),
+        PackSourceError::Authority => (ProblemCode::NotAuthorized, "source-authority"),
+        PackSourceError::Audit => (ProblemCode::ServiceUnavailable, "access-audit"),
+        PackSourceError::Budget => (ProblemCode::DependencyUnavailable, "acquisition-budget"),
+        PackSourceError::Protocol => (ProblemCode::DependencyUnavailable, "source-protocol"),
+        PackSourceError::Dependency => (ProblemCode::DependencyUnavailable, "source-unavailable"),
+        PackSourceError::ExtractUnavailable => (
+            ProblemCode::DependencyUnavailable,
+            "source-extract-unavailable",
+        ),
+        PackSourceError::ExtractStale => {
+            (ProblemCode::DependencyUnavailable, "source-extract-stale")
+        }
+        PackSourceError::StatementRefused => (
+            ProblemCode::DependencyUnavailable,
+            "source-statement-refused",
+        ),
+        PackSourceError::StatementParameter => (
+            ProblemCode::DependencyUnavailable,
+            "source-statement-parameter",
+        ),
+        PackSourceError::StatementBudget => (
+            ProblemCode::DependencyUnavailable,
+            "source-statement-budget",
+        ),
+        PackSourceError::StatementResult => (
+            ProblemCode::DependencyUnavailable,
+            "source-statement-result",
+        ),
+        PackSourceError::StatementUnavailable => (
+            ProblemCode::DependencyUnavailable,
+            "source-statement-unavailable",
+        ),
+        PackSourceError::ResponseTooLarge => {
+            (ProblemCode::DependencyUnavailable, "source-response-size")
+        }
+        PackSourceError::Concurrency => (ProblemCode::DependencyUnavailable, "source-concurrency"),
+        PackSourceError::Credential => (ProblemCode::DependencyUnavailable, "source-credential"),
+        PackSourceError::Timeout => (ProblemCode::DependencyUnavailable, "source-timeout"),
+    };
+    failure(problem, category)
+}
+
+fn pack_source_diagnosed_failure(error: PackSourceFailure) -> RuntimeFailure {
+    match error.http_diagnostic() {
+        Some(
+            EvidenceHttpDiagnostic::Unauthorized
+            | EvidenceHttpDiagnostic::Forbidden
+            | EvidenceHttpDiagnostic::RateLimited
+            | EvidenceHttpDiagnostic::ServerError
+            | EvidenceHttpDiagnostic::UndeclaredNotFound,
+        ) => failure(ProblemCode::DependencyUnavailable, "source-status"),
+        Some(
+            EvidenceHttpDiagnostic::Verification | EvidenceHttpDiagnostic::DeclaredNotFoundMismatch,
+        ) => failure(ProblemCode::DependencyUnavailable, "source-protocol"),
+        None => pack_source_failure(error.category()),
+    }
+}
+
 struct SourceStageOutcome {
-    lookup: SourceStageLookup,
+    lookup: LookupResult,
     source_id: String,
     adapter_id: String,
     valid_until: Option<chrono::DateTime<Utc>>,
+    acquisition_deadline: tokio::time::Instant,
 }
 
 struct AcquiredFacts {
     values: BTreeMap<String, Value>,
     valid_until: Option<chrono::DateTime<Utc>>,
-}
-
-fn earliest_deadline(
-    left: Option<chrono::DateTime<Utc>>,
-    right: Option<chrono::DateTime<Utc>>,
-) -> Option<chrono::DateTime<Utc>> {
-    match (left, right) {
-        (Some(left), Some(right)) => Some(left.min(right)),
-        (Some(deadline), None) | (None, Some(deadline)) => Some(deadline),
-        (None, None) => None,
-    }
-}
-
-enum SourceStageLookup {
-    Lookup(LookupResult),
-    DeclaredUnresolved,
 }
 
 struct AuditCaller {
@@ -3975,23 +3292,6 @@ impl AuditMaterial {
     }
 }
 
-/// How long one source round-trip may still run, or `None` once the
-/// acquisition ceiling is spent.
-///
-/// `tokio::time::timeout` polls the future it wraps before it consults its
-/// timer, so handing it a zero remainder is not a refusal: the wrapped
-/// execution is polled once, which is enough to acquire a credential and put an
-/// evidence-data request on the wire, and only then is it abandoned. The
-/// ceiling bounds when a request may leave the process, so a spent one has to
-/// be answered before the future is polled at all. The stage's durable
-/// access-attempt append and its preparation script both run after the
-/// deadline was computed, so a remainder of zero is reachable on any stage,
-/// including the first, where no between-stage guard precedes it.
-fn stage_time_budget(deadline: Instant, now: Instant) -> Option<Duration> {
-    let remaining = deadline.saturating_duration_since(now);
-    (!remaining.is_zero()).then_some(remaining)
-}
-
 /// The assertion scope a resolved authorization issues under.
 ///
 /// A holder-bound resolution names no relying party, so its assertion carries
@@ -4019,79 +3319,6 @@ fn map_response_protection(format: ResponseFormat) -> ResponseProtection {
         ResponseFormat::UnsignedJson => ResponseProtection::Unsigned,
         ResponseFormat::SdJwtVc | ResponseFormat::SdJwtVcBatch => ResponseProtection::SdJwtVc,
     }
-}
-
-fn source_selectors(
-    resolved: &ResolvedAuthorization,
-    inputs: &[SelectorInput],
-) -> Result<Vec<ResolvedSourceSelector>, RuntimeFailure> {
-    inputs
-        .iter()
-        .map(|input| {
-            let Some(subject) = resolved
-                .subjects
-                .iter()
-                .find(|subject| subject.role == input.role)
-            else {
-                return Ok(None);
-            };
-            let alternative = input
-                .alternatives
-                .iter()
-                .find(|alternative| alternative.profile == subject.selector_profile)
-                .ok_or_else(selector_contract_failure)?;
-            let values = alternative
-                .fields
-                .iter()
-                .map(|name| {
-                    let field = subject
-                        .fields
-                        .iter()
-                        .find(|field| &field.name == name)
-                        .ok_or_else(selector_contract_failure)?;
-                    let value = match &field.value {
-                        ResolvedSelectorValue::String(value)
-                        | ResolvedSelectorValue::Date(value)
-                        | ResolvedSelectorValue::ControlledCode(value) => {
-                            SelectorValue::String(value.clone())
-                        }
-                        ResolvedSelectorValue::Integer(value) => SelectorValue::Integer(*value),
-                        ResolvedSelectorValue::Boolean(value) => SelectorValue::Boolean(*value),
-                    };
-                    Ok((name.clone(), value))
-                })
-                .collect::<Result<BTreeMap<_, _>, RuntimeFailure>>()?;
-            Ok(Some(ResolvedSourceSelector {
-                role: input.role.clone(),
-                profile: alternative.profile.clone(),
-                values,
-            }))
-        })
-        .collect::<Result<Vec<_>, RuntimeFailure>>()
-        .map(|selectors| selectors.into_iter().flatten().collect())
-}
-
-fn source_selector_input_value(
-    resolved: &ResolvedAuthorization,
-    inputs: &[SelectorInput],
-) -> Result<Value, RuntimeFailure> {
-    if inputs.is_empty() {
-        return Ok(Value::Object(JsonMap::new()));
-    }
-    let active = inputs
-        .iter()
-        .filter(|input| {
-            resolved
-                .subjects
-                .iter()
-                .any(|subject| subject.role == input.role)
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    if active.is_empty() {
-        return Err(selector_contract_failure());
-    }
-    selector_input_value(resolved, &active)
 }
 
 fn selector_input_value(
@@ -4191,71 +3418,13 @@ fn map_selector_limit(error: RateLimitError) -> RuntimeFailure {
     }
 }
 
-/// Whether a declared acquisition budget is spent before the next stage is
-/// entered.
-///
-/// Read between stages rather than only inside one, because a stage entered
-/// with nothing left would still poll its request once before abandoning it,
-/// and one poll is enough to contact a source the budget no longer covers. The
-/// forms that declare no budget bound each call on its own, so no instant
-/// exhausts an acquisition they never bounded.
-pub(crate) fn acquisition_budget_exhausted(deadline: Option<Instant>, now: Instant) -> bool {
-    deadline.is_some_and(|deadline| now >= deadline)
-}
-
-fn source_failure_category(error: &SourceError) -> &'static str {
-    match error {
-        SourceError::Credential => "source-credential",
-        SourceError::Concurrency => "source-concurrency",
-        SourceError::Timeout => "source-timeout",
-        SourceError::Redirect => "source-redirect",
-        SourceError::Status(_) => "source-status",
-        SourceError::WrongMediaType => "source-media-type",
-        SourceError::ResponseTooLarge => "source-response-size",
-        SourceError::InvalidJson
-        | SourceError::Verification
-        | SourceError::ErrorEnvelope
-        | SourceError::ProblemMismatch
-        | SourceError::ProjectionViolation => "source-protocol",
-        SourceError::InvalidPlan | SourceError::InvalidSelectors | SourceError::Transport => {
-            "source-unavailable"
-        }
-        // A statement source has more than one way to fail and each one has a
-        // different fix: mount the file, refresh it, correct the statement,
-        // correct the parameters, raise a budget, or bring the result back
-        // inside its declared contract. One shared label would tell an operator
-        // only that something is wrong somewhere.
-        SourceError::ExtractUnavailable(_) => "source-extract-unavailable",
-        SourceError::ExtractTooOld(_) => "source-extract-stale",
-        SourceError::StatementRefused(_) => "source-statement-refused",
-        SourceError::StatementParameter(_) => "source-statement-parameter",
-        SourceError::StatementBudget(_) => "source-statement-budget",
-        SourceError::StatementResult(_) => "source-statement-result",
-        SourceError::StatementUnavailable => "source-statement-unavailable",
-    }
-}
-
-/// Map a closed source-boundary failure to its public problem class.
-///
-/// The offline fixture command uses this same function, so its symbolic
-/// failure cases cannot drift from the production release pipeline.
-///
-/// Every source failure, on either transport, is one dependency this
-/// deployment could not read. A statement source names a file rather than a
-/// host, but the relying party's position is the same and the extra shape a
-/// statement could carry is exactly the shape that would tell a caller
-/// something about the extract's contents. The acting detail lives in the
-/// audit category and, for the deployment path, in the artifact fault.
-pub fn source_failure_problem(_error: &SourceError) -> ProblemCode {
-    ProblemCode::DependencyUnavailable
-}
-
 fn kernel_failure_category(error: &KernelError) -> &'static str {
     match error {
         KernelError::Preparation => "request-preparation",
         KernelError::Extraction => "fact-unavailable",
         KernelError::DerivationInput => "derivation-input",
         KernelError::SourceProtocol => "source-protocol",
+        KernelError::FactsBound => "acquisition-fact-size",
         KernelError::Script => "script-failure",
         KernelError::Output | KernelError::UndeclaredOutputProperty(_) => "output-gate",
         KernelError::Bundle
@@ -4275,6 +3444,7 @@ fn kernel_failure_problem(error: &KernelError) -> ProblemCode {
         KernelError::Extraction | KernelError::DerivationInput => ProblemCode::EvidenceNotAvailable,
         KernelError::SourceProtocol => ProblemCode::DependencyUnavailable,
         KernelError::Script
+        | KernelError::FactsBound
         | KernelError::Output
         | KernelError::UndeclaredOutputProperty(_)
         | KernelError::Bundle
@@ -4459,65 +3629,115 @@ mod tests {
     }
 
     #[test]
-    fn every_statement_source_failure_audits_under_its_own_category() {
-        use crate::bundle::ArtifactFault;
-        use crate::config::SchemaFault;
-
-        let fault = ArtifactFault::new("queries/example.sql", SchemaFault::because("a cause"));
-        let failures = [
-            SourceError::ExtractUnavailable(fault.clone()),
-            SourceError::ExtractTooOld(fault.clone()),
-            SourceError::StatementRefused(fault.clone()),
-            SourceError::StatementParameter(fault.clone()),
-            SourceError::StatementBudget(fault.clone()),
-            SourceError::StatementResult(fault),
-            SourceError::StatementUnavailable,
+    fn every_pack_source_failure_keeps_its_public_class_and_value_free_audit_category() {
+        let expected = [
+            (
+                PackSourceError::Plan,
+                ProblemCode::ServiceUnavailable,
+                "source-plan",
+            ),
+            (
+                PackSourceError::Inputs,
+                ProblemCode::ServiceUnavailable,
+                "source-inputs",
+            ),
+            (
+                PackSourceError::Authority,
+                ProblemCode::NotAuthorized,
+                "source-authority",
+            ),
+            (
+                PackSourceError::Audit,
+                ProblemCode::ServiceUnavailable,
+                "access-audit",
+            ),
+            (
+                PackSourceError::Budget,
+                ProblemCode::DependencyUnavailable,
+                "acquisition-budget",
+            ),
+            (
+                PackSourceError::Protocol,
+                ProblemCode::DependencyUnavailable,
+                "source-protocol",
+            ),
+            (
+                PackSourceError::Dependency,
+                ProblemCode::DependencyUnavailable,
+                "source-unavailable",
+            ),
+            (
+                PackSourceError::ExtractUnavailable,
+                ProblemCode::DependencyUnavailable,
+                "source-extract-unavailable",
+            ),
+            (
+                PackSourceError::ExtractStale,
+                ProblemCode::DependencyUnavailable,
+                "source-extract-stale",
+            ),
+            (
+                PackSourceError::StatementRefused,
+                ProblemCode::DependencyUnavailable,
+                "source-statement-refused",
+            ),
+            (
+                PackSourceError::StatementParameter,
+                ProblemCode::DependencyUnavailable,
+                "source-statement-parameter",
+            ),
+            (
+                PackSourceError::StatementBudget,
+                ProblemCode::DependencyUnavailable,
+                "source-statement-budget",
+            ),
+            (
+                PackSourceError::StatementResult,
+                ProblemCode::DependencyUnavailable,
+                "source-statement-result",
+            ),
+            (
+                PackSourceError::StatementUnavailable,
+                ProblemCode::DependencyUnavailable,
+                "source-statement-unavailable",
+            ),
+            (
+                PackSourceError::ResponseTooLarge,
+                ProblemCode::DependencyUnavailable,
+                "source-response-size",
+            ),
+            (
+                PackSourceError::Concurrency,
+                ProblemCode::DependencyUnavailable,
+                "source-concurrency",
+            ),
+            (
+                PackSourceError::Credential,
+                ProblemCode::DependencyUnavailable,
+                "source-credential",
+            ),
+            (
+                PackSourceError::Timeout,
+                ProblemCode::DependencyUnavailable,
+                "source-timeout",
+            ),
         ];
 
         let mut categories = BTreeSet::new();
-        for failure in &failures {
-            let category = source_failure_category(failure);
+        for (error, problem, category) in expected {
+            let failure = pack_source_failure(error);
+            assert_eq!(failure.problem, problem);
+            assert_eq!(failure.category, category);
             assert!(
                 categories.insert(category),
-                "two statement failures share the category {category}"
+                "two pack failures share the category {category}"
             );
-            // The public problem class stays one class for every transport, so
-            // the category is the only place the acting difference is recorded.
-            assert_eq!(
-                source_failure_problem(failure),
-                ProblemCode::DependencyUnavailable
-            );
-            // An audit category is a label, never a value.
-            assert!(!category.contains("queries/example.sql"));
+            // A pack failure has more than one repair and the category names
+            // that repair without carrying a path, endpoint, selector or value.
+            assert!(category.bytes().all(|byte| {
+                byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'
+            }));
         }
-
-        for other in [
-            SourceError::Credential,
-            SourceError::Timeout,
-            SourceError::Transport,
-            SourceError::ResponseTooLarge,
-        ] {
-            assert!(
-                categories.insert(source_failure_category(&other)),
-                "a statement failure took an existing category"
-            );
-        }
-    }
-
-    #[test]
-    fn a_spent_acquisition_ceiling_leaves_no_time_for_one_more_source_call() {
-        let now = Instant::now();
-
-        // `tokio::time::timeout` polls the future it wraps before it consults
-        // its timer, so a zero remainder handed to it would still let one
-        // request leave the process after the ceiling. A spent deadline has to
-        // be answered before the source future exists, not by the timer.
-        assert_eq!(stage_time_budget(now, now), None);
-        assert_eq!(stage_time_budget(now - Duration::from_millis(1), now), None);
-        assert_eq!(
-            stage_time_budget(now + Duration::from_millis(5), now),
-            Some(Duration::from_millis(5))
-        );
     }
 
     #[test]

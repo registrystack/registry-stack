@@ -337,12 +337,27 @@ fn every_frozen_profile_negative_is_bound_to_a_mapped_security_negative() {
     }
 }
 
+#[test]
+fn shared_acquisition_engine_is_a_traceable_security_owner() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    assert_reference_is_an_executable_test(
+        &root,
+        "sec-source-request-immutable",
+        &TestReference {
+            file: "crates/registry-adapter-engine/tests/connection_isolation.rs".to_owned(),
+            name: "different_named_connections_with_identical_material_do_not_share_cache_or_admission"
+                .to_owned(),
+        },
+    );
+}
+
 /// Prove that one mapped reference still names a real Rust test item, so a
 /// renamed, moved, or deleted test fails the traceability checker.
 fn assert_reference_is_an_executable_test(root: &Path, entry_id: &str, test: &TestReference) {
     // Evidence security invariants may be implemented by the runtime, its
-    // relying-party client, the portable verifier, the narrowly shared
-    // platform primitives they use, the governed Casework authority, or the
+    // adopter tooling, relying-party client, the portable verifier, the shared Adapter
+    // acquisition engine, the narrowly shared platform primitives they use,
+    // the governed Casework authority, or the
     // OpenID4VCI delivery front end,
     // which owns the wallet-facing boundary the runtime deliberately does not
     // speak. The front end is a permitted implementer of its own delivery
@@ -350,8 +365,10 @@ fn assert_reference_is_an_executable_test(root: &Path, entry_id: &str, test: &Te
     // than at the endpoint would not be traceable here, which is the point.
     let permitted_crate = [
         "crates/registry-evidence/",
+        "crates/registry-evidencectl/",
         "crates/registry-evidence-client/",
         "crates/registry-evidence-verifier/",
+        "crates/registry-adapter-engine/",
         "crates/registry-evidence-oid4vci/",
         "crates/registry-casework/",
         "crates/registry-platform-audit/",

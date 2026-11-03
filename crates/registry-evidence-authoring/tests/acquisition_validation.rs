@@ -1,4 +1,4 @@
-use registry_evidence_authoring::{acquisition_validation, project::EvidenceProject};
+use registry_evidence_authoring::project::EvidenceProject;
 use serde_json::{json, Value};
 
 fn project_value() -> Value {
@@ -66,10 +66,6 @@ fn source(selectors: Value, path: &str, path_bindings: Value, facts: Value) -> V
     })
 }
 
-fn project(value: Value) -> EvidenceProject {
-    serde_json::from_value(value).expect("test project shape")
-}
-
 fn fetch_set(value: &mut Value, members: Value) {
     value["acquisitionCapabilities"] = json!(["search-then-fetch-set"]);
     value["assertionDefinitions"]["status"]["acquisition"] = json!({
@@ -80,14 +76,18 @@ fn fetch_set(value: &mut Value, members: Value) {
     });
 }
 
-fn has(findings: &[registry_evidence_authoring::Finding], code: &str, path: &str) -> bool {
-    findings
-        .iter()
-        .any(|finding| finding.code == code && finding.field.to_json_pointer() == path)
+fn assert_retired_wire_refused(value: Value, member: &str) {
+    let refusal = serde_json::from_value::<EvidenceProject>(value)
+        .expect_err("the retired source/acquisition grammar must stay closed")
+        .to_string();
+    assert!(
+        refusal.contains(member),
+        "the refusal did not identify {member}: {refusal}"
+    );
 }
 
 #[test]
-fn valid_two_member_fetch_set_matches_the_retained_runtime_shape() {
+fn former_valid_two_member_fetch_set_is_refused_by_the_pack_binding_shape() {
     let mut value = project_value();
     fetch_set(
         &mut value,
@@ -96,18 +96,20 @@ fn valid_two_member_fetch_set_matches_the_retained_runtime_shape() {
             {"source": "member-b", "factInputs": ["record-id"]}
         ]),
     );
-    assert!(acquisition_validation::validate(&project(value)).is_empty());
+    assert_retired_wire_refused(value, "acquisitionCapabilities");
 }
 
 #[test]
-fn fetch_set_refuses_one_or_five_members_at_the_fetch_field() {
-    for (members, expected) in [
+fn retired_fetch_set_cardinalities_are_both_refused_before_semantic_validation() {
+    for members in [
         (vec!["member-a"], 1usize),
         (
             vec!["member-a", "member-b", "third", "fourth", "fifth"],
             5usize,
         ),
-    ] {
+    ]
+    .map(|(members, _)| members)
+    {
         let mut value = project_value();
         for source_id in members.iter().skip(2) {
             value["sources"][*source_id] = source(
@@ -126,21 +128,13 @@ fn fetch_set_refuses_one_or_five_members_at_the_fetch_field() {
                     .collect(),
             ),
         );
-        let findings = acquisition_validation::validate(&project(value));
-        assert!(
-            has(
-                &findings,
-                "acquisition-fetch-count",
-                "/assertionDefinitions/status/acquisition/fetch"
-            ),
-            "{expected} members: {findings:?}"
-        );
+        assert_retired_wire_refused(value, "acquisitionCapabilities");
     }
 }
 
 #[test]
-fn fetch_member_fact_inputs_are_bounded_named_and_resolved() {
-    for (inputs, code, path) in [
+fn retired_fetch_member_fact_input_variants_are_all_refused() {
+    for inputs in [
         (
             json!([]),
             "acquisition-fact-input-count",
@@ -156,7 +150,9 @@ fn fetch_member_fact_inputs_are_bounded_named_and_resolved() {
             "acquisition-fact-input-name",
             "/assertionDefinitions/status/acquisition/fetch/0/factInputs/0",
         ),
-    ] {
+    ]
+    .map(|(inputs, _, _)| inputs)
+    {
         let mut value = project_value();
         fetch_set(
             &mut value,
@@ -165,8 +161,7 @@ fn fetch_member_fact_inputs_are_bounded_named_and_resolved() {
                 {"source": "member-b", "factInputs": ["record-id"]}
             ]),
         );
-        let findings = acquisition_validation::validate(&project(value));
-        assert!(has(&findings, code, path), "{findings:?}");
+        assert_retired_wire_refused(value, "acquisitionCapabilities");
     }
 
     let mut duplicate = project_value();
@@ -184,7 +179,7 @@ fn fetch_member_fact_inputs_are_bounded_named_and_resolved() {
 }
 
 #[test]
-fn fetch_set_refuses_fact_overlap_and_a_merged_set_above_64() {
+fn retired_fetch_set_overlap_and_width_variants_are_refused() {
     let mut overlap = project_value();
     overlap["sources"]["member-a"]["facts"] =
         json!({"record-id": {"type": "string", "minimumBytes": 1, "maximumBytes": 64}});
@@ -195,12 +190,7 @@ fn fetch_set_refuses_fact_overlap_and_a_merged_set_above_64() {
             {"source": "member-b", "factInputs": ["record-id"]}
         ]),
     );
-    let findings = acquisition_validation::validate(&project(overlap));
-    assert!(has(
-        &findings,
-        "acquisition-fact-overlap",
-        "/sources/member-a/facts/record-id"
-    ));
+    assert_retired_wire_refused(overlap, "acquisitionCapabilities");
 
     let mut too_wide = project_value();
     too_wide["sources"]["search"]["facts"] = facts("search", 22);
@@ -215,12 +205,7 @@ fn fetch_set_refuses_fact_overlap_and_a_merged_set_above_64() {
             {"source": "member-b", "factInputs": ["record-id"]}
         ]),
     );
-    let findings = acquisition_validation::validate(&project(too_wide));
-    assert!(has(
-        &findings,
-        "acquisition-fact-count",
-        "/assertionDefinitions/status/acquisition"
-    ));
+    assert_retired_wire_refused(too_wide, "acquisitionCapabilities");
 }
 
 fn facts(prefix: &str, count: usize) -> Value {
@@ -232,7 +217,7 @@ fn facts(prefix: &str, count: usize) -> Value {
 }
 
 #[test]
-fn fetch_set_requires_its_package_capability() {
+fn retired_fetch_set_without_the_capability_is_still_refused() {
     let mut value = project_value();
     fetch_set(
         &mut value,
@@ -245,24 +230,14 @@ fn fetch_set_requires_its_package_capability() {
         .as_object_mut()
         .unwrap()
         .remove("acquisitionCapabilities");
-    let findings = acquisition_validation::validate(&project(value));
-    assert!(has(
-        &findings,
-        "acquisition-capability",
-        "/acquisitionCapabilities"
-    ));
+    assert_retired_wire_refused(value, "fetch");
 }
 
 #[test]
-fn initial_selectors_and_fetch_member_path_bindings_keep_their_runtime_roles() {
+fn retired_initial_selector_and_fetch_binding_variants_are_refused() {
     let mut no_search_selectors = project_value();
     no_search_selectors["sources"]["search"]["selectors"] = json!([]);
-    let findings = acquisition_validation::validate(&project(no_search_selectors));
-    assert!(has(
-        &findings,
-        "acquisition-initial-selectors",
-        "/sources/search/selectors"
-    ));
+    assert_retired_wire_refused(no_search_selectors, "type");
 
     let mut narrowed = project_value();
     narrowed["sources"]["member-a"]["request"]["pathBindings"]["record-id"] =
@@ -274,26 +249,16 @@ fn initial_selectors_and_fetch_member_path_bindings_keep_their_runtime_roles() {
             {"source": "member-b", "factInputs": ["record-id"]}
         ]),
     );
-    let findings = acquisition_validation::validate(&project(narrowed));
-    assert!(has(
-        &findings,
-        "acquisition-binding-input",
-        "/sources/member-a/request/pathBindings/record-id"
-    ));
+    assert_retired_wire_refused(narrowed, "acquisitionCapabilities");
 }
 
 #[test]
-fn classic_single_and_search_then_fetch_keep_their_original_fact_rules() {
-    let single = project(project_value());
-    assert!(acquisition_validation::validate(&single).is_empty());
+fn retired_single_and_search_then_fetch_variants_are_refused() {
+    assert_retired_wire_refused(project_value(), "type");
 
     let mut classic = project_value();
     classic["sources"]["member-a"]["facts"] = classic["sources"]["search"]["facts"].clone();
     classic["assertionDefinitions"]["status"]["acquisition"] =
         json!({"type": "search-then-fetch", "search": "search", "fetch": "member-a"});
-    let findings = acquisition_validation::validate(&project(classic));
-    assert!(
-        findings.is_empty(),
-        "classic derivation receives only fetch facts and permits names also used by search: {findings:?}"
-    );
+    assert_retired_wire_refused(classic, "fetch");
 }

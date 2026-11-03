@@ -1,11 +1,13 @@
 # Registry Adapter
 
-Use the Registry Adapter when the records a caller needs already live in a
-system you do not replace, and the caller expects a standard registry API.
-The Adapter is a live translation facade: it serves a declared API, such as
-the `breg-records` profile, by calling the source system on each request and
-translating the answer. It holds no records of its own; the source system
-stays the system of record.
+Use the Registry Adapter to expose existing records through a standard
+registry API or ingest them into a registry workflow.
+The Adapter runs reviewed integration routes over that source. Its facade
+serves a declared API, such as the `breg-records` profile, by translating each
+request. Its ingestion job reads bounded source pages and delivers their
+reviewed projection either to a BReg Action or to a Coordinator workflow.
+The facade holds no records; the job stores item identity and progress, never
+source payloads. The institution's registry remains the system of record.
 
 All system knowledge lives in configuration. A reviewed, versioned pack
 declares a source's endpoints and route templates, with field mapping in
@@ -24,30 +26,133 @@ loaded Adapter process exposes to an external gateway.
 ## Status
 
 Unreleased and pre-1.0. The configuration formats are `v1alpha1` and may
-change without migration. The engine serves the read operations of the
-`breg-records` profile over the compiled contract; `CONCEPT.md` section 8.10
-carries the status of each ported Camel concept, and section 14 the
-increments still to land.
+change without migration. `CONCEPT.md` section 8.10 records each ported
+concept and its evidence; section 14 records pending increments. Section 17
+owns the ingestion contract and its declared limits.
 
 ## Crates
 
 | Crate | Owns |
 |---|---|
 | `crates/registry-adapter-core` | Source-neutral model, wire DTOs, `adapter.*` problem codes, and the pure authoring checks; no I/O |
-| `crates/registry-adapter` | The `adapter` binary: the governed facade, the Camel-port engine, the audit journal, and the idempotency store |
+| `crates/registry-adapter-engine` | Listener-free route compilation, execution, components and replay shared by the facade, job host and Evidence |
+| `crates/registry-adapter` | The `adapter` binary: the governed facade, audit journal and idempotency store |
+| `crates/registry-adapter-job` | The source-build `adapter-job` binary: bounded ingestion, item progress, scheduling and explicit destination delivery |
+| `crates/registry-adapter-connectors` | BReg client integration reachable only through the job host's default-off `direct-breg` feature |
 | `crates/registry-adapterctl` | The `adapterctl` binary: `check`, `compile`, `fixtures replay`, `verify --live`, and `schemas` |
 
 ## Layout
 
 | Path | Holds |
 |---|---|
-| `schemas/` | Generated JSON Schemas for the six formats (profile, pack, project, runtime, fixture, effective contract) |
+| `schemas/` | Generated JSON Schemas for eight formats (profile, pack, project, runtime, job, job runtime, fixture, effective contract) |
 | `profiles/` | Facade profiles: `breg-records`, plus `case-api` and `govstack-consultation`, which prove the exposed API is configuration |
-| `packs/` | Maintained packs: `dhis2-tracker` and `opencrvs-events` |
+| `packs/` | Maintained facade and ingestion packs: `dhis2-tracker`, `opencrvs-events`, `kobotoolbox` and `odk-central` |
 | `examples/` | Example projects that bind the packs to profiles, and the registered format examples |
 | `fixtures/` | Recorded or documented upstream exchanges for the maintained packs, the bad-authoring `corpus/`, and `source-shapes/` |
 | `fixtures/source-shapes/` | Authored packs over five upstream API shapes (FHIR R4 search and conditional create, Relay GraphQL, JSON:API behind mTLS, and a second target profile); each README states what the shape proves and the gaps it records |
 | `scripts/` | Product gates and helpers |
+
+## Recover a multi-effect facade write
+
+Use the [facade recovery example](examples/facade-recovery/README.md) when a
+source process is one fixed sequence of provider-idempotent HTTP operations.
+It shows identifier-only checkpoints, same-body and same-key recovery at the
+first unfinished step, the artifact and lease fences, and the authoring shapes
+the Adapter refuses because skipped source-response state is not
+reconstructible in this closed subset. Later reads from the digest-bound,
+resupplied caller record are intentionally deferred rather than inherently
+dependent on stored payloads.
+
+## Operate an SFTP job source
+
+The default-off `job-sftp` host is read-only. Give it a dedicated source
+account whose server-side authorization confines that account to the configured
+`baseDirectory`, using a chroot or an equivalent SFTP-server policy. SFTP v3
+has no portable atomic `open-beneath` or no-follow operation: client symlink and
+canonical-path checks are defense in depth, not the confinement boundary.
+
+Choose exactly one completed-file protocol:
+
+- `completed-name` means the producer writes under another name, closes it,
+  then atomically renames the complete bytes into the final candidate name.
+- `done-file` means the producer removes any stale marker before replacing a
+  same-name file, writes under another name, closes it, atomically renames the
+  complete bytes into place, then publishes the marker last. This read-only consumer
+  never removes markers. Leaving an old marker while overwriting in place is an
+  unsupported producer protocol and cannot be made safe by size, timestamp, or
+  marker rechecks.
+
+Pin one complete OpenSSH Ed25519 or P-256 public key and use only secret
+references for the password or private key. The maintained
+[`sftp-source` example](examples/sftp-source/README.md) shows the runtime shape
+and producer lifecycle.
+
+## Operate a RabbitMQ job source
+
+The default-off `job-rabbitmq` host reads one message at a time with the
+explicit `rabbitmq-json` profile and manual source-owned settlement. Production
+builds require AMQPS with system roots or an operator-captured private CA.
+Plain AMQP exists only behind the named loopback fixture feature and is not a
+production runtime option.
+
+Publish immutable events with a unique, stable AMQP `message-id`. The job key
+combines the configured namespace with that identity. Its stored digest
+domain-separates the raw-message revision from the declared projection digest,
+so neither a changed body nor a reviewed normalization change can silently
+skip. Reuse of one identity for changed event bytes or projection is retained
+as `adapter.job.rabbitmq-event-changed` and held for an operator; it is not
+delivered or acknowledged automatically.
+
+Publishers must also set `delivery_mode=2` and wait for publisher confirms.
+The host rejects a delivery without mode 2 to the configured DLQ under
+`adapter.job.rabbitmq-delivery-mode`; it cannot tell whether the producer
+received a publisher confirm. The dedicated source principal needs only the
+resource-scoped configure/write/read regexes in the maintained example, not a
+broker administrative tag.
+
+An acknowledged destination outcome is written to PostgreSQL before the broker
+delivery is acknowledged. An item-scoped refusal is written before the
+delivery is rejected without requeue, so the configured durable DLX and DLQ
+receive it. Pending, stopped, crashed, and held deliveries remain unsettled and
+requeue when their channel closes. A held message can therefore remain at the
+head of a queue and delay later messages; use operational queue partitioning
+where head blocking is unacceptable. The job stores identity, digest, state,
+and destination references only, never message payloads or broker credentials.
+Settlement uses the poll operation's finite deadline. A timeout is uncertain,
+keeps source position safe, and reconnects on a later bounded read; the host
+does not leave Lapin's detached automatic-recovery loop running.
+
+This source uses AMQP `basic.get`, which is not governed by broker prefetch.
+`maximumOutstandingDeliveries` is a local semaphore bound over unsettled
+deliveries. Lapin has already assembled a body before the job can apply its
+retained-message ceiling, so every authenticated institutional broker must set
+RabbitMQ's hard `max_message_size` no higher than the deployment ceiling. This
+client does not claim to attest that broker setting. Queue `--dry-run` refuses
+before broker acquisition because AMQP 0-9-1 has no side-effect-free peek and
+even requeueing can consume a delivery attempt.
+
+The [`rabbitmq-source` example](examples/rabbitmq-source/README.md) shows the
+authored endpoint, strict decoder, runtime TLS and dead-letter bindings, and
+the broker-side requirement.
+
+## Resolve held job items
+
+`adapter-job status` reports aggregate `holdGuidance` by code. Use
+`adapter-job inspect` for the item-level `hold`, including the stored
+`destinationReference` when one exists, the `actionOwner`, and the static
+`nextAction`. These reports are observational: the Adapter has no generic
+unhold, retry, accept, or acknowledge mutation. A held row remains held, and
+an unchanged held item is skipped by ordinary passes and rescans. Resolve a
+BReg outcome in BReg, or a Coordinator Run and linked review in their owning
+products.
+
+For `adapter.job.rabbitmq-event-changed`, first establish any possible
+destination outcome. The broker operator then resolves the old unsettled
+delivery under approved broker policy. Only after that does the source
+operator correct immutable-identity and version handling for legitimate
+future work. Publishing a new message ID does not clear the old held row or
+acknowledge its delivery; that delivery can continue to block the queue head.
 
 ## Check the product
 
@@ -59,7 +164,8 @@ export CARGO_TARGET_DIR=/path/to/your/target
 products/adapter/scripts/check-contracts.sh
 ```
 
-`check-contracts.sh` formats, lints, and tests the three adapter crates,
+`check-contracts.sh` formats, lints and tests the facade, core, engine, job,
+connector and authoring crates, including the declared feature lanes. It
 holds the generated schemas and the effective-contract example to their
 generators, runs the platform configuration-format lint and
 `check-port-table.py`, checks and replays the examples, holds each source
@@ -67,6 +173,24 @@ shape to its committed contract and fixtures, and runs the bad-authoring
 corpus. `products/adapter/scripts/test-postgres.sh` runs the
 PostgreSQL-gated suites; without `ADAPTER_TEST_DATABASE_URL` it starts and
 removes its own loopback PostgreSQL container.
+
+`products/adapter/scripts/test-job-postgres.sh` also builds BReg and
+Coordinator together from the current checkout and runs the ignored direct
+BReg and signed Coordinator-event job proofs against their real binaries and
+PostgreSQL. Set `CARGO_TARGET_DIR` explicitly and provide Docker; the wrapper
+owns its pinned loopback PostgreSQL fixture and removes it on success or
+failure. To run only those destination proofs against a caller-owned
+disposable loopback database:
+
+```sh
+CARGO_TARGET_DIR=/path/to/your/target \
+ADAPTER_TEST_DATABASE_URL=postgresql://user:password@127.0.0.1:5432/adapter \
+python3 products/adapter/scripts/test-connector-native.py --suite job-destinations
+```
+
+This is native fixture evidence for destination admission, recovery, and
+changed-item holds. It is not the controlled Kobo, review-provider, and
+application drill required by `CONCEPT.md` section 17.7.
 
 To check one project by hand:
 

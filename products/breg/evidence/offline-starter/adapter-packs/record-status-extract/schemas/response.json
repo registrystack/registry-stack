@@ -1,0 +1,30 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["rows", "extract"],
+  "properties": {
+    "rows": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 2,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["status"],
+        "properties": {
+          "status": {"type": "string", "minLength": 4, "maxLength": 32}
+        }
+      }
+    },
+    "extract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["publishedAt", "publisher", "extractId"],
+      "properties": {
+        "publishedAt": {"type": "string", "format": "date-time"},
+        "publisher": {"type": "string", "minLength": 1, "maxLength": 512},
+        "extractId": {"type": "string", "minLength": 1, "maxLength": 512}
+      }
+    }
+  }
+}

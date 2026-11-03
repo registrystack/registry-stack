@@ -3,9 +3,9 @@
 //! It reads the runtime file through the shared reader, verifies and loads the
 //! package the file binds as that package is found, and applies every rule the
 //! runtime applies to the pair that needs no secret, network, or database.
-//! Every problem it finds becomes one CFG-DIAG-1 diagnostic: no semantic rule
-//! stops the check at its first finding, and no message repeats a configured
-//! value (CFG-SEC-3).
+//! Independent configuration findings accumulate as CFG-DIAG-1 diagnostics.
+//! A refused source plan reports its governed artifact before resource binding
+//! comparison; no message repeats a configured value (CFG-SEC-3).
 //!
 //! Freezing, secret material, extract capture, and runtime dependencies are
 //! properties of the host the deployment runs on, not of its configuration.
@@ -18,6 +18,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use registry_adapter_engine::evidence::EvidenceCompileError;
 use registry_platform_config::{contains_environment_expression, PackageError, PackageErrorKind};
 use registry_platform_yaml::{
     escape_pointer_segment, Diagnostic, Node, NodeValue, Position, Reader, Refusal, Report,
@@ -26,8 +27,8 @@ use registry_platform_yaml::{
 
 use crate::{
     bundle::{
-        evidence_package_limits, open_no_follow, runtime_binding_findings, validate_ca_bundle,
-        ArtifactFault, Bundle, BundleError, MAX_CA_BUNDLE_BYTES,
+        evidence_package_limits, runtime_binding_findings, validate_ca_bundle, ArtifactFault,
+        Bundle, BundleError, RuntimeBindingPlanError, MAX_CA_BUNDLE_BYTES,
     },
     config::{report_in_file, ConfigError, RuntimeConfig, MAX_CONFIG_BYTES},
 };
@@ -418,7 +419,14 @@ fn push_binding_findings(
     config: &RuntimeConfig,
     skip_substituted: bool,
 ) {
-    for finding in runtime_binding_findings(&bundle.config, config) {
+    let findings = match runtime_binding_findings(bundle, config) {
+        Ok(findings) => findings,
+        Err(error) => {
+            push_binding_plan_error(check, layout, error);
+            return;
+        }
+    };
+    for finding in findings {
         if skip_substituted && layout.substituted(&finding.pointer) {
             continue;
         }
@@ -434,6 +442,48 @@ fn push_binding_findings(
             message,
             finding.action,
         );
+    }
+}
+
+/// Report the source-plan failures whose repair belongs to the runtime file.
+/// Invalid acquisition limits already have their field diagnostics from
+/// `RuntimeConfig::findings`; planning cannot compare source resources after
+/// that refusal, and must not fabricate a second package error.
+fn push_binding_plan_error(
+    check: &mut OfflineCheck,
+    layout: &Layout,
+    error: RuntimeBindingPlanError,
+) {
+    match error {
+        RuntimeBindingPlanError::Limits => {}
+        RuntimeBindingPlanError::SourcePlan {
+            error:
+                EvidenceCompileError::StaticOperationBudgetExceeded { required, maximum },
+            ..
+        } => check.push_runtime(
+            layout,
+            "evidence.runtime.source-operation-budget-exceeded",
+            "/sourceAcquisition/maximumDataOperations",
+            false,
+            format!(
+                "a selected source route requires {required} data operations in its static worst case, above the configured maximum of {maximum}"
+            ),
+            format!(
+                "Raise sourceAcquisition.maximumDataOperations to at least {required}, or reduce and bound the selected route's sends and retries."
+            ),
+        ),
+        RuntimeBindingPlanError::SourcePlan {
+            error: EvidenceCompileError::StaticOperationBudgetUncountable,
+            ..
+        } => check.push_runtime(
+            layout,
+            "evidence.runtime.source-operation-budget-uncountable",
+            "/sourceAcquisition/maximumDataOperations",
+            false,
+            "a selected source route exceeds the reader's nesting or numeric count bound, so its static worst-case data-operation count cannot be derived",
+            "Reduce the selected route's nesting or bounded operation multipliers, then rebuild the package.",
+        ),
+        other => push_bundle_error(check, layout, other.into_bundle_error()),
     }
 }
 
@@ -585,16 +635,18 @@ fn push_package_error(check: &mut OfflineCheck, layout: &Layout, error: &Package
                     "Remove the entry, since a package holds only regular files, and rebuild the package with `evidencectl package`.",
                 );
             }
-            for (pointer, position) in members {
+            for member in members {
                 let mut diagnostic = Diagnostic::error(
                     "evidence.package.unsafe-entry",
-                    pointer,
+                    member.pointer,
                     format!("the package file this member names {reason}"),
                     "Put a regular file at this path, since a package holds only regular files, and rebuild the package with `evidencectl package`.",
                 );
-                diagnostic.artifact = Some(BUNDLE_ARTIFACT.to_owned());
-                diagnostic.source =
-                    Some(source(&check.package_file(BUNDLE_DOCUMENT), Some(position)));
+                diagnostic.artifact = Some(member.artifact.to_owned());
+                diagnostic.source = Some(source(
+                    &check.package_file(&member.document),
+                    Some(member.position),
+                ));
                 check.diagnostics.push(diagnostic);
             }
             return;
@@ -668,7 +720,7 @@ fn oversized_document(check: &OfflineCheck, path: &str) -> Option<Report> {
 /// cap, read from a regular file opened without following a link. `None` when
 /// the file is anything else or cannot be read.
 fn read_package_document(check: &OfflineCheck, path: &str) -> Option<Vec<u8>> {
-    let file = open_no_follow(&check.package_root.as_ref()?.join(path)).ok()?;
+    let file = open_package_document(check, path)?;
     if !file.metadata().ok()?.is_file() {
         return None;
     }
@@ -680,27 +732,132 @@ fn read_package_document(check: &OfflineCheck, path: &str) -> Option<Vec<u8>> {
     Some(bytes)
 }
 
-/// The bundle members whose value is the package path `path`, each with the
-/// position of that value, so a refused package entry is reported where the
-/// author named it (CFG-VAL-8, CFG-DIAG-1). Empty when no member names the
-/// entry or the bundle document cannot be read as YAML, which leaves the
-/// refusal at the package directory.
+/// Open a package diagnostic document without following any directory link.
+/// Verification has already refused the package, so every parent is pinned
+/// independently before the bounded diagnostic read.
+fn open_package_document(check: &OfflineCheck, relative: &str) -> Option<File> {
+    let root = check.package_root.as_ref()?;
+    let parts = Path::new(relative)
+        .components()
+        .map(|part| match part {
+            std::path::Component::Normal(part) => Some(part),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let (name, parents) = parts.split_last()?;
+    #[cfg(unix)]
+    {
+        use rustix::fs::{open, openat, Mode, OFlags};
+        let directory_flags =
+            OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::DIRECTORY;
+        let mut directory = open(root, directory_flags, Mode::empty()).ok()?;
+        for parent in parents {
+            directory = openat(&directory, *parent, directory_flags, Mode::empty()).ok()?;
+        }
+        let file = openat(
+            &directory,
+            *name,
+            OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK,
+            Mode::empty(),
+        )
+        .ok()?;
+        Some(File::from(file))
+    }
+    #[cfg(not(unix))]
+    {
+        // Optional nested diagnostics must not read through an unverified
+        // parent on a platform without descriptor-relative no-follow opens.
+        if !parents.is_empty() {
+            return None;
+        }
+        crate::bundle::open_no_follow(&root.join(name)).ok()
+    }
+}
+
+struct PackageMemberLocation {
+    artifact: &'static str,
+    document: String,
+    pointer: String,
+    position: Position,
+}
+
+/// Locate a refused file in the bundle or its captured Adapter pack. Pack
+/// artifact pins, rather than repeated call sites, own their repair location
+/// (CFG-VAL-8, CFG-DIAG-1). Missing or unreadable declarations leave the refusal
+/// at the package directory.
 ///
-/// The package failed verification, so the bundle read here is untrusted: it
-/// is read within the reader's cap for positions only, and no value from it
-/// reaches a diagnostic.
-fn bundle_members_naming(check: &OfflineCheck, path: &str) -> Vec<(String, Position)> {
-    let mut members = Vec::new();
-    let tree = read_package_document(check, BUNDLE_DOCUMENT).and_then(|bytes| {
+/// Verification failed, so these documents are untrusted. Reads stay bounded
+/// and refuse every parent link; only member positions reach diagnostics.
+fn bundle_members_naming(check: &OfflineCheck, path: &str) -> Vec<PackageMemberLocation> {
+    let mut locations = Vec::new();
+    let bundle = read_package_document(check, BUNDLE_DOCUMENT).and_then(|bytes| {
         Reader::new(check.package_file(BUNDLE_DOCUMENT))
             .scan(&bytes)
             .ok()
             .flatten()
     });
-    if let Some(tree) = tree {
+    if let Some(tree) = bundle {
+        let mut members = Vec::new();
         collect_members_naming(&tree, path, &mut String::new(), &mut members);
+        locations.extend(
+            members
+                .into_iter()
+                .map(|(pointer, position)| PackageMemberLocation {
+                    artifact: BUNDLE_ARTIFACT,
+                    document: BUNDLE_DOCUMENT.to_owned(),
+                    pointer,
+                    position,
+                }),
+        );
     }
-    members
+    let parts = path.split('/').collect::<Vec<_>>();
+    if parts.len() < 4
+        || parts[0] != "adapter-packs"
+        || registry_platform_yaml::LocalId::new(parts[1]).is_err()
+        || parts[2].len() != 64
+        || !parts[2]
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    {
+        return locations;
+    }
+    let document = format!("{}/{}/{}/pack.yaml", parts[0], parts[1], parts[2]);
+    let Some(tree) = read_package_document(check, &document).and_then(|bytes| {
+        Reader::new(check.package_file(&document))
+            .scan(&bytes)
+            .ok()
+            .flatten()
+    }) else {
+        return locations;
+    };
+    if !tree.pointer("/kind").is_some_and(
+        |node| matches!(&node.value, NodeValue::String(value) if value.text == "AdapterPack"),
+    ) {
+        return locations;
+    }
+    let relative = parts[3..].join("/");
+    let mut members = Vec::new();
+    collect_members_naming(&tree, &relative, &mut String::new(), &mut members);
+    for (pointer, position) in members {
+        // The digest declaration owns the artifact. Repeated script call-site
+        // references do not duplicate the same repair diagnostic.
+        let Some(parent) = pointer.strip_suffix("/path") else {
+            continue;
+        };
+        if tree
+            .pointer(parent)
+            .and_then(|node| node.get("digest"))
+            .is_some()
+        {
+            locations.push(PackageMemberLocation {
+                artifact: "AdapterPack",
+                document: document.clone(),
+                pointer,
+                position,
+            });
+        }
+    }
+    locations
 }
 
 fn collect_members_naming(
@@ -944,6 +1101,92 @@ impl ScalarHook for MarkSubstitutions {
 mod tests {
     use super::*;
 
+    fn acquisition_layout() -> Layout {
+        Layout::scan(
+            "runtime.yaml",
+            b"sourceAcquisition:\n  maximumDataOperations: 2\n",
+        )
+    }
+
+    #[test]
+    fn static_operation_budget_failure_names_the_runtime_limit_and_exact_repair() {
+        let mut check = OfflineCheck::new("runtime.yaml".to_owned());
+        push_binding_plan_error(
+            &mut check,
+            &acquisition_layout(),
+            RuntimeBindingPlanError::SourcePlan {
+                artifact_prefix: "adapter-packs/register/digest".to_owned(),
+                error: EvidenceCompileError::StaticOperationBudgetExceeded {
+                    required: 3,
+                    maximum: 2,
+                },
+            },
+        );
+
+        let [diagnostic] = check.diagnostics.as_slice() else {
+            panic!("one runtime budget diagnostic: {:?}", check.diagnostics);
+        };
+        assert_eq!(
+            diagnostic.code,
+            "evidence.runtime.source-operation-budget-exceeded"
+        );
+        assert_eq!(diagnostic.path, "/sourceAcquisition/maximumDataOperations");
+        assert_eq!(diagnostic.artifact.as_deref(), Some(RUNTIME_ARTIFACT));
+        assert_eq!(
+            diagnostic.message,
+            "a selected source route requires 3 data operations in its static worst case, above the configured maximum of 2"
+        );
+        assert_eq!(
+            diagnostic.suggested_action,
+            "Raise sourceAcquisition.maximumDataOperations to at least 3, or reduce and bound the selected route's sends and retries."
+        );
+    }
+
+    #[test]
+    fn uncountable_static_operation_cost_names_both_repair_causes() {
+        let mut check = OfflineCheck::new("runtime.yaml".to_owned());
+        push_binding_plan_error(
+            &mut check,
+            &acquisition_layout(),
+            RuntimeBindingPlanError::SourcePlan {
+                artifact_prefix: "adapter-packs/register/digest".to_owned(),
+                error: EvidenceCompileError::StaticOperationBudgetUncountable,
+            },
+        );
+
+        let [diagnostic] = check.diagnostics.as_slice() else {
+            panic!("one runtime budget diagnostic: {:?}", check.diagnostics);
+        };
+        assert_eq!(
+            diagnostic.code,
+            "evidence.runtime.source-operation-budget-uncountable"
+        );
+        assert_eq!(diagnostic.path, "/sourceAcquisition/maximumDataOperations");
+        assert_eq!(diagnostic.artifact.as_deref(), Some(RUNTIME_ARTIFACT));
+        assert_eq!(
+            diagnostic.message,
+            "a selected source route exceeds the reader's nesting or numeric count bound, so its static worst-case data-operation count cannot be derived"
+        );
+        assert_eq!(
+            diagnostic.suggested_action,
+            "Reduce the selected route's nesting or bounded operation multipliers, then rebuild the package."
+        );
+    }
+
+    #[test]
+    fn invalid_limits_do_not_add_a_bogus_package_plan_error() {
+        let mut check = OfflineCheck::new("runtime.yaml".to_owned());
+        push_binding_plan_error(
+            &mut check,
+            &acquisition_layout(),
+            RuntimeBindingPlanError::Limits,
+        );
+        assert!(
+            check.diagnostics.is_empty(),
+            "RuntimeConfig::findings owns the invalid-limit diagnostic"
+        );
+    }
+
     #[test]
     fn a_schema_path_becomes_a_pointer() {
         assert_eq!(
@@ -952,5 +1195,29 @@ mod tests {
         );
         assert_eq!(schema_path_pointer("a[1][2].b"), "/a/1/2/b");
         assert_eq!(schema_path_pointer("rateLimits"), "/rateLimits");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn package_diagnostic_documents_never_follow_a_parent_directory_link() {
+        let root = tempfile::tempdir().expect("synthetic package root");
+        let outside = tempfile::tempdir().expect("synthetic outside root");
+        let digest = "a".repeat(64);
+        std::fs::create_dir(outside.path().join(&digest)).unwrap();
+        std::fs::write(
+            outside.path().join(&digest).join("pack.yaml"),
+            b"private synthetic canary",
+        )
+        .unwrap();
+        std::fs::create_dir(root.path().join("adapter-packs")).unwrap();
+        std::os::unix::fs::symlink(outside.path(), root.path().join("adapter-packs/fixture"))
+            .unwrap();
+        let mut check = OfflineCheck::new("runtime.yaml".to_owned());
+        check.package_root = Some(root.path().to_owned());
+        assert!(read_package_document(
+            &check,
+            &format!("adapter-packs/fixture/{digest}/pack.yaml")
+        )
+        .is_none());
     }
 }

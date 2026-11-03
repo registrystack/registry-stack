@@ -22,8 +22,9 @@ entries:
   - id: acceptance-row-05
     summary: Source request method, URL, fields, credentials, size, timeout, and redirect behavior remain fixed by trusted configuration.
     tests:
-      - {file: crates/registry-evidence/tests/source_contracts.rs, name: exact_request_applies_path_query_body_headers_auth_and_projection_once}
-      - {file: crates/registry-evidence/tests/source_contracts.rs, name: source_executor_failure_matrix_is_exact_single_request_and_value_free}
+      - {file: crates/registry-evidence/tests/support/source_contracts_pack.rs, name: captured_pack_owns_exact_body_headers_auth_json_projection_and_privacy}
+      - {file: crates/registry-evidence/tests/support/source_contracts_pack.rs, name: shared_pack_path_query_fixed_header_and_api_key_are_exact_on_the_wire}
+      - {file: crates/registry-evidence/tests/support/source_contracts_pack.rs, name: actual_pack_http_failures_keep_exact_categories_one_send_and_no_facts}
       - {file: crates/registry-evidence/src/config.rs, name: path_templates_headers_and_projection_fail_closed}
       - {file: crates/registry-evidence/src/config.rs, name: source_urls_reject_insecure_aliases_and_ambiguous_numeric_hosts}
   - id: acceptance-row-06
@@ -35,7 +36,7 @@ entries:
   - id: acceptance-row-07
     summary: Extra, missing, mistyped, or oversized derived values are rejected.
     tests:
-      - {file: crates/registry-evidence/src/kernel.rs, name: extraction_failures_and_invalid_outputs_fail_closed}
+      - {file: crates/registry-evidence/src/kernel.rs, name: completed_lookup_outcomes_and_invalid_outputs_fail_closed}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: runtime_output_gate_rejects_every_fixture_injected_derivation_without_release}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: runtime_rejects_an_extra_extracted_fact_before_derivation_or_release}
   - id: acceptance-row-08
@@ -84,34 +85,32 @@ entries:
     summary: Unsafe combinations, including threshold ladders and overlapping categories, are rejected at bundle review or validation.
     tests:
       - {file: crates/registry-evidence/src/config.rs, name: a_shared_disclosure_family_rejects_the_complete_bundle}
-      - {file: crates/registry-evidence/src/kernel.rs, name: all_four_acceptance_bundles_use_the_same_kernel}
+      - {file: crates/registry-evidence/src/kernel.rs, name: all_four_acceptance_bundles_use_current_pack_replay_and_the_same_kernel}
       - {file: crates/registry-evidence/src/main.rs, name: offline_cli_evaluates_every_coequal_acceptance_fixture}
   - id: acceptance-row-16
     summary: All three frozen test-only source-shape mocks, flat REST plus the nested-paged REST and event-search JSON compatibility profiles, use the same Rust source executor.
     tests:
-      - {file: crates/registry-evidence/tests/source_contracts.rs, name: every_frozen_source_shape_executes_through_production_materialization_and_projection}
-      - {file: crates/registry-evidence/tests/source_contracts.rs, name: every_acquisition_posture_fixture_executes_with_one_bounded_request}
+      - {file: crates/registry-evidence/tests/support/source_contracts_current.rs, name: current_maintained_pack_matrix_executes_exact_routes_within_the_shared_budget}
+      - {file: crates/registry-evidence/tests/support/source_contracts_pack.rs, name: one_shared_data_operation_budget_stops_a_multi_endpoint_pack_before_send_two}
   - id: acceptance-row-17
     summary: Zero, one, and multiple results map consistently to no_match, match, and ambiguous across the three source shapes; facts exist only on match.
-    tests: [{file: crates/registry-evidence/tests/source_contracts.rs, name: every_frozen_source_shape_executes_through_production_materialization_and_projection}]
+    tests: [{file: crates/registry-evidence/tests/support/source_contracts_current.rs, name: current_maintained_pack_matrix_executes_exact_routes_within_the_shared_budget}]
   - id: acceptance-row-18
     summary: Event-index envelope errors and incomplete declaration data fail closed.
     tests:
-      - {file: crates/registry-evidence/tests/source_contracts.rs, name: every_frozen_source_shape_executes_through_production_materialization_and_projection}
-      - {file: crates/registry-evidence/tests/source_contracts.rs, name: source_executor_failure_matrix_is_exact_single_request_and_value_free}
+      - {file: crates/registry-evidence/tests/support/source_contracts_current.rs, name: current_maintained_pack_matrix_executes_exact_routes_within_the_shared_budget}
+      - {file: crates/registry-evidence/tests/support/source_contracts_pack.rs, name: actual_pack_http_failures_keep_exact_categories_one_send_and_no_facts}
   - id: acceptance-row-19
     summary: OAuth token requests and responses are absent from all diagnostics, no placement can put client credentials in the token URL, a source authenticates by client secret or by signed client assertion but never by both, and the assertion audience is the token endpoint unless the bundle governs it.
     tests:
-      - {file: crates/registry-evidence/tests/source_contracts.rs, name: oauth_credential_redaction_fixture_fails_closed_without_data_requests}
-      - {file: crates/registry-evidence/tests/source_contracts.rs, name: oauth_client_credentials_placements_are_exact_and_cache_reuse_is_bounded}
-      - {file: crates/registry-evidence/src/config.rs, name: source_adapter_name_is_audit_safe_and_oauth_endpoint_has_no_query}
-      - {file: crates/registry-evidence/tests/source_contracts.rs, name: an_oauth_source_without_exactly_one_credential_form_cannot_be_declared}
-      - {file: crates/registry-evidence/tests/source_contracts.rs, name: a_private_key_jwt_source_sends_an_endpoint_audienced_assertion_and_no_secret}
-      - {file: crates/registry-evidence/tests/source_contracts.rs, name: a_private_key_jwt_source_signs_the_configured_assertion_audience}
+      - {file: crates/registry-evidence/tests/support/source_contracts_current.rs, name: current_oauth_redaction_fixture_fails_closed_before_data_sends}
+      - {file: crates/registry-evidence/tests/support/source_contracts_current.rs, name: current_oauth_client_credentials_preserve_placement_resource_cache_and_redaction}
+      - {file: crates/registry-adapter-engine/src/auth/plan.rs, name: token_endpoints_are_usable_or_refused}
+      - {file: crates/registry-evidence/tests/support/source_contracts_current.rs, name: current_pack_compile_refuses_invalid_authentication_contracts}
+      - {file: crates/registry-evidence/tests/support/source_contracts_pack.rs, name: retained_pack_failures_are_value_free}
+      - {file: crates/registry-evidence/tests/support/source_contracts_current.rs, name: current_private_key_jwt_preserves_signed_claims_audience_resource_and_key_refusals}
       - {file: crates/registry-evidence/src/config.rs, name: a_client_assertion_audience_without_an_assertion_key_is_refused}
-      - {file: crates/registry-evidence/tests/source_contracts.rs, name: an_unreadable_client_assertion_key_fails_before_the_token_request}
-      - {file: crates/registry-evidence/tests/source_contracts.rs, name: client_assertion_key_material_the_jwk_parser_refuses_never_signs}
-      - {file: crates/registry-evidence/tests/source_contracts.rs, name: a_client_secret_that_is_not_utf8_is_refused_in_either_placement}
+      - {file: crates/registry-evidence/tests/support/source_contracts_current.rs, name: current_binary_client_secrets_are_refused_before_token_or_data_requests}
   - id: acceptance-row-20
     summary: Live-source tests are ignored by default, read-only, and refuse missing or permissively stored credential files.
     tests:
@@ -157,7 +156,8 @@ entries:
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: real_router_serves_all_definitions_concurrently_without_crossing_boundaries}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: one_runtime_proves_all_definitions_and_collapses_unresolved_relationships}
       - {file: crates/registry-evidence/src/bundle.rs, name: combined_acceptance_bundle_loads_as_one_atomic_revision}
-      - {file: crates/registry-evidence/src/rhai_runtime.rs, name: all_four_acceptance_script_pairs_run_through_one_runtime}
+      - {file: crates/registry-evidence/src/rhai_runtime.rs, name: all_four_retained_acceptance_derivations_run_through_one_runtime}
+      - {file: crates/registry-evidence/src/kernel.rs, name: all_four_acceptance_bundles_use_current_pack_replay_and_the_same_kernel}
   - id: acceptance-row-26
     summary: At least one acceptance definition runs against two different mock source shapes with only bundle and Rhai changes.
     tests:
@@ -203,8 +203,8 @@ entries:
   - id: acceptance-row-30
     summary: source-derived, field-projected, and record-transformed definitions use the same executor and report their acquisition guarantees honestly.
     tests:
-      - {file: crates/registry-evidence/tests/source_contracts.rs, name: every_acquisition_posture_fixture_executes_with_one_bounded_request}
-      - {file: crates/registry-evidence/tests/source_contracts.rs, name: every_frozen_source_shape_executes_through_production_materialization_and_projection}
+      - {file: crates/registry-evidence/tests/support/source_contracts_current.rs, name: current_maintained_pack_matrix_executes_exact_routes_within_the_shared_budget}
+      - {file: crates/registry-evidence/tests/support/source_contracts_pack.rs, name: one_shared_data_operation_budget_stops_a_multi_endpoint_pack_before_send_two}
   - id: acceptance-row-31
     summary: A serving process cannot reload, mutate, merge, or fall back to another verified package at runtime.
     tests:
@@ -247,16 +247,17 @@ entries:
   - id: acceptance-row-38
     summary: Provider ambiguity never causes a second data request, page traversal, retrieval beyond the configured maximum of two minimally projected results, candidate choice, derivation execution, or success response.
     tests:
-      - {file: crates/registry-evidence/tests/source_contracts.rs, name: every_frozen_source_shape_executes_through_production_materialization_and_projection}
-      - {file: crates/registry-evidence/tests/source_contracts.rs, name: source_executor_failure_matrix_is_exact_single_request_and_value_free}
-      - {file: crates/registry-evidence/tests/source_contracts.rs, name: a_reset_transport_failure_yields_exactly_one_connection_attempt}
+      - {file: crates/registry-evidence/tests/support/source_contracts_current.rs, name: current_maintained_pack_matrix_executes_exact_routes_within_the_shared_budget}
+      - {file: crates/registry-evidence/tests/support/source_contracts_pack.rs, name: actual_pack_http_failures_keep_exact_categories_one_send_and_no_facts}
+      - {file: crates/registry-evidence/tests/support/source_contracts_pack.rs, name: reset_on_the_first_connection_is_one_categorical_dependency_attempt}
       - {file: crates/registry-evidence/src/runtime.rs, name: public_unavailability_does_not_distinguish_no_match_from_ambiguity}
   - id: acceptance-row-39
     summary: Candidate records, candidate counts beyond the closed outcome, scores, confidence, near-match hints, and field-by-field comparison results are rejected by the extraction boundary and absent from public responses.
     tests:
       - {file: crates/registry-evidence/src/rhai_runtime.rs, name: candidate_numeric_string_and_opaque_type_surface_is_pinned}
       - {file: crates/registry-evidence/src/rhai_runtime.rs, name: compiler_rejects_every_forbidden_candidate_construct}
-      - {file: crates/registry-evidence/src/rhai_runtime.rs, name: extraction_decodes_only_the_closed_union_and_validates_facts}
+      - {file: crates/registry-evidence/src/kernel.rs, name: completed_lookup_is_closed_and_fact_schema_validated}
+      - {file: crates/registry-evidence/tests/support/source_contracts_current.rs, name: current_pack_outcomes_keep_unresolved_distinct_and_refuse_malformed_results}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: runtime_rejects_an_extra_extracted_fact_before_derivation_or_release}
   - id: acceptance-row-40
     summary: Native audit records at most the selector-profile id and one scoped keyed pseudonym over each complete canonical role and selector bundle; separate hashes of low-entropy fields fail redaction tests.
@@ -293,7 +294,7 @@ entries:
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: all_four_definitions_pass_the_explicitly_authorized_unsigned_path}
       - {file: crates/registry-evidence/src/main.rs, name: offline_cli_evaluates_every_coequal_acceptance_fixture}
       - {file: crates/registry-evidence/src/main.rs, name: offline_cli_evaluates_the_combined_acceptance_bundle}
-      - {file: crates/registry-evidence/src/kernel.rs, name: all_four_acceptance_bundles_use_the_same_kernel}
+      - {file: crates/registry-evidence/src/kernel.rs, name: all_four_acceptance_bundles_use_current_pack_replay_and_the_same_kernel}
   - id: acceptance-row-45
     summary: Governed package and runtime configuration have separate closed schemas, package-digest verification, one-time read-only runtime capture, and negative tests proving runtime fields cannot override sources, authorization, disclosure, limits, signing, or audit policy.
     tests:
@@ -304,40 +305,48 @@ entries:
   - id: acceptance-row-46
     summary: Fixed paths and tagged selector or fetch prior-fact path templates pass exact encoding tests; missing, extra, duplicated, slash, backslash, percent, control, empty, and dot-segment bindings fail before credential acquisition or source access.
     tests:
-      - {file: crates/registry-evidence/src/source.rs, name: path_selector_encoding_is_single_pass_and_hostile_values_fail_closed}
-      - {file: crates/registry-evidence/tests/source_contracts.rs, name: path_binding_contract_rejects_empty_missing_and_extra_material_before_credentials}
-      - {file: crates/registry-evidence/tests/source_contracts.rs, name: hostile_path_values_and_malformed_preparation_fail_before_transport_and_redact}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: a_selector_value_the_source_path_cannot_carry_is_refused_before_source_access}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: an_encodable_path_selector_value_still_reaches_the_source}
+      - {file: crates/registry-evidence/tests/support/source_contracts_pack.rs, name: hostile_path_input_is_refused_before_api_key_resolution_or_transport}
+      - {file: crates/registry-adapter-engine/src/route.rs, name: a_path_slot_that_is_not_one_segment_is_refused_anywhere_in_the_path}
+      - {file: crates/registry-evidence/tests/support/source_contracts_pack.rs, name: input_schema_refuses_missing_extra_and_invalid_values_before_effects}
       - {file: crates/registry-evidence/src/config.rs, name: path_templates_headers_and_projection_fail_closed}
   - id: acceptance-row-47
     summary: Fixed non-secret headers, static Authorization header, and static API-key authentication pass generic exact-request and redaction tests; forbidden, duplicate, framing, routing, forwarding, proxy, tracing, cookie, and authentication header collisions fail at startup, as does a configured authentication scheme that is not an HTTP token.
     tests:
-      - {file: crates/registry-evidence/tests/source_contracts.rs, name: basic_bearer_and_static_api_key_headers_are_exact_and_failures_are_redacted}
-      - {file: crates/registry-evidence/tests/source_contracts.rs, name: forbidden_header_collisions_and_invalid_projection_contracts_fail_at_compilation}
-      - {file: crates/registry-evidence/tests/source_contracts.rs, name: exact_request_applies_path_query_body_headers_auth_and_projection_once}
-      - {file: crates/registry-evidence/tests/source_contracts.rs, name: compilation_refuses_an_authorization_scheme_that_is_not_an_http_token}
+      - {file: crates/registry-evidence/tests/support/source_contracts_pack.rs, name: maintained_basic_pack_owns_exact_query_and_basic_header}
+      - {file: crates/registry-evidence/tests/support/source_contracts_pack.rs, name: shared_pack_path_query_fixed_header_and_api_key_are_exact_on_the_wire}
+      - {file: crates/registry-evidence/tests/support/source_contracts_pack.rs, name: missing_credentials_are_categorical_redacted_and_post_intent}
+      - {file: crates/registry-evidence/tests/support/source_contracts_current.rs, name: current_pack_compile_refuses_get_body_and_reserved_headers_before_credentials}
+      - {file: crates/registry-evidence/tests/support/source_contracts_pack.rs, name: captured_pack_owns_exact_body_headers_auth_json_projection_and_privacy}
+      - {file: crates/registry-evidence/tests/support/source_contracts_current.rs, name: current_pack_compile_refuses_invalid_authentication_contracts}
   - id: acceptance-row-48
     summary: System roots and logical private-CA trust profiles pass positive TLS tests; unbound, malformed, insecure, symlinked, mutable, or hostname-bypassing CA configurations prevent readiness, and ambient HTTP proxy environment variables cannot redirect evidence-data or OAuth requests.
     tests:
-      - {file: crates/registry-evidence/tests/source_contracts.rs, name: private_ca_tls_handshake_succeeds_and_hostname_mismatch_fails}
-      - {file: crates/registry-evidence/tests/source_contracts.rs, name: private_ca_plan_rejects_unbound_missing_and_malformed_captures}
-      - {file: crates/registry-evidence/tests/source_contracts.rs, name: runtime_ca_capture_rejects_symlink_malformed_and_mutable_files}
-      - {file: crates/registry-evidence/tests/source_contracts.rs, name: ambient_proxy_variables_are_ignored_in_an_isolated_process}
-      - {file: crates/registry-evidence/src/source.rs, name: evidence_client_uses_rustls_and_fails_closed_on_an_unrecognized_certificate_authority}
+      - {file: crates/registry-evidence/tests/support/source_contracts_pack.rs, name: captured_private_ca_succeeds_and_hostname_mismatch_fails_through_the_pack}
+      - {file: crates/registry-evidence/tests/support/source_contracts_pack.rs, name: private_ca_stage_reports_the_exact_engine_result_before_pack_mapping}
+      - {file: crates/registry-evidence/tests/support/source_contracts_pack.rs, name: current_private_ca_plan_refuses_unbound_and_missing_captures}
+      - {file: crates/registry-evidence/tests/support/source_contracts_pack.rs, name: current_runtime_ca_capture_rejects_symlink_malformed_and_mutable_files}
+      - {file: crates/registry-evidence/tests/support/source_contracts_current.rs, name: current_pack_ignores_ambient_proxy_for_token_and_data_requests}
+      - {file: crates/registry-evidence/tests/support/source_contracts_pack.rs, name: reset_on_the_first_connection_is_one_categorical_dependency_attempt}
   - id: acceptance-row-49
-    summary: Extended JSON Pointer response projection passes flat, nested, array, literal-dot-key, missing-leaf, mistyped-intermediate, invalid-escape, duplicate, overlap, size-before-projection, and privacy-canary tests; Rhai sees only the projected tree while posture reflects the pre-projection wire response.
+    summary: Reviewed pack logic projects provider data and may validate it against pinned schemas; bounded parsing precedes provider scripts, closed lookup and fact validation precede derivation, and private unselected data does not reach released facts. The retired inline extended-pointer projection API is not a second runtime surface.
     tests:
-      - {file: crates/registry-evidence/src/source.rs, name: projection_supports_nested_arrays_escapes_and_literal_dots}
-      - {file: crates/registry-evidence/src/source.rs, name: projection_omits_missing_leaves_but_rejects_missing_or_mistyped_intermediates}
-      - {file: crates/registry-evidence/src/source.rs, name: projection_rejects_duplicates_conflicts_indexes_and_mixed_container_shapes}
-      - {file: crates/registry-evidence/tests/source_contracts.rs, name: projection_missing_leaf_is_omitted_but_bad_intermediate_stops_before_extraction}
-      - {file: crates/registry-evidence/tests/source_contracts.rs, name: every_acquisition_posture_fixture_executes_with_one_bounded_request}
-      - {file: crates/registry-evidence/src/rhai_runtime.rs, name: extraction_source_input_uses_the_configured_one_mebibyte_boundary}
+      - {file: crates/registry-evidence/tests/support/source_contracts_pack.rs, name: captured_pack_owns_exact_body_headers_auth_json_projection_and_privacy}
+      - {file: crates/registry-adapter-engine/src/route.rs, name: provider_schema_validation_is_digest_pinned_and_terminal}
+      - {file: crates/registry-evidence/src/kernel.rs, name: completed_lookup_is_closed_and_fact_schema_validated}
+      - {file: crates/registry-evidence/tests/support/source_contracts_current.rs, name: current_maintained_pack_matrix_executes_exact_routes_within_the_shared_budget}
+      - {file: crates/registry-evidence/tests/support/source_contracts_pack.rs, name: one_shared_data_operation_budget_stops_a_multi_endpoint_pack_before_send_two}
+      - {file: crates/registry-evidence/tests/support/source_contracts_pack.rs, name: actual_pack_http_failures_keep_exact_categories_one_send_and_no_facts}
+      - {file: crates/registry-adapter-engine/src/route.rs, name: evidence_budget_counts_wire_whitespace_before_json_normalization}
   - id: acceptance-row-50
     summary: parse_integer accepts the documented ASCII grammar and leading zeroes and rejects empty, plus-prefixed, whitespace, non-ASCII, fractional, exponential, and overflowing values; query values remain strings and no implicit value-to-string conversion is introduced.
     tests:
       - {file: crates/registry-evidence/src/rhai_runtime.rs, name: strict_integer_parser_and_mutating_helpers_enforce_bounds}
       - {file: crates/registry-evidence/src/rhai_runtime.rs, name: out_of_range_json_integer_tokens_fail_before_rhai}
-      - {file: crates/registry-evidence/src/rhai_runtime.rs, name: preparation_inputs_and_request_parts_are_closed_and_bounded}
+      - {file: crates/registry-evidence/tests/support/source_contracts_pack.rs, name: input_schema_refuses_missing_extra_and_invalid_values_before_effects}
+      - {file: crates/registry-evidence/tests/support/source_contracts_current.rs, name: current_pack_compile_refuses_get_body_and_reserved_headers_before_credentials}
+      - {file: crates/registry-evidence/tests/support/source_contracts_pack.rs, name: hostile_path_input_is_refused_before_api_key_resolution_or_transport}
       - {file: crates/registry-evidence/src/rhai_runtime.rs, name: candidate_numeric_string_and_opaque_type_surface_is_pinned}
   - id: acceptance-row-51
     summary: Public request subjects are resolved uniquely by role rather than array position; permutations produce the same authorized internal role order, and duplicate, missing, unknown, or wrong-profile roles fail before credentials or source access.
@@ -391,13 +400,17 @@ entries:
       - {file: crates/registry-evidence/src/contracts.rs, name: schemas_accept_the_exact_public_wire_shapes}
       - {file: crates/registry-evidence/src/contracts.rs, name: jws_and_problem_schemas_are_closed}
   - id: acceptance-row-59
-    summary: Both response formats serialize final immutable bytes and require durable disclosure-release audit before release; audit records the closed protection mode and conditionally requires or forbids signingKeyId without recording nonce, selectors, source values, or disclosed values.
+    summary: Both response formats serialize final immutable bytes and require durable disclosure-release audit before release; audit records the closed protection mode and conditionally requires or forbids signingKeyId without recording nonce, selectors, source values, or disclosed values. The acquisition deadline gates admission to that append, while an admitted append completes without cancellation and may return the exact bytes after expiry.
     tests:
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: disclosure_audit_failure_prevents_signed_response_release}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: disclosure_audit_failure_prevents_unsigned_response_release}
       - {file: crates/registry-evidence/src/audit.rs, name: frozen_audit_fixture_matches_native_event_shape_and_phase_rules}
       - {file: crates/registry-evidence/src/audit.rs, name: invalid_release_shape_fails_closed_before_any_write}
       - {file: crates/registry-evidence/src/audit.rs, name: audit_is_durable_keyed_and_redacted}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: singular_release_does_not_begin_after_its_acquisition_deadline}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: admitted_release_append_completes_and_returns_bytes_after_deadline}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_release_obeys_the_earliest_item_acquisition_deadline}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_unavailable_item_contributes_to_the_earliest_deadline}
   - id: acceptance-row-60
     summary: All four coequal definitions pass signed and explicitly authorized unsigned paths through the same router, source executor, derivation, output gate, subject binding, minimization, and audit logic without domain branches.
     tests:
@@ -427,36 +440,46 @@ entries:
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: discovery_uses_the_bounded_per_principal_request_budget}
       - {file: crates/registry-evidence/src/contracts.rs, name: openapi_has_only_the_version_one_routes_and_exact_success_media}
   - id: acceptance-row-63
-    summary: An authorization refusal after successful authentication durably appends exactly one standalone minimal registry.evidence.audit.authorization-refusal/v1 denial event before returning the generic 403; append failure returns the generic 503, no source boundary is crossed, and authentication, malformed-request, and invalid-selector failures remain operational-only.
+    summary: An authorization refusal after successful authentication durably appends exactly one standalone minimal registry.evidence.audit.authorization-refusal/v2 denial event before returning the generic 403; append failure returns the generic 503, no source boundary is crossed, and authentication, malformed-request, and invalid-selector failures remain operational-only.
     tests:
       - {file: crates/registry-evidence/src/audit.rs, name: audit_contract_schema_accepts_each_native_shape_and_rejects_mixed_shapes}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: authorization_refusal_is_minimally_audited}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: authorization_refusal_audit_failure_returns_service_unavailable}
   - id: acceptance-row-64
-    summary: A search-then-fetch requirement executes one fixed audited search and, only after a unique schema-valid match, one fixed audited fetch using declared scalar prior-fact path binding; only final facts reach derivation, the weaker posture governs, unresolved search makes no fetch, intermediate facts stay out of audit, and no third call or response-led routing exists.
+    summary: The reviewed search-and-fetch reference pack performs one search and a unique-match-dependent fetch through fixed endpoints with checked route-property bindings. Unresolved search makes no fetch, only complete final facts reach derivation, and intermediate source material stays out of audit. Every send shares one bounded acquisition.
     tests:
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: search_then_fetch_is_two_fixed_audited_calls_with_validated_fact_handoff}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: search_then_fetch_stops_after_an_unresolved_search}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: search_then_fetch_treats_an_unresolved_fetch_as_dependency_failure}
-      - {file: crates/registry-evidence/src/runtime_tests.rs, name: search_then_fetch_rejects_an_unbound_prior_fact_at_startup}
-      - {file: crates/registry-evidence/src/source.rs, name: path_selector_encoding_is_single_pass_and_hostile_values_fail_closed}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: search_then_fetch_refuses_an_unbound_route_property_before_dependent_fetch}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: a_selector_value_the_source_path_cannot_carry_is_refused_before_source_access}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: an_encodable_path_selector_value_still_reaches_the_source}
+      - {file: crates/registry-evidence/tests/support/source_contracts_pack.rs, name: hostile_path_input_is_refused_before_api_key_resolution_or_transport}
+      - {file: crates/registry-adapter-engine/src/route.rs, name: a_path_slot_that_is_not_one_segment_is_refused_anywhere_in_the_path}
   - id: acceptance-row-65
-    summary: A search-then-fetch-set requirement executes one fixed audited search and, only after a unique schema-valid match, one fixed audited call per declared member in declared order; each member receives only its declared fact-input allowlist through every channel including a body preparation builds, derivation receives the union of the disjoint stage FactSets, an unresolved stage contacts no later member, and the release names every executed source in order.
+    summary: The reviewed search-and-members reference pack performs its declared reads in order after a unique search, gives each member only its reviewed inputs, and constructs one complete final FactSet. A missing required search reference or unresolved member stops later reads; intermediate values remain private and the host records the selected pack acquisition.
     tests:
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: fetch_set_is_one_search_then_one_fixed_call_per_declared_member_in_order}
-      - {file: crates/registry-evidence/src/runtime_tests.rs, name: fetch_set_member_receives_only_its_declared_fact_inputs}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: fetch_set_member_body_carries_only_its_declared_fact_inputs}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: fetch_set_stops_before_member_calls_when_search_omits_a_required_reference}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: fetch_set_derivation_receives_the_union_of_every_stage_fact_set}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: fetch_set_stops_at_the_first_unresolved_member_and_calls_no_further_source}
       - {file: crates/registry-evidence/src/main.rs, name: offline_cli_evaluates_the_fetch_set_acceptance_fixture}
   - id: acceptance-row-66
-    summary: A gated acquisition kind serves only where the bundle declares it and the operator enabled it in the runtime configuration, refused before the listener binds and reported by check and doctor; the declared acquisition ceiling bounds the whole sequence as a dependency failure under its own category without cancelling a durable audit append.
+    summary: A Source selects one exact reviewed pack route and governed connection policy, matched by captured runtime endpoint resources before effects. Retired acquisition capability switches are refused. One configurable finite acquisition budget and absolute deadline constrain the complete route and admission to terminal release, without interrupting a durable audit append already admitted. Verified source validUntil remains an independent bound.
     tests:
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: fetch_set_abandons_acquisition_when_the_declared_budget_is_exhausted}
-      - {file: crates/registry-evidence/src/config.rs, name: the_optional_operator_acquisition_capabilities_enable_nothing_by_default}
-      - {file: crates/registry-evidence/src/bundle.rs, name: a_gated_acquisition_kind_binds_only_where_the_operator_enabled_it}
+      - {file: crates/registry-evidence/src/config.rs, name: published_runtime_contract_refuses_retired_acquisition_capabilities}
+      - {file: crates/registry-evidence/src/config.rs, name: retired_acquisition_fields_are_each_refused_without_masking_the_current_source_binding}
+      - {file: crates/registry-evidence/src/config.rs, name: requirement_acquisition_names_one_pack_source_and_retired_workflow_fields_are_refused}
+      - {file: crates/registry-evidence/src/bundle.rs, name: a_source_binding_selects_one_declared_pack_route}
       - {file: crates/registry-evidence/tests/cli.rs, name: check_names_a_safe_artifact_and_a_value_free_cause_for_every_failure_class}
-      - {file: crates/registry-evidence/tests/cli.rs, name: check_accepts_a_gated_acquisition_kind_the_operator_enabled}
+      - {file: crates/registry-evidence/tests/cli.rs, name: check_accepts_a_reviewed_route_with_a_sufficient_operator_budget}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: access_intent_captures_default_and_overridden_execution_bounds_before_missing_credentials}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: singular_release_does_not_begin_after_its_acquisition_deadline}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: admitted_release_append_completes_and_returns_bytes_after_deadline}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_release_obeys_the_earliest_item_acquisition_deadline}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_unavailable_item_contributes_to_the_earliest_deadline}
   - id: acceptance-row-67
     summary: The tracked holder-bound acceptance bundle declares every coequal definition under the holder-bound mode, each definition's matched grant carries the mode permission as well as the serialization permission, and the whole bundle satisfies the published bundle contract.
     tests:
@@ -489,22 +512,22 @@ entries:
       - {file: crates/registry-evidence/src/bundle.rs, name: every_unusable_extract_is_refused_by_its_own_name_and_cause}
       - {file: crates/registry-evidence/src/bundle.rs, name: an_extract_is_bound_as_a_digest_of_its_bytes}
       - {file: crates/registry-evidence/src/bundle.rs, name: a_bound_extract_refuses_a_path_replaced_before_it_was_opened}
-      - {file: crates/registry-evidence/src/bundle.rs, name: a_source_extract_binding_must_be_exact_in_both_directions}
+      - {file: crates/registry-evidence/tests/statement_source_pack.rs, name: pack_plan_keeps_the_governed_profile_and_checks_age_before_rows}
   - id: acceptance-row-74
     summary: Extract publication metadata has exactly one complete valid row, and maximum age is compared against the evaluation instant before a row is read with inclusive boundary behavior and a value-free governed-profile failure.
     tests:
-      - {file: crates/registry-evidence/src/source_sqlite.rs, name: an_extract_without_its_metadata_table_is_refused}
-      - {file: crates/registry-evidence/src/source_sqlite.rs, name: a_metadata_table_without_exactly_one_row_is_refused}
-      - {file: crates/registry-evidence/src/source_sqlite.rs, name: a_metadata_table_missing_a_column_is_refused}
-      - {file: crates/registry-evidence/src/source_sqlite.rs, name: malformed_metadata_is_refused}
-      - {file: crates/registry-evidence/src/source_sqlite.rs, name: the_configured_age_bound_refuses_a_stale_extract}
+      - {file: crates/registry-evidence/tests/sqlite_security_contracts.rs, name: an_extract_without_its_metadata_table_is_refused}
+      - {file: crates/registry-evidence/tests/sqlite_security_contracts.rs, name: a_metadata_table_without_exactly_one_row_is_refused}
+      - {file: crates/registry-evidence/tests/sqlite_security_contracts.rs, name: a_metadata_table_missing_a_column_is_refused}
+      - {file: crates/registry-evidence/tests/sqlite_security_contracts.rs, name: malformed_metadata_is_refused}
+      - {file: crates/registry-evidence/tests/sqlite_security_contracts.rs, name: the_configured_age_bound_refuses_a_stale_extract}
       - {file: crates/registry-evidence/tests/statement_source.rs, name: an_extract_older_than_the_source_allows_fails_before_a_row_is_read}
       - {file: crates/registry-evidence/tests/statement_source.rs, name: a_stale_extract_names_only_its_governed_profile}
   - id: acceptance-row-75
     summary: Statement text, bound and result values, extract paths, and engine messages never reach rendering, diagnostics, logs, snapshots, or audit, while syntax and contract failures remain distinguishable through value-free location and cause.
     tests:
       - {file: crates/registry-evidence/tests/statement_source.rs, name: no_rendering_carries_statement_text_or_extract_data}
-      - {file: crates/registry-evidence/src/source_sqlite.rs, name: a_located_syntax_fault_carries_no_statement_text}
+      - {file: crates/registry-evidence/tests/sqlite_security_contracts.rs, name: a_located_syntax_fault_carries_no_statement_text}
       - {file: crates/registry-evidence/tests/statement_source.rs, name: a_refused_statement_names_the_artifact_and_a_closed_cause}
   - id: acceptance-row-76
     summary: Professional licence status passes through the complete SQLite reference deployment fixture, including real extract materialization, ordinary derivation, output validation, signing, and the required unavailable and bounded-source cases.
@@ -532,15 +555,15 @@ entries:
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_later_authorization_refusal_precedes_missing_source_credential_resolution}
       - {file: crates/registry-evidence/src/audit.rs, name: request_batch_audit_groups_partition_items_and_terminal_shapes_are_closed}
   - id: acceptance-row-80
-    summary: Sequential request-batch execution preserves request order and supports every existing acquisition kind; absent or ineligible source batching and a batch above the source ceiling select sequential execution before I/O.
+    summary: Sequential request-batch execution preserves request order across all coequal definitions and reviewed multistep or SQLite packs. Each logical item retains its own authorized inputs, nonce, result and acquisition intent; no provider-side optimization or hidden physical batch is selected.
     tests:
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_preserves_order_and_independent_ids_nonces_with_mixed_outcomes}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_sequential_fallback_serves_all_four_coequal_definitions}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_sequential_fallback_runs_every_multistage_plan_in_item_order}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_sequential_fallback_executes_sqlite_items_in_request_order}
-      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_source_neutral_fixture_matches_sequential_and_optimized_strategies}
-      - {file: crates/registry-evidence/src/config.rs, name: source_batch_optimization_is_fixed_route_two_author_and_pre_io_planned}
-      - {file: crates/registry-evidence/src/config.rs, name: source_batch_optimization_is_silent_without_a_block_and_never_applies_to_multistage}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_source_neutral_fixture_preserves_item_order_and_outcomes}
+      - {file: crates/registry-evidence/src/config.rs, name: retired_acquisition_fields_are_each_refused_without_masking_the_current_source_binding}
+      - {file: crates/registry-evidence/src/config.rs, name: requirement_acquisition_names_one_pack_source_and_retired_workflow_fields_are_refused}
   - id: acceptance-row-81
     summary: The closed ordered response carries flattened signed JWS or evidence-not-available under the existing singular collapse contract; mixed and all-unavailable envelopes return 200, while every other failure aborts without partial release.
     tests:
@@ -557,26 +580,23 @@ entries:
       - {file: crates/registry-evidence-verifier/src/model.rs, name: request_batch_response_has_the_closed_ordered_wire_shape}
       - {file: crates/registry-evidence-verifier/src/model.rs, name: request_batch_response_refuses_open_envelopes_and_items}
   - id: acceptance-row-82
-    summary: Optimized source batching requires both capability gates, single acquisition, one fixed-path HTTP JSON source, and its complete block; its one call inherits every ordinary transport and preparation bound.
+    summary: The retired inline source-batch block, capability switches and prepare_batch/extract_batch ABI are refused. Current requests execute the complete sequential baseline through digest-pinned reviewed pack routes and their ordinary connection and acquisition bounds.
     tests:
-      - {file: crates/registry-evidence/src/config.rs, name: source_batch_optimization_is_fixed_route_two_author_and_pre_io_planned}
-      - {file: crates/registry-evidence/src/source.rs, name: optimized_batch_execution_uses_one_fixed_physical_call}
-      - {file: crates/registry-evidence/src/bundle.rs, name: source_batch_artifacts_change_bundle_and_requirement_revisions}
-      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_source_neutral_fixture_matches_sequential_and_optimized_strategies}
+      - {file: crates/registry-evidence/src/config.rs, name: retired_acquisition_fields_are_each_refused_without_masking_the_current_source_binding}
+      - {file: crates/registry-evidence/src/config.rs, name: requirement_acquisition_names_one_pack_source_and_retired_workflow_fields_are_refused}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_source_neutral_fixture_preserves_item_order_and_outcomes}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_sequential_fallback_serves_all_four_coequal_definitions}
   - id: acceptance-row-83
-    summary: Batch Rhai receives only opaque slots, minimized selectors, parameters, projected response, and the expected slots; extraction requires an exact slot bijection and optimized failure never retries through fanout.
+    summary: Rust validates and authorizes every request-batch item before source access, preserves item correlation and order without provider-authored slots, validates every final lookup and FactSet, and aborts malformed execution without partial release or fallback fanout. The retired batch script interfaces grant no execution path.
     tests:
-      - {file: crates/registry-evidence/src/rhai_runtime.rs, name: batch_preparation_receives_only_slotted_minimized_items_and_parameters}
-      - {file: crates/registry-evidence/src/rhai_runtime.rs, name: batch_extraction_context_is_parameters_and_rust_slots_only}
-      - {file: crates/registry-evidence/src/rhai_runtime.rs, name: batch_extraction_accepts_reordering_and_restores_request_order}
-      - {file: crates/registry-evidence/src/rhai_runtime.rs, name: batch_and_sequential_extraction_share_lookup_result_primitives}
-      - {file: crates/registry-evidence/src/rhai_runtime.rs, name: batch_extraction_requires_an_exact_slot_bijection}
-      - {file: crates/registry-evidence/src/kernel.rs, name: source_batch_items_are_revalidated_as_exact_minimized_selectors}
-      - {file: crates/registry-evidence/src/kernel.rs, name: every_malformed_batch_extraction_is_a_global_protocol_failure}
-      - {file: crates/registry-evidence/src/source.rs, name: optimized_batch_failure_is_not_retried_or_fanned_out}
-      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_optimized_source_failure_aborts_after_one_call_without_sequential_fanout}
+      - {file: crates/registry-evidence/src/config.rs, name: retired_acquisition_fields_are_each_refused_without_masking_the_current_source_binding}
+      - {file: crates/registry-evidence/src/config.rs, name: requirement_acquisition_names_one_pack_source_and_retired_workflow_fields_are_refused}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_bounds_unique_nonces_and_every_item_before_source_access}
+      - {file: crates/registry-evidence/tests/pack_inputs.rs, name: changed_profile_missing_field_and_duplicate_role_are_refused}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_malformed_sequential_extraction_aborts_without_partial_release}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_first_source_failure_aborts_after_one_call_without_sequential_fanout}
   - id: acceptance-row-84
-    summary: Batch audit records one bounded grouped access per physical source call and one complete terminal release or value-free terminal failure; all-unavailable releases omit signing key id, forbidden values stay absent, and the exact 1 MiB-bounded bytes are durably audited before release.
+    summary: Batch audit records durable acquisition intent for each started logical item and one complete terminal release or value-free terminal failure. Optional per-send detail does not replace intent or release audit. All-unavailable releases omit signing key id, protected values stay absent, and the exact bounded response bytes are durably audited before release.
     tests:
       - {file: crates/registry-evidence/src/audit.rs, name: request_batch_audit_contract_schema_accepts_every_phase_and_rejects_mixed_shapes}
       - {file: crates/registry-evidence/src/audit.rs, name: request_batch_audit_groups_partition_items_and_terminal_shapes_are_closed}

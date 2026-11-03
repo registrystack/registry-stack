@@ -1,498 +1,83 @@
-# Evidence request-adapter API
+# Evidence derivation script API
 
-Status: Implemented Version 1 trusted request-adapter ABI
+Status: current Version 1 assertion derivation ABI, maintained reference.
 
-This document defines the Version 1 API visible to reviewed source-adapter
-scripts. It is intentionally smaller than Rhai's standard library. The host is
-Rust. Adapter scripts cannot perform I/O or choose transport authority.
+Use `derive/3` to turn a completed, schema-validated Source lookup into the
+selected requirement's concept values. Registry Evidence supplies the private
+facts, separately minimized authorized selectors, and deterministic evaluation
+context. Rust validates the result before subject binding, signing and release.
 
-This is the compiled bundle's runtime ABI. For normalized EvidenceProject
-Functions, start with the [authoring reference](../authoring-projects/CONFIG.md).
-In particular, an authored `assertion-derive/v1` Function returns local
-`{output, value}` entries; the authoring compiler translates them into this
-runtime ABI's `{concept_id, value}` entries. The host-helper and resource limits
-below also apply to the compiled authored Functions.
+Source acquisition and extraction use reviewed [Adapter packs](../../../adapter/CONCEPT.md).
+Pack scripts use the Adapter exchange ABI and compile separately from Evidence
+assertion derivations. Evidence Sources bind a pinned pack, route, connection,
+selector inputs and fact schema through the
+[compiled Source configuration](deployment-projects/CONFIG.md#adapter-pack-source-example).
+The retired Evidence `prepare`, `extract`, `prepare_batch` and `extract_batch`
+entry points are refused; they are not alternate forms of `derive`.
 
-This contract is the `registry.evidence.request-adapter/v1` ABI and is bound to
-the Evidence bundle contract Version 1. A
-source does not carry a redundant `adapterAbiVersion` field unless the product
-later demonstrates a need to run multiple adapter ABIs under one bundle
-version.
+This reference describes the compiled `registry.evidence.request-adapter/v1`
+assertion ABI under Evidence bundle Version 1. For normalized EvidenceProject
+Functions, use the [authoring reference](../authoring-projects/CONFIG.md).
+An authored `assertion-derive/v1` Function returns local `{output, value}`
+entries; the authoring compiler translates them into compiled
+`{concept_id, value}` entries. The host helpers and resource limits apply to
+both authored and compiled assertion derivations.
 
-`evidencectl package` is an authoring-to-bundle compiler, not another adapter
-runtime. It carries reviewed scripts and their referenced schemas into one
-closed candidate, then asks the real `evidence` binary to compile and evaluate
-them. Production build metadata cannot add an ABI entry point, helper,
-transport capability, source call, or script-selected behavior.
+The implementation source is `registry-evidence`'s `rhai_runtime` module,
+including `compile_derivation`, `derive` and the closed result decoder.
+`evidencectl package` compiles authoring inputs and delegates execution to the
+real `evidence` binary; it supplies no additional script runtime or authority.
 
-## Complete Version 1 surface
-
-This inventory is the complete adopter-facing Version 1 script surface. It
-defines all five entry points, every host-provided helper, the pinned Rhai
-syntax, result types, resource bounds, and forbidden constructs. Adopters do
-not need to inspect the Rust implementation to determine whether a script is
-supported.
+## Entry point
 
 ```text
-prepare(selectors: map, context: {parameters: map, prior_facts: map}) -> RequestParts
-extract(response: JSON, context: {parameters: map, prior_facts: map}) -> LookupResult
-# Optional replacement for extract/2, declared as the only extract function:
-extract(response: JSON, selectors: map, context: {parameters: map, prior_facts: map}) -> LookupResult
 derive(facts: map, selectors: map, evaluation_context: map)
     -> array<DerivedConceptValue>
-prepare_batch(items: array<{slot: int, selectors: map}>, context: {parameters: map})
-    -> RequestParts
-extract_batch(response: JSON, context: {parameters: map, slots: array<int>})
-    -> array<{slot: int, result: LookupResult}>
 ```
 
-Version 1 uses one shared deterministic helper catalogue for `prepare`,
-`extract`, `prepare_batch`, `extract_batch`, and `derive`. The helpers are pure and provide no external
-authority. Capability separation instead comes from the values Rust supplies
-and the closed result validator for each entry point. For example, preparation
-receives no evaluation context or codelist handles, and `RequestParts` rejects
-typed derivation values.
+Each derivation artifact declares one public `derive` function with exactly
+three arguments. Statically named same-file helpers are permitted; overloaded
+entry points, top-level executable statements, anonymous functions, function
+pointers and data-derived dispatch are refused.
 
-The compiler accepts exactly one function with the required entry-point name
-and arity. It rejects top-level executable statements, an absent or overloaded
-entry point, function pointers, data-derived dispatch, anonymous functions,
-and closures. Statically named, bounded same-file helper functions are allowed;
-Rust invokes only the declared entry point.
-
-## Entry points
-
-An ordinary source has two separately compiled adapter scripts, and each
-requirement has one separately compiled derivation script. An optional HTTP
-batch block names two additional separately compiled scripts:
-
-```text
-prepare(selectors: map, context: {parameters: map, prior_facts: map}) -> RequestParts
-extract(response: JSON, context: {parameters: map, prior_facts: map}) -> LookupResult
-# Optional replacement for extract/2, declared as the only extract function:
-extract(response: JSON, selectors: map, context: {parameters: map, prior_facts: map}) -> LookupResult
-derive(facts: map, selectors: map, evaluation_context: map)
-    -> array<DerivedConceptValue>
-prepare_batch(items: array<{slot: int, selectors: map}>, context: {parameters: map})
-    -> RequestParts
-extract_batch(response: JSON, context: {parameters: map, slots: array<int>})
-    -> array<{slot: int, result: LookupResult}>
-```
-
-- All five entry points run with fresh state on every invocation.
-- Inputs are isolated per-invocation copies constructed by Rust. A script may
-  mutate a local nested map, array, or string, but that mutation cannot affect
-  the bundle, a later invocation, or the other adapter stage.
-- Scripts compile at startup. Top-level executable statements are forbidden.
-- Named same-file helper functions are allowed, but Rust invokes only the
-  declared entry point. Calls remain statically named in reviewed source.
-- Preparation runs after successful authorization and durable access-attempt
-  audit, but before credential resolution or source access.
-- `context.parameters` is the source's closed startup-validated configuration.
-  `context.prior_facts` is empty for single and search stages and is exactly the
-  schema-validated search FactSet for the fixed fetch stage.
-- Existing `extract/2` receives neither selectors nor prepared request parts.
-  A source may instead declare `extract(response, selectors, context)` to receive
-  the same fresh, minimized authorized source selector map as preparation.
-  No new configuration field is required. Declaring both arities is refused.
-  Extraction never receives prepared request parts.
-- Batch preparation receives one to sixteen ordered exact maps with `slot` and
-  `selectors`, plus context with exactly `parameters`. Each opaque non-negative
-  integer slot is Rust-issued and carries correlation only. Each selectors map
-  is the ordinary minimized source input for that logical item.
-- Batch extraction receives the projected and schema-validated response plus
-  context with exactly `parameters` and `slots`. It receives neither selectors
-  nor prepared request parts and returns one exact `{slot, result}` map for
-  every supplied slot. Result order may differ. Rust restores request order and
-  rejects a missing, duplicate, extra, negative, non-integer, or out-of-range
-  slot as a source-protocol failure.
-- Derivation runs only for `match`, receives only the authorized roles and
-  fields declared by the requirement's closed `derivation.selectorInputs`, and
-  receives neither the source response nor prepared request parts. A
-  derivation that declares no selector inputs receives an empty map.
-
-## Bundle configuration shape
-
-The Version 1 bundle schema adds these exact script-owned fields while keeping
-transport authority in the existing source request object:
-
-```yaml
-sources:
-  source-a:
-    type: http-json
-    baseUrl: https://source.example
-    forwardAccessAttribution: true
-    posture: record-transformed
-    authentication: {type: static-authorization, tokenRef: secret:file/source-token}
-    request:
-      method: POST
-      path: /v1/search
-      fixedHeaders: [{name: Accept, value: application/json}]
-      selectorInputs:
-        - role: child
-          alternatives:
-            - {profile: record-reference-v1, fields: [record_reference]}
-      prepareScript: adapters/source-a-prepare.rhai
-      adapterParameters: {resultLimit: 2}
-      adapterParametersSchema: schemas/source-a-parameters.schema.yaml
-      preparationLimits:
-        query: forbidden
-        jsonBody: required
-        maximumJsonDepth: 12
-        maximumCollectionItems: 32
-        maximumStringBytes: 512
-        maximumNormalizedBytes: 8192
-      projection: [/total, /results]
-      redirects: deny
-      attemptTimeoutMilliseconds: 3000
-      maximumResponseBytes: 65536
-      maximumConcurrency: 8
-    responseSchema: schemas/source-a-response.schema.yaml
-    extractScript: adapters/source-a-extract.rhai
-    factSchema: schemas/source-a-facts.schema.yaml
-    batch:
-      maximumItems: 16
-      prepareScript: adapters/source-a-batch-prepare.rhai
-      extractScript: adapters/source-a-batch-extract.rhai
-      responseSchema: schemas/source-a-batch-response.schema.yaml
-      projection: [/results/*/slot, /results/*/outcome, /results/*/facts]
-requirements:
-  - uri: urn:example:requirement:relationship:v1
-    derivation:
-      script: derivations/relationship.rhai
-      selectorInputs:
-        - role: candidate
-          alternatives:
-            - {profile: person-reference-v1, fields: [person_reference]}
-      parameters: {matching_policy: exact-reference-v1}
-```
-
-`request.selectorInputs` controls preparation and optional `extract/3` exposure.
-`derivation.selectorInputs` independently controls derivation exposure. Every
-alternative must exactly match one declared requirement role, profile, and
-field set. Rust rejects a missing, surplus, unauthorized, or incompatible
-binding at startup. `prepareScript` and `extractScript` are symmetric,
-separately compiled entry points; neither is a transport plugin.
-
-The optional `batch` block is eligible only on a fixed-path `http-json` source
-under both bundle and runtime `source-batch` capability. Its scripts cannot
-change the ordinary source's method, origin, path, authentication, headers,
-TLS, redirect policy, timeout, response limit, concurrency semaphore, or
-preparation limits. Its response uses the batch projection and schema, but
-every match still validates against the ordinary `factSchema`. SQLite, path
-templates, multi-stage acquisitions, and batches above `maximumItems` use the
-ordinary entry points sequentially in request order.
-
-The ceiling of at most two minimally projected results, which lets one bounded
-request separate a unique match from ambiguity, is governed adapter policy. Its
-value is declared by the reviewed source configuration, here
-`adapterParameters: {resultLimit: 2}`, and rendered into the request by that
-source's `prepareScript`. Rust enforces only the generic one-request-per-stage,
-projection, and response bounds around it. The adapter's result limit is not a
-Rust domain rule, built-in operation, or property of any source product.
-
-A source using `extract/3` must omit `batch`. Startup refuses their combination:
-optimized `extract_batch/2` has no authorized selectors with which to enforce the
-ordinary source's identity comparison. Ordinary request batches still execute
-that source sequentially. Existing `extract/2` and `extract_batch/2` sources keep
-their current behavior.
-
-## Reusable returned-record identity
-
-Selector-aware extraction lets several questions reuse the same reviewed source
-identity check. The request explicitly selects one authorized named profile,
-including a profile with a composite key. The adapter checks each returned
-identity scalar's `type_of` and exact value against that profile's minimized
-selector values before returning `match`. For example, an integer identity must
-not silently accept a floating-point representation or a numeric-looking string.
-Overlapping alternatives remain separate named profiles; there is one lookup and
-no fallback. Returned identity fields may then be discarded so the fixed FactSet
-contains only the facts reused by question derivations. Missing, mismatched or
-uncertain identity stops evaluation without a signed negative concept; a
-generated adapter reports it by throwing `source_protocol_error`.
-
-The extraction adapter is the enforcement point for that comparison. A source
-exporter emits it for every alternative it exports, from the selector fields the
-provider already grants. Rust enforces the entry-point contract around it and
-nothing inside it: exactly one `extract` with two or three parameters, the
-refusal to pair `extract/3` with `batch`, the fresh authorized selector subset
-handed to the script, and the fixed FactSet validation of what comes back. It
-does not inspect which fields an adapter compared, so an `extract/3` that
-ignores its selectors loads and compiles, and the assertions it produces are
-signed.
-
-An author writing `extract/3` by hand therefore carries the comparison as an
-obligation: check every identity field of each named profile the source accepts,
-by `type_of` and exact value, before any `match`, and fail the evaluation rather
-than returning facts when one does not agree. Prove it in the source's own
-adapter fixtures with a returned record whose identity differs from the selected
-profile's values in value and in scalar type.
-
-Existing adapters and question-level identity checks continue to work without
-this optional signature. Import/export and named connections are independent
-optional authoring conveniences; ordinary custom HTTP sources require neither.
+Scripts compile before readiness. Every invocation receives fresh state and
+fresh input copies, so local mutation cannot change the bundle, another
+invocation or another definition. Only a completed `match` reaches derivation;
+no-match, ambiguous, unresolved and malformed lookup results release no facts
+to this ABI.
 
 ## Inputs
 
-For `prepare` and optional `extract/3`, `selectors` contains only roles, profiles, and fields declared
-by the source's closed `selectorInputs` contract. Rust has already validated
-and authorized them. Surplus request fields are not passed to preparation.
-Scripts may rely on this exact shape and should not repeat role, profile,
-field, type, or bound validation. Host-shape violations are Rust contract
-failures and belong in host negative tests. A script still validates
-requirement-specific semantic relationships that Rust cannot infer, such as a
-provider status or a governed namespace agreement.
+`facts` is the complete private FactSet from the matched pack route, validated
+against the Evidence Source's closed `factSchema`. Internal pack operations
+may compose multiple reviewed reads, but derivation receives one completed
+FactSet. Integer tokens outside the signed 64-bit range fail before conversion
+to Rhai rather than becoming imprecise floats. Provider identifiers outside
+that range must be strings.
 
-For `derive`, `selectors` contains only the roles, profiles, and fields declared
-by that requirement's closed derivation selector-input contract. Rust resolves
-those values from the already authorized requirement subjects. A relationship
-requirement can therefore retrieve a record using only a child selector and
-compare an extracted parent fact with only the separately authorized
-candidate-parent reference. Derivation cannot inspect the child selector when
-it did not declare it, the complete HTTP request, bearer token, grant, or
-caller-supplied surplus data.
+`selectors` contains only the roles, profiles and fields declared by the
+requirement's derivation selector-input contract. Rust resolves them from the
+already authorized requirement subjects. Omission yields an empty map. A
+relationship derivation can compare a returned parent reference with the
+separately authorized candidate-parent selector without receiving the complete
+request, credentials, grant or unrelated lookup selectors.
+
+For example, one declared role is represented as:
 
 ```json
 {
   "subject": {
-    "profile": "person-demographics-v1",
-    "values": {
-      "given_name": "Synthetic",
-      "family_name": "Subject",
-      "birth_date": "2000-02-29"
-    }
+    "profile": "record-reference-v1",
+    "values": {"record_reference": "synthetic-reference"}
   }
 }
 ```
 
-Source-adapter `parameters` is non-secret bundle data validated at startup
-against a closed JSON Schema. It may contain provider field identifiers and
-fixed request constants. It must not contain credentials, tokens, requester
-identity, authorization objects, audit handles, or runtime state. The same
-parameters are supplied independently to `prepare` and `extract`; neither
-invocation can mutate the other's copy.
-
-Derivation parameters remain in `evaluation_context.parameters`, alongside
-Rust-owned observation time and codelist handles. They are independent of the
-source-adapter parameters unless the reviewed bundle deliberately repeats a
-non-secret constant in both closed configurations.
-
-The adapter-parameter conversion is closed:
-
-| JSON form | Rhai form |
-|---|---|
-| boolean | `bool` |
-| integer in the signed 64-bit range | `i64` |
-| bounded UTF-8 string | `string` |
-| bounded array of permitted forms | `array` |
-| bounded object of permitted forms | `map` |
-
-Null, fractional numbers, integers outside the signed 64-bit range, and typed
-derivation envelopes such as `{type: "decimal", value: "..."}` are not adapter
-parameters. They fail startup validation. No implicit numeric conversion is
-performed.
-
-`response` is one bounded JSON response from the fixed source request. Rust
-rejects an invalid media type, oversized body, malformed JSON, redirect, or
-transport failure before extraction. JSON integers outside the signed 64-bit
-range are rejected before Rhai so they cannot silently become imprecise binary
-floating-point values. Ordinary fractional JSON numbers remain `f64`; an
-adapter must reject one wherever the provider contract requires an integer.
-
-### Response projection
-
-`request.projection` is a Rust-enforced, client-side allowlist applied after
-the bounded JSON response is parsed and before it is converted to Rhai. It is
-not documentation and does not request provider-side field selection. A source
-should also use a provider field-selection feature when one exists, but its
-acquisition posture describes what crosses the wire before this local pruning.
-
-Each projection entry is an extended JSON Pointer. Ordinary segments follow
-RFC 6901 escaping: `~0` means `~` and `~1` means `/`. The reserved segment `*`
-visits every current array element. Numeric array indexes, recursive descent,
-filters, predicates, unions, and script-computed projection paths are not
-supported. Examples:
-
-```text
-/total
-/results/*/status
-/results/*/declaration/mother.personReference
-```
-
-Projection constructs a new JSON tree containing only present selected leaves
-and the objects or arrays needed to reach them. Object keys not selected are
-dropped. Array order and length are preserved; each selected array element is
-projected independently. A missing selected leaf is omitted rather than
-invented or treated as `null`, so extraction can distinguish missing data from
-an explicit JSON null and fail according to the provider contract. A missing
-or mistyped intermediate container is a source-protocol failure before Rhai.
-An empty projection, duplicate path, invalid escape, overlapping ancestor and
-descendant paths, or path that cannot be reconciled with another selected path
-fails bundle validation.
-
-Projection also reports where an HTTP source's response departed from the
-declared shape, without changing what it produces or refuses. A mistyped
-intermediate container, a missing intermediate container, and a selected leaf
-that is missing from an object which carries a member the projection does not
-select are shape drift. The last is the signature a renamed upstream member
-leaves: the old name is gone and a new one appears beside it. Each drifted
-response increments `evidence_source_shape_drift_total{source}`, and the
-operator log carries a rate-limited WARN naming the source and the declared
-pointers, with `*` in place of any array index. Neither ever carries a response
-value, an unselected member name, or an array length. The
-[operator contract](../../OPERATOR-CONTRACT.md#source-diagnostics) describes
-both.
-
-Two cases are deliberately not drift. A missing selected leaf alone is a record
-with no value for that member, and unselected members alone are a source sending
-more than the projection needs. Declaring a member optional therefore has a
-cost: when a source renames it, a record that drops the old name and carries the
-new one is reported, but a source that simply stops sending it looks exactly
-like a subject without the value, and the extraction script answers it as
-one. Require a member in `responseSchema`
-whenever the source always sends it, so its disappearance is a response-shape
-rejection the operator log names, and keep it optional only where absence is
-a real answer.
-
-### Declared response shape
-
-Every source declares a required `responseSchema`: a bundle-relative closed
-JSON Schema, in the same subset as `adapterParametersSchema` and `factSchema`,
-describing the projected tree. Rust validates the projected response against it
-after projection and before conversion to Rhai, so a response outside the shape
-the adapter was reviewed against never reaches a script; that is a
-source-protocol failure like any other.
-
-Two rules differ from the fact and adapter-parameter roles, because the
-projected tree is not the wire response:
-
-- It may require fewer members than it declares properties. Projection drops a
-  selected leaf the record did not carry, and a page decided ambiguous is never
-  read record by record, so a record on that page need not be complete.
-- A node may write its type as the pair `[T, "null"]`. A source that reports an
-  explicit null where it holds no value has that null carried through
-  projection verbatim, and it reaches the script as the same unit marker
-  `is_missing` already reads. This is the only union the subset admits, and
-  only in this role: a fact and an adapter parameter are never null.
-
-State in the schema what a shape can state: member presence where it is
-guaranteed, member types, array bounds and uniqueness, string bounds and
-formats, and enumerated or constant values. What remains for the script is what
-a shape cannot state, such as how a reported total agrees with the records
-returned, page-count arithmetic, and which values must agree with the closed
-adapter parameters.
-
-Response byte limits and JSON parsing bounds apply before projection, so the
-configured `maximumResponseBytes` describes the wire body Evidence is willing
-to read. The projected tree is bounded separately: it must serialize to at most
-65,536 bytes, and Rhai input bounds apply to it again. Exact root-envelope
-checks in an extraction script may therefore rely on unselected root keys having
-been removed. The fixture harness supplies raw provider JSON and runs this same
-projection before extraction.
-
-## Output from `prepare`
-
-`RequestParts` has exactly two members:
-
-```text
-RequestParts {
-  query: array<{name: string, value: string}>,
-  body: JSON | null
-}
-```
-
-- Query pairs remain ordered and may repeat a name.
-- Query names and values are lexical strings even when the provider interprets
-  them as numbers or booleans. Constants destined for the query string must be
-  authored as strings such as `"2"` and `"true"`; JSON body values retain
-  their JSON types. Rust performs no implicit query conversion.
-- Query names and values are logical raw strings. Names must be non-empty.
-  Rust rejects CR or LF in either component and percent-encodes each component
-  exactly once as UTF-8. ASCII letters, digits, `-`, `.`, `_`, and `~` remain
-  unescaped; every other byte uses uppercase `%HH`, including space as `%20`.
-- Rust validates the complete result before acquiring credentials.
-- The source definition decides whether query and body output are permitted.
-- Unknown members or non-JSON values fail closed.
-
-The following are never script-controlled:
-
-```text
-source, origin, URL, path, method, headers, authentication, credentials,
-content type, timeout, redirect policy, retry policy, pagination, proxy use,
-response limit, concurrency, or number of requests
-```
-
-Rust executes only the requirement's closed acquisition: one request for
-`single`, or one fixed search followed by one fixed fetch after a unique
-validated match. A response cannot supply a source, URL, next page, retry, or
-third request.
-
-A bundle may write `path` as a Rust-owned template with tagged complete-segment
-`pathBindings`. `type: selector` binds an already validated and authorized
-selector field. `type: prior-fact` is valid only on a fetch source and binds a
-scalar property required by the preceding search fact schema. Bindings are not
-`RequestParts` and are never selected by a script. Values reject `/`, `\`, `%`,
-controls, `.` and `..`, then Rust percent-encodes them exactly once. Expansion
-cannot change the configured origin, endpoint family, method, credentials, or
-request count. A `path` without placeholders is a literal and takes no
-`pathBindings`.
-
-Bundle-fixed `fixedHeaders` are ordered, non-secret constants. Names are unique
-after ASCII case folding and cannot set authentication, host/routing, cookies,
-body framing, content length/type, connection, forwarding, proxy, or tracing
-headers. Rust adds `Content-Type: application/json` for a JSON body and owns all
-authentication and framing headers. Header names and values are bounded and
-reject controls, CR, and LF. Scripts cannot observe or modify headers.
-
-`forwardAccessAttribution: true` is an explicit per-source choice for an
-authenticated source that keeps its own subject-facing access history. After
-the complete Evidence authorization and selector decision, Rust sends
-`Registry-Access-Requester` and `Registry-Access-Purpose`. Each value is the
-base64url encoding without padding of its bounded, non-control UTF-8 value.
-Both names are reserved from `fixedHeaders` and API-key authentication, and
-Rhai has no header channel. Omission forwards no attribution. The source must
-separately trust the authenticated Evidence service to assert these values;
-they grant no read authority.
-
-The governed bundle and operator runtime split, the Basic, static-Authorization,
-static-API-key, and OAuth profiles, the local-only credential-free loopback
-boundary, and logical private-CA bindings are defined in
-[`deployment-projects/CONFIG.md`](deployment-projects/CONFIG.md). They are
-transport contracts, not script capabilities.
-
-### Normalization and exact fixtures
-
-Rust converts the Rhai result into a JSON tree before applying result limits.
-For byte limits and deterministic transport, normalized JSON is compact UTF-8
-with no insignificant whitespace, object keys in lexical byte order, array
-order preserved, canonical JSON integer spelling, and finite floating-point
-values rendered in the shortest round-trippable form. Unsupported and
-non-finite values fail closed.
-
-Expected `RequestParts` may be an external JSON file in a focused adapter
-fixture or the inline `common.expectedRequestParts` object in a complete
-project fixture. Both are parsed and compared structurally after normalization.
-Source-file whitespace and object-member order are not significant. The order
-of the query-pair array is significant. A separate transport assertion compares
-the exact encoded query string and exact normalized JSON request-body bytes
-sent to the mock. The closed project fixture vocabulary is defined in
-[`deployment-projects/FIXTURES.md`](deployment-projects/FIXTURES.md).
-
-## Output from `extract`
-
-`LookupResult` is one member of this closed union:
-
-```text
-#{outcome: "no_match"}
-#{outcome: "ambiguous"}
-#{outcome: "match", facts: <JSON object>}
-```
-
-- `no_match` and `ambiguous` contain no `facts` member.
-- `match` requires exactly one provider match and facts that satisfy the
-  source's closed fact schema.
-- Provider protocol inconsistencies must fail. They must not become
-  `no_match`, `ambiguous`, or default facts.
-- An absent result never represents an authoritative negative assertion.
+`evaluation_context` contains exactly the runtime observation instant, legal
+local date and time, closed requirement parameters and read-only codelist
+handles described in [Evidence primitives](#evidence-primitives). The caller
+cannot supply a clock. Parameters carry reviewed non-secret requirement data,
+not requester identity, authorization objects, credentials or runtime handles.
 
 ## Output from `derive`
 
@@ -549,7 +134,7 @@ than the source and governance justify. Probabilistic matching, fuzzy scoring,
 candidate ranking, deduplication, and best-match selection remain outside this
 ABI.
 
-A derivation may return `false` only after extraction established one uniquely
+A derivation may return `false` only after the pack lookup established one uniquely
 resolved authoritative record and emitted a schema-required returned-record
 identifier, relationship-set contract identifier, reference namespace, and
 `relationship_set_complete: true` fact. When the provider returns the lookup
@@ -561,12 +146,11 @@ or protocol uncertainty stops before the boolean result and never becomes an
 authoritative negative assertion. The bundle review must justify how the configured source
 contract distinguishes an absent optional relationship from missing data.
 
-In the portable family example, `reference_namespace` and
-`relationship_set_contract` are copied from closed adapter parameters and then
-compared with closed requirement parameters. That is startup constant
-agreement between reviewed bundle sections, not proof that the provider
+A reviewed pack may supply `reference_namespace` and
+`relationship_set_contract` as fixed constants checked against closed
+requirement parameters. Constant agreement does not prove that the provider
 returned a namespace or contract identifier. If either value can vary by
-record, extraction must derive and validate it from projected provider data,
+record, the pack must derive and validate it from provider data,
 the fact schema must require it, and fixtures must cover mismatch. Governance
 must always establish that returned references belong to the declared
 namespace and that the relationship set has the claimed meaning and
@@ -578,12 +162,12 @@ parentage. The portable OpenCRVS reference therefore uses
 `registered-parent-relationship` until that stronger jurisdiction-specific
 meaning is documented.
 
-## Version 1 combined language surface
+## Version 1 derivation language surface
 
-With the Version 1 additions, adapter scripts may construct `bool`, signed
+Derivation scripts may construct `bool`, signed
 64-bit integer, finite floating-point number, character, string, array, map,
-and unit/null values. Adapter outputs must be JSON-compatible; non-finite
-numbers and unsupported host-object values are rejected.
+and unit/null values. Derived values must satisfy the closed result gate; ordinary floats and
+unsupported host objects are rejected as public outputs.
 
 The Version 1 ABI pins Rhai 1.27.0 core syntax plus the host registrations in
 this document. Rhai syntax does not grant host authority, but its observable
@@ -630,8 +214,7 @@ The following are deliberately forbidden:
 - `try`/`catch`, so a script cannot suppress the host-private unavailable
   termination raised by `required`; and
 - `switch`, `while`, `until`, `loop`, `do`, range construction, string slicing,
-  optional chaining, and null coalescing because Version 1 adapters do not
-  require them.
+  optional chaining, and null coalescing because the reviewed derivation language excludes them.
 
 Negative tests pin each forbidden construct and the index guard. The operation,
 call-depth, expression-depth, string, array, and map ceilings apply to every
@@ -658,9 +241,9 @@ otherwise permitted construct.
 
 ### Evidence primitives
 
-The opaque types cannot be serialized into
-`RequestParts` or extraction facts. Some helpers require handles that only
-Rust can supply through derivation context.
+Opaque values cross the result gate only through the declared Decimal and
+entity-reference forms. Some helpers require handles that only Rust can supply
+through derivation context.
 
 | Function | Signature and behavior |
 |---|---|
@@ -697,8 +280,7 @@ For context, Rust supplies derivation with exactly `observed_at: Instant`,
 `legal_local_date: Date`, `legal_local_time: LegalLocalTime`, validated
 `parameters: map`, and `codelists: map<CodelistHandle>`. The authorized
 selectors are a distinct explicit derivation argument, not ambient context.
-None of those values is supplied to request preparation or extraction except
-for preparation's separately minimized selector argument.
+Acquisition scripts use the separate Adapter exchange contract.
 
 `observed_at` is always a runtime-supplied instant normalized to UTC.
 `legal_local_date` and `legal_local_time` use the requirement's validated IANA
@@ -722,16 +304,15 @@ operations. Exact legal or financial arithmetic must use the `Decimal`
 helpers. Rust performs serialization, URL encoding, authentication, signing,
 and hashing outside the script.
 
-Ordinary Rhai floats are carried only on the adapter surfaces that see
-provider-shaped JSON: request preparation and source extraction, and only when
-finite and inside the signed 64-bit magnitude. A public derived value is never
-an ordinary float. Declare an integer concept or an exact `Decimal` instead;
-a float reaching the derived-value gate fails the invocation.
+Finite ordinary floats inside the signed 64-bit magnitude may occur in
+private facts or local computation. A public derived value is never an
+ordinary float. Declare an integer concept or an exact `Decimal` instead; a
+float reaching the derived-value gate fails the invocation.
 
 `parse_integer` permits leading zeroes because provider text may use them; the
-result has ordinary integer semantics. Extraction must still enforce
-provider-specific bounds such as a non-negative count. Invalid input terminates
-the invocation under the closed error class for that adapter stage.
+result has ordinary integer semantics. Reviewed pack logic validates
+provider-specific bounds such as a non-negative count. Invalid derivation
+input terminates the invocation under a closed error class.
 
 No other Rhai standard package is loaded. In particular, scripts have no:
 
@@ -756,11 +337,8 @@ These engine ceilings apply independently of script logic:
 | String value | 16,384 bytes |
 | Array | 256 items |
 | Map | 256 entries |
-| Source-response body before projection | 1,048,576 wire JSON bytes |
-| Projected source response | 65,536 serialized JSON bytes |
-| Source-response input | 1,048,576 normalized JSON bytes |
 | Facts, parameters, or result | 65,536 normalized bytes |
-| Extracted fact entries | 64 |
+| Input fact entries | 64 |
 | Derived concept values | 16 |
 | Configured codelists | 256 |
 | Entries per codelist | 4,096 |
@@ -772,69 +350,35 @@ These engine ceilings apply independently of script logic:
 | `required` error code | 64 ASCII bytes |
 | Exact decimal precision | 28 significant digits |
 | Exact decimal scale | 9 fractional digits |
-
-An HTTP source's optional exact `unresolvedProblem` declaration is resolved in
-Rust before this ABI. A matching 404 response becomes a data-free transport
-outcome, so neither `extract/2` nor any other Rhai entry point receives its
-Problem Details body. Any mismatch follows the ordinary dependency-failure
-path and also never reaches Rhai.
 | Instant/local-time fractional precision | 9 digits |
 
-The Version 1 preparation profile adds these hard ceilings. A source may
-configure stricter `RequestParts` limits:
-
-| Resource | Hard ceiling |
-|---|---:|
-| Combined normalized preparation input | 1,048,576 bytes |
-| Request-batch items or extraction slots | 16 |
-| Normalized `RequestParts` output | 65,536 bytes |
-| Query pairs | 64 |
-| Query name | 64 bytes |
-| Query value | 4,096 bytes |
-| JSON body depth | 32 |
-
-Operation exhaustion, bound violations, invalid indexing, integer errors, and
-explicit `throw` terminate the invocation. They never produce partial request
-parts or partial facts.
+Operation exhaustion, bound violations, invalid indexing, integer errors and
+explicit `throw` terminate the invocation. A failed derivation releases no
+partial concept values.
 
 ## Errors and observability
 
-Adapter scripts use only stable, value-free signals:
+A reviewed derivation can throw `derivation_input_error` to reject an
+inconsistent selector, fact or policy contract without including input values.
+The public result is `evidence.unavailable`, also used for no-match and
+ambiguous lookups, so the failure does not reveal that a record exists.
+The internal audit category remains value-free.
 
-```text
-adapter_input_error
-source_protocol_error
-derivation_input_error
-```
+The `required` helper terminates a missing-value invocation with a host-private,
+unforgeable unavailable marker. Its safe-code argument is validated and then
+discarded. Scripts cannot manufacture the marker with `throw` or catch it;
+`try` and `catch` are refused.
 
-`source_protocol_error` is the extraction signal.
-`adapter_input_error` is the request-preparation signal.
-`derivation_input_error` rejects an
-inconsistent selector/fact/policy contract without including any input value.
-Its public collapse is deliberate: a uniquely found record whose derivation
-inputs are inconsistent returns the same `evidence.unavailable` problem as
-`no_match` and `ambiguous`, so a caller cannot learn from the response that a
-record exists. The internal category stays a value-free operator diagnostic in
-audit. The `required` primitive uses another,
-host-private unavailable termination. It is an opaque Rust-owned value that
-script source cannot construct, reproduce with `throw`, or catch. The compiler
-rejects `try`/`catch`.
+Rust maps compilation, entry-point, input-bound, invocation and result failures
+to closed internal classes. Selector values, source facts, parameters,
+credentials, tokens and raw Rhai errors are excluded from HTTP problems, audit
+details, logs, metrics, traces and snapshots. Signing and release audit receive
+only values that passed the complete output gate.
 
-Rust maps compilation, entry-point, input-bound, invocation, request-result,
-source-protocol, and extraction-result failures to closed internal classes.
-Selector values, source facts, response bodies, parameters, credentials,
-tokens, and raw Rhai errors must not enter HTTP problems, audit data, logs,
-metrics, traces, snapshots, panic output, or test-failure artifacts.
-
-An adapter failure after the access-attempt audit prevents credential use,
-source access, evidence construction, response protection, and disclosure as
-applicable to its pipeline position. There is no fallback request or fallback
-adapter.
-
-Once an optimized batch invocation begins, a preparation, source, projection,
-schema, extraction, slot, fact, or later failure aborts the outer request. It
-never falls back to ordinary per-item calls and never releases completed item
-results.
+Request batches execute logical items sequentially under Rust-owned ordering.
+An allowed unavailable result belongs to its item; an acquisition, protocol,
+signing or audit failure aborts the request without partial release. Provider
+scripts do not receive or manufacture request-batch correlation slots.
 
 Tests prove that a script cannot forge the host-private
 unavailable marker, use `Fn` or an anonymous function, interpolate an opaque
@@ -843,16 +387,9 @@ snapshot, or failed-test diagnostic.
 
 ## Review examples
 
-- [DHIS2 preparation](dhis2-tracker/prepare.rhai) produces ordered repeated
-  `filter` query pairs while Rust keeps the endpoint and credentials fixed.
-- [OpenCRVS preparation](opencrvs-event-search/prepare.rhai) produces one
-  bounded Event Search body.
-- [OpenCRVS extraction](opencrvs-event-search/extract.rhai) emits only a narrow
-  provider-search fact. It does not decide legal parenthood.
-- [Deployment-shaped examples](deployment-projects/README.md) show complete
-  DHIS2 adult-status and OpenCRVS adult-status, registered-parent confirmation,
-  and registered-parent identification projects using this ABI.
-
-The accepted Evidence contracts and runtime implement this API together with
-startup, negative, resource-bound, redaction, exact-request, and one-request
-transport tests.
+- [Professional licence derivation](../../fixtures/acceptance/professional-licence/derivations/professional-licence.rhai)
+  uses runtime legal time, exact dates and Decimal buckets.
+- [Deployment-shaped examples](deployment-projects/README.md) combine reviewed
+  packs with adult-status and registered-parent assertion derivations.
+- [Adapter script contract](../../../adapter/CONCEPT.md#8113-script-abi)
+  defines the separate exchange input and result seams used inside packs.

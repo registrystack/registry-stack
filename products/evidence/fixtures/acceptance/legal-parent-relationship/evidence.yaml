@@ -1,104 +1,169 @@
 apiVersion: id.registrystack.org/formats/evidence/bundle/v1
 kind: EvidenceBundle
 assuranceProfile: evidence-grade
-service: {providerId: urn:example:fixture:provider:evidence, publicOrigin: https://evidence.invalid, trustDomain: urn:example:fixture:trust-domain:acceptance}
-issuer: {uri: urn:example:fixture:issuer:authority}
-publication: {serviceId: urn:example:fixture:service:evidence, title: Synthetic Evidence service, description: Synthetic minimum-disclosure assertions for acceptance testing, endpointUrl: https://evidence.example.invalid, jurisdictions: [urn:example:jurisdiction:acceptance]}
+service:
+  providerId: urn:example:fixture:provider:evidence
+  publicOrigin: https://evidence.invalid
+  trustDomain: urn:example:fixture:trust-domain:acceptance
+issuer:
+  uri: urn:example:fixture:issuer:authority
+publication:
+  serviceId: urn:example:fixture:service:evidence
+  title: Synthetic Evidence service
+  description: Synthetic minimum-disclosure assertions for acceptance testing
+  endpointUrl: https://evidence.example.invalid
+  jurisdictions:
+  - urn:example:jurisdiction:acceptance
 authentication:
-  oidc: {issuer: https://identity.invalid, audience: evidence-fixture, allowedClients: [evidence-task-agent], tokenTypes: [at+jwt], algorithms: [ES256], jwksSource: {type: uri, uri: https://identity.invalid/.well-known/jwks.json}, principalClaim: sub, requesterTagsClaim: evidence_tags, evidenceAudienceClaim: evidence_audience, requiredScopes: unrestricted, maximumTokenLifetimeSeconds: 300, revokedKeyIds: []}
-audit: {hashKeyRef: secret:file/audit-hash-key, hashKeyVersion: 1}
-subjectBinding: {secretRef: secret:file/subject-binding-key, keyVersion: 1}
-rateLimits: {requestsPerPrincipalPerMinute: 60, burstPerPrincipal: 10, failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 10}
-signing: {format: flattened-jws-json, algorithm: ES256, activePublicJwkFile: public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json, publishedPublicJwkFiles: [], revokedKeyIds: [], jwksPath: /.well-known/evidence/jwks.json, maximumAssertionValiditySeconds: 300, verifierClockSkewSeconds: 30}
-responseFormats: [signed-jws]
-
+  oidc:
+    issuer: https://identity.invalid
+    audience: evidence-fixture
+    allowedClients:
+    - evidence-task-agent
+    tokenTypes:
+    - at+jwt
+    algorithms:
+    - ES256
+    jwksSource:
+      type: uri
+      uri: https://identity.invalid/.well-known/jwks.json
+    principalClaim: sub
+    requesterTagsClaim: evidence_tags
+    evidenceAudienceClaim: evidence_audience
+    requiredScopes: unrestricted
+    maximumTokenLifetimeSeconds: 300
+    revokedKeyIds: []
+audit:
+  hashKeyRef: secret:file/audit-hash-key
+  hashKeyVersion: 1
+subjectBinding:
+  secretRef: secret:file/subject-binding-key
+  keyVersion: 1
+rateLimits:
+  requestsPerPrincipalPerMinute: 60
+  burstPerPrincipal: 10
+  failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 10
+signing:
+  format: flattened-jws-json
+  algorithm: ES256
+  activePublicJwkFile: public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json
+  publishedPublicJwkFiles: []
+  revokedKeyIds: []
+  jwksPath: "/.well-known/evidence/jwks.json"
+  maximumAssertionValiditySeconds: 300
+  verifierClockSkewSeconds: 30
+responseFormats:
+- signed-jws
 selectorProfiles:
   civil-record-reference-v1:
     maximumAggregateBytes: 96
-    fields: {record_reference: {type: string, minimumBytes: 1, maximumBytes: 96}}
+    fields:
+      record_reference:
+        type: string
+        minimumBytes: 1
+        maximumBytes: 96
   person-reference-v1:
     maximumAggregateBytes: 128
-    fields: {person_reference: {type: string, minimumBytes: 1, maximumBytes: 128}}
+    fields:
+      person_reference:
+        type: string
+        minimumBytes: 1
+        maximumBytes: 128
 sources:
   source-d:
-    type: http-json
-    baseUrl: https://source.invalid
+    pack:
+      id: fixture-parents
+      version: '1'
+      digest: sha256:9508cf0ec06ad80a75955aae0db1689eed85363d51c12acf06c5c3e99539d72d
+      artifactPrefix: adapter-packs/fixture-parents/9508cf0ec06ad80a75955aae0db1689eed85363d51c12acf06c5c3e99539d72d
+    route: lookup
+    connection: provider
+    inputs:
+      record_reference:
+        selector:
+          role: child
+          profile: civil-record-reference-v1
+          field: record_reference
     posture: field-projected
-    authentication: {type: static-authorization, tokenRef: secret:file/source-d-token}
-    request:
-      method: POST
-      path: /v1/child-relationships
-      fixedHeaders: [{name: Accept, value: application/json}]
-      selectorInputs:
-        - role: child
-          alternatives: [{profile: civil-record-reference-v1, fields: [record_reference]}]
-      prepareScript: adapters/source-d-prepare.rhai
-      adapterParameters:
-        requestedFields: [returned_child_reference, parent_references, reference_namespace, relationship_set_contract, relationship_set_complete]
-        resultLimit: 2
-        referenceNamespace: urn:example:fixture:person-reference
-        relationshipSetContract: urn:example:fixture:legal-parent-set:v1
-        relationshipSetComplete: true
-      adapterParametersSchema: schemas/adapter-parameters.schema.yaml
-      preparationLimits: {query: forbidden, jsonBody: required, maximumJsonDepth: 8, maximumCollectionItems: 16, maximumStringBytes: 256, maximumNormalizedBytes: 4096}
-      projection:
-        - /total
-        - /records/*/returned_child_reference
-        - /records/*/parent_references
-        - /records/*/reference_namespace
-        - /records/*/relationship_set_contract
-        - /records/*/relationship_set_complete
-      redirects: deny
-      attemptTimeoutMilliseconds: 3000
-      maximumResponseBytes: 65536
-      maximumConcurrency: 8
-    responseSchema: schemas/response.schema.yaml
-    extractScript: adapters/source-d.rhai
     factSchema: schemas/facts.schema.yaml
 authorityProfiles:
   statutory-caseworker-v1:
-    requesterClients: [evidence-task-agent]
+    requesterClients:
+    - evidence-task-agent
     grantSourceIssuer: https://casework.invalid
     kind: statutory
-    requesterTags: [fixture-agency]
+    requesterTags:
+    - fixture-agency
     grants:
-      - requirement: urn:example:fixture:requirement:legal-parent-relationship:v1
-        purpose: fixture-enrolment
-        audienceFrom: authenticated-requester
-        responseFormats: [signed-jws]
-        subjects:
-          - {role: child, selectorProfile: civil-record-reference-v1, valueOrigin: request}
-          - role: candidate-parent
-            selectorProfile: person-reference-v1
-            valueOrigin: authenticated-grant
-            valueClaims: {person_reference: grant.candidate_parent.person_reference}
+    - requirement: urn:example:fixture:requirement:legal-parent-relationship:v1
+      purpose: fixture-enrolment
+      audienceFrom: authenticated-requester
+      responseFormats:
+      - signed-jws
+      subjects:
+      - role: child
+        selectorProfile: civil-record-reference-v1
+        valueOrigin: request
+      - role: candidate-parent
+        selectorProfile: person-reference-v1
+        valueOrigin: authenticated-grant
+        valueClaims:
+          person_reference: grant.candidate_parent.person_reference
 requirements:
-  - handle: legal-parent-relationship
-    uri: urn:example:fixture:requirement:legal-parent-relationship:v1
-    kind: criterion
-    acquisition:
-      type: single
-      source: source-d
-    purposes: [fixture-enrolment]
-    subjectRoles:
-      - {role: child, cardinality: one, selectorProfiles: [civil-record-reference-v1]}
-      - {role: candidate-parent, cardinality: one, selectorProfiles: [person-reference-v1]}
-    referenceFrameworks: [urn:example:fixture:framework:legal-parent-relationship:v1]
-    evidenceType: urn:example:fixture:evidence-type:legal-parent-relationship:v1
-    validitySeconds: 300
-    derivation:
-      script: derivations/legal-parent-relationship.rhai
-      selectorInputs:
-        - role: child
-          alternatives: [{profile: civil-record-reference-v1, fields: [record_reference]}]
-        - role: candidate-parent
-          alternatives: [{profile: person-reference-v1, fields: [person_reference]}]
-      parameters:
-        matching_policy: exact-opaque-reference-membership-v1
-        candidate_reference_namespace: urn:example:fixture:person-reference
-        relationship_set_contract: urn:example:fixture:legal-parent-set:v1
-        legal_authority_attestation: urn:example:fixture:governance:legal-parent-register:v1
-    concepts: [{handle: relationship-confirmed, uri: urn:example:fixture:concept:legal-parent-relationship-confirmed, type: boolean, required: true, constraints: {}}]
-    fixtures: fixtures/cases.yaml
-    disclosureGuard: {families: [urn:example:fixture:disclosure-family:legal-parent-relationship]}
-    existenceDisclosure: collapse-unresolved
+- handle: legal-parent-relationship
+  uri: urn:example:fixture:requirement:legal-parent-relationship:v1
+  kind: criterion
+  acquisition:
+    source: source-d
+  purposes:
+  - fixture-enrolment
+  subjectRoles:
+  - role: child
+    cardinality: one
+    selectorProfiles:
+    - civil-record-reference-v1
+  - role: candidate-parent
+    cardinality: one
+    selectorProfiles:
+    - person-reference-v1
+  referenceFrameworks:
+  - urn:example:fixture:framework:legal-parent-relationship:v1
+  evidenceType: urn:example:fixture:evidence-type:legal-parent-relationship:v1
+  validitySeconds: 300
+  derivation:
+    script: derivations/legal-parent-relationship.rhai
+    selectorInputs:
+    - role: child
+      alternatives:
+      - profile: civil-record-reference-v1
+        fields:
+        - record_reference
+    - role: candidate-parent
+      alternatives:
+      - profile: person-reference-v1
+        fields:
+        - person_reference
+    parameters:
+      matching_policy: exact-opaque-reference-membership-v1
+      candidate_reference_namespace: urn:example:fixture:person-reference
+      relationship_set_contract: urn:example:fixture:legal-parent-set:v1
+      legal_authority_attestation: urn:example:fixture:governance:legal-parent-register:v1
+  concepts:
+  - handle: relationship-confirmed
+    uri: urn:example:fixture:concept:legal-parent-relationship-confirmed
+    type: boolean
+    required: true
+    constraints: {}
+  fixtures: fixtures/cases.yaml
+  disclosureGuard:
+    families:
+    - urn:example:fixture:disclosure-family:legal-parent-relationship
+  existenceDisclosure: collapse-unresolved
+sourceConnections:
+  provider:
+    endpoints:
+    - endpoint: provider
+      baseUrl: https://source.invalid
+      authentication:
+        type: static-authorization
+      clientIdentity: forbidden

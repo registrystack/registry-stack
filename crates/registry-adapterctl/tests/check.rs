@@ -680,8 +680,8 @@ fn schemas_writes_eight_files_into_the_given_directory() {
     assert!(stderr.is_empty(), "{}", String::from_utf8_lossy(&stderr));
     assert_eq!(report["command"], "schemas");
     let expected = BTreeSet::from([
-        "job.v1alpha1.schema.json".to_owned(),
         "job-runtime.v1alpha1.schema.json".to_owned(),
+        "job.v1alpha1.schema.json".to_owned(),
         "effective-contract.v1alpha1.schema.json".to_owned(),
         "fixture.v1alpha1.schema.json".to_owned(),
         "pack.v1alpha1.schema.json".to_owned(),
@@ -1743,8 +1743,8 @@ fn base_job_text(name: &str) -> String {
     .unwrap()
 }
 
-/// The located findings of a refusal, as (code, path) pairs.
-fn located(report: &Value) -> Vec<(String, String)> {
+/// The located findings of a refusal, as (code, path, line) tuples.
+fn located(report: &Value) -> Vec<(String, String, Option<u64>)> {
     report["diagnostics"]
         .as_array()
         .unwrap_or_else(|| panic!("no diagnostics list: {report}"))
@@ -1753,53 +1753,62 @@ fn located(report: &Value) -> Vec<(String, String)> {
             (
                 diagnostic["code"].as_str().unwrap_or_default().to_owned(),
                 diagnostic["path"].as_str().unwrap_or_default().to_owned(),
+                diagnostic["source"]["line"].as_u64(),
             )
         })
         .collect()
 }
 
 /// A job the reader refuses reports the reader's own located finding,
-/// the code and pointer an author fixes, not one folded root refusal.
+/// including the code, pointer, and source line an author fixes, not one
+/// folded root refusal.
 #[test]
 fn a_job_the_reader_refuses_reports_the_located_finding() {
-    let text = format!("{}conformanceFirst: 1\n", base_job_text("job.yaml"));
+    let base = base_job_text("job.yaml");
+    let line = base.lines().count() as u64 + 1;
+    let text = format!("{base}conformanceFirst: 1\n");
     let (exit, report, _) = job_check_with("job.yaml", &text, &[]);
     assert_eq!(exit, ExitCode::from(1), "{report}");
     let found = located(&report);
     assert!(
         found.contains(&(
             "config.unknown-key".to_owned(),
-            "/conformanceFirst".to_owned()
+            "/conformanceFirst".to_owned(),
+            Some(line)
         )),
         "{report}"
     );
     assert!(
         !found
             .iter()
-            .any(|(code, _)| code == "adapter.artifact.refused"),
+            .any(|(code, _, _)| code == "adapter.artifact.refused"),
         "{report}"
     );
 }
 
 /// A job runtime config the loader refuses reports the loader's located
-/// finding, not one folded runtime refusal.
+/// finding, including code, pointer, and source line, not one folded
+/// runtime refusal.
 #[test]
 fn a_job_runtime_the_loader_refuses_reports_the_located_finding() {
-    let text = format!("{}conformanceFirst: 1\n", base_job_text("job-runtime.yaml"));
+    let base = base_job_text("job-runtime.yaml");
+    let line = base.lines().count() as u64 + 1;
+    let text = format!("{base}conformanceFirst: 1\n");
     let (exit, report, _) = job_check_with("job-runtime.yaml", &text, &[]);
     assert_eq!(exit, ExitCode::from(1), "{report}");
     let found = located(&report);
     assert!(
         found.contains(&(
             "config.unknown-key".to_owned(),
-            "/conformanceFirst".to_owned()
+            "/conformanceFirst".to_owned(),
+            Some(line)
         )),
         "{report}"
     );
     assert!(
         !found
             .iter()
-            .any(|(code, _)| code == "platform.runtime-config.refused"),
+            .any(|(code, _, _)| code == "platform.runtime-config.refused"),
         "{report}"
     );
 }

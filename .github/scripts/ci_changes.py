@@ -99,6 +99,7 @@ SHARDS = {
     ),
     "adapter": (
         "registry-adapter-core",
+        "registry-adapter-engine",
         "registry-adapter",
         "registry-adapter-connectors",
         "registry-adapter-job",

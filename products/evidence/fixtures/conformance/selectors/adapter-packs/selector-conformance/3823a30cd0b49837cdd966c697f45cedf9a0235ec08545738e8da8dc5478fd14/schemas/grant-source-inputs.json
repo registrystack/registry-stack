@@ -1,0 +1,31 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "grant_given_name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "grant_family_name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "grant_birth_date": {
+      "type": "string",
+      "format": "date"
+    },
+    "grant_event_reference": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 96
+    }
+  },
+  "required": [
+    "grant_given_name",
+    "grant_family_name",
+    "grant_birth_date",
+    "grant_event_reference"
+  ]
+}

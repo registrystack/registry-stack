@@ -83,6 +83,22 @@ pub(crate) const PREPARED_SOURCE_FORMAT: FormatSpec<'static> = FormatSpec {
 /// read. Nothing is changed.
 const INVALID_PREPARATION: &str = "retained source preparation is invalid; preserve it for inspection, or run bregctl dev stop --remove, then remove .breg/dev and start again";
 
+fn evidence_source_options(
+    args: &PrepareSourceArgs,
+    entity: String,
+) -> registry_breg::evidence_source::EvidenceSourceOptions {
+    registry_breg::evidence_source::EvidenceSourceOptions {
+        access_profile: args.access_profile.clone(),
+        entity,
+        selectors: vec![args.selector_profile.clone()],
+        fields: args.readable_fields.clone(),
+        source_id: args.source_id.clone(),
+        connection: args.connection.clone(),
+        authentication:
+            registry_breg::evidence_source::EvidenceSourceAuthentication::Oauth2PrivateKeyJwt,
+    }
+}
+
 fn transition_sequence<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
     registry_platform_yaml::BoundedU64::<2, { u64::MAX }>::deserialize(deserializer)
         .map(registry_platform_yaml::BoundedU64::get)
@@ -667,14 +683,7 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
         })?;
         registry_breg::evidence_source::export_evidence_source(
             &compiled,
-            &registry_breg::evidence_source::EvidenceSourceOptions {
-                access_profile: args.access_profile.clone(),
-                entity: entity_id.clone(),
-                selectors: vec![args.selector_profile.clone()],
-                fields: args.readable_fields.clone(),
-                source_id: args.source_id.clone(),
-                connection: args.connection.clone(),
-            },
+            &evidence_source_options(&args, entity_id.clone()),
         )
         .map_err(|diagnostic| {
             anyhow::anyhow!("selected source cannot be exported: {}", diagnostic.message)
@@ -1074,6 +1083,16 @@ mod tests {
             connection: "registry".into(),
             apply: false,
         }
+    }
+    #[test]
+    fn native_preparation_selects_private_key_jwt_pack_authentication() {
+        let (_temporary, state) = source_fixture();
+        let selected = evidence_source_options(&args(&state), "record".into());
+
+        assert_eq!(
+            selected.authentication,
+            registry_breg::evidence_source::EvidenceSourceAuthentication::Oauth2PrivateKeyJwt
+        );
     }
     #[test]
     fn existing_unique_selector_and_lookup_grant_are_a_zero_ddl_successor() {
@@ -1546,6 +1565,7 @@ mod tests {
                 fields: vec!["organization".into(), "label".into()],
                 source_id: "registry".into(),
                 connection: "registry".into(),
+                authentication: registry_breg::evidence_source::EvidenceSourceAuthentication::Oauth2PrivateKeyJwt,
             },
         )
         .unwrap();

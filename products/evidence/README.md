@@ -7,19 +7,23 @@ a purpose and the subject selectors required by that definition. An optional
 source effects.
 
 One `evidence` process serves one operator-controlled trust domain. The immutable
-bundle contains compiled definitions, source contracts, reviewed Functions,
-schemas, signing identity and target bindings. A separate runtime file binds
+bundle contains compiled definitions, digest-pinned Adapter packs, thin Source
+bindings, reviewed derivation Functions, schemas, signing identity and target
+bindings. A separate runtime file binds
 process resources, secret mounts, signer transport, audit storage and TLS trust.
 Complete target authority is activated separately with durable history. Its
 grants stay inside the package ceilings; a running process retains its activated
 snapshot until restart.
 
 Rust owns authentication, complete-grant authorization, selector minimization,
-fixed source execution, bounded Function execution, output validation, signing
-and audit. Reviewed Rhai Functions prepare requests, extract private facts and
-derive only declared outputs. Authorization and selector checks precede secret
-resolution and source access. Durable access audit precedes acquisition, and the
-terminal disclosure audit gates the exact serialized response.
+bounded Adapter pack execution, bounded derivation Function execution, output
+validation, signing and audit. One reviewed Adapter pack route owns each complete
+provider acquisition and returns a schema-validated private FactSet. The only
+authored Evidence Function interface is `assertion-derive/v1`; it derives only
+declared outputs from those facts and its explicitly declared selector inputs.
+Authorization and selector checks precede secret resolution and source access.
+Durable access audit precedes acquisition, and the terminal disclosure audit
+gates the exact serialized response.
 
 The default representation is signed flattened JWS. Unsigned JSON and SD-JWT VC
 require explicit package and matched-grant permission. Holder-bound assertions
@@ -29,14 +33,17 @@ offline verification without the serving runtime or source access. The optional
 OID4VCI adapter is a separate consumer; Evidence has no wallet or OID4VCI runtime
 dependency.
 
-Sources use fixed HTTP JSON contracts or bounded SQLite extracts. Acquisition
-can be direct, search followed by fetch, or an explicitly bounded fetch set.
-Request and source batching preserve per-item authorization, disclosure and
-audit boundaries. Authenticated context and task grants establish only the
+Each AssertionDefinition names one Source. That Source binds a pinned Adapter
+pack version and route to one target connection, and maps only authorized
+selector fields into the route's closed inputs. The route owns the complete
+bounded sequence of HTTP, SQLite, or other admitted provider operations and the
+projection to private facts. Request-batch evaluation runs that same Source
+independently for each item while preserving per-item authorization, disclosure
+and audit boundaries. Authenticated context and task grants establish only the
 explicit authority and selector origins their verified contracts permit.
-Evidence needs no Base Registry Engine (BReg), Casework or Coordinator service or database. Assertions
-establish claims and bindings, and confer no review approval or downstream write
-authority.
+Evidence needs no Base Registry Engine (BReg), Casework or Coordinator service
+or database. Assertions establish claims and bindings, and confer no review
+approval or downstream write authority.
 
 Adult status, residence region, professional licence status, legal-parent
 relationship and operator activity are example definitions. They are authored
@@ -45,7 +52,7 @@ compatibility fixtures grant no special production behavior.
 
 The maintained runtime contracts include the [operator contract](OPERATOR-CONTRACT.md),
 [source-testing contract](SOURCE-TESTING.md), [wire and security contracts](contracts/README.md)
-and [trusted Function ABI](reference/request-adapter/ADAPTER-API.md). Generated
+and [trusted derivation Function ABI](reference/request-adapter/ADAPTER-API.md). Generated
 contracts and authoring schemas are reproduced by their documented generators.
 Use the normalized examples below for the current authoring journey.
 
@@ -57,11 +64,12 @@ normalized authoring, complete access grants, local setup, signed requests,
 independent offline verification and a deployment handoff.
 
 `evidencectl` uses one `evidence.yaml` EvidenceProject containing
-AssertionDefinitions, named Sources, named Functions and selector profiles.
-Each definition declares its semantic URIs, subjects, acquisition plan, output
-allowlist, validity, binding and grant ceiling. Function assets use
-`source-prepare/v1`, `source-extract/v1` or `assertion-derive/v1`; their interfaces
-and typed call sites are available through `explain` and generated types.
+AssertionDefinitions, named Sources, derivation Functions and selector profiles.
+Each definition declares its semantic URIs, subjects, one Source, output
+allowlist, validity, binding and grant ceiling. A Source names its pack, route,
+connection, acquisition posture and selector-to-input bindings. Function assets
+use only `assertion-derive/v1`; their typed call sites are available through
+`explain` and generated types.
 
 A separate EvidenceTarget declares the deployment's connections, authentication,
 keys, secrets, audit destination and authority document. Its AccessProfiles match
@@ -70,12 +78,14 @@ package ceilings. Local development uses those same grants. Grants never combine
 to create broader authority.
 
 `evidencectl init <dir> --openapi <file-or-url> --profile local` retains the API
-description for source authoring. `source suggest` and the source import commands
-produce reviewed source contracts and named Function assets. The author supplies
-the fixed assertion semantics and resolves any reported review markers.
-Explicit `source suggest --map-selector` assignments generate fixed path, query
-and JSON-body bindings from the project's existing selector profiles. Generated
-Functions remain ordinary reviewed project assets.
+description for source authoring. `source suggest` emits a reviewed Adapter pack
+closure plus its thin Source binding. The source import commands install reviewed
+Adapter pack artifacts, Source fragments and their declared dependencies. The
+author supplies the fixed assertion semantics and resolves any reported review
+markers. Explicit `source suggest --map-selector` assignments map the project's
+existing selector profiles to named pack inputs and reviewed request channels.
+Generated pack code remains ordinary reviewed project input; it does not become
+an Evidence Function interface.
 `evidencectl init <dir> --transport sqlite-extract --profile local` creates a
 runnable synthetic SQLite project. `init --starter <dir> --profile local` copies
 a reviewed normalized project.
@@ -96,15 +106,18 @@ evidencectl types '<project>' --language typescript --output '<new-file.ts>'
 With a complete target public key it also compiles and delegates a static bundle
 check. Missing deployment inputs are reported explicitly. `--production` requires
 production or evidence-grade assurance; `--deny-warnings` refuses warnings.
-Checks resolve no secrets and make no dependency request. Fixtures execute the
-bounded source/extraction/derivation path using supplied synthetic responses.
+Checks resolve no secrets and make no dependency request. Fixtures compile the
+selected pack route, replay its exact synthetic acquisition exchanges, validate
+the resulting private facts and execute the derivation Function.
 
-`explain` shows each definition's ordered source operations, preparation and
-extraction Functions, private fact names, derivation and output names, with
-connection identifiers and source limits. Sources not referenced by a definition
-are listed separately. The JSON report's `assertionDefinitions` entries also
-carry each definition's `validitySeconds`, so a reader can compare credential
-lifetimes without compiling. The human report contains no source values or credentials.
+`explain` shows each definition's Source, pinned pack and route, named connection,
+acquisition posture, minimized selector-to-input bindings, typed private fact
+names, derivation Function and declared output names. Sources not referenced by
+a definition are listed separately. The JSON report's `assertionDefinitions`
+entries also carry each definition's `validitySeconds`, so a reader can compare
+credential lifetimes without compiling. The report does not invent provider
+HTTP, authentication or operational-limit detail, and the human report contains
+no source values or credentials.
 
 `evidencectl check --file <file>` checks one tooling file offline, including a
 client profile, local access client registration, reviewed contracts, development state or source-import document.
@@ -138,10 +151,12 @@ minimization, audit, and disclosure.
 response path. The shared README names the transport and credential tests.
 These are maintained references, not claims of execution here.
 
-Source descriptions accept HTTPS or numeric loopback HTTP and reject embedded
-credentials, queries and fragments. Fetch an authenticated API description with
-your own client and pass its local file. Source credentials grant no Evidence
-caller authority.
+For network endpoints, target connections bind the exact origins, authentication
+and trust material permitted by the governed pack endpoints. Production
+connections use HTTPS; local authoring may use an exact numeric-loopback HTTP
+origin under the local assurance profile. Fetch an authenticated API description
+with your own client and pass its local file. Source credentials grant no
+Evidence caller authority.
 
 ### Package and deployment handoff
 

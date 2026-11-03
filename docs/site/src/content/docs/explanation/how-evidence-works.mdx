@@ -24,26 +24,28 @@ file and the scripts it names, kept in version control. It declares four things.
   [Requirement URI](../../reference/glossary/#requirement), the purpose it serves, the subject
   roles a caller names, the source it reads, the outputs it may return, and the grant ceiling no
   caller can exceed.
-- **Sources.** Each entry under `sources` is one [source](../../reference/glossary/#source), a fixed read, an HTTP request or one SQL statement
-  over a read-only SQLite extract, with the response shape it accepts.
+- **Sources.** Each entry under `sources` binds a reviewed Adapter pack route to a named
+  connection and only the authorized selector fields it needs. The route acquires and normalizes
+  facts, using HTTP reads or a reviewed statement over a read-only SQLite extract.
 - **Selector profiles.** A [selector profile](../../reference/glossary/#selector-profile) bounds what a caller may send to identify a subject.
-  `record-by-id` admits one string field of 1 to 64 bytes, and a source's path takes its value
+  `record-by-id` admits one string field of 1 to 64 bytes, and a route input takes its value
   only from that field.
 - **Functions.** A [Function](../../reference/glossary/#function) is a small
-  [Rhai](../../reference/glossary/#rhai) script with a declared interface. A `source-extract/v1`
-  Function turns the source response into facts; an `assertion-derive/v1` Function turns facts
-  into outputs. Functions run under fixed operation and size limits and cannot import code.
+  [Rhai](../../reference/glossary/#rhai) script with the `assertion-derive/v1` interface. It turns
+  the route's validated facts into declared outputs. Provider response normalization belongs to
+  the pack. Functions run under fixed operation and size limits and cannot import code.
 
 Evidence has no built-in domain: adult status exists only because a project declares it.
 
 Beside the project sit two files an operator owns. A [target](../../reference/glossary/#target), such as `local-target.yaml`, binds
-the project to one deployment: the token issuer, the source endpoints and their credentials, the
-signer, and the audit path. A target authority, such as `dev-authority.yaml`, names the access
+the project to one deployment: the token issuer, named connections with permitted endpoints and
+credential references, the signer, and the audit path. A target authority, such as `dev-authority.yaml`, names the access
 profiles that may call and the grants each holds. A grant can only narrow a definition's
 [grant ceiling](../../reference/glossary/#grant-ceiling); Registry Evidence refuses to activate one that widens it.
 
 {/* Evidence: crates/registry-evidence-authoring/src/project.rs, EvidenceProject, SelectorProfile,
-    FunctionInterface, AssertionDefinition, and SourceType; crates/registry-evidence/src/rhai_runtime.rs,
+    FunctionInterface, AssertionDefinition, and Source;
+    crates/registry-evidence/src/pack_source.rs, PackSourceExecutor; crates/registry-evidence/src/rhai_runtime.rs,
     MAXIMUM_OPERATIONS and disable_symbol; products/evidence/examples/standalone/evidence.yaml;
     products/evidence/examples/standalone/local-target.yaml; products/evidence/examples/standalone/dev-authority.yaml;
     crates/registry-evidence/src/authority.rs, target_grants_cannot_widen_any_definition_ceiling. */}

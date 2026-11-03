@@ -423,9 +423,15 @@ vector.
 
 The listener request timeout bounds admission, concurrency queueing, and body
 collection. It is not a total evaluation deadline. Once a protected evaluation
-starts, Evidence lets it finish under the separately bounded OIDC and source
-operations so cancellation cannot bypass required audit or signed-response
-release ordering.
+starts, the captured `sourceAcquisition.acquisitionDeadlineMilliseconds` is the
+absolute deadline for its pack acquisition and for admission to its terminal
+release append. Admission to that append is the disclosure-begin boundary.
+Evidence starts no new credential, source, or release-append
+operation after that deadline. A terminal release append admitted before the
+deadline completes without cancellation, and the exact audited response bytes
+may return after the deadline expires. The deadline is therefore not a hard
+wall-clock response cutoff. A signed source's verified `validUntil` remains an
+independent data-validity bound.
 
 ## Response formats
 
@@ -575,32 +581,43 @@ unsupported authoring field. For a compromised caller-token issuer key, set
 
 ## Source and selector controls
 
-An optional governed `sourceConnections` map names shared HTTP workload
-connections. Each authored source's `connection` reference is resolved at build
-time into concrete endpoint, authentication, TLS-profile and concurrency fields;
-startup rejects mismatches. The connection owns those settings and aggregate
-resource limits. Each source retains its operation-specific request, timeout,
-projection and response bounds. Existing inline sources remain supported.
+A governed `sourceConnections` map reviews the non-secret authority for every
+named workload connection. Each entry contains an `endpoints` list. An endpoint
+policy fixes the Adapter pack endpoint id, exact base URL, optional trust
+profile, client-identity requirement, and authentication kind and authority.
+Secret references, attempt limits, response limits, private-network allowances,
+and trust-anchor files belong to the matching runtime binding instead.
 
-Only the same explicit name in one process shares a transport pool, an
-admission semaphore and an OAuth token cache with single-flight refresh.
-Independent connection names and inline sources retain separate resources even
-when their credential bytes are equal. No facts or authorization decisions are
-shared. Waiting is bounded and cancellation releases capacity. Multiple
+Each source binds one digest-pinned Adapter pack and Evidence route to a named
+connection. Its `inputs` map projects only authorized selector fields into
+named route inputs; its posture and fact schema must equal the pinned route
+contract. The pack owns request construction, extraction, response validation,
+and destination endpoint selection. There is no inline source transport plan
+and no runtime override of the reviewed pack, route, connection, selector map,
+posture, or fact schema.
+
+`runtime.yaml` binds the same connection name under `sourceConnections`, and
+the value's `id` must equal the map key. Its endpoint ids, base URLs, trust
+profiles, client identity, and credential kinds must match the governed policy.
+One name in one Evidence process shares the endpoint transport resources,
+admission permits, and OAuth cache across every program that reaches it.
+Different names remain isolated even when their destinations or credential
+bytes happen to match. Facts and authorization decisions always remain
+request-local. Waiting is bounded, cancellation releases capacity, and separate
 processes do not share a distributed concurrency budget.
 
-The bundle-only check and evaluate seams that Evidencectl drives run before a
-`runtime.yaml` exists, so they compile a connected source without those shared
-resources and give each source its own instead. The pool is built from the
-runtime document's outbound TLS settings and its captured CA bytes, which a
-bundle alone does not carry. Nothing on that path dispatches an HTTP request:
-it materializes request parts and asserts them, and executes only a statement
-source, against a fixture extract. Shared client identity, private CA trust,
-the token cache, and admission are therefore not among the facts a bundle-only
-run proves. `evidence evaluate` reads `runtime.yaml`, builds the resources, and
-refuses a connected source that cannot get them. `evidence check` stays
-offline: it checks the runtime file's outbound TLS and CA bundle bindings
-without building a client.
+`sourceAcquisition` supplies finite operational ceilings for one acquisition:
+data operations, elapsed milliseconds, and aggregate response bytes. Omission
+uses 5 operations, 30,000 milliseconds, and 1,048,576 bytes. These runtime
+limits may constrain a reviewed pack further, but cannot add routes, endpoint
+authority, requests, or response shapes.
+
+The bundle-only check path has no runtime connection material and performs no
+HTTP request. It validates the complete digest-pinned pack closure and governed
+binding. `evidence check` additionally validates runtime endpoint, credential,
+TLS, CA-bundle, and extract bindings without sending source data. Live
+evaluation builds the shared resources and refuses a governed connection that
+does not have an exact runtime binding.
 
 Each subject role admits only named selector profiles from the trusted bundle.
 Each profile has one exact deployment-defined scalar field set, byte and
@@ -619,9 +636,9 @@ resolved authoritative record. When count plus one minimized result is unavailab
 request may retrieve at most two minimally projected results solely to detect
 ambiguity.
 
-Every source declares its acquisition posture. A single requirement inherits
-its source posture. A requirement that acquires from more than one source
-takes the weakest posture among them:
+Every source declares its acquisition posture, exactly equal to the posture in
+the digest-pinned Adapter route contract. Its requirement inherits that
+posture:
 
 | Posture | Operator claim |
 |---|---|
@@ -630,69 +647,35 @@ takes the weakest posture among them:
 | `record-transformed` | Disclosure minimization only |
 
 The operator must not describe a `record-transformed` integration as full
-lifecycle minimization. Rust applies every source's extended JSON Pointer
-projection after bounded JSON parsing and before extraction, but the posture
-describes the pre-projection wire response. The fixed request mock must prove
-provider-specific field selection where claimed. A provider whose wire response
-cannot be closed at that boundary must use `record-transformed`, even when
-local projection and Rhai emit only narrow facts.
+lifecycle minimization. The posture describes what crossed the provider
+boundary before the Adapter route transforms and validates it. Route replay
+must prove provider-specific field selection where claimed. A provider whose
+wire response cannot be closed at that boundary must use `record-transformed`,
+even when the final validated facts are narrow.
 
 A statement returning one aggregate is `source-derived` on the same terms as an
 API returning that aggregate, because the narrow fact is what crossed the source
 boundary. A later derivation may map that fact to the asserted concept without
 changing the acquisition posture.
 
-Bundle-fixed headers cannot set authentication, routing, cookies, framing,
-forwarding, proxy, or tracing fields. Tagged path placeholders occupy complete
-segments and Rust expands them directly from already authorized selectors or,
-only for a fixed fetch, a scalar property in the validated search FactSet.
-Scripts render only query pairs and one JSON body and cannot select the binding
-origin.
+Each requirement names exactly one source binding. The bound Adapter route is
+the complete reviewed acquisition program, including every permitted provider
+operation, retry, and validation step. Its closed input map is populated only
+from the source binding's authorized selector projections. Caller values,
+responses, and scripts cannot select another pack, route, connection, endpoint,
+credential, or additional operation.
 
-Each requirement declares exactly one acquisition kind. `single` and
-`search-then-fetch` are the frozen Version 1 forms; `search-then-fetch` fixes
-both source identifiers at startup, performs the fetch only after a unique
-schema-valid search match, and has a hard two-call ceiling.
+Request-batch evaluation preserves request order and runs the same source route
+independently for each item. The retired source-specific `prepare_batch` and
+`extract_batch` ABI is not part of the pack-source contract. Any optimization
+inside an Adapter route remains bounded by that route's reviewed steps and the
+shared acquisition operation, deadline, and response-byte budgets; it does not
+create a second Evidence batching authority.
 
-`search-then-fetch-set` is a gated kind added after that surface froze. It
-widens the fixed fetch into two to four declared members, executed in the order
-the bundle declares them, each receiving only the `factInputs` allowlist it
-declares out of the validated search FactSet. Its ceiling is one plus the
-member count, fixed by the bundle before any request is made, and it requires a
-`maximumAcquisitionMilliseconds` between one and thirty seconds. Two gates open
-it, and both are required: the bundle names the kind under
-`acquisitionCapabilities`, and this file names it under
-`acquisitionCapabilities` as well. Absent means enabled nothing, so a
-deployment that never made this decision keeps serving exactly what it served
-before. A bundle using the kind without the deployment's entry is refused
-before the listener binds; `evidencectl doctor` names this file and the entry
-to add.
-
-No acquisition kind is a workflow surface: neither a response nor Rhai may
-choose a source, origin, method, credentials, retry, or further call.
-
-The optional `source-batch` capability reduces physical HTTP calls for the
-multi-subject request-batch route. It is independently named in the bundle and
-`runtime.yaml`, and the selected fixed-path `http-json` source must also carry a
-`batch` block with `maximumItems`, batch preparation and extraction scripts, a
-response schema, and a projection. A block without either gate fails startup.
-An omitted block, a different transport, a path template, any multi-stage
-acquisition, or an outer item count above the source ceiling selects ordinary
-sequential execution in request order before I/O. Once an optimized attempt
-starts, it never retries as sequential fanout.
-
-The one optimized call reuses the ordinary method, origin, fixed path,
-authentication, headers, TLS, redirect denial, timeout, maximum response bytes,
-concurrency semaphore, and preparation limits. `prepare_batch` sees only opaque
-integer slots paired with minimized selectors and closed parameters.
-`extract_batch` sees only the validated projection, parameters, and slot list.
-It must return an exact slot bijection over ordinary lookup results. Missing,
-duplicate, extra, negative, or out-of-range slots abort the whole request.
-
-A source may name a logical TLS trust profile, and so may `authentication` for
-the connection that fetches the access-token issuer's key set. `runtime.yaml`
-binds each name to one bounded PEM CA file, trusted beside the system roots for
-the connections of the source or issuer that names it and no other. Hostname
+A governed endpoint policy may name a logical TLS trust profile, and inbound
+authentication may name one for the access-token issuer's key set.
+`runtime.yaml` binds each name to one bounded PEM CA file, trusted beside the
+system roots for the connection or issuer that names it and no other. Hostname
 and fixed-origin verification remain mandatory; there is no insecure or
 trust-all mode. Version 1 ignores `HTTP_PROXY`,
 `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY` and has no application-level proxy.
@@ -702,9 +685,12 @@ trust-all mode. Version 1 ignores `HTTP_PROXY`,
 After successful authentication, the configured audit sink must durably accept
 a minimal authorization-refusal event before a generic `403` is returned. It
 must durably accept one access-attempt event before each actual evidence-data
-source read and the disclosure-release event after signing and before response
-release. Any failure blocks the applicable action and returns a generic `503`
-when an HTTP response remains possible.
+source read. That access event captures the effective immutable acquisition
+limits in the closed `executionBounds` object before credential resolution or
+source effects. The sink must also accept the disclosure-release event after
+final serialization and any signing, and before response release. Any failure
+blocks the applicable action and returns a generic `503` when an HTTP response
+remains possible.
 
 Authorized-material audit events contain reviewed identifiers and decision
 categories, never raw selector values, per-field selector hashes, source
@@ -768,14 +754,27 @@ the audit entry's `eventId`, not a verbosity setting on the audit log.
 
 The refusal event is written under the distinct
 `registry.evidence.audit.authorization-refusal/v2` entry schema, in the same
-envelope and destination as `registry.evidence.audit/v2`. A semantic reader
-selects the record shape by the envelope's `schema` member. Readers written for
-the chained `/v1` records do not read `/v2` entries, so operators must update
-semantic audit readers and the service together before routing traffic to the
-changed runtime.
+envelope and destination as current authorized-material entries. New singular
+authorized-material entries use `registry.evidence.audit/v3`; retained
+`registry.evidence.audit/v2` entries remain readable history. A semantic reader
+selects the record shape by the envelope's `schema` member. Readers must accept
+the new authorized `/v3` schema before operators route traffic to the changed
+runtime. `evidencectl audit show` keeps its internal
+`registry.evidence.local-audit-operation/v2` projection and reads retained
+authorized `/v2` history alongside `/v3`; that projection is not an entry
+schema.
+
+Every singular and request-batch `/v3` access-attempt record requires exactly
+one closed `executionBounds` object with three positive integers:
+`maximumDataOperations`, `acquisitionDeadlineMilliseconds`, and `maximumResponseBytes`.
+They are the effective `sourceAcquisition` values captured from the immutable
+runtime configuration. When that block is omitted, the captured defaults are
+`5`, `30000`, and `1048576`. The object carries no endpoint, credential, secret,
+or source value. Terminal `/v3` records must omit it, and retained `/v2` records
+must also omit it.
 
 The request-batch route adds
-`registry.evidence.audit.request-batch/v2` entries to that same destination. One access
+`registry.evidence.audit.request-batch/v3` entries to that same destination. One access
 event precedes every physical source call and names the bounded zero-based item
 indices it carries. `itemGroups` partition those indices by identical authority
 object and ordered pseudonymized subject set, so different grants and authority
@@ -848,7 +847,7 @@ Every audit entry is one JSON line with exactly six members:
 
 | Member | Meaning |
 |---|---|
-| `schema` | The entry schema: `registry.evidence.audit/v2`, `registry.evidence.audit.request-batch/v2`, or `registry.evidence.audit.authorization-refusal/v2`. |
+| `schema` | The current writer schema: `registry.evidence.audit/v3`, `registry.evidence.audit.request-batch/v3`, or `registry.evidence.audit.authorization-refusal/v2`. Retained authorized-material `/v2` entries remain readable history. |
 | `eventId` | A random UUID the writer mints for this entry. |
 | `time` | The writer's RFC 3339 UTC timestamp for the append. |
 | `phase` | `request` for an access attempt, written before the source read it authorizes; `response` for every terminal record: a release, a denial, or a failure. |
@@ -1116,29 +1115,17 @@ evidence_source_shape_drift_total{source="civil-register"} 0
 
 A source failure reaches the caller as `source.unavailable` or
 `evidence.unavailable`, which names no member and no cause, and the served
-request's `category` field names only the failure class. Three `WARN` records
-on the `registry_evidence::source` target say where the fault lies. They are
-written to the same stream as the operational records and carry no operation
-or trace identifier. Each names a governed source identifier, JSON pointers,
-and closed reasons, and none carries a response value, a member name the bundle
-did not declare, a selector, a subject, or a credential. The projection record
-writes `*` for an array index, so it does not reveal how many items a response
-held; the response-shape record points into the projected tree and may name an
-index there.
+request's `category` field names only the failure class. Operational records
+name the governed source and a closed pack-execution category. They never carry
+raw response content, selector values, subjects, credentials, endpoint URLs,
+schema values, or script messages. Provider 404 bodies and other error payloads
+remain dependency data and are not reflected to the caller or operator log.
 
-| Message | Fields | Meaning |
-|---|---|---|
-| `the source response does not match its declared projection` | `source`, `violations`, `total_violations`, `suppressed` | The response drifted from the projection: a selected container is missing or is not the declared object or array, or a selected leaf is missing beside a member the projection does not select, which is what a rename leaves. `violations` lists up to five distinct findings such as `/records/*/region is absent beside an undeclared member`, and `total_violations` counts them all. |
-| `the projected source response does not match its declared response shape` | `source`, `schema`, `violations`, `total_violations` | The projected response failed its `responseSchema`, for example an enumerated value outside the declared set or a member of the wrong type. Each violation pairs the member's pointer with the schema rule's pointer. |
-| `source answered 404 with an undeclared shape` | `source`, `unresolved_problem`, `suppressed` | A 404 was not the source's declared unresolved outcome. `unresolved_problem` is `not declared` when the source declares no `unresolvedProblem`, or `not matched` when this response was not exactly the declared tuple. |
-
-The caller's answer to an undeclared 404 stays `source.unavailable`. A distinct
-code would tell the caller that the subject is absent at the source, which the
-operator never declared as disclosable; `unresolvedProblem` is how an operator
-declares it. The record is how an operator learns that a source answers "not
-found" in a shape the bundle does not declare yet, or that a source rejected a
-request it no longer understands, such as a field selection naming a member the
-source removed.
+A schema or script refusal in the Adapter route remains a value-free protocol
+failure. The operator uses the governed source id, route id, stable closed
+category, Adapter pack revision, and provider-side telemetry to locate drift.
+Evidence does not publish response pointers or member names learned from an
+untrusted provider body.
 
 The projection and 404 records are rate-limited: each is written at most once
 per 60 seconds per source, and `suppressed` counts the events of the same kind
@@ -1380,16 +1367,13 @@ whether or not any grant enables the credential format, it never reveals which
 requesters or requirements do, and it is discovery rather than a trust anchor
 on exactly the terms in [secrets and keys](#secrets-and-keys).
 No-match and ambiguous outcomes are publicly indistinguishable by default.
-An HTTP source may additionally declare one exact unresolved Problem Details
-tuple. Only the closed exact response becomes public evidence unavailable at a
-singular or search stage; its neutral audit decision is `unresolved`, not
-`no-match`, because the upstream result may be hidden or ambiguous. The problem
-body, type, code, detail, and trace are never recorded. A mismatch and an
-unresolved fetch after unique search are dependency failures by default. A
-`search-then-fetch` acquisition may explicitly set `onFetchNoMatch: unavailable`
-for an absent optional record; ambiguity and transport failures remain 503.
-Source, signing, and dependency failures use stable safe problem codes and do
-not reflect protected inputs. Signing failure returns a safe transient failure.
+The Adapter route returns a closed `no-match` or `ambiguous` outcome without
+provider details, and Evidence collapses both to unavailable according to the
+requirement's disclosure rule. Provider problem bodies, types, codes, details,
+and traces are never reflected to the caller. Transport, authentication,
+budget, protocol, script, schema, and signing failures remain dependency or
+service failures rather than becoming `no-match`. Safe problem codes do not
+reflect protected inputs.
 
 Every authorization refusal after successful authentication collapses to one
 generic problem with code `evidence.denied` and HTTP 403 and reveals no layer
@@ -1482,18 +1466,23 @@ first, and for most
 deployments it is not Evidence.
 
 Outbound source concurrency binds first whenever the provider is slower than
-the in-process handler used for measurement. Each source's `maximumConcurrency`
-is the number of requests Evidence will have outstanding to that source at
-once, so sustained throughput through it is about `maximumConcurrency` divided by
-the source's round-trip latency. A `maximumConcurrency` of 8 against a provider
-answering in 20 ms sustains roughly 400 requests/second, and Evidence being
-capable of thousands changes nothing about that. The field accepts 1 to 256. Inline sources state it explicitly.
-A named connection owns one aggregate `maximumConcurrency` across its operations,
-with a conservative default of 4; a resolved source repeats that exact value.
-Size the connection limit against the provider's tolerance for the whole
-workload, and include every Evidence process when estimating provider load.
-Raising it moves load onto the provider, so raise it against the provider's own
-documented or agreed limit, not against Evidence's spare capacity.
+the in-process handler used for measurement. Each runtime endpoint binding's
+`maximumConcurrency` is the number of requests one Evidence process may have
+outstanding through that named connection and endpoint at once. Sustained
+throughput through it is therefore about `maximumConcurrency` divided by the
+provider's round-trip latency. A value of 8 against a provider answering in
+20 ms sustains roughly 400 requests/second, and Evidence being capable of
+thousands changes nothing about that. The field accepts 1 to 256 and defaults
+to 8.
+
+Every source program that uses the same connection name in one process shares
+that capacity. Different names have isolated permits, even if they select the
+same origin. The limit is not distributed across replicas: the fleet can place
+up to `maximumConcurrency` multiplied by the number of Evidence processes in
+flight against that endpoint. Size both the per-process limit and replica count
+against the provider's tolerance for the whole workload. Raising either moves
+load onto the provider, so raise them against the provider's documented or
+agreed limit, not against Evidence's spare capacity.
 
 `listener.maximumConcurrentRequests` is the admission ceiling, from 1 to 4096.
 It is a semaphore over evaluations already accepted, not a connection limit and

@@ -606,6 +606,8 @@ fn evidence_source_export_refuses_a_gated_profile() {
             fields: vec!["district".into()],
             source_id: "person-status".into(),
             connection: "registry".into(),
+            authentication:
+                registry_breg::evidence_source::EvidenceSourceAuthentication::StaticAuthorization,
         },
     ) {
         Ok(_) => panic!("a gated profile must not be exported as an Evidence source"),

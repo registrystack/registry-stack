@@ -4,14 +4,15 @@ use std::collections::{BTreeMap, BTreeSet};
 use registry_platform_yaml::{
     duplicate_display_text_diagnostics, local_id_collision_diagnostics, lookalike_local_id_pairs,
     ApiVersion, AuthoredDisplayText, AuthoredId, BoundedU64, Decoded, Diagnostic, DisplayText,
-    EnvelopeRule, FormatSpec, LocalId, Report, UniqueList,
+    EnvelopeRule, Expect, ExternalId, FormatSpec, LocalId, Reader, Refusal, Report, ScalarHook,
+    ScalarSite, UniqueList,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::{
     finding::{FieldPath, Finding},
-    formats::{decode_authored, findings_report},
+    formats::{findings_report, AuthoredExpressions},
 };
 
 pub const MAX_VALIDITY_SECONDS: u64 = 31_536_000;
@@ -62,39 +63,9 @@ pub struct EvidenceProject {
     pub functions: Vec<Function>,
     pub sources: BTreeMap<LocalId, Source>,
     pub assertion_definitions: BTreeMap<LocalId, AssertionDefinition>,
-    /// Package opt-in ceilings. Operators must separately enable these acquisitions.
-    #[serde(default, skip_serializing_if = "empty_capabilities")]
-    pub acquisition_capabilities: UniqueList<AcquisitionCapability>,
     /// Maximum assertions released together in one holder-bound batch; omission means one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub maximum_holder_bound_batch_size: Option<BoundedU64<1, 16>>,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "kebab-case")]
-pub enum FetchNoMatchPolicy {
-    #[default]
-    DependencyFailure,
-    Unavailable,
-}
-
-impl FetchNoMatchPolicy {
-    fn is_default(&self) -> bool {
-        *self == Self::DependencyFailure
-    }
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq, Hash)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "kebab-case")]
-pub enum AcquisitionCapability {
-    SearchThenFetchSet,
-    SourceBatch,
-}
-
-pub fn empty_capabilities(value: &UniqueList<AcquisitionCapability>) -> bool {
-    value.is_empty()
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -161,25 +132,17 @@ pub struct Function {
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq, Hash)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum FunctionInterface {
-    #[serde(rename = "source-prepare/v1")]
-    SourcePrepare,
-    #[serde(rename = "source-extract/v1")]
-    SourceExtract,
     #[serde(rename = "assertion-derive/v1")]
     AssertionDerive,
 }
 impl FunctionInterface {
     pub const fn entry_point(self) -> (&'static str, &'static [usize]) {
         match self {
-            Self::SourcePrepare => ("prepare", &[2]),
-            Self::SourceExtract => ("extract", &[2, 3]),
             Self::AssertionDerive => ("derive", &[3]),
         }
     }
     pub const fn capabilities(self) -> &'static [&'static str] {
         match self {
-            Self::SourcePrepare => &["bounded-request-parts"],
-            Self::SourceExtract => &["lookup-outcome", "private-facts"],
             Self::AssertionDerive => &["declared-outputs"],
         }
     }
@@ -212,15 +175,6 @@ pub struct FunctionCall {
     pub parameters: BTreeMap<String, Value>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub selector_inputs: Vec<DeriveSelectorInput>,
-}
-
-/// Source preparation and extraction share the Source's declared adapter
-/// parameters and minimized selector inputs. Call sites cannot override them.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(deny_unknown_fields)]
-pub struct SourceFunctionRef {
-    pub function: LocalId,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -399,75 +353,20 @@ pub enum BindingMode {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
-#[serde(remote = "Self", rename_all = "kebab-case", deny_unknown_fields)]
-pub enum Acquisition {
-    Single {
-        source: LocalId,
-    },
-    SearchThenFetch {
-        search: LocalId,
-        fetch: LocalId,
-        #[serde(
-            default,
-            rename = "onFetchNoMatch",
-            skip_serializing_if = "FetchNoMatchPolicy::is_default"
-        )]
-        on_fetch_no_match: FetchNoMatchPolicy,
-    },
-    #[serde(rename_all = "camelCase")]
-    SearchThenFetchSet {
-        search: LocalId,
-        fetch: Vec<FetchMember>,
-        maximum_acquisition_milliseconds: BoundedU64<1, 30_000>,
-    },
+#[serde(deny_unknown_fields)]
+pub struct Acquisition {
+    /// One reviewed route owns the complete bounded provider interaction.
+    pub source: LocalId,
 }
-registry_platform_yaml::tagged_union!(Acquisition);
-impl Serialize for Acquisition {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let external = Self::serialize(self, serde_json::value::Serializer)
-            .map_err(serde::ser::Error::custom)?;
-        let Value::Object(variants) = external else {
-            return Err(serde::ser::Error::custom(
-                "acquisition variant must be a mapping",
-            ));
-        };
-        let Some((tag, Value::Object(mut body))) = variants.into_iter().next() else {
-            return Err(serde::ser::Error::custom(
-                "acquisition body must be a mapping",
-            ));
-        };
-        body.insert("type".to_owned(), json!(tag));
-        body.serialize(serializer)
-    }
-}
+
 impl Acquisition {
-    /// Sources whose facts reach assertion derivation in the retained kernel.
-    /// Search-then-fetch retains its search facts only for preparing the fetch.
     pub fn derivation_source_ids(&self) -> Vec<&LocalId> {
-        match self {
-            Self::SearchThenFetch { fetch, .. } => vec![fetch],
-            _ => self.source_ids(),
-        }
+        vec![&self.source]
     }
 
     pub fn source_ids(&self) -> Vec<&LocalId> {
-        match self {
-            Self::Single { source } => vec![source],
-            Self::SearchThenFetch { search, fetch, .. } => vec![search, fetch],
-            Self::SearchThenFetchSet { search, fetch, .. } => std::iter::once(search)
-                .chain(fetch.iter().map(|member| &member.source))
-                .collect(),
-        }
+        vec![&self.source]
     }
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct FetchMember {
-    pub source: LocalId,
-    pub fact_inputs: UniqueList<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -585,101 +484,125 @@ pub struct Source {
         schemars(with = "Option<registry_platform_yaml::DisplayText>")
     )]
     pub description: Option<String>,
-    #[serde(rename = "type")]
-    pub source_type: SourceType,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub connection: Option<LocalId>,
-    pub acquisition_posture: String,
-    #[serde(default)]
-    pub selectors: Vec<SourceSelector>,
-    pub request: Value,
-    pub response: SourceResponse,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub prepare: Option<SourceFunctionRef>,
-    pub extract: SourceFunctionRef,
-    #[cfg_attr(feature = "schema", schemars(extend("x-registry-passthrough" = "Reviewed bounded private fact schemas, normalized by the Evidence compiler and checked by the kernel.")))]
-    pub facts: BTreeMap<LocalId, Value>,
-    pub limits: SourceLimits,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub adapter_parameters: Option<Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "schema", schemars(extend("x-registry-foreign" = "json-schema-2020-12")))]
-    pub adapter_parameters_schema: Option<Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub preparation_limits: Option<Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub batch: Option<SourceBatch>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub extract_profile: Option<LocalId>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub maximum_extract_age_seconds: Option<BoundedU64<1, 2_592_000>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub evidence: Option<Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub unresolved_problem: Option<Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub behavior_revision: Option<String>,
-    #[serde(default)]
-    pub forward_access_attribution: bool,
+    pub pack: PackReference,
+    pub route: LocalId,
+    pub connection: LocalId,
+    #[serde(
+        default,
+        deserialize_with = "external_id_map",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "external_id_map_schema::<SourceInput>")
+    )]
+    pub inputs: BTreeMap<String, SourceInput>,
+    pub acquisition_posture: AcquisitionPosture,
 }
 
-/// A bounded physical Source call serving independent slotted logical lookups.
-/// The same reviewed Function interfaces are used with their batch call-site types.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+fn external_id_map<'de, D, V>(deserializer: D) -> Result<BTreeMap<String, V>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    V: Deserialize<'de>,
+{
+    let map = BTreeMap::<ExternalId, V>::deserialize(deserializer)?;
+    Ok(map
+        .into_iter()
+        .map(|(key, value)| (key.into_string(), value))
+        .collect())
+}
+
+#[cfg(feature = "schema")]
+fn external_id_map_schema<V: schemars::JsonSchema>(
+    generator: &mut schemars::SchemaGenerator,
+) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": "object",
+        "propertyNames": generator.subschema_for::<ExternalId>(),
+        "additionalProperties": generator.subschema_for::<V>(),
+    })
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct SourceBatch {
-    pub maximum_items: BoundedU64<1, 16>,
-    pub prepare: SourceFunctionRef,
-    pub extract: SourceFunctionRef,
-    pub response: BatchResponse,
+pub struct PackReference {
+    pub id: LocalId,
+    pub version: String,
 }
 
-/// The batch response uses the Source's byte and transport ceilings.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
-pub struct BatchResponse {
-    pub projection: Vec<String>,
-    pub shape: Value,
+pub struct SourceInput {
+    pub selector: SourceInputSelector,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq, Hash)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq, Hash, Ord, PartialOrd)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
-pub enum SourceType {
-    HttpJson,
-    SqliteExtract,
+pub enum AcquisitionPosture {
+    SourceDerived,
+    FieldProjected,
+    RecordTransformed,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
-pub struct SourceSelector {
+pub struct SourceInputSelector {
     pub role: LocalId,
-    pub profiles: UniqueList<LocalId>,
+    pub profile: LocalId,
+    pub field: LocalId,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct SourceResponse {
-    pub projection: Vec<String>,
-    pub shape: Value,
-    pub maximum_bytes: BoundedU64<1, 1_048_576>,
+const RETIRED_ACQUISITION_CODE: &str = "evidence.project.source-acquisition-retired";
+const RETIRED_ACQUISITION_ACTION: &str = "Move preparation and extraction into a reviewed Adapter pack, retain assertion-derive/v1 Functions, and replace the Source with pack, route, connection and inputs. Import current exports with evidencectl source import EXPORT --project PROJECT; it does not convert retired projects.";
+
+/// Project-specific scalar refusals reuse the shared authored-file rules and
+/// retain the reader's exact source location. A retired acquisition interface
+/// never suggests rewriting acquisition as assertion derivation.
+struct ProjectScalars {
+    authored: AuthoredExpressions,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct SourceLimits {
-    pub attempt_timeout_milliseconds: BoundedU64<1, 30_000>,
-    pub maximum_concurrency: BoundedU64<1, 256>,
+impl ScalarHook for ProjectScalars {
+    fn key(&mut self, site: &ScalarSite<'_>) -> Result<(), Refusal> {
+        self.authored.key(site)
+    }
+
+    fn value(&mut self, site: &ScalarSite<'_>) -> Result<Option<String>, Refusal> {
+        self.authored.value(site)?;
+        let message = if site.keys == ["functions", "interface"]
+            && matches!(site.text, "source-prepare/v1" | "source-extract/v1")
+        {
+            Some("The source-prepare/v1 and source-extract/v1 interfaces are retired; reviewed Adapter pack routes own source acquisition.")
+        } else if matches!(site.keys, ["sources", _, "type"])
+            && matches!(site.text, "http-json" | "sqlite-extract")
+        {
+            Some("The tagged Source transport form is retired; Sources bind a reviewed Adapter pack route.")
+        } else {
+            None
+        };
+        match message {
+            Some(message) => Err(Refusal {
+                code: RETIRED_ACQUISITION_CODE.to_owned(),
+                message: message.to_owned(),
+                suggested_action: RETIRED_ACQUISITION_ACTION.to_owned(),
+            }),
+            None => Ok(None),
+        }
+    }
 }
 
 /// Typed reader shared by CLI and unsaved editor buffers.
 pub fn read_project(file: &str, bytes: &[u8]) -> Result<Decoded<EvidenceProject>, Report> {
-    let mut decoded = decode_authored::<EvidenceProject>(file, bytes, &PROJECT)?;
+    let mut hook = ProjectScalars {
+        authored: AuthoredExpressions,
+    };
+    let mut decoded = Reader::new(file)
+        .with_hook(&mut hook)
+        .decode::<EvidenceProject>(bytes, &Expect::one(&PROJECT))?;
     let integrity = project_integrity_diagnostics(&mut decoded);
     let mut diagnostics = findings_report(
         &decoded.document,
@@ -765,30 +688,15 @@ fn project_id_namespaces(project: &EvidenceProject) -> Vec<ProjectIdNamespace<'_
             .key("sources")
             .map_key(source_id.to_string());
         namespaces.push((
-            "source-fact-id-collision",
+            "source-input-id-collision",
             true,
             source
-                .facts
+                .inputs
                 .keys()
                 .map(|id| {
                     (
                         id.as_str(),
-                        base.clone().key("facts").map_key(id.to_string()),
-                    )
-                })
-                .collect(),
-        ));
-        namespaces.push((
-            "source-selector-role-collision",
-            false,
-            source
-                .selectors
-                .iter()
-                .enumerate()
-                .map(|(index, selector)| {
-                    (
-                        selector.role.as_str(),
-                        base.clone().key("selectors").index(index).key("role"),
+                        base.clone().key("inputs").map_key(id.to_string()),
                     )
                 })
                 .collect(),
@@ -1194,44 +1102,11 @@ fn validate_project_without_id_collisions(project: &EvidenceProject) -> Vec<Find
                 }
             }
         }
-        let sources = definition.acquisition.source_ids();
-        let references = match &definition.acquisition {
-            Acquisition::Single { source } => {
-                vec![(at.clone().key("acquisition").key("source"), source)]
-            }
-            Acquisition::SearchThenFetch { search, fetch, .. } => vec![
-                (at.clone().key("acquisition").key("search"), search),
-                (at.clone().key("acquisition").key("fetch"), fetch),
-            ],
-            Acquisition::SearchThenFetchSet { search, fetch, .. } => {
-                std::iter::once((at.clone().key("acquisition").key("search"), search))
-                    .chain(fetch.iter().enumerate().map(|(index, member)| {
-                        (
-                            at.clone()
-                                .key("acquisition")
-                                .key("fetch")
-                                .index(index)
-                                .key("source"),
-                            &member.source,
-                        )
-                    }))
-                    .collect()
-            }
-        };
-        for (path, source) in references {
-            if !project.sources.contains_key(source) {
-                push(
-                    path,
-                    "acquisition-source",
-                    "acquisition must name an existing Source",
-                );
-            }
-        }
-        if sources.iter().collect::<BTreeSet<_>>().len() != sources.len() {
+        if !project.sources.contains_key(&definition.acquisition.source) {
             push(
-                at.clone().key("acquisition"),
+                at.clone().key("acquisition").key("source"),
                 "acquisition-source",
-                "acquisition must name distinct Sources",
+                "acquisition must name an existing pack Source",
             );
         }
         if functions
@@ -1361,131 +1236,63 @@ fn validate_project_without_id_collisions(project: &EvidenceProject) -> Vec<Find
     }
     for (id, source) in &project.sources {
         let at = FieldPath::root().key("sources").map_key(id.to_string());
-        let allowed_request_keys: &[&str] = match source.source_type {
-            SourceType::HttpJson => &["method", "path", "pathBindings", "fixedHeaders"],
-            SourceType::SqliteExtract => &[
-                "statement",
-                "columns",
-                "parameterBindings",
-                "maximumRows",
-                "maximumCellBytes",
-                "maximumStatementSteps",
-            ],
-        };
-        if let Some(request) = source.request.as_object() {
-            for key in request
-                .keys()
-                .filter(|key| !allowed_request_keys.contains(&key.as_str()))
+        if source.pack.version.trim().is_empty()
+            || source.pack.version.len() > 128
+            || source.pack.version.chars().any(char::is_whitespace)
+        {
+            push(
+                at.clone().key("pack").key("version"),
+                "source-pack-version",
+                "name one bounded pack version without whitespace",
+            );
+        }
+        for (input_name, input) in &source.inputs {
+            let input_at = at.clone().key("inputs").map_key(input_name.to_string());
+            if input_name.is_empty()
+                || input_name.len() > 128
+                || !input_name
+                    .bytes()
+                    .next()
+                    .is_some_and(|byte| byte.is_ascii_alphabetic())
+                || !input_name
+                    .bytes()
+                    .skip(1)
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
             {
-                push(at.clone().key("request").map_key(key.clone()), "source-request-key", "declare request fields owned by this transport; selectors, response and resource bounds belong to their named Source fields");
-            }
-        } else {
-            push(
-                at.clone().key("request"),
-                "source-request",
-                "Source request must be a transport request mapping",
-            );
-        }
-        if source.source_type == SourceType::SqliteExtract
-            && source.prepare.is_none()
-            && (source.adapter_parameters.is_some()
-                || source.adapter_parameters_schema.is_some()
-                || source.preparation_limits.is_some())
-        {
-            push(at.clone().key("prepare"), "source-preparation", "SQLite adapter parameters and preparation limits require a named preparation Function");
-        }
-        if let Some(batch) = &source.batch {
-            if source.source_type != SourceType::HttpJson
-                || !project
-                    .acquisition_capabilities
-                    .contains(&AcquisitionCapability::SourceBatch)
-            {
-                push(at.clone().key("batch"), "source-batch-capability", "source batching requires an HTTP Source and the source-batch package capability");
-            }
-            for (field, call, interface) in [
-                ("prepare", &batch.prepare, FunctionInterface::SourcePrepare),
-                ("extract", &batch.extract, FunctionInterface::SourceExtract),
-            ] {
-                if functions
-                    .get(&call.function)
-                    .is_none_or(|function| function.interface != interface)
-                {
-                    push(
-                        at.clone().key("batch").key(field).key("function"),
-                        "function-interface",
-                        "batch call must name a Function with the matching source interface",
-                    );
-                }
-            }
-        }
-        if functions
-            .get(&source.extract.function)
-            .is_none_or(|f| f.interface != FunctionInterface::SourceExtract)
-        {
-            push(
-                at.clone().key("extract").key("function"),
-                "function-interface",
-                "extract must name a source-extract/v1 Function",
-            );
-        }
-        if source.prepare.as_ref().is_some_and(|call| {
-            functions
-                .get(&call.function)
-                .is_none_or(|f| f.interface != FunctionInterface::SourcePrepare)
-        }) {
-            push(
-                at.clone().key("prepare").key("function"),
-                "function-interface",
-                "prepare must name a source-prepare/v1 Function",
-            );
-        }
-        if source.source_type == SourceType::HttpJson && source.connection.is_none() {
-            push(
-                at.clone().key("connection"),
-                "source-connection",
-                "an HTTP Source must name a target-bound connection",
-            );
-        }
-        if source.source_type == SourceType::SqliteExtract
-            && (source.extract_profile.is_none() || source.maximum_extract_age_seconds.is_none())
-        {
-            push(
-                at.clone(),
-                "source-extract-binding",
-                "a SQLite Source must name an extract profile and maximum age",
-            );
-        }
-        for (index, selector) in source.selectors.iter().enumerate() {
-            if selector.profiles.is_empty() {
                 push(
-                    at.clone().key("selectors").index(index).key("profiles"),
-                    "source-selector",
-                    "Source selectors must name existing profiles",
+                    input_at.clone(),
+                    "source-input-name",
+                    "name one bounded route input using letters, digits, underscore or hyphen",
                 );
             }
-            for (profile_index, profile) in selector.profiles.iter().enumerate() {
-                if !project.selector_profiles.contains_key(profile) {
+            let selector = &input.selector;
+            if project
+                .selector_profiles
+                .get(&selector.profile)
+                .is_none_or(|profile| !profile.fields.contains_key(&selector.field))
+            {
+                push(
+                    input_at.clone().key("selector"),
+                    "source-input-selector",
+                    "name an existing selector profile and field",
+                );
+            }
+            for definition in project.assertion_definitions.values() {
+                if definition.acquisition.source == *id
+                    && !definition.subjects.iter().any(|subject| {
+                        subject.role == selector.role
+                            && subject.selectors.contains(&selector.profile)
+                    })
+                {
                     push(
-                        at.clone()
-                            .key("selectors")
-                            .index(index)
-                            .key("profiles")
-                            .index(profile_index),
-                        "source-selector",
-                        "name an existing selector profile",
+                        input_at.clone().key("selector"),
+                        "source-input-authorization",
+                        "every definition using this Source must authorize the selector role and profile",
                     );
                 }
             }
         }
-        if source.facts.is_empty() {
-            push(
-                at.clone().key("facts"),
-                "source-facts",
-                "declare the private fact schema",
-            );
-        }
     }
-    findings.extend(crate::acquisition_validation::validate(project));
     findings
 }
 

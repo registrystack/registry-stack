@@ -34,6 +34,11 @@ pub enum CheckCode {
     FixtureUnknownOperation,
     FixtureUnknownProblemCode,
     // adapter.pack.*
+    PackAsyncStatusRouteInvalid,
+    PackAsyncStatusRouteReachable,
+    PackAsyncStatusRouteUnsafe,
+    PackAttemptTimeoutAboveOrdinaryMaximum,
+    PackAttemptTimeoutMissing,
     PackCodeMapEntryNotScalar,
     PackCodeMapUnreferenced,
     PackDigestPinRequired,
@@ -49,11 +54,13 @@ pub enum CheckCode {
     PackMapParameterMisplaced,
     PackReservedHeaderName,
     PackScriptUncompilable,
+    PackSqliteExtractInvalid,
     PackTooManyHeaders,
     PackTransportRefusedHeader,
     PackUnknownScript,
     PackUnknownTemplateParameter,
     // adapter.profile.*
+    ProfileAsyncStatusPathCollision,
     ProfileInvalidPath,
     ProfilePageSizeDefaultOutOfBounds,
     ProfileProblemDataFieldDuplicate,
@@ -78,6 +85,7 @@ pub enum CheckCode {
     ProfileUnresolvedPathParameter,
     // adapter.project.*
     ProjectAccessProfileScopesEmpty,
+    ProjectAsyncDeclarationMismatch,
     ProjectDuplicateRouteId,
     ProjectFilterParameterCollision,
     ProjectParameterTypeMismatch,
@@ -125,6 +133,7 @@ pub enum CheckCode {
     RouteRedeliveryWithoutUpstreamSend,
     RouteReservedHeaderName,
     RouteReservedPropertyName,
+    RouteResumeInvalid,
     RouteRetryWhileWithoutRedeliveries,
     RouteStopOnExceptionExclusive,
     RouteThrowExceptionClass,
@@ -137,6 +146,8 @@ pub enum CheckCode {
     RouteUnknownOperation,
     RouteWriteWithoutIdempotency,
     // adapter.runtime.*
+    RuntimeAsyncIdempotencyRequired,
+    RuntimeAsyncWaitExceedsRetention,
     RuntimeInsecureOrigin,
     RuntimeInvalidOrigin,
     RuntimeInvalidOutboundTls,
@@ -161,6 +172,11 @@ impl CheckCode {
         Self::FixtureUnknownIntercept,
         Self::FixtureUnknownOperation,
         Self::FixtureUnknownProblemCode,
+        Self::PackAsyncStatusRouteInvalid,
+        Self::PackAsyncStatusRouteReachable,
+        Self::PackAsyncStatusRouteUnsafe,
+        Self::PackAttemptTimeoutAboveOrdinaryMaximum,
+        Self::PackAttemptTimeoutMissing,
         Self::PackCodeMapEntryNotScalar,
         Self::PackCodeMapUnreferenced,
         Self::PackDigestPinRequired,
@@ -176,10 +192,12 @@ impl CheckCode {
         Self::PackMapParameterMisplaced,
         Self::PackReservedHeaderName,
         Self::PackScriptUncompilable,
+        Self::PackSqliteExtractInvalid,
         Self::PackTooManyHeaders,
         Self::PackTransportRefusedHeader,
         Self::PackUnknownScript,
         Self::PackUnknownTemplateParameter,
+        Self::ProfileAsyncStatusPathCollision,
         Self::ProfileInvalidPath,
         Self::ProfilePageSizeDefaultOutOfBounds,
         Self::ProfileProblemClassDuplicate,
@@ -203,6 +221,7 @@ impl CheckCode {
         Self::ProfileUnknownSlot,
         Self::ProfileUnresolvedPathParameter,
         Self::ProjectAccessProfileScopesEmpty,
+        Self::ProjectAsyncDeclarationMismatch,
         Self::ProjectDuplicateRouteId,
         Self::ProjectFilterParameterCollision,
         Self::ProjectParameterTypeMismatch,
@@ -249,6 +268,7 @@ impl CheckCode {
         Self::RouteRedeliveryWithoutUpstreamSend,
         Self::RouteReservedHeaderName,
         Self::RouteReservedPropertyName,
+        Self::RouteResumeInvalid,
         Self::RouteRetryWhileWithoutRedeliveries,
         Self::RouteStopOnExceptionExclusive,
         Self::RouteThrowExceptionClass,
@@ -260,6 +280,8 @@ impl CheckCode {
         Self::RouteUnknownHeader,
         Self::RouteUnknownOperation,
         Self::RouteWriteWithoutIdempotency,
+        Self::RuntimeAsyncIdempotencyRequired,
+        Self::RuntimeAsyncWaitExceedsRetention,
         Self::RuntimeInsecureOrigin,
         Self::RuntimeInvalidOrigin,
         Self::RuntimeInvalidOutboundTls,
@@ -284,6 +306,13 @@ impl CheckCode {
             Self::FixtureUnknownIntercept => "adapter.fixture.unknown-intercept",
             Self::FixtureUnknownOperation => "adapter.fixture.unknown-operation",
             Self::FixtureUnknownProblemCode => "adapter.fixture.unknown-problem-code",
+            Self::PackAsyncStatusRouteInvalid => "adapter.pack.async-status-route-invalid",
+            Self::PackAsyncStatusRouteReachable => "adapter.pack.async-status-route-reachable",
+            Self::PackAsyncStatusRouteUnsafe => "adapter.pack.async-status-route-unsafe",
+            Self::PackAttemptTimeoutAboveOrdinaryMaximum => {
+                "adapter.pack.attempt-timeout-above-ordinary-maximum"
+            }
+            Self::PackAttemptTimeoutMissing => "adapter.pack.attempt-timeout-missing",
             Self::PackCodeMapEntryNotScalar => "adapter.pack.code-map-entry-not-scalar",
             Self::PackCodeMapUnreferenced => "adapter.pack.code-map-unreferenced",
             Self::PackDigestPinRequired => "adapter.pack.digest-pin-required",
@@ -300,11 +329,13 @@ impl CheckCode {
             Self::PackInvalidHeaderName => "adapter.pack.invalid-header-name",
             Self::PackMapParameterMisplaced => "adapter.pack.map-parameter-misplaced",
             Self::PackReservedHeaderName => "adapter.pack.reserved-header-name",
+            Self::PackSqliteExtractInvalid => "adapter.pack.sqlite-extract-invalid",
             Self::PackScriptUncompilable => "adapter.pack.script-uncompilable",
             Self::PackTooManyHeaders => "adapter.pack.too-many-headers",
             Self::PackTransportRefusedHeader => "adapter.pack.transport-refused-header",
             Self::PackUnknownScript => "adapter.pack.unknown-script",
             Self::PackUnknownTemplateParameter => "adapter.pack.unknown-template-parameter",
+            Self::ProfileAsyncStatusPathCollision => "adapter.profile.async-status-path-collision",
             Self::ProfileInvalidPath => "adapter.profile.invalid-path",
             Self::ProfilePageSizeDefaultOutOfBounds => {
                 "adapter.profile.page-size-default-out-of-bounds"
@@ -344,6 +375,7 @@ impl CheckCode {
             Self::ProfileUnknownSlot => "adapter.profile.unknown-slot",
             Self::ProfileUnresolvedPathParameter => "adapter.profile.unresolved-path-parameter",
             Self::ProjectAccessProfileScopesEmpty => "adapter.project.access-profile-scopes-empty",
+            Self::ProjectAsyncDeclarationMismatch => "adapter.project.async-declaration-mismatch",
             Self::ProjectDuplicateRouteId => "adapter.project.duplicate-route-id",
             Self::ProjectFilterParameterCollision => "adapter.project.filter-parameter-collision",
             Self::ProjectParameterTypeMismatch => "adapter.project.parameter-type-mismatch",
@@ -394,6 +426,7 @@ impl CheckCode {
             }
             Self::RouteReservedHeaderName => "adapter.route.reserved-header-name",
             Self::RouteReservedPropertyName => "adapter.route.reserved-property-name",
+            Self::RouteResumeInvalid => "adapter.route.resume-invalid",
             Self::RouteRetryWhileWithoutRedeliveries => {
                 "adapter.route.retry-while-without-redeliveries"
             }
@@ -409,6 +442,10 @@ impl CheckCode {
             Self::RouteUnknownHeader => "adapter.route.unknown-header",
             Self::RouteUnknownOperation => "adapter.route.unknown-operation",
             Self::RouteWriteWithoutIdempotency => "adapter.route.write-without-idempotency",
+            Self::RuntimeAsyncIdempotencyRequired => "adapter.runtime.async-idempotency-required",
+            Self::RuntimeAsyncWaitExceedsRetention => {
+                "adapter.runtime.async-wait-exceeds-retention"
+            }
             Self::RuntimeInsecureOrigin => "adapter.runtime.insecure-origin",
             Self::RuntimeInvalidOrigin => "adapter.runtime.invalid-origin",
             Self::RuntimeInvalidOutboundTls => "adapter.runtime.invalid-outbound-tls",
@@ -427,6 +464,8 @@ impl CheckCode {
             | Self::AuthAnonymousHttpsRequiresTls
             | Self::AuthKindMismatch
             | Self::AuthNoneNotLoopback
+            | Self::RuntimeAsyncIdempotencyRequired
+            | Self::RuntimeAsyncWaitExceedsRetention
             | Self::RuntimeInsecureOrigin
             | Self::RuntimeInvalidOrigin
             | Self::RuntimeInvalidOutboundTls
@@ -434,6 +473,7 @@ impl CheckCode {
             | Self::RuntimeUnknownEndpoint
             | Self::RuntimeUnknownTrustProfile => crate::naming::ADAPTER_RUNTIME_KIND,
             Self::EnvelopeInvalidPlaceholder
+            | Self::ProfileAsyncStatusPathCollision
             | Self::ProfileInvalidPath
             | Self::ProfilePageSizeDefaultOutOfBounds
             | Self::ProfileProblemDataFieldDuplicate
@@ -464,7 +504,12 @@ impl CheckCode {
             | Self::FixtureUnknownIntercept
             | Self::FixtureUnknownOperation
             | Self::FixtureUnknownProblemCode => crate::naming::ADAPTER_FIXTURE_KIND,
-            Self::PackCodeMapEntryNotScalar
+            Self::PackAsyncStatusRouteInvalid
+            | Self::PackAsyncStatusRouteReachable
+            | Self::PackAsyncStatusRouteUnsafe
+            | Self::PackAttemptTimeoutAboveOrdinaryMaximum
+            | Self::PackAttemptTimeoutMissing
+            | Self::PackCodeMapEntryNotScalar
             | Self::PackCodeMapUnreferenced
             | Self::PackDigestPinRequired
             | Self::PackDuplicateHeaderName
@@ -479,6 +524,7 @@ impl CheckCode {
             | Self::PackMapParameterMisplaced
             | Self::PackReservedHeaderName
             | Self::PackScriptUncompilable
+            | Self::PackSqliteExtractInvalid
             | Self::PackTooManyHeaders
             | Self::PackTransportRefusedHeader
             | Self::PackUnknownScript
@@ -514,6 +560,7 @@ impl CheckCode {
             | Self::RouteRedeliveryWithoutUpstreamSend
             | Self::RouteReservedHeaderName
             | Self::RouteReservedPropertyName
+            | Self::RouteResumeInvalid
             | Self::RouteRetryWhileWithoutRedeliveries
             | Self::RouteStopOnExceptionExclusive
             | Self::RouteThrowExceptionClass
@@ -526,6 +573,7 @@ impl CheckCode {
             | Self::RouteUnknownOperation
             | Self::RouteWriteWithoutIdempotency => crate::naming::ADAPTER_PACK_KIND,
             Self::ProjectAccessProfileScopesEmpty
+            | Self::ProjectAsyncDeclarationMismatch
             | Self::ProjectDuplicateRouteId
             | Self::ProjectFilterParameterCollision
             | Self::ProjectParameterTypeMismatch

@@ -68,6 +68,8 @@ pub enum AuthorityError {
     InvalidDocument,
     #[error("target authority exceeds a package ceiling or names another project")]
     OutsideCeiling,
+    #[error("target authority does not supply every required source route input")]
+    SourceRouteInputs,
     #[error("target authority activation is not for this package and target; activate it again for the selected package")]
     BindingMismatch,
     #[error("target authority storage is invalid; use an owned directory with no group or world write access")]
@@ -313,7 +315,8 @@ pub fn history(root: &Path) -> Result<Vec<AuthorityActivation>, AuthorityError> 
 /// as one document. An exact repeat of the active package and revision is
 /// refused as already active. One file lock serializes concurrent operators,
 /// and every acknowledged activation is fsynced. It writes no audit record;
-/// the operator command audits through [`activate_with_operator`].
+/// the operator command audits through
+/// [`crate::bundle::Bundle::activate_target_authority`].
 #[cfg(test)]
 pub(crate) fn activate(
     root: &Path,
@@ -332,7 +335,8 @@ pub(crate) fn activate(
     )
 }
 
-/// Audit, validate, and commit one activation as the operator command does.
+/// Audit, validate the captured package, and commit one activation as the
+/// operator command does.
 ///
 /// The `request` entry is accepted before the authority lock is taken; a
 /// refused request leaves the authority store untouched. The commit is the
@@ -343,7 +347,30 @@ pub(crate) fn activate(
 /// leaves a request without a response; inspect history before proceeding.
 /// A response the destination refuses after a known durable commit is reported as
 /// [`ActivationError::AppliedUnaudited`], never as a failed activation.
-pub async fn activate_with_operator(
+pub(crate) async fn activate_bundle_with_operator(
+    bundle: &crate::bundle::Bundle,
+    root: &Path,
+    target: &str,
+    document: &AuthorityDocument,
+    operator_reference: Option<&str>,
+    audit: &EvidenceAuditLog,
+) -> Result<AuthoritySnapshot, ActivationError> {
+    activate_with_operator_sync(
+        root,
+        target,
+        &bundle.config,
+        bundle.package_digest(),
+        document,
+        operator_reference,
+        || bundle.validate_target_authority_for_activation(target, document),
+        audit,
+        File::sync_all,
+    )
+    .await
+}
+
+#[cfg(test)]
+async fn activate_with_operator(
     root: &Path,
     target: &str,
     config: &EvidenceConfig,
@@ -359,6 +386,7 @@ pub async fn activate_with_operator(
         package_digest,
         document,
         operator_reference,
+        || Ok(()),
         audit,
         File::sync_all,
     )
@@ -374,6 +402,7 @@ async fn activate_with_operator_sync(
     package_digest: &str,
     document: &AuthorityDocument,
     operator_reference: Option<&str>,
+    package_validation: impl FnOnce() -> Result<(), AuthorityError>,
     audit: &EvidenceAuditLog,
     mut sync: impl FnMut(&File) -> std::io::Result<()> + Send + 'static,
 ) -> Result<AuthoritySnapshot, ActivationError> {
@@ -404,6 +433,8 @@ async fn activate_with_operator_sync(
     // The authority lock is a blocking file lock; take it off the executor.
     let committed = if invalid_operator_reference {
         Err(AuthorityError::InvalidOperatorReference)
+    } else if let Err(error) = package_validation() {
+        Err(error)
     } else {
         let root = root.to_owned();
         let target = target.to_owned();
@@ -959,6 +990,7 @@ mod tests {
             &package,
             &document,
             None,
+            || Ok(()),
             &audit,
             |file| {
                 if file.metadata()?.is_dir() {
@@ -1002,6 +1034,7 @@ mod tests {
             &package,
             &narrowed(&document, "next-service"),
             None,
+            || Ok(()),
             &audit,
             |_| {
                 Err(std::io::Error::other(

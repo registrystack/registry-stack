@@ -1,0 +1,177 @@
+{
+  "apiVersion": "id.registrystack.org/formats/adapter/pack/v1alpha1",
+  "kind": "AdapterPack",
+  "id": "fhir-read-through",
+  "version": "1",
+  "testedVersions": [],
+  "endpoints": [
+    {
+      "id": "fhir",
+      "component": "http",
+      "authentication": {
+        "type": "none"
+      },
+      "attemptTimeoutMilliseconds": 30000,
+      "maximumResponseBytes": 65536,
+      "requestHeaders": [
+        "accept"
+      ],
+      "operations": [
+        {
+          "id": "coverage-read",
+          "safeUpstream": true
+        },
+        {
+          "id": "organization-read",
+          "safeUpstream": true
+        }
+      ]
+    }
+  ],
+  "scripts": [
+    {
+      "path": "scripts/fhir.rhai",
+      "digest": "sha256:f80e61bd0e212f673722dd320ea1a92c53a006d44d05364f94c9aba7e9cb1199"
+    }
+  ],
+  "sourceRoutes": [
+    {
+      "id": "coverage-record",
+      "evidence": {
+        "inputsSchema": {
+          "path": "schemas/inputs-coverage.json",
+          "digest": "sha256:a70e6414a6baedd4404c53015ce035caa3e3a2528700a259727be4632296f03d"
+        },
+        "factsSchema": {
+          "path": "schemas/facts-coverage.json",
+          "digest": "sha256:7c93c17ec873a96e80a31fb096260add3abbb64e0b2a3ad9352cde10b4c9775a"
+        },
+        "acquisitionPosture": "record-transformed"
+      },
+      "steps": [
+        {
+          "setProperty": {
+            "name": "coverage-id",
+            "value": {
+              "jsonpath": "$.coverageId"
+            }
+          }
+        },
+        {
+          "setHeader": {
+            "name": "Accept",
+            "value": {
+              "constant": "application/json"
+            }
+          }
+        },
+        {
+          "to": {
+            "uri": "http:fhir",
+            "parameters": {
+              "httpMethod": "GET",
+              "path": "/Coverage/{{coverage-id}}",
+              "pathParameters": {
+                "coverage-id": {
+                  "exchangeProperty": "coverage-id"
+                }
+              },
+              "operation": "coverage-read"
+            }
+          }
+        },
+        {
+          "setBody": {
+            "rhai": {
+              "file": "scripts/fhir.rhai",
+              "entrypoint": "project_coverage"
+            }
+          }
+        },
+        {
+          "validateSchema": {
+            "path": "schemas/provider-coverage.json",
+            "digest": "sha256:b68e7439c839a2d4e8574978c0fe8fd41e3b4e31c6de49ebf6eb3e30ad5af8f5"
+          }
+        },
+        {
+          "setBody": {
+            "rhai": {
+              "file": "scripts/fhir.rhai",
+              "entrypoint": "lookup_coverage"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "organization-record",
+      "evidence": {
+        "inputsSchema": {
+          "path": "schemas/inputs-organization.json",
+          "digest": "sha256:a39cd884f8b4083fefdbe07368c4ccb1706a3321d44e31d30fa97830194660cc"
+        },
+        "factsSchema": {
+          "path": "schemas/facts-organization.json",
+          "digest": "sha256:932e02e07548bc7514c938cd872d7cde962576aca744fd392f26facfe26b2dc3"
+        },
+        "acquisitionPosture": "record-transformed"
+      },
+      "steps": [
+        {
+          "setProperty": {
+            "name": "organization-id",
+            "value": {
+              "jsonpath": "$.organizationId"
+            }
+          }
+        },
+        {
+          "setHeader": {
+            "name": "Accept",
+            "value": {
+              "constant": "application/json"
+            }
+          }
+        },
+        {
+          "to": {
+            "uri": "http:fhir",
+            "parameters": {
+              "httpMethod": "GET",
+              "path": "/Organization/{{organization-id}}",
+              "pathParameters": {
+                "organization-id": {
+                  "exchangeProperty": "organization-id"
+                }
+              },
+              "operation": "organization-read"
+            }
+          }
+        },
+        {
+          "setBody": {
+            "rhai": {
+              "file": "scripts/fhir.rhai",
+              "entrypoint": "project_organization"
+            }
+          }
+        },
+        {
+          "validateSchema": {
+            "path": "schemas/provider-organization.json",
+            "digest": "sha256:040e6e17bd12e0bfdba9d154f2d3c9e70a26d28b2457b8e8feb51763ea1588e2"
+          }
+        },
+        {
+          "setBody": {
+            "rhai": {
+              "file": "scripts/fhir.rhai",
+              "entrypoint": "lookup_organization"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

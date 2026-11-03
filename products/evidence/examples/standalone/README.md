@@ -2,8 +2,10 @@
 
 This project issues fixed assertions from a synthetic HTTP source. It runs with
 Evidence, a local OAuth issuer, and an independent relying client. Each definition
-has an explicit grant ceiling, named extraction and derivation Functions, and an
-output allowlist. Private source facts stay inside Evidence.
+has an explicit grant ceiling, a pinned Adapter pack route, a derivation Function,
+and an output allowlist. The pack owns provider requests and fact extraction;
+Evidence owns grants, subject binding, derivation, signing and release audit.
+Private source facts stay inside Evidence.
 
 | Definition | Purpose | Output |
 | --- | --- | --- |

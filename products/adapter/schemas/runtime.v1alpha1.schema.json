@@ -84,9 +84,9 @@
           "description": "The operator's explicit acknowledgement that a credential-free\nsource is intentionally served over verified HTTPS. Omission keeps\nthe credential-free policy closed outside numeric loopback and mTLS."
         },
         "attemptTimeoutMilliseconds": {
-          "description": "A lower attempt timeout than the pack declares, in milliseconds;\nabsent, the declared one applies. A value above the declared one is\nrefused when the deployment loads.",
+          "description": "A finite attempt-timeout override in milliseconds. Evidence may raise\nor lower its pack default under the acquisition's remaining deadline;\nfacade and job admit only a lower value within their ten-second policy.",
           "format": "uint64",
-          "maximum": 10000,
+          "maximum": 18446744073709551615,
           "minimum": 1,
           "type": "integer"
         },
@@ -101,6 +101,14 @@
         "endpoint": {
           "$ref": "#/$defs/ExternalId",
           "description": "The pack endpoint this binding configures."
+        },
+        "maximumConcurrency": {
+          "default": 8,
+          "description": "The maximum simultaneous physical data operations admitted for this\nendpoint. Evidence programs selecting the same named connection share\none permit pool; token acquisition retains its own cache/single-flight\ncontrols.",
+          "format": "uint64",
+          "maximum": 256,
+          "minimum": 1,
+          "type": "integer"
         },
         "maximumResponseBytes": {
           "description": "A lower response bound than the pack declares, in bytes; absent, the\ndeclared one applies. A value above the declared one is refused when\nthe deployment loads.",

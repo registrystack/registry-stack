@@ -140,7 +140,7 @@
     {
       "name": "adapter-job",
       "invocation": "adapter-job",
-      "about": "Run a governed-ingestion job: check, bounded pass, status, inspect, rescan.",
+      "about": "Run a governed-ingestion job: initialize its store, check, bounded pass, status, inspect, rescan.",
       "long_about": null,
       "usage": "adapter-job [OPTIONS] <COMMAND>",
       "arguments": [],
@@ -175,6 +175,45 @@
       ],
       "constraints": [],
       "subcommands": [
+        {
+          "name": "init-store",
+          "invocation": "adapter-job init-store",
+          "about": "Initialize or migrate the job store without running a job",
+          "long_about": null,
+          "usage": "adapter-job init-store [OPTIONS] --runtime <RUNTIME>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--runtime <RUNTIME>",
+              "description": "The operator runtime config file, whose store block alone is resolved. Source and destination credentials are not activated",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--show-values",
+              "description": "Include the projected values a dry-run pass would deliver. The default omits every item value",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
         {
           "name": "check",
           "invocation": "adapter-job check",
@@ -3439,6 +3478,18 @@
               "repeatable": false,
               "default_values": [],
               "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--authentication <AUTHENTICATION>",
+              "description": "Authentication contract the generated Adapter pack requires from its endpoint binding",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [
+                "static-authorization",
+                "oauth2-private-key-jwt"
+              ],
               "environment": null
             },
             {
@@ -16613,6 +16664,90 @@
                   ]
                 }
               ],
+              "subcommands": []
+            },
+            {
+              "name": "record-facts",
+              "invocation": "evidencectl fixtures record-facts",
+              "about": "Record final offline Adapter facts into one maintained fixture",
+              "long_about": null,
+              "usage": "evidencectl fixtures record-facts [OPTIONS] --target <TARGET> --fixture <FIXTURE> --write [PROJECT]",
+              "arguments": [
+                {
+                  "display": "[PROJECT]",
+                  "description": "Editable Evidence project directory; defaults to the current directory",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "."
+                  ],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--target <TARGET>",
+                  "description": "Complete deployment target used for the offline fixture compilation",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--fixture <FIXTURE>",
+                  "description": "Exact project-relative fixture path referenced by one definition",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--write",
+                  "description": "Apply the fact record to the maintained authored fixture",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--evidence-bin <EVIDENCE_BIN>",
+                  "description": "Path to the evidence binary; defaults to `evidence` on PATH",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format. `junit` is accepted only by `test` and `fixtures run`",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json",
+                    "junit"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
               "subcommands": []
             }
           ]

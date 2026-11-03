@@ -24,6 +24,27 @@ audit:
   path: /var/lib/registry-evidence/audit/evidence.jsonl
 outboundTls:
   systemRoots: true
-  trustProfiles:
-    government-internal-pki:
-      caBundleFile: /etc/registry-evidence/ca/government-internal.pem
+  trustProfiles: {}
+sourceConnections:
+  population-tracker:
+    id: population-tracker
+    endpoints:
+      - endpoint: tracker
+        baseUrl: https://dhis2.gov.example
+        credential:
+          type: basic
+          usernameRef: secret:file/dhis2-username
+          passwordRef: secret:file/dhis2-password
+        attemptTimeoutMilliseconds: 3000
+        maximumResponseBytes: 65536
+        maximumConcurrency: 8
+        tlsTrustProfile: government-internal-pki
+    outboundTls:
+      trustProfiles:
+        government-internal-pki:
+          caBundleFile: /etc/registry-evidence/ca/government-internal.pem
+    allowedPrivateCidrs: []
+sourceAcquisition:
+  maximumDataOperations: 5
+  acquisitionDeadlineMilliseconds: 30000
+  maximumResponseBytes: 1048576

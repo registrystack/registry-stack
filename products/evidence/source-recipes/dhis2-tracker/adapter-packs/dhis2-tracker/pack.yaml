@@ -1,0 +1,60 @@
+apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: dhis2-tracker
+version: '1'
+testedVersions: ['2.43']
+endpoints:
+- id: tracker
+  component: http
+  authentication: {type: basic}
+  attemptTimeoutMilliseconds: 3000
+  maximumResponseBytes: 65536
+  requestHeaders: [accept]
+  responseHeaders: []
+  operations: [{id: tracked-entity-lookup}]
+  testedVersions: ['2.43']
+sourceRoutes:
+- id: tracked-entity-status
+  evidence:
+    inputsSchema:
+      path: schemas/inputs.json
+      digest: sha256:a2d205510180a304f7f30b2139a3f7d3ff7f7bb3be107fd28230c328988d85ab
+    factsSchema:
+      path: schemas/facts.json
+      digest: sha256:75ae709dcfdff5c41b9ce83fc645b0388c879e4f1bae7b496d81906b1637abd8
+    acquisitionPosture: record-transformed
+  steps:
+  - setProperty:
+      name: requestedRecordReference
+      value: {jsonpath: '$.recordReference'}
+  - setHeader:
+      name: Accept
+      value: {constant: application/json}
+  - to:
+      uri: http:tracker
+      parameters:
+        httpMethod: GET
+        path: /api/tracker/trackedEntities
+        operation: tracked-entity-lookup
+        query:
+          program: {constant: Prg00000001}
+          orgUnits: {constant: Org00000001}
+          trackedEntities: {exchangeProperty: requestedRecordReference}
+          fields: {constant: 'trackedEntity,attributes[attribute,value]'}
+          pageSize: {constant: '2'}
+          page: {constant: '1'}
+          totalPages: {constant: 'true'}
+  - setBody:
+      rhai: {file: scripts/source-recipe.rhai, entrypoint: project_response}
+  - validateSchema:
+      path: schemas/provider-response.json
+      digest: sha256:c69e7d62f3bc76d3558a06f91902a4dd7bb4e3ad8312f59a442aa342acad12f3
+  - setBody:
+      rhai: {file: scripts/source-recipe.rhai, entrypoint: lookup}
+scripts:
+- path: scripts/source-recipe.rhai
+  digest: sha256:afdd1c872699bd90a339820b733a6206cc28be4c38fa91c75ccf0b863dc47dbc
+capabilities:
+  components: [http]
+  languages: [constant, exchangeProperty, jsonpath, rhai]
+  eips: [setBody, setHeader, setProperty, to, validate]

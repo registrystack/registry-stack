@@ -7,10 +7,11 @@ minimum-disclosure requirements:
 - professional licence status as an active-licence boolean plus a bounded
   expiry category.
 
-The two requirements are independent. Each has its own source, extraction
-script, fact schema, derivation, authority profile, purpose, validity period,
-disclosure family, and fixtures. A caller authorized for one learns nothing
-about the other.
+The two requirements are independent. Each has its own pack route, fact
+schema, derivation, authority profile, purpose, validity period, disclosure
+family, and fixtures. A caller authorized for one learns nothing about the
+other. Both routes come from the maintained `dhis2-tracker` Adapter pack, and
+the bundle captures that pack and every pinned artifact by digest.
 
 The reviewed governance bundle is under `bundle/`. Process-local paths,
 listener settings, and the private-CA file binding are in `runtime.yaml`.
@@ -28,19 +29,18 @@ Before deployment, the operator changes only:
 
 ## Shared lookup shape
 
-Both sources reuse `adapters/prepare.rhai`. It reads only the closed
-`program`, `organisationUnit`, `providerFields`, `pageSize`, `page`, and
-`totalPages` parameters, so the same reviewed preparation renders both
-requests and neither requirement can widen the other's query. Extraction stays
-separate because the two sources validate and emit different facts.
+The maintained pack owns both fixed provider requests. The bundle binds only
+the minimized `recordReference` input from the authorized subject and selects
+one reviewed route. Programme, organisation unit, projected provider fields,
+page size, page, and total-page behavior stay digest-covered pack policy, so a
+bundle cannot widen the provider query through source parameters.
 
-Each source performs one page-one lookup for exactly one tracked-entity
+Each route performs one page-one lookup for exactly one tracked-entity
 reference with `pageSize=2`. A second page is never followed. That two-result
-ceiling is governed adapter policy declared by this reviewed bundle and
-rendered by its preparation script so one bounded response separates a unique
-match from ambiguity. It is not a Rust domain rule and not a DHIS2 property.
-Both extractions require the complete `page`, `pageSize`, `total`, and
-`pageCount` pager, check that the page count agrees with the total and the page
+ceiling is reviewed pack policy, allowing one bounded response to distinguish a
+unique match from ambiguity. It is not a Rust domain rule and not a DHIS2
+property. Both routes require the complete `page`, `pageSize`, `total`, and
+`pageCount` pager, check that the page count agrees with the total and page
 size, and check that the returned collection agrees with the total. A truncated
 or inconsistent pager is a protocol failure rather than a silently smaller
 result set.
@@ -86,15 +86,13 @@ verifier learns how soon the licence lapses without learning the date. A
 validity window that ends before it starts is an inconsistent record and is
 rejected as `derivation_input_error` rather than signed as expired.
 
-The `absentRestrictionEventMeansUnrestricted` adapter parameter is a
-governance declaration, not a convenience default. When the deployment sets it
-`true`, as here, an enrollment recording no restriction event at all is read as
-unrestricted, and that reading is reviewed bundle policy rather than an
-inference from DHIS2 behavior. When a deployment cannot make that statement it
-sets the parameter `false`, extraction omits `restriction_recorded`, the fact
-schema rejects the incomplete fact set, and the requirement is unresolved.
-Evidence has no third state to sign: a missing signal must either be governed
-into a definite reading or stop the assertion.
+The professional-licence pack route explicitly treats an enrollment with no
+restriction event as unrestricted. This is reviewed, digest-covered route
+policy rather than an inference made by the Evidence bundle. A deployment that
+cannot adopt that rule must publish a distinct pack route and digest; it cannot
+change the result through runtime configuration. Evidence has no third state to
+sign: a missing signal must either have a governed reading or stop the
+assertion.
 
 ## Secrets
 
@@ -108,9 +106,11 @@ dhis2-username
 dhis2-password
 ```
 
-Both sources authenticate with the same credential files. A deployment whose
-licence programme is served by a separate DHIS2 instance or a separate service
-account gives that source its own `baseUrl` and its own secret references.
+Both routes select the same governed `population-tracker` connection, whose
+runtime binding supplies these credential files. A deployment whose licence
+programme is served by a separate DHIS2 instance or service account declares a
+second governed connection policy and matching runtime binding, then binds the
+licence source to that connection.
 
 The audit and subject-binding files must contain independently generated raw
 key material of at least 32 bytes each; they are not base64-decoded. Production

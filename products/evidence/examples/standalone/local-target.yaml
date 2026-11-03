@@ -32,10 +32,12 @@ authentication:
     maximumTokenLifetimeSeconds: 300
 connections:
   synthetic-register:
-    origin: http://127.0.0.1:8081
-    authentication:
-      type: bearer
-      tokenRef: secret:file/synthetic-source-token
+    endpoints:
+      register:
+        origin: http://127.0.0.1:8081
+        authentication:
+          type: static-authorization
+          tokenRef: secret:file/synthetic-source-token
 secretProviders:
   file:
     root: .generated/secrets

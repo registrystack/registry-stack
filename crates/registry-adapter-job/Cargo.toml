@@ -17,21 +17,96 @@ path = "src/main.rs"
 
 [features]
 default = []
+# Enables the separate Basic-authenticated, rate-bounded hook ingress that can
+# wake the interval pass loop early. The facade never enables or links it.
+job-hook = [
+    "dep:axum",
+    "dep:base64",
+    "dep:futures",
+    "dep:registry-platform-crypto",
+    "dep:registry-platform-ratelimit",
+    "dep:zeroize",
+]
+# Optional source protocols remain unreachable from default builds.
+job-sftp = ["dep:russh", "dep:russh-sftp", "registry-adapter-engine/job-sftp"]
+job-rabbitmq = ["dep:lapin", "rustls/fips", "registry-adapter-engine/job-rabbitmq"]
+# Plaintext AMQP is a loopback-only test profile, absent from release features.
+rabbitmq-test-plaintext = ["job-rabbitmq", "registry-adapter-engine/rabbitmq-test-plaintext"]
 # Gates the suites that need a disposable database; the product's
 # test-job-postgres.sh runs them the way registry-adapter gates its own.
 # The same feature allows the plaintext test-database connection, exactly
 # as registry-adapter's own pool does.
-postgres-test = []
+postgres-test = ["registry-adapter-engine/postgres-test"]
+# The PostgreSQL TLS child-process proof has mandatory helper environment and
+# is selected only by its owning wrapper, never by the ordinary feature matrix.
+postgres-tls-test = ["postgres-test", "job-postgres"]
+# Enables only the shared engine's bounded local-file source for this host.
+# The release default remains HTTP/GraphQL-only; every additional source has
+# its own explicit host feature.
+job-file = ["registry-adapter-engine/job-file"]
+# Enables only the shared engine's reviewed read-only PostgreSQL source and
+# the job host client that supplies its connection seam. The release default
+# remains free of source-database reachability.
+job-postgres = [
+    "dep:futures",
+    "dep:rustls-native-certs",
+    "registry-adapter-engine/job-postgres",
+]
+# Unparks only the job host's direct BReg destination. The connector
+# forwards its own off-by-default BReg feature; engine and facade do not
+# depend on this crate and cannot reach the product client.
+direct-breg = [
+    "dep:registry-adapter-connectors",
+    "dep:registry-platform-crypto",
+    "dep:registry-platform-httputil",
+    "registry-adapter-connectors/breg",
+]
+# Enables only the job host's platform-signed Coordinator event
+# destination. No Coordinator crate or client is linked.
+signed-coordinator-event = [
+    "dep:registry-adapter-connectors",
+    "dep:registry-platform-httputil",
+    "registry-adapter-connectors/coordinator-event",
+]
+# Native fixture support is a test-only extension of direct-breg, never
+# selected by the adapter-job runtime or release feature set.
+native-test-support = ["direct-breg", "registry-adapter-connectors/native-test-support"]
+
+[[test]]
+name = "job_file_host"
+path = "tests/job_file_host.rs"
+required-features = ["job-file"]
+
+[[test]]
+name = "postgres_source_host"
+path = "tests/postgres_source_host.rs"
+required-features = ["job-postgres", "postgres-test", "signed-coordinator-event"]
+
+[[test]]
+name = "hook_ingress_postgres"
+path = "tests/hook_ingress_postgres.rs"
+required-features = ["job-hook", "postgres-test"]
 
 [dependencies]
-registry-adapter.workspace = true
+registry-adapter-engine.workspace = true
 registry-adapter-core.workspace = true
+registry-adapter-connectors = { workspace = true, optional = true }
 registry-platform-config.workspace = true
+registry-platform-crypto = { workspace = true, optional = true }
+registry-platform-httputil = { workspace = true, optional = true }
+registry-platform-ratelimit = { workspace = true, optional = true }
 registry-platform-yaml.workspace = true
+axum = { workspace = true, optional = true }
+base64 = { workspace = true, optional = true }
 chrono = { workspace = true, features = ["clock", "std"] }
 clap.workspace = true
 deadpool-postgres.workspace = true
+futures = { workspace = true, optional = true }
+lapin = { workspace = true, optional = true }
 rustls.workspace = true
+russh = { workspace = true, optional = true }
+russh-sftp = { workspace = true, optional = true }
+rustls-native-certs = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
@@ -40,7 +115,38 @@ tokio.workspace = true
 tokio-postgres.workspace = true
 tokio-postgres-rustls.workspace = true
 tracing.workspace = true
+uuid.workspace = true
+zeroize = { workspace = true, optional = true }
 
 [dev-dependencies]
 axum.workspace = true
+rcgen.workspace = true
 tempfile.workspace = true
+registry-platform-testing = { workspace = true, features = ["test-authorization-server"] }
+registry-platform-crypto.workspace = true
+registry-platform-hooks = { workspace = true, features = ["receiver"] }
+registry-platform-httputil.workspace = true
+reqwest.workspace = true
+serde_norway.workspace = true
+time.workspace = true
+url.workspace = true
+
+[[test]]
+name = "rabbitmq_source"
+path = "tests/rabbitmq_source.rs"
+required-features = ["job-rabbitmq", "rabbitmq-test-plaintext"]
+
+[[test]]
+name = "sftp_job_path"
+path = "tests/sftp_job_path.rs"
+required-features = ["job-sftp"]
+
+[[test]]
+name = "sftp_cli_host"
+path = "tests/sftp_cli_host.rs"
+required-features = ["job-sftp", "postgres-test", "signed-coordinator-event"]
+
+[[test]]
+name = "rabbitmq_pass"
+path = "tests/rabbitmq_pass.rs"
+required-features = ["job-rabbitmq", "rabbitmq-test-plaintext", "postgres-test", "signed-coordinator-event"]

@@ -72,6 +72,7 @@ pub enum ReasonCode {
     UniqueMatch,
     NoMatch,
     Ambiguous,
+    DeclaredUnresolved,
     ExtractionRefused,
     DerivationInputRefused,
     SourceProtocolRefused,

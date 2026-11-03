@@ -1,0 +1,54 @@
+apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: opencrvs-event-search
+version: '1'
+testedVersions: []
+endpoints:
+- id: events
+  component: http
+  authentication: {type: oauth2-client-credentials}
+  attemptTimeoutMilliseconds: 3000
+  maximumResponseBytes: 262144
+  requestHeaders: [accept]
+  responseHeaders: []
+  operations: [{id: registered-event-lookup, safeUpstream: true}]
+  testedVersions: []
+sourceRoutes:
+- id: registered-parent
+  evidence:
+    inputsSchema:
+      path: schemas/inputs.json
+      digest: sha256:3ecf0b2b918b62de0987dd862c2208437645e8586df12843e3b54218e3a4c28c
+    factsSchema:
+      path: schemas/facts.json
+      digest: sha256:df2a43be66f46935417d4b095d9026d1f9679c188e36dcf78db4856edc58d830
+    acquisitionPosture: record-transformed
+  steps:
+  - setProperty:
+      name: requestedTrackingId
+      value: {jsonpath: '$.trackingId'}
+  - setHeader:
+      name: Accept
+      value: {constant: application/json}
+  - to:
+      uri: http:events
+      parameters:
+        httpMethod: POST
+        path: /events/search
+        operation: registered-event-lookup
+        body:
+          rhai: {file: scripts/source-recipe.rhai, entrypoint: prepare_query}
+  - setBody:
+      rhai: {file: scripts/source-recipe.rhai, entrypoint: project_response}
+  - validateSchema:
+      path: schemas/provider-response.json
+      digest: sha256:3bdbcfdc4dc3ced6677a096600723496e16fb5612bd14e1cc0f050337c967c91
+  - setBody:
+      rhai: {file: scripts/source-recipe.rhai, entrypoint: lookup}
+scripts:
+- path: scripts/source-recipe.rhai
+  digest: sha256:6e7fec1678bd08b17b03fad8aa7bff9369db4b20570fb6f710f33e7015ff9eb3
+capabilities:
+  components: [http]
+  languages: [constant, jsonpath, rhai]
+  eips: [setBody, setHeader, setProperty, to, validate]

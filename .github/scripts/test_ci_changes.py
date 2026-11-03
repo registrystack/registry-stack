@@ -1230,6 +1230,7 @@ class CiChangesTest(unittest.TestCase):
         for path in (
             "products/adapter/CONCEPT.md",
             "crates/registry-adapter-core/src/lib.rs",
+            "crates/registry-adapter-engine/src/lib.rs",
             "crates/registry-adapter/src/lib.rs",
             "crates/registry-adapter-job/src/pass.rs",
             "crates/registry-adapterctl/src/main.rs",
@@ -1249,6 +1250,20 @@ class CiChangesTest(unittest.TestCase):
             {row["name"] for row in unrelated["rust_matrix"]["include"]},
         )
         self.assertFalse(unrelated["adapter_contracts"])
+
+    def test_shared_adapter_engine_selects_evidence_consumers(self) -> None:
+        outputs = classify(
+            self.workspace,
+            ("crates/registry-adapter-engine/src/evidence.rs",),
+            pull_request=True,
+        )
+        self.assertIn("registry-evidence", outputs["rust_packages"])
+        self.assertIn(
+            "evidence", {row["name"] for row in outputs["rust_matrix"]["include"]}
+        )
+        self.assertTrue(outputs["evidence_contracts"])
+        self.assertTrue(outputs["evidence_postgres"])
+        self.assertTrue(outputs["adapter_contracts"])
 
     def test_adapter_contract_job_runs_the_ingestion_postgres_suite(self) -> None:
         steps = self.workflow_jobs["adapter-contracts"]["steps"]
@@ -3752,7 +3767,7 @@ class LockfileSelectionTest(unittest.TestCase):
             change.members,
             frozenset(
                 {
-                    "registry-adapter",
+                    "registry-adapter-engine",
                     "registry-breg",
                     "registry-coordinator",
                     "registry-evidence",

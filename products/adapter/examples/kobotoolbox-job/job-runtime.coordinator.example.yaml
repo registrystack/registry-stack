@@ -1,0 +1,25 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/job-runtime/job-runtime.v1alpha1.schema.json
+# The signed-Coordinator deployment binding for job.coordinator.yaml. The
+# source endpoint and store are identical to the direct example; only the
+# destination credential and endpoint differ. Every secret remains an
+# operator reference, never an authored value.
+apiVersion: id.registrystack.org/formats/adapter/job-runtime/v1alpha1
+kind: AdapterJobRuntimeConfig
+id: kobotoolbox-job-workflow-example
+endpoints:
+  - endpoint: kobo-api
+    baseUrl: https://kobo.example.invalid/api/v2/assets/aFixtureUid0000000000000000000001/data
+    credential:
+      type: basic
+      usernameRef: secret:env/KOBO_USERNAME
+      passwordRef: secret:env/KOBO_PASSWORD
+allowedPrivateCidrs:
+  - 10.0.0.0/8
+destinations:
+  household-workflow:
+    type: signed-coordinator-event
+    baseUrl: https://coordinator.example.invalid
+    signingKeyRef: secret:env/COORDINATOR_EVENT_KEY
+    attemptTimeoutMilliseconds: 5000
+store:
+  runtimeUrlRef: secret:env/ADAPTER_JOB_DB

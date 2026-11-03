@@ -1,0 +1,207 @@
+apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: selector-conformance
+version: '1'
+testedVersions: []
+endpoints:
+- id: facts
+  component: http
+  authentication:
+    type: static-authorization
+  requestHeaders:
+  - accept
+  attemptTimeoutMilliseconds: 3000
+  maximumResponseBytes: 65536
+  operations:
+  - id: lookup
+    safeUpstream: true
+  testedVersions: []
+sourceRoutes:
+- id: classification-source
+  evidence:
+    inputsSchema:
+      path: schemas/classification-source-inputs.json
+      digest: sha256:dbb887c07e403593bbdb79becaa60a0f6243561d57195f255bfc63fee5322aab
+    factsSchema:
+      path: schemas/facts.json
+      digest: sha256:980f07ae39dbc5a39153fee5fc3f59984d2bc540f8feef110bd6a7496f6fbace
+    acquisitionPosture: field-projected
+  steps:
+  - setHeader:
+      name: accept
+      value:
+        constant: application/json
+  - to:
+      uri: http:facts
+      parameters:
+        httpMethod: POST
+        path: "/v1/selector-facts"
+        operation: lookup
+        body:
+          rhai:
+            file: scripts/provider.rhai
+            entrypoint: request
+  - setBody:
+      rhai:
+        file: scripts/provider.rhai
+        entrypoint: project
+  - validateSchema:
+      path: schemas/provider.json
+      digest: sha256:95f4397017a5edaa2e2a6808b39fec4bfdf1cabff4b627a0ab16de3d280f42a9
+  - setBody:
+      rhai:
+        file: scripts/provider.rhai
+        entrypoint: lookup
+- id: context-source
+  evidence:
+    inputsSchema:
+      path: schemas/context-source-inputs.json
+      digest: sha256:56ebd8cb54ab5f0be821c8f4c8a7d66f02cc218c3a76b145af871d702900ae1b
+    factsSchema:
+      path: schemas/facts.json
+      digest: sha256:980f07ae39dbc5a39153fee5fc3f59984d2bc540f8feef110bd6a7496f6fbace
+    acquisitionPosture: field-projected
+  steps:
+  - setHeader:
+      name: accept
+      value:
+        constant: application/json
+  - to:
+      uri: http:facts
+      parameters:
+        httpMethod: POST
+        path: "/v1/selector-facts"
+        operation: lookup
+        body:
+          rhai:
+            file: scripts/provider.rhai
+            entrypoint: request
+  - setBody:
+      rhai:
+        file: scripts/provider.rhai
+        entrypoint: project
+  - validateSchema:
+      path: schemas/provider.json
+      digest: sha256:95f4397017a5edaa2e2a6808b39fec4bfdf1cabff4b627a0ab16de3d280f42a9
+  - setBody:
+      rhai:
+        file: scripts/provider.rhai
+        entrypoint: lookup
+- id: grant-source
+  evidence:
+    inputsSchema:
+      path: schemas/grant-source-inputs.json
+      digest: sha256:40ddd67f5588b3e8041cea359c66a48696e5ed82cc98f22d418809ee89975986
+    factsSchema:
+      path: schemas/facts.json
+      digest: sha256:980f07ae39dbc5a39153fee5fc3f59984d2bc540f8feef110bd6a7496f6fbace
+    acquisitionPosture: field-projected
+  steps:
+  - setHeader:
+      name: accept
+      value:
+        constant: application/json
+  - to:
+      uri: http:facts
+      parameters:
+        httpMethod: POST
+        path: "/v1/selector-facts"
+        operation: lookup
+        body:
+          rhai:
+            file: scripts/provider.rhai
+            entrypoint: request
+  - setBody:
+      rhai:
+        file: scripts/provider.rhai
+        entrypoint: project
+  - validateSchema:
+      path: schemas/provider.json
+      digest: sha256:95f4397017a5edaa2e2a6808b39fec4bfdf1cabff4b627a0ab16de3d280f42a9
+  - setBody:
+      rhai:
+        file: scripts/provider.rhai
+        entrypoint: lookup
+- id: relationship-source
+  evidence:
+    inputsSchema:
+      path: schemas/relationship-source-inputs.json
+      digest: sha256:61f46d3cc047c0b3ee97800c5dae311f7c928202eec6d27784014d3765eab267
+    factsSchema:
+      path: schemas/facts.json
+      digest: sha256:980f07ae39dbc5a39153fee5fc3f59984d2bc540f8feef110bd6a7496f6fbace
+    acquisitionPosture: field-projected
+  steps:
+  - setHeader:
+      name: accept
+      value:
+        constant: application/json
+  - to:
+      uri: http:facts
+      parameters:
+        httpMethod: POST
+        path: "/v1/selector-facts"
+        operation: lookup
+        body:
+          rhai:
+            file: scripts/provider.rhai
+            entrypoint: request
+  - setBody:
+      rhai:
+        file: scripts/provider.rhai
+        entrypoint: project
+  - validateSchema:
+      path: schemas/provider.json
+      digest: sha256:95f4397017a5edaa2e2a6808b39fec4bfdf1cabff4b627a0ab16de3d280f42a9
+  - setBody:
+      rhai:
+        file: scripts/provider.rhai
+        entrypoint: lookup
+- id: opaque-source
+  evidence:
+    inputsSchema:
+      path: schemas/opaque-source-inputs.json
+      digest: sha256:81d5213bb6c99df3aa1064e99952abc265c369522c6cb5e535c9cbb3142e447a
+    factsSchema:
+      path: schemas/facts.json
+      digest: sha256:980f07ae39dbc5a39153fee5fc3f59984d2bc540f8feef110bd6a7496f6fbace
+    acquisitionPosture: field-projected
+  steps:
+  - setHeader:
+      name: accept
+      value:
+        constant: application/json
+  - to:
+      uri: http:facts
+      parameters:
+        httpMethod: POST
+        path: "/v1/selector-facts"
+        operation: lookup
+        body:
+          rhai:
+            file: scripts/provider.rhai
+            entrypoint: request
+  - setBody:
+      rhai:
+        file: scripts/provider.rhai
+        entrypoint: project
+  - validateSchema:
+      path: schemas/provider.json
+      digest: sha256:95f4397017a5edaa2e2a6808b39fec4bfdf1cabff4b627a0ab16de3d280f42a9
+  - setBody:
+      rhai:
+        file: scripts/provider.rhai
+        entrypoint: lookup
+scripts:
+- path: scripts/provider.rhai
+  digest: sha256:96090fd2dd1396f8cdf3a0a3ee47f520677731add6f3e6bd1a5ce76867e56b3a
+capabilities:
+  components:
+  - http
+  languages:
+  - constant
+  - rhai
+  eips:
+  - setHeader
+  - setBody
+  - to

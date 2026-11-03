@@ -26,7 +26,7 @@ async fn definition_references_completion_and_hover_use_named_sources() {
     let mut session = LspSession::start();
     session.initialize(&p.root).await;
     session.open(&p.path(PROJECT), SOURCE, 1).await;
-    let position = after(SOURCE, "acquisition: {type: single, source: ");
+    let position = after(SOURCE, "acquisition: {source: ");
     let params = json!({"textDocument":{"uri":uri(&p.path(PROJECT))},"position":position});
     let definition = session
         .request("textDocument/definition", params.clone())

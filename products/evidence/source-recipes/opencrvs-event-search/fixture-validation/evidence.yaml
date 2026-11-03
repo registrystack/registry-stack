@@ -10,30 +10,17 @@ functions:
 - id: derive-registered-parent
   interface: assertion-derive/v1
   source: functions/derive-registered-parent.rhai
-- id: validation-seed-extract
-  interface: source-extract/v1
-  source: functions/validation-seed-extract.rhai
 - id: validation-seed-derive
   interface: assertion-derive/v1
   source: functions/validation-seed-derive.rhai
 sources:
   validation-seed:
-    type: http-json
+    pack: {id: validation-seed, version: '1'}
+    route: validation-seed
     connection: validation-seed
     acquisitionPosture: record-transformed
-    selectors: [{role: seed, profiles: [validation-seed]}]
-    request: {method: GET, path: /seed}
-    response:
-      projection: [/matched]
-      shape:
-        type: object
-        additionalProperties: false
-        required: [matched]
-        properties: {matched: {type: boolean}}
-      maximumBytes: 1024
-    extract: {function: validation-seed-extract}
-    facts: {matched: {type: boolean}}
-    limits: {attemptTimeoutMilliseconds: 1000, maximumConcurrency: 1}
+    inputs:
+      id: {selector: {role: seed, profile: validation-seed, field: id}}
 assertionDefinitions:
   validation-seed:
     question: Does the local validation seed match?
@@ -49,7 +36,7 @@ assertionDefinitions:
       valueOrigins: [request]
       audiences: [urn:example:audience:source-recipe-validator]
     subjects: [{role: seed, selectors: [validation-seed]}]
-    acquisition: {type: single, source: validation-seed}
+    acquisition: {source: validation-seed}
     derive: {function: validation-seed-derive}
     outputs:
       matched: {concept: 'urn:example:concept:source-recipe-validation-seed:v1', type: boolean}

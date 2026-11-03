@@ -249,7 +249,7 @@ pub struct RecordedFacadeRequest {
 
 /// One recorded upstream reply.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RecordedResponse {
     /// The status the upstream answered with.
@@ -264,6 +264,40 @@ pub struct RecordedResponse {
         deserialize_with = "deserialize_recorded_body"
     )]
     pub body: Option<RecordedBody>,
+    /// Exact response bytes for a selected host protocol, encoded as standard
+    /// padded base64. This is mutually exclusive with `body`; ordinary replay
+    /// never decodes or exposes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_body_base64: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for RecordedResponse {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct Wire {
+            status: HttpStatus,
+            #[serde(default)]
+            headers: RecordedHeaders,
+            #[serde(default, deserialize_with = "deserialize_recorded_body")]
+            body: Option<RecordedBody>,
+            #[serde(default)]
+            raw_body_base64: Option<String>,
+        }
+
+        let wire = Wire::deserialize(deserializer)?;
+        if wire.body.is_some() && wire.raw_body_base64.is_some() {
+            return Err(serde::de::Error::custom(
+                "a recorded response cannot carry both body and rawBodyBase64",
+            ));
+        }
+        Ok(Self {
+            status: wire.status,
+            headers: wire.headers,
+            body: wire.body,
+            raw_body_base64: wire.raw_body_base64,
+        })
+    }
 }
 
 /// One recorded upstream exchange: the send the route made and the reply
@@ -505,6 +539,7 @@ mod tests {
                 status: HttpStatus::new(200).expect("a status"),
                 headers: RecordedHeaders::new(),
                 body: body(serde_json::json!({"page": path})),
+                raw_body_base64: None,
             },
         }
     }
@@ -605,6 +640,7 @@ mod tests {
                             status: HttpStatus::new(200).expect("a status"),
                             headers: RecordedHeaders::new(),
                             body: body(serde_json::json!({"access_token": "t"})),
+                            raw_body_base64: None,
                         },
                     },
                     RecordedExchange {
@@ -621,6 +657,7 @@ mod tests {
                             status: HttpStatus::new(200).expect("a status"),
                             headers: upstream_response_headers,
                             body: body(serde_json::json!({"id": "123"})),
+                            raw_body_base64: None,
                         },
                     },
                 ],
@@ -1054,5 +1091,27 @@ mod tests {
         let canonical = r#"{"a":{"x":3,"y":2},"b":1}"#;
         assert_eq!(canonical_body(Some(&first)), canonical);
         assert_eq!(canonical_body(Some(&second)), canonical);
+    }
+
+    #[test]
+    fn a_recorded_response_keeps_exact_raw_bytes_exclusive_from_json() {
+        let raw: RecordedResponse = serde_json::from_value(serde_json::json!({
+            "status": 200,
+            "rawBodyBase64": "IHtcbiAgXCJzaWduZWRcIiA6IHRydWVcbiB9IA=="
+        }))
+        .expect("raw response");
+        assert!(raw.body.is_none());
+        assert_eq!(
+            raw.raw_body_base64.as_deref(),
+            Some("IHtcbiAgXCJzaWduZWRcIiA6IHRydWVcbiB9IA==")
+        );
+        assert!(
+            serde_json::from_value::<RecordedResponse>(serde_json::json!({
+                "status": 200,
+                "body": {"signed": true},
+                "rawBodyBase64": "e30="
+            }))
+            .is_err()
+        );
     }
 }

@@ -16,10 +16,16 @@ use crate::pack::{AdapterPack, GraphQlOperationKind, SourceRouteDecl};
 use crate::profile::{
     resolve_problem, AdapterProfile, EnvelopeTemplate, ProfileOperation, MAX_PROBLEM_DATA_FIELDS,
     READ_REQUEST_SLOTS, SLOT_PROBLEM_CODE, SLOT_PROBLEM_DATA, SLOT_RECORD, SLOT_RECORDS,
+    SLOT_STATUS_EXPIRES_AT, SLOT_STATUS_LINK,
 };
-use crate::project::AdapterProject;
-use crate::route::{effective_clause_redelivery_policy, Step, TemplateParameterType};
+use crate::project::{AdapterProject, BindingAsyncCompletion};
+use crate::route::{
+    effective_clause_redelivery_policy, IdempotentConsumerStep, Step, TemplateParameterType,
+    ToParameters, RESUME_PROPERTY_PREFIX,
+};
 use crate::runtime::AdapterRuntimeConfig;
+use jsonpath_rust::parser::model::{Segment, Selector};
+use jsonpath_rust::parser::parse_json_path;
 use registry_platform_httputil::destination::{
     is_script_visible_response_header_name, is_script_writable_request_header_name,
     MAX_DESTINATION_OPERATION_TIMEOUT, MAX_DESTINATION_REQUEST_HEADERS,
@@ -31,12 +37,15 @@ use std::collections::{HashMap, HashSet};
 /// (`products/adapter/CONCEPT.md` section 8.3).
 pub const MAX_DIRECT_DEPTH: usize = 16;
 
-/// The longest one outbound attempt may take, in milliseconds: the
-/// destination substrate's whole-operation ceiling that an endpoint's
-/// `attemptTimeoutMilliseconds` may not exceed
-/// (`products/adapter/CONCEPT.md` section 8.8), the same bound
-/// Messaging's provider sends carry.
+/// The longest one facade or job outbound attempt may take, in milliseconds
+/// (`products/adapter/CONCEPT.md` section 8.8). Evidence uses its own finite
+/// acquisition deadline and may select a longer or shorter attempt within the
+/// remaining acquisition budget.
 pub const MAXIMUM_ATTEMPT_TIMEOUT_MILLISECONDS: u64 = 10_000;
+/// The most source identifiers one successful write step may checkpoint.
+pub const MAXIMUM_RESUME_BINDINGS_PER_STEP: usize = 16;
+/// The longest RFC 9535 selector accepted for a resume binding.
+pub const MAXIMUM_RESUME_SELECTOR_BYTES: usize = 4_096;
 const _: () = assert!(
     MAXIMUM_ATTEMPT_TIMEOUT_MILLISECONDS == MAX_DESTINATION_OPERATION_TIMEOUT.as_millis() as u64
 );
@@ -785,8 +794,10 @@ fn problem_data_route_faults(
 /// judge), a `{{name}}` placeholder no `pathParameters` entry binds
 /// (pointed at `path`), and an entry naming no placeholder the path
 /// carries (pointed at `pathParameters`). A `{{?name}}` optional
-/// placeholder may stay unbound.
-fn path_parameter_faults(
+/// placeholder may stay unbound. Public so every engine host reuses the
+/// authoring grammar before it admits a route.
+#[must_use]
+pub fn path_parameter_faults(
     path: &str,
     bindings: &std::collections::BTreeMap<String, Expression>,
 ) -> Vec<(&'static str, &'static str)> {
@@ -904,8 +915,9 @@ fn endpoint_carries_authentication(authentication: &EndpointAuthentication) -> b
 /// fragment delimiter, and no `..` segment in any spelling a URL parser
 /// resolves, plain or percent-encoded, all judged on the static skeleton
 /// with `{{name}}` placeholders removed. The fault text never quotes the
-/// path.
-fn origin_relative_path_fault(path: &str) -> Option<&'static str> {
+/// path. Public so route compilation cannot diverge from authoring checks.
+#[must_use]
+pub fn origin_relative_path_fault(path: &str) -> Option<&'static str> {
     if path.contains("://") {
         return Some("the path carries a scheme");
     }
@@ -1361,6 +1373,13 @@ fn envelope_checks(path: &str, envelope: &EnvelopeTemplate) -> Vec<Diagnostic> {
                 "the envelope names a slot only a read's request body fills",
                 "Use cursor, filters, and pageSize only in a read operation's request envelope.",
             ));
+        } else if matches!(name.as_str(), SLOT_STATUS_LINK | SLOT_STATUS_EXPIRES_AT) {
+            findings.push(finding(
+                CheckCode::ProfileUnknownSlot,
+                path,
+                "the envelope names a slot reserved for an asynchronous accepted response",
+                "Use statusLink and statusExpiresAt only in asyncCompletion.acceptedEnvelope.",
+            ));
         }
     }
     findings
@@ -1372,8 +1391,14 @@ fn envelope_checks(path: &str, envelope: &EnvelopeTemplate) -> Vec<Diagnostic> {
 #[must_use]
 pub fn check_pack(pack: &AdapterPack) -> Vec<Diagnostic> {
     let mut findings = Vec::new();
+    let evidence_only_endpoints = evidence_only_endpoint_ids(pack);
     for (index, endpoint) in pack.endpoints.iter().enumerate() {
         let prefix = format!("/endpoints/{index}");
+        if !evidence_only_endpoints.contains(endpoint.id.as_str()) {
+            if let Some(finding) = ordinary_attempt_timeout_finding(endpoint, index) {
+                findings.push(finding);
+            }
+        }
         // A producer component (http, graphql, or the read-only postgres
         // source) names an upstream endpoint; the job-only file and sftp
         // sources are read through pollEnrich (section 17.1). `direct`
@@ -1385,6 +1410,45 @@ pub fn check_pack(pack: &AdapterPack) -> Vec<Diagnostic> {
                 &format!("{prefix}/component"),
                 "an endpoint declares a non-producer component",
                 "Declare http, graphql, postgres, or a job source component on an endpoint; direct names routes and rest is the facade consumer.",
+            ));
+        }
+        let sqlite_kind = endpoint.component == crate::model::ComponentKind::SqliteExtract;
+        let sqlite_valid = endpoint.sqlite_extract.as_ref().is_some_and(|contract| {
+            let path = &contract.statement.path;
+            let columns = contract
+                .columns
+                .iter()
+                .map(|column| column.name.as_str())
+                .collect::<HashSet<_>>();
+            let parameters = contract
+                .parameters
+                .iter()
+                .map(|parameter| parameter.name.as_str())
+                .collect::<HashSet<_>>();
+            path.starts_with("queries/")
+                && path.ends_with(".sql")
+                && !path.contains('\\')
+                && std::path::Path::new(path)
+                    .components()
+                    .all(|component| matches!(component, std::path::Component::Normal(_)))
+                && !columns.is_empty()
+                && columns.len() == contract.columns.len()
+                && parameters.len() == contract.parameters.len()
+                && !parameters.contains("evidence_now")
+                && matches!(endpoint.authentication, EndpointAuthentication::None {})
+                && endpoint.request_headers.is_empty()
+                && endpoint.response_headers.is_empty()
+                && endpoint.operations.is_empty()
+                && endpoint.query_file.is_none()
+                && endpoint.operation_name.is_none()
+                && endpoint.variables.is_none()
+        });
+        if (sqlite_kind && !sqlite_valid) || (!sqlite_kind && endpoint.sqlite_extract.is_some()) {
+            findings.push(finding(
+                CheckCode::PackSqliteExtractInvalid,
+                &format!("{prefix}/sqliteExtract"),
+                "the SQLite extract producer declaration is missing, misplaced or invalid",
+                "Use sqliteExtract only on a sqlite-extract endpoint, with pinned queries/*.sql, unique typed columns and named parameters, and no HTTP authority members.",
             ));
         }
         if endpoint.component == crate::model::ComponentKind::GraphQl
@@ -1405,6 +1469,48 @@ pub fn check_pack(pack: &AdapterPack) -> Vec<Diagnostic> {
                 &format!("{prefix}/queryFile"),
                 "a postgres endpoint names no query file",
                 "Reference a digest-pinned query file from the pack inventory; user-supplied SQL never enters a send.",
+            ));
+        }
+        if endpoint.component == crate::model::ComponentKind::Postgres
+            && endpoint.key_column.is_none()
+        {
+            findings.push(job_finding(
+                JobCode::PostgresKeyRequired,
+                &format!("{prefix}/keyColumn"),
+                "a postgres endpoint names no stable key column",
+                "Declare the scalar result column whose value remains stable across source-row edits.",
+            ));
+        }
+        if endpoint.component != crate::model::ComponentKind::Postgres
+            && endpoint.key_column.is_some()
+        {
+            findings.push(job_finding(
+                JobCode::PostgresKeyRequired,
+                &format!("{prefix}/keyColumn"),
+                "a non-postgres endpoint carries a postgres key column",
+                "Remove keyColumn; only a postgres source declares its stable result column.",
+            ));
+        }
+        if endpoint.component != crate::model::ComponentKind::Postgres
+            && endpoint.parameter_order.is_some()
+        {
+            findings.push(job_finding(
+                JobCode::PostgresParametersRequired,
+                &format!("{prefix}/parameterOrder"),
+                "a non-postgres endpoint carries a postgres parameter order",
+                "Remove parameterOrder; only a postgres source maps names to SQL parameter positions.",
+            ));
+        }
+        if endpoint
+            .parameter_order
+            .as_ref()
+            .is_some_and(|parameters| parameters.len() > 16)
+        {
+            findings.push(job_finding(
+                JobCode::PostgresParametersUnbounded,
+                &format!("{prefix}/parameterOrder"),
+                "the postgres endpoint declares more named parameters than the bound",
+                "Keep parameterOrder at sixteen names or fewer.",
             ));
         }
         if endpoint.component == crate::model::ComponentKind::GraphQl
@@ -1502,7 +1608,12 @@ fn source_route_checks(pack: &AdapterPack) -> Vec<Diagnostic> {
         .collect();
     for (index, source) in pack.source_routes.iter().enumerate() {
         let prefix = format!("/sourceRoutes/{index}");
-        if source.scan.is_none() {
+        let ingestion = source.evidence.is_none()
+            || source.scan.is_some()
+            || source.next_recovery.is_some()
+            || source.edits.is_some()
+            || source.rescan_delay_seconds.is_some();
+        if ingestion && source.scan.is_none() {
             findings.push(job_finding(
                 JobCode::SourceScanRequired,
                 &format!("{prefix}/scan"),
@@ -1510,7 +1621,7 @@ fn source_route_checks(pack: &AdapterPack) -> Vec<Diagnostic> {
                 "Declare scan as finite or ongoing; the item contract requires the declaration.",
             ));
         }
-        if source.next_recovery.is_none() {
+        if ingestion && source.next_recovery.is_none() {
             findings.push(job_finding(
                 JobCode::SourceRecoveryRequired,
                 &format!("{prefix}/nextRecovery"),
@@ -1518,7 +1629,9 @@ fn source_route_checks(pack: &AdapterPack) -> Vec<Diagnostic> {
                 "Declare nextRecovery as exact-replay or key-deduplicated; the item contract requires the declaration.",
             ));
         }
-        findings.extend(edit_declaration_checks(&prefix, source));
+        if ingestion {
+            findings.extend(edit_declaration_checks(&prefix, source));
+        }
         if internal_ids.contains(source.id.as_str()) {
             findings.push(job_finding(
                 JobCode::SourceIdCollision,
@@ -1601,9 +1714,7 @@ fn template_parameter_checks(pack: &AdapterPack) -> Vec<Diagnostic> {
             finding(
                 CheckCode::PackMapParameterMisplaced,
                 &format!("/routeTemplates/{index}/steps{path}"),
-                &format!(
-                    "the map parameter {{{{{name}}}}} is used where only text fits"
-                ),
+                &format!("the map parameter {{{{{name}}}}} is used where only text fits"),
                 "Use a map parameter only as the whole value of a constant in setProperty or setBody.",
             )
         };
@@ -1821,16 +1932,47 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
         }
     }
 
-    for (id, steps) in &ordered_bodies {
-        if instantiated_ids.contains(id) {
+    // Source routes share the authored route language, but not the direct
+    // consumer namespace. Add their bodies only to the validation walk: the
+    // graph and `known_ids` above remain internal routes and instantiated
+    // templates, so a source id never becomes directly callable. Carry each
+    // prefix beside its body so a source/internal id collision cannot
+    // overwrite either diagnostic location.
+    let mut authored_bodies: Vec<(&str, &[Step], String, bool)> = ordered_bodies
+        .iter()
+        .map(|(id, steps)| {
+            let prefix = body_prefixes
+                .get(id)
+                .cloned()
+                .unwrap_or_else(|| format!("/routes/{id}"));
+            (*id, *steps, prefix, false)
+        })
+        .collect();
+    authored_bodies.extend(
+        pack.source_routes
+            .iter()
+            .enumerate()
+            .map(|(index, source)| {
+                (
+                    source.id.as_str(),
+                    source.steps.as_slice(),
+                    format!("/sourceRoutes/{index}"),
+                    true,
+                )
+            }),
+    );
+    authored_bodies.sort_by(|left, right| {
+        left.0
+            .cmp(right.0)
+            .then_with(|| left.2.as_str().cmp(right.2.as_str()))
+    });
+
+    for (id, steps, prefix, source_route) in &authored_bodies {
+        if !source_route && instantiated_ids.contains(id) {
             // The instantiation's body is its template's authored steps;
             // the template's defects already report at /routeTemplates/N.
             continue;
         }
-        let prefix = body_prefixes
-            .get(id)
-            .cloned()
-            .unwrap_or_else(|| format!("/routes/{id}"));
         let steps: &[Step] = steps;
         let mut route_findings = Vec::new();
         let handler_policy = steps.iter().find_map(|step| match step {
@@ -1840,7 +1982,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                 .and_then(|handler| handler.redelivery_policy.as_ref()),
             _ => None,
         });
-        let sends = collect_non_safe_sends(steps, &bodies, &body_prefixes, &prefix, pack);
+        let sends = collect_non_safe_sends(steps, &bodies, &body_prefixes, prefix, pack);
         walk_steps(steps, &mut |step, path| match step {
             Step::To(to) => {
                 let target = &to.uri;
@@ -1895,13 +2037,13 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                             ));
                         }
                     }
-                    push_http_uri_member_findings(
-                        &mut route_findings,
-                        &format!("{prefix}/steps{path}"),
-                        target.component,
-                        parameters,
-                    );
                 }
+                push_http_uri_member_findings(
+                    &mut route_findings,
+                    &format!("{prefix}/steps{path}"),
+                    target.component,
+                    to.parameters.as_ref(),
+                );
                 if target.component == SendComponent::GraphQl {
                     if let Some(parameters) = to.parameters.as_ref() {
                         for member in graphql_send_member_faults(parameters) {
@@ -1918,7 +2060,9 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                     SendComponent::Http
                     | SendComponent::GraphQl
                     | SendComponent::Postgres
+                    | SendComponent::SqliteExtract
                     | SendComponent::File
+                    | SendComponent::RabbitMq
                     | SendComponent::Sftp => {
                         if !endpoint_ids.contains(target.id.as_str()) {
                             route_findings.push(finding(
@@ -1993,13 +2137,13 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                             ));
                         }
                     }
-                    push_http_uri_member_findings(
-                        &mut route_findings,
-                        &format!("{prefix}/steps{path}"),
-                        enrich.uri.component,
-                        parameters,
-                    );
                 }
+                push_http_uri_member_findings(
+                    &mut route_findings,
+                    &format!("{prefix}/steps{path}"),
+                    enrich.uri.component,
+                    enrich.parameters.as_ref(),
+                );
                 if enrich.uri.component == SendComponent::GraphQl {
                     if let Some(parameters) = enrich.parameters.as_ref() {
                         for member in graphql_send_member_faults(parameters) {
@@ -2016,7 +2160,9 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                     SendComponent::Http
                     | SendComponent::GraphQl
                     | SendComponent::Postgres
+                    | SendComponent::SqliteExtract
                     | SendComponent::File
+                    | SendComponent::RabbitMq
                     | SendComponent::Sftp => {
                         if !endpoint_ids.contains(enrich.uri.id.as_str()) {
                             route_findings.push(finding(
@@ -2358,7 +2504,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
         // Header writes and reads stay bounded
         // (`products/adapter/CONCEPT.md` section 8.11.4).
         check_route_headers(
-            &prefix,
+            prefix,
             steps,
             &allowlist,
             &api_key_headers,
@@ -2381,7 +2527,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
             if !declared {
                 findings.push(finding(
                     CheckCode::RouteUnknownOperation,
-                    &prefix,
+                    prefix,
                     "the send names no operation its endpoint declares",
                     "Name an operation the send's endpoint declares.",
                 ));
@@ -2397,7 +2543,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
         {
             findings.push(finding(
                 CheckCode::RouteRedeliveryOverNonSafeSend,
-                &prefix,
+                prefix,
                 "redelivery is declared over a non-safe send without an idempotentUpstream claim",
                 "Declare idempotentUpstream on the endpoint operation, or drop the redelivery.",
             ));
@@ -2408,7 +2554,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
         if declares_redelivery(steps) && !reaches_component_send(steps, &bodies, 0) {
             findings.push(finding(
                 CheckCode::RouteRedeliveryWithoutUpstreamSend,
-                &prefix,
+                prefix,
                 "redelivery is declared but the route reaches no http:, graphql: or postgres: send",
                 "Send to an http: or graphql: endpoint, or drop the redelivery.",
             ));
@@ -2504,7 +2650,10 @@ pub fn check_job_boundaries(pack: &AdapterPack, project: &AdapterProject) -> Vec
                         }
                         if matches!(
                             to.uri.component,
-                            SendComponent::Http | SendComponent::GraphQl | SendComponent::Postgres
+                            SendComponent::Http
+                                | SendComponent::GraphQl
+                                | SendComponent::Postgres
+                                | SendComponent::SqliteExtract
                         ) {
                             facade_endpoints.insert(to.uri.id.as_str());
                         }
@@ -2529,7 +2678,10 @@ pub fn check_job_boundaries(pack: &AdapterPack, project: &AdapterProject) -> Vec
                         }
                         if matches!(
                             enrich.uri.component,
-                            SendComponent::Http | SendComponent::GraphQl | SendComponent::Postgres
+                            SendComponent::Http
+                                | SendComponent::GraphQl
+                                | SendComponent::Postgres
+                                | SendComponent::SqliteExtract
                         ) {
                             facade_endpoints.insert(enrich.uri.id.as_str());
                         }
@@ -2560,7 +2712,15 @@ pub fn check_job_boundaries(pack: &AdapterPack, project: &AdapterProject) -> Vec
     // A facade-reachable endpoint keeps the facade response ceiling; only
     // an endpoint the facade can never reach may declare up to the
     // platform cap (D39).
+    let evidence_only_endpoints = evidence_only_endpoint_ids(pack);
     for (index, endpoint) in pack.endpoints.iter().enumerate() {
+        if facade_endpoints.contains(endpoint.id.as_str())
+            && evidence_only_endpoints.contains(endpoint.id.as_str())
+        {
+            if let Some(finding) = ordinary_attempt_timeout_finding(endpoint, index) {
+                findings.push(finding);
+            }
+        }
         if facade_endpoints.contains(endpoint.id.as_str())
             && endpoint.maximum_response_bytes.get() > MAXIMUM_RESPONSE_BYTES
         {
@@ -2575,6 +2735,104 @@ pub fn check_job_boundaries(pack: &AdapterPack, project: &AdapterProject) -> Vec
     findings
 }
 
+/// Endpoint ids whose complete authored reachability is Evidence-only. An
+/// undeclared endpoint is ordinary by default: the exemption is granted only
+/// when at least one Evidence source reaches it and no governed-ingestion
+/// source does. Facade reachability is composed with the project later in
+/// [`check_job_boundaries`].
+fn evidence_only_endpoint_ids(pack: &AdapterPack) -> HashSet<String> {
+    let bodies: HashMap<&str, &[Step]> = pack
+        .routes
+        .iter()
+        .map(|route| (route.from.uri.id.as_str(), route.steps.as_slice()))
+        .collect();
+    let mut evidence = HashSet::new();
+    let mut ordinary = HashSet::new();
+    for source in &pack.source_routes {
+        if source.evidence.is_some() {
+            collect_source_endpoint_ids(&source.steps, &bodies, &mut evidence);
+        }
+        let ingestion = source.evidence.is_none()
+            || source.scan.is_some()
+            || source.next_recovery.is_some()
+            || source.edits.is_some()
+            || source.rescan_delay_seconds.is_some();
+        if ingestion {
+            collect_source_endpoint_ids(&source.steps, &bodies, &mut ordinary);
+        }
+    }
+    evidence.retain(|endpoint| !ordinary.contains(endpoint));
+    evidence
+}
+
+/// Collect every endpoint a source can reach through bounded, acyclic
+/// `direct:` expansion. Route graph diagnostics report a cycle or excessive
+/// depth separately; this policy walk stops revisiting a named body.
+fn collect_source_endpoint_ids(
+    root: &[Step],
+    bodies: &HashMap<&str, &[Step]>,
+    endpoints: &mut HashSet<String>,
+) {
+    let mut queue = std::collections::VecDeque::from([root]);
+    let mut visited_direct = HashSet::new();
+    while let Some(steps) = queue.pop_front() {
+        walk_steps(steps, &mut |step, _| match step {
+            Step::To(to) => {
+                if to.uri.component == SendComponent::Direct {
+                    if visited_direct.insert(to.uri.id.as_str()) {
+                        if let Some(target) = bodies.get(to.uri.id.as_str()) {
+                            queue.push_back(*target);
+                        }
+                    }
+                } else {
+                    endpoints.insert(to.uri.id.clone());
+                }
+            }
+            Step::Enrich(enrich) => {
+                if enrich.uri.component == SendComponent::Direct {
+                    if visited_direct.insert(enrich.uri.id.as_str()) {
+                        if let Some(target) = bodies.get(enrich.uri.id.as_str()) {
+                            queue.push_back(*target);
+                        }
+                    }
+                } else {
+                    endpoints.insert(enrich.uri.id.clone());
+                }
+            }
+            Step::PollEnrich(poll) => {
+                if let Some((_, endpoint)) = poll.uri.split_once(':') {
+                    if !endpoint.is_empty() {
+                        endpoints.insert(endpoint.to_string());
+                    }
+                }
+            }
+            _ => {}
+        });
+    }
+}
+
+fn ordinary_attempt_timeout_finding(
+    endpoint: &crate::pack::Endpoint,
+    index: usize,
+) -> Option<Diagnostic> {
+    let path = format!("/endpoints/{index}/attemptTimeoutMilliseconds");
+    match endpoint.attempt_timeout_milliseconds {
+        None => Some(finding(
+            CheckCode::PackAttemptTimeoutMissing,
+            &path,
+            "an endpoint reachable outside Evidence declares no attempt timeout",
+            "Declare attemptTimeoutMilliseconds from 1 through 10000 for every facade or job endpoint; only an Evidence-only endpoint may omit it.",
+        )),
+        Some(timeout) if timeout.get() > MAXIMUM_ATTEMPT_TIMEOUT_MILLISECONDS => Some(finding(
+            CheckCode::PackAttemptTimeoutAboveOrdinaryMaximum,
+            &path,
+            "an endpoint reachable outside Evidence declares an attempt timeout above the ordinary maximum",
+            "Keep attemptTimeoutMilliseconds at or below 10000 for every facade or job endpoint; only an Evidence-only endpoint may declare a longer finite attempt.",
+        )),
+        Some(_) => None,
+    }
+}
+
 /// The bodies the facade bindings reach, transitively through `direct:`
 /// sends, as sets of body steps. Two names aliasing one body (a pack
 /// route's id and its from name) collapse, because the set keys on the
@@ -2585,36 +2843,50 @@ fn facade_reachable_bodies<'a>(
 ) -> HashSet<&'a [Step]> {
     let bodies = route_bodies(pack, project);
     let by_id = route_bodies_by_id(pack, project);
-    let mut reachable: HashSet<&[Step]> = HashSet::new();
-    let mut queue: std::collections::VecDeque<&str> = project
+    facade_reachable_route_names(pack, project)
+        .into_iter()
+        .filter_map(|name| {
+            bodies
+                .get(name.as_str())
+                .copied()
+                .or_else(|| by_id.get(name.as_str()).copied())
+        })
+        .collect()
+}
+
+/// Every internal route name a facade binding can reach, retaining names
+/// rather than body equality so two distinct routes with identical steps do
+/// not gain each other's authority.
+fn facade_reachable_route_names(pack: &AdapterPack, project: &AdapterProject) -> HashSet<String> {
+    let bodies = route_bodies(pack, project);
+    let by_id = route_bodies_by_id(pack, project);
+    let mut queue: std::collections::VecDeque<String> = project
         .bindings
         .iter()
-        .map(|binding| binding.route.as_str())
+        .map(|binding| binding.route.as_str().to_string())
         .collect();
-    let mut seen: HashSet<&str> = HashSet::new();
+    let mut seen: HashSet<String> = HashSet::new();
     while let Some(name) = queue.pop_front() {
-        if !seen.insert(name) {
+        if !seen.insert(name.clone()) {
             continue;
         }
         if let Some(steps) = bodies
-            .get(name)
+            .get(name.as_str())
             .copied()
-            .or_else(|| by_id.get(name).copied())
+            .or_else(|| by_id.get(name.as_str()).copied())
         {
-            if reachable.insert(steps) {
-                let mut targets = Vec::new();
-                collect_direct_targets(steps, &mut targets);
-                for target in targets {
-                    queue.push_back(target);
-                }
+            let mut targets = Vec::new();
+            collect_direct_targets(steps, &mut targets);
+            for target in targets {
+                queue.push_back(target.to_string());
             }
         }
     }
-    reachable
+    seen
 }
 
 /// The send checks of the job boundary, applied over every body: a
-/// `file:` or `sftp:` URI is never a send destination, a `direct:` send
+/// `file:`, `rabbitmq:`, or `sftp:` URI is never a send destination, a `direct:` send
 /// never targets a source route, and a `postgres:` send stays within its
 /// shape and its named-parameter bound.
 fn job_send_checks(
@@ -2625,7 +2897,11 @@ fn job_send_checks(
     source_ids: &HashSet<&str>,
 ) {
     if let Some(parameters) = parameters {
-        if uri.component != SendComponent::Postgres && !parameters.query_parameters.is_empty() {
+        if !matches!(
+            uri.component,
+            SendComponent::Postgres | SendComponent::SqliteExtract
+        ) && !parameters.query_parameters.is_empty()
+        {
             findings.push(finding(
                 CheckCode::RouteGraphQlSendMembers,
                 &format!("{pointer}/parameters/queryParameters"),
@@ -2635,12 +2911,12 @@ fn job_send_checks(
         }
     }
     match uri.component {
-        SendComponent::File | SendComponent::Sftp => {
+        SendComponent::File | SendComponent::RabbitMq | SendComponent::Sftp => {
             findings.push(job_finding(
                 JobCode::SendComponentRefused,
                 pointer,
                 "a send targets a job source",
-                "Read a file or sftp source through a pollEnrich step; no send targets a job source.",
+                "Read a file, RabbitMQ, or SFTP source through a pollEnrich step; no send targets a job source.",
             ));
         }
         SendComponent::Direct => {
@@ -2653,7 +2929,7 @@ fn job_send_checks(
                 ));
             }
         }
-        SendComponent::Postgres => {
+        SendComponent::Postgres | SendComponent::SqliteExtract => {
             if let Some(parameters) = parameters {
                 if parameters.query_parameters.len() > MAXIMUM_POSTGRES_QUERY_PARAMETERS {
                     findings.push(job_finding(
@@ -2723,7 +2999,7 @@ fn poll_enrich_checks(
                 JobCode::DecoderUnknown,
                 &format!("{pointer}/decoder"),
                 "the pollEnrich names no decoder the engine carries",
-                "Name csv, jsonl, or raw; an absent decoder reads raw.",
+                "Name csv, jsonl, rabbitmq-json, or raw; an absent decoder reads raw for file-shaped sources.",
             ));
         }
         if let crate::route::PollDecoder::Csv(csv) = decoder {
@@ -2743,18 +3019,44 @@ fn poll_enrich_checks(
             }
         }
     }
+    if !poll.valid_key_pointer() {
+        findings.push(job_finding(JobCode::DecoderUnknown,
+            &format!("{pointer}/keyPointer"),
+            "the row identity selector is missing, malformed, overbound, or selected for a non-row decoder",
+            "Declare one RFC 6901 keyPointer of at most 512 bytes for csv or jsonl only; the selected row key must be a non-empty string."));
+    }
     let named = match poll.uri.split_once(':') {
         Some(("file", id)) if !id.is_empty() => Some((ComponentKind::File, id)),
+        Some(("rabbitmq", id)) if !id.is_empty() => Some((ComponentKind::RabbitMq, id)),
         Some(("sftp", id)) if !id.is_empty() => Some((ComponentKind::Sftp, id)),
         _ => None,
     };
+    let decoder_name = poll.decoder.as_ref().map(crate::route::PollDecoder::name);
+    if matches!(named, Some((ComponentKind::RabbitMq, _))) && decoder_name != Some("rabbitmq-json")
+    {
+        findings.push(job_finding(
+            JobCode::DecoderUnknown,
+            &format!("{pointer}/decoder"),
+            "the rabbitmq pollEnrich does not select its one-message JSON profile",
+            "Set decoder to rabbitmq-json; RabbitMQ payload syntax is never guessed.",
+        ));
+    }
+    if decoder_name == Some("rabbitmq-json") && !matches!(named, Some((ComponentKind::RabbitMq, _)))
+    {
+        findings.push(job_finding(
+            JobCode::DecoderUnknown,
+            &format!("{pointer}/decoder"),
+            "the rabbitmq-json profile is selected for a different source component",
+            "Use rabbitmq-json only with a declared rabbitmq: endpoint.",
+        ));
+    }
     match named.and_then(|(kind, id)| pack.endpoints.get(id).map(|endpoint| (kind, endpoint))) {
         Some((kind, endpoint)) if endpoint.component != kind => {
             findings.push(job_finding(
                 JobCode::PollEndpointKind,
                 &format!("{pointer}/uri"),
                 "the pollEnrich uri names an endpoint whose component does not match the scheme",
-                "Name a file: or sftp: endpoint whose component matches the uri scheme.",
+                "Name a file:, rabbitmq:, or sftp: endpoint whose component matches the uri scheme.",
             ));
         }
         Some(_) => {}
@@ -2762,8 +3064,8 @@ fn poll_enrich_checks(
             findings.push(job_finding(
                 JobCode::PollEndpointUnknown,
                 &format!("{pointer}/uri"),
-                "the pollEnrich uri names no declared file or sftp endpoint",
-                "Name an endpoint the pack declares with the file or sftp component.",
+                "the pollEnrich uri names no declared job source endpoint",
+                "Name an endpoint the pack declares with the file, rabbitmq, or sftp component.",
             ));
         }
     }
@@ -2879,7 +3181,7 @@ fn is_non_safe_to(to: &crate::route::ToStep, pack: &AdapterPack) -> bool {
 /// declared query kind alone. A `postgres:` send is a read-only query
 /// (section 8.10, the SQL row), so it counts as safe; the `file:` and
 /// `sftp:` job sources are refused as sends outright.
-fn is_non_safe_upstream(
+pub fn is_non_safe_upstream(
     component: SendComponent,
     endpoint: &str,
     parameters: Option<&crate::route::ToParameters>,
@@ -2898,7 +3200,11 @@ fn is_non_safe_upstream(
                     && operation_claims_safe_upstream(endpoint, parameters, pack))
         }
         SendComponent::GraphQl => !is_declared_graphql_query(endpoint, parameters, pack),
-        SendComponent::Postgres | SendComponent::File | SendComponent::Sftp => false,
+        SendComponent::SqliteExtract
+        | SendComponent::Postgres
+        | SendComponent::File
+        | SendComponent::RabbitMq
+        | SendComponent::Sftp => false,
     }
 }
 
@@ -3098,22 +3404,31 @@ fn graphql_send_member_faults(parameters: &crate::route::ToParameters) -> Vec<&'
 
 /// The `httpUri` member faults of a send or enrichment
 /// (`products/adapter/CONCEPT.md` section 8.11.5): an `http` send carries
-/// exactly one of `path` and `httpUri`, with no `query` beside an
-/// `httpUri` (the query string the source wrote travels in the link), and
-/// no other component carries the member at all. Each fault names the
-/// member to remove.
+/// exactly one of `path` and `httpUri`, with no `pathParameters` or `query`
+/// beside an `httpUri` (the source-provided link is the complete request
+/// target), and no other component carries the member at all. Each fault
+/// names the missing or incompatible member.
 fn http_uri_member_faults(
     component: SendComponent,
-    parameters: &crate::route::ToParameters,
+    parameters: Option<&crate::route::ToParameters>,
 ) -> Vec<&'static str> {
-    if parameters.http_uri.is_none() {
-        return Vec::new();
-    }
     match component {
         SendComponent::Http => {
+            let Some(parameters) = parameters else {
+                return vec!["path"];
+            };
             let mut members = Vec::new();
+            if parameters.http_uri.is_none() {
+                if parameters.path.is_none() {
+                    members.push("path");
+                }
+                return members;
+            }
             if parameters.path.is_some() {
                 members.push("path");
+            }
+            if !parameters.path_parameters.is_empty() {
+                members.push("pathParameters");
             }
             if !parameters.query.is_empty() {
                 members.push("query");
@@ -3123,8 +3438,13 @@ fn http_uri_member_faults(
         SendComponent::GraphQl
         | SendComponent::Direct
         | SendComponent::Postgres
+        | SendComponent::SqliteExtract
         | SendComponent::File
-        | SendComponent::Sftp => vec!["httpUri"],
+        | SendComponent::RabbitMq
+        | SendComponent::Sftp => parameters
+            .and_then(|parameters| parameters.http_uri.as_ref())
+            .map(|_| vec!["httpUri"])
+            .unwrap_or_default(),
     }
 }
 
@@ -3134,15 +3454,24 @@ fn push_http_uri_member_findings(
     route_findings: &mut Vec<Diagnostic>,
     code_prefix: &str,
     component: SendComponent,
-    parameters: &crate::route::ToParameters,
+    parameters: Option<&crate::route::ToParameters>,
 ) {
     for member in http_uri_member_faults(component, parameters) {
-        let (message, action) = match member {
-            "path" => (
+        let has_http_uri = parameters.is_some_and(|parameters| parameters.http_uri.is_some());
+        let (message, action) = match (member, has_http_uri) {
+            ("path", false) => (
+                "the HTTP send carries neither path nor httpUri",
+                "Declare exactly one of path and httpUri on every HTTP send.",
+            ),
+            ("path", true) => (
                 "the send carries path beside httpUri",
                 "Declare exactly one of path and httpUri; a send cannot carry both.",
             ),
-            "query" => (
+            ("pathParameters", true) => (
+                "the send carries pathParameters beside httpUri",
+                "Remove pathParameters; the source-provided link is sent as one origin-pinned address.",
+            ),
+            ("query", true) => (
                 "the send carries a query beside httpUri",
                 "Move the query parameters into the link; the query string a source wrote is sent as written.",
             ),
@@ -3232,7 +3561,7 @@ fn declares_redelivery(steps: &[Step]) -> bool {
 /// send naming no operation is never idempotent, and an operation id the
 /// endpoint does not declare is refused on its own under
 /// `adapter.route.unknown-operation`, never silently false.
-fn send_claims_idempotent(
+pub fn send_claims_idempotent(
     pack: &AdapterPack,
     endpoint_id: &str,
     operation: Option<&ExternalId>,
@@ -3262,14 +3591,21 @@ fn reaches_component_send(steps: &[Step], bodies: &HashMap<&str, &[Step]>, depth
     steps.iter().any(|step| match step {
         Step::To(to) => match to.uri.component {
             SendComponent::Http | SendComponent::GraphQl | SendComponent::Postgres => true,
-            SendComponent::File | SendComponent::Sftp => false,
+            SendComponent::SqliteExtract
+            | SendComponent::File
+            | SendComponent::RabbitMq
+            | SendComponent::Sftp => false,
             SendComponent::Direct => bodies
                 .get(to.uri.id.as_str())
                 .is_some_and(|target| reaches_component_send(target, bodies, depth + 1)),
         },
         Step::Enrich(enrich) => match enrich.uri.component {
             SendComponent::Http | SendComponent::GraphQl => true,
-            SendComponent::Postgres | SendComponent::File | SendComponent::Sftp => false,
+            SendComponent::SqliteExtract
+            | SendComponent::Postgres
+            | SendComponent::File
+            | SendComponent::RabbitMq
+            | SendComponent::Sftp => false,
             SendComponent::Direct => bodies
                 .get(enrich.uri.id.as_str())
                 .is_some_and(|target| reaches_component_send(target, bodies, depth + 1)),
@@ -4396,8 +4732,13 @@ pub fn check_project(workspace: &Workspace<'_>) -> Vec<Diagnostic> {
                 })
                 .map(|endpoint| endpoint.id.as_str())
                 .collect();
-            let (worst, depth_exceeded) = route_worst_case(route_steps, &bodies, &oauth_endpoints);
-            if depth_exceeded {
+            let worst = route_worst_case(
+                route_steps,
+                &bodies,
+                &oauth_endpoints,
+                WorstCaseSendProfile::AdapterUpstream,
+            );
+            if worst.depth_exceeded {
                 findings.push(finding(
                     CheckCode::RouteNestingDepthExceeded,
                     &format!("{prefix}/route"),
@@ -4405,7 +4746,7 @@ pub fn check_project(workspace: &Workspace<'_>) -> Vec<Diagnostic> {
                     "Flatten the nesting; the reader refuses documents deeper than the bound.",
                 ));
             }
-            if worst > binding.maximum_upstream_calls.get() {
+            if worst.operations > binding.maximum_upstream_calls.get() {
                 findings.push(finding(
                     CheckCode::ProjectUpstreamBudgetExceeded,
                     &format!("{prefix}/maximumUpstreamCalls"),
@@ -4427,6 +4768,14 @@ pub fn check_project(workspace: &Workspace<'_>) -> Vec<Diagnostic> {
                     pack,
                 ));
             } else {
+                if closure_has_resume_bindings(route_steps, &bodies) {
+                    findings.push(finding(
+                        CheckCode::RouteResumeInvalid,
+                        &format!("{prefix}/route"),
+                        "a read route declares resumeBindings outside a resumable write plan",
+                        "Remove resumeBindings; they are served only by the closed linear multi-effect write form.",
+                    ));
+                }
                 // A read operation reaches only safe sends
                 // (`products/adapter/CONCEPT.md` section 8.8): every
                 // non-safe send its route can reach refuses at the send.
@@ -4445,6 +4794,13 @@ pub fn check_project(workspace: &Workspace<'_>) -> Vec<Diagnostic> {
             }
         }
     }
+
+    findings.extend(async_contract_checks(
+        workspace,
+        &bodies,
+        &bodies_by_id,
+        &body_prefixes,
+    ));
 
     for part in workspace.profile.parameterized_parts.iter() {
         if project
@@ -4520,10 +4876,442 @@ pub fn check_project(workspace: &Workspace<'_>) -> Vec<Diagnostic> {
     findings
 }
 
+fn async_contract_checks(
+    workspace: &Workspace<'_>,
+    bodies: &HashMap<&str, &[Step]>,
+    bodies_by_id: &HashMap<&str, &[Step]>,
+    body_prefixes: &HashMap<&str, String>,
+) -> Vec<Diagnostic> {
+    let mut findings = async_status_path_collision_checks(workspace);
+    let pack = workspace.pack;
+    let facade_reachable = facade_reachable_route_names(pack, workspace.project);
+    let oauth_endpoints: HashSet<&str> = pack
+        .endpoints
+        .iter()
+        .filter(|endpoint| {
+            matches!(
+                endpoint.authentication,
+                EndpointAuthentication::Oauth2ClientCredentials { .. }
+                    | EndpointAuthentication::Oauth2PrivateKeyJwt { .. }
+            )
+        })
+        .map(|endpoint| endpoint.id.as_str())
+        .collect();
+
+    let has_async_binding = workspace
+        .project
+        .bindings
+        .iter()
+        .any(|binding| binding.async_completion.is_some());
+    if has_async_binding
+        && workspace
+            .runtime
+            .is_some_and(|runtime| runtime.idempotency.is_none())
+    {
+        findings.push(finding(
+            CheckCode::RuntimeAsyncIdempotencyRequired,
+            "/idempotency",
+            "an asynchronous binding has no exact-response custody retention",
+            "Configure idempotency.responseRetentionSeconds before serving an asynchronous write.",
+        ));
+    }
+
+    for (binding_index, binding) in workspace.project.bindings.iter().enumerate() {
+        let Some(profile_operation) = workspace.profile.operations.get(binding.operation.as_str())
+        else {
+            continue;
+        };
+        let Some(initial_steps) = bodies_by_id.get(binding.route.as_str()).copied() else {
+            continue;
+        };
+        let initial_prefix = body_prefixes
+            .get(binding.route.as_str())
+            .map(String::as_str)
+            .unwrap_or_default();
+        let sends =
+            collect_non_safe_sends(initial_steps, bodies, body_prefixes, initial_prefix, pack);
+        let source = match sends.as_slice() {
+            [send] => pack
+                .endpoints
+                .iter()
+                .enumerate()
+                .find(|(_, endpoint)| endpoint.id.as_str() == send.endpoint)
+                .and_then(|(endpoint_index, endpoint)| {
+                    let operation = send.operation.as_ref()?;
+                    endpoint
+                        .operations
+                        .iter()
+                        .enumerate()
+                        .find(|(_, declared)| declared.id.as_str() == operation.as_str())
+                        .map(|(operation_index, declared)| {
+                            (endpoint_index, operation_index, declared)
+                        })
+                }),
+            _ => None,
+        };
+        let profile_async = profile_operation.async_completion.is_some();
+        let binding_async = binding.async_completion.is_some();
+        let source_async = source
+            .and_then(|(_, _, operation)| operation.async_completion.as_ref())
+            .is_some();
+        if !(profile_async == binding_async
+            && binding_async == source_async
+            && (!profile_async || sends.len() == 1))
+        {
+            findings.push(finding(
+                CheckCode::ProjectAsyncDeclarationMismatch,
+                &format!("/bindings/{binding_index}/asyncCompletion"),
+                "the profile, binding, and bound source operation do not declare one asynchronous contract together",
+                "Declare asyncCompletion on all three artifacts for exactly one non-safe source send, or omit it from all three.",
+            ));
+        }
+        let Some((endpoint_index, operation_index, source_operation)) = source else {
+            continue;
+        };
+        let Some(source_completion) = source_operation.async_completion.as_ref() else {
+            continue;
+        };
+        let Some(binding_completion) = binding.async_completion.as_ref() else {
+            continue;
+        };
+        if !profile_async {
+            continue;
+        }
+
+        let source_prefix =
+            format!("/endpoints/{endpoint_index}/operations/{operation_index}/asyncCompletion");
+        if let Some(recovery) = source_completion.uncertainty_recovery.as_ref() {
+            let endpoint = &pack.endpoints[endpoint_index];
+            if endpoint.request_headers.iter().any(|header| {
+                header
+                    .as_str()
+                    .eq_ignore_ascii_case(recovery.request_header.as_str())
+            }) {
+                findings.push(finding(
+                    CheckCode::PackAsyncStatusRouteUnsafe,
+                    &format!("{source_prefix}/uncertaintyRecovery/requestHeader"),
+                    "the source recovery header also appears in the endpoint's authored request-header allowlist",
+                    "Remove the recovery header from requestHeaders; only the host may install its correlation value.",
+                ));
+            }
+        }
+        let status = async_status_route_facts(
+            source_completion.status_route.as_str(),
+            &format!("{source_prefix}/statusRoute"),
+            pack,
+            bodies,
+            &facade_reachable,
+            &oauth_endpoints,
+            &mut findings,
+        );
+        let recovery = source_completion
+            .uncertainty_recovery
+            .as_ref()
+            .and_then(|recovery| {
+                async_status_route_facts(
+                    recovery.status_route.as_str(),
+                    &format!("{source_prefix}/uncertaintyRecovery/statusRoute"),
+                    pack,
+                    bodies,
+                    &facade_reachable,
+                    &oauth_endpoints,
+                    &mut findings,
+                )
+            });
+        let initial = route_worst_case(
+            initial_steps,
+            bodies,
+            &oauth_endpoints,
+            WorstCaseSendProfile::AdapterUpstream,
+        );
+        let mut overflow = initial.arithmetic_overflow;
+        let asynchronous_worst = match (binding_completion, status.as_ref()) {
+            (BindingAsyncCompletion::BoundedWait { maximum_polls, .. }, Some(status)) => {
+                let polls = worst_case_mul(status.operations, maximum_polls.get(), &mut overflow);
+                worst_case_add(initial.operations, polls, &mut overflow)
+            }
+            _ => initial.operations,
+        };
+        let recovery_exceeds = recovery
+            .as_ref()
+            .is_some_and(|recovery| recovery.operations > binding.maximum_upstream_calls.get());
+        let status_exceeds = status
+            .as_ref()
+            .is_some_and(|status| status.operations > binding.maximum_upstream_calls.get());
+        if overflow
+            || asynchronous_worst > binding.maximum_upstream_calls.get()
+            || status_exceeds
+            || recovery_exceeds
+        {
+            findings.push(finding(
+                CheckCode::ProjectUpstreamBudgetExceeded,
+                &format!("/bindings/{binding_index}/maximumUpstreamCalls"),
+                "the asynchronous initial and status-route call bound exceeds the binding budget",
+                "Raise maximumUpstreamCalls, lower maximumPolls, or reduce the status-route worst case.",
+            ));
+        }
+
+        if let (
+            BindingAsyncCompletion::BoundedWait {
+                wait_timeout_milliseconds,
+                ..
+            },
+            Some(runtime),
+        ) = (binding_completion, workspace.runtime)
+        {
+            if let Some(retention) = runtime.idempotency {
+                let retention_milliseconds = retention
+                    .response_retention_seconds
+                    .get()
+                    .saturating_mul(1_000);
+                if wait_timeout_milliseconds.get() >= retention_milliseconds {
+                    findings.push(finding(
+                        CheckCode::RuntimeAsyncWaitExceedsRetention,
+                        "/idempotency/responseRetentionSeconds",
+                        "a bounded wait reaches or exceeds the accepted-response retention window",
+                        "Keep every waitTimeoutMilliseconds strictly below responseRetentionSeconds converted to milliseconds.",
+                    ));
+                }
+            }
+        }
+    }
+    findings
+}
+
+struct AsyncStatusRouteFacts {
+    operations: u64,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn async_status_route_facts(
+    route_id: &str,
+    pointer: &str,
+    pack: &AdapterPack,
+    bodies: &HashMap<&str, &[Step]>,
+    facade_reachable: &HashSet<String>,
+    oauth_endpoints: &HashSet<&str>,
+    findings: &mut Vec<Diagnostic>,
+) -> Option<AsyncStatusRouteFacts> {
+    let Some(route) = pack.routes.get(route_id) else {
+        findings.push(finding(
+            CheckCode::PackAsyncStatusRouteInvalid,
+            pointer,
+            "the asynchronous status reference names no internal pack route",
+            "Name a declared pack route with a complete safe source-send closure.",
+        ));
+        return None;
+    };
+    if facade_reachable.contains(route.id.as_str())
+        || facade_reachable.contains(route.from.uri.id.as_str())
+    {
+        findings.push(finding(
+            CheckCode::PackAsyncStatusRouteReachable,
+            pointer,
+            "the asynchronous status route is independently facade-reachable",
+            "Keep the status route private to host-owned asynchronous recovery.",
+        ));
+    }
+
+    let (closure, unresolved) = direct_route_closure(route.steps.as_slice(), bodies);
+    let mut unsafe_step = unresolved;
+    let mut endpoints = HashSet::new();
+    for steps in &closure {
+        walk_steps(steps, &mut |step, _| match step {
+            Step::To(to) if to.uri.component != SendComponent::Direct => {
+                if matches!(
+                    to.uri.component,
+                    SendComponent::Http | SendComponent::GraphQl
+                ) {
+                    endpoints.insert(to.uri.id.clone());
+                }
+                unsafe_step |= !matches!(
+                    to.uri.component,
+                    SendComponent::Http | SendComponent::GraphQl
+                ) || is_non_safe_upstream(
+                    to.uri.component,
+                    to.uri.id.as_str(),
+                    to.parameters.as_ref(),
+                    pack,
+                ) || to
+                    .parameters
+                    .as_ref()
+                    .is_some_and(|parameters| parameters.http_uri.is_some());
+            }
+            Step::Enrich(enrich) if enrich.uri.component != SendComponent::Direct => {
+                if matches!(
+                    enrich.uri.component,
+                    SendComponent::Http | SendComponent::GraphQl
+                ) {
+                    endpoints.insert(enrich.uri.id.clone());
+                }
+                unsafe_step |= !matches!(
+                    enrich.uri.component,
+                    SendComponent::Http | SendComponent::GraphQl
+                ) || is_non_safe_upstream(
+                    enrich.uri.component,
+                    enrich.uri.id.as_str(),
+                    enrich.parameters.as_ref(),
+                    pack,
+                ) || enrich
+                    .parameters
+                    .as_ref()
+                    .is_some_and(|parameters| parameters.http_uri.is_some());
+            }
+            Step::IdempotentConsumer(_) | Step::PollEnrich(_) => unsafe_step = true,
+            _ => {}
+        });
+    }
+    if unsafe_step {
+        findings.push(finding(
+            CheckCode::PackAsyncStatusRouteUnsafe,
+            pointer,
+            "the asynchronous status route closure contains an unsafe, dynamic-target, job-only, or idempotent step",
+            "Use only safe HTTP or GraphQL source sends and bounded ordinary processors in the complete direct closure.",
+        ));
+    }
+    let worst = route_worst_case(
+        route.steps.as_slice(),
+        bodies,
+        oauth_endpoints,
+        WorstCaseSendProfile::AdapterUpstream,
+    );
+    if worst.depth_exceeded
+        || worst.arithmetic_overflow
+        || worst.operations == 0
+        || endpoints.is_empty()
+    {
+        findings.push(finding(
+            CheckCode::PackAsyncStatusRouteInvalid,
+            pointer,
+            "the asynchronous status route has no bounded source send",
+            "Declare at least one safe HTTP or GraphQL send inside the existing nesting and arithmetic bounds.",
+        ));
+        return None;
+    }
+    if unsafe_step {
+        return None;
+    }
+    Some(AsyncStatusRouteFacts {
+        operations: worst.operations,
+    })
+}
+
+fn direct_route_closure<'a>(
+    root: &'a [Step],
+    bodies: &HashMap<&'a str, &'a [Step]>,
+) -> (Vec<&'a [Step]>, bool) {
+    let mut closure = vec![root];
+    let mut queue = std::collections::VecDeque::from([root]);
+    let mut visited = HashSet::new();
+    let mut unresolved = false;
+    while let Some(steps) = queue.pop_front() {
+        let mut targets = Vec::new();
+        collect_direct_targets(steps, &mut targets);
+        for target in targets {
+            if !visited.insert(target) {
+                continue;
+            }
+            match bodies.get(target).copied() {
+                Some(target_steps) => {
+                    closure.push(target_steps);
+                    queue.push_back(target_steps);
+                }
+                None => unresolved = true,
+            }
+        }
+    }
+    (closure, unresolved)
+}
+
+fn async_status_path_collision_checks(workspace: &Workspace<'_>) -> Vec<Diagnostic> {
+    const WELL_KNOWN_PATH: &str = "/.well-known/registry-adapter/effective-contract";
+    let mut findings = Vec::new();
+    let statuses: Vec<(usize, &str, String)> = workspace
+        .profile
+        .operations
+        .iter()
+        .enumerate()
+        .filter_map(|(index, operation)| {
+            operation.async_completion.as_ref().map(|completion| {
+                (
+                    index,
+                    operation.id.as_str(),
+                    facade_path_shape(completion.status_path.as_str()),
+                )
+            })
+        })
+        .collect();
+    let mut refused = HashSet::new();
+    for (position, (index, operation_id, shape)) in statuses.iter().enumerate() {
+        if shape == WELL_KNOWN_PATH && refused.insert(*index) {
+            findings.push(async_status_path_collision(*index));
+        }
+        if statuses[..position]
+            .iter()
+            .any(|(_, other_operation, other_shape)| {
+                other_operation != operation_id && other_shape == shape
+            })
+            && refused.insert(*index)
+        {
+            findings.push(async_status_path_collision(*index));
+        }
+    }
+    for binding in &workspace.project.bindings {
+        let Some(operation) = workspace.profile.operations.get(binding.operation.as_str()) else {
+            continue;
+        };
+        if operation.method != HttpMethod::Get {
+            continue;
+        }
+        let concrete = operation.path.replace(
+            &format!("{{{}}}", operation.record_type_parameter.as_str()),
+            binding.record_type.as_str(),
+        );
+        let ordinary_shape = facade_path_shape(&concrete);
+        for (index, _, status_shape) in &statuses {
+            if ordinary_shape == *status_shape && refused.insert(*index) {
+                findings.push(async_status_path_collision(*index));
+            }
+        }
+    }
+    findings
+}
+
+fn async_status_path_collision(index: usize) -> Diagnostic {
+    finding(
+        CheckCode::ProfileAsyncStatusPathCollision,
+        &format!("/operations/{index}/asyncCompletion/statusPath"),
+        "the asynchronous status path collides with another served GET path shape",
+        "Choose a distinct profile-owned status path; one profile operation may share its path across record-type bindings.",
+    )
+}
+
+/// A facade path with every parameter name erased, including a parameter
+/// embedded inside one segment. The router, checks, and generated contract
+/// use this one shape rule when deciding whether two paths collide.
+#[must_use]
+pub fn facade_path_shape(path: &str) -> String {
+    let mut shaped = String::with_capacity(path.len());
+    let mut rest = path;
+    while let Some(open) = rest.find('{') {
+        shaped.push_str(&rest[..open]);
+        let after = &rest[open + 1..];
+        let Some(close) = after.find('}') else {
+            shaped.push_str(&rest[open..]);
+            return shaped;
+        };
+        shaped.push_str("{}");
+        rest = &after[close + 1..];
+    }
+    shaped.push_str(rest);
+    shaped
+}
+
 /// The write-route rules of `products/adapter/CONCEPT.md` section 9: every
-/// non-safe send sits inside an `idempotentConsumer`, and a write route
-/// carries at most one non-safe send until write resume lands in
-/// Increment 3.
+/// non-safe send sits inside an `idempotentConsumer`. More than one is served
+/// only by the closed resumable form: one outer consumer whose body is a flat
+/// sequence of HTTP sends, each backed by the source's reviewed
+/// `idempotentUpstream` semantic assumption.
 fn write_route_checks(
     prefix: &str,
     body_prefix: &str,
@@ -4542,17 +5330,236 @@ fn write_route_checks(
             "Wrap the write route's sends in idempotentConsumer.",
         ));
     }
-    // A send repeated per item or iteration counts as more than one
-    // non-safe send.
-    if sends.len() > 1 || sends.iter().any(|send| send.repeated) {
+    let resumable_linear = match steps {
+        [Step::IdempotentConsumer(consumer)]
+            if consumer.steps.len() == sends.len()
+                && sends.len() > 1
+                && consumer.steps.iter().all(|step| match step {
+                    Step::To(to)
+                        if to.uri.component == SendComponent::Http && is_non_safe_to(to, pack) =>
+                    {
+                        send_claims_idempotent(
+                            pack,
+                            to.uri.id.as_str(),
+                            to.parameters
+                                .as_ref()
+                                .and_then(|parameters| parameters.operation.as_ref()),
+                        )
+                    }
+                    _ => false,
+                }) =>
+        {
+            Some(consumer)
+        }
+        _ => None,
+    };
+    // A send repeated per item or iteration is never the closed linear form.
+    if (sends.len() > 1 && resumable_linear.is_none()) || sends.iter().any(|send| send.repeated) {
         findings.push(finding(
             CheckCode::RouteMultipleNonSafeSends,
             &format!("{prefix}/route"),
-            "the write route carries more than one non-safe send before Increment 3",
-            "Split the write across bound operations, or wait for write resume.",
+            "the write route carries non-safe sends outside the supported linear resume form",
+            "Use one outer idempotentConsumer with a flat sequence of HTTP operations that each declare idempotentUpstream.",
+        ));
+    }
+    if let Some(consumer) = resumable_linear {
+        findings.extend(linear_resume_checks(prefix, consumer, pack));
+    } else if closure_has_resume_bindings(steps, bodies) {
+        findings.push(finding(
+            CheckCode::RouteResumeInvalid,
+            &format!("{prefix}/route"),
+            "the route declares resumeBindings outside the supported linear resume form",
+            "Remove resumeBindings, or use one outer idempotentConsumer with a flat sequence of provider-idempotent HTTP writes.",
         ));
     }
     findings
+}
+
+fn closure_has_resume_bindings(steps: &[Step], bodies: &HashMap<&str, &[Step]>) -> bool {
+    let (closure, _) = direct_route_closure(steps, bodies);
+    closure.into_iter().any(|body| {
+        let mut found = false;
+        walk_steps(body, &mut |step, _| {
+            let parameters = match step {
+                Step::To(to) => to.parameters.as_ref(),
+                Step::Enrich(enrich) => enrich.parameters.as_ref(),
+                _ => None,
+            };
+            found |= parameters.is_some_and(|parameters| !parameters.resume_bindings.is_empty());
+        });
+        found
+    })
+}
+
+/// Checks the reconstructible portion of the closed linear resume form. A
+/// later send has no skipped source response body on retry, so it may read
+/// constants and previously checkpointed identifiers only.
+fn linear_resume_checks(
+    prefix: &str,
+    consumer: &IdempotentConsumerStep,
+    pack: &AdapterPack,
+) -> Vec<Diagnostic> {
+    let mut findings = Vec::new();
+    if !matches!(
+        &consumer.expression,
+        Expression::Header(name) if name.eq_ignore_ascii_case("Idempotency-Key")
+    ) {
+        findings.push(finding(
+            CheckCode::RouteResumeInvalid,
+            &format!("{prefix}/route/0/expression"),
+            "a resumable write does not use the facade's Idempotency-Key",
+            "Use the Idempotency-Key header as the outer idempotentConsumer expression.",
+        ));
+    }
+    let mut declared: HashMap<String, String> = HashMap::new();
+    let mut used: HashSet<String> = HashSet::new();
+    let last = consumer.steps.len().saturating_sub(1);
+    for (step_index, step) in consumer.steps.iter().enumerate() {
+        let Step::To(to) = step else {
+            continue;
+        };
+        let Some(parameters) = &to.parameters else {
+            continue;
+        };
+        let step_path = format!("{prefix}/route/0/steps/{step_index}");
+        if !parameters.throw_exception_on_failure || parameters.ok_status_code_range.is_some() {
+            findings.push(finding(
+                CheckCode::RouteResumeInvalid,
+                &format!("{step_path}/parameters"),
+                "a resumable send changes the default HTTP failure classification",
+                "Keep throwExceptionOnFailure true and omit okStatusCodeRange so a generic non-2xx reply remains resumable.",
+            ));
+        }
+        if pack
+            .endpoints
+            .get(to.uri.id.as_str())
+            .is_some_and(|endpoint| !endpoint.request_headers.is_empty())
+        {
+            findings.push(finding(
+                CheckCode::RouteResumeInvalid,
+                &format!("{step_path}/uri"),
+                "a resumable send targets an endpoint with requestHeaders",
+                "Use an endpoint with no requestHeaders so a retry never depends on unstored headers from an earlier response.",
+            ));
+        }
+        if step_index > 0 {
+            for (expression_path, expression) in resume_send_expressions(parameters) {
+                match expression {
+                    Expression::Constant(_) => {}
+                    Expression::ExchangeProperty(property) => {
+                        let Some(name) = property.strip_prefix(RESUME_PROPERTY_PREFIX) else {
+                            findings.push(finding(
+                                CheckCode::RouteResumeInvalid,
+                                &format!("{step_path}/{expression_path}"),
+                                "a resumed send reads an exchange property outside the reserved resume namespace",
+                                "Use a constant or a previously declared AdapterResume.<binding> property.",
+                            ));
+                            continue;
+                        };
+                        if declared.contains_key(name) {
+                            used.insert(name.to_owned());
+                        } else {
+                            findings.push(finding(
+                                CheckCode::RouteResumeInvalid,
+                                &format!("{step_path}/{expression_path}"),
+                                "a resumed send reads an unknown or forward resume binding",
+                                "Reference only a resume binding declared by an earlier send.",
+                            ));
+                        }
+                    }
+                    _ => findings.push(finding(
+                        CheckCode::RouteResumeInvalid,
+                        &format!("{step_path}/{expression_path}"),
+                        "a resumed send depends on message state that is not checkpointed",
+                        "Use a constant or a previously declared AdapterResume.<binding> property.",
+                    )),
+                }
+            }
+        }
+        if step_index == last && !parameters.resume_bindings.is_empty() {
+            findings.push(finding(
+                CheckCode::RouteResumeInvalid,
+                &format!("{step_path}/parameters/resumeBindings"),
+                "the final send declares resume bindings that no later send can use",
+                "Remove final-step resumeBindings; terminal response custody closes the final step.",
+            ));
+        }
+        if parameters.resume_bindings.len() > MAXIMUM_RESUME_BINDINGS_PER_STEP {
+            findings.push(finding(
+                CheckCode::RouteResumeInvalid,
+                &format!("{step_path}/parameters/resumeBindings"),
+                "one send declares too many resume bindings",
+                "Keep at most 16 source identifier bindings on one send.",
+            ));
+        }
+        for (binding_index, binding) in parameters.resume_bindings.iter().enumerate() {
+            let binding_path = format!("{step_path}/parameters/resumeBindings/{binding_index}");
+            if binding.path.len() > MAXIMUM_RESUME_SELECTOR_BYTES
+                || !resume_selector_is_singular(&binding.path)
+            {
+                findings.push(finding(
+                    CheckCode::RouteResumeInvalid,
+                    &format!("{binding_path}/path"),
+                    "a resume binding path is not a bounded singular RFC 9535 selector",
+                    "Use one name-or-index path that selects at most one identifier.",
+                ));
+            }
+            let name = binding.name.as_str().to_owned();
+            if declared.insert(name, binding_path.clone()).is_some() {
+                findings.push(finding(
+                    CheckCode::RouteResumeInvalid,
+                    &format!("{binding_path}/name"),
+                    "a resume binding name is declared more than once in the route",
+                    "Give each resume binding one route-wide unique name.",
+                ));
+            }
+        }
+    }
+    for (name, path) in declared {
+        if !used.contains(&name) {
+            findings.push(finding(
+                CheckCode::RouteResumeInvalid,
+                &format!("{path}/name"),
+                "a resume binding is stored but no later send reads it",
+                "Remove the unused binding or reference AdapterResume.<binding> from a later send.",
+            ));
+        }
+    }
+    findings
+}
+
+fn resume_send_expressions(parameters: &ToParameters) -> Vec<(&'static str, &Expression)> {
+    let mut expressions = Vec::new();
+    if let Some(expression) = &parameters.body {
+        expressions.push(("parameters/body", expression));
+    }
+    if let Some(expression) = &parameters.http_uri {
+        expressions.push(("parameters/httpUri", expression));
+    }
+    expressions.extend(
+        parameters
+            .path_parameters
+            .values()
+            .map(|expression| ("parameters/pathParameters", expression)),
+    );
+    expressions.extend(
+        parameters
+            .query
+            .values()
+            .map(|expression| ("parameters/query", expression)),
+    );
+    expressions
+}
+
+fn resume_selector_is_singular(selector: &str) -> bool {
+    parse_json_path(selector).is_ok_and(|query| {
+        query.segments.iter().all(|segment| {
+            matches!(
+                segment,
+                Segment::Selector(Selector::Name(_)) | Segment::Selector(Selector::Index(_))
+            )
+        })
+    })
 }
 
 /// The static worst-case upstream call count of a route
@@ -4568,36 +5575,106 @@ fn route_worst_case(
     steps: &[Step],
     bodies: &HashMap<&str, &[Step]>,
     oauth_endpoints: &HashSet<&str>,
-) -> (u64, bool) {
+    profile: WorstCaseSendProfile,
+) -> RouteWorstCase {
     let mut walk = WorstCaseWalk {
         bodies,
         oauth_endpoints,
+        profile,
         used_oauth: &mut HashSet::new(),
         clauses: Vec::new(),
         depth_exceeded: false,
+        arithmetic_overflow: false,
     };
-    let main = worst_body(steps, &mut walk, 0, declared_redeliveries(steps), false, 1);
-    let resends = u64::try_from(walk.used_oauth.len()).unwrap_or(u64::MAX);
+    let main = worst_body(
+        steps,
+        &mut walk,
+        0,
+        declared_redeliveries(steps),
+        false,
+        WorstCaseMultiplier::ONE,
+    );
+    let resends = match u64::try_from(walk.used_oauth.len()) {
+        Ok(resends) => resends,
+        Err(_) => {
+            walk.arithmetic_overflow = true;
+            u64::MAX
+        }
+    };
     // A `continued` clause resumes after the failure point and can fire
     // once per body failure, so its candidate is the clause worst-case
     // once per route-body send, plus the clause worst-case when the body
     // itself cannot fail; handled and propagated clauses run once.
-    let clause_worst = walk
-        .clauses
-        .iter()
-        .map(|(worst, continued)| {
-            if *continued {
-                worst.saturating_mul(main.saturating_add(1))
-            } else {
-                *worst
-            }
-        })
-        .max()
-        .unwrap_or(0);
-    (
-        main.saturating_add(clause_worst).saturating_add(resends),
-        walk.depth_exceeded,
-    )
+    let mut clause_worst = 0;
+    for (worst, continued) in &walk.clauses {
+        let candidate = if *continued && *worst != 0 {
+            let resumes = worst_case_add(main, 1, &mut walk.arithmetic_overflow);
+            worst_case_mul(*worst, resumes, &mut walk.arithmetic_overflow)
+        } else {
+            *worst
+        };
+        clause_worst = clause_worst.max(candidate);
+    }
+    let operations = worst_case_add(main, clause_worst, &mut walk.arithmetic_overflow);
+    let operations = worst_case_add(operations, resends, &mut walk.arithmetic_overflow);
+    RouteWorstCase {
+        operations,
+        depth_exceeded: walk.depth_exceeded,
+        arithmetic_overflow: walk.arithmetic_overflow,
+    }
+}
+
+/// One bounded walk result. `operations == u64::MAX` may be an exact count;
+/// `arithmetic_overflow` distinguishes that valid boundary from an
+/// unrepresentable larger count.
+struct RouteWorstCase {
+    operations: u64,
+    depth_exceeded: bool,
+    arithmetic_overflow: bool,
+}
+
+#[derive(Clone, Copy)]
+struct WorstCaseMultiplier {
+    value: u64,
+    overflowed: bool,
+}
+
+impl WorstCaseMultiplier {
+    const ONE: Self = Self {
+        value: 1,
+        overflowed: false,
+    };
+
+    fn multiply(self, factor: u64) -> Self {
+        match self.value.checked_mul(factor) {
+            Some(value) if !self.overflowed => Self {
+                value,
+                overflowed: false,
+            },
+            Some(value) => Self {
+                value,
+                overflowed: true,
+            },
+            None => Self {
+                value: u64::MAX,
+                overflowed: true,
+            },
+        }
+    }
+}
+
+fn worst_case_add(left: u64, right: u64, arithmetic_overflow: &mut bool) -> u64 {
+    left.checked_add(right).unwrap_or_else(|| {
+        *arithmetic_overflow = true;
+        u64::MAX
+    })
+}
+
+fn worst_case_mul(left: u64, right: u64, arithmetic_overflow: &mut bool) -> u64 {
+    left.checked_mul(right).unwrap_or_else(|| {
+        *arithmetic_overflow = true;
+        u64::MAX
+    })
 }
 
 /// The static worst-case upstream call count of one source route over
@@ -4629,7 +5706,85 @@ pub(crate) fn source_route_worst_case(pack: &AdapterPack, steps: &[Step]) -> (u6
         })
         .map(|endpoint| endpoint.id.as_str())
         .collect();
-    route_worst_case(steps, &bodies, &oauth_endpoints)
+    let worst = route_worst_case(
+        steps,
+        &bodies,
+        &oauth_endpoints,
+        WorstCaseSendProfile::AdapterUpstream,
+    );
+    (worst.operations, worst.depth_exceeded)
+}
+
+/// The static data-operation cost of one reviewed Evidence source route.
+///
+/// Evidence resolves `direct:` names through a pack route's `from` URI and
+/// charges HTTP, GraphQL, and SQLite-extract attempts to one acquisition
+/// budget. A retried data request after an OAuth 401 is another operation;
+/// the token request itself is separately bounded and is not an Evidence data
+/// operation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EvidenceRouteWorstCase {
+    /// Maximum Evidence data operations the reviewed route can attempt.
+    pub data_operations: u64,
+    /// The route exceeded the nesting or numeric count bound.
+    pub uncountable: bool,
+}
+
+/// Derive the checked Evidence route's worst-case data-operation count with
+/// the same bounded control-flow walk facade and job checking use.
+#[must_use]
+pub fn evidence_route_worst_case(pack: &AdapterPack, steps: &[Step]) -> EvidenceRouteWorstCase {
+    let bodies: HashMap<&str, &[Step]> = pack
+        .routes
+        .iter()
+        .map(|route| (route.from.uri.id.as_str(), route.steps.as_slice()))
+        .collect();
+    let oauth_endpoints: HashSet<&str> = pack
+        .endpoints
+        .iter()
+        .filter(|endpoint| {
+            matches!(
+                endpoint.authentication,
+                EndpointAuthentication::Oauth2ClientCredentials { .. }
+                    | EndpointAuthentication::Oauth2PrivateKeyJwt { .. }
+            )
+        })
+        .map(|endpoint| endpoint.id.as_str())
+        .collect();
+    let worst = route_worst_case(
+        steps,
+        &bodies,
+        &oauth_endpoints,
+        WorstCaseSendProfile::EvidenceData,
+    );
+    EvidenceRouteWorstCase {
+        data_operations: worst.operations,
+        uncountable: worst.depth_exceeded || worst.arithmetic_overflow,
+    }
+}
+
+/// Which effects one shared worst-case walk charges. Facade and job charge
+/// HTTP/GraphQL upstream calls, and a job's `to` a postgres source send too
+/// (the facade refuses that component). Evidence additionally charges each
+/// SQLite statement as one data operation.
+#[derive(Clone, Copy)]
+enum WorstCaseSendProfile {
+    AdapterUpstream,
+    EvidenceData,
+}
+
+impl WorstCaseSendProfile {
+    const fn counts(self, component: SendComponent) -> bool {
+        match self {
+            Self::AdapterUpstream => {
+                matches!(component, SendComponent::Http | SendComponent::GraphQl)
+            }
+            Self::EvidenceData => matches!(
+                component,
+                SendComponent::Http | SendComponent::GraphQl | SendComponent::SqliteExtract
+            ),
+        }
+    }
 }
 
 /// The redeliveries a body declares: the widest `maximumRedeliveries`
@@ -4665,6 +5820,7 @@ fn declared_redeliveries(steps: &[Step]) -> u32 {
 struct WorstCaseWalk<'a> {
     bodies: &'a HashMap<&'a str, &'a [Step]>,
     oauth_endpoints: &'a HashSet<&'a str>,
+    profile: WorstCaseSendProfile,
     used_oauth: &'a mut HashSet<String>,
     /// Top-level exception-clause bodies seen so far, as (worst-case
     /// sends, whether the clause resumes with `continued`).
@@ -4672,6 +5828,9 @@ struct WorstCaseWalk<'a> {
     /// The walk nested past the reader's depth bound: the count is
     /// uncountable and the caller must refuse.
     depth_exceeded: bool,
+    /// The exact worst-case count exceeded `u64`, so the saturated count is
+    /// not itself a representable bound.
+    arithmetic_overflow: bool,
 }
 
 /// The worst-case upstream send count of one body: `to` and `enrich`
@@ -4688,8 +5847,8 @@ struct WorstCaseWalk<'a> {
 /// `continued`), and a clause nested inside another clause adds to its
 /// enclosing clause's body (the runtime can run both). A `filter`
 /// wrapper is transparent: its contents count. Past the reader's
-/// nesting bound the count is uncountable: the walk saturates at
-/// `u64::MAX` and reports the depth, never a silent zero. The
+/// nesting or numeric count bound the count is uncountable: the walk
+/// saturates at `u64::MAX` and reports the cause, never a silent zero. The
 /// `multiplier` carries the enclosing splits' and loops' bounds so a
 /// deferred clause candidate carries them too.
 fn worst_body(
@@ -4698,92 +5857,125 @@ fn worst_body(
     depth: usize,
     redeliveries: u32,
     in_clause: bool,
-    multiplier: u64,
+    multiplier: WorstCaseMultiplier,
 ) -> u64 {
     if depth > registry_platform_yaml::MAXIMUM_DEPTH {
         walk.depth_exceeded = true;
         return u64::MAX;
     }
-    let attempts = 1u64.saturating_add(u64::from(redeliveries));
+    let attempts = worst_case_add(1, u64::from(redeliveries), &mut walk.arithmetic_overflow);
     let mut total = 0u64;
     for step in steps {
         match step {
             Step::To(to) => match to.uri.component {
-                SendComponent::Http | SendComponent::GraphQl => {
-                    if walk.oauth_endpoints.contains(to.uri.id.as_str()) {
+                component if walk.profile.counts(component) => {
+                    if matches!(component, SendComponent::Http | SendComponent::GraphQl)
+                        && walk.oauth_endpoints.contains(to.uri.id.as_str())
+                    {
                         walk.used_oauth.insert(to.uri.id.to_string());
                     }
-                    total = total.saturating_add(attempts.saturating_mul(multiplier));
+                    walk.arithmetic_overflow |= multiplier.overflowed;
+                    let sends =
+                        worst_case_mul(attempts, multiplier.value, &mut walk.arithmetic_overflow);
+                    total = worst_case_add(total, sends, &mut walk.arithmetic_overflow);
                 }
                 // The read-only postgres source send counts against the
-                // run's upstream-call budget at run time, and a failing
+                // job run's upstream-call budget at run time, and a failing
                 // one is redelivered like any other component send, so it
                 // counts here the same way. It names no OAuth endpoint.
-                SendComponent::Postgres => {
-                    total = total.saturating_add(attempts.saturating_mul(multiplier));
+                SendComponent::Postgres
+                    if matches!(walk.profile, WorstCaseSendProfile::AdapterUpstream) =>
+                {
+                    walk.arithmetic_overflow |= multiplier.overflowed;
+                    let sends =
+                        worst_case_mul(attempts, multiplier.value, &mut walk.arithmetic_overflow);
+                    total = worst_case_add(total, sends, &mut walk.arithmetic_overflow);
                 }
-                SendComponent::File | SendComponent::Sftp => {}
+                SendComponent::Postgres
+                | SendComponent::File
+                | SendComponent::RabbitMq
+                | SendComponent::Sftp
+                | SendComponent::SqliteExtract
+                | SendComponent::Http
+                | SendComponent::GraphQl => {}
                 SendComponent::Direct => {
                     if let Some(target) = walk.bodies.get(to.uri.id.as_str()) {
                         let target_redeliveries = redeliveries.max(declared_redeliveries(target));
-                        total = total.saturating_add(worst_body(
+                        let direct = worst_body(
                             target,
                             walk,
                             depth + 1,
                             target_redeliveries,
                             in_clause,
                             multiplier,
-                        ));
+                        );
+                        total = worst_case_add(total, direct, &mut walk.arithmetic_overflow);
                     }
                 }
             },
             Step::Enrich(enrich) => match enrich.uri.component {
-                SendComponent::Http | SendComponent::GraphQl => {
-                    if walk.oauth_endpoints.contains(enrich.uri.id.as_str()) {
+                component if walk.profile.counts(component) => {
+                    if matches!(component, SendComponent::Http | SendComponent::GraphQl)
+                        && walk.oauth_endpoints.contains(enrich.uri.id.as_str())
+                    {
                         walk.used_oauth.insert(enrich.uri.id.to_string());
                     }
-                    total = total.saturating_add(attempts.saturating_mul(multiplier));
+                    walk.arithmetic_overflow |= multiplier.overflowed;
+                    let sends =
+                        worst_case_mul(attempts, multiplier.value, &mut walk.arithmetic_overflow);
+                    total = worst_case_add(total, sends, &mut walk.arithmetic_overflow);
                 }
                 // The engine refuses a job component as an enrich resource
                 // before any send, so none of them makes a call.
-                SendComponent::Postgres | SendComponent::File | SendComponent::Sftp => {}
+                SendComponent::Postgres
+                | SendComponent::File
+                | SendComponent::RabbitMq
+                | SendComponent::Sftp
+                | SendComponent::SqliteExtract
+                | SendComponent::Http
+                | SendComponent::GraphQl => {}
                 SendComponent::Direct => {
                     if let Some(target) = walk.bodies.get(enrich.uri.id.as_str()) {
                         let target_redeliveries = redeliveries.max(declared_redeliveries(target));
-                        total = total.saturating_add(worst_body(
+                        let direct = worst_body(
                             target,
                             walk,
                             depth + 1,
                             target_redeliveries,
                             in_clause,
                             multiplier,
-                        ));
+                        );
+                        total = worst_case_add(total, direct, &mut walk.arithmetic_overflow);
                     }
                 }
             },
             Step::Split(split) => {
                 let items = split.maximum_items.map_or(1u64, |bound| bound.get());
-                total = total.saturating_add(worst_body(
+                let multiplier = multiplier.multiply(items);
+                let split_worst = worst_body(
                     &split.steps,
                     walk,
                     depth + 1,
                     redeliveries,
                     in_clause,
-                    multiplier.saturating_mul(items),
-                ));
+                    multiplier,
+                );
+                total = worst_case_add(total, split_worst, &mut walk.arithmetic_overflow);
             }
             Step::Loop(loop_step) => {
                 let iterations = loop_step
                     .maximum_iterations
                     .map_or(1u64, |bound| bound.get());
-                total = total.saturating_add(worst_body(
+                let multiplier = multiplier.multiply(iterations);
+                let loop_worst = worst_body(
                     &loop_step.steps,
                     walk,
                     depth + 1,
                     redeliveries,
                     in_clause,
-                    multiplier.saturating_mul(iterations),
-                ));
+                    multiplier,
+                );
+                total = worst_case_add(total, loop_worst, &mut walk.arithmetic_overflow);
             }
             Step::Choice(choice) => {
                 let mut widest = 0u64;
@@ -4807,57 +5999,62 @@ fn worst_body(
                         multiplier,
                     ));
                 }
-                total = total.saturating_add(widest);
+                total = worst_case_add(total, widest, &mut walk.arithmetic_overflow);
             }
             Step::CircuitBreaker(breaker) => {
-                total = total.saturating_add(worst_body(
+                let body_worst = worst_body(
                     &breaker.steps,
                     walk,
                     depth + 1,
                     redeliveries,
                     in_clause,
                     multiplier,
-                ));
+                );
+                total = worst_case_add(total, body_worst, &mut walk.arithmetic_overflow);
                 if let Some(fallback) = &breaker.on_fallback {
-                    total = total.saturating_add(worst_body(
+                    let fallback_worst = worst_body(
                         &fallback.steps,
                         walk,
                         depth + 1,
                         redeliveries,
                         in_clause,
                         multiplier,
-                    ));
+                    );
+                    total = worst_case_add(total, fallback_worst, &mut walk.arithmetic_overflow);
                 }
             }
             Step::Throttle(throttle) => {
-                total = total.saturating_add(worst_body(
+                let throttle_worst = worst_body(
                     &throttle.steps,
                     walk,
                     depth + 1,
                     redeliveries,
                     in_clause,
                     multiplier,
-                ));
+                );
+                total = worst_case_add(total, throttle_worst, &mut walk.arithmetic_overflow);
             }
             Step::IdempotentConsumer(idempotent) => {
-                total = total.saturating_add(worst_body(
+                let idempotent_worst = worst_body(
                     &idempotent.steps,
                     walk,
                     depth + 1,
                     redeliveries,
                     in_clause,
                     multiplier,
-                ));
+                );
+                total = worst_case_add(total, idempotent_worst, &mut walk.arithmetic_overflow);
             }
             Step::DoTry(do_try) => {
-                total = total.saturating_add(worst_body(
+                let try_worst = worst_body(
                     &do_try.steps,
                     walk,
                     depth + 1,
                     redeliveries,
                     in_clause,
                     multiplier,
-                ));
+                );
+                total = worst_case_add(total, try_worst, &mut walk.arithmetic_overflow);
                 let mut widest = 0u64;
                 for catch in &do_try.do_catch {
                     widest = widest.max(worst_body(
@@ -4869,27 +6066,29 @@ fn worst_body(
                         multiplier,
                     ));
                 }
-                total = total.saturating_add(widest);
+                total = worst_case_add(total, widest, &mut walk.arithmetic_overflow);
                 if let Some(do_finally) = &do_try.do_finally {
-                    total = total.saturating_add(worst_body(
+                    let finally_worst = worst_body(
                         &do_finally.steps,
                         walk,
                         depth + 1,
                         redeliveries,
                         in_clause,
                         multiplier,
-                    ));
+                    );
+                    total = worst_case_add(total, finally_worst, &mut walk.arithmetic_overflow);
                 }
             }
             Step::Filter(filter) => {
-                total = total.saturating_add(worst_body(
+                let filter_worst = worst_body(
                     &filter.steps,
                     walk,
                     depth + 1,
                     redeliveries,
                     in_clause,
                     multiplier,
-                ));
+                );
+                total = worst_case_add(total, filter_worst, &mut walk.arithmetic_overflow);
             }
             Step::OnException(clause) => {
                 let clause_redeliveries = clause
@@ -4907,7 +6106,7 @@ fn worst_body(
                     multiplier,
                 );
                 if in_clause {
-                    total = total.saturating_add(worst);
+                    total = worst_case_add(total, worst, &mut walk.arithmetic_overflow);
                 } else {
                     walk.clauses.push((worst, clause.continued == Some(true)));
                 }
@@ -5128,12 +6327,14 @@ fn check_token_endpoint(
             "Serve the token endpoint over TLS.",
         ));
     }
-    if carries_query_or_fragment(token_endpoint) {
+    if !registry_platform_httputil::valid_resource_uri(token_endpoint.as_str())
+        || carries_query_or_fragment(token_endpoint)
+    {
         findings.push(finding(
             CheckCode::RuntimeInvalidOrigin,
             &format!("{prefix}/credential/tokenEndpoint"),
-            "the token endpoint carries a query or fragment",
-            "Bind the token endpoint as scheme, host, port, and path, with no query or fragment; the engine adds the grant parameters itself.",
+            "the token endpoint is not an ASCII URI without query or fragment",
+            "Bind scheme, host, port, and path using complete percent escapes for encoded characters and no query or fragment; the engine adds the grant parameters itself.",
         ));
     }
 }
@@ -5423,21 +6624,25 @@ mod tests {
     };
     use crate::model::{ComponentKind, ErrorClass, HttpMethod, RhaiExpression, SendUri};
     use crate::pack::{AdapterPack, Capabilities, CodeMap, Endpoint, EndpointOperation};
-    use crate::profile::{PaginationParameters, ParameterizedPart, ProfileOperation};
+    use crate::profile::{
+        AsyncStatusPath, PaginationParameters, ParameterizedPart, ProfileAsyncCompletion,
+        ProfileOperation,
+    };
     use crate::project::{
-        AccessProfile, Binding, PinnedRef, ProjectIdentity, RecordField, RecordFieldType,
-        RecordType,
+        AccessProfile, Binding, BindingAsyncCompletion, PinnedRef, ProjectIdentity, RecordField,
+        RecordFieldType, RecordType,
     };
     use crate::route::{
         ChoiceStep, CircuitBreakerStep, ConvertStep, DefaultErrorHandler, DoCatch, DoFinally,
         DoTryStep, EnrichStep, ErrorHandlerStep, FilterStep, IdempotentConsumerStep, LoopStep,
-        OnExceptionStep, OnFallback, Percentage, PositiveU32, RedeliveryOptions, RouteDefinition,
-        RouteFrom, RouteTemplate, SetHeaderStep, SetPropertyStep, SplitStep, TemplateParameter,
-        TemplateParameterType, TemplatedRoute, ThrottleStep, ThrowExceptionStep, ToParameters,
-        ToStep, ValidateStep, When,
+        OnExceptionStep, OnFallback, Percentage, PositiveU32, RedeliveryOptions, ResumeBinding,
+        RouteDefinition, RouteFrom, RouteTemplate, SetHeaderStep, SetPropertyStep, SplitStep,
+        TemplateParameter, TemplateParameterType, TemplatedRoute, ThrottleStep, ThrowExceptionStep,
+        ToParameters, ToStep, ValidateStep, When,
     };
     use crate::runtime::{
-        AdapterRuntimeConfig, AuditRetention, Cidr, EndpointBinding, OutboundTls, TrustProfile,
+        AdapterRuntimeConfig, AuditRetention, Cidr, EndpointBinding, IdempotencyRetention,
+        OutboundTls, TrustProfile,
     };
     use registry_platform_yaml::Url;
     use registry_platform_yaml::{
@@ -5471,7 +6676,7 @@ mod tests {
             uri: send(endpoint),
             parameters: Some(ToParameters {
                 http_method: Some(HttpMethod::Get),
-                path: None,
+                path: Some("/".to_string()),
                 path_parameters: BTreeMap::new(),
                 query: BTreeMap::new(),
                 body: None,
@@ -5490,7 +6695,7 @@ mod tests {
             uri: send(endpoint),
             parameters: Some(ToParameters {
                 http_method: Some(HttpMethod::Post),
-                path: None,
+                path: Some("/".to_string()),
                 path_parameters: BTreeMap::new(),
                 query: BTreeMap::new(),
                 body: None,
@@ -5563,6 +6768,7 @@ mod tests {
             }])
             .expect("unique"),
             query_files: UniqueList::new(Vec::new()).expect("empty"),
+            open_api: None,
             capabilities: Capabilities::default(),
         }
     }
@@ -5572,13 +6778,15 @@ mod tests {
             id: local("case-api"),
             component: ComponentKind::Http,
             authentication: EndpointAuthentication::Oauth2ClientCredentials {},
-            attempt_timeout_milliseconds: registry_platform_yaml::BoundedU64::new(10_000)
-                .expect("attempt timeout"),
+            attempt_timeout_milliseconds: Some(
+                registry_platform_yaml::BoundedU64::new(10_000).expect("attempt timeout"),
+            ),
             maximum_response_bytes: registry_platform_yaml::BoundedU64::new(1_048_576)
                 .expect("response bound"),
             response_headers: UniqueList::new(Vec::new()).expect("empty"),
             request_headers: UniqueList::new(Vec::new()).expect("unique"),
             operations: vec![EndpointOperation {
+                async_completion: None,
                 id: local("cases-create"),
                 idempotent_upstream: true,
                 safe_upstream: false,
@@ -5586,8 +6794,12 @@ mod tests {
             }],
             tested_versions: vec!["2.7".to_string()],
             query_file: None,
+            key_column: None,
+            parameter_order: None,
             operation_name: None,
             variables: None,
+            sqlite_extract: None,
+            host_protocol: None,
         }
     }
 
@@ -5596,13 +6808,15 @@ mod tests {
             id: local("case-api"),
             component: ComponentKind::Http,
             authentication: EndpointAuthentication::Basic {},
-            attempt_timeout_milliseconds: registry_platform_yaml::BoundedU64::new(10_000)
-                .expect("attempt timeout"),
+            attempt_timeout_milliseconds: Some(
+                registry_platform_yaml::BoundedU64::new(10_000).expect("attempt timeout"),
+            ),
             maximum_response_bytes: registry_platform_yaml::BoundedU64::new(1_048_576)
                 .expect("response bound"),
             response_headers: UniqueList::new(Vec::new()).expect("empty"),
             request_headers: UniqueList::new(Vec::new()).expect("unique"),
             operations: vec![EndpointOperation {
+                async_completion: None,
                 id: local("cases-find"),
                 idempotent_upstream: true,
                 safe_upstream: false,
@@ -5610,8 +6824,12 @@ mod tests {
             }],
             tested_versions: vec!["2.7".to_string()],
             query_file: None,
+            key_column: None,
+            parameter_order: None,
             operation_name: None,
             variables: None,
+            sqlite_extract: None,
+            host_protocol: None,
         }
     }
 
@@ -5620,13 +6838,15 @@ mod tests {
             id: local("case-api"),
             component: ComponentKind::Http,
             authentication: EndpointAuthentication::None {},
-            attempt_timeout_milliseconds: registry_platform_yaml::BoundedU64::new(10_000)
-                .expect("attempt timeout"),
+            attempt_timeout_milliseconds: Some(
+                registry_platform_yaml::BoundedU64::new(10_000).expect("attempt timeout"),
+            ),
             maximum_response_bytes: registry_platform_yaml::BoundedU64::new(1_048_576)
                 .expect("response bound"),
             response_headers: UniqueList::new(Vec::new()).expect("empty"),
             request_headers: UniqueList::new(Vec::new()).expect("unique"),
             operations: vec![EndpointOperation {
+                async_completion: None,
                 id: local("cases-find"),
                 idempotent_upstream: true,
                 safe_upstream: false,
@@ -5634,8 +6854,12 @@ mod tests {
             }],
             tested_versions: vec!["2.7".to_string()],
             query_file: None,
+            key_column: None,
+            parameter_order: None,
             operation_name: None,
             variables: None,
+            sqlite_extract: None,
+            host_protocol: None,
         }
     }
 
@@ -5692,6 +6916,7 @@ mod tests {
 
     fn operation(id_text: &str, method: HttpMethod) -> ProfileOperation {
         ProfileOperation {
+            async_completion: None,
             id: local(id_text),
             method,
             path: "/v2/cases/{type}".to_string(),
@@ -5759,6 +6984,80 @@ mod tests {
             runtime: None,
             fixtures: &[],
         }
+    }
+
+    fn async_workspace_parts() -> (AdapterProfile, AdapterPack, AdapterProject) {
+        let mut profile_operation = operation("cases-create", HttpMethod::Post);
+        profile_operation.record_id_parameter = None;
+        profile_operation.success_status = BoundedU32::new(202).expect("status");
+        profile_operation.request_envelope =
+            Some(EnvelopeTemplate(r#"{"record": {{record}}}"#.to_string()));
+        profile_operation.async_completion = Some(ProfileAsyncCompletion {
+            completed_status: BoundedU32::new(200).expect("status"),
+            status_path: AsyncStatusPath::new("/v2/status/{statusId}".to_string())
+                .expect("status path"),
+            accepted_envelope: EnvelopeTemplate(
+                r#"{"link":"{{statusLink}}","expires":"{{statusExpiresAt}}","requestId":"{{requestId}}"}"#.to_string(),
+            ),
+        });
+        let profile = profile_builder(vec![profile_operation]);
+
+        let source_operation: EndpointOperation = serde_json::from_value(serde_json::json!({
+            "id": "cases-create",
+            "asyncCompletion": {
+                "acceptedId": {"jsonpath": "$.operationId"},
+                "statusRoute": "case-status",
+                "uncertaintyRecovery": {
+                    "requestHeader": "X-Source-Recovery-Id",
+                    "statusRoute": "case-recovery-status"
+                }
+            }
+        }))
+        .expect("source operation");
+        let mut endpoint = basic_endpoint();
+        endpoint.operations = vec![source_operation];
+        let write = RouteDefinition {
+            id: local("create-case"),
+            from: RouteFrom {
+                uri: direct("create-case"),
+            },
+            steps: vec![Step::IdempotentConsumer(IdempotentConsumerStep {
+                expression: Expression::Header("Idempotency-Key".to_string()),
+                eager: true,
+                remove_on_failure: true,
+                completion_eager: false,
+                steps: vec![to_post("case-api", "cases-create")],
+            })],
+        };
+        let status = |id_text: &str| RouteDefinition {
+            id: local(id_text),
+            from: RouteFrom {
+                uri: direct(id_text),
+            },
+            steps: vec![to_get("case-api")],
+        };
+        let pack = pack_builder(
+            vec![endpoint],
+            vec![write, status("case-status"), status("case-recovery-status")],
+        );
+
+        let mut project = project_builder(&pack);
+        project.access_profiles = UniqueIdList::new(Vec::new()).expect("empty");
+        project.bindings = UniqueIdList::new(vec![Binding {
+            async_completion: Some(BindingAsyncCompletion::BoundedWait {
+                wait_timeout_milliseconds: BoundedU64::new(900).expect("wait"),
+                poll_interval_milliseconds: BoundedU64::new(10).expect("interval"),
+                maximum_polls: BoundedU64::new(2).expect("polls"),
+            }),
+            id: local("create-case"),
+            operation: id("cases-create"),
+            record_type: local("case"),
+            route: id("create-case"),
+            filters: UniqueList::new(Vec::new()).expect("empty"),
+            maximum_upstream_calls: BoundedU64::new(3).expect("budget"),
+        }])
+        .expect("unique");
+        (profile, pack, project)
     }
 
     fn codes(findings: &[Diagnostic]) -> Vec<&str> {
@@ -5988,6 +7287,7 @@ mod tests {
     #[test]
     fn profile_refuses_an_unknown_slot() {
         let profile = profile_builder(vec![ProfileOperation {
+            async_completion: None,
             id: local("cases-find"),
             method: HttpMethod::Get,
             path: "/v2/cases/{type}".to_string(),
@@ -6066,6 +7366,7 @@ mod tests {
     #[test]
     fn profile_refuses_a_response_envelope_without_its_result_slot() {
         let profile = profile_builder(vec![ProfileOperation {
+            async_completion: None,
             id: local("cases-find"),
             method: HttpMethod::Get,
             path: "/v2/cases/{type}".to_string(),
@@ -6260,6 +7561,7 @@ mod tests {
         let pack = pack_builder(vec![], vec![route(data.clone())]);
         let mut project = project_builder(&pack);
         project.bindings = UniqueIdList::new(vec![Binding {
+            async_completion: None,
             id: local("raise-partial"),
             operation: id("cases-write"),
             record_type: local("case"),
@@ -6313,6 +7615,7 @@ mod tests {
         pack.route_templates = UniqueIdList::new(vec![template]).expect("unique");
         let mut project = project_builder(&pack);
         project.bindings = UniqueIdList::new(vec![Binding {
+            async_completion: None,
             id: local("read-cases"),
             operation: id("cases-find"),
             record_type: local("case"),
@@ -6345,6 +7648,7 @@ mod tests {
         let pack = pack_builder(vec![], vec![one_direct_route(vec![]), bad]);
         let mut project = project_builder(&pack);
         project.bindings = UniqueIdList::new(vec![Binding {
+            async_completion: None,
             id: local("raise-partial"),
             operation: id("cases-write"),
             record_type: local("case"),
@@ -6388,6 +7692,7 @@ mod tests {
         }])
         .expect("unique");
         project.bindings = UniqueIdList::new(vec![Binding {
+            async_completion: None,
             id: local("raise-partial"),
             operation: id("cases-write"),
             record_type: local("case"),
@@ -6436,6 +7741,7 @@ mod tests {
         let pack = pack_builder(vec![], vec![entry, target]);
         let mut project = project_builder(&pack);
         project.bindings = UniqueIdList::new(vec![Binding {
+            async_completion: None,
             id: local("read-cases"),
             operation: id("cases-find"),
             record_type: local("case"),
@@ -6641,6 +7947,349 @@ mod tests {
         );
     }
 
+    #[test]
+    fn async_slots_are_confined_to_the_accepted_envelope() {
+        let mut terminal = operation("cases-find", HttpMethod::Get);
+        terminal.response_envelope =
+            EnvelopeTemplate(r#"{"cases": {{records}}, "link": "{{statusLink}}"}"#.to_string());
+        assert_has(
+            &check_profile(&profile_builder(vec![terminal])),
+            CheckCode::ProfileUnknownSlot,
+        );
+
+        let mut request = operation("cases-create", HttpMethod::Post);
+        request.request_envelope = Some(EnvelopeTemplate(
+            r#"{"record": {{record}}, "expiry": "{{statusExpiresAt}}"}"#.to_string(),
+        ));
+        assert_has(
+            &check_profile(&profile_builder(vec![request])),
+            CheckCode::ProfileUnknownSlot,
+        );
+
+        let mut item = operation("cases-find", HttpMethod::Get);
+        item.item_envelope = Some(EnvelopeTemplate(
+            r#"{"case": {{record}}, "link": "{{statusLink}}"}"#.to_string(),
+        ));
+        assert_has(
+            &check_profile(&profile_builder(vec![item])),
+            CheckCode::ProfileUnknownSlot,
+        );
+
+        let mut problem = profile_builder(vec![]);
+        problem.problem_envelope = EnvelopeTemplate(
+            r#"{"code": "{{problemCode}}", "expiry": "{{statusExpiresAt}}"}"#.to_string(),
+        );
+        assert_has(&check_profile(&problem), CheckCode::ProfileUnknownSlot);
+    }
+
+    #[test]
+    fn async_declarations_correspond_across_the_bound_source_send() {
+        let (profile, pack, project) = async_workspace_parts();
+        let findings = check_project(&workspace(&profile, &pack, &project));
+        assert!(
+            !codes(&findings).contains(&CheckCode::ProjectAsyncDeclarationMismatch.code()),
+            "the complete declaration is admitted: {findings:?}"
+        );
+
+        let mut missing_binding = project.clone();
+        let mut bindings = missing_binding.bindings.into_vec();
+        bindings[0].async_completion = None;
+        missing_binding.bindings = UniqueIdList::new(bindings).expect("bindings");
+        assert_has(
+            &check_project(&workspace(&profile, &pack, &missing_binding)),
+            CheckCode::ProjectAsyncDeclarationMismatch,
+        );
+
+        let mut missing_profile = profile.clone();
+        let mut operations = missing_profile.operations.into_vec();
+        operations[0].async_completion = None;
+        missing_profile.operations = UniqueIdList::new(operations).expect("operations");
+        assert_has(
+            &check_project(&workspace(&missing_profile, &pack, &project)),
+            CheckCode::ProjectAsyncDeclarationMismatch,
+        );
+
+        let mut missing_source = pack.clone();
+        let mut endpoints = missing_source.endpoints.into_vec();
+        endpoints[0].operations[0].async_completion = None;
+        missing_source.endpoints = UniqueIdList::new(endpoints).expect("endpoints");
+        assert_has(
+            &check_project(&workspace(&profile, &missing_source, &project)),
+            CheckCode::ProjectAsyncDeclarationMismatch,
+        );
+    }
+
+    #[test]
+    fn async_status_routes_resolve_to_a_safe_private_source_closure() {
+        let (profile, pack, project) = async_workspace_parts();
+        let clean = check_project(&workspace(&profile, &pack, &project));
+        assert!(
+            !codes(&clean).contains(&CheckCode::PackAsyncStatusRouteInvalid.code())
+                && !codes(&clean).contains(&CheckCode::PackAsyncStatusRouteUnsafe.code())
+                && !codes(&clean).contains(&CheckCode::PackAsyncStatusRouteReachable.code()),
+            "the safe private status routes are admitted: {clean:?}"
+        );
+
+        let mut missing = pack.clone();
+        let mut endpoints = missing.endpoints.into_vec();
+        endpoints[0].operations[0]
+            .async_completion
+            .as_mut()
+            .expect("async")
+            .status_route = id("missing-status");
+        missing.endpoints = UniqueIdList::new(endpoints).expect("endpoints");
+        assert_has(
+            &check_project(&workspace(&profile, &missing, &project)),
+            CheckCode::PackAsyncStatusRouteInvalid,
+        );
+
+        let mut empty = pack.clone();
+        let mut routes = empty.routes.into_vec();
+        routes
+            .iter_mut()
+            .find(|route| route.id.as_str() == "case-status")
+            .expect("status route")
+            .steps
+            .clear();
+        empty.routes = UniqueIdList::new(routes).expect("routes");
+        assert_has(
+            &check_project(&workspace(&profile, &empty, &project)),
+            CheckCode::PackAsyncStatusRouteInvalid,
+        );
+
+        let mut unsafe_send = pack.clone();
+        let mut routes = unsafe_send.routes.into_vec();
+        routes
+            .iter_mut()
+            .find(|route| route.id.as_str() == "case-status")
+            .expect("status route")
+            .steps = vec![to_post("case-api", "cases-create")];
+        unsafe_send.routes = UniqueIdList::new(routes).expect("routes");
+        assert_has(
+            &check_project(&workspace(&profile, &unsafe_send, &project)),
+            CheckCode::PackAsyncStatusRouteUnsafe,
+        );
+
+        let mut dynamic_target = pack.clone();
+        let mut routes = dynamic_target.routes.into_vec();
+        routes
+            .iter_mut()
+            .find(|route| route.id.as_str() == "case-status")
+            .expect("status route")
+            .steps = vec![Step::To(ToStep {
+            uri: send("case-api"),
+            parameters: Some(ToParameters {
+                http_method: Some(HttpMethod::Get),
+                path: None,
+                path_parameters: BTreeMap::new(),
+                query: BTreeMap::new(),
+                body: None,
+                operation: None,
+                throw_exception_on_failure: true,
+                ok_status_code_range: None,
+                http_uri: Some(Expression::Constant(serde_json::json!(
+                    "https://source.example/status"
+                ))),
+                resume_bindings: Vec::new(),
+                query_parameters: BTreeMap::new(),
+            }),
+        })];
+        dynamic_target.routes = UniqueIdList::new(routes).expect("routes");
+        assert_has(
+            &check_project(&workspace(&profile, &dynamic_target, &project)),
+            CheckCode::PackAsyncStatusRouteUnsafe,
+        );
+
+        let mut idempotent_status = pack.clone();
+        let mut routes = idempotent_status.routes.into_vec();
+        routes
+            .iter_mut()
+            .find(|route| route.id.as_str() == "case-status")
+            .expect("status route")
+            .steps = vec![Step::IdempotentConsumer(IdempotentConsumerStep {
+            expression: Expression::Constant(serde_json::json!("status")),
+            eager: true,
+            remove_on_failure: true,
+            completion_eager: false,
+            steps: vec![to_get("case-api")],
+        })];
+        idempotent_status.routes = UniqueIdList::new(routes).expect("routes");
+        assert_has(
+            &check_project(&workspace(&profile, &idempotent_status, &project)),
+            CheckCode::PackAsyncStatusRouteUnsafe,
+        );
+
+        let mut job_component = pack.clone();
+        let mut routes = job_component.routes.into_vec();
+        routes
+            .iter_mut()
+            .find(|route| route.id.as_str() == "case-status")
+            .expect("status route")
+            .steps = vec![Step::To(ToStep {
+            uri: SendUri::parse("postgres:case-api").expect("uri"),
+            parameters: None,
+        })];
+        job_component.routes = UniqueIdList::new(routes).expect("routes");
+        assert_has(
+            &check_project(&workspace(&profile, &job_component, &project)),
+            CheckCode::PackAsyncStatusRouteUnsafe,
+        );
+
+        let mut facade_reachable = pack.clone();
+        let mut routes = facade_reachable.routes.into_vec();
+        let write = routes
+            .iter_mut()
+            .find(|route| route.id.as_str() == "create-case")
+            .expect("write route");
+        let Step::IdempotentConsumer(consumer) = &mut write.steps[0] else {
+            panic!("idempotent write");
+        };
+        consumer.steps.push(Step::To(ToStep {
+            uri: direct("case-status"),
+            parameters: None,
+        }));
+        facade_reachable.routes = UniqueIdList::new(routes).expect("routes");
+        assert_has(
+            &check_project(&workspace(&profile, &facade_reachable, &project)),
+            CheckCode::PackAsyncStatusRouteReachable,
+        );
+    }
+
+    #[test]
+    fn async_wait_budget_and_runtime_retention_are_strictly_bounded() {
+        let (profile, pack, mut project) = async_workspace_parts();
+        let mut bindings = project.bindings.into_vec();
+        bindings[0].maximum_upstream_calls = BoundedU64::new(2).expect("budget");
+        project.bindings = UniqueIdList::new(bindings).expect("bindings");
+        assert_has(
+            &check_project(&workspace(&profile, &pack, &project)),
+            CheckCode::ProjectUpstreamBudgetExceeded,
+        );
+        let mut bindings = project.bindings.into_vec();
+        bindings[0].maximum_upstream_calls = BoundedU64::new(3).expect("budget");
+        project.bindings = UniqueIdList::new(bindings).expect("bindings");
+
+        let mut runtime = runtime_builder(vec![]);
+        let mut ws = workspace(&profile, &pack, &project);
+        ws.runtime = Some(&runtime);
+        assert_has(
+            &check_project(&ws),
+            CheckCode::RuntimeAsyncIdempotencyRequired,
+        );
+
+        runtime.idempotency = Some(IdempotencyRetention {
+            response_retention_seconds: BoundedU64::new(1).expect("retention"),
+        });
+        let mut bindings = project.bindings.into_vec();
+        let BindingAsyncCompletion::BoundedWait {
+            wait_timeout_milliseconds,
+            ..
+        } = bindings[0].async_completion.as_mut().expect("async")
+        else {
+            panic!("bounded wait");
+        };
+        *wait_timeout_milliseconds = BoundedU64::new(1_000).expect("wait");
+        project.bindings = UniqueIdList::new(bindings).expect("bindings");
+        let mut ws = workspace(&profile, &pack, &project);
+        ws.runtime = Some(&runtime);
+        assert_has(
+            &check_project(&ws),
+            CheckCode::RuntimeAsyncWaitExceedsRetention,
+        );
+
+        let mut bindings = project.bindings.into_vec();
+        let BindingAsyncCompletion::BoundedWait {
+            wait_timeout_milliseconds,
+            ..
+        } = bindings[0].async_completion.as_mut().expect("async")
+        else {
+            panic!("bounded wait");
+        };
+        *wait_timeout_milliseconds = BoundedU64::new(999).expect("wait");
+        project.bindings = UniqueIdList::new(bindings).expect("bindings");
+        let mut ws = workspace(&profile, &pack, &project);
+        ws.runtime = Some(&runtime);
+        let findings = check_project(&ws);
+        assert!(
+            !codes(&findings).contains(&CheckCode::RuntimeAsyncWaitExceedsRetention.code()),
+            "a wait strictly below retention is admitted: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn async_recovery_correlation_header_is_never_an_authored_request_header() {
+        let (profile, mut pack, project) = async_workspace_parts();
+        let mut endpoints = pack.endpoints.into_vec();
+        endpoints[0].request_headers =
+            UniqueList::new(vec![id("x-source-recovery-id")]).expect("unique header");
+        pack.endpoints = UniqueIdList::new(endpoints).expect("unique endpoints");
+
+        let findings = check_project(&workspace(&profile, &pack, &project));
+        assert_has(&findings, CheckCode::PackAsyncStatusRouteUnsafe);
+        assert!(findings.iter().any(|finding| {
+            finding.path
+                == "/endpoints/0/operations/0/asyncCompletion/uncertaintyRecovery/requestHeader"
+        }));
+    }
+
+    #[test]
+    fn async_status_paths_refuse_other_served_path_shapes() {
+        assert_eq!(
+            facade_path_shape("/v2/{type}/case-{case-id}"),
+            "/v2/{}/case-{}"
+        );
+        let (mut profile, mut pack, mut project) = async_workspace_parts();
+        let mut read = operation("cases-find", HttpMethod::Get);
+        read.path = "/v2/status/{type}/{case-id}".to_string();
+        read.path_parameters =
+            UniqueList::new(vec![local("type"), local("case-id")]).expect("parameters");
+        read.record_type_parameter = local("type");
+        read.record_id_parameter = Some(local("case-id"));
+        profile.operations =
+            UniqueIdList::new(vec![profile.operations[0].clone(), read]).expect("operations");
+        let mut operations = profile.operations.into_vec();
+        operations[0]
+            .async_completion
+            .as_mut()
+            .expect("async")
+            .status_path =
+            AsyncStatusPath::new("/v2/status/case/{statusId}".to_string()).expect("status path");
+        profile.operations = UniqueIdList::new(operations).expect("operations");
+        let mut routes = pack.routes.into_vec();
+        routes.push(RouteDefinition {
+            id: local("find-case"),
+            from: RouteFrom {
+                uri: direct("find-case"),
+            },
+            steps: vec![to_get("case-api")],
+        });
+        pack.routes = UniqueIdList::new(routes).expect("routes");
+        let mut bindings = project.bindings.into_vec();
+        bindings.push(Binding {
+            async_completion: None,
+            id: local("find-case"),
+            operation: id("cases-find"),
+            record_type: local("case"),
+            route: id("find-case"),
+            filters: UniqueList::new(Vec::new()).expect("empty"),
+            maximum_upstream_calls: BoundedU64::new(1).expect("budget"),
+        });
+        project.bindings = UniqueIdList::new(bindings).expect("bindings");
+        assert_has(
+            &check_project(&workspace(&profile, &pack, &project)),
+            CheckCode::ProfileAsyncStatusPathCollision,
+        );
+
+        let mut second_async = profile.operations[0].clone();
+        second_async.id = local("cases-create-again");
+        profile.operations = UniqueIdList::new(vec![profile.operations[0].clone(), second_async])
+            .expect("operations");
+        assert_has(
+            &check_project(&workspace(&profile, &pack, &project)),
+            CheckCode::ProfileAsyncStatusPathCollision,
+        );
+    }
+
     /// A write operation needs a request envelope naming the record slot;
     /// a read operation needs none.
     #[test]
@@ -6651,6 +8300,7 @@ mod tests {
             CheckCode::ProfileRequestEnvelopeMissingRecordSlot,
         );
         let wrong_slot = profile_builder(vec![ProfileOperation {
+            async_completion: None,
             id: local("cases-create"),
             method: HttpMethod::Post,
             path: "/v2/cases/{type}".to_string(),
@@ -6670,6 +8320,7 @@ mod tests {
             CheckCode::ProfileRequestEnvelopeMissingRecordSlot,
         );
         let good = profile_builder(vec![ProfileOperation {
+            async_completion: None,
             id: local("cases-create"),
             method: HttpMethod::Post,
             path: "/v2/cases/{type}".to_string(),
@@ -6730,6 +8381,7 @@ mod tests {
     #[test]
     fn pagination_parameters_are_accepted() {
         let profile = profile_builder(vec![ProfileOperation {
+            async_completion: None,
             id: local("cases-find"),
             method: HttpMethod::Get,
             path: "/v2/cases/{type}".to_string(),
@@ -7498,6 +9150,7 @@ mod tests {
         let mut pack = pack_builder(vec![basic_endpoint()], vec![]);
         pack.route_templates = UniqueIdList::new(vec![template]).expect("unique");
         let binding = |route: registry_platform_yaml::ExternalId| Binding {
+            async_completion: None,
             id: local("find-cases"),
             operation: id("cases-find"),
             record_type: local("case"),
@@ -7757,7 +9410,7 @@ mod tests {
                 aggregate_on_exception: false,
                 parameters: Some(ToParameters {
                     http_method: Some(http_method),
-                    path: None,
+                    path: Some("/".to_string()),
                     path_parameters: BTreeMap::new(),
                     query: BTreeMap::new(),
                     body: None,
@@ -8016,6 +9669,7 @@ mod tests {
     #[test]
     fn write_refuses_two_posts_through_direct() {
         let profile = profile_builder(vec![ProfileOperation {
+            async_completion: None,
             id: local("cases-create"),
             method: HttpMethod::Post,
             path: "/v2/cases/{type}".to_string(),
@@ -8060,6 +9714,7 @@ mod tests {
         let mut project = project_builder(&pack);
         project.access_profiles = UniqueIdList::new(Vec::new()).expect("empty");
         project.bindings = UniqueIdList::new(vec![Binding {
+            async_completion: None,
             id: local("create-cases"),
             operation: id("cases-create"),
             record_type: local("case"),
@@ -8117,6 +9772,7 @@ mod tests {
         };
         let mut unclaimed = oauth_endpoint();
         unclaimed.operations = vec![EndpointOperation {
+            async_completion: None,
             id: local("cases-create"),
             idempotent_upstream: false,
             safe_upstream: false,
@@ -8160,6 +9816,7 @@ mod tests {
             })],
         };
         let profile = profile_builder(vec![ProfileOperation {
+            async_completion: None,
             id: local("cases-create"),
             method: HttpMethod::Post,
             path: "/v2/cases/{type}".to_string(),
@@ -8181,6 +9838,7 @@ mod tests {
         let mut project = project_builder(&pack);
         project.access_profiles = UniqueIdList::new(Vec::new()).expect("empty");
         project.bindings = UniqueIdList::new(vec![Binding {
+            async_completion: None,
             id: local("create-cases"),
             operation: id("cases-create"),
             record_type: local("case"),
@@ -8806,6 +10464,7 @@ mod tests {
         };
         let mut unclaimed = oauth_endpoint();
         unclaimed.operations = vec![EndpointOperation {
+            async_completion: None,
             id: local("cases-create"),
             idempotent_upstream: false,
             safe_upstream: false,
@@ -8843,6 +10502,7 @@ mod tests {
         let mut project = project_builder(&pack);
         project.access_profiles = UniqueIdList::new(Vec::new()).expect("empty");
         project.bindings = UniqueIdList::new(vec![Binding {
+            async_completion: None,
             id: local("find-cases"),
             operation: id("cases-find"),
             record_type: local("case"),
@@ -9172,6 +10832,7 @@ mod tests {
         }])
         .expect("unique");
         project.bindings = UniqueIdList::new(vec![Binding {
+            async_completion: None,
             id: local("find-cases"),
             operation: id("cases-find"),
             record_type: local("case"),
@@ -9195,6 +10856,7 @@ mod tests {
         }])
         .expect("unique");
         project.bindings = UniqueIdList::new(vec![Binding {
+            async_completion: None,
             id: local("binding"),
             operation: id("cases-missing"),
             record_type: local("ghost"),
@@ -9232,6 +10894,7 @@ mod tests {
         }])
         .expect("unique");
         project.bindings = UniqueIdList::new(vec![Binding {
+            async_completion: None,
             id: local("find-cases"),
             operation: id("cases-find"),
             record_type: local("case"),
@@ -9570,6 +11233,7 @@ mod tests {
         // for the one OAuth endpoint (CONCEPT 10.2): eleven; token
         // requests sit outside the budget.
         project.bindings = UniqueIdList::new(vec![Binding {
+            async_completion: None,
             id: local("find-cases"),
             operation: id("cases-find"),
             record_type: local("case"),
@@ -9581,6 +11245,7 @@ mod tests {
         let findings = check_project(&workspace(&profile, &pack, &project));
         assert_has(&findings, CheckCode::ProjectUpstreamBudgetExceeded);
         project.bindings = UniqueIdList::new(vec![Binding {
+            async_completion: None,
             id: local("find-cases"),
             operation: id("cases-find"),
             record_type: local("case"),
@@ -9590,6 +11255,201 @@ mod tests {
         }])
         .expect("unique");
         assert_clean(check_project(&workspace(&profile, &pack, &project)));
+    }
+
+    /// Evidence counts source-data operations, not OAuth token requests. The
+    /// same shared walk also has to follow `direct:` by the route's `from`
+    /// URI, count SQLite statements, and retain authored redelivery bounds.
+    #[test]
+    fn evidence_worst_case_uses_data_operation_semantics() {
+        let pack: AdapterPack = serde_json::from_value(serde_json::json!({
+            "id": "evidence-costs",
+            "version": "1",
+            "testedVersions": [],
+            "endpoints": [
+                {
+                    "id": "oauth-register",
+                    "component": "http",
+                    "authentication": {"type": "oauth2-client-credentials"},
+                    "attemptTimeoutMilliseconds": 1000,
+                    "maximumResponseBytes": 4096
+                },
+                {
+                    "id": "plain-register",
+                    "component": "http",
+                    "authentication": {"type": "none"},
+                    "attemptTimeoutMilliseconds": 1000,
+                    "maximumResponseBytes": 4096
+                },
+                {
+                    "id": "extract",
+                    "component": "sqlite-extract",
+                    "authentication": {"type": "none"},
+                    "maximumResponseBytes": 4096
+                }
+            ],
+            "routes": [
+                {
+                    "id": "decoy-id",
+                    "from": {"uri": "direct:oauth-read"},
+                    "steps": [{"to": {"uri": "http:oauth-register"}}]
+                },
+                {
+                    "id": "oauth-read",
+                    "from": {"uri": "direct:decoy-id"},
+                    "steps": [
+                        {"loop": {"constant": 9, "maximumIterations": 9,
+                            "steps": [{"to": {"uri": "sqlite-extract:extract"}}]}}
+                    ]
+                }
+            ],
+            "sourceRoutes": [
+                {"id": "oauth", "steps": [{"to": {"uri": "direct:oauth-read"}}]},
+                {"id": "sqlite-loop", "steps": [
+                    {"loop": {"constant": 2, "maximumIterations": 2,
+                        "steps": [{"to": {"uri": "sqlite-extract:extract"}}]}}
+                ]},
+                {"id": "redelivery", "steps": [
+                    {"errorHandler": {"defaultErrorHandler": {
+                        "redeliveryPolicy": {"maximumRedeliveries": 1}
+                    }}},
+                    {"to": {"uri": "http:plain-register"}}
+                ]}
+            ]
+        }))
+        .expect("pack");
+
+        let cost = |id: &str| {
+            let source = pack.source_routes.get(id).expect("source route");
+            evidence_route_worst_case(&pack, source.steps.as_slice())
+        };
+        assert_eq!(
+            cost("oauth"),
+            EvidenceRouteWorstCase {
+                data_operations: 2,
+                uncountable: false,
+            },
+            "one OAuth data send plus its possible refreshed resend costs two; the token request is not a third operation"
+        );
+        assert_eq!(
+            cost("sqlite-loop"),
+            EvidenceRouteWorstCase {
+                data_operations: 2,
+                uncountable: false,
+            },
+            "each bounded SQLite statement is one Evidence data operation"
+        );
+        assert_eq!(
+            cost("redelivery"),
+            EvidenceRouteWorstCase {
+                data_operations: 2,
+                uncountable: false,
+            },
+            "the declared redelivery remains part of the static worst case"
+        );
+    }
+
+    /// A route nested past the reader's bound is uncountable and must never
+    /// be admitted merely because the saturating count happens to fit.
+    #[test]
+    fn evidence_worst_case_reports_excessive_depth() {
+        let pack = pack_builder(Vec::new(), Vec::new());
+        let steps = nested_filters(
+            registry_platform_yaml::MAXIMUM_DEPTH + 1,
+            vec![to_get("case-api")],
+        );
+        let cost = evidence_route_worst_case(&pack, &steps);
+        assert_eq!(cost.data_operations, u64::MAX);
+        assert!(cost.uncountable);
+
+        let mut empty_steps = serde_json::json!([]);
+        for _ in 0..4 {
+            empty_steps = serde_json::json!([
+                {"loop": {
+                    "constant": 100_000,
+                    "maximumIterations": 100_000,
+                    "steps": empty_steps
+                }}
+            ]);
+        }
+        let empty_steps: Vec<Step> =
+            serde_json::from_value(empty_steps).expect("empty nested loop steps");
+        assert_eq!(
+            evidence_route_worst_case(&pack, &empty_steps),
+            EvidenceRouteWorstCase {
+                data_operations: 0,
+                uncountable: false,
+            },
+            "an unrepresentable multiplier with no data operation still has an exact zero cost"
+        );
+    }
+
+    /// A finite route whose exact count exceeds `u64` is uncountable even
+    /// though saturating arithmetic would otherwise equal the largest budget.
+    #[test]
+    fn evidence_worst_case_reports_arithmetic_overflow() {
+        let pack = pack_builder(Vec::new(), Vec::new());
+        let mut steps = serde_json::json!([
+            {"to": {"uri": "http:case-api"}}
+        ]);
+        for _ in 0..4 {
+            steps = serde_json::json!([
+                {"loop": {
+                    "constant": 100_000,
+                    "maximumIterations": 100_000,
+                    "steps": steps
+                }}
+            ]);
+        }
+        let steps: Vec<Step> = serde_json::from_value(steps).expect("nested loop steps");
+        let cost = evidence_route_worst_case(&pack, &steps);
+        assert_eq!(cost.data_operations, u64::MAX);
+        assert!(cost.uncountable);
+    }
+
+    /// A zero-cost continued clause adds nothing even when the route body's
+    /// exact operation count is `u64::MAX`; deriving the unused resume
+    /// multiplier must not turn that representable boundary into overflow.
+    #[test]
+    fn evidence_worst_case_keeps_exact_max_with_an_empty_continued_clause() {
+        let term = |coefficient: u64, powers_of_hundred_thousand: usize| {
+            let mut step = serde_json::json!({"to": {"uri": "http:case-api"}});
+            for maximum in
+                std::iter::once(coefficient).chain((0..powers_of_hundred_thousand).map(|_| 100_000))
+            {
+                step = serde_json::json!({
+                    "loop": {
+                        "constant": maximum,
+                        "maximumIterations": maximum,
+                        "steps": [step]
+                    }
+                });
+            }
+            step
+        };
+        let steps: Vec<Step> = serde_json::from_value(serde_json::Value::Array(vec![
+            term(18_446, 3),
+            term(74_407, 2),
+            term(37_095, 1),
+            term(51_615, 0),
+            serde_json::json!({
+                "onException": {
+                    "exception": ["upstream.timeout"],
+                    "continued": true,
+                    "steps": []
+                }
+            }),
+        ]))
+        .expect("exact maximum route steps");
+        let pack = pack_builder(Vec::new(), Vec::new());
+
+        assert_eq!(
+            evidence_route_worst_case(&pack, &steps),
+            EvidenceRouteWorstCase {
+                data_operations: u64::MAX,
+                uncountable: false,
+            }
+        );
     }
 
     /// A binding filters on declared record fields only
@@ -9610,6 +11470,7 @@ mod tests {
         let mut project = project_builder(&pack);
         project.access_profiles = UniqueIdList::new(Vec::new()).expect("empty");
         let binding = |filters: Vec<LocalId>| Binding {
+            async_completion: None,
             id: local("find-cases"),
             operation: id("cases-find"),
             record_type: local("case"),
@@ -9688,6 +11549,7 @@ mod tests {
         }])
         .expect("unique");
         let binding = |filters: Vec<LocalId>| Binding {
+            async_completion: None,
             id: local("find-cases"),
             operation: id("cases-find"),
             record_type: local("case"),
@@ -9851,6 +11713,7 @@ mod tests {
         // Three body sends plus the continued-clause send standalone and
         // once per body send: 3 + 1 * (1 + 3) = 7.
         project.bindings = UniqueIdList::new(vec![Binding {
+            async_completion: None,
             id: local("find-cases"),
             operation: id("cases-find"),
             record_type: local("case"),
@@ -9862,6 +11725,7 @@ mod tests {
         let findings = check_project(&workspace(&profile, &pack, &project));
         assert_has(&findings, CheckCode::ProjectUpstreamBudgetExceeded);
         project.bindings = UniqueIdList::new(vec![Binding {
+            async_completion: None,
             id: local("find-cases"),
             operation: id("cases-find"),
             record_type: local("case"),
@@ -9876,6 +11740,7 @@ mod tests {
         let mut project = project_builder(&pack);
         project.access_profiles = UniqueIdList::new(Vec::new()).expect("empty");
         project.bindings = UniqueIdList::new(vec![Binding {
+            async_completion: None,
             id: local("find-cases"),
             operation: id("cases-find"),
             record_type: local("case"),
@@ -9919,6 +11784,7 @@ mod tests {
         let mut project = project_builder(&pack);
         project.access_profiles = UniqueIdList::new(Vec::new()).expect("empty");
         project.bindings = UniqueIdList::new(vec![Binding {
+            async_completion: None,
             id: local("find-cases"),
             operation: id("cases-find"),
             record_type: local("case"),
@@ -9931,6 +11797,7 @@ mod tests {
         assert_has(&findings, CheckCode::ProjectUpstreamBudgetExceeded);
         // The exact worst case fits: 9 sends + 1 resend.
         project.bindings = UniqueIdList::new(vec![Binding {
+            async_completion: None,
             id: local("find-cases"),
             operation: id("cases-find"),
             record_type: local("case"),
@@ -9942,11 +11809,13 @@ mod tests {
         assert_clean(check_project(&workspace(&profile, &pack, &project)));
     }
 
-    /// A write route must wrap its sends in `idempotentConsumer` and carry
-    /// at most one non-safe send before Increment 3.
+    /// A write route must wrap its sends in `idempotentConsumer`. A flat
+    /// sequence of reviewed idempotent source operations is the resumable
+    /// multi-effect form; ordinary nested multi-effect routes remain refused.
     #[test]
     fn project_refuses_a_write_route_without_idempotency_and_two_non_safe_sends() {
         let profile = profile_builder(vec![ProfileOperation {
+            async_completion: None,
             id: local("cases-create"),
             method: HttpMethod::Post,
             path: "/v2/cases/{type}".to_string(),
@@ -9972,6 +11841,7 @@ mod tests {
         let mut project = project_builder(&pack);
         project.access_profiles = UniqueIdList::new(Vec::new()).expect("empty");
         project.bindings = UniqueIdList::new(vec![Binding {
+            async_completion: None,
             id: local("create-cases"),
             operation: id("cases-create"),
             record_type: local("case"),
@@ -10000,6 +11870,7 @@ mod tests {
         let mut wrapped_project = project_builder(&wrapped_pack);
         wrapped_project.access_profiles = UniqueIdList::new(Vec::new()).expect("empty");
         wrapped_project.bindings = UniqueIdList::new(vec![Binding {
+            async_completion: None,
             id: local("create-cases"),
             operation: id("cases-create"),
             record_type: local("case"),
@@ -10034,6 +11905,46 @@ mod tests {
         let mut doubled_project = project_builder(&doubled_pack);
         doubled_project.access_profiles = UniqueIdList::new(Vec::new()).expect("empty");
         doubled_project.bindings = UniqueIdList::new(vec![Binding {
+            async_completion: None,
+            id: local("create-cases"),
+            operation: id("cases-create"),
+            record_type: local("case"),
+            route: id("create-case"),
+            filters: UniqueList::new(Vec::new()).expect("unique"),
+            maximum_upstream_calls: BoundedU64::<1, 100_000>::new(10).expect("budget"),
+        }])
+        .expect("unique");
+        assert_clean(check_project(&workspace(
+            &profile,
+            &doubled_pack,
+            &doubled_project,
+        )));
+
+        let mut non_idempotent_endpoint = oauth_endpoint();
+        non_idempotent_endpoint.operations[0].idempotent_upstream = false;
+        let non_idempotent_pack = pack_builder(
+            vec![non_idempotent_endpoint],
+            vec![RouteDefinition {
+                id: local("create-case"),
+                from: RouteFrom {
+                    uri: direct("create-case"),
+                },
+                steps: vec![Step::IdempotentConsumer(IdempotentConsumerStep {
+                    expression: Expression::Header("Idempotency-Key".to_string()),
+                    eager: true,
+                    remove_on_failure: true,
+                    completion_eager: false,
+                    steps: vec![
+                        to_post("case-api", "cases-create"),
+                        to_post("case-api", "cases-create"),
+                    ],
+                })],
+            }],
+        );
+        let mut non_idempotent_project = project_builder(&non_idempotent_pack);
+        non_idempotent_project.access_profiles = UniqueIdList::new(Vec::new()).expect("empty");
+        non_idempotent_project.bindings = UniqueIdList::new(vec![Binding {
+            async_completion: None,
             id: local("create-cases"),
             operation: id("cases-create"),
             record_type: local("case"),
@@ -10043,8 +11954,271 @@ mod tests {
         }])
         .expect("unique");
         assert_has(
-            &check_project(&workspace(&profile, &doubled_pack, &doubled_project)),
+            &check_project(&workspace(
+                &profile,
+                &non_idempotent_pack,
+                &non_idempotent_project,
+            )),
             CheckCode::RouteMultipleNonSafeSends,
+        );
+    }
+
+    #[test]
+    fn linear_resume_bindings_are_singular_ordered_used_and_reconstructible() {
+        let profile = profile_builder(vec![operation("cases-create", HttpMethod::Post)]);
+        let route =
+            |first_path: &str, second_body: Expression, use_binding: bool, final_binding: bool| {
+                let mut second_path_parameters = BTreeMap::new();
+                second_path_parameters.insert(
+                    "id".to_string(),
+                    if use_binding {
+                        Expression::ExchangeProperty("AdapterResume.case_id".to_string())
+                    } else {
+                        Expression::Constant(serde_json::json!("fixed"))
+                    },
+                );
+                let binding = ResumeBinding {
+                    name: local("case_id"),
+                    path: first_path.to_string(),
+                };
+                RouteDefinition {
+                    id: local("create-case"),
+                    from: RouteFrom {
+                        uri: direct("create-case"),
+                    },
+                    steps: vec![Step::IdempotentConsumer(IdempotentConsumerStep {
+                        expression: Expression::Header("Idempotency-Key".to_string()),
+                        eager: true,
+                        remove_on_failure: true,
+                        completion_eager: false,
+                        steps: vec![
+                            Step::To(ToStep {
+                                uri: send("case-api"),
+                                parameters: Some(ToParameters {
+                                    http_method: Some(HttpMethod::Post),
+                                    path: Some("/cases".to_string()),
+                                    path_parameters: BTreeMap::new(),
+                                    query: BTreeMap::new(),
+                                    query_parameters: BTreeMap::new(),
+                                    http_uri: None,
+                                    body: Some(Expression::JsonPath("$.record".to_string())),
+                                    operation: Some(id("cases-create")),
+                                    throw_exception_on_failure: true,
+                                    ok_status_code_range: None,
+                                    resume_bindings: vec![binding.clone()],
+                                }),
+                            }),
+                            Step::To(ToStep {
+                                uri: send("case-api"),
+                                parameters: Some(ToParameters {
+                                    http_method: Some(HttpMethod::Post),
+                                    path: Some("/cases/{id}/submit".to_string()),
+                                    path_parameters: second_path_parameters,
+                                    query: BTreeMap::new(),
+                                    query_parameters: BTreeMap::new(),
+                                    http_uri: None,
+                                    body: Some(second_body),
+                                    operation: Some(id("cases-create")),
+                                    throw_exception_on_failure: true,
+                                    ok_status_code_range: None,
+                                    resume_bindings: if final_binding {
+                                        vec![binding]
+                                    } else {
+                                        Vec::new()
+                                    },
+                                }),
+                            }),
+                        ],
+                    })],
+                }
+            };
+        let project_for = |pack: &AdapterPack| {
+            let mut project = project_builder(pack);
+            project.access_profiles = UniqueIdList::new(Vec::new()).expect("empty");
+            project.bindings = UniqueIdList::new(vec![Binding {
+                async_completion: None,
+                id: local("create-cases"),
+                operation: id("cases-create"),
+                record_type: local("case"),
+                route: id("create-case"),
+                filters: UniqueList::new(Vec::new()).expect("unique"),
+                maximum_upstream_calls: BoundedU64::<1, 100_000>::new(10).expect("budget"),
+            }])
+            .expect("unique");
+            project
+        };
+        let findings_for = |route| {
+            let pack = pack_builder(vec![oauth_endpoint()], vec![route]);
+            let project = project_for(&pack);
+            check_project(&workspace(&profile, &pack, &project))
+        };
+
+        assert_clean(findings_for(route(
+            "$.id",
+            Expression::Constant(serde_json::json!({"command":"submit"})),
+            true,
+            false,
+        )));
+        let mut non_host_key = route(
+            "$.id",
+            Expression::Constant(serde_json::json!({"command":"submit"})),
+            true,
+            false,
+        );
+        let Step::IdempotentConsumer(consumer) = &mut non_host_key.steps[0] else {
+            panic!("the route has one idempotent consumer");
+        };
+        consumer.expression = Expression::Constant(serde_json::json!("shared"));
+        assert_has(&findings_for(non_host_key), CheckCode::RouteResumeInvalid);
+
+        let mut permissive_status = route(
+            "$.id",
+            Expression::Constant(serde_json::json!({"command":"submit"})),
+            true,
+            false,
+        );
+        let Step::IdempotentConsumer(consumer) = &mut permissive_status.steps[0] else {
+            panic!("the route has one idempotent consumer");
+        };
+        let Step::To(second) = &mut consumer.steps[1] else {
+            panic!("the second step is a send");
+        };
+        second
+            .parameters
+            .as_mut()
+            .expect("the send has parameters")
+            .throw_exception_on_failure = false;
+        assert_has(
+            &findings_for(permissive_status),
+            CheckCode::RouteResumeInvalid,
+        );
+
+        let mut custom_success = route(
+            "$.id",
+            Expression::Constant(serde_json::json!({"command":"submit"})),
+            true,
+            false,
+        );
+        let Step::IdempotentConsumer(consumer) = &mut custom_success.steps[0] else {
+            panic!("the route has one idempotent consumer");
+        };
+        let Step::To(second) = &mut consumer.steps[1] else {
+            panic!("the second step is a send");
+        };
+        second
+            .parameters
+            .as_mut()
+            .expect("the send has parameters")
+            .ok_status_code_range = Some("200-499".to_owned());
+        assert_has(&findings_for(custom_success), CheckCode::RouteResumeInvalid);
+
+        let header_route = route(
+            "$.id",
+            Expression::Constant(serde_json::json!({"command":"submit"})),
+            true,
+            false,
+        );
+        let mut header_endpoint = oauth_endpoint();
+        header_endpoint.request_headers =
+            UniqueList::new(vec![id("X-Source-Context")]).expect("unique");
+        let header_pack = pack_builder(vec![header_endpoint], vec![header_route]);
+        let header_project = project_for(&header_pack);
+        assert_has(
+            &check_project(&workspace(&profile, &header_pack, &header_project)),
+            CheckCode::RouteResumeInvalid,
+        );
+
+        assert_has(
+            &findings_for(route(
+                "$.items[*].id",
+                Expression::Constant(serde_json::json!({"command":"submit"})),
+                true,
+                false,
+            )),
+            CheckCode::RouteResumeInvalid,
+        );
+        assert_has(
+            &findings_for(route(
+                "$.id",
+                Expression::Constant(serde_json::json!({"command":"submit"})),
+                false,
+                false,
+            )),
+            CheckCode::RouteResumeInvalid,
+        );
+        assert_has(
+            &findings_for(route(
+                "$.id",
+                Expression::JsonPath("$.command".to_string()),
+                true,
+                false,
+            )),
+            CheckCode::RouteResumeInvalid,
+        );
+        assert_has(
+            &findings_for(route(
+                "$.id",
+                Expression::Constant(serde_json::json!({"command":"submit"})),
+                true,
+                true,
+            )),
+            CheckCode::RouteResumeInvalid,
+        );
+
+        let mut single_send = to_post("case-api", "cases-create");
+        let Step::To(single_to) = &mut single_send else {
+            panic!("the helper returns a send");
+        };
+        single_to
+            .parameters
+            .as_mut()
+            .expect("the send has parameters")
+            .resume_bindings = vec![ResumeBinding {
+            name: local("ignored_id"),
+            path: "$.id".to_owned(),
+        }];
+        let single_route = RouteDefinition {
+            id: local("create-case"),
+            from: RouteFrom {
+                uri: direct("create-case"),
+            },
+            steps: vec![Step::IdempotentConsumer(IdempotentConsumerStep {
+                expression: Expression::Header("Idempotency-Key".to_owned()),
+                eager: true,
+                remove_on_failure: true,
+                completion_eager: false,
+                steps: vec![single_send],
+            })],
+        };
+        assert_has(&findings_for(single_route), CheckCode::RouteResumeInvalid);
+
+        let mut read_send = to_get("case-api");
+        let Step::To(read_to) = &mut read_send else {
+            panic!("the helper returns a send");
+        };
+        read_to
+            .parameters
+            .as_mut()
+            .expect("the send has parameters")
+            .resume_bindings = vec![ResumeBinding {
+            name: local("ignored_id"),
+            path: "$.id".to_owned(),
+        }];
+        let read_profile = profile_builder(vec![operation("cases-find", HttpMethod::Get)]);
+        let read_pack = pack_builder(
+            vec![oauth_endpoint()],
+            vec![RouteDefinition {
+                id: local("find-cases"),
+                from: RouteFrom {
+                    uri: direct("find-cases"),
+                },
+                steps: vec![read_send],
+            }],
+        );
+        let read_project = read_binding_project(&read_pack);
+        assert_has(
+            &check_project(&workspace(&read_profile, &read_pack, &read_project)),
+            CheckCode::RouteResumeInvalid,
         );
     }
 
@@ -10054,6 +12228,7 @@ mod tests {
         let mut project = project_builder(pack);
         project.access_profiles = UniqueIdList::new(Vec::new()).expect("empty");
         project.bindings = UniqueIdList::new(vec![Binding {
+            async_completion: None,
             id: local("find-cases"),
             operation: id("cases-find"),
             record_type: local("case"),
@@ -10137,6 +12312,7 @@ mod tests {
         project.access_profiles = UniqueIdList::new(Vec::new()).expect("empty");
         project.bindings = UniqueIdList::new(vec![
             Binding {
+                async_completion: None,
                 id: local("find-cases"),
                 operation: id("cases-find"),
                 record_type: local("case"),
@@ -10145,6 +12321,7 @@ mod tests {
                 maximum_upstream_calls: BoundedU64::<1, 100_000>::new(10).expect("budget"),
             },
             Binding {
+                async_completion: None,
                 id: local("search-cases"),
                 operation: id("cases-search"),
                 record_type: local("case"),
@@ -10365,13 +12542,15 @@ mod tests {
             id: local("graph-api"),
             component: ComponentKind::GraphQl,
             authentication: EndpointAuthentication::None {},
-            attempt_timeout_milliseconds: registry_platform_yaml::BoundedU64::new(10_000)
-                .expect("attempt timeout"),
+            attempt_timeout_milliseconds: Some(
+                registry_platform_yaml::BoundedU64::new(10_000).expect("attempt timeout"),
+            ),
             maximum_response_bytes: registry_platform_yaml::BoundedU64::new(1_048_576)
                 .expect("response bound"),
             response_headers: UniqueList::new(Vec::new()).expect("empty"),
             request_headers: UniqueList::new(Vec::new()).expect("unique"),
             operations: vec![EndpointOperation {
+                async_completion: None,
                 id: local("person-find"),
                 idempotent_upstream: false,
                 safe_upstream: true,
@@ -10379,8 +12558,12 @@ mod tests {
             }],
             tested_versions: vec!["1.0".to_string()],
             query_file: Some("queries/person.graphql".to_string()),
+            key_column: None,
+            parameter_order: None,
             operation_name: None,
             variables: None,
+            sqlite_extract: None,
+            host_protocol: None,
         };
         let mutation_route = RouteDefinition {
             id: local("find-cases"),
@@ -10419,6 +12602,7 @@ mod tests {
     #[test]
     fn a_claimed_safe_upstream_post_no_longer_counts_as_a_non_safe_send_on_a_write_route() {
         let profile = profile_builder(vec![ProfileOperation {
+            async_completion: None,
             id: local("cases-create"),
             method: HttpMethod::Post,
             path: "/v2/cases/{type}".to_string(),
@@ -10444,6 +12628,7 @@ mod tests {
             let mut project = project_builder(pack);
             project.access_profiles = UniqueIdList::new(Vec::new()).expect("empty");
             project.bindings = UniqueIdList::new(vec![Binding {
+                async_completion: None,
                 id: local("create-cases"),
                 operation: id("cases-create"),
                 record_type: local("case"),
@@ -10589,6 +12774,7 @@ mod tests {
             mtls_identity: None,
             attempt_timeout_milliseconds: None,
             maximum_response_bytes: None,
+            maximum_concurrency: BoundedU64::new(8).expect("concurrency"),
         }
     }
 
@@ -10646,6 +12832,7 @@ mod tests {
             }),
             attempt_timeout_milliseconds: None,
             maximum_response_bytes: None,
+            maximum_concurrency: BoundedU64::new(8).expect("concurrency"),
         };
         let none_finds = |binding: EndpointBinding, expected: CheckCode| {
             let runtime = runtime_builder(vec![binding]);
@@ -10988,6 +13175,65 @@ mod tests {
     }
 
     #[test]
+    fn runtime_checks_token_endpoint_uri_bytes_for_both_oauth_kinds() {
+        for private_key in [false, true] {
+            let profile = profile_builder(vec![]);
+            let mut endpoint = oauth_endpoint();
+            if private_key {
+                endpoint.authentication = EndpointAuthentication::Oauth2PrivateKeyJwt {};
+            }
+            let pack = pack_builder(vec![endpoint], vec![]);
+            let project = project_builder(&pack);
+            for (token_endpoint, accepted) in [
+                ("https://token.example.invalid/tokén", false),
+                ("https://token.example.invalid/token{raw}", false),
+                ("https://token.example.invalid/token%GG", false),
+                ("https://token.example.invalid/token%", false),
+                ("https://token.example.invalid/tok%C3%A9n", true),
+                ("https://token.example.invalid/token%7Braw%7D", true),
+            ] {
+                let mut binding = oauth_binding("https://cases.example.invalid");
+                let mut credential = serde_json::json!({
+                    "type":"oauth2-client-credentials",
+                    "tokenEndpoint":token_endpoint,
+                    "clientIdRef":"secret:env/CLIENT_ID",
+                    "clientSecretRef":"secret:env/CLIENT_SECRET",
+                    "credentialPlacement":"form-body",
+                    "maximumCacheSeconds":60
+                });
+                if private_key {
+                    credential["type"] = "oauth2-private-key-jwt".into();
+                    credential
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("clientSecretRef");
+                    credential
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("credentialPlacement");
+                    credential["clientAssertionKeyRef"] = "secret:env/ASSERTION_KEY".into();
+                }
+                binding.credential = Some(serde_json::from_value(credential).unwrap());
+                let runtime = runtime_builder(vec![binding]);
+                let mut ws = workspace(&profile, &pack, &project);
+                ws.runtime = Some(&runtime);
+                let findings = check_runtime(&ws, &runtime);
+                if accepted {
+                    assert_clean(findings);
+                } else {
+                    assert_eq!(
+                        findings.len(),
+                        1,
+                        "invalid URI bytes must be refused offline"
+                    );
+                    assert_eq!(findings[0].code, CheckCode::RuntimeInvalidOrigin.code());
+                    assert_eq!(findings[0].path, "/endpoints/0/credential/tokenEndpoint");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn runtime_refuses_unknown_and_missing_endpoint_bindings() {
         let profile = profile_builder(vec![]);
         let pack = pack_builder(vec![oauth_endpoint()], vec![]);
@@ -11101,13 +13347,15 @@ mod tests {
             id: local("graph-api"),
             component: ComponentKind::GraphQl,
             authentication: EndpointAuthentication::None {},
-            attempt_timeout_milliseconds: registry_platform_yaml::BoundedU64::new(10_000)
-                .expect("attempt timeout"),
+            attempt_timeout_milliseconds: Some(
+                registry_platform_yaml::BoundedU64::new(10_000).expect("attempt timeout"),
+            ),
             maximum_response_bytes: registry_platform_yaml::BoundedU64::new(1_048_576)
                 .expect("response bound"),
             response_headers: UniqueList::new(Vec::new()).expect("empty"),
             request_headers: UniqueList::new(Vec::new()).expect("unique"),
             operations: vec![EndpointOperation {
+                async_completion: None,
                 id: local("person-find"),
                 idempotent_upstream: false,
                 safe_upstream: false,
@@ -11115,8 +13363,12 @@ mod tests {
             }],
             tested_versions: vec!["1.0".to_string()],
             query_file: Some("queries/person.graphql".to_string()),
+            key_column: None,
+            parameter_order: None,
             operation_name: None,
             variables: None,
+            sqlite_extract: None,
+            host_protocol: None,
         };
         let redelivered_send = |operation: &str| RouteDefinition {
             id: local("fetch-person"),
@@ -11189,13 +13441,15 @@ mod tests {
             id: local("graph-api"),
             component: ComponentKind::GraphQl,
             authentication: EndpointAuthentication::None {},
-            attempt_timeout_milliseconds: registry_platform_yaml::BoundedU64::new(10_000)
-                .expect("attempt timeout"),
+            attempt_timeout_milliseconds: Some(
+                registry_platform_yaml::BoundedU64::new(10_000).expect("attempt timeout"),
+            ),
             maximum_response_bytes: registry_platform_yaml::BoundedU64::new(1_048_576)
                 .expect("response bound"),
             response_headers: UniqueList::new(Vec::new()).expect("empty"),
             request_headers: UniqueList::new(Vec::new()).expect("unique"),
             operations: vec![EndpointOperation {
+                async_completion: None,
                 id: local("person-find"),
                 idempotent_upstream: false,
                 safe_upstream: false,
@@ -11203,8 +13457,12 @@ mod tests {
             }],
             tested_versions: vec!["1.0".to_string()],
             query_file: Some("queries/person.graphql".to_string()),
+            key_column: None,
+            parameter_order: None,
             operation_name: None,
             variables: None,
+            sqlite_extract: None,
+            host_protocol: None,
         };
         let send_route = |parameters: ToParameters| RouteDefinition {
             id: local("fetch-person"),
@@ -11430,13 +13688,15 @@ mod tests {
             id: local("graph-api"),
             component: ComponentKind::GraphQl,
             authentication: EndpointAuthentication::None {},
-            attempt_timeout_milliseconds: registry_platform_yaml::BoundedU64::new(10_000)
-                .expect("attempt timeout"),
+            attempt_timeout_milliseconds: Some(
+                registry_platform_yaml::BoundedU64::new(10_000).expect("attempt timeout"),
+            ),
             maximum_response_bytes: registry_platform_yaml::BoundedU64::new(1_048_576)
                 .expect("response bound"),
             response_headers: UniqueList::new(Vec::new()).expect("empty"),
             request_headers: UniqueList::new(Vec::new()).expect("unique"),
             operations: vec![EndpointOperation {
+                async_completion: None,
                 id: local("person-find"),
                 idempotent_upstream: false,
                 safe_upstream: false,
@@ -11444,8 +13704,12 @@ mod tests {
             }],
             tested_versions: vec!["1.0".to_string()],
             query_file: Some("queries/person.graphql".to_string()),
+            key_column: None,
+            parameter_order: None,
             operation_name: None,
             variables: None,
+            sqlite_extract: None,
+            host_protocol: None,
         };
         let graphql_link = RouteDefinition {
             id: local("fetch-person"),
@@ -11587,7 +13851,7 @@ mod tests {
                 aggregate_on_exception: false,
                 parameters: Some(ToParameters {
                     http_method: Some(HttpMethod::Get),
-                    path: None,
+                    path: Some("/".to_string()),
                     path_parameters: BTreeMap::new(),
                     query: BTreeMap::new(),
                     body: None,
@@ -12368,6 +14632,7 @@ mod tests {
                 status: BoundedU32::new(200).expect("a status"),
                 headers: RecordedHeaders::new(),
                 body: None,
+                raw_body_base64: None,
             },
         }
     }
@@ -12400,6 +14665,7 @@ mod tests {
         let pack = pack_builder(vec![oauth_endpoint()], vec![]);
         let mut project = project_builder(&pack);
         project.bindings = UniqueIdList::new(vec![Binding {
+            async_completion: None,
             id: local("find-cases"),
             operation: id("cases-find"),
             record_type: local("case"),
@@ -12469,6 +14735,7 @@ mod tests {
 
         // A binding to a route makes the operation exercisable: passes.
         project.bindings = UniqueIdList::new(vec![Binding {
+            async_completion: None,
             id: local("find-cases"),
             operation: id("cases-find"),
             record_type: local("case"),
@@ -12494,6 +14761,7 @@ mod tests {
         let pack = pack_builder(vec![oauth_endpoint()], vec![]);
         let mut project = project_builder(&pack);
         project.bindings = UniqueIdList::new(vec![Binding {
+            async_completion: None,
             id: local("find-cases"),
             operation: id("cases-find"),
             record_type: local("case"),
@@ -12571,6 +14839,7 @@ mod tests {
         let pack = pack_builder(vec![oauth_endpoint()], vec![]);
         let mut project = project_builder(&pack);
         project.bindings = UniqueIdList::new(vec![Binding {
+            async_completion: None,
             id: local("find-cases"),
             operation: id("cases-find"),
             record_type: local("case"),
@@ -12611,6 +14880,7 @@ mod tests {
         let pack = pack_builder(vec![oauth_endpoint()], vec![]);
         let mut project = project_builder(&pack);
         project.bindings = UniqueIdList::new(vec![Binding {
+            async_completion: None,
             id: local("find-cases"),
             operation: id("cases-find"),
             record_type: local("case"),
@@ -12699,6 +14969,7 @@ mod tests {
         let pack = pack_builder(vec![api_key_endpoint], vec![]);
         let mut project = project_builder(&pack);
         project.bindings = UniqueIdList::new(vec![Binding {
+            async_completion: None,
             id: local("find-cases"),
             operation: id("cases-find"),
             record_type: local("case"),
@@ -12943,6 +15214,7 @@ mod tests {
         let mut project = project_builder(&pack);
         project.access_profiles = UniqueIdList::new(Vec::new()).expect("empty");
         project.bindings = UniqueIdList::new(vec![Binding {
+            async_completion: None,
             id: local("find-cases"),
             operation: id("cases-find"),
             record_type: local("case"),
@@ -12964,6 +15236,7 @@ mod tests {
     fn bound_project(pack: &AdapterPack, route: &str) -> AdapterProject {
         let mut project = project_builder(pack);
         project.bindings = UniqueIdList::new(vec![Binding {
+            async_completion: None,
             id: local("find-cases"),
             operation: id("cases-find"),
             record_type: local("case"),
@@ -12977,6 +15250,319 @@ mod tests {
 
     fn has_job_code(findings: &[Diagnostic], code: JobCode) -> bool {
         findings.iter().any(|finding| finding.code == code.code())
+    }
+
+    /// One ordinary source route over HTTP, built from its wire form so the
+    /// source-route admission tests exercise the same authored shape that a
+    /// pack reader supplies to the public checks.
+    fn source_route_http_pack(steps: serde_json::Value) -> AdapterPack {
+        serde_json::from_value(serde_json::json!({
+            "id": "source-pack",
+            "version": "1",
+            "testedVersions": [],
+            "endpoints": [{
+                "id": "provider",
+                "component": "http",
+                "authentication": { "type": "none" },
+                "attemptTimeoutMilliseconds": 10000,
+                "maximumResponseBytes": 1048576,
+                "operations": [{ "id": "lookup", "safeUpstream": true }]
+            }],
+            "sourceRoutes": [{
+                "id": "source-lookup",
+                "scan": "finite",
+                "nextRecovery": "exact-replay",
+                "edits": "ordered",
+                "steps": steps
+            }]
+        }))
+        .expect("source pack")
+    }
+
+    /// A source route is a public route entry point, so an HTTP send nested
+    /// under an EIP still declares exactly one destination form. The public
+    /// workspace admission must surface the same value-free route finding as
+    /// a facade-authored body.
+    #[test]
+    fn nested_source_http_send_requires_a_path_or_http_uri() {
+        let pack = source_route_http_pack(serde_json::json!([{
+            "filter": {
+                "constant": true,
+                "steps": [{
+                    "to": {
+                        "uri": "http:provider",
+                        "parameters": { "httpMethod": "GET", "operation": "lookup" }
+                    }
+                }]
+            }
+        }]));
+        let project = project_builder(&pack);
+        let findings = check_routes(&pack, &project);
+        assert_has(&findings, CheckCode::RouteHttpUriMembers);
+        assert!(
+            findings.iter().any(|finding| {
+                finding.path == "/sourceRoutes/0/steps/0/steps/0/parameters/path"
+            }),
+            "the missing destination points at the nested source send: {findings:?}"
+        );
+
+        let profile = profile_builder(Vec::new());
+        assert_has(
+            &check_workspace(&workspace(&profile, &pack, &project)),
+            CheckCode::RouteHttpUriMembers,
+        );
+    }
+
+    /// Omitting the whole parameters object does not exempt an HTTP `to` or
+    /// `enrich` from naming exactly one destination form. Source-route
+    /// admission reports both nested shapes before a host tries to run them.
+    #[test]
+    fn nested_source_parameter_free_http_sends_require_a_destination() {
+        let pack = source_route_http_pack(serde_json::json!([{
+            "filter": {
+                "constant": true,
+                "steps": [
+                    { "to": { "uri": "http:provider" } },
+                    { "enrich": { "uri": "http:provider" } }
+                ]
+            }
+        }]));
+        let findings = check_routes(&pack, &project_builder(&pack));
+        let destination_paths = findings
+            .iter()
+            .filter(|finding| finding.code == CheckCode::RouteHttpUriMembers.code())
+            .map(|finding| finding.path.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            destination_paths,
+            [
+                "/sourceRoutes/0/steps/0/steps/0/parameters/path",
+                "/sourceRoutes/0/steps/0/steps/1/parameters/path",
+            ],
+            "both parameter-free HTTP forms require a destination: {findings:?}"
+        );
+    }
+
+    /// Source-route `to` and `enrich` steps reuse the common path-template
+    /// correspondence rule even when nested. This is the authored admission
+    /// boundary, before either the job host or Evidence executes a route.
+    #[test]
+    fn nested_source_sends_check_path_parameter_correspondence() {
+        let pack = source_route_http_pack(serde_json::json!([{
+            "filter": {
+                "constant": true,
+                "steps": [
+                    {
+                        "to": {
+                            "uri": "http:provider",
+                            "parameters": {
+                                "httpMethod": "GET",
+                                "path": "/v1/facts/{{given_name}}",
+                                "operation": "lookup"
+                            }
+                        }
+                    },
+                    {
+                        "enrich": {
+                            "uri": "http:provider",
+                            "parameters": {
+                                "httpMethod": "GET",
+                                "path": "/v1/facts",
+                                "pathParameters": {
+                                    "given_name": { "constant": "Ada" }
+                                },
+                                "operation": "lookup"
+                            }
+                        }
+                    }
+                ]
+            }
+        }]));
+        let project = project_builder(&pack);
+        let findings = check_routes(&pack, &project);
+        let mismatch_paths = findings
+            .iter()
+            .filter(|finding| finding.code == CheckCode::RoutePathParameterMismatch.code())
+            .map(|finding| finding.path.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            mismatch_paths,
+            [
+                "/sourceRoutes/0/steps/0/steps/0/parameters/path",
+                "/sourceRoutes/0/steps/0/steps/1/parameters/pathParameters",
+            ],
+            "both nested source sends use the common path rule: {findings:?}"
+        );
+    }
+
+    /// Source and internal route ids remain separate namespaces even when an
+    /// invalid pack collides them: validation reports each authored body at
+    /// its own location instead of overwriting a prefix or making the source
+    /// entry point a direct consumer.
+    #[test]
+    fn colliding_source_and_internal_ids_keep_their_authored_locations() {
+        let mut pack = source_route_http_pack(serde_json::json!([{
+            "to": {"uri": "http:provider", "parameters": {
+                "httpMethod": "GET",
+                "path": "/v1/facts/{{given_name}}",
+                "operation": "lookup"
+            }}
+        }]));
+        pack.routes = UniqueIdList::new(vec![RouteDefinition {
+            id: local("source-lookup"),
+            from: RouteFrom {
+                uri: direct("source-lookup"),
+            },
+            steps: vec![Step::To(ToStep {
+                uri: send("provider"),
+                parameters: Some(ToParameters {
+                    http_method: Some(HttpMethod::Get),
+                    path: Some("not-origin-relative".to_string()),
+                    path_parameters: BTreeMap::new(),
+                    query: BTreeMap::new(),
+                    body: None,
+                    operation: Some(id("lookup")),
+                    throw_exception_on_failure: true,
+                    ok_status_code_range: None,
+                    http_uri: None,
+                    resume_bindings: Vec::new(),
+                    query_parameters: BTreeMap::new(),
+                }),
+            })],
+        }])
+        .expect("unique route");
+
+        let findings = check_routes(&pack, &project_builder(&pack));
+        assert!(findings.iter().any(|finding| {
+            finding.code == CheckCode::RouteInvalidPath.code()
+                && finding.path == "/routes/source-lookup/steps/0/parameters/path"
+        }));
+        assert!(findings.iter().any(|finding| {
+            finding.code == CheckCode::RoutePathParameterMismatch.code()
+                && finding.path == "/sourceRoutes/0/steps/0/parameters/path"
+        }));
+    }
+
+    /// Extending the shared route admission to source entry points must keep
+    /// non-HTTP route rules active and must not apply HTTP address rules to a
+    /// static direct send.
+    #[test]
+    fn source_routes_keep_non_http_route_rules() {
+        let pack = source_route_http_pack(serde_json::json!([{
+            "filter": {
+                "constant": true,
+                "steps": [{
+                    "loop": { "constant": 1, "steps": [] }
+                }]
+            }
+        }]));
+        let project = project_builder(&pack);
+        assert_has(
+            &check_routes(&pack, &project),
+            CheckCode::RouteMaximumIterationsRequired,
+        );
+
+        let mut direct_pack = source_route_http_pack(serde_json::json!([
+            { "to": { "uri": "direct:normalize" } },
+            { "enrich": { "uri": "direct:normalize" } }
+        ]));
+        direct_pack.routes = UniqueIdList::new(vec![RouteDefinition {
+            id: local("normalize"),
+            from: RouteFrom {
+                uri: direct("normalize"),
+            },
+            steps: Vec::new(),
+        }])
+        .expect("unique route");
+        let findings = check_routes(&direct_pack, &project_builder(&direct_pack));
+        assert!(
+            !codes(&findings).contains(&CheckCode::RouteHttpUriMembers.code()),
+            "a direct source send carries no HTTP destination finding: {findings:?}"
+        );
+    }
+
+    fn evidence_timeout_pack(
+        attempt_timeout_milliseconds: Option<u64>,
+        ordinary_source: bool,
+    ) -> AdapterPack {
+        let mut endpoint = serde_json::json!({
+            "id": "register",
+            "component": "http",
+            "authentication": { "type": "none" },
+            "maximumResponseBytes": 1048576
+        });
+        if let Some(timeout) = attempt_timeout_milliseconds {
+            endpoint["attemptTimeoutMilliseconds"] = serde_json::json!(timeout);
+        }
+        let mut source_routes = vec![serde_json::json!({
+            "id": "evidence-register",
+            "evidence": {
+                "inputsSchema": {
+                    "path": "schemas/inputs.json",
+                    "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+                },
+                "factsSchema": {
+                    "path": "schemas/facts.json",
+                    "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+                }
+            },
+            "steps": [{ "to": { "uri": "direct:shared-read" } }]
+        })];
+        if ordinary_source {
+            source_routes.push(serde_json::json!({
+                "id": "job-register",
+                "scan": "finite",
+                "nextRecovery": "exact-replay",
+                "edits": "ordered",
+                "steps": [{ "to": { "uri": "direct:shared-read" } }]
+            }));
+        }
+        serde_json::from_value(serde_json::json!({
+            "id": "register-pack",
+            "version": "1",
+            "testedVersions": [],
+            "endpoints": [endpoint],
+            "routes": [{
+                "id": "shared-read",
+                "from": { "uri": "direct:shared-read" },
+                "steps": [{ "to": { "uri": "http:register" } }]
+            }],
+            "sourceRoutes": source_routes
+        }))
+        .expect("pack")
+    }
+
+    /// Evidence owns a longer, configurable acquisition deadline. Only an
+    /// endpoint proven reachable exclusively from Evidence may omit the
+    /// ordinary ten-second attempt policy or declare a longer attempt.
+    #[test]
+    fn attempt_timeout_policy_follows_endpoint_reachability() {
+        for timeout in [None, Some(45_000)] {
+            let evidence_only = evidence_timeout_pack(timeout, false);
+            let findings = check_pack(&evidence_only);
+            assert!(
+                !codes(&findings).contains(&CheckCode::PackAttemptTimeoutMissing.code())
+                    && !codes(&findings)
+                        .contains(&CheckCode::PackAttemptTimeoutAboveOrdinaryMaximum.code()),
+                "an Evidence-only endpoint keeps the Evidence attempt policy: {findings:?}"
+            );
+        }
+
+        let missing = evidence_timeout_pack(None, true);
+        assert_has(&check_pack(&missing), CheckCode::PackAttemptTimeoutMissing);
+
+        let too_long = evidence_timeout_pack(Some(10_001), true);
+        assert_has(
+            &check_pack(&too_long),
+            CheckCode::PackAttemptTimeoutAboveOrdinaryMaximum,
+        );
+
+        let facade_reachable = evidence_timeout_pack(Some(45_000), false);
+        let project = bound_project(&facade_reachable, "shared-read");
+        assert_has(
+            &check_job_boundaries(&facade_reachable, &project),
+            CheckCode::PackAttemptTimeoutAboveOrdinaryMaximum,
+        );
     }
 
     /// The job-source and postgres endpoint components pass the pack
@@ -12996,7 +15582,7 @@ mod tests {
                       "attemptTimeoutMilliseconds": 10000, "maximumResponseBytes": 1048576 },
                     { "id": "ledger", "component": "postgres", "authentication": { "type": "none" },
                       "attemptTimeoutMilliseconds": 10000, "maximumResponseBytes": 1048576,
-                      "queryFile": "queries/ledger.sql" }
+                      "queryFile": "queries/ledger.sql", "keyColumn": "id" }
                 ],
                 "queryFiles": [
                     { "path": "queries/ledger.sql", "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111" }
@@ -13021,6 +15607,10 @@ mod tests {
             has_job_code(&findings, JobCode::PostgresQueryUnpinned),
             "a postgres endpoint without a query file refuses: {findings:?}"
         );
+        assert!(
+            has_job_code(&findings, JobCode::PostgresKeyRequired),
+            "a postgres endpoint without a key column refuses: {findings:?}"
+        );
         assert_eq!(
             findings
                 .iter()
@@ -13028,6 +15618,25 @@ mod tests {
                 .and_then(|finding| finding.artifact.as_deref()),
             Some("AdapterPack")
         );
+
+        let misplaced = job_pack(
+            r#"{
+                "id": "kobo-pack",
+                "version": "1",
+                "testedVersions": [],
+                "endpoints": [
+                    { "id": "cases", "component": "http", "authentication": { "type": "none" },
+                      "attemptTimeoutMilliseconds": 10000, "maximumResponseBytes": 1048576,
+                      "keyColumn": "id", "parameterOrder": ["cursor"] }
+                ]
+            }"#,
+        );
+        let misplaced = check_pack(&misplaced);
+        assert!(has_job_code(&misplaced, JobCode::PostgresKeyRequired));
+        assert!(has_job_code(
+            &misplaced,
+            JobCode::PostgresParametersRequired
+        ));
 
         let direct = job_pack(
             r#"{
@@ -13215,7 +15824,7 @@ mod tests {
                 "sourceRoutes": [
                     { "id": "kobo-submissions", "scan": "ongoing", "nextRecovery": "key-deduplicated", "edits": "ordered",
                       "steps": [
-                        { "pollEnrich": { "uri": "file:submissions", "timeoutMilliseconds": 5000, "decoder": { "delimiter": ";" } } },
+                        { "pollEnrich": { "uri": "file:submissions", "timeoutMilliseconds": 5000, "decoder": { "delimiter": ";" }, "keyPointer": "/id" } },
                         { "to": { "uri": "direct:normalize" } },
                         { "to": { "uri": "postgres:ledger" } }
                       ] }
@@ -13341,6 +15950,10 @@ mod tests {
             has_job_code(&findings, JobCode::SourceCalledRefused),
             "a direct send into a source route refuses: {findings:?}"
         );
+        assert_has(
+            &check_routes(&pack, &project),
+            CheckCode::RouteUnknownDirectTarget,
+        );
     }
 
     /// A poll names a declared endpoint of its scheme under a mandatory
@@ -13369,7 +15982,7 @@ mod tests {
                         { "pollEnrich": { "uri": "sftp:submissions", "timeoutMilliseconds": 5 } },
                         { "pollEnrich": { "uri": "sftp:dropbox" } },
                         { "pollEnrich": { "uri": "sftp:dropbox", "timeoutMilliseconds": 5, "decoder": "parquet" } },
-                        { "pollEnrich": { "uri": "file:submissions", "timeoutMilliseconds": 5, "decoder": "jsonl" } }
+                        { "pollEnrich": { "uri": "file:submissions", "timeoutMilliseconds": 5, "decoder": "jsonl", "keyPointer": "/id" } }
                       ] }
                 ]
             }"#,
@@ -13400,6 +16013,50 @@ mod tests {
             5,
             "the sound polls stay unrefused: {findings:?}"
         );
+    }
+
+    #[test]
+    fn row_decoders_require_one_valid_business_key_pointer() {
+        let pack = job_pack(
+            r#"{"id":"file-pack","version":"1","testedVersions":[],
+            "endpoints":[{"id":"rows","component":"file","authentication":{"type":"none"},"attemptTimeoutMilliseconds":1000,"maximumResponseBytes":1024}],
+            "routes":[]}"#,
+        );
+        for (decoder, pointer, accepted) in [
+            ("csv", Some("/householdId"), true),
+            ("csv", Some("/0"), true),
+            ("jsonl", Some("/submission/id"), true),
+            ("jsonl", Some("/escaped~1slash/~0tilde"), true),
+            ("jsonl", Some(""), true),
+            ("csv", Some(""), false),
+            ("csv", Some("/nested/id"), false),
+            ("csv", None, false),
+            ("jsonl", None, false),
+            ("csv", Some("relative"), false),
+            ("jsonl", Some("/bad~2escape"), false),
+            ("jsonl", Some("/bad~"), false),
+            ("raw", Some("/id"), false),
+        ] {
+            let mut value =
+                serde_json::json!({"uri":"file:rows","timeoutMilliseconds":1000,"decoder":decoder});
+            if let Some(pointer) = pointer {
+                value["keyPointer"] = serde_json::json!(pointer);
+            }
+            let poll = serde_json::from_value(value).expect("supported row selector member");
+            let mut findings = Vec::new();
+            poll_enrich_checks(&mut findings, "/pollEnrich", &poll, &pack);
+            assert_eq!(
+                findings.is_empty(),
+                accepted,
+                "decoder {decoder}: {findings:?}"
+            );
+            if !accepted {
+                assert!(
+                    findings.iter().all(|f| f.path == "/pollEnrich/keyPointer"),
+                    "{findings:?}"
+                );
+            }
+        }
     }
 
     /// A postgres send stays within its shape: the named parameters ride

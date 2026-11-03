@@ -9,8 +9,8 @@ See [the export contract](../EVIDENCE.md) and [BReg development](../DEV.md).
 | Input | Responsibility |
 | --- | --- |
 | `registry/` | Explicit native BReg project with two unique selectors, status facts, an operator and a lookup-only source profile. |
-| `offline-starter/` | Complete native EvidenceProject with named Functions, a local target, complete target authority and 13 SQLite fixtures. |
-| `starter/` | Reviewed authoring fragment, derive Functions and 22 fixtures for two definitions sharing the imported BReg Source. |
+| `offline-starter/` | Complete native EvidenceProject with a pinned SQLite adapter pack, a derive Function, a local target, complete target authority and 13 SQLite fixtures. |
+| `starter/` | Reviewed authoring fragment, derive Functions and 24 fixtures for two definitions sharing the imported BReg Source. |
 | `tests/verify-composition.py` | Offline maintainer proof using matching installed binaries. |
 
 The default `bregctl init` creates a minimal contact directory with editor clients.
@@ -35,12 +35,12 @@ bregctl generate evidence-source ./registry \
 evidencectl source import ./registry-status-export --project ./evidence
 ```
 
-Import adds the normalized Source, selector profiles and named preparation and
-extraction Functions to `evidence.yaml`. It supplies no assertion or caller grant.
-The existing offline definition remains independently runnable.
+Import adds the normalized Source, selector profiles and pinned adapter-pack
+closure to the project. It supplies no assertion, derive Function or caller
+grant. The existing offline definition remains independently runnable.
 
 Follow [the definition fragment instructions](starter/README.md) to add the two
-BReg definitions and their Functions and fixtures. Then generate a complete local
+BReg definitions, derive Functions and fixtures. Then generate a complete local
 target and review its separate authority:
 
 ```sh
@@ -91,7 +91,7 @@ Run `tests/verify-composition.py` with matching `--bregctl`, `--evidencectl` and
 `--evidence` paths and PyYAML. `--work-dir <new-directory>` retains synthetic
 outputs privately. The runner starts no services and proves:
 
-- Native offline initialization, checking, all 35 fixtures and packaging.
+- Native offline initialization, checking, all 37 fixtures and packaging.
 - Repeatable export bytes and inventory digests, unreadable-field refusal and
   tampered-import refusal without authored changes.
 - Exact selector and returned-identity binding, minimum disclosure, unavailable

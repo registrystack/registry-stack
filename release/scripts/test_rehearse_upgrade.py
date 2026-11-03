@@ -1168,19 +1168,36 @@ class AuditUpgradeTest(unittest.TestCase):
             with self.subTest(before=before, after=after):
                 self.assertEqual(len(MODULE.audit_stream_losses("Evidence", before, after, 2)), 1)
 
-    def test_the_stream_requires_valid_response_envelopes(self) -> None:
+    def test_the_stream_requires_valid_current_and_retained_envelopes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             path = root / "evidence.jsonl"
-            schema = "registry.evidence.audit/v2"
-            for value in ({"old": True}, {"schema": schema, "phase": "response"}):
+            schemas = {
+                "registry.evidence.audit/v2",
+                "registry.evidence.audit/v3",
+            }
+            for value in (
+                {"old": True},
+                {"schema": "registry.evidence.audit/v3", "phase": "response"},
+            ):
                 path.write_text(json.dumps(value) + "\n")
                 with self.assertRaises(Error):
-                    MODULE.audit_record_count(root, "evidence.jsonl", schema=schema)
-            path.write_text(json.dumps({"schema": schema, "phase": "response",
-                "eventId": "event-1", "time": "2026-09-25T00:00:00Z",
-                "correlation": "operation-1", "record": {}}) + "\n")
-            self.assertEqual(MODULE.audit_record_count(root, "evidence.jsonl", schema=schema), 1)
+                    MODULE.audit_record_count(root, "evidence.jsonl", schemas=schemas)
+            entries = [
+                {"schema": schema, "phase": "response",
+                 "eventId": f"event-{index}", "time": "2026-09-25T00:00:00Z",
+                 "correlation": f"operation-{index}", "record": {}}
+                for index, schema in enumerate(sorted(schemas), start=1)
+            ]
+            path.write_text("".join(json.dumps(entry) + "\n" for entry in entries))
+            self.assertEqual(
+                MODULE.audit_record_count(root, "evidence.jsonl", schemas=schemas),
+                2,
+            )
+            unknown = dict(entries[0], schema="registry.evidence.audit/v4")
+            path.write_text(json.dumps(unknown) + "\n")
+            with self.assertRaises(Error):
+                MODULE.audit_record_count(root, "evidence.jsonl", schemas=schemas)
 
 
 class MessagingAssertionsTest(unittest.TestCase):

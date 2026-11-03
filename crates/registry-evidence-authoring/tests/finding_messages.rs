@@ -160,7 +160,17 @@ fn normalized_rule_codes_remain_machine_addressable() {
         project.selector_profiles.clear()
     }));
     codes.extend(normalized_findings(|project| {
-        project.sources.values_mut().next().unwrap().facts.clear();
+        project
+            .sources
+            .values_mut()
+            .next()
+            .unwrap()
+            .inputs
+            .values_mut()
+            .next()
+            .unwrap()
+            .selector
+            .field = registry_platform_yaml::LocalId::new("missing").unwrap();
     }));
     codes.extend(normalized_findings(|project| {
         let output = project
@@ -193,8 +203,7 @@ fn normalized_rule_codes_remain_machine_addressable() {
             "output-bounds",
             "output-concept",
             "output-type",
-            "source-facts",
-            "source-selector",
+            "source-input-selector",
             "subject-selectors",
         ]
     );
@@ -500,18 +509,10 @@ fn normalized_output_diagnostics_keep_type_and_constraint_sites_distinct() {
 }
 
 #[test]
-fn normalized_references_distinguish_missing_assets_and_wrong_function_interfaces() {
+fn normalized_references_report_the_retained_derivation_interface() {
     let findings = normalized_findings(|project| {
         project.functions.clear();
     });
-    assert!(findings.iter().any(|finding| {
-        finding.code == "function-interface"
-            && finding.message == "extract must name a source-extract/v1 Function"
-            && finding
-                .field
-                .to_json_pointer()
-                .ends_with("/extract/function")
-    }));
     assert!(findings.iter().any(|finding| {
         finding.code == "function-interface"
             && finding.message == "derive must name an assertion-derive/v1 Function"
@@ -652,12 +653,12 @@ fn normalized_subject_and_acquisition_diagnostics_keep_exact_sites() {
                 .ends_with("/subjects/0/selectors/0")
     }));
     assert!(findings.iter().any(|finding| {
-        finding.code == "source-selector"
-            && finding.message == "name an existing selector profile"
+        finding.code == "source-input-selector"
+            && finding.message == "name an existing selector profile and field"
             && finding
                 .field
                 .to_json_pointer()
-                .ends_with("/selectors/0/profiles/0")
+                .ends_with("/inputs/recordId/selector")
     }));
 
     let findings = normalized_findings(|project| {
@@ -665,7 +666,7 @@ fn normalized_subject_and_acquisition_diagnostics_keep_exact_sites() {
     });
     assert!(findings.iter().any(|finding| {
         finding.code == "acquisition-source"
-            && finding.message == "acquisition must name an existing Source"
+            && finding.message == "acquisition must name an existing pack Source"
             && finding
                 .field
                 .to_json_pointer()
@@ -728,54 +729,72 @@ fn normalized_output_bounds_cover_each_retained_output_family() {
 }
 
 #[test]
-fn normalized_source_diagnostics_keep_private_fact_and_interface_sites() {
+fn normalized_source_diagnostics_keep_pack_and_authorized_input_sites() {
     let findings = normalized_findings(|project| {
-        project.sources.values_mut().next().unwrap().facts.clear();
+        project
+            .sources
+            .values_mut()
+            .next()
+            .unwrap()
+            .pack
+            .version
+            .clear();
     });
     assert_normalized_finding(
         &findings,
-        "source-facts",
-        "/sources/licence-record/facts",
-        "declare the private fact schema",
-    );
-
-    let findings = normalized_findings(|project| {
-        project.sources.values_mut().next().unwrap().connection = None;
-    });
-    assert_normalized_finding(
-        &findings,
-        "source-connection",
-        "/sources/licence-record/connection",
-        "an HTTP Source must name a target-bound connection",
+        "source-pack-version",
+        "/sources/licence-record/pack/version",
+        "name one bounded pack version without whitespace",
     );
 
     let findings = normalized_findings(|project| {
         let source = project.sources.values_mut().next().unwrap();
-        source.source_type = project::SourceType::SqliteExtract;
-        source.extract_profile = None;
-        source.maximum_extract_age_seconds = None;
+        let (_, input) = source.inputs.pop_first().expect("source input");
+        source.inputs.insert("bad.input".to_owned(), input);
     });
     assert_normalized_finding(
         &findings,
-        "source-extract-binding",
-        "/sources/licence-record",
-        "a SQLite Source must name an extract profile and maximum age",
+        "source-input-name",
+        "/sources/licence-record/inputs/bad.input",
+        "name one bounded route input using letters, digits, underscore or hyphen",
     );
 
     let findings = normalized_findings(|project| {
-        project.sources.values_mut().next().unwrap().selectors[0].profiles = Default::default();
+        let source = project.sources.values_mut().next().unwrap();
+        source.inputs.values_mut().next().unwrap().selector.role =
+            registry_platform_yaml::LocalId::new("other").unwrap();
     });
     assert_normalized_finding(
         &findings,
-        "source-selector",
-        "/sources/licence-record/selectors/0/profiles",
-        "Source selectors must name existing profiles",
+        "source-input-authorization",
+        "/sources/licence-record/inputs/recordId/selector",
+        "every definition using this Source must authorize the selector role and profile",
+    );
+
+    let findings = normalized_findings(|project| {
+        project
+            .sources
+            .values_mut()
+            .next()
+            .unwrap()
+            .inputs
+            .values_mut()
+            .next()
+            .unwrap()
+            .selector
+            .field = registry_platform_yaml::LocalId::new("missing").unwrap();
+    });
+    assert_normalized_finding(
+        &findings,
+        "source-input-selector",
+        "/sources/licence-record/inputs/recordId/selector",
+        "name an existing selector profile and field",
     );
 }
 
 #[test]
 fn named_function_abi_reports_compile_signature_and_interface_failures() {
-    use registry_evidence_authoring::derivation::{validate_batch_function, validate_function};
+    use registry_evidence_authoring::derivation::validate_function;
 
     let compile = validate_function("fn derive(", project::FunctionInterface::AssertionDerive);
     assert_case(
@@ -812,27 +831,30 @@ fn named_function_abi_reports_compile_signature_and_interface_failures() {
         project::FunctionInterface::AssertionDerive,
     )
     .is_empty());
-    assert!(validate_function(
-        "fn extract(response, context) { #{} }",
-        project::FunctionInterface::SourceExtract,
-    )
-    .is_empty());
-    assert!(validate_function(
-        "fn extract(response, selectors, context) { #{} }",
-        project::FunctionInterface::SourceExtract,
-    )
-    .is_empty());
-
-    let batch = validate_batch_function(
-        "fn extract(response, selectors, context) { #{} }",
-        project::FunctionInterface::SourceExtract,
-    );
-    assert_case(
-        "batch Function signature",
-        "source batch Functions must expose the two-argument source interface",
-        &batch,
-    );
-    assert_eq!(first(&batch).code, "batch-function-signature");
+    for (case, signature) in [
+        (
+            "two-argument extract",
+            "fn extract(response, context) { #{} }",
+        ),
+        (
+            "three-argument extract",
+            "fn extract(response, selectors, context) { #{} }",
+        ),
+        (
+            "three-argument batch extract",
+            "fn extract(response, selectors, context) { #{} }",
+        ),
+    ] {
+        let declaration = json!({
+            "id": case.replace(' ', "-"),
+            "interface": "source-extract/v1",
+            "source": format!("functions/{}.rhai", case.replace(' ', "-")),
+        });
+        assert!(
+            serde_json::from_value::<project::Function>(declaration).is_err(),
+            "retired {case} interface unexpectedly parsed for `{signature}`"
+        );
+    }
 }
 
 #[test]

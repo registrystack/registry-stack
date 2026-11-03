@@ -12,7 +12,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use axum::body::Body;
 use axum::extract::rejection::PathRejection;
@@ -24,13 +24,19 @@ use axum::Router;
 use deadpool_postgres::Pool;
 use registry_adapter_core::{
     decode_slot, fixed_facade_problem_response, parse_envelope_template, problem_data_schema,
-    resolve_problem, validate_result_schema, AdapterProfile, AdapterProject, ErrorClass,
-    HttpMethod, SlotForm, MAX_PROBLEM_DATA_BYTES, SLOT_PROBLEM_DATA, SLOT_RECORD,
+    resolve_problem, validate_result_schema, AdapterProfile, AdapterProject, AsyncStatusOutcome,
+    BindingAsyncCompletion, ErrorClass, HttpMethod, ProfileAsyncCompletion, SlotForm,
+    MAX_PROBLEM_DATA_BYTES, SLOT_PROBLEM_DATA, SLOT_RECORD,
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use time::format_description::well_known::Rfc3339;
+use time::OffsetDateTime;
+use tokio::sync::Semaphore;
 
-use crate::custody::{WriteExecutionContext, WriteResolution};
+use crate::custody::{
+    AsyncWriteContext, ResumeWriteContext, WriteExecutionContext, WriteResolution,
+};
 use crate::engine::component::http::uri::encode_path_segment;
 use crate::engine::component::rest::continuation::{
     filter_digest, ContinuationCodec, CursorBinding, CursorRefusal,
@@ -46,10 +52,13 @@ use crate::engine::exchange::{
 };
 use crate::engine::load::{Loaded, ServedOperation, ServedPagination};
 use crate::engine::read_request::{parse_filter_text, ReadRefusal};
-use crate::engine::route::{run_route_with_profile, RouteContext, RouteFailure};
+use crate::engine::route::{
+    run_async_status_poll, run_served_route_until, AsyncStatusPollKind, RouteContext, RouteFailure,
+    EXCHANGE_DEADLINE,
+};
 use crate::idempotent::{
-    PostgresIdempotencyStore, StoredResponse, TerminalOutcome, VerifiedCallerIdentity,
-    MAX_STORED_RESPONSE_BYTES,
+    PostgresIdempotencyStore, RecoveryLease, StatusLookup, StatusLookupRequest, StoredResponse,
+    TerminalOutcome, VerifiedCallerIdentity, MAX_STORED_RESPONSE_BYTES,
 };
 use crate::journal::{self, JournalEvent};
 use crate::serve::{Authenticator, Caller, CallerRefusal};
@@ -72,6 +81,12 @@ pub struct FacadeState {
     /// Present only when this deployment explicitly configures exact write
     /// response retention and serves at least one write operation.
     pub idempotency: Option<PostgresIdempotencyStore>,
+    /// Current artifact digest used to bind every asynchronous status row.
+    pub artifact_digest: [u8; 32],
+    /// Exact accepted-response and status-link lifetime.
+    pub async_retention: Option<Duration>,
+    /// One non-blocking status-poll permit pool per asynchronous binding.
+    pub async_recovery: HashMap<String, Arc<Semaphore>>,
     /// Seals and opens pagination cursors; present when the runtime
     /// config declares `cursorKeyRef`, which a paginated operation needs.
     pub codec: Option<ContinuationCodec>,
@@ -89,6 +104,7 @@ type PathMethods = Vec<(HttpMethod, Vec<usize>)>;
 /// problem and journal nothing, since no caller was verified.
 pub fn router(state: Arc<FacadeState>) -> Router {
     let mut by_path: Vec<(String, PathMethods)> = Vec::new();
+    let mut async_status_paths: Vec<(String, Vec<usize>)> = Vec::new();
     for (index, operation) in state.loaded.served.iter().enumerate() {
         let methods = match by_path
             .iter_mut()
@@ -106,6 +122,23 @@ pub fn router(state: Arc<FacadeState>) -> Router {
         {
             Some((_, indexes)) => indexes.push(index),
             None => methods.push((operation.method, vec![index])),
+        }
+        if operation.async_completion.is_some() {
+            let declared = state
+                .loaded
+                .profile
+                .operations
+                .get(operation.operation.as_str())
+                .and_then(|profile_operation| profile_operation.async_completion.as_ref())
+                .expect("a compiled asynchronous operation retains its profile contract");
+            let path = declared.status_path.as_str();
+            match async_status_paths
+                .iter_mut()
+                .find(|(existing, _)| existing == path)
+            {
+                Some((_, indexes)) => indexes.push(index),
+                None => async_status_paths.push((path.to_owned(), vec![index])),
+            }
         }
     }
     let mut router = Router::new();
@@ -175,6 +208,50 @@ pub fn router(state: Arc<FacadeState>) -> Router {
                     if let Ok(value) = HeaderValue::from_str(&allow) {
                         response.headers_mut().insert(header::ALLOW, value);
                     }
+                    response
+                }
+            }),
+        );
+    }
+    for (path, indexes) in async_status_paths {
+        let shared = Arc::clone(&state);
+        let method_fallback = Arc::clone(&state);
+        let indexes: Arc<[usize]> = indexes.into();
+        router = router.route(
+            &path,
+            get(
+                move |headers: HeaderMap,
+                      params: Result<Path<HashMap<String, String>>, PathRejection>,
+                      RawQuery(query): RawQuery| {
+                    let shared = Arc::clone(&shared);
+                    let indexes = Arc::clone(&indexes);
+                    async move {
+                        let Ok(Path(params)) = params else {
+                            return facade_problem(
+                                shared.loaded.problems(),
+                                ErrorClass::FacadeInvalidRequest,
+                                StatusCode::BAD_REQUEST,
+                                "",
+                                &new_id(),
+                            );
+                        };
+                        handle_async_status(shared, indexes, headers, params, query).await
+                    }
+                },
+            )
+            .fallback(move || {
+                let shared = Arc::clone(&method_fallback);
+                async move {
+                    let mut response = facade_problem(
+                        shared.loaded.problems(),
+                        ErrorClass::FacadeMethodNotAllowed,
+                        StatusCode::METHOD_NOT_ALLOWED,
+                        "",
+                        &new_id(),
+                    );
+                    response
+                        .headers_mut()
+                        .insert(header::ALLOW, HeaderValue::from_static("GET"));
                     response
                 }
             }),
@@ -293,6 +370,461 @@ async fn handle(
         .map(|replayed| replayed.0.clone())
         .unwrap_or(fallback_id);
     with_request_id(response, &response_id)
+}
+
+async fn handle_async_status(
+    state: Arc<FacadeState>,
+    indexes: Arc<[usize]>,
+    headers: HeaderMap,
+    params: HashMap<String, String>,
+    query: Option<String>,
+) -> Response {
+    let physical_request_id = new_id();
+    let fallback_id = physical_request_id.clone();
+    let fallback = Arc::clone(&state);
+    let task = tokio::spawn(async move {
+        answer_async_status(
+            &state,
+            &indexes,
+            physical_request_id,
+            &headers,
+            &params,
+            query.as_deref(),
+        )
+        .await
+    });
+    let response = match task.await {
+        Ok(response) => response,
+        Err(error) => {
+            tracing::error!(%error, "an asynchronous status call ended without an answer");
+            facade_problem(
+                fallback.loaded.problems(),
+                ErrorClass::Facade,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "",
+                &fallback_id,
+            )
+        }
+    };
+    let response_id = response
+        .extensions()
+        .get::<ReplayedResponseRequestId>()
+        .map(|replayed| replayed.0.clone())
+        .unwrap_or(fallback_id);
+    with_request_id(response, &response_id)
+}
+
+async fn answer_async_status(
+    state: &FacadeState,
+    indexes: &[usize],
+    physical_request_id: String,
+    headers: &HeaderMap,
+    params: &HashMap<String, String>,
+    query: Option<&str>,
+) -> Response {
+    let representative = &state.loaded.served[indexes[0]];
+    let profile = state.loaded.problems();
+    let caller = match authenticate(state, headers).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal_response(profile, refusal, &physical_request_id),
+    };
+    if !accepts_json(headers) {
+        return refuse_call(
+            state,
+            representative,
+            &caller,
+            &representative.record_type,
+            &physical_request_id,
+            ErrorClass::FacadeNotAcceptable,
+            StatusCode::NOT_ACCEPTABLE,
+        )
+        .await;
+    }
+    if query.is_some_and(|value| !value.is_empty()) {
+        return refuse_request(
+            state,
+            representative,
+            &caller,
+            &representative.record_type,
+            &physical_request_id,
+            Refusal::invalid_request("the asynchronous status operation takes no query parameters"),
+        )
+        .await;
+    }
+    if !effective_contract_matches(headers, &state.effective_contract.digest) {
+        return refuse_contract_pin(state, representative, &caller, &physical_request_id).await;
+    }
+    let Some(status_id) = params.get("statusId") else {
+        return refuse_call(
+            state,
+            representative,
+            &caller,
+            &representative.record_type,
+            &physical_request_id,
+            ErrorClass::FacadeNotFound,
+            StatusCode::NOT_FOUND,
+        )
+        .await;
+    };
+    let Some(store) = state.idempotency.as_ref() else {
+        return facade_problem(
+            profile,
+            ErrorClass::Facade,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &representative.record_type,
+            &physical_request_id,
+        );
+    };
+    let caller_identity = match VerifiedCallerIdentity::new(
+        caller.issuer.clone(),
+        caller.reference.clone(),
+        caller.client_id.clone(),
+    ) {
+        Ok(identity) => identity,
+        Err(error) => {
+            tracing::error!(%error, "the verified caller could not enter asynchronous status custody");
+            return facade_problem(
+                profile,
+                ErrorClass::Facade,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &representative.record_type,
+                &physical_request_id,
+            );
+        }
+    };
+    let lookup = match store
+        .lookup_status(
+            StatusLookupRequest {
+                caller: &caller_identity,
+                deployment: state.loaded.runtime.id.as_str(),
+                artifact_digest: state.artifact_digest,
+                status_id,
+            },
+            SystemTime::now(),
+        )
+        .await
+    {
+        Ok(lookup) => lookup,
+        Err(error) => {
+            tracing::error!(%error, "asynchronous status custody failed");
+            return facade_problem(
+                profile,
+                ErrorClass::Facade,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &representative.record_type,
+                &physical_request_id,
+            );
+        }
+    };
+    let metadata = match &lookup {
+        StatusLookup::NotFound => {
+            return refuse_call(
+                state,
+                representative,
+                &caller,
+                &representative.record_type,
+                &physical_request_id,
+                ErrorClass::FacadeNotFound,
+                StatusCode::NOT_FOUND,
+            )
+            .await;
+        }
+        StatusLookup::Accepted(pending) => pending.metadata().clone(),
+        StatusLookup::Terminal { metadata, .. } => metadata.clone(),
+    };
+    let Some(operation) = indexes
+        .iter()
+        .map(|index| &state.loaded.served[*index])
+        .find(|operation| {
+            operation.binding == metadata.binding_id()
+                && operation.operation == metadata.profile_operation()
+                && operation.record_type == metadata.record_type()
+        })
+    else {
+        tracing::error!("asynchronous custody names no loaded binding");
+        return facade_problem(
+            profile,
+            ErrorClass::Facade,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &representative.record_type,
+            &physical_request_id,
+        );
+    };
+    if !admits_stored(
+        &state.loaded.project,
+        &caller,
+        metadata.profile_operation(),
+        metadata.record_type(),
+    ) {
+        return refuse_call(
+            state,
+            operation,
+            &caller,
+            metadata.record_type(),
+            &physical_request_id,
+            ErrorClass::FacadeForbidden,
+            StatusCode::FORBIDDEN,
+        )
+        .await;
+    }
+    let event = |kind: &'static str, detail: Option<Value>, at: SystemTime| {
+        (
+            JournalEvent {
+                event_kind: kind,
+                exchange_id: physical_request_id.clone(),
+                operation: operation.operation.clone(),
+                caller_ref: caller.reference.clone(),
+                route_id: operation
+                    .async_completion
+                    .as_ref()
+                    .expect("asynchronous operation")
+                    .status
+                    .route_id
+                    .clone(),
+                detail: detail.map(|value| value.to_string()),
+            },
+            at,
+        )
+    };
+    if let StatusLookup::Terminal {
+        outcome, response, ..
+    } = lookup
+    {
+        let terminal_kind = match outcome {
+            TerminalOutcome::Completed => "exchangeCompleted",
+            TerminalOutcome::Failed => "exchangeFailed",
+        };
+        let events = vec![
+            event("exchangeCreated", None, SystemTime::now()),
+            event(terminal_kind, None, SystemTime::now()),
+        ];
+        if let Err(fault) = append_all(&state.journal, events).await {
+            tracing::error!(%fault, "the terminal status replay could not be journaled");
+            return facade_problem(
+                profile,
+                ErrorClass::Facade,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                metadata.record_type(),
+                &physical_request_id,
+            );
+        }
+        return replay_response(response);
+    }
+    let StatusLookup::Accepted(pending) = lookup else {
+        unreachable!("terminal and absent status lookups returned above")
+    };
+    let accepted_response = pending.response().clone();
+    let created = event("exchangeCreated", None, SystemTime::now());
+    let Some(semaphore) = state.async_recovery.get(&operation.binding) else {
+        tracing::error!("asynchronous binding has no recovery admission pool");
+        return facade_problem(
+            profile,
+            ErrorClass::Facade,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            metadata.record_type(),
+            &physical_request_id,
+        );
+    };
+    let Ok(_permit) = Arc::clone(semaphore).try_acquire_owned() else {
+        if let Err(fault) = append_all(&state.journal, vec![created]).await {
+            tracing::error!(%fault, "the audit journal could not record a busy status lookup");
+            return facade_problem(
+                profile,
+                ErrorClass::Facade,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                metadata.record_type(),
+                &physical_request_id,
+            );
+        }
+        return replay_response(accepted_response);
+    };
+    let deadline_clock = tokio::time::Instant::now();
+    let deadline_wall = SystemTime::now();
+    let absolute_deadline = deadline_clock + EXCHANGE_DEADLINE;
+    let requested_deadline = deadline_wall
+        .checked_add(absolute_deadline.duration_since(deadline_clock))
+        .expect("the fixed status deadline fits SystemTime");
+    let recovery = match store
+        .acquire_status_recovery(&pending, deadline_wall, requested_deadline)
+        .await
+    {
+        Ok(RecoveryLease::Acquired(recovery)) => recovery,
+        Ok(RecoveryLease::Busy) => {
+            if let Err(fault) = append_all(&state.journal, vec![created]).await {
+                tracing::error!(%fault, "the audit journal could not record a leased status lookup");
+                return facade_problem(
+                    profile,
+                    ErrorClass::Facade,
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    metadata.record_type(),
+                    &physical_request_id,
+                );
+            }
+            return replay_response(accepted_response);
+        }
+        Ok(RecoveryLease::Stale) => {
+            return refuse_call(
+                state,
+                operation,
+                &caller,
+                metadata.record_type(),
+                &physical_request_id,
+                ErrorClass::FacadeNotFound,
+                StatusCode::NOT_FOUND,
+            )
+            .await;
+        }
+        Err(error) => {
+            tracing::error!(%error, "the asynchronous poll lease failed");
+            return facade_problem(
+                profile,
+                ErrorClass::Facade,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                metadata.record_type(),
+                &physical_request_id,
+            );
+        }
+    };
+    let Some(source_id) = recovery.source_id() else {
+        tracing::error!("accepted asynchronous custody has no source id");
+        return facade_problem(
+            profile,
+            ErrorClass::Facade,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            metadata.record_type(),
+            &physical_request_id,
+        );
+    };
+    let poll_started = tokio::time::Instant::now();
+    let context = RouteContext {
+        endpoints: &state.loaded.endpoints,
+        scripts: &state.loaded.scripts,
+        resolver: &state.loaded.resolver,
+        resilience: &operation.resilience,
+        routes: &state.loaded.routes,
+        code_maps: state.loaded.code_maps.clone(),
+        maximum_upstream_calls: operation.maximum_upstream_calls,
+        job: crate::engine::job_sources::JobPageState::default(),
+    };
+    let polled = run_async_status_poll(
+        &context,
+        &state.loaded.profile,
+        operation,
+        AsyncStatusPollKind::Primary,
+        source_id,
+        &physical_request_id,
+        absolute_deadline,
+    )
+    .await;
+    let mut events = vec![created];
+    for route_event in polled.events {
+        events.push(event(
+            route_event.kind,
+            Some(route_event.detail),
+            route_event.at,
+        ));
+    }
+    let duration = u64::try_from(poll_started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    match polled.result {
+        Ok(AsyncStatusOutcome::Pending {}) => {
+            events.push(event(
+                "recoveryChecked",
+                Some(json!({"result": "pending", "pollOrdinal": 1, "durationMilliseconds": duration})),
+                SystemTime::now(),
+            ));
+            return finish_nonterminal_poll(
+                state,
+                store,
+                recovery,
+                events,
+                accepted_response,
+                metadata.record_type(),
+                &physical_request_id,
+            )
+            .await;
+        }
+        Err(failure) => {
+            events.push(event(
+                "recoveryCheckFailed",
+                Some(json!({"class": failure.class.class(), "certainty": "uncertain"})),
+                SystemTime::now(),
+            ));
+            return finish_nonterminal_poll(
+                state,
+                store,
+                recovery,
+                events,
+                accepted_response,
+                metadata.record_type(),
+                &physical_request_id,
+            )
+            .await;
+        }
+        Ok(outcome) => {
+            let terminal = render_recovery_terminal(
+                state,
+                operation,
+                outcome,
+                metadata.record_type(),
+                recovery.response_request_id(),
+            );
+            let (response, outcome, result) = match terminal {
+                Ok(terminal) => terminal,
+                Err(class) => {
+                    events.push(event(
+                        "recoveryCheckFailed",
+                        Some(json!({"class": class.class(), "certainty": "uncertain"})),
+                        SystemTime::now(),
+                    ));
+                    return finish_nonterminal_poll(
+                        state,
+                        store,
+                        recovery,
+                        events,
+                        accepted_response,
+                        metadata.record_type(),
+                        &physical_request_id,
+                    )
+                    .await;
+                }
+            };
+            events.push(event(
+                "recoveryChecked",
+                Some(json!({"result": result, "pollOrdinal": 1, "durationMilliseconds": duration})),
+                SystemTime::now(),
+            ));
+            events.push(event(
+                match outcome {
+                    TerminalOutcome::Completed => "exchangeCompleted",
+                    TerminalOutcome::Failed => "exchangeFailed",
+                },
+                None,
+                SystemTime::now(),
+            ));
+            match append_all_with_recovery(
+                &state.journal,
+                store,
+                recovery,
+                outcome,
+                response,
+                events,
+            )
+            .await
+            {
+                Ok(response) => response,
+                Err(fault) => {
+                    tracing::error!(%fault, "terminal recovery custody and journal could not commit");
+                    facade_problem(
+                        profile,
+                        ErrorClass::Facade,
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        metadata.record_type(),
+                        &physical_request_id,
+                    )
+                }
+            }
+        }
+    }
 }
 
 /// Return the immutable startup contract only to an authenticated machine
@@ -585,6 +1117,12 @@ async fn answer(
         .await;
     }
 
+    let route_clock = tokio::time::Instant::now();
+    let route_wall_clock = SystemTime::now();
+    let route_deadline = route_clock + EXCHANGE_DEADLINE;
+    let effect_deadline = route_wall_clock
+        .checked_add(route_deadline.duration_since(route_clock))
+        .expect("the fixed exchange deadline fits SystemTime");
     let mut exchange = Exchange::new(request_id.clone());
     let write_execution = if is_write {
         let Some((record, raw_body)) = write_request else {
@@ -647,13 +1185,56 @@ async fn answer(
             &record_id,
             &raw_body,
         );
-        let context = crate::custody::WriteExecutionContext::new(
-            store,
-            caller_identity,
-            state.loaded.runtime.id.as_str().to_owned(),
-            concrete_operation,
-            digest,
-        );
+        let async_write = operation
+            .async_completion
+            .as_ref()
+            .map(|completion| AsyncWriteContext {
+                response_request_id: request_id.clone(),
+                artifact_digest: state.artifact_digest,
+                binding_id: operation.binding.clone(),
+                profile_operation: operation.operation.clone(),
+                record_type: operation.record_type.clone(),
+                recovery_id: completion.uncertainty.as_ref().map(|_| new_recovery_id()),
+                effect_deadline,
+            });
+        let context = match (async_write, operation.resume_step_count()) {
+            (Some(async_write), None) => crate::custody::WriteExecutionContext::new_async(
+                store,
+                caller_identity,
+                state.loaded.runtime.id.as_str().to_owned(),
+                concrete_operation,
+                digest,
+                async_write,
+            ),
+            (None, Some(step_count)) => crate::custody::WriteExecutionContext::new_resume(
+                store,
+                caller_identity,
+                state.loaded.runtime.id.as_str().to_owned(),
+                concrete_operation,
+                digest,
+                ResumeWriteContext {
+                    artifact_digest: state.artifact_digest,
+                    effect_deadline,
+                    step_count,
+                },
+            ),
+            (None, None) => crate::custody::WriteExecutionContext::new(
+                store,
+                caller_identity,
+                state.loaded.runtime.id.as_str().to_owned(),
+                concrete_operation,
+                digest,
+            ),
+            (Some(_), Some(_)) => {
+                return facade_problem(
+                    profile,
+                    ErrorClass::Facade,
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &record_type,
+                    &request_id,
+                );
+            }
+        };
         exchange.install_write(
             context.clone() as std::sync::Arc<dyn crate::engine::exchange::WriteCustody>
         );
@@ -730,8 +1311,14 @@ async fn answer(
         maximum_upstream_calls: operation.maximum_upstream_calls,
         job: crate::engine::job_sources::JobPageState::default(),
     };
-    let outcome =
-        run_route_with_profile(&context, &state.loaded.profile, &operation.steps, exchange).await;
+    let outcome = run_served_route_until(
+        &context,
+        &state.loaded.profile,
+        operation,
+        exchange,
+        route_deadline,
+    )
+    .await;
     for event in outcome.events {
         events.push((journal_event(event.kind, Some(event.detail)), event.at));
     }
@@ -739,10 +1326,65 @@ async fn answer(
         Some(context) => context.resolution().await,
         None => WriteResolution::Pending,
     };
+    let uncertain_effect = match &write_execution {
+        Some(context) => outcome.result.is_err() && context.has_uncertain_effect().await,
+        None => false,
+    };
+    let recoverable_uncertainty = match &write_execution {
+        Some(context) => {
+            context.has_recoverable_uncertainty().await
+                && (matches!(write_resolution, WriteResolution::Uncertain) || uncertain_effect)
+        }
+        None => false,
+    };
+    if recoverable_uncertainty {
+        return run_uncertainty_recovery(
+            state,
+            UncertaintyRecoveryRequest {
+                operation,
+                caller: &caller,
+                write: write_execution
+                    .as_ref()
+                    .expect("recoverable uncertainty has write custody"),
+                events,
+                physical_request_id: &request_id,
+                absolute_deadline: route_deadline,
+                deadline_wall: effect_deadline,
+            },
+        )
+        .await;
+    }
+    if uncertain_effect {
+        events.push((
+            journal_event(
+                "exchangeFailed",
+                Some(exchange_failure_detail(profile, ErrorClass::FacadeConflict)),
+            ),
+            SystemTime::now(),
+        ));
+        if let Err(fault) = append_all(&state.journal, events).await {
+            tracing::error!(%fault, "the uncertain-effect journal could not commit");
+            return facade_problem(
+                profile,
+                ErrorClass::Facade,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &record_type,
+                &request_id,
+            );
+        }
+        return facade_problem(
+            profile,
+            ErrorClass::FacadeConflict,
+            StatusCode::CONFLICT,
+            &record_type,
+            &request_id,
+        );
+    }
 
     // The response body is built before the journal commits, so the
     // journal never records `exchangeCompleted` for an exchange whose body
     // the facade then failed to seal or render.
+    let mut resume_host_validation_pending = false;
     let rendered = match write_resolution.clone() {
         WriteResolution::Replay { outcome, response } => {
             let event = match outcome {
@@ -752,9 +1394,21 @@ async fn answer(
             events.push((journal_event(event, None), SystemTime::now()));
             Finished::Replay(response)
         }
+        WriteResolution::Accepted { response } => Finished::Replay(response),
         WriteResolution::Conflict
         | WriteResolution::ResponseExpired
-        | WriteResolution::UnsupportedIncomplete => {
+        | WriteResolution::UnsupportedIncomplete
+        | WriteResolution::Uncertain => {
+            events.push((
+                journal_event(
+                    "exchangeFailed",
+                    Some(exchange_failure_detail(profile, ErrorClass::FacadeConflict)),
+                ),
+                SystemTime::now(),
+            ));
+            Finished::FacadeProblem(ErrorClass::FacadeConflict, StatusCode::CONFLICT)
+        }
+        WriteResolution::ResumePending => {
             events.push((
                 journal_event(
                     "exchangeFailed",
@@ -782,6 +1436,12 @@ async fn answer(
         }
         WriteResolution::Finished => Finished::Internal,
         WriteResolution::Pending | WriteResolution::Released => match outcome.result {
+            Ok(done) if done.async_source_acceptance().is_some() => Finished::Accepted(
+                done.async_source_acceptance()
+                    .expect("the guarded acceptance is present")
+                    .source_id
+                    .clone(),
+            ),
             Ok(done) => match disclosed_slots(
                 operation,
                 &done.message.body,
@@ -826,28 +1486,55 @@ async fn answer(
                         violations,
                         "a route ended with a record its type does not declare"
                     );
-                    let failure = RouteFailure {
-                        class: ErrorClass::DisclosureViolation,
-                        message: None,
-                        data: None,
-                        auth: None,
-                        code: None,
-                    };
-                    events.push((
-                        journal_event(
-                            "exchangeFailed",
-                            Some(exchange_failure_detail(profile, failure.class)),
-                        ),
-                        SystemTime::now(),
-                    ));
-                    Finished::Route(failure)
+                    if operation.resume_step_count().is_some() {
+                        let retained = match write_execution.as_ref() {
+                            Some(write) => write
+                                .retain_resume_after_host_validation_failure()
+                                .await
+                                .map_err(|error| error.to_string()),
+                            None => Err("write custody is absent".to_owned()),
+                        };
+                        if let Err(error) = retained {
+                            tracing::error!(
+                                %error,
+                                "the resumable write lease could not be released after host validation failed"
+                            );
+                        }
+                        resume_host_validation_pending = true;
+                        events.push((
+                            journal_event(
+                                "exchangeFailed",
+                                Some(exchange_failure_detail(profile, ErrorClass::FacadeConflict)),
+                            ),
+                            SystemTime::now(),
+                        ));
+                        Finished::FacadeProblem(ErrorClass::FacadeConflict, StatusCode::CONFLICT)
+                    } else {
+                        let failure = RouteFailure {
+                            class: ErrorClass::DisclosureViolation,
+                            message: None,
+                            data: None,
+                            auth: None,
+                            code: None,
+                            record: None,
+                            evidence_diagnostic: None,
+                        };
+                        events.push((
+                            journal_event(
+                                "exchangeFailed",
+                                Some(exchange_failure_detail(profile, failure.class)),
+                            ),
+                            SystemTime::now(),
+                        ));
+                        Finished::Route(failure)
+                    }
                 }
             },
             Err(failure) => {
                 let failure = enforce_problem_data(profile.profile, failure);
                 let mut detail = exchange_failure_detail(profile, failure.class);
                 if let Some(auth) = &failure.auth {
-                    detail["auth"] = auth.clone();
+                    detail["auth"] = auth.as_ref().clone();
                 }
                 events.push((
                     journal_event("exchangeFailed", Some(detail)),
@@ -856,6 +1543,110 @@ async fn answer(
                 Finished::Route(failure)
             }
         },
+    };
+    let rendered = match rendered {
+        Finished::Accepted(source_id) => {
+            let Some(write) = write_execution.as_ref() else {
+                return facade_problem(
+                    profile,
+                    ErrorClass::Facade,
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &record_type,
+                    &request_id,
+                );
+            };
+            let Some(retention) = state.async_retention else {
+                return facade_problem(
+                    profile,
+                    ErrorClass::Facade,
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &record_type,
+                    &request_id,
+                );
+            };
+            let Some(profile_async) = state
+                .loaded
+                .profile
+                .operations
+                .get(operation.operation.as_str())
+                .and_then(|declared| declared.async_completion.as_ref())
+            else {
+                return facade_problem(
+                    profile,
+                    ErrorClass::Facade,
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &record_type,
+                    &request_id,
+                );
+            };
+            let acceptance_event = journal_event("exchangeAccepted", None);
+            let Some(binding_completion) = state
+                .loaded
+                .project
+                .bindings
+                .iter()
+                .find(|binding| binding.id.as_str() == operation.binding)
+                .and_then(|binding| binding.async_completion)
+            else {
+                return facade_problem(
+                    profile,
+                    ErrorClass::Facade,
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &record_type,
+                    &request_id,
+                );
+            };
+            let acceptance_mode = match binding_completion {
+                BindingAsyncCompletion::StatusLink {} => "status-link",
+                BindingAsyncCompletion::BoundedWait { .. } => "bounded-wait",
+            };
+            match append_all_with_acceptance(
+                &state.journal,
+                events,
+                acceptance_event,
+                write,
+                operation,
+                profile_async,
+                &state.loaded.project.parameterized_parts,
+                &source_id,
+                &request_id,
+                retention,
+                acceptance_mode,
+            )
+            .await
+            {
+                Ok(committed) => match binding_completion {
+                    BindingAsyncCompletion::StatusLink {} => return committed.response,
+                    BindingAsyncCompletion::BoundedWait {
+                        wait_timeout_milliseconds,
+                        poll_interval_milliseconds,
+                        maximum_polls,
+                    } => {
+                        return run_bounded_wait(
+                            state,
+                            operation,
+                            &caller,
+                            committed,
+                            Duration::from_millis(wait_timeout_milliseconds.get()),
+                            Duration::from_millis(poll_interval_milliseconds.get()),
+                            maximum_polls.get(),
+                        )
+                        .await;
+                    }
+                },
+                Err(fault) => {
+                    tracing::error!(%fault, "the acceptance journal and response custody could not commit");
+                    return facade_problem(
+                        profile,
+                        ErrorClass::Facade,
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        &record_type,
+                        &request_id,
+                    );
+                }
+            }
+        }
+        other => other,
     };
     let (mut response, mut terminal) = match rendered {
         Finished::Body(body) => {
@@ -893,6 +1684,7 @@ async fn answer(
             warn_exchange_failed(failure.class, response.status());
             (response, Some(TerminalOutcome::Failed))
         }
+        Finished::Accepted(_) => unreachable!("acceptance returned after its atomic commit"),
         Finished::Replay(response) => (replay_response(response), None),
         Finished::FacadeProblem(class, status) => {
             warn_exchange_failed(class, status);
@@ -902,10 +1694,14 @@ async fn answer(
             )
         }
     };
-    let pending_write = matches!(
-        write_resolution,
-        WriteResolution::Pending | WriteResolution::UnsupportedIncomplete
-    )
+    if resume_host_validation_pending {
+        terminal = None;
+    }
+    let pending_write = (!resume_host_validation_pending
+        && matches!(
+            write_resolution,
+            WriteResolution::Pending | WriteResolution::UnsupportedIncomplete
+        ))
     .then_some(())
     .and(write_execution.as_ref());
     let (response, stored) = match pending_write {
@@ -978,6 +1774,7 @@ fn exchange_failure_detail(profile: Problems<'_>, class: ErrorClass) -> Value {
 /// commits it.
 enum Finished {
     Body(Value),
+    Accepted(String),
     Internal,
     Route(RouteFailure),
     Replay(StoredResponse),
@@ -1046,6 +1843,774 @@ async fn append_all_with_write(
         .map_err(|error| journal_fault(&error))
 }
 
+/// Render and atomically commit one profile-owned 202 with the route events
+/// that preceded it and the value-free `exchangeAccepted` event.
+#[allow(clippy::too_many_arguments)]
+async fn append_all_with_acceptance(
+    pool: &Pool,
+    events: Vec<(JournalEvent, SystemTime)>,
+    mut acceptance_event: JournalEvent,
+    context: &WriteExecutionContext,
+    operation: &ServedOperation,
+    profile_contract: &ProfileAsyncCompletion,
+    parameterized_parts: &BTreeMap<registry_platform_yaml::ExternalId, String>,
+    source_id: &str,
+    request_id: &str,
+    retention: Duration,
+    mode: &'static str,
+) -> Result<CommittedAcceptance, String> {
+    let mut client = pool
+        .get()
+        .await
+        .map_err(|_| "the journal connection pool gave no connection".to_owned())?;
+    let transaction = client
+        .transaction()
+        .await
+        .map_err(|error| journal_fault(&error))?;
+    let accepted_at = SystemTime::now();
+    let expires_at = accepted_at
+        .checked_add(retention)
+        .ok_or_else(|| "adapter.async-expiry: retention instant is invalid".to_owned())?;
+    let expires_text = OffsetDateTime::from(expires_at)
+        .format(&Rfc3339)
+        .map_err(|_| "adapter.async-expiry: timestamp could not be formatted".to_owned())?;
+    let declared = operation
+        .async_completion
+        .as_ref()
+        .ok_or_else(|| "adapter.async-acceptance: compiled contract is absent".to_owned())?;
+    let status_link = profile_contract
+        .status_path
+        .as_str()
+        .replace("{statusId}", request_id);
+    let mut slots = BTreeMap::new();
+    slots.insert("statusLink", Value::String(status_link));
+    slots.insert("statusExpiresAt", Value::String(expires_text.clone()));
+    slots.insert("requestId", Value::String(request_id.to_owned()));
+    let envelope = CompiledEnvelope::compile(
+        profile_contract.accepted_envelope.text(),
+        parameterized_parts,
+    )?;
+    let body = envelope.render(&slots)?;
+    let response = json_response(StatusCode::ACCEPTED, &body);
+    let (response, stored) = prepare_write_response(response, request_id).await?;
+    let stored = stored.ok_or_else(|| "adapter.async-acceptance: custody is absent".to_owned())?;
+    context
+        .accept_with_client(&transaction, source_id, stored.clone(), accepted_at)
+        .await
+        .map_err(|error| error.to_string())?;
+    acceptance_event.detail = Some(
+        json!({
+            "mode": mode,
+            "profileOperation": operation.operation,
+            "statusRoute": declared.status.route_id,
+            "recoveryExpiry": expires_text,
+        })
+        .to_string(),
+    );
+    for (event, occurred_at) in events.into_iter().chain([(acceptance_event, accepted_at)]) {
+        journal::append(&transaction, event, occurred_at)
+            .await
+            .map_err(|error| match error {
+                journal::JournalError::Query(error) => journal_fault(&error),
+                _ => "the journal write failed".to_owned(),
+            })?;
+    }
+    transaction
+        .commit()
+        .await
+        .map_err(|error| journal_fault(&error))?;
+    Ok(CommittedAcceptance {
+        response,
+        stored,
+        accepted_at,
+        expires_at,
+    })
+}
+
+struct CommittedAcceptance {
+    response: Response,
+    stored: StoredResponse,
+    accepted_at: SystemTime,
+    expires_at: SystemTime,
+}
+
+async fn run_bounded_wait(
+    state: &FacadeState,
+    operation: &ServedOperation,
+    caller: &Caller,
+    committed: CommittedAcceptance,
+    wait_timeout: Duration,
+    poll_interval: Duration,
+    maximum_polls: u64,
+) -> Response {
+    let profile = state.loaded.problems();
+    let request_id = committed.stored.request_id().to_owned();
+    let caller_identity = match VerifiedCallerIdentity::new(
+        caller.issuer.clone(),
+        caller.reference.clone(),
+        caller.client_id.clone(),
+    ) {
+        Ok(identity) => identity,
+        Err(error) => {
+            tracing::error!(%error, "the bounded wait caller could not enter status custody");
+            return facade_problem(
+                profile,
+                ErrorClass::Facade,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &operation.record_type,
+                &request_id,
+            );
+        }
+    };
+    let Some(store) = state.idempotency.as_ref() else {
+        return facade_problem(
+            profile,
+            ErrorClass::Facade,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &operation.record_type,
+            &request_id,
+        );
+    };
+    let deadline_wall = committed
+        .accepted_at
+        .checked_add(wait_timeout)
+        .map(|deadline| deadline.min(committed.expires_at));
+    let Some(deadline_wall) = deadline_wall else {
+        return committed.response;
+    };
+    let deadline_clock = tokio::time::Instant::now();
+    let now_wall = SystemTime::now();
+    let Ok(remaining) = deadline_wall.duration_since(now_wall) else {
+        return committed.response;
+    };
+    let absolute_deadline = deadline_clock + remaining;
+    let lookup = match store
+        .lookup_status(
+            StatusLookupRequest {
+                caller: &caller_identity,
+                deployment: state.loaded.runtime.id.as_str(),
+                artifact_digest: state.artifact_digest,
+                status_id: &request_id,
+            },
+            now_wall,
+        )
+        .await
+    {
+        Ok(StatusLookup::Accepted(pending)) => pending,
+        Ok(StatusLookup::Terminal { response, .. }) => return replay_response(response),
+        Ok(StatusLookup::NotFound) => {
+            tracing::error!("fresh asynchronous acceptance was absent from status custody");
+            return facade_problem(
+                profile,
+                ErrorClass::Facade,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &operation.record_type,
+                &request_id,
+            );
+        }
+        Err(error) => {
+            tracing::error!(%error, "bounded-wait status custody failed");
+            return facade_problem(
+                profile,
+                ErrorClass::Facade,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &operation.record_type,
+                &request_id,
+            );
+        }
+    };
+    let Some(semaphore) = state.async_recovery.get(&operation.binding) else {
+        tracing::error!("asynchronous binding has no recovery admission pool");
+        return facade_problem(
+            profile,
+            ErrorClass::Facade,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &operation.record_type,
+            &request_id,
+        );
+    };
+    let Ok(_permit) = Arc::clone(semaphore).try_acquire_owned() else {
+        return replay_response(committed.stored);
+    };
+    let recovery = match store
+        .acquire_status_recovery(&lookup, now_wall, deadline_wall)
+        .await
+    {
+        Ok(RecoveryLease::Acquired(recovery)) => recovery,
+        Ok(RecoveryLease::Busy | RecoveryLease::Stale) => {
+            return replay_response(committed.stored);
+        }
+        Err(error) => {
+            tracing::error!(%error, "the bounded-wait recovery lease failed");
+            return facade_problem(
+                profile,
+                ErrorClass::Facade,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &operation.record_type,
+                &request_id,
+            );
+        }
+    };
+    let Some(source_id) = recovery.source_id() else {
+        tracing::error!("accepted asynchronous custody has no source id");
+        return facade_problem(
+            profile,
+            ErrorClass::Facade,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &operation.record_type,
+            &request_id,
+        );
+    };
+    let source_id = source_id.to_owned();
+    let event = |kind: &'static str, detail: Option<Value>, at: SystemTime| {
+        (
+            JournalEvent {
+                event_kind: kind,
+                exchange_id: request_id.clone(),
+                operation: operation.operation.clone(),
+                caller_ref: caller.reference.clone(),
+                route_id: operation
+                    .async_completion
+                    .as_ref()
+                    .expect("asynchronous operation")
+                    .status
+                    .route_id
+                    .clone(),
+                detail: detail.map(|value| value.to_string()),
+            },
+            at,
+        )
+    };
+    let context = RouteContext {
+        endpoints: &state.loaded.endpoints,
+        scripts: &state.loaded.scripts,
+        resolver: &state.loaded.resolver,
+        resilience: &operation.resilience,
+        routes: &state.loaded.routes,
+        code_maps: state.loaded.code_maps.clone(),
+        maximum_upstream_calls: operation.maximum_upstream_calls,
+        job: crate::engine::job_sources::JobPageState::default(),
+    };
+    let mut recovery = Some(recovery);
+    for poll_ordinal in 1..=maximum_polls {
+        if tokio::time::Instant::now() >= absolute_deadline {
+            break;
+        }
+        let poll_started = tokio::time::Instant::now();
+        let polled = run_async_status_poll(
+            &context,
+            &state.loaded.profile,
+            operation,
+            AsyncStatusPollKind::Primary,
+            &source_id,
+            &request_id,
+            absolute_deadline,
+        )
+        .await;
+        let mut events = Vec::new();
+        for route_event in polled.events {
+            events.push(event(
+                route_event.kind,
+                Some(route_event.detail),
+                route_event.at,
+            ));
+        }
+        let duration = u64::try_from(poll_started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        match polled.result {
+            Ok(AsyncStatusOutcome::Pending {}) => {
+                events.push(event(
+                    "recoveryChecked",
+                    Some(json!({
+                        "result": "pending",
+                        "pollOrdinal": poll_ordinal,
+                        "durationMilliseconds": duration
+                    })),
+                    SystemTime::now(),
+                ));
+                if poll_ordinal == maximum_polls {
+                    return finish_nonterminal_poll(
+                        state,
+                        store,
+                        recovery.take().expect("the recovery lease is live"),
+                        events,
+                        committed.stored,
+                        &operation.record_type,
+                        &request_id,
+                    )
+                    .await;
+                }
+                if let Err(fault) = append_all(&state.journal, events).await {
+                    tracing::error!(%fault, "the bounded-wait journal could not commit");
+                    return facade_problem(
+                        profile,
+                        ErrorClass::Facade,
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        &operation.record_type,
+                        &request_id,
+                    );
+                }
+            }
+            Err(failure) => {
+                events.push(event(
+                    "recoveryCheckFailed",
+                    Some(json!({"class": failure.class.class(), "certainty": "uncertain"})),
+                    SystemTime::now(),
+                ));
+                return finish_nonterminal_poll(
+                    state,
+                    store,
+                    recovery.take().expect("the recovery lease is live"),
+                    events,
+                    committed.stored,
+                    &operation.record_type,
+                    &request_id,
+                )
+                .await;
+            }
+            Ok(outcome) => {
+                let terminal = render_recovery_terminal(
+                    state,
+                    operation,
+                    outcome,
+                    &operation.record_type,
+                    recovery
+                        .as_ref()
+                        .expect("the recovery lease is live")
+                        .response_request_id(),
+                );
+                let (response, outcome, result) = match terminal {
+                    Ok(terminal) => terminal,
+                    Err(class) => {
+                        events.push(event(
+                            "recoveryCheckFailed",
+                            Some(json!({"class": class.class(), "certainty": "uncertain"})),
+                            SystemTime::now(),
+                        ));
+                        return finish_nonterminal_poll(
+                            state,
+                            store,
+                            recovery.take().expect("the recovery lease is live"),
+                            events,
+                            committed.stored,
+                            &operation.record_type,
+                            &request_id,
+                        )
+                        .await;
+                    }
+                };
+                events.push(event(
+                    "recoveryChecked",
+                    Some(json!({
+                        "result": result,
+                        "pollOrdinal": poll_ordinal,
+                        "durationMilliseconds": duration
+                    })),
+                    SystemTime::now(),
+                ));
+                events.push(event(
+                    match outcome {
+                        TerminalOutcome::Completed => "exchangeCompleted",
+                        TerminalOutcome::Failed => "exchangeFailed",
+                    },
+                    None,
+                    SystemTime::now(),
+                ));
+                return match append_all_with_recovery(
+                    &state.journal,
+                    store,
+                    recovery.take().expect("the recovery lease is live"),
+                    outcome,
+                    response,
+                    events,
+                )
+                .await
+                {
+                    Ok(response) => response,
+                    Err(fault) => {
+                        tracing::error!(%fault, "bounded-wait terminal custody could not commit");
+                        facade_problem(
+                            profile,
+                            ErrorClass::Facade,
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            &operation.record_type,
+                            &request_id,
+                        )
+                    }
+                };
+            }
+        }
+        let wake = tokio::time::Instant::now() + poll_interval;
+        if wake >= absolute_deadline {
+            break;
+        }
+        tokio::time::sleep_until(wake).await;
+    }
+    let recovery = recovery.expect("the recovery lease is live");
+    if let Err(error) = store.release_recovery(recovery).await {
+        tracing::error!(%error, "the bounded-wait recovery lease could not be released");
+        return facade_problem(
+            profile,
+            ErrorClass::Facade,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &operation.record_type,
+            &request_id,
+        );
+    }
+    replay_response(committed.stored)
+}
+
+struct UncertaintyRecoveryRequest<'a> {
+    operation: &'a ServedOperation,
+    caller: &'a Caller,
+    write: &'a Arc<WriteExecutionContext>,
+    events: Vec<(JournalEvent, SystemTime)>,
+    physical_request_id: &'a str,
+    absolute_deadline: tokio::time::Instant,
+    deadline_wall: SystemTime,
+}
+
+async fn run_uncertainty_recovery(
+    state: &FacadeState,
+    request: UncertaintyRecoveryRequest<'_>,
+) -> Response {
+    let UncertaintyRecoveryRequest {
+        operation,
+        caller,
+        write,
+        mut events,
+        physical_request_id,
+        absolute_deadline,
+        deadline_wall,
+    } = request;
+    let profile = state.loaded.problems();
+    let Some(store) = state.idempotency.as_ref() else {
+        return facade_problem(
+            profile,
+            ErrorClass::Facade,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &operation.record_type,
+            physical_request_id,
+        );
+    };
+    let Some(semaphore) = state.async_recovery.get(&operation.binding) else {
+        tracing::error!("asynchronous binding has no recovery admission pool");
+        return facade_problem(
+            profile,
+            ErrorClass::Facade,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &operation.record_type,
+            physical_request_id,
+        );
+    };
+    let recovery_event = |kind: &'static str, detail: Option<Value>, at: SystemTime| {
+        (
+            JournalEvent {
+                event_kind: kind,
+                exchange_id: physical_request_id.to_owned(),
+                operation: operation.operation.clone(),
+                caller_ref: caller.reference.clone(),
+                route_id: operation
+                    .async_completion
+                    .as_ref()
+                    .and_then(|completion| completion.uncertainty.as_ref())
+                    .expect("recoverable uncertainty has a compiled route")
+                    .status
+                    .route_id
+                    .clone(),
+                detail: detail.map(|value| value.to_string()),
+            },
+            at,
+        )
+    };
+    let conflict = |mut events: Vec<(JournalEvent, SystemTime)>| {
+        events.push((
+            JournalEvent {
+                event_kind: "exchangeFailed",
+                exchange_id: physical_request_id.to_owned(),
+                operation: operation.operation.clone(),
+                caller_ref: caller.reference.clone(),
+                route_id: operation.route_id.clone(),
+                detail: Some(
+                    exchange_failure_detail(profile, ErrorClass::FacadeConflict).to_string(),
+                ),
+            },
+            SystemTime::now(),
+        ));
+        events
+    };
+    let Ok(_permit) = Arc::clone(semaphore).try_acquire_owned() else {
+        if let Err(fault) = append_all(&state.journal, conflict(events)).await {
+            tracing::error!(%fault, "the uncertain-effect journal could not commit");
+            return facade_problem(
+                profile,
+                ErrorClass::Facade,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &operation.record_type,
+                physical_request_id,
+            );
+        }
+        return facade_problem(
+            profile,
+            ErrorClass::FacadeConflict,
+            StatusCode::CONFLICT,
+            &operation.record_type,
+            physical_request_id,
+        );
+    };
+    let recovery = match write
+        .acquire_uncertain_recovery(SystemTime::now(), deadline_wall)
+        .await
+    {
+        Ok(RecoveryLease::Acquired(recovery)) => recovery,
+        Ok(RecoveryLease::Busy | RecoveryLease::Stale) => {
+            if let Err(fault) = append_all(&state.journal, conflict(events)).await {
+                tracing::error!(%fault, "the uncertain-effect journal could not commit");
+                return facade_problem(
+                    profile,
+                    ErrorClass::Facade,
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &operation.record_type,
+                    physical_request_id,
+                );
+            }
+            return facade_problem(
+                profile,
+                ErrorClass::FacadeConflict,
+                StatusCode::CONFLICT,
+                &operation.record_type,
+                physical_request_id,
+            );
+        }
+        Err(error) => {
+            tracing::error!(%error, "the uncertainty recovery lease failed");
+            return facade_problem(
+                profile,
+                ErrorClass::Facade,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &operation.record_type,
+                physical_request_id,
+            );
+        }
+    };
+    let Some(recovery_id) = recovery.recovery_id().map(str::to_owned) else {
+        tracing::error!("uncertain effect custody has no source correlation");
+        return facade_problem(
+            profile,
+            ErrorClass::Facade,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &operation.record_type,
+            physical_request_id,
+        );
+    };
+    let context = RouteContext {
+        endpoints: &state.loaded.endpoints,
+        scripts: &state.loaded.scripts,
+        resolver: &state.loaded.resolver,
+        resilience: &operation.resilience,
+        routes: &state.loaded.routes,
+        code_maps: state.loaded.code_maps.clone(),
+        maximum_upstream_calls: operation.maximum_upstream_calls,
+        job: crate::engine::job_sources::JobPageState::default(),
+    };
+    let poll_started = tokio::time::Instant::now();
+    let polled = run_async_status_poll(
+        &context,
+        &state.loaded.profile,
+        operation,
+        AsyncStatusPollKind::UncertaintyRecovery,
+        &recovery_id,
+        physical_request_id,
+        absolute_deadline,
+    )
+    .await;
+    for route_event in polled.events {
+        events.push(recovery_event(
+            route_event.kind,
+            Some(route_event.detail),
+            route_event.at,
+        ));
+    }
+    let duration = u64::try_from(poll_started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    match polled.result {
+        Ok(AsyncStatusOutcome::Pending {}) => {
+            events.push(recovery_event(
+                "recoveryChecked",
+                Some(json!({
+                    "result": "pending",
+                    "pollOrdinal": 1,
+                    "durationMilliseconds": duration
+                })),
+                SystemTime::now(),
+            ));
+        }
+        Err(failure) => {
+            events.push(recovery_event(
+                "recoveryCheckFailed",
+                Some(json!({"class": failure.class.class(), "certainty": "uncertain"})),
+                SystemTime::now(),
+            ));
+        }
+        Ok(outcome) => {
+            let terminal = render_recovery_terminal(
+                state,
+                operation,
+                outcome,
+                &operation.record_type,
+                recovery.response_request_id(),
+            );
+            if let Ok((response, outcome, result)) = terminal {
+                events.push(recovery_event(
+                    "recoveryChecked",
+                    Some(json!({
+                        "result": result,
+                        "pollOrdinal": 1,
+                        "durationMilliseconds": duration
+                    })),
+                    SystemTime::now(),
+                ));
+                events.push(recovery_event(
+                    match outcome {
+                        TerminalOutcome::Completed => "exchangeCompleted",
+                        TerminalOutcome::Failed => "exchangeFailed",
+                    },
+                    None,
+                    SystemTime::now(),
+                ));
+                return match append_all_with_recovery(
+                    &state.journal,
+                    store,
+                    recovery,
+                    outcome,
+                    response,
+                    events,
+                )
+                .await
+                {
+                    Ok(response) => response,
+                    Err(fault) => {
+                        tracing::error!(%fault, "uncertainty terminal custody could not commit");
+                        facade_problem(
+                            profile,
+                            ErrorClass::Facade,
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            &operation.record_type,
+                            physical_request_id,
+                        )
+                    }
+                };
+            }
+            events.push(recovery_event(
+                "recoveryCheckFailed",
+                Some(json!({
+                    "class": ErrorClass::DisclosureViolation.class(),
+                    "certainty": "uncertain"
+                })),
+                SystemTime::now(),
+            ));
+        }
+    }
+    if let Err(fault) = append_all(&state.journal, conflict(events)).await {
+        tracing::error!(%fault, "the uncertain-effect journal could not commit");
+        return facade_problem(
+            profile,
+            ErrorClass::Facade,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &operation.record_type,
+            physical_request_id,
+        );
+    }
+    if let Err(error) = store.release_recovery(recovery).await {
+        tracing::error!(%error, "the uncertainty recovery lease could not be released");
+        return facade_problem(
+            profile,
+            ErrorClass::Facade,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &operation.record_type,
+            physical_request_id,
+        );
+    }
+    facade_problem(
+        profile,
+        ErrorClass::FacadeConflict,
+        StatusCode::CONFLICT,
+        &operation.record_type,
+        physical_request_id,
+    )
+}
+
+async fn finish_nonterminal_poll(
+    state: &FacadeState,
+    store: &PostgresIdempotencyStore,
+    recovery: Box<crate::idempotent::RecoveryExecution>,
+    events: Vec<(JournalEvent, SystemTime)>,
+    accepted_response: StoredResponse,
+    record_type: &str,
+    physical_request_id: &str,
+) -> Response {
+    if let Err(fault) = append_all(&state.journal, events).await {
+        tracing::error!(%fault, "the asynchronous status journal could not commit");
+        return facade_problem(
+            state.loaded.problems(),
+            ErrorClass::Facade,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            record_type,
+            physical_request_id,
+        );
+    }
+    if let Err(error) = store.release_recovery(recovery).await {
+        tracing::error!(%error, "the asynchronous status lease could not be released");
+        return facade_problem(
+            state.loaded.problems(),
+            ErrorClass::Facade,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            record_type,
+            physical_request_id,
+        );
+    }
+    replay_response(accepted_response)
+}
+
+async fn append_all_with_recovery(
+    pool: &Pool,
+    store: &PostgresIdempotencyStore,
+    recovery: Box<crate::idempotent::RecoveryExecution>,
+    outcome: TerminalOutcome,
+    response: Response,
+    events: Vec<(JournalEvent, SystemTime)>,
+) -> Result<Response, String> {
+    let response_request_id = recovery.response_request_id().to_owned();
+    let (mut response, stored) = prepare_write_response(response, &response_request_id).await?;
+    let stored = stored.ok_or_else(|| "adapter.async-recovery: custody is absent".to_owned())?;
+    let mut client = pool
+        .get()
+        .await
+        .map_err(|_| "the journal connection pool gave no connection".to_owned())?;
+    let transaction = client
+        .transaction()
+        .await
+        .map_err(|error| journal_fault(&error))?;
+    store
+        .finish_recovery_with_client(&transaction, recovery, outcome, stored, SystemTime::now())
+        .await
+        .map_err(|error| error.to_string())?;
+    for (event, occurred_at) in events {
+        journal::append(&transaction, event, occurred_at)
+            .await
+            .map_err(|error| match error {
+                journal::JournalError::Query(error) => journal_fault(&error),
+                _ => "the journal write failed".to_owned(),
+            })?;
+    }
+    transaction
+        .commit()
+        .await
+        .map_err(|error| journal_fault(&error))?;
+    response
+        .extensions_mut()
+        .insert(ReplayedResponseRequestId(response_request_id));
+    Ok(response)
+}
+
 fn journal_fault(error: &tokio_postgres::Error) -> String {
     match error.code() {
         Some(code) => format!("the journal write failed with SQLSTATE {}", code.code()),
@@ -1086,6 +2651,29 @@ fn admits(project: &AdapterProject, caller: &Caller, operation: &ServedOperation
                 .record_types
                 .iter()
                 .any(|name| name.as_str() == operation.record_type)
+    })
+}
+
+fn admits_stored(
+    project: &AdapterProject,
+    caller: &Caller,
+    profile_operation: &str,
+    record_type: &str,
+) -> bool {
+    project.access_profiles.iter().any(|profile| {
+        !profile.scopes.is_empty()
+            && profile
+                .scopes
+                .iter()
+                .all(|scope| caller.scopes.iter().any(|held| held == scope.as_str()))
+            && profile
+                .operations
+                .iter()
+                .any(|id| id.as_str() == profile_operation)
+            && profile
+                .record_types
+                .iter()
+                .any(|name| name.as_str() == record_type)
     })
 }
 
@@ -1217,6 +2805,67 @@ pub(crate) fn disclosed_slots(
     Ok(slots)
 }
 
+fn render_recovery_terminal(
+    state: &FacadeState,
+    operation: &ServedOperation,
+    outcome: AsyncStatusOutcome,
+    record_type: &str,
+    response_request_id: &str,
+) -> Result<(Response, TerminalOutcome, &'static str), ErrorClass> {
+    match outcome {
+        AsyncStatusOutcome::Succeeded { result } => {
+            let slots = disclosed_slots(operation, &result, None, record_type, response_request_id)
+                .map_err(|_| ErrorClass::DisclosureViolation)?;
+            let body = render_success(operation, slots, None, record_type, response_request_id)
+                .map_err(|_| ErrorClass::Facade)?;
+            let status = state
+                .loaded
+                .profile
+                .operations
+                .get(operation.operation.as_str())
+                .and_then(|declared| declared.async_completion.as_ref())
+                .and_then(|completion| {
+                    StatusCode::from_u16(completion.completed_status.get() as u16).ok()
+                })
+                .ok_or(ErrorClass::Facade)?;
+            Ok((
+                json_response(status, &body),
+                TerminalOutcome::Completed,
+                "succeeded",
+            ))
+        }
+        AsyncStatusOutcome::Failed { class, data } => {
+            let data = data
+                .map(serde_json::to_value)
+                .transpose()
+                .map_err(|_| ErrorClass::DisclosureViolation)?;
+            let failure = enforce_problem_data(
+                &state.loaded.profile,
+                RouteFailure {
+                    class,
+                    message: None,
+                    data,
+                    auth: None,
+                    code: None,
+                    record: None,
+                    evidence_diagnostic: None,
+                },
+            );
+            Ok((
+                route_problem(
+                    state.loaded.problems(),
+                    &failure,
+                    record_type,
+                    response_request_id,
+                ),
+                TerminalOutcome::Failed,
+                "failed",
+            ))
+        }
+        AsyncStatusOutcome::Pending {} => Err(ErrorClass::Facade),
+    }
+}
+
 /// Whether a caller-supplied identifier can stand as one path segment of the
 /// source call: its percent-encoded form must pass the canonical-path rule
 /// the outbound origin pin applies. An empty identifier is not one. The
@@ -1256,11 +2905,15 @@ pub(crate) struct Refusal {
     reason: String,
 }
 
-impl crate::engine::load::Loaded {
+trait LoadedProblems {
+    #[must_use]
+    fn problems(&self) -> Problems<'_>;
+}
+
+impl LoadedProblems for crate::engine::load::Loaded {
     /// The problems view the facade answers refusals from: the facade's
     /// own projection of the compiled authored state.
-    #[must_use]
-    pub fn problems(&self) -> Problems<'_> {
+    fn problems(&self) -> Problems<'_> {
         Problems {
             profile: &self.profile,
             envelope: &self.problem_envelope,
@@ -2127,6 +3780,12 @@ fn new_id() -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+fn new_recovery_id() -> String {
+    let mut bytes = [0_u8; 32];
+    getrandom::fill(&mut bytes).expect("the operating system supplies randomness");
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
 #[cfg(test)]
 #[path = "facade_generated_properties.rs"]
 mod generated_properties;
@@ -2164,6 +3823,7 @@ mod tests {
             record_type: record_type.to_owned(),
             route_id: String::new(),
             steps: std::sync::Arc::new(Vec::new()),
+            resume: None,
             resilience: crate::engine::resilience::ResilienceRuntime::empty(),
             maximum_upstream_calls: 1,
             item_envelope: None,
@@ -2178,6 +3838,7 @@ mod tests {
             request_template: None,
             request_maximum_bytes: crate::engine::load::DEFAULT_REQUEST_MAXIMUM_BYTES,
             filters: Vec::new(),
+            async_completion: None,
         }
     }
 

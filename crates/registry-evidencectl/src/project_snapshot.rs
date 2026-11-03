@@ -144,6 +144,7 @@ fn capture_project_in(project: &Path, temporary_root: &Path) -> Result<ProjectSn
         ("functions", Bound::Refuse(MAX_DERIVATION_BYTES)),
         (SCHEMAS_DIRECTORY, Bound::Refuse(MAX_SOURCE_ARTIFACT_BYTES)),
         (FIXTURES_DIRECTORY, Bound::Refuse(MAX_SOURCE_ARTIFACT_BYTES)),
+        ("adapter-packs", Bound::Refuse(MAX_SOURCE_ARTIFACT_BYTES)),
         ("adapters", Bound::Refuse(MAX_SOURCE_ARTIFACT_BYTES)),
         ("queries", Bound::Refuse(MAX_SOURCE_ARTIFACT_BYTES)),
         ("codelists", Bound::Refuse(MAX_SOURCE_ARTIFACT_BYTES)),
@@ -705,6 +706,31 @@ mod tests {
             assert_eq!(
                 fs::read_link(nested.join("linked.pem")).unwrap(),
                 Path::new("missing")
+            );
+        }
+    }
+
+    #[test]
+    fn project_snapshot_captures_the_complete_local_pack_closure() {
+        let temporary = temporary();
+        let project = temporary.path().join("project");
+        let pack = project.join("adapter-packs/register");
+        fs::create_dir_all(pack.join("schemas")).unwrap();
+        fs::create_dir_all(pack.join("scripts")).unwrap();
+        put_marker(&project);
+        fs::write(pack.join("pack.yaml"), "kind: AdapterPack\n").unwrap();
+        fs::write(pack.join("schemas/facts.json"), "{}").unwrap();
+        fs::write(pack.join("scripts/facts.rhai"), "fn facts(x) { x }").unwrap();
+
+        let snapshot = capture_project_in(&project, temporary.path()).unwrap();
+        for relative in [
+            "adapter-packs/register/pack.yaml",
+            "adapter-packs/register/schemas/facts.json",
+            "adapter-packs/register/scripts/facts.rhai",
+        ] {
+            assert!(
+                snapshot.root().join(relative).is_file(),
+                "missing {relative}"
             );
         }
     }

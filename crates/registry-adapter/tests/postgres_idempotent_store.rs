@@ -10,9 +10,10 @@
 //! `IdempotentConsumerRemoveOnFailureTest`, and
 //! `IdempotentConsumerFailedDuplicateTest` supply the applicable store cases:
 //! an eager racing duplicate cannot own or remove the first claim, and failed
-//! work is removable only under the configured semantics. `eager` and
-//! `completionEager` route-scope behavior belongs to the later processor
-//! integration, not this store slice.
+//! work is removable only under the configured semantics. Direct `eager` and
+//! `completionEager` route-scope behavior lives in
+//! `camel_idempotent_consumer`; this suite proves that the facade's durable
+//! reservation remains independent of those EIP timings.
 //! Adapter keeps those semantics only before an upstream effect. Once a
 //! non-safe send may happen, the durable claim is never released as fresh
 //! work. Every test runs in its own schema inside the disposable database
@@ -21,21 +22,32 @@
 
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use deadpool_postgres::{GenericClient, Manager, ManagerConfig, Pool, RecyclingMethod};
+use registry_adapter::custody::{WriteExecutionContext, WriteResolution};
+use registry_adapter::engine::exchange::{WriteClaim, WriteCustody};
+use registry_adapter::engine::ResumeValue;
 use registry_adapter::idempotent::{
-    self, Claim, ClaimRequest, IdempotencyError, StoredResponse, TerminalOutcome,
+    self, AsyncEffectAttempt, Claim, ClaimRequest, IdempotencyError, RecoveryLease,
+    ResumeClaimContext, StatusLookup, StatusLookupRequest, StoredResponse, TerminalOutcome,
     VerifiedCallerIdentity, MAX_CALLER_IDENTITY_BYTES, MAX_CALLER_ISSUER_BYTES,
     MAX_STORED_RESPONSE_BYTES,
 };
+use tokio::sync::Barrier;
 use tokio_postgres::{Client, Config as PgConfig, NoTls};
 
 static NEXT_SCHEMA: AtomicU32 = AtomicU32::new(0);
 const V0100_SCHEMA: &str = include_str!("../src/idempotent/migrations/0100_idempotency_store.sql");
 const V0200_SCHEMA: &str =
     include_str!("../src/idempotent/migrations/0200_logical_deployment_identity.sql");
+const V0300_SCHEMA: &str =
+    include_str!("../src/idempotent/migrations/0300_response_request_id.sql");
 const RESPONSE_REQUEST_ID: &str = "00000000000000000000000000000001";
+const OTHER_RESPONSE_REQUEST_ID: &str = "00000000000000000000000000000002";
+const THIRD_RESPONSE_REQUEST_ID: &str = "00000000000000000000000000000004";
+const RECOVERY_ID: &str = "0000000000000000000000000000000000000000000000000000000000000003";
 
 #[derive(Clone)]
 struct Isolated {
@@ -147,6 +159,22 @@ async fn install_v0200(client: &impl GenericClient) {
         .expect("record the historical v0200 migration");
 }
 
+async fn install_v0300(client: &impl GenericClient) {
+    install_v0200(client).await;
+    client
+        .batch_execute(V0300_SCHEMA)
+        .await
+        .expect("apply the historical v0300 response-id migration");
+    client
+        .execute(
+            "INSERT INTO adapter_idempotency_schema_migrations(version, applied_at) \
+             VALUES (300, now())",
+            &[],
+        )
+        .await
+        .expect("record the historical v0300 migration");
+}
+
 async fn migration_versions(client: &impl GenericClient) -> Vec<i64> {
     client
         .query(
@@ -210,6 +238,227 @@ fn response(status: u16, content_type: &[u8], body: &[u8]) -> StoredResponse {
         RESPONSE_REQUEST_ID,
     )
     .expect("the synthetic facade response is bounded")
+}
+
+fn async_attempt<'a>(
+    request_id: &'a str,
+    recovery_id: Option<&'a str>,
+    artifact_byte: u8,
+    effect_deadline: SystemTime,
+) -> AsyncEffectAttempt<'a> {
+    AsyncEffectAttempt {
+        response_request_id: request_id,
+        artifact_digest: [artifact_byte; 32],
+        binding_id: "person-create-binding",
+        profile_operation: "records-create",
+        concrete_operation: "records-create.person",
+        record_type: "person",
+        recovery_id,
+        effect_deadline,
+    }
+}
+
+fn status_lookup<'a>(
+    caller: &'a VerifiedCallerIdentity,
+    status_id: &'a str,
+    artifact_byte: u8,
+) -> StatusLookupRequest<'a> {
+    StatusLookupRequest {
+        caller,
+        deployment: "deployment-a",
+        artifact_digest: [artifact_byte; 32],
+        status_id,
+    }
+}
+
+fn resume_context(artifact_byte: u8, deadline: SystemTime) -> ResumeClaimContext {
+    ResumeClaimContext {
+        artifact_digest: [artifact_byte; 32],
+        effect_deadline: deadline,
+        step_count: 2,
+    }
+}
+
+#[tokio::test]
+async fn linear_resume_checkpoints_only_declared_ids_and_reacquires_the_unfinished_step() {
+    let isolated = isolated().await;
+    let store = isolated.store(Duration::from_secs(60)).await;
+    let caller = caller("resume-operator");
+    let start = UNIX_EPOCH + Duration::from_secs(4_000_000);
+    let mut execution = match store
+        .claim_resume(
+            request(&caller, "records-create.person", "resume-key", 71),
+            resume_context(41, start + Duration::from_secs(10)),
+            start,
+        )
+        .await
+        .expect("claim the linear write")
+    {
+        Claim::Execute(execution) => execution,
+        other => panic!("a fresh write executes: {other:?}"),
+    };
+    store
+        .mark_resume_step_attempted(&mut execution, 0, start + Duration::from_secs(1))
+        .await
+        .expect("premark step zero");
+    store
+        .checkpoint_resume_step(
+            &mut execution,
+            0,
+            &[ResumeValue::new(
+                "record_id".to_string(),
+                "source-17".to_string(),
+            )],
+            start + Duration::from_secs(2),
+        )
+        .await
+        .expect("checkpoint the source identifier only");
+
+    assert!(matches!(
+        store
+            .claim_resume(
+                request(&caller, "records-create.person", "resume-key", 71),
+                resume_context(41, start + Duration::from_secs(12)),
+                start + Duration::from_secs(3),
+            )
+            .await
+            .expect("a racing retry resolves"),
+        Claim::InFlight
+    ));
+    assert!(matches!(
+        store
+            .ensure_async_artifact_compatible(
+                "deployment-a",
+                [42; 32],
+                start + Duration::from_secs(3),
+            )
+            .await,
+        Err(IdempotencyError::AsyncArtifactInUse)
+    ));
+
+    let (mut resumed, next_step, bindings) = match store
+        .claim_resume(
+            request(&caller, "records-create.person", "resume-key", 71),
+            resume_context(41, start + Duration::from_secs(21)),
+            start + Duration::from_secs(11),
+        )
+        .await
+        .expect("reacquire after the crashed lease")
+    {
+        Claim::Resume {
+            execution,
+            next_step,
+            bindings,
+        } => (execution, next_step, bindings),
+        other => panic!("the unfinished step resumes: {other:?}"),
+    };
+    assert_eq!(next_step, 1);
+    assert_eq!(bindings.len(), 1);
+    assert_eq!(
+        bindings.get("record_id").map(String::as_str),
+        Some("source-17")
+    );
+    let client = isolated.client().await;
+    let stored_columns: i64 = client
+        .query_one(
+            "SELECT count(*) FROM information_schema.columns \
+             WHERE table_name IN ('adapter_idempotency_resumes', \
+                                  'adapter_idempotency_resume_bindings') \
+               AND column_name IN ('body', 'payload', 'request_body', 'response_body')",
+            &[],
+        )
+        .await
+        .expect("inspect the resume tables")
+        .get(0);
+    assert_eq!(stored_columns, 0, "resume custody has no payload column");
+
+    store
+        .mark_resume_step_attempted(&mut resumed, 1, start + Duration::from_secs(12))
+        .await
+        .expect("premark the final step");
+    store
+        .finish(
+            resumed,
+            TerminalOutcome::Completed,
+            response(201, b"application/json", br#"{"record":"done"}"#),
+            start + Duration::from_secs(13),
+        )
+        .await
+        .expect("commit the terminal response");
+    assert!(matches!(
+        store
+            .claim_resume(
+                request(&caller, "records-create.person", "resume-key", 71),
+                resume_context(41, start + Duration::from_secs(30)),
+                start + Duration::from_secs(20),
+            )
+            .await
+            .expect("terminal retry resolves"),
+        Claim::Replay {
+            outcome: TerminalOutcome::Completed,
+            ..
+        }
+    ));
+}
+
+#[tokio::test]
+async fn a_clean_resume_release_admits_a_new_lease_and_fences_the_old_owner() {
+    let isolated = isolated().await;
+    let store = isolated.store(Duration::from_secs(60)).await;
+    let caller = caller("resume-clean-release");
+    let start = UNIX_EPOCH + Duration::from_secs(4_100_000);
+    let mut old = match store
+        .claim_resume(
+            request(&caller, "records-create.person", "resume-release-key", 72),
+            resume_context(43, start + Duration::from_secs(10)),
+            start,
+        )
+        .await
+        .expect("claim the first attempt")
+    {
+        Claim::Execute(execution) => execution,
+        other => panic!("a fresh write executes: {other:?}"),
+    };
+    store
+        .mark_resume_step_attempted(&mut old, 0, start + Duration::from_secs(1))
+        .await
+        .expect("premark the first physical attempt");
+    store
+        .release_resume_lease(&old, start + Duration::from_secs(2))
+        .await
+        .expect("a cleanly returned attempt releases only its lease");
+
+    let mut resumed = match store
+        .claim_resume(
+            request(&caller, "records-create.person", "resume-release-key", 72),
+            resume_context(43, start + Duration::from_secs(12)),
+            start + Duration::from_secs(2),
+        )
+        .await
+        .expect("reacquire the released step")
+    {
+        Claim::Resume {
+            execution,
+            next_step: 0,
+            bindings,
+        } if bindings.is_empty() => execution,
+        other => panic!("the same unfinished step resumes: {other:?}"),
+    };
+    assert!(matches!(
+        store
+            .checkpoint_resume_step(
+                &mut old,
+                0,
+                &[ResumeValue::new("record_id".to_owned(), "stale".to_owned())],
+                start + Duration::from_secs(3),
+            )
+            .await,
+        Err(IdempotencyError::StateConflict)
+    ));
+    store
+        .mark_resume_step_attempted(&mut resumed, 0, start + Duration::from_secs(3))
+        .await
+        .expect("the new lease alone owns the step");
 }
 
 #[test]
@@ -326,7 +575,7 @@ async fn an_interrupted_migration_commits_neither_its_schema_nor_its_ledger_row(
         .into_iter()
         .map(|row| row.get::<_, i64>(0))
         .collect::<Vec<_>>();
-    assert_eq!(versions, [100, 200, 300]);
+    assert_eq!(versions, [100, 200, 300, 400, 500]);
 }
 
 #[tokio::test]
@@ -355,12 +604,18 @@ async fn migration_owns_a_separate_idempotency_ledger_and_is_idempotent() {
     assert_eq!(
         relations,
         vec![
+            "adapter_idempotency_async_artifacts".to_owned(),
             "adapter_idempotency_entries".to_owned(),
+            "adapter_idempotency_resume_bindings".to_owned(),
+            "adapter_idempotency_resumes".to_owned(),
             "adapter_idempotency_schema_migrations".to_owned(),
         ],
         "the idempotency migration neither creates nor borrows the journal ledger"
     );
-    assert_eq!(migration_versions(&client).await, vec![100, 200, 300]);
+    assert_eq!(
+        migration_versions(&client).await,
+        vec![100, 200, 300, 400, 500]
+    );
 }
 
 #[tokio::test]
@@ -401,7 +656,10 @@ async fn logical_deployment_migration_accepts_an_empty_v0100_ledger() {
     idempotent::migrate(&mut client)
         .await
         .expect("an empty v0100 ledger can adopt the logical deployment namespace");
-    assert_eq!(migration_versions(&client).await, vec![100, 200, 300]);
+    assert_eq!(
+        migration_versions(&client).await,
+        vec![100, 200, 300, 400, 500]
+    );
 }
 
 #[tokio::test]
@@ -470,7 +728,10 @@ async fn response_identity_migration_accepts_and_preserves_expired_v0200_tombsto
     idempotent::migrate(&mut client)
         .await
         .expect("an expired tombstone has no response identity to recover");
-    assert_eq!(migration_versions(&client).await, vec![100, 200, 300]);
+    assert_eq!(
+        migration_versions(&client).await,
+        vec![100, 200, 300, 400, 500]
+    );
     let row = client
         .query_one(
             "SELECT state, response_request_id, response_body \
@@ -496,7 +757,10 @@ async fn current_rows_do_not_block_a_subsequent_startup() {
     idempotent::migrate(&mut client)
         .await
         .expect("the applied semantic migration does not inspect current rows again");
-    assert_eq!(migration_versions(&client).await, vec![100, 200, 300]);
+    assert_eq!(
+        migration_versions(&client).await,
+        vec![100, 200, 300, 400, 500]
+    );
     assert_eq!(
         client
             .query_one("SELECT count(*) FROM adapter_idempotency_entries", &[])
@@ -537,7 +801,10 @@ async fn current_cached_response_ids_do_not_block_a_subsequent_startup() {
     idempotent::migrate(&mut client)
         .await
         .expect("an already-applied response-id migration accepts current custody");
-    assert_eq!(migration_versions(&client).await, vec![100, 200, 300]);
+    assert_eq!(
+        migration_versions(&client).await,
+        vec![100, 200, 300, 400, 500]
+    );
     assert_eq!(
         client
             .query_one(
@@ -1017,4 +1284,1474 @@ async fn sweep_erases_expired_response_custody_without_reopening_the_effect() {
     assert_eq!(row.get::<_, Option<Vec<u8>>>(2), None);
     assert_eq!(row.get::<_, Option<String>>(3), None);
     assert_eq!(row.get::<_, String>(4), "completed_expired");
+}
+
+/// Camel's non-eager consumer does not add a failed exchange to its
+/// repository, regardless of `removeOnFailure`. Adapter may therefore release
+/// its separate host reservation only while no non-safe effect was attempted.
+#[tokio::test]
+async fn eager_false_failure_releases_a_safe_host_reservation() {
+    let isolated = isolated().await;
+    let store = isolated.store(Duration::from_secs(60)).await;
+    let caller = caller("non-eager-safe-failure");
+    let context = WriteExecutionContext::new(
+        store.clone(),
+        caller.clone(),
+        "deployment-a".to_owned(),
+        "records-create.person".to_owned(),
+        [71; 32],
+    );
+
+    assert_eq!(
+        context
+            .claim("non-eager-safe-key", false)
+            .await
+            .expect("reserve the host key"),
+        WriteClaim::Execute
+    );
+    context
+        .complete(false, false)
+        .await
+        .expect("a non-eager failed exchange never becomes an EIP member");
+    assert_eq!(context.resolution().await, WriteResolution::Released);
+
+    let retry = WriteExecutionContext::new(
+        store,
+        caller,
+        "deployment-a".to_owned(),
+        "records-create.person".to_owned(),
+        [71; 32],
+    );
+    assert_eq!(
+        retry
+            .claim("non-eager-safe-key", false)
+            .await
+            .expect("retry the safely released key"),
+        WriteClaim::Execute
+    );
+}
+
+/// Adapter's effect marker is independent of Camel repository timing. Even
+/// with `eager=false`, a possible source effect keeps the host reservation
+/// spent and the terminal problem replays instead of executing again.
+#[tokio::test]
+async fn eager_false_failure_after_an_effect_never_reopens_the_key() {
+    let isolated = isolated().await;
+    let store = isolated.store(Duration::from_secs(60)).await;
+    let caller = caller("non-eager-effect-failure");
+    let context = WriteExecutionContext::new(
+        store.clone(),
+        caller.clone(),
+        "deployment-a".to_owned(),
+        "records-update.person".to_owned(),
+        [72; 32],
+    );
+
+    assert_eq!(
+        context
+            .claim("non-eager-effect-key", false)
+            .await
+            .expect("reserve the host key"),
+        WriteClaim::Execute
+    );
+    context
+        .before_effect()
+        .await
+        .expect("persist the effect boundary before the send");
+    context
+        .complete(false, true)
+        .await
+        .expect("completion cannot release an attempted effect");
+    assert_eq!(context.resolution().await, WriteResolution::Pending);
+
+    let problem = response(
+        502,
+        b"application/problem+json",
+        br#"{"code":"adapter.upstream-unavailable"}"#,
+    );
+    let client = isolated.client().await;
+    context
+        .finish_with_client(&client, TerminalOutcome::Failed, problem.clone())
+        .await
+        .expect("record the terminal response for the attempted effect");
+
+    let retry = WriteExecutionContext::new(
+        store,
+        caller,
+        "deployment-a".to_owned(),
+        "records-update.person".to_owned(),
+        [72; 32],
+    );
+    assert_eq!(
+        retry
+            .claim("non-eager-effect-key", false)
+            .await
+            .expect("resolve the spent key"),
+        WriteClaim::Stop
+    );
+    assert_eq!(
+        retry.resolution().await,
+        WriteResolution::Replay {
+            outcome: TerminalOutcome::Failed,
+            response: problem,
+        }
+    );
+}
+
+#[tokio::test]
+async fn v0400_preserves_v0300_terminal_and_spent_rows_without_inventing_async_authority() {
+    let isolated = isolated().await;
+    let mut client = isolated.client().await;
+    install_v0300(&client).await;
+    client
+        .execute(
+            "INSERT INTO adapter_idempotency_entries (\
+                 scope_digest, request_digest, state, claimed_at, terminal_at, expires_at, \
+                 response_status, response_content_type, response_body, response_request_id) \
+             VALUES ($1, $2, 'completed', now(), now(), now() + interval '1 hour', \
+                     201, $3, $4, $5), \
+                    ($6, $7, 'failed_expired', now(), now(), now(), \
+                     NULL, NULL, NULL, NULL)",
+            &[
+                &[81_u8; 32].as_slice(),
+                &[82_u8; 32].as_slice(),
+                &b"application/json".as_slice(),
+                &b"{}".as_slice(),
+                &RESPONSE_REQUEST_ID,
+                &[83_u8; 32].as_slice(),
+                &[84_u8; 32].as_slice(),
+            ],
+        )
+        .await
+        .expect("insert v0300 terminal and tombstone rows");
+    client
+        .execute(
+            "INSERT INTO adapter_idempotency_entries (\
+                 scope_digest, request_digest, state, claimed_at, effect_started_at) \
+             VALUES ($1, $2, 'effect_started', now(), now())",
+            &[&[85_u8; 32].as_slice(), &[86_u8; 32].as_slice()],
+        )
+        .await
+        .expect("insert a v0300 permanently-spent uncertain effect");
+
+    idempotent::migrate(&mut client)
+        .await
+        .expect("v0400 accepts existing terminal and spent rows");
+
+    assert_eq!(
+        migration_versions(&client).await,
+        vec![100, 200, 300, 400, 500]
+    );
+    let rows = client
+        .query(
+            "SELECT state, artifact_digest, async_binding_digest, async_recovery_id \
+             FROM adapter_idempotency_entries ORDER BY state",
+            &[],
+        )
+        .await
+        .expect("inspect migrated v0300 rows");
+    assert_eq!(rows.len(), 3);
+    assert!(rows
+        .iter()
+        .any(|row| row.get::<_, String>(0) == "effect_started"));
+    for row in rows {
+        assert_eq!(row.get::<_, Option<Vec<u8>>>(1), None);
+        assert_eq!(row.get::<_, Option<Vec<u8>>>(2), None);
+        assert_eq!(row.get::<_, Option<String>>(3), None);
+    }
+}
+
+#[tokio::test]
+async fn accepted_response_replays_exactly_and_status_metadata_is_exposed_only_after_binding_match()
+{
+    let isolated = isolated().await;
+    let store = isolated.store(Duration::from_secs(60)).await;
+    let owner = caller("async-owner");
+    let other = caller("async-other");
+    let now = SystemTime::now();
+    let effect_deadline = now
+        .checked_add(Duration::from_secs(10))
+        .expect("effect deadline is representable");
+    let claim_request = request(&owner, "records-create.person", "accepted-exact-key", 91);
+    let Claim::Execute(mut execution) = store
+        .claim(claim_request, now)
+        .await
+        .expect("claim the asynchronous write")
+    else {
+        panic!("the asynchronous write must execute first");
+    };
+    store
+        .mark_async_effect_attempted(
+            &mut execution,
+            request(&owner, "records-create.person", "accepted-exact-key", 91),
+            async_attempt(RESPONSE_REQUEST_ID, Some(RECOVERY_ID), 92, effect_deadline),
+            now,
+        )
+        .await
+        .expect("precommit asynchronous recovery before the effect");
+    let accepted = response(
+        202,
+        b"application/vnd.registry+json; profile=accepted",
+        br#"{"status":"accepted", "requestId":"00000000000000000000000000000001"}\n"#,
+    );
+    store
+        .accept(execution, "source-operation-7", accepted.clone(), now)
+        .await
+        .expect("commit exact accepted response custody");
+
+    assert!(matches!(
+        store
+            .claim(
+                request(
+                    &owner,
+                    "records-create.person",
+                    "accepted-exact-key",
+                    91,
+                ),
+                now,
+            )
+            .await
+            .expect("retry the accepted write"),
+        Claim::Accepted { response } if response == accepted
+    ));
+    assert!(matches!(
+        store
+            .lookup_status(status_lookup(&other, RESPONSE_REQUEST_ID, 92), now)
+            .await
+            .expect("look up as another verified caller"),
+        StatusLookup::NotFound
+    ));
+    assert!(matches!(
+        store
+            .lookup_status(status_lookup(&owner, RESPONSE_REQUEST_ID, 93), now)
+            .await
+            .expect("look up under another artifact"),
+        StatusLookup::NotFound
+    ));
+    assert!(matches!(
+        store
+            .lookup_status(status_lookup(&owner, "ABC", 92), now)
+            .await
+            .expect("look up a malformed status handle"),
+        StatusLookup::NotFound
+    ));
+
+    let StatusLookup::Accepted(status) = store
+        .lookup_status(status_lookup(&owner, RESPONSE_REQUEST_ID, 92), now)
+        .await
+        .expect("look up the caller-bound accepted status")
+    else {
+        panic!("the matching caller and artifact must see accepted custody");
+    };
+    assert_eq!(status.response(), &accepted);
+    assert_eq!(status.metadata().binding_id(), "person-create-binding");
+    assert_eq!(status.metadata().profile_operation(), "records-create");
+    assert_eq!(
+        status.metadata().concrete_operation(),
+        "records-create.person"
+    );
+    assert_eq!(status.metadata().record_type(), "person");
+}
+
+#[tokio::test]
+async fn a_live_async_status_handle_collision_is_refused_without_mutating_the_second_claim() {
+    let isolated = isolated().await;
+    let store = isolated.store(Duration::from_secs(30)).await;
+    let owner = caller("collision-owner");
+    let now = SystemTime::now();
+    let effect_deadline = now
+        .checked_add(Duration::from_secs(5))
+        .expect("effect deadline is representable");
+
+    let Claim::Execute(mut first) = store
+        .claim(
+            request(&owner, "records-create.person", "collision-first", 95),
+            now,
+        )
+        .await
+        .expect("claim the first handle owner")
+    else {
+        panic!("the first handle owner must execute");
+    };
+    store
+        .mark_async_effect_attempted(
+            &mut first,
+            request(&owner, "records-create.person", "collision-first", 95),
+            async_attempt(RESPONSE_REQUEST_ID, Some(RECOVERY_ID), 96, effect_deadline),
+            now,
+        )
+        .await
+        .expect("commit the first live handle");
+
+    let Claim::Execute(mut second) = store
+        .claim(
+            request(&owner, "records-create.person", "collision-second", 97),
+            now,
+        )
+        .await
+        .expect("claim the second handle owner")
+    else {
+        panic!("the second handle owner must execute before collision");
+    };
+    assert!(matches!(
+        store
+            .mark_async_effect_attempted(
+                &mut second,
+                request(&owner, "records-create.person", "collision-second", 97),
+                async_attempt(RESPONSE_REQUEST_ID, Some(RECOVERY_ID), 96, effect_deadline),
+                now,
+            )
+            .await,
+        Err(IdempotencyError::Query(_))
+    ));
+    store
+        .release_before_effect(second)
+        .await
+        .expect("the refused collision never crossed the effect boundary");
+    assert!(matches!(
+        store
+            .claim(
+                request(&owner, "records-create.person", "collision-second", 97),
+                now,
+            )
+            .await
+            .expect("reclaim the unmutated collision row"),
+        Claim::Execute(_)
+    ));
+}
+
+#[tokio::test]
+async fn one_recovery_lease_owns_a_row_and_terminal_status_lives_until_original_link_expiry() {
+    let isolated = isolated().await;
+    let store = isolated.store(Duration::from_secs(10)).await;
+    let owner = caller("lease-owner");
+    let accepted_at = SystemTime::now();
+    let effect_deadline = accepted_at
+        .checked_add(Duration::from_secs(5))
+        .expect("effect deadline is representable");
+    let Claim::Execute(mut execution) = store
+        .claim(
+            request(&owner, "records-create.person", "lease-key", 101),
+            accepted_at,
+        )
+        .await
+        .expect("claim the leased asynchronous write")
+    else {
+        panic!("the leased asynchronous write must execute");
+    };
+    store
+        .mark_async_effect_attempted(
+            &mut execution,
+            request(&owner, "records-create.person", "lease-key", 101),
+            async_attempt(RESPONSE_REQUEST_ID, Some(RECOVERY_ID), 102, effect_deadline),
+            accepted_at,
+        )
+        .await
+        .expect("precommit recovery custody");
+    let accepted = response(202, b"application/json", br#"{"status":"accepted"}"#);
+    store
+        .accept(
+            execution,
+            "source-operation-lease",
+            accepted.clone(),
+            accepted_at,
+        )
+        .await
+        .expect("commit accepted custody");
+
+    let StatusLookup::Accepted(status) = store
+        .lookup_status(status_lookup(&owner, RESPONSE_REQUEST_ID, 102), accepted_at)
+        .await
+        .expect("load pending status")
+    else {
+        panic!("status must be accepted");
+    };
+    let lease_deadline = accepted_at
+        .checked_add(Duration::from_secs(3))
+        .expect("lease deadline is representable");
+    let RecoveryLease::Acquired(recovery) = store
+        .acquire_status_recovery(&status, accepted_at, lease_deadline)
+        .await
+        .expect("acquire the first recovery lease")
+    else {
+        panic!("the first checker must acquire the row");
+    };
+    assert_eq!(recovery.source_id(), Some("source-operation-lease"));
+    assert!(matches!(
+        store
+            .acquire_status_recovery(&status, accepted_at, lease_deadline)
+            .await
+            .expect("contend for the recovery lease"),
+        RecoveryLease::Busy
+    ));
+
+    let terminal_at = accepted_at
+        .checked_add(Duration::from_secs(2))
+        .expect("terminal time is representable");
+    let terminal = response(200, b"application/json", br#"{"done":true}"#);
+    store
+        .finish_recovery(
+            recovery,
+            TerminalOutcome::Completed,
+            terminal.clone(),
+            terminal_at,
+        )
+        .await
+        .expect("commit terminal recovery");
+
+    let before_link_expiry = accepted_at
+        .checked_add(Duration::from_secs(9))
+        .expect("pre-expiry time is representable");
+    assert!(matches!(
+        store
+            .lookup_status(
+                status_lookup(&owner, RESPONSE_REQUEST_ID, 102),
+                before_link_expiry,
+            )
+            .await
+            .expect("look up terminal response before original link expiry"),
+        StatusLookup::Terminal {
+            outcome: TerminalOutcome::Completed,
+            response,
+            ..
+        } if response == terminal
+    ));
+
+    let client = isolated.client().await;
+    let identifiers = client
+        .query_one(
+            "SELECT async_source_id, async_recovery_id, response_request_id, \
+                    async_binding_digest \
+             FROM adapter_idempotency_entries",
+            &[],
+        )
+        .await
+        .expect("inspect terminal async custody");
+    assert_eq!(identifiers.get::<_, Option<String>>(0), None);
+    assert_eq!(identifiers.get::<_, Option<String>>(1), None);
+    assert_eq!(
+        identifiers.get::<_, Option<String>>(2).as_deref(),
+        Some(RESPONSE_REQUEST_ID)
+    );
+    assert!(identifiers.get::<_, Option<Vec<u8>>>(3).is_some());
+
+    let after_link_before_response_expiry = accepted_at
+        .checked_add(Duration::from_secs(11))
+        .expect("post-link time is representable");
+    assert_eq!(
+        store
+            .sweep_expired(after_link_before_response_expiry, 100)
+            .await
+            .expect("erase the expired async link"),
+        1
+    );
+    assert!(matches!(
+        store
+            .lookup_status(
+                status_lookup(&owner, RESPONSE_REQUEST_ID, 102),
+                after_link_before_response_expiry,
+            )
+            .await
+            .expect("look up an expired status link"),
+        StatusLookup::NotFound
+    ));
+    assert!(matches!(
+        store
+            .claim(
+                request(&owner, "records-create.person", "lease-key", 101),
+                after_link_before_response_expiry,
+            )
+            .await
+            .expect("retry before ordinary terminal response expiry"),
+        Claim::Replay {
+            outcome: TerminalOutcome::Completed,
+            response
+        } if response == terminal
+    ));
+}
+
+#[tokio::test]
+async fn uncertainty_is_permanently_spent_and_only_precommitted_correlation_can_acquire_recovery() {
+    let isolated = isolated().await;
+    let store = isolated.store(Duration::from_secs(5)).await;
+    let owner = caller("uncertainty-owner");
+    let now = SystemTime::now();
+    let effect_deadline = now
+        .checked_add(Duration::from_secs(5))
+        .expect("effect deadline is representable");
+
+    let Claim::Execute(mut uncorrelated) = store
+        .claim(
+            request(&owner, "records-create.person", "uncorrelated-key", 111),
+            now,
+        )
+        .await
+        .expect("claim uncorrelated uncertainty")
+    else {
+        panic!("uncorrelated uncertainty must execute first");
+    };
+    store
+        .mark_async_effect_attempted(
+            &mut uncorrelated,
+            request(&owner, "records-create.person", "uncorrelated-key", 111),
+            async_attempt(RESPONSE_REQUEST_ID, None, 112, effect_deadline),
+            now,
+        )
+        .await
+        .expect("mark the uncorrelated effect");
+    assert!(matches!(
+        store
+            .acquire_uncertain_recovery(
+                request(&owner, "records-create.person", "uncorrelated-key", 111,),
+                [112; 32],
+                now,
+                effect_deadline,
+            )
+            .await
+            .expect("refuse recovery without source-native correlation"),
+        RecoveryLease::Stale
+    ));
+
+    let Claim::Execute(mut correlated) = store
+        .claim(
+            request(&owner, "records-create.person", "correlated-key", 113),
+            now,
+        )
+        .await
+        .expect("claim correlated uncertainty")
+    else {
+        panic!("correlated uncertainty must execute first");
+    };
+    store
+        .mark_async_effect_attempted(
+            &mut correlated,
+            request(&owner, "records-create.person", "correlated-key", 113),
+            async_attempt(
+                OTHER_RESPONSE_REQUEST_ID,
+                Some(RECOVERY_ID),
+                112,
+                effect_deadline,
+            ),
+            now,
+        )
+        .await
+        .expect("precommit source-native correlation");
+    let RecoveryLease::Acquired(recovery) = store
+        .acquire_uncertain_recovery(
+            request(&owner, "records-create.person", "correlated-key", 113),
+            [112; 32],
+            now,
+            effect_deadline,
+        )
+        .await
+        .expect("acquire correlated uncertainty")
+    else {
+        panic!("the correlated effect must be recoverable");
+    };
+    assert_eq!(recovery.recovery_id(), Some(RECOVERY_ID));
+    store
+        .release_recovery(recovery)
+        .await
+        .expect("release a pending uncertainty check");
+
+    let after_custody = effect_deadline
+        .checked_add(Duration::from_secs(6))
+        .expect("uncertainty expiry is representable");
+    store
+        .sweep_expired(after_custody, 100)
+        .await
+        .expect("erase expired uncertainty metadata");
+    assert!(matches!(
+        store
+            .claim(
+                request(&owner, "records-create.person", "correlated-key", 113,),
+                after_custody,
+            )
+            .await
+            .expect("retry after uncertainty metadata expiry"),
+        Claim::EffectUnknown
+    ));
+}
+
+#[tokio::test]
+async fn accepted_expiry_erases_custody_and_never_reopens_the_key() {
+    let isolated = isolated().await;
+    let store = isolated.store(Duration::from_secs(1)).await;
+    let owner = caller("accepted-expiry-owner");
+    let accepted_at = SystemTime::now();
+    let Claim::Execute(mut execution) = store
+        .claim(
+            request(&owner, "records-create.person", "accepted-expiry", 121),
+            accepted_at,
+        )
+        .await
+        .expect("claim expiring acceptance")
+    else {
+        panic!("the expiring acceptance must execute");
+    };
+    store
+        .mark_async_effect_attempted(
+            &mut execution,
+            request(&owner, "records-create.person", "accepted-expiry", 121),
+            async_attempt(RESPONSE_REQUEST_ID, Some(RECOVERY_ID), 122, accepted_at),
+            accepted_at,
+        )
+        .await
+        .expect("precommit expiring recovery");
+    store
+        .accept(
+            execution,
+            "source-expiry",
+            response(202, b"application/json", br#"{"accepted":true}"#),
+            accepted_at,
+        )
+        .await
+        .expect("commit expiring acceptance");
+
+    let after_expiry = accepted_at
+        .checked_add(Duration::from_secs(2))
+        .expect("accepted expiry is representable");
+    assert_eq!(
+        store
+            .sweep_expired(after_expiry, 100)
+            .await
+            .expect("erase accepted custody"),
+        1
+    );
+    assert!(matches!(
+        store
+            .claim(
+                request(&owner, "records-create.person", "accepted-expiry", 121),
+                after_expiry,
+            )
+            .await
+            .expect("retry expired acceptance"),
+        Claim::AcceptedExpired
+    ));
+    let client = isolated.client().await;
+    let row = client
+        .query_one(
+            "SELECT response_status, response_body, response_request_id, \
+                    artifact_digest, async_binding_digest, async_source_id, async_recovery_id \
+             FROM adapter_idempotency_entries",
+            &[],
+        )
+        .await
+        .expect("inspect accepted tombstone");
+    assert_eq!(row.get::<_, Option<i16>>(0), None);
+    assert_eq!(row.get::<_, Option<Vec<u8>>>(1), None);
+    assert_eq!(row.get::<_, Option<String>>(2), None);
+    assert_eq!(row.get::<_, Option<Vec<u8>>>(3), None);
+    assert_eq!(row.get::<_, Option<Vec<u8>>>(4), None);
+    assert_eq!(row.get::<_, Option<String>>(5), None);
+    assert_eq!(row.get::<_, Option<String>>(6), None);
+}
+
+#[tokio::test]
+async fn incompatible_artifact_is_refused_while_async_recovery_is_live() {
+    let isolated = isolated().await;
+    let store = isolated.store(Duration::from_secs(5)).await;
+    let owner = caller("upgrade-owner");
+    let now = SystemTime::now();
+    let effect_deadline = now
+        .checked_add(Duration::from_secs(5))
+        .expect("effect deadline is representable");
+    let Claim::Execute(mut execution) = store
+        .claim(
+            request(&owner, "records-create.person", "upgrade-key", 131),
+            now,
+        )
+        .await
+        .expect("claim upgrade-blocking uncertainty")
+    else {
+        panic!("upgrade-blocking uncertainty must execute");
+    };
+    store
+        .mark_async_effect_attempted(
+            &mut execution,
+            request(&owner, "records-create.person", "upgrade-key", 131),
+            async_attempt(RESPONSE_REQUEST_ID, Some(RECOVERY_ID), 132, effect_deadline),
+            now,
+        )
+        .await
+        .expect("precommit upgrade-bound recovery");
+
+    store
+        .ensure_async_artifact_compatible("deployment-a", [132; 32], now)
+        .await
+        .expect("the same artifact remains compatible");
+    assert!(matches!(
+        store
+            .ensure_async_artifact_compatible("deployment-a", [133; 32], now)
+            .await,
+        Err(IdempotencyError::AsyncArtifactInUse)
+    ));
+    store
+        .ensure_async_artifact_compatible("another-deployment", [133; 32], now)
+        .await
+        .expect("another logical deployment is independent");
+
+    let client = isolated.client().await;
+    let effect_count: i64 = client
+        .query_one(
+            "SELECT count(*) FROM adapter_idempotency_entries \
+             WHERE state = 'effect_started'",
+            &[],
+        )
+        .await
+        .expect("count old-artifact effects after refused activation")
+        .get(0);
+    assert_eq!(effect_count, 1);
+}
+
+#[tokio::test]
+async fn a_new_artifact_activation_fences_late_old_artifact_precommit_before_effect() {
+    let isolated = isolated().await;
+    let store = isolated.store(Duration::from_secs(5)).await;
+    let owner = caller("new-first-upgrade-owner");
+    let now = SystemTime::now();
+    store
+        .ensure_async_artifact_compatible("deployment-a", [172; 32], now)
+        .await
+        .expect("activate the new artifact before the old pod attempts an effect");
+
+    let Claim::Execute(mut old_execution) = store
+        .claim(
+            request(&owner, "records-create.person", "new-first-upgrade", 171),
+            now,
+        )
+        .await
+        .expect("claim work in the old pod before its fenced precommit")
+    else {
+        panic!("the old pod claim must initially be fresh");
+    };
+    let effect_deadline = now
+        .checked_add(Duration::from_secs(5))
+        .expect("effect deadline is representable");
+    assert!(matches!(
+        store
+            .mark_async_effect_attempted(
+                &mut old_execution,
+                request(&owner, "records-create.person", "new-first-upgrade", 171),
+                async_attempt(RESPONSE_REQUEST_ID, Some(RECOVERY_ID), 173, effect_deadline,),
+                now,
+            )
+            .await,
+        Err(IdempotencyError::AsyncArtifactInUse)
+    ));
+    store
+        .release_before_effect(old_execution)
+        .await
+        .expect("the refused old artifact never crossed the effect boundary");
+
+    let client = isolated.client().await;
+    let effect_count: i64 = client
+        .query_one(
+            "SELECT count(*) FROM adapter_idempotency_entries \
+             WHERE state = 'effect_started'",
+            &[],
+        )
+        .await
+        .expect("count effects after the new-first refusal")
+        .get(0);
+    assert_eq!(effect_count, 0);
+}
+
+#[tokio::test]
+async fn artifact_activation_and_old_precommit_are_serialized_by_one_postgres_fence() {
+    let isolated = isolated().await;
+    let store = isolated.store(Duration::from_secs(5)).await;
+    let owner = caller("concurrent-upgrade-owner");
+    let now = SystemTime::now();
+    let effect_deadline = now
+        .checked_add(Duration::from_secs(5))
+        .expect("effect deadline is representable");
+    let Claim::Execute(old_execution) = store
+        .claim(
+            request(&owner, "records-create.person", "concurrent-upgrade", 174),
+            now,
+        )
+        .await
+        .expect("claim work before the concurrent upgrade fence")
+    else {
+        panic!("the concurrent old pod claim must initially be fresh");
+    };
+    let barrier = Arc::new(Barrier::new(2));
+    let mark_barrier = Arc::clone(&barrier);
+    let activate_barrier = Arc::clone(&barrier);
+    let mark_store = store.clone();
+    let activate_store = store.clone();
+    let mark_owner = owner.clone();
+
+    let (mark, activation) = tokio::join!(
+        async move {
+            let mut execution = old_execution;
+            mark_barrier.wait().await;
+            let result = mark_store
+                .mark_async_effect_attempted(
+                    &mut execution,
+                    request(
+                        &mark_owner,
+                        "records-create.person",
+                        "concurrent-upgrade",
+                        174,
+                    ),
+                    async_attempt(RESPONSE_REQUEST_ID, Some(RECOVERY_ID), 175, effect_deadline),
+                    now,
+                )
+                .await;
+            (result, execution)
+        },
+        async move {
+            activate_barrier.wait().await;
+            activate_store
+                .ensure_async_artifact_compatible("deployment-a", [176; 32], now)
+                .await
+        }
+    );
+
+    let expected_effect_count = match (mark.0, activation) {
+        (Ok(()), Err(IdempotencyError::AsyncArtifactInUse)) => 1,
+        (Err(IdempotencyError::AsyncArtifactInUse), Ok(())) => {
+            store
+                .release_before_effect(mark.1)
+                .await
+                .expect("the fenced concurrent old claim remains releasable");
+            0
+        }
+        (mark_result, activation_result) => panic!(
+            "exactly one artifact may win the deployment fence: \
+             mark={mark_result:?}, activation={activation_result:?}"
+        ),
+    };
+    let client = isolated.client().await;
+    let effect_count: i64 = client
+        .query_one(
+            "SELECT count(*) FROM adapter_idempotency_entries \
+             WHERE state = 'effect_started'",
+            &[],
+        )
+        .await
+        .expect("count effects after the concurrent deployment fence")
+        .get(0);
+    assert_eq!(effect_count, expected_effect_count);
+}
+
+#[tokio::test]
+async fn cleanup_and_late_acceptance_serialize_without_reopening_or_resending() {
+    let isolated = isolated().await;
+    let store = isolated.store(Duration::from_secs(1)).await;
+    let owner = caller("accept-race-owner");
+    let started_at = SystemTime::now();
+    let Claim::Execute(mut execution) = store
+        .claim(
+            request(&owner, "records-create.person", "accept-race", 141),
+            started_at,
+        )
+        .await
+        .expect("claim acceptance race")
+    else {
+        panic!("the acceptance race must execute first");
+    };
+    store
+        .mark_async_effect_attempted(
+            &mut execution,
+            request(&owner, "records-create.person", "accept-race", 141),
+            async_attempt(RESPONSE_REQUEST_ID, Some(RECOVERY_ID), 142, started_at),
+            started_at,
+        )
+        .await
+        .expect("precommit acceptance race metadata");
+    let after_uncertainty_expiry = started_at
+        .checked_add(Duration::from_secs(2))
+        .expect("race time is representable");
+    store
+        .ensure_async_artifact_compatible("deployment-a", [143; 32], after_uncertainty_expiry)
+        .await
+        .expect("the new artifact activates after old uncertainty expires");
+    let accept_store = store.clone();
+    let sweep_store = store.clone();
+    let (accepted, swept) = tokio::join!(
+        async move {
+            accept_store
+                .accept(
+                    execution,
+                    "late-source-id",
+                    response(202, b"application/json", br#"{"accepted":true}"#),
+                    after_uncertainty_expiry,
+                )
+                .await
+        },
+        async move {
+            sweep_store
+                .sweep_expired(after_uncertainty_expiry, 100)
+                .await
+        }
+    );
+    swept.expect("the racing cleanup completes");
+    assert!(matches!(accepted, Err(IdempotencyError::StateConflict)));
+    assert!(matches!(
+        store
+            .claim(
+                request(&owner, "records-create.person", "accept-race", 141),
+                after_uncertainty_expiry,
+            )
+            .await
+            .expect("resolve the raced write"),
+        Claim::EffectUnknown
+    ));
+}
+
+#[tokio::test]
+async fn an_expired_recovery_capability_cannot_finish_but_its_successor_can() {
+    let isolated = isolated().await;
+    let store = isolated.store(Duration::from_secs(30)).await;
+    let owner = caller("expired-terminal-capability-owner");
+    let now = SystemTime::now();
+    let effect_deadline = now
+        .checked_add(Duration::from_secs(20))
+        .expect("effect deadline is representable");
+    let Claim::Execute(mut execution) = store
+        .claim(
+            request(
+                &owner,
+                "records-create.person",
+                "expired-terminal-capability",
+                143,
+            ),
+            now,
+        )
+        .await
+        .expect("claim terminal capability expiry")
+    else {
+        panic!("terminal capability expiry must execute first");
+    };
+    store
+        .mark_async_effect_attempted(
+            &mut execution,
+            request(
+                &owner,
+                "records-create.person",
+                "expired-terminal-capability",
+                143,
+            ),
+            async_attempt(RESPONSE_REQUEST_ID, Some(RECOVERY_ID), 144, effect_deadline),
+            now,
+        )
+        .await
+        .expect("precommit terminal capability recovery");
+    store
+        .accept(
+            execution,
+            "source-expired-terminal-capability",
+            response(202, b"application/json", br#"{"accepted":true}"#),
+            now,
+        )
+        .await
+        .expect("commit accepted custody before terminal capability expiry");
+    let StatusLookup::Accepted(status) = store
+        .lookup_status(status_lookup(&owner, RESPONSE_REQUEST_ID, 144), now)
+        .await
+        .expect("load accepted status before terminal capability expiry")
+    else {
+        panic!("terminal capability row must be accepted");
+    };
+    let first_lease_until = now
+        .checked_add(Duration::from_secs(1))
+        .expect("first terminal lease deadline is representable");
+    let RecoveryLease::Acquired(expired) = store
+        .acquire_status_recovery(&status, now, first_lease_until)
+        .await
+        .expect("acquire the terminal capability that will expire")
+    else {
+        panic!("the first terminal checker must acquire the row");
+    };
+    let after_first_lease = now
+        .checked_add(Duration::from_secs(2))
+        .expect("post-terminal-lease time is representable");
+    assert!(matches!(
+        store
+            .finish_recovery(
+                expired,
+                TerminalOutcome::Completed,
+                response(200, b"application/json", br#"{"late":true}"#),
+                after_first_lease,
+            )
+            .await,
+        Err(IdempotencyError::StateConflict)
+    ));
+    assert!(matches!(
+        store
+            .lookup_status(
+                status_lookup(&owner, RESPONSE_REQUEST_ID, 144),
+                after_first_lease,
+            )
+            .await
+            .expect("late terminal capability leaves accepted custody unchanged"),
+        StatusLookup::Accepted(_)
+    ));
+
+    let successor_lease_until = after_first_lease
+        .checked_add(Duration::from_secs(2))
+        .expect("successor terminal lease deadline is representable");
+    let RecoveryLease::Acquired(successor) = store
+        .acquire_status_recovery(&status, after_first_lease, successor_lease_until)
+        .await
+        .expect("acquire a successor terminal capability")
+    else {
+        panic!("the successor terminal checker must acquire the row");
+    };
+    store
+        .finish_recovery(
+            successor,
+            TerminalOutcome::Completed,
+            response(200, b"application/json", br#"{"done":true}"#),
+            after_first_lease,
+        )
+        .await
+        .expect("the live successor terminal capability commits");
+}
+
+#[tokio::test]
+async fn an_expired_uncertain_capability_cannot_accept_but_its_successor_can() {
+    let isolated = isolated().await;
+    let store = isolated.store(Duration::from_secs(30)).await;
+    let owner = caller("expired-accept-capability-owner");
+    let now = SystemTime::now();
+    let effect_deadline = now
+        .checked_add(Duration::from_secs(20))
+        .expect("effect deadline is representable");
+    let claim_request = request(
+        &owner,
+        "records-create.person",
+        "expired-accept-capability",
+        145,
+    );
+    let Claim::Execute(mut execution) = store
+        .claim(claim_request, now)
+        .await
+        .expect("claim recovered acceptance capability expiry")
+    else {
+        panic!("recovered acceptance capability expiry must execute first");
+    };
+    store
+        .mark_async_effect_attempted(
+            &mut execution,
+            request(
+                &owner,
+                "records-create.person",
+                "expired-accept-capability",
+                145,
+            ),
+            async_attempt(RESPONSE_REQUEST_ID, Some(RECOVERY_ID), 146, effect_deadline),
+            now,
+        )
+        .await
+        .expect("precommit recovered acceptance correlation");
+    let first_lease_until = now
+        .checked_add(Duration::from_secs(1))
+        .expect("first recovered acceptance lease deadline is representable");
+    let RecoveryLease::Acquired(expired) = store
+        .acquire_uncertain_recovery(
+            request(
+                &owner,
+                "records-create.person",
+                "expired-accept-capability",
+                145,
+            ),
+            [146; 32],
+            now,
+            first_lease_until,
+        )
+        .await
+        .expect("acquire the recovered acceptance capability that will expire")
+    else {
+        panic!("the first recovered acceptance checker must acquire the row");
+    };
+    let after_first_lease = now
+        .checked_add(Duration::from_secs(2))
+        .expect("post-recovered-acceptance-lease time is representable");
+    let client = isolated.client().await;
+    assert!(matches!(
+        store
+            .accept_recovery_with_client(
+                &client,
+                expired,
+                "late-source-id",
+                response(202, b"application/json", br#"{"late":true}"#),
+                after_first_lease,
+            )
+            .await,
+        Err(IdempotencyError::StateConflict)
+    ));
+    assert!(matches!(
+        store
+            .claim(
+                request(
+                    &owner,
+                    "records-create.person",
+                    "expired-accept-capability",
+                    145,
+                ),
+                after_first_lease,
+            )
+            .await
+            .expect("late acceptance capability leaves effect permanently spent"),
+        Claim::EffectUnknown
+    ));
+
+    let successor_lease_until = after_first_lease
+        .checked_add(Duration::from_secs(2))
+        .expect("successor recovered acceptance lease deadline is representable");
+    let RecoveryLease::Acquired(successor) = store
+        .acquire_uncertain_recovery(
+            request(
+                &owner,
+                "records-create.person",
+                "expired-accept-capability",
+                145,
+            ),
+            [146; 32],
+            after_first_lease,
+            successor_lease_until,
+        )
+        .await
+        .expect("acquire a successor recovered acceptance capability")
+    else {
+        panic!("the successor recovered acceptance checker must acquire the row");
+    };
+    store
+        .accept_recovery_with_client(
+            &client,
+            successor,
+            "recovered-source-id",
+            response(202, b"application/json", br#"{"accepted":true}"#),
+            after_first_lease,
+        )
+        .await
+        .expect("the live successor recovered acceptance capability commits");
+}
+
+#[tokio::test]
+async fn accepted_and_terminal_custody_roll_back_with_the_callers_journal_transaction() {
+    let isolated = isolated().await;
+    let store = isolated.store(Duration::from_secs(30)).await;
+    let owner = caller("atomic-owner");
+    let now = SystemTime::now();
+    let effect_deadline = now
+        .checked_add(Duration::from_secs(5))
+        .expect("effect deadline is representable");
+
+    let Claim::Execute(mut rolled_back_execution) = store
+        .claim(
+            request(&owner, "records-create.person", "accept-rollback", 151),
+            now,
+        )
+        .await
+        .expect("claim rolled-back acceptance")
+    else {
+        panic!("rolled-back acceptance must execute");
+    };
+    store
+        .mark_async_effect_attempted(
+            &mut rolled_back_execution,
+            request(&owner, "records-create.person", "accept-rollback", 151),
+            async_attempt(RESPONSE_REQUEST_ID, Some(RECOVERY_ID), 152, effect_deadline),
+            now,
+        )
+        .await
+        .expect("precommit rolled-back acceptance");
+    let mut client = isolated.client().await;
+    let transaction = client
+        .transaction()
+        .await
+        .expect("begin acceptance journal transaction");
+    store
+        .accept_with_client(
+            &transaction,
+            rolled_back_execution,
+            "source-rollback",
+            response(202, b"application/json", br#"{"accepted":true}"#),
+            now,
+        )
+        .await
+        .expect("stage accepted custody");
+    transaction
+        .rollback()
+        .await
+        .expect("roll back acceptance with journal");
+    assert!(matches!(
+        store
+            .claim(
+                request(&owner, "records-create.person", "accept-rollback", 151),
+                now,
+            )
+            .await
+            .expect("resolve rolled-back acceptance"),
+        Claim::EffectUnknown
+    ));
+
+    let Claim::Execute(mut terminal_execution) = store
+        .claim(
+            request(&owner, "records-create.person", "terminal-rollback", 153),
+            now,
+        )
+        .await
+        .expect("claim terminal rollback")
+    else {
+        panic!("terminal rollback must execute");
+    };
+    store
+        .mark_async_effect_attempted(
+            &mut terminal_execution,
+            request(&owner, "records-create.person", "terminal-rollback", 153),
+            async_attempt(
+                OTHER_RESPONSE_REQUEST_ID,
+                Some(RECOVERY_ID),
+                152,
+                effect_deadline,
+            ),
+            now,
+        )
+        .await
+        .expect("precommit terminal rollback recovery");
+    let accepted = StoredResponse::new(
+        202,
+        b"application/json".to_vec(),
+        br#"{"accepted":true}"#.to_vec(),
+        OTHER_RESPONSE_REQUEST_ID,
+    )
+    .expect("the alternate accepted response is bounded");
+    store
+        .accept(
+            terminal_execution,
+            "source-terminal-rollback",
+            accepted,
+            now,
+        )
+        .await
+        .expect("commit acceptance before terminal rollback");
+    let StatusLookup::Accepted(status) = store
+        .lookup_status(status_lookup(&owner, OTHER_RESPONSE_REQUEST_ID, 152), now)
+        .await
+        .expect("load accepted terminal rollback")
+    else {
+        panic!("terminal rollback row must be accepted");
+    };
+    let RecoveryLease::Acquired(recovery) = store
+        .acquire_status_recovery(&status, now, effect_deadline)
+        .await
+        .expect("lease terminal rollback row")
+    else {
+        panic!("terminal rollback checker must acquire the row");
+    };
+    let transaction = client
+        .transaction()
+        .await
+        .expect("begin terminal journal transaction");
+    store
+        .finish_recovery_with_client(
+            &transaction,
+            recovery,
+            TerminalOutcome::Completed,
+            StoredResponse::new(
+                200,
+                b"application/json".to_vec(),
+                br#"{"done":true}"#.to_vec(),
+                OTHER_RESPONSE_REQUEST_ID,
+            )
+            .expect("the alternate terminal response is bounded"),
+            now,
+        )
+        .await
+        .expect("stage terminal custody");
+    transaction
+        .rollback()
+        .await
+        .expect("roll back terminal custody with journal");
+    let row = client
+        .query_one(
+            "SELECT state, async_source_id, response_status \
+             FROM adapter_idempotency_entries \
+             WHERE response_request_id = $1",
+            &[&OTHER_RESPONSE_REQUEST_ID],
+        )
+        .await
+        .expect("inspect rolled-back terminal custody");
+    assert_eq!(row.get::<_, String>(0), "accepted");
+    assert_eq!(
+        row.get::<_, Option<String>>(1).as_deref(),
+        Some("source-terminal-rollback")
+    );
+    assert_eq!(row.get::<_, Option<i16>>(2), Some(202));
+
+    let Claim::Execute(mut recovered_acceptance) = store
+        .claim(
+            request(
+                &owner,
+                "records-create.person",
+                "recovered-accept-rollback",
+                155,
+            ),
+            now,
+        )
+        .await
+        .expect("claim recovered acceptance rollback")
+    else {
+        panic!("recovered acceptance rollback must execute");
+    };
+    store
+        .mark_async_effect_attempted(
+            &mut recovered_acceptance,
+            request(
+                &owner,
+                "records-create.person",
+                "recovered-accept-rollback",
+                155,
+            ),
+            async_attempt(
+                THIRD_RESPONSE_REQUEST_ID,
+                Some(RECOVERY_ID),
+                152,
+                effect_deadline,
+            ),
+            now,
+        )
+        .await
+        .expect("precommit recovered acceptance rollback correlation");
+    let RecoveryLease::Acquired(recovery) = store
+        .acquire_uncertain_recovery(
+            request(
+                &owner,
+                "records-create.person",
+                "recovered-accept-rollback",
+                155,
+            ),
+            [152; 32],
+            now,
+            effect_deadline,
+        )
+        .await
+        .expect("lease recovered acceptance rollback")
+    else {
+        panic!("recovered acceptance rollback must acquire the row");
+    };
+    let recovered_response = StoredResponse::new(
+        202,
+        b"application/json".to_vec(),
+        br#"{"accepted":true}"#.to_vec(),
+        THIRD_RESPONSE_REQUEST_ID,
+    )
+    .expect("the recovered acceptance response is bounded");
+    let transaction = client
+        .transaction()
+        .await
+        .expect("begin recovered acceptance journal transaction");
+    store
+        .accept_recovery_with_client(
+            &transaction,
+            recovery,
+            "source-recovered-rollback",
+            recovered_response,
+            now,
+        )
+        .await
+        .expect("stage recovered acceptance custody");
+    transaction
+        .rollback()
+        .await
+        .expect("roll back recovered acceptance with journal");
+    let row = client
+        .query_one(
+            "SELECT state, async_source_id, response_status, async_poll_lease_id \
+             FROM adapter_idempotency_entries WHERE response_request_id = $1",
+            &[&THIRD_RESPONSE_REQUEST_ID],
+        )
+        .await
+        .expect("inspect rolled-back recovered acceptance custody");
+    assert_eq!(row.get::<_, String>(0), "effect_started");
+    assert_eq!(row.get::<_, Option<String>>(1), None);
+    assert_eq!(row.get::<_, Option<i16>>(2), None);
+    assert!(row.get::<_, Option<Vec<u8>>>(3).is_some());
+}
+
+#[tokio::test]
+async fn a_dropped_recovery_capability_stays_busy_until_its_lease_expires_then_recovers() {
+    let isolated = isolated().await;
+    let store = isolated.store(Duration::from_secs(30)).await;
+    let owner = caller("cancelled-recovery-owner");
+    let now = SystemTime::now();
+    let effect_deadline = now
+        .checked_add(Duration::from_secs(20))
+        .expect("effect deadline is representable");
+    let Claim::Execute(mut execution) = store
+        .claim(
+            request(&owner, "records-create.person", "cancelled-recovery", 161),
+            now,
+        )
+        .await
+        .expect("claim cancellation recovery")
+    else {
+        panic!("cancellation recovery must execute first");
+    };
+    store
+        .mark_async_effect_attempted(
+            &mut execution,
+            request(&owner, "records-create.person", "cancelled-recovery", 161),
+            async_attempt(RESPONSE_REQUEST_ID, Some(RECOVERY_ID), 162, effect_deadline),
+            now,
+        )
+        .await
+        .expect("precommit cancellation correlation");
+    let first_lease_until = now
+        .checked_add(Duration::from_secs(2))
+        .expect("first lease deadline is representable");
+    let RecoveryLease::Acquired(cancelled) = store
+        .acquire_uncertain_recovery(
+            request(&owner, "records-create.person", "cancelled-recovery", 161),
+            [162; 32],
+            now,
+            first_lease_until,
+        )
+        .await
+        .expect("acquire the cancelled lease")
+    else {
+        panic!("the first checker must acquire the uncertainty");
+    };
+    drop(cancelled);
+    assert!(matches!(
+        store
+            .acquire_uncertain_recovery(
+                request(&owner, "records-create.person", "cancelled-recovery", 161,),
+                [162; 32],
+                now,
+                first_lease_until,
+            )
+            .await
+            .expect("contend before cancelled lease expiry"),
+        RecoveryLease::Busy
+    ));
+
+    let after_lease = now
+        .checked_add(Duration::from_secs(3))
+        .expect("post-lease time is representable");
+    let second_lease_until = after_lease
+        .checked_add(Duration::from_secs(2))
+        .expect("second lease deadline is representable");
+    let RecoveryLease::Acquired(recovered) = store
+        .acquire_uncertain_recovery(
+            request(&owner, "records-create.person", "cancelled-recovery", 161),
+            [162; 32],
+            after_lease,
+            second_lease_until,
+        )
+        .await
+        .expect("recover after cancelled lease expiry")
+    else {
+        panic!("the next checker must recover the expired lease");
+    };
+    store
+        .release_recovery(recovered)
+        .await
+        .expect("release recovered uncertainty");
 }

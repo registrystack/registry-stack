@@ -57,4 +57,5 @@ sourceRoutes:
           uri: file:submissions
           timeoutMilliseconds: 5000
           decoder: csv
+          keyPointer: /id
 capabilities: {}

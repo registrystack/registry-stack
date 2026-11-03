@@ -1,0 +1,62 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/pack/pack.v1alpha1.schema.json
+#
+# A source-neutral reference pack for the facade's closed linear write-resume
+# contract. The loopback journey in the Adapter tests is the executable source
+# for these controlled-reference-v1 semantics. This is not a connector claim
+# for a named external product.
+apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: facade-recovery-reference
+version: "1"
+testedVersions:
+  - controlled-reference-v1
+endpoints:
+  - id: reference
+    component: http
+    authentication:
+      type: basic
+    attemptTimeoutMilliseconds: 10000
+    maximumResponseBytes: 65536
+    operations:
+      # The controlled provider keys the first logical effect by the admitted
+      # record body and returns the same sourceId on an identical retry.
+      - id: create-draft
+        idempotentUpstream: true
+      # The controlled provider keys finalization by source_id and command.
+      # The assumption is provider-specific, not general exactly-once delivery.
+      - id: finalize-draft
+        idempotentUpstream: true
+routeTemplates:
+  - id: create-and-finalize
+    steps:
+      - idempotentConsumer:
+          expression:
+            header: Idempotency-Key
+          steps:
+            - to:
+                uri: http:reference
+                parameters:
+                  httpMethod: POST
+                  path: /drafts
+                  body:
+                    jsonpath: "$"
+                  operation: create-draft
+                  resumeBindings:
+                    - name: source_id
+                      path: $.sourceId
+            - to:
+                uri: http:reference
+                parameters:
+                  httpMethod: POST
+                  path: /finalizations
+                  query:
+                    source_id:
+                      exchangeProperty: AdapterResume.source_id
+                  body:
+                    constant:
+                      command: finalize
+                  operation: finalize-draft
+capabilities:
+  components: [http]
+  languages: [constant, exchangeProperty, header, jsonpath]
+  eips: [idempotentConsumer, to]

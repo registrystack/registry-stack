@@ -20,21 +20,26 @@ EXTRA_PACKAGES = (
     / "evidence"
     / "provider",
 )
+BUNDLE_HEADER = re.compile(
+    r"(?m)^[ \t]*(?:kind|\"kind\"|'kind')[ \t]*:[ \t]*"
+    r"(?:EvidenceBundle|\"EvidenceBundle\"|'EvidenceBundle')[ \t]*(?:#.*)?$"
+)
+
+
+def is_bundle_root(root: Path) -> bool:
+    config = root / "evidence.yaml"
+    return config.is_file() and BUNDLE_HEADER.search(config.read_text()) is not None
 
 
 def package_roots() -> list[Path]:
     # Authored projects share the canonical filename with compiled bundles.
     # Only compiled EvidenceBundle roots carry a package checksum envelope.
-    bundle_header = re.compile(
-        r"(?m)^[ \t]*(?:kind|\"kind\"|'kind')[ \t]*:[ \t]*"
-        r"(?:EvidenceBundle|\"EvidenceBundle\"|'EvidenceBundle')[ \t]*(?:#.*)?$"
-    )
     roots = {
         path.parent
         for path in EVIDENCE_ROOT.rglob("evidence.yaml")
-        if bundle_header.search(path.read_text())
+        if is_bundle_root(path.parent)
     }
-    roots.update(path for path in EXTRA_PACKAGES if (path / "evidence.yaml").is_file())
+    roots.update(path for path in EXTRA_PACKAGES if is_bundle_root(path))
     return sorted(roots)
 
 

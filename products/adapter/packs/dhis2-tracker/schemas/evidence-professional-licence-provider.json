@@ -1,0 +1,80 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "pager",
+    "trackedEntities"
+  ],
+  "properties": {
+    "pager": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "page",
+        "pageSize",
+        "total",
+        "pageCount"
+      ],
+      "properties": {
+        "page": { "const": 1 },
+        "pageSize": { "const": 2 },
+        "total": { "type": "integer", "minimum": 0, "maximum": 1000000 },
+        "pageCount": { "type": "integer", "minimum": 0, "maximum": 1000000 }
+      }
+    },
+    "trackedEntities": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 2,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "trackedEntity": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "attributes": {
+            "type": "array",
+            "minItems": 0,
+            "maxItems": 64,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["attribute", "value"],
+              "properties": {
+                "attribute": { "type": "string", "minLength": 1, "maxLength": 64 },
+                "value": { "type": "string", "maxLength": 512 }
+              }
+            }
+          },
+          "enrollments": {
+            "type": "array",
+            "minItems": 0,
+            "maxItems": 16,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["program", "status"],
+              "properties": {
+                "program": { "type": "string", "minLength": 1, "maxLength": 64 },
+                "status": { "type": "string", "minLength": 1, "maxLength": 64 },
+                "events": {
+                  "type": "array",
+                  "minItems": 0,
+                  "maxItems": 64,
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["programStage", "status"],
+                    "properties": {
+                      "programStage": { "type": "string", "minLength": 1, "maxLength": 64 },
+                      "status": { "type": "string", "minLength": 1, "maxLength": 64 }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

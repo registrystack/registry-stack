@@ -21,7 +21,8 @@ fn file_pack(decoder: &str) -> String {
     let decoder_member = if decoder == "raw" {
         String::new()
     } else {
-        format!("\n          decoder: {decoder}")
+        let key_pointer = if decoder == "jsonl" { "/id" } else { "/name" };
+        format!("\n          decoder: {decoder}\n          keyPointer: {key_pointer}")
     };
     format!(
         r#"apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
@@ -63,6 +64,14 @@ source:
     version: "1"
     digest: {pack_digest}
   route: drop-page
+destination:
+  type: signed-coordinator-event
+  binding: coordinator-test
+  workflow: drop-ingestion
+  trigger: submitted
+  source: urn:registry-adapter:job:drop-daily
+  eventType: org.example.drop-submitted.v1
+  dataSchema: urn:example:schema:drop-submitted:v1
 projection:
   fields:
     - name
@@ -468,7 +477,8 @@ fn the_compile_holds_the_read_lock_bounds() {
             .diagnostics
             .iter()
             .any(|diagnostic| diagnostic.code == "config.out-of-range"
-                && diagnostic.path == "/sources/file/dropbox/readLockCheckIntervalMilliseconds"),
+                && diagnostic.path == "/sources/file/dropbox/readLockCheckIntervalMilliseconds"
+                && diagnostic.artifact.as_deref() == Some("AdapterJobRuntimeConfig")),
         "the reader's bound carries the located refusal: {:?}",
         error.diagnostics
     );
@@ -624,11 +634,9 @@ async fn a_csv_file_pages_across_two_reads() {
         .await
         .expect("the first page runs");
     assert_eq!(first.page.items.len(), 2);
-    let file_digest = sha256_uri(b"name,age\nalice,007\nbob,3\ncarol,4\n");
     assert_eq!(
-        first.page.items[0].key,
-        format!("exports:{file_digest}:1"),
-        "the record ordinal counts the header record"
+        first.page.items[0].key, "file-row-v1:7:exports:alice",
+        "the declared business key preserves row identity"
     );
     assert_eq!(
         first.page.items[0].value,
@@ -650,6 +658,33 @@ async fn a_csv_file_pages_across_two_reads() {
     );
 }
 
+/// File replacement and reordering change the file cursor digest, not row
+/// identity. A resumed read starts the replacement at zero and emits the same
+/// business keys, so the item store can skip unchanged rows and classify an
+/// edited row as a revision instead of a second registration.
+#[tokio::test]
+async fn a_reordered_replacement_keeps_csv_business_keys() {
+    let fixture = write_fixture("csv", "", 1_073_741_824, 1);
+    write_file(&fixture, "people.csv", b"name,age\nalice,007\nbob,3\n");
+    let program =
+        compile_job(&fixture.pack, &fixture.job, &fixture.runtime).expect("the csv job compiles");
+    let first = run_job_page(&program, None)
+        .await
+        .expect("the first page runs");
+    assert_eq!(first.page.items[0].key, "file-row-v1:7:exports:alice");
+
+    write_file(&fixture, "people.csv", b"name,age\nbob,3\nalice,008\n");
+    let replacement = run_job_page(&program, first.page.next.clone())
+        .await
+        .expect("the replacement starts from zero");
+    assert_eq!(replacement.page.items[0].key, "file-row-v1:7:exports:bob");
+    let edited = run_job_page(&program, replacement.page.next.clone())
+        .await
+        .expect("the edited row remains reachable");
+    assert_eq!(edited.page.items[0].key, first.page.items[0].key);
+    assert_eq!(edited.page.items[0].value["age"], "008");
+}
+
 /// A malformed CSV record fails the read under its own code and blocks
 /// its file: the resumed read re-encounters the same bytes.
 #[tokio::test]
@@ -666,6 +701,7 @@ async fn a_malformed_csv_record_blocks_its_file() {
         .await
         .expect_err("the extra field refuses the read");
     assert_eq!(failure.code, Some("adapter.job.decoder-row"));
+    assert_eq!(failure.record.map(|record| record.ordinal), Some(2));
     assert_eq!(
         failure.class.map(|class| class.class().to_owned()),
         Some("upstream.malformed".to_owned()),
@@ -681,19 +717,17 @@ async fn a_malformed_jsonl_line_continues_with_a_count() {
     write_file(
         &fixture,
         "events.jsonl",
-        b"{\"a\":1}\nnot json\n{\"a\":2}\n",
+        b"{\"id\":\"001\",\"a\":1}\nnot json\n{\"id\":\"002\",\"a\":2}\n",
     );
     let program =
         compile_job(&fixture.pack, &fixture.job, &fixture.runtime).expect("the jsonl job compiles");
     let page = run_job_page(&program, None).await.expect("the read runs");
     assert_eq!(page.page.items.len(), 2);
     assert_eq!(page.malformed_lines, 1, "the skipped line is counted");
-    let file_digest = sha256_uri(b"{\"a\":1}\nnot json\n{\"a\":2}\n");
-    assert_eq!(page.page.items[0].key, format!("exports:{file_digest}:0"));
+    assert_eq!(page.page.items[0].key, "file-row-v1:7:exports:001");
     assert_eq!(
-        page.page.items[1].key,
-        format!("exports:{file_digest}:2"),
-        "the line ordinal counts the skipped line"
+        page.page.items[1].key, "file-row-v1:7:exports:002",
+        "the declared key is independent of the skipped line"
     );
 }
 

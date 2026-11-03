@@ -225,6 +225,17 @@ pub enum Command {
         #[arg(long, value_enum, requires = "explain")]
         explain_format: Option<ExplainFormat>,
     },
+    /// Internal Evidencectl seam for recording final offline Adapter facts.
+    #[command(hide = true)]
+    BundleRecordFixtureFacts {
+        #[arg(long)]
+        bundle: PathBuf,
+        /// Validated compiled target grants used only for offline fixtures.
+        #[arg(long)]
+        authority_document: Option<PathBuf>,
+        #[arg(long)]
+        fixture: PathBuf,
+    },
     /// Internal Evidencectl seam for deterministic provider-publication compilation.
     #[command(hide = true)]
     RenderDiscoveryDescription {

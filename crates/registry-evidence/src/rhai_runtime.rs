@@ -15,10 +15,7 @@ use rhai::{
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::{
-    model::{LookupResult, SelectorValue},
-    values::{Decimal, EntityReferenceSeed},
-};
+use crate::values::{Decimal, EntityReferenceSeed};
 
 pub const MAXIMUM_OPERATIONS: u64 = 100_000;
 pub const MAXIMUM_CALL_DEPTH: usize = 32;
@@ -30,18 +27,7 @@ pub const MAXIMUM_MAP_ENTRIES: usize = 256;
 pub const MAXIMUM_FACT_ENTRIES: usize = 64;
 pub const MAXIMUM_CONCEPT_VALUES: usize = 16;
 pub const MAXIMUM_CODELIST_ENTRIES: usize = 4_096;
-pub const MAXIMUM_SOURCE_INPUT_BYTES: usize = 1_048_576;
 pub const MAXIMUM_RESULT_BYTES: usize = 65_536;
-pub const MAXIMUM_PREPARATION_INPUT_BYTES: usize = 1_048_576;
-pub const MAXIMUM_REQUEST_PARTS_BYTES: usize = 65_536;
-pub const MAXIMUM_QUERY_PAIRS: usize = 64;
-pub const MAXIMUM_QUERY_NAME_BYTES: usize = 64;
-pub const MAXIMUM_QUERY_VALUE_BYTES: usize = 4_096;
-pub const MAXIMUM_STATEMENT_PARAMETERS: usize = 64;
-pub const MAXIMUM_STATEMENT_PARAMETER_NAME_BYTES: usize = 64;
-pub const MAXIMUM_STATEMENT_PARAMETER_VALUE_BYTES: usize = 4_096;
-pub const MAXIMUM_JSON_BODY_DEPTH: usize = 32;
-pub const MAXIMUM_SOURCE_BATCH_ITEMS: usize = 16;
 
 const MAXIMUM_BUCKETS: usize = 64;
 const MAXIMUM_ENTITY_REFERENCE_ITEMS: usize = 64;
@@ -69,18 +55,10 @@ pub enum RhaiRuntimeError {
     Invocation,
     #[error("Evidence required input is unavailable")]
     Unavailable,
-    #[error("Evidence source response violates its protocol contract")]
-    SourceProtocol,
     #[error("Evidence script input exceeds its bound")]
     InputBound,
-    #[error("Evidence request preparation input is invalid")]
-    AdapterInput,
-    #[error("Evidence request preparation result violates the closed ABI")]
-    PreparationResult,
-    #[error("Evidence extraction result violates the closed ABI")]
-    ExtractionResult,
-    #[error("Evidence extracted facts violate their schema")]
-    FactSchema,
+    #[error("Evidence facts exceed the derivation input bound")]
+    FactsBound,
     #[error("Evidence derivation result violates the closed ABI")]
     DerivationResult,
     #[error("Evidence derivation input violates its reviewed contract")]
@@ -91,213 +69,9 @@ pub enum RhaiRuntimeError {
     Codelist,
 }
 
-/// A schema hook kept separate from bundle configuration while that layer is loaded.
-pub trait FactSchemaValidator {
-    fn is_valid(&self, facts: &Value) -> bool;
-}
-
-impl FactSchemaValidator for jsonschema::JSONSchema {
-    fn is_valid(&self, facts: &Value) -> bool {
-        jsonschema::JSONSchema::is_valid(self, facts)
-    }
-}
-
-impl<F> FactSchemaValidator for F
-where
-    F: Fn(&Value) -> bool,
-{
-    fn is_valid(&self, facts: &Value) -> bool {
-        self(facts)
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct CompiledExtraction {
-    ast: AST,
-    selector_aware: bool,
-}
-
-impl CompiledExtraction {
-    pub(crate) fn selector_aware(&self) -> bool {
-        self.selector_aware
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct CompiledPreparation {
-    ast: AST,
-}
-
-#[derive(Clone, Debug)]
-pub struct CompiledBatchPreparation {
-    ast: AST,
-}
-
-#[derive(Clone, Debug)]
-pub struct CompiledBatchExtraction {
-    ast: AST,
-}
-
 #[derive(Clone, Debug)]
 pub struct CompiledDerivation {
     ast: AST,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RequestPartRequirement {
-    Forbidden,
-    Optional,
-    Required,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RequestPartsLimits {
-    query: RequestPartRequirement,
-    body: RequestPartRequirement,
-    maximum_query_pairs: usize,
-    maximum_query_name_bytes: usize,
-    maximum_query_value_bytes: usize,
-    maximum_json_depth: usize,
-    maximum_collection_items: usize,
-    maximum_string_bytes: usize,
-    maximum_normalized_bytes: usize,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct RequestPartsBounds {
-    pub maximum_query_pairs: usize,
-    pub maximum_query_name_bytes: usize,
-    pub maximum_query_value_bytes: usize,
-    pub maximum_json_depth: usize,
-    pub maximum_collection_items: usize,
-    pub maximum_string_bytes: usize,
-    pub maximum_normalized_bytes: usize,
-}
-
-impl RequestPartsLimits {
-    pub fn new(
-        query: RequestPartRequirement,
-        body: RequestPartRequirement,
-        bounds: RequestPartsBounds,
-    ) -> Result<Self, RhaiRuntimeError> {
-        let RequestPartsBounds {
-            maximum_query_pairs,
-            maximum_query_name_bytes,
-            maximum_query_value_bytes,
-            maximum_json_depth,
-            maximum_collection_items,
-            maximum_string_bytes,
-            maximum_normalized_bytes,
-        } = bounds;
-        if maximum_query_pairs == 0
-            || maximum_query_pairs > MAXIMUM_QUERY_PAIRS
-            || maximum_query_name_bytes == 0
-            || maximum_query_name_bytes > MAXIMUM_QUERY_NAME_BYTES
-            || maximum_query_value_bytes == 0
-            || maximum_query_value_bytes > MAXIMUM_QUERY_VALUE_BYTES
-            || maximum_json_depth == 0
-            || maximum_json_depth > MAXIMUM_JSON_BODY_DEPTH
-            || maximum_collection_items == 0
-            || maximum_collection_items > MAXIMUM_ARRAY_ITEMS
-            || maximum_string_bytes == 0
-            || maximum_string_bytes > MAXIMUM_STRING_BYTES
-            || maximum_normalized_bytes == 0
-            || maximum_normalized_bytes > MAXIMUM_REQUEST_PARTS_BYTES
-        {
-            return Err(RhaiRuntimeError::PreparationResult);
-        }
-        Ok(Self {
-            query,
-            body,
-            maximum_query_pairs,
-            maximum_query_name_bytes,
-            maximum_query_value_bytes,
-            maximum_json_depth,
-            maximum_collection_items,
-            maximum_string_bytes,
-            maximum_normalized_bytes,
-        })
-    }
-}
-
-#[derive(Clone, PartialEq)]
-pub struct QueryPair {
-    pub name: String,
-    pub value: String,
-}
-
-impl fmt::Debug for QueryPair {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("QueryPair")
-            .field("name", &"[redacted]")
-            .field("value", &"[redacted]")
-            .finish()
-    }
-}
-
-#[derive(Clone, PartialEq)]
-pub struct RequestParts {
-    pub query: Vec<QueryPair>,
-    pub body: Option<Value>,
-}
-
-impl fmt::Debug for RequestParts {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("RequestParts")
-            .field("query_pairs", &self.query.len())
-            .field("body_present", &self.body.is_some())
-            .finish()
-    }
-}
-
-/// Bounds on the parameter map a statement source's preparation may return.
-///
-/// A statement carries no URL, no query string and no body, so the whole
-/// preparation channel is that map and only its entry count and the size of one
-/// scalar value need a declared bound.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct StatementParametersLimits {
-    maximum_parameters: usize,
-    maximum_parameter_value_bytes: usize,
-}
-
-impl StatementParametersLimits {
-    pub fn new(
-        maximum_parameters: usize,
-        maximum_parameter_value_bytes: usize,
-    ) -> Result<Self, RhaiRuntimeError> {
-        if maximum_parameters == 0
-            || maximum_parameters > MAXIMUM_STATEMENT_PARAMETERS
-            || maximum_parameter_value_bytes == 0
-            || maximum_parameter_value_bytes > MAXIMUM_STATEMENT_PARAMETER_VALUE_BYTES
-        {
-            return Err(RhaiRuntimeError::PreparationResult);
-        }
-        Ok(Self {
-            maximum_parameters,
-            maximum_parameter_value_bytes,
-        })
-    }
-}
-
-/// The scalar values a statement source's preparation produced, by parameter name.
-///
-/// Which names are admissible is the caller's decision: this runtime holds the
-/// shape and the bounds, and the source plan holds the declared parameter names.
-#[derive(Clone, PartialEq)]
-pub struct StatementParameters {
-    pub parameters: BTreeMap<String, SelectorValue>,
-}
-
-impl fmt::Debug for StatementParameters {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("StatementParameters")
-            .field("parameters", &self.parameters.len())
-            .finish()
-    }
 }
 
 /// Strict proleptic-Gregorian date exposed to Rhai as an opaque typed value.
@@ -553,276 +327,9 @@ impl RhaiRuntime {
         Self { engine }
     }
 
-    pub fn compile_preparation(
-        &self,
-        source: &str,
-    ) -> Result<CompiledPreparation, RhaiRuntimeError> {
-        self.compile_exact(source, "prepare", 2)
-            .map(|ast| CompiledPreparation { ast })
-    }
-
-    pub fn compile_extraction(&self, source: &str) -> Result<CompiledExtraction, RhaiRuntimeError> {
-        let ast = self.compile_arities(source, "extract", &[2, 3])?;
-        let selector_aware = ast
-            .iter_functions()
-            .any(|function| function.name == "extract" && function.params.len() == 3);
-        Ok(CompiledExtraction {
-            ast,
-            selector_aware,
-        })
-    }
-
-    pub fn compile_batch_preparation(
-        &self,
-        source: &str,
-    ) -> Result<CompiledBatchPreparation, RhaiRuntimeError> {
-        self.compile_exact(source, "prepare_batch", 2)
-            .map(|ast| CompiledBatchPreparation { ast })
-    }
-
-    pub fn compile_batch_extraction(
-        &self,
-        source: &str,
-    ) -> Result<CompiledBatchExtraction, RhaiRuntimeError> {
-        self.compile_exact(source, "extract_batch", 2)
-            .map(|ast| CompiledBatchExtraction { ast })
-    }
-
     pub fn compile_derivation(&self, source: &str) -> Result<CompiledDerivation, RhaiRuntimeError> {
         self.compile_exact(source, "derive", 3)
             .map(|ast| CompiledDerivation { ast })
-    }
-
-    pub fn prepare(
-        &self,
-        script: &CompiledPreparation,
-        selectors: &Value,
-        parameters: &Value,
-        limits: &RequestPartsLimits,
-    ) -> Result<RequestParts, RhaiRuntimeError> {
-        self.prepare_with_prior_facts(script, selectors, parameters, &BTreeMap::new(), limits)
-    }
-
-    pub fn prepare_with_prior_facts(
-        &self,
-        script: &CompiledPreparation,
-        selectors: &Value,
-        parameters: &Value,
-        prior_facts: &BTreeMap<String, Value>,
-        limits: &RequestPartsLimits,
-    ) -> Result<RequestParts, RhaiRuntimeError> {
-        validate_adapter_inputs(selectors, parameters, prior_facts)?;
-        let selectors = adapter_object_to_dynamic(selectors)?;
-        let context = adapter_context_to_dynamic(parameters, prior_facts)?;
-        let result = self
-            .engine
-            .call_fn_with_options::<Dynamic>(
-                CallFnOptions::new().eval_ast(false),
-                &mut Scope::new(),
-                &script.ast,
-                "prepare",
-                (selectors, context),
-            )
-            .map_err(|error| classify_invocation_error(error, ScriptStage::Preparation))?;
-        decode_request_parts(result, limits)
-    }
-
-    /// Run the closed HTTP batch-preparation ABI. `items` is constructed by
-    /// Rust after exact selector-shape validation and contains only an opaque
-    /// slot plus the ordinary minimized selector object for each logical
-    /// request. No prior facts or transport authority enter this context.
-    pub fn prepare_batch(
-        &self,
-        script: &CompiledBatchPreparation,
-        items: &Value,
-        parameters: &Value,
-        limits: &RequestPartsLimits,
-    ) -> Result<RequestParts, RhaiRuntimeError> {
-        validate_batch_items(items)?;
-        validate_adapter_object(parameters)?;
-        let combined = Value::Array(vec![items.clone(), parameters.clone()]);
-        if serde_json::to_vec(&combined)
-            .map_err(|_| RhaiRuntimeError::AdapterInput)?
-            .len()
-            > MAXIMUM_PREPARATION_INPUT_BYTES
-        {
-            return Err(RhaiRuntimeError::InputBound);
-        }
-        let items = rhai::serde::to_dynamic(items).map_err(|_| RhaiRuntimeError::AdapterInput)?;
-        let context = batch_context_to_dynamic(parameters, None)?;
-        let result = self
-            .engine
-            .call_fn_with_options::<Dynamic>(
-                CallFnOptions::new().eval_ast(false),
-                &mut Scope::new(),
-                &script.ast,
-                "prepare_batch",
-                (items, context),
-            )
-            .map_err(|error| classify_invocation_error(error, ScriptStage::Preparation))?;
-        decode_request_parts(result, limits)
-    }
-
-    pub fn prepare_statement(
-        &self,
-        script: &CompiledPreparation,
-        selectors: &Value,
-        parameters: &Value,
-        limits: &StatementParametersLimits,
-    ) -> Result<StatementParameters, RhaiRuntimeError> {
-        self.prepare_statement_with_prior_facts(
-            script,
-            selectors,
-            parameters,
-            &BTreeMap::new(),
-            limits,
-        )
-    }
-
-    pub fn prepare_statement_with_prior_facts(
-        &self,
-        script: &CompiledPreparation,
-        selectors: &Value,
-        parameters: &Value,
-        prior_facts: &BTreeMap<String, Value>,
-        limits: &StatementParametersLimits,
-    ) -> Result<StatementParameters, RhaiRuntimeError> {
-        validate_adapter_inputs(selectors, parameters, prior_facts)?;
-        let selectors = adapter_object_to_dynamic(selectors)?;
-        let context = adapter_context_to_dynamic(parameters, prior_facts)?;
-        let result = self
-            .engine
-            .call_fn_with_options::<Dynamic>(
-                CallFnOptions::new().eval_ast(false),
-                &mut Scope::new(),
-                &script.ast,
-                "prepare",
-                (selectors, context),
-            )
-            .map_err(|error| classify_invocation_error(error, ScriptStage::Preparation))?;
-        decode_statement_parameters(result, limits)
-    }
-
-    pub fn extract<V>(
-        &self,
-        script: &CompiledExtraction,
-        source_response: &Value,
-        parameters: &Value,
-        fact_schema: &V,
-    ) -> Result<LookupResult, RhaiRuntimeError>
-    where
-        V: FactSchemaValidator + ?Sized,
-    {
-        self.extract_with_prior_facts(
-            script,
-            source_response,
-            parameters,
-            &BTreeMap::new(),
-            fact_schema,
-        )
-    }
-
-    pub fn extract_with_prior_facts<V>(
-        &self,
-        script: &CompiledExtraction,
-        source_response: &Value,
-        parameters: &Value,
-        prior_facts: &BTreeMap<String, Value>,
-        fact_schema: &V,
-    ) -> Result<LookupResult, RhaiRuntimeError>
-    where
-        V: FactSchemaValidator + ?Sized,
-    {
-        self.extract_with_selectors(
-            script,
-            source_response,
-            &Value::Object(Default::default()),
-            parameters,
-            prior_facts,
-            fact_schema,
-        )
-    }
-
-    /// Extract with the same minimized authorized source selector map passed
-    /// to preparation. Legacy extract/2 receives exactly its original inputs.
-    pub fn extract_with_selectors<V>(
-        &self,
-        script: &CompiledExtraction,
-        source_response: &Value,
-        selectors: &Value,
-        parameters: &Value,
-        prior_facts: &BTreeMap<String, Value>,
-        fact_schema: &V,
-    ) -> Result<LookupResult, RhaiRuntimeError>
-    where
-        V: FactSchemaValidator + ?Sized,
-    {
-        validate_json_bound(source_response, MAXIMUM_SOURCE_INPUT_BYTES)?;
-        if !json_numbers_are_supported(source_response) {
-            return Err(RhaiRuntimeError::InputBound);
-        }
-        validate_adapter_context(parameters, prior_facts)?;
-        let input =
-            rhai::serde::to_dynamic(source_response).map_err(|_| RhaiRuntimeError::InputBound)?;
-        let context = adapter_context_to_dynamic(parameters, prior_facts)?;
-        let result = if script.selector_aware {
-            validate_adapter_object(selectors)?;
-            let selectors = adapter_object_to_dynamic(selectors)?;
-            self.engine.call_fn_with_options::<Dynamic>(
-                CallFnOptions::new().eval_ast(false),
-                &mut Scope::new(),
-                &script.ast,
-                "extract",
-                (input, selectors, context),
-            )
-        } else {
-            self.engine.call_fn_with_options::<Dynamic>(
-                CallFnOptions::new().eval_ast(false),
-                &mut Scope::new(),
-                &script.ast,
-                "extract",
-                (input, context),
-            )
-        }
-        .map_err(|error| classify_invocation_error(error, ScriptStage::Extraction))?;
-        decode_lookup_result(result, fact_schema)
-    }
-
-    /// Run the closed HTTP batch-extraction ABI and restore logical request
-    /// order after proving the returned slots are an exact bijection. The
-    /// optimized lane applies only to `single` acquisitions, so there are no
-    /// prior-stage facts to expose: extraction receives exactly adapter
-    /// parameters and Rust's retained expected slots.
-    pub fn extract_batch<V>(
-        &self,
-        script: &CompiledBatchExtraction,
-        source_response: &Value,
-        parameters: &Value,
-        slots: &[i64],
-        fact_schema: &V,
-    ) -> Result<Vec<LookupResult>, RhaiRuntimeError>
-    where
-        V: FactSchemaValidator + ?Sized,
-    {
-        validate_json_bound(source_response, MAXIMUM_SOURCE_INPUT_BYTES)?;
-        if !json_numbers_are_supported(source_response) {
-            return Err(RhaiRuntimeError::InputBound);
-        }
-        validate_batch_slots(slots)?;
-        let input =
-            rhai::serde::to_dynamic(source_response).map_err(|_| RhaiRuntimeError::InputBound)?;
-        let context = batch_context_to_dynamic(parameters, Some(slots))?;
-        let result = self
-            .engine
-            .call_fn_with_options::<Dynamic>(
-                CallFnOptions::new().eval_ast(false),
-                &mut Scope::new(),
-                &script.ast,
-                "extract_batch",
-                (input, context),
-            )
-            .map_err(|error| classify_invocation_error(error, ScriptStage::Extraction))?;
-        decode_batch_lookup_results(result, slots, fact_schema)
     }
 
     pub fn derive(
@@ -833,7 +340,7 @@ impl RhaiRuntime {
         evaluation_context: EvaluationContext,
     ) -> Result<Vec<DerivedConceptValue>, RhaiRuntimeError> {
         if facts.len() > MAXIMUM_FACT_ENTRIES {
-            return Err(RhaiRuntimeError::InputBound);
+            return Err(RhaiRuntimeError::FactsBound);
         }
         let facts_value = Value::Object(
             facts
@@ -841,7 +348,8 @@ impl RhaiRuntime {
                 .map(|(name, value)| (name.clone(), value.clone()))
                 .collect(),
         );
-        validate_json_bound(&facts_value, MAXIMUM_RESULT_BYTES)?;
+        validate_json_bound(&facts_value, MAXIMUM_RESULT_BYTES)
+            .map_err(|_| RhaiRuntimeError::FactsBound)?;
         if !json_numbers_are_supported(&facts_value) {
             return Err(RhaiRuntimeError::InputBound);
         }
@@ -859,7 +367,7 @@ impl RhaiRuntime {
                 "derive",
                 (facts, selectors, context),
             )
-            .map_err(|error| classify_invocation_error(error, ScriptStage::Derivation))?;
+            .map_err(classify_invocation_error)?;
         decode_derivation_result(result)
     }
 
@@ -1308,31 +816,13 @@ fn required(value: Dynamic, error_code: &str) -> Result<Dynamic, Box<EvalAltResu
     Ok(value)
 }
 
-#[derive(Clone, Copy)]
-enum ScriptStage {
-    Preparation,
-    Extraction,
-    Derivation,
-}
-
-fn classify_invocation_error(error: Box<EvalAltResult>, stage: ScriptStage) -> RhaiRuntimeError {
+fn classify_invocation_error(error: Box<EvalAltResult>) -> RhaiRuntimeError {
     if contains_unavailable_signal(&error) {
         RhaiRuntimeError::Unavailable
+    } else if contains_runtime_signal(&error, "derivation_input_error") {
+        RhaiRuntimeError::DerivationInput
     } else {
-        match stage {
-            ScriptStage::Preparation if contains_runtime_signal(&error, "adapter_input_error") => {
-                RhaiRuntimeError::AdapterInput
-            }
-            ScriptStage::Extraction if contains_runtime_signal(&error, "source_protocol_error") => {
-                RhaiRuntimeError::SourceProtocol
-            }
-            ScriptStage::Derivation
-                if contains_runtime_signal(&error, "derivation_input_error") =>
-            {
-                RhaiRuntimeError::DerivationInput
-            }
-            _ => RhaiRuntimeError::Invocation,
-        }
+        RhaiRuntimeError::Invocation
     }
 }
 
@@ -1359,96 +849,6 @@ fn contains_runtime_signal(error: &EvalAltResult, expected: &str) -> bool {
 
 fn is_missing(value: Dynamic) -> bool {
     value.is_unit()
-}
-
-fn decode_lookup_result<V>(
-    result: Dynamic,
-    fact_schema: &V,
-) -> Result<LookupResult, RhaiRuntimeError>
-where
-    V: FactSchemaValidator + ?Sized,
-{
-    let map = result
-        .try_cast::<Map>()
-        .ok_or(RhaiRuntimeError::ExtractionResult)?;
-    let outcome = map
-        .get("outcome")
-        .and_then(|value| value.clone().try_cast::<ImmutableString>())
-        .ok_or(RhaiRuntimeError::ExtractionResult)?;
-    match outcome.as_str() {
-        "no_match" if has_exact_keys(&map, &["outcome"]) => Ok(LookupResult::NoMatch),
-        "ambiguous" if has_exact_keys(&map, &["outcome"]) => Ok(LookupResult::Ambiguous),
-        "match" if has_exact_keys(&map, &["outcome", "facts"]) => {
-            let facts_dynamic = map.get("facts").ok_or(RhaiRuntimeError::ExtractionResult)?;
-            if !dynamic_is_json(facts_dynamic, FloatAdmission::AdapterSurface) {
-                return Err(RhaiRuntimeError::ExtractionResult);
-            }
-            let facts: Value = rhai::serde::from_dynamic(facts_dynamic)
-                .map_err(|_| RhaiRuntimeError::ExtractionResult)?;
-            let object = facts
-                .as_object()
-                .ok_or(RhaiRuntimeError::ExtractionResult)?;
-            if object.len() > MAXIMUM_FACT_ENTRIES {
-                return Err(RhaiRuntimeError::ExtractionResult);
-            }
-            validate_json_bound(&facts, MAXIMUM_RESULT_BYTES)
-                .map_err(|_| RhaiRuntimeError::ExtractionResult)?;
-            if !fact_schema.is_valid(&facts) {
-                return Err(RhaiRuntimeError::FactSchema);
-            }
-            Ok(LookupResult::Match(
-                object
-                    .iter()
-                    .map(|(name, value)| (name.clone(), value.clone()))
-                    .collect(),
-            ))
-        }
-        _ => Err(RhaiRuntimeError::ExtractionResult),
-    }
-}
-
-fn decode_batch_lookup_results<V>(
-    result: Dynamic,
-    expected_slots: &[i64],
-    fact_schema: &V,
-) -> Result<Vec<LookupResult>, RhaiRuntimeError>
-where
-    V: FactSchemaValidator + ?Sized,
-{
-    let array = result
-        .try_cast::<Array>()
-        .ok_or(RhaiRuntimeError::ExtractionResult)?;
-    if array.len() != expected_slots.len() {
-        return Err(RhaiRuntimeError::SourceProtocol);
-    }
-    let expected = expected_slots.iter().copied().collect::<BTreeSet<_>>();
-    let mut by_slot = BTreeMap::new();
-    for item in array {
-        let map = item
-            .try_cast::<Map>()
-            .ok_or(RhaiRuntimeError::ExtractionResult)?;
-        if !has_exact_keys(&map, &["result", "slot"]) {
-            return Err(RhaiRuntimeError::ExtractionResult);
-        }
-        let slot = map
-            .get("slot")
-            .and_then(|slot| slot.clone().try_cast::<INT>())
-            .ok_or(RhaiRuntimeError::SourceProtocol)?;
-        if slot < 0 || !expected.contains(&slot) || by_slot.contains_key(&slot) {
-            return Err(RhaiRuntimeError::SourceProtocol);
-        }
-        let lookup = decode_lookup_result(
-            map.get("result")
-                .ok_or(RhaiRuntimeError::ExtractionResult)?
-                .clone(),
-            fact_schema,
-        )?;
-        by_slot.insert(slot, lookup);
-    }
-    expected_slots
-        .iter()
-        .map(|slot| by_slot.remove(slot).ok_or(RhaiRuntimeError::SourceProtocol))
-        .collect()
 }
 
 fn decode_derivation_result(result: Dynamic) -> Result<Vec<DerivedConceptValue>, RhaiRuntimeError> {
@@ -1522,7 +922,7 @@ fn decode_derived_value(value: Dynamic) -> Result<DerivedValue, RhaiRuntimeError
             ));
         }
     }
-    if !dynamic_is_json(&value, FloatAdmission::Rejected) {
+    if !dynamic_is_json(&value) {
         return Err(RhaiRuntimeError::DerivationResult);
     }
     let json = rhai::serde::from_dynamic::<Value>(&value)
@@ -1987,132 +1387,9 @@ fn is_identifier_continue(byte: u8) -> bool {
     is_identifier_start(byte) || byte.is_ascii_digit()
 }
 
-fn validate_adapter_inputs(
-    selectors: &Value,
-    parameters: &Value,
-    prior_facts: &BTreeMap<String, Value>,
-) -> Result<(), RhaiRuntimeError> {
-    validate_adapter_object(selectors)?;
-    validate_adapter_context(parameters, prior_facts)?;
-    let combined = Value::Array(vec![
-        selectors.clone(),
-        parameters.clone(),
-        prior_facts_value(prior_facts),
-    ]);
-    let size = serde_json::to_vec(&combined)
-        .map_err(|_| RhaiRuntimeError::AdapterInput)?
-        .len();
-    if size > MAXIMUM_PREPARATION_INPUT_BYTES {
-        return Err(RhaiRuntimeError::InputBound);
-    }
-    Ok(())
-}
-
-fn validate_batch_items(items: &Value) -> Result<(), RhaiRuntimeError> {
-    let items = items
-        .as_array()
-        .filter(|items| !items.is_empty() && items.len() <= MAXIMUM_SOURCE_BATCH_ITEMS)
-        .ok_or(RhaiRuntimeError::AdapterInput)?;
-    for (expected_slot, item) in items.iter().enumerate() {
-        let item = item.as_object().ok_or(RhaiRuntimeError::AdapterInput)?;
-        if item.len() != 2 || !item.contains_key("slot") || !item.contains_key("selectors") {
-            return Err(RhaiRuntimeError::AdapterInput);
-        }
-        let slot = item
-            .get("slot")
-            .and_then(Value::as_i64)
-            .ok_or(RhaiRuntimeError::AdapterInput)?;
-        if usize::try_from(slot).ok() != Some(expected_slot) {
-            return Err(RhaiRuntimeError::AdapterInput);
-        }
-        validate_adapter_object(
-            item.get("selectors")
-                .ok_or(RhaiRuntimeError::AdapterInput)?,
-        )?;
-    }
-    validate_json_bound(
-        &Value::Array(items.to_vec()),
-        MAXIMUM_PREPARATION_INPUT_BYTES,
-    )
-}
-
-fn validate_batch_slots(slots: &[i64]) -> Result<(), RhaiRuntimeError> {
-    if slots.is_empty() || slots.len() > MAXIMUM_SOURCE_BATCH_ITEMS {
-        return Err(RhaiRuntimeError::InputBound);
-    }
-    if slots
-        .iter()
-        .enumerate()
-        .any(|(expected, slot)| usize::try_from(*slot).ok() != Some(expected))
-    {
-        return Err(RhaiRuntimeError::SourceProtocol);
-    }
-    Ok(())
-}
-
-fn batch_context_to_dynamic(
-    parameters: &Value,
-    slots: Option<&[i64]>,
-) -> Result<Dynamic, RhaiRuntimeError> {
-    validate_adapter_object(parameters)?;
-    let mut context = Map::new();
-    context.insert("parameters".into(), adapter_object_to_dynamic(parameters)?);
-    if let Some(slots) = slots {
-        validate_batch_slots(slots)?;
-        context.insert(
-            "slots".into(),
-            Dynamic::from(
-                slots
-                    .iter()
-                    .copied()
-                    .map(Dynamic::from_int)
-                    .collect::<Array>(),
-            ),
-        );
-    }
-    Ok(Dynamic::from(context))
-}
-
-fn validate_adapter_context(
-    parameters: &Value,
-    prior_facts: &BTreeMap<String, Value>,
-) -> Result<(), RhaiRuntimeError> {
-    validate_adapter_object(parameters)?;
-    if prior_facts.len() > MAXIMUM_FACT_ENTRIES {
-        return Err(RhaiRuntimeError::InputBound);
-    }
-    let prior_facts = prior_facts_value(prior_facts);
-    validate_adapter_object(&prior_facts)?;
-    validate_json_bound(&prior_facts, MAXIMUM_RESULT_BYTES)?;
-    Ok(())
-}
-
-fn prior_facts_value(prior_facts: &BTreeMap<String, Value>) -> Value {
-    Value::Object(
-        prior_facts
-            .iter()
-            .map(|(name, value)| (name.clone(), value.clone()))
-            .collect(),
-    )
-}
-
-fn adapter_context_to_dynamic(
-    parameters: &Value,
-    prior_facts: &BTreeMap<String, Value>,
-) -> Result<Dynamic, RhaiRuntimeError> {
-    validate_adapter_context(parameters, prior_facts)?;
-    let mut context = Map::new();
-    context.insert("parameters".into(), adapter_object_to_dynamic(parameters)?);
-    context.insert(
-        "prior_facts".into(),
-        adapter_object_to_dynamic(&prior_facts_value(prior_facts))?,
-    );
-    Ok(Dynamic::from(context))
-}
-
 fn validate_adapter_object(value: &Value) -> Result<(), RhaiRuntimeError> {
     if !value.is_object() || !adapter_value_is_supported(value) {
-        return Err(RhaiRuntimeError::AdapterInput);
+        return Err(RhaiRuntimeError::DerivationInput);
     }
     Ok(())
 }
@@ -2137,7 +1414,7 @@ fn adapter_value_is_supported(value: &Value) -> bool {
 }
 
 fn adapter_object_to_dynamic(value: &Value) -> Result<Dynamic, RhaiRuntimeError> {
-    let object = value.as_object().ok_or(RhaiRuntimeError::AdapterInput)?;
+    let object = value.as_object().ok_or(RhaiRuntimeError::DerivationInput)?;
     object
         .iter()
         .map(|(name, value)| Ok((name.as_str().into(), adapter_value_to_dynamic(value)?)))
@@ -2151,7 +1428,7 @@ fn adapter_value_to_dynamic(value: &Value) -> Result<Dynamic, RhaiRuntimeError> 
         Value::Number(value) => value
             .as_i64()
             .map(Dynamic::from)
-            .ok_or(RhaiRuntimeError::AdapterInput),
+            .ok_or(RhaiRuntimeError::DerivationInput),
         Value::String(value) if value.len() <= MAXIMUM_STRING_BYTES => {
             Ok(Dynamic::from(value.clone()))
         }
@@ -2167,14 +1444,14 @@ fn adapter_value_to_dynamic(value: &Value) -> Result<Dynamic, RhaiRuntimeError> 
                 .iter()
                 .map(|(name, value)| {
                     if name.len() > MAXIMUM_STRING_BYTES {
-                        return Err(RhaiRuntimeError::AdapterInput);
+                        return Err(RhaiRuntimeError::DerivationInput);
                     }
                     Ok((name.as_str().into(), adapter_value_to_dynamic(value)?))
                 })
                 .collect::<Result<Map, _>>()
                 .map(Dynamic::from)
         }
-        _ => Err(RhaiRuntimeError::AdapterInput),
+        _ => Err(RhaiRuntimeError::DerivationInput),
     }
 }
 
@@ -2182,233 +1459,6 @@ fn is_typed_derivation_envelope(values: &serde_json::Map<String, Value>) -> bool
     values.len() == 2
         && values.get("type") == Some(&Value::String("decimal".to_string()))
         && values.get("value").is_some_and(Value::is_string)
-}
-
-fn decode_request_parts(
-    result: Dynamic,
-    limits: &RequestPartsLimits,
-) -> Result<RequestParts, RhaiRuntimeError> {
-    let map = result
-        .try_cast::<Map>()
-        .ok_or(RhaiRuntimeError::PreparationResult)?;
-    if !has_exact_keys(&map, &["query", "body"]) {
-        return Err(RhaiRuntimeError::PreparationResult);
-    }
-
-    let query = map["query"]
-        .clone()
-        .try_cast::<Array>()
-        .ok_or(RhaiRuntimeError::PreparationResult)?;
-    if query.len() > limits.maximum_query_pairs || query.len() > MAXIMUM_QUERY_PAIRS {
-        return Err(RhaiRuntimeError::PreparationResult);
-    }
-    let query = query
-        .into_iter()
-        .map(|pair| {
-            let pair = pair
-                .try_cast::<Map>()
-                .ok_or(RhaiRuntimeError::PreparationResult)?;
-            if !has_exact_keys(&pair, &["name", "value"]) {
-                return Err(RhaiRuntimeError::PreparationResult);
-            }
-            let name = pair["name"]
-                .clone()
-                .try_cast::<ImmutableString>()
-                .ok_or(RhaiRuntimeError::PreparationResult)?
-                .to_string();
-            let value = pair["value"]
-                .clone()
-                .try_cast::<ImmutableString>()
-                .ok_or(RhaiRuntimeError::PreparationResult)?
-                .to_string();
-            if name.is_empty()
-                || name.len() > limits.maximum_query_name_bytes
-                || name.len() > MAXIMUM_QUERY_NAME_BYTES
-                || name.len() > limits.maximum_string_bytes
-                || value.len() > limits.maximum_query_value_bytes
-                || value.len() > MAXIMUM_QUERY_VALUE_BYTES
-                || value.len() > limits.maximum_string_bytes
-                || name.bytes().any(|byte| matches!(byte, b'\r' | b'\n'))
-                || value.bytes().any(|byte| matches!(byte, b'\r' | b'\n'))
-            {
-                return Err(RhaiRuntimeError::PreparationResult);
-            }
-            Ok(QueryPair { name, value })
-        })
-        .collect::<Result<Vec<_>, RhaiRuntimeError>>()?;
-
-    validate_part_requirement(limits.query, !query.is_empty())?;
-    let body = if map["body"].is_unit() {
-        None
-    } else {
-        if !dynamic_is_json(&map["body"], FloatAdmission::AdapterSurface) {
-            return Err(RhaiRuntimeError::PreparationResult);
-        }
-        let body = rhai::serde::from_dynamic::<Value>(&map["body"])
-            .map_err(|_| RhaiRuntimeError::PreparationResult)?;
-        if !json_numbers_are_supported(&body)
-            || !json_value_within_limits(
-                &body,
-                limits.maximum_json_depth,
-                limits.maximum_collection_items,
-                limits.maximum_string_bytes,
-            )
-        {
-            return Err(RhaiRuntimeError::PreparationResult);
-        }
-        Some(body)
-    };
-    validate_part_requirement(limits.body, body.is_some())?;
-
-    let normalized = Value::Object(serde_json::Map::from_iter([
-        ("body".to_string(), body.clone().unwrap_or(Value::Null)),
-        (
-            "query".to_string(),
-            Value::Array(
-                query
-                    .iter()
-                    .map(|pair| {
-                        Value::Object(serde_json::Map::from_iter([
-                            ("name".to_string(), Value::String(pair.name.clone())),
-                            ("value".to_string(), Value::String(pair.value.clone())),
-                        ]))
-                    })
-                    .collect(),
-            ),
-        ),
-    ]));
-    let normalized_size = serde_json::to_vec(&normalized)
-        .map_err(|_| RhaiRuntimeError::PreparationResult)?
-        .len();
-    if normalized_size > limits.maximum_normalized_bytes
-        || normalized_size > MAXIMUM_REQUEST_PARTS_BYTES
-    {
-        return Err(RhaiRuntimeError::PreparationResult);
-    }
-    Ok(RequestParts { query, body })
-}
-
-fn decode_statement_parameters(
-    result: Dynamic,
-    limits: &StatementParametersLimits,
-) -> Result<StatementParameters, RhaiRuntimeError> {
-    let map = result
-        .try_cast::<Map>()
-        .ok_or(RhaiRuntimeError::PreparationResult)?;
-    if !has_exact_keys(&map, &["parameters"]) {
-        return Err(RhaiRuntimeError::PreparationResult);
-    }
-    let entries = map["parameters"]
-        .clone()
-        .try_cast::<Map>()
-        .ok_or(RhaiRuntimeError::PreparationResult)?;
-    if entries.len() > limits.maximum_parameters || entries.len() > MAXIMUM_STATEMENT_PARAMETERS {
-        return Err(RhaiRuntimeError::PreparationResult);
-    }
-
-    let mut parameters = BTreeMap::new();
-    for (name, value) in entries {
-        let name = name.to_string();
-        if name.is_empty() || name.len() > MAXIMUM_STATEMENT_PARAMETER_NAME_BYTES {
-            return Err(RhaiRuntimeError::PreparationResult);
-        }
-        // A statement binds scalars. Anything a SQLite value cannot be is refused
-        // here rather than flattened into one on the way to the binding.
-        let value = if value.is::<ImmutableString>() {
-            let text = value
-                .try_cast::<ImmutableString>()
-                .ok_or(RhaiRuntimeError::PreparationResult)?
-                .to_string();
-            if text.len() > limits.maximum_parameter_value_bytes
-                || text.len() > MAXIMUM_STATEMENT_PARAMETER_VALUE_BYTES
-            {
-                return Err(RhaiRuntimeError::PreparationResult);
-            }
-            SelectorValue::String(text)
-        } else if value.is::<bool>() {
-            SelectorValue::Boolean(
-                value
-                    .try_cast::<bool>()
-                    .ok_or(RhaiRuntimeError::PreparationResult)?,
-            )
-        } else if value.is::<INT>() {
-            SelectorValue::Integer(
-                value
-                    .try_cast::<INT>()
-                    .ok_or(RhaiRuntimeError::PreparationResult)?,
-            )
-        } else {
-            return Err(RhaiRuntimeError::PreparationResult);
-        };
-        parameters.insert(name, value);
-    }
-    Ok(StatementParameters { parameters })
-}
-
-fn validate_part_requirement(
-    requirement: RequestPartRequirement,
-    present: bool,
-) -> Result<(), RhaiRuntimeError> {
-    match (requirement, present) {
-        (RequestPartRequirement::Forbidden, true) | (RequestPartRequirement::Required, false) => {
-            Err(RhaiRuntimeError::PreparationResult)
-        }
-        _ => Ok(()),
-    }
-}
-
-fn json_value_within_limits(
-    value: &Value,
-    maximum_depth: usize,
-    maximum_collection_items: usize,
-    maximum_string_bytes: usize,
-) -> bool {
-    fn visit(
-        value: &Value,
-        container_depth: usize,
-        maximum_depth: usize,
-        maximum_collection_items: usize,
-        maximum_string_bytes: usize,
-    ) -> bool {
-        match value {
-            Value::String(value) => value.len() <= maximum_string_bytes,
-            Value::Array(values) => {
-                container_depth < maximum_depth
-                    && values.len() <= maximum_collection_items
-                    && values.iter().all(|value| {
-                        visit(
-                            value,
-                            container_depth + 1,
-                            maximum_depth,
-                            maximum_collection_items,
-                            maximum_string_bytes,
-                        )
-                    })
-            }
-            Value::Object(values) => {
-                container_depth < maximum_depth
-                    && values.len() <= maximum_collection_items
-                    && values.iter().all(|(name, value)| {
-                        name.len() <= maximum_string_bytes
-                            && visit(
-                                value,
-                                container_depth + 1,
-                                maximum_depth,
-                                maximum_collection_items,
-                                maximum_string_bytes,
-                            )
-                    })
-            }
-            _ => true,
-        }
-    }
-    visit(
-        value,
-        0,
-        maximum_depth,
-        maximum_collection_items,
-        maximum_string_bytes,
-    )
 }
 
 /// Numeric admission for JSON decoded into Rhai. An integer token outside the signed
@@ -2430,35 +1480,18 @@ fn is_supported_float(value: f64) -> bool {
     value.is_finite() && value.abs() < INTEGER_MAGNITUDE_LIMIT
 }
 
-/// Whether ordinary Rhai floats may appear in a decoded value.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum FloatAdmission {
-    /// Request preparation and source extraction carry provider-shaped JSON, which may
-    /// contain finite ordinary floats.
-    AdapterSurface,
-    /// Public derived values use the declared integer or exact Decimal forms only.
-    Rejected,
-}
-
-fn dynamic_is_json(value: &Dynamic, floats: FloatAdmission) -> bool {
+fn dynamic_is_json(value: &Dynamic) -> bool {
     if value.is_unit() || value.is_bool() || value.is_int() || value.is_string() {
         return true;
     }
     if value.is_float() {
-        return floats == FloatAdmission::AdapterSurface
-            && value.as_float().is_ok_and(is_supported_float);
+        return false;
     }
     if value.is_array() {
-        return value
-            .clone_cast::<Array>()
-            .iter()
-            .all(|value| dynamic_is_json(value, floats));
+        return value.clone_cast::<Array>().iter().all(dynamic_is_json);
     }
     if value.is_map() {
-        return value
-            .clone_cast::<Map>()
-            .values()
-            .all(|value| dynamic_is_json(value, floats));
+        return value.clone_cast::<Map>().values().all(dynamic_is_json);
     }
     false
 }
@@ -2746,33 +1779,17 @@ mod tests {
 
     use super::*;
 
-    const ADULT_EXTRACTION: &str = include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../products/evidence/fixtures/acceptance/adult-status/adapters/source-a.rhai"
-    ));
     const ADULT_DERIVATION: &str = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../products/evidence/fixtures/acceptance/adult-status/derivations/adult-status.rhai"
-    ));
-    const RESIDENCE_EXTRACTION: &str = include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../products/evidence/fixtures/acceptance/residence-region/adapters/source-b.rhai"
     ));
     const RESIDENCE_DERIVATION: &str = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../products/evidence/fixtures/acceptance/residence-region/derivations/residence-region.rhai"
     ));
-    const LICENCE_EXTRACTION: &str = include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../products/evidence/fixtures/acceptance/professional-licence/adapters/source-c.rhai"
-    ));
     const LICENCE_DERIVATION: &str = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../products/evidence/fixtures/acceptance/professional-licence/derivations/professional-licence.rhai"
-    ));
-    const RELATIONSHIP_EXTRACTION: &str = include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../products/evidence/fixtures/acceptance/legal-parent-relationship/adapters/source-d.rhai"
     ));
     const RELATIONSHIP_DERIVATION: &str = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -2795,202 +1812,6 @@ mod tests {
             codelists,
         )
         .expect("context")
-    }
-
-    fn request_limits(
-        query: RequestPartRequirement,
-        body: RequestPartRequirement,
-    ) -> RequestPartsLimits {
-        RequestPartsLimits::new(
-            query,
-            body,
-            RequestPartsBounds {
-                maximum_query_pairs: MAXIMUM_QUERY_PAIRS,
-                maximum_query_name_bytes: MAXIMUM_QUERY_NAME_BYTES,
-                maximum_query_value_bytes: MAXIMUM_QUERY_VALUE_BYTES,
-                maximum_json_depth: MAXIMUM_JSON_BODY_DEPTH,
-                maximum_collection_items: MAXIMUM_ARRAY_ITEMS,
-                maximum_string_bytes: MAXIMUM_STRING_BYTES,
-                maximum_normalized_bytes: MAXIMUM_REQUEST_PARTS_BYTES,
-            },
-        )
-        .expect("request limits")
-    }
-
-    #[test]
-    fn batch_preparation_receives_only_slotted_minimized_items_and_parameters() {
-        let runtime = runtime();
-        let script = runtime
-            .compile_batch_preparation(
-                r#"
-                fn prepare_batch(items, context) {
-                    #{
-                        query: [],
-                        body: #{
-                            items: items,
-                            marker: context.parameters.marker,
-                            context_key_count: len(context),
-                            prior_facts_absent: is_missing(context.prior_facts),
-                            slots_absent: is_missing(context.slots)
-                        }
-                    }
-                }
-                "#,
-            )
-            .expect("batch preparation compiles");
-        let items = json!([
-            {"slot": 0, "selectors": {"subject": {"profile": "opaque-v1", "values": {"id": "first"}}}},
-            {"slot": 1, "selectors": {"subject": {"profile": "opaque-v1", "values": {"id": "second"}}}}
-        ]);
-        let prepared = runtime
-            .prepare_batch(
-                &script,
-                &items,
-                &json!({"marker": "fixed"}),
-                &request_limits(
-                    RequestPartRequirement::Forbidden,
-                    RequestPartRequirement::Required,
-                ),
-            )
-            .expect("batch prepares");
-        assert_eq!(
-            prepared.body,
-            Some(json!({
-                "items": items,
-                "marker": "fixed",
-                "context_key_count": 1,
-                "prior_facts_absent": true,
-                "slots_absent": true
-            }))
-        );
-    }
-
-    #[test]
-    fn batch_extraction_context_is_parameters_and_rust_slots_only() {
-        let runtime = runtime();
-        let script = runtime
-            .compile_batch_extraction(
-                r#"
-                fn extract_batch(response, context) {
-                    if len(context) != 2
-                        || context.parameters.marker != "fixed"
-                        || !is_missing(context.prior_facts)
-                        || !is_missing(context.headers)
-                        || !is_missing(context.path) {
-                        return [#{slot: context.slots[0], result: #{outcome: "ambiguous"}}];
-                    }
-                    [#{slot: context.slots[0], result: #{outcome: "no_match"}}]
-                }
-                "#,
-            )
-            .expect("batch extraction compiles");
-        assert_eq!(
-            runtime.extract_batch(
-                &script,
-                &json!({}),
-                &json!({"marker": "fixed"}),
-                &[0],
-                &|_: &Value| true,
-            ),
-            Ok(vec![LookupResult::NoMatch])
-        );
-    }
-
-    #[test]
-    fn batch_extraction_accepts_reordering_and_restores_request_order() {
-        let runtime = runtime();
-        let script = runtime
-            .compile_batch_extraction(
-                r#"
-                fn extract_batch(response, context) {
-                    [
-                        #{slot: context.slots[1], result: #{outcome: "no_match"}},
-                        #{slot: context.slots[0], result: #{outcome: "match", facts: #{code: response.results[0].code}}}
-                    ]
-                }
-                "#,
-            )
-            .expect("batch extraction compiles");
-        let extracted = runtime
-            .extract_batch(
-                &script,
-                &json!({"results": [{"code": "A"}]}),
-                &json!({}),
-                &[0, 1],
-                &|facts: &Value| facts == &json!({"code": "A"}),
-            )
-            .expect("reordered results extract");
-        assert!(matches!(
-            &extracted[0],
-            LookupResult::Match(facts) if facts == &BTreeMap::from([("code".to_owned(), json!("A"))])
-        ));
-        assert!(matches!(extracted[1], LookupResult::NoMatch));
-    }
-
-    #[test]
-    fn batch_and_sequential_extraction_share_lookup_result_primitives() {
-        let runtime = runtime();
-        for result in [
-            r##"#{outcome: "match", facts: #{code: response.code}}"##,
-            r##"#{outcome: "no_match"}"##,
-            r##"#{outcome: "ambiguous"}"##,
-        ] {
-            let ordinary = runtime
-                .compile_extraction(&format!("fn extract(response, context) {{ {result} }}"))
-                .expect("ordinary extraction compiles");
-            let batch = runtime
-                .compile_batch_extraction(&format!(
-                    "fn extract_batch(response, context) {{ [#{{slot: context.slots[0], result: {result}}}] }}"
-                ))
-                .expect("batch extraction compiles");
-            let response = json!({"code": "A"});
-            let fact_schema = |facts: &Value| facts == &json!({"code": "A"});
-            let ordinary = runtime
-                .extract(&ordinary, &response, &json!({}), &fact_schema)
-                .expect("ordinary result decodes");
-            assert_eq!(
-                runtime
-                    .extract_batch(&batch, &response, &json!({}), &[0], &fact_schema)
-                    .expect("batch result decodes"),
-                vec![ordinary]
-            );
-        }
-    }
-
-    #[test]
-    fn batch_extraction_requires_an_exact_slot_bijection() {
-        let runtime = runtime();
-        let cases = [
-            ("[#{slot: 0, result: #{outcome: \"no_match\"}}]", "missing"),
-            (
-                "[#{slot: 0, result: #{outcome: \"no_match\"}}, #{slot: 0, result: #{outcome: \"no_match\"}}]",
-                "duplicate",
-            ),
-            (
-                "[#{slot: 0, result: #{outcome: \"no_match\"}}, #{slot: 1, result: #{outcome: \"no_match\"}}, #{slot: 2, result: #{outcome: \"no_match\"}}]",
-                "extra",
-            ),
-            (
-                "[#{slot: 0, result: #{outcome: \"no_match\"}}, #{slot: 2, result: #{outcome: \"no_match\"}}]",
-                "out-of-range",
-            ),
-            (
-                "[#{slot: 0, result: #{outcome: \"no_match\"}}, #{slot: -1, result: #{outcome: \"no_match\"}}]",
-                "negative",
-            ),
-        ];
-        for (result, label) in cases {
-            let script = runtime
-                .compile_batch_extraction(&format!(
-                    "fn extract_batch(response, context) {{ {result} }}"
-                ))
-                .unwrap_or_else(|error| panic!("{label} script did not compile: {error}"));
-            assert_eq!(
-                runtime.extract_batch(&script, &json!({}), &json!({}), &[0, 1], &|_: &Value| true,),
-                Err(RhaiRuntimeError::SourceProtocol),
-                "{label} slots were accepted"
-            );
-        }
     }
 
     #[test]
@@ -3019,236 +1840,6 @@ mod tests {
     }
 
     #[test]
-    fn preparation_runs_named_helpers_with_fresh_isolated_inputs() {
-        let runtime = runtime();
-        let script = runtime
-            .compile_preparation(
-                r#"
-                    fn query_pair(name, value) { #{ name: name, value: value } }
-                    fn prepare(selectors, context) {
-                        let parameters = context.parameters;
-                        let query = [];
-                        query.push(query_pair("filter", selectors.subject.values.reference));
-                        query.push(query_pair("filter", parameters.status));
-                        let provider_name = parameters.provider_name;
-                        provider_name.replace("_", "-");
-                        selectors.subject.values.reference = "mutated-only-locally";
-                        #{
-                            query: query,
-                            body: #{
-                                provider: provider_name,
-                                limit: parse_integer(parameters.limit)
-                            }
-                        }
-                    }
-                "#,
-            )
-            .expect("preparation compiles");
-        let selectors = json!({
-            "subject": {"profile": "reference-v1", "values": {"reference": "person-1"}}
-        });
-        let parameters = json!({"status": "ACTIVE", "provider_name": "source_a", "limit": "02"});
-        let limits = request_limits(
-            RequestPartRequirement::Required,
-            RequestPartRequirement::Required,
-        );
-        for _ in 0..2 {
-            assert_eq!(
-                runtime
-                    .prepare(&script, &selectors, &parameters, &limits)
-                    .expect("prepares"),
-                RequestParts {
-                    query: vec![
-                        QueryPair {
-                            name: "filter".to_string(),
-                            value: "person-1".to_string(),
-                        },
-                        QueryPair {
-                            name: "filter".to_string(),
-                            value: "ACTIVE".to_string(),
-                        },
-                    ],
-                    body: Some(json!({"limit": 2, "provider": "source-a"})),
-                }
-            );
-        }
-        assert_eq!(selectors["subject"]["values"]["reference"], "person-1");
-        assert_eq!(parameters["provider_name"], "source_a");
-    }
-
-    #[test]
-    fn statement_preparation_returns_bounded_scalar_parameters() {
-        let runtime = runtime();
-        let limits = StatementParametersLimits::new(4, 64).expect("limits");
-        let script = runtime
-            .compile_preparation(
-                "fn prepare(selectors, parameters) { #{ parameters: #{ code: selectors.subject.values.reference, count: 3, active: true } } }",
-            )
-            .expect("compiles");
-        let selectors = json!({"subject": {"values": {"reference": "person-1"}}});
-        assert_eq!(
-            runtime
-                .prepare_statement(&script, &selectors, &json!({}), &limits)
-                .expect("prepares"),
-            StatementParameters {
-                parameters: BTreeMap::from_iter([
-                    (
-                        "active".to_string(),
-                        crate::model::SelectorValue::Boolean(true)
-                    ),
-                    (
-                        "code".to_string(),
-                        crate::model::SelectorValue::String("person-1".to_string())
-                    ),
-                    ("count".to_string(), crate::model::SelectorValue::Integer(3)),
-                ]),
-            }
-        );
-
-        for source in [
-            "fn prepare(selectors, parameters) { #{ parameters: #{}, extra: true } }",
-            "fn prepare(selectors, parameters) { #{ query: [], body: () } }",
-            "fn prepare(selectors, parameters) { #{ parameters: [] } }",
-            "fn prepare(selectors, parameters) { #{ parameters: #{ code: () } } }",
-            "fn prepare(selectors, parameters) { #{ parameters: #{ code: [1] } } }",
-            "fn prepare(selectors, parameters) { #{ parameters: #{ code: #{a: 1} } } }",
-            "fn prepare(selectors, parameters) { #{ parameters: #{ code: parse_date(\"2026-08-02\") } } }",
-        ] {
-            let script = runtime.compile_preparation(source).expect("compiles");
-            assert_eq!(
-                runtime.prepare_statement(&script, &json!({}), &json!({}), &limits),
-                Err(RhaiRuntimeError::PreparationResult),
-                "{source}"
-            );
-        }
-
-        let wide = runtime
-            .compile_preparation(
-                "fn prepare(selectors, parameters) { #{ parameters: #{ a: 1, b: 2 } } }",
-            )
-            .expect("compiles");
-        let narrow = StatementParametersLimits::new(1, 8).expect("limits");
-        assert_eq!(
-            runtime.prepare_statement(&wide, &json!({}), &json!({}), &narrow),
-            Err(RhaiRuntimeError::PreparationResult)
-        );
-        let long = runtime
-            .compile_preparation(
-                "fn prepare(selectors, parameters) { #{ parameters: #{ a: \"123456789\" } } }",
-            )
-            .expect("compiles");
-        assert_eq!(
-            runtime.prepare_statement(&long, &json!({}), &json!({}), &narrow),
-            Err(RhaiRuntimeError::PreparationResult)
-        );
-
-        assert_eq!(
-            StatementParametersLimits::new(0, 8),
-            Err(RhaiRuntimeError::PreparationResult)
-        );
-        assert_eq!(
-            StatementParametersLimits::new(MAXIMUM_STATEMENT_PARAMETERS + 1, 8),
-            Err(RhaiRuntimeError::PreparationResult)
-        );
-        assert_eq!(
-            StatementParametersLimits::new(1, 0),
-            Err(RhaiRuntimeError::PreparationResult)
-        );
-        assert_eq!(
-            StatementParametersLimits::new(1, MAXIMUM_STATEMENT_PARAMETER_VALUE_BYTES + 1),
-            Err(RhaiRuntimeError::PreparationResult)
-        );
-    }
-
-    #[test]
-    fn preparation_inputs_and_request_parts_are_closed_and_bounded() {
-        let runtime = runtime();
-        let passthrough = runtime
-            .compile_preparation(
-                "fn prepare(selectors, parameters) { #{ query: parameters.query, body: () } }",
-            )
-            .expect("compiles");
-        let limits = request_limits(
-            RequestPartRequirement::Optional,
-            RequestPartRequirement::Optional,
-        );
-
-        for invalid in [
-            json!({"value": null}),
-            json!({"value": 1.25}),
-            json!({"value": {"type": "decimal", "value": "1.25"}}),
-        ] {
-            assert_eq!(
-                runtime.prepare(&passthrough, &json!({}), &invalid, &limits),
-                Err(RhaiRuntimeError::AdapterInput)
-            );
-        }
-
-        for parameters in [
-            json!({"query": [{"name": "", "value": "x"}]}),
-            json!({"query": [{"name": "x\r", "value": "y"}]}),
-            json!({"query": [{"name": "x", "value": "y\n"}]}),
-            json!({"query": [{"name": "x", "value": 1}]}),
-        ] {
-            assert!(matches!(
-                runtime.prepare(&passthrough, &json!({}), &parameters, &limits),
-                Err(RhaiRuntimeError::AdapterInput | RhaiRuntimeError::PreparationResult)
-            ));
-        }
-
-        let unknown = runtime
-            .compile_preparation(
-                "fn prepare(selectors, parameters) { #{ query: [], body: (), extra: true } }",
-            )
-            .expect("compiles");
-        assert_eq!(
-            runtime.prepare(&unknown, &json!({}), &json!({}), &limits),
-            Err(RhaiRuntimeError::PreparationResult)
-        );
-        for body in ["parse_date(\"2026-08-02\")", "'x'"] {
-            let source =
-                format!("fn prepare(selectors, parameters) {{ #{{ query: [], body: {body} }} }}");
-            let script = runtime.compile_preparation(&source).expect("compiles");
-            assert_eq!(
-                runtime.prepare(&script, &json!({}), &json!({}), &limits),
-                Err(RhaiRuntimeError::PreparationResult)
-            );
-        }
-        let forbidden_query = request_limits(
-            RequestPartRequirement::Forbidden,
-            RequestPartRequirement::Optional,
-        );
-        let query = runtime
-            .compile_preparation(
-                "fn prepare(selectors, parameters) { #{ query: [#{name: \"x\", value: \"y\"}], body: () } }",
-            )
-            .expect("compiles");
-        assert_eq!(
-            runtime.prepare(&query, &json!({}), &json!({}), &forbidden_query),
-            Err(RhaiRuntimeError::PreparationResult)
-        );
-
-        let strict = RequestPartsLimits::new(
-            RequestPartRequirement::Optional,
-            RequestPartRequirement::Optional,
-            RequestPartsBounds {
-                maximum_query_pairs: 1,
-                maximum_query_name_bytes: 1,
-                maximum_query_value_bytes: 1,
-                maximum_json_depth: 1,
-                maximum_collection_items: 1,
-                maximum_string_bytes: 1,
-                maximum_normalized_bytes: 32,
-            },
-        )
-        .expect("strict limits");
-        assert_eq!(
-            runtime.prepare(&query, &json!({}), &json!({}), &strict),
-            Err(RhaiRuntimeError::PreparationResult)
-        );
-    }
-
-    #[test]
     fn compiler_rejects_every_forbidden_candidate_construct() {
         let runtime = runtime();
         let bodies = [
@@ -3271,10 +1862,10 @@ mod tests {
         ];
         for body in bodies {
             let source = format!(
-                "fn prepare(selectors, parameters) {{ {body} #{{ query: [], body: () }} }}"
+                "fn derive(facts, selectors, evaluation_context) {{ {body} [#{{ concept_id: \"x\", value: true }}] }}"
             );
             assert!(
-                runtime.compile_preparation(&source).is_err(),
+                runtime.compile_derivation(&source).is_err(),
                 "construct compiled: {body}"
             );
         }
@@ -3284,17 +1875,17 @@ mod tests {
     fn compiler_allows_unique_helpers_but_rejects_entry_overloads() {
         let runtime = runtime();
         assert!(runtime
-            .compile_preparation(
-                "fn helper(value) { value } fn prepare(selectors, parameters) { #{query: [], body: helper(())} }"
+            .compile_derivation(
+                "fn helper(value) { value } fn derive(facts, selectors, evaluation_context) { [#{concept_id: \"x\", value: helper(true)}] }"
             )
             .is_ok());
         for source in [
-            "fn prepare(a, b) { #{query: [], body: ()} } fn prepare(a) { a }",
-            "fn helper(a) { a } fn helper(a, b) { b } fn prepare(a, b) { #{query: [], body: ()} }",
-            "private fn prepare(a, b) { #{query: [], body: ()} }",
+            "fn derive(a, b, c) { [] } fn derive(a) { a }",
+            "fn helper(a) { a } fn helper(a, b) { b } fn derive(a, b, c) { [] }",
+            "private fn derive(a, b, c) { [] }",
         ] {
             assert_eq!(
-                runtime.compile_preparation(source).unwrap_err(),
+                runtime.compile_derivation(source).unwrap_err(),
                 RhaiRuntimeError::EntryPoint
             );
         }
@@ -3329,20 +1920,22 @@ mod tests {
         let runtime = runtime();
         assert_eq!(
             runtime
-                .compile_extraction("fn derive(x) { x }")
+                .compile_derivation("fn extract(x) { x }")
                 .unwrap_err(),
             RhaiRuntimeError::EntryPoint
         );
         assert!(runtime
-            .compile_extraction("fn extract(x, parameters) { x } fn helper() {}")
+            .compile_derivation(
+                "fn derive(facts, selectors, evaluation_context) { [] } fn helper() {}"
+            )
             .is_ok());
 
         assert_eq!(
             runtime
-                .compile_extraction(
+                .compile_derivation(
                     r#"
                     throw("top_level_must_not_run");
-                    fn extract(source_response, parameters) { #{ outcome: "no_match" } }
+                    fn derive(facts, selectors, evaluation_context) { [] }
                 "#,
                 )
                 .unwrap_err(),
@@ -3361,427 +1954,29 @@ mod tests {
             "timestamp()",
         ] {
             let source = format!(
-                "fn extract(source_response, parameters) {{ {forbidden}; #{{ outcome: \"no_match\" }} }}"
+                "fn derive(facts, selectors, evaluation_context) {{ {forbidden}; [#{{ concept_id: \"x\", value: true }}] }}"
             );
-            if let Ok(script) = runtime.compile_extraction(&source) {
-                assert_eq!(
-                    runtime.extract(&script, &json!({}), &json!({}), &|_: &Value| true),
-                    Err(RhaiRuntimeError::Invocation),
+            if let Ok(script) = runtime.compile_derivation(&source) {
+                assert!(
+                    matches!(
+                        runtime.derive(
+                            &script,
+                            &BTreeMap::new(),
+                            &json!({}),
+                            context(json!({}), BTreeMap::new())
+                        ),
+                        Err(RhaiRuntimeError::Invocation)
+                    ),
                     "{forbidden} must be unavailable"
                 );
             }
         }
         assert!(matches!(
-            runtime.compile_extraction(
-                "import \"outside\" as outside; fn extract(x, parameters) { #{ outcome: \"no_match\" } }"
+            runtime.compile_derivation(
+                "import \"outside\" as outside; fn derive(facts, selectors, evaluation_context) { [] }"
             ),
             Err(RhaiRuntimeError::Compilation)
         ));
-    }
-
-    #[test]
-    fn extraction_decodes_only_the_closed_union_and_validates_facts() {
-        let runtime = runtime();
-        let valid = runtime
-            .compile_extraction(
-                r#"
-                    fn extract(source_response, parameters) {
-                        #{ outcome: "match", facts: #{ code: source_response.code } }
-                    }
-                "#,
-            )
-            .expect("compiles");
-        let schema = jsonschema::JSONSchema::compile(&json!({
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["code"],
-            "properties": {"code": {"type": "string"}}
-        }))
-        .expect("schema");
-        assert_eq!(
-            runtime.extract(&valid, &json!({"code": "A"}), &json!({}), &schema),
-            Ok(LookupResult::Match(BTreeMap::from([(
-                "code".to_string(),
-                json!("A")
-            )])))
-        );
-        assert_eq!(
-            runtime.extract(&valid, &json!({"code": 1}), &json!({}), &schema),
-            Err(RhaiRuntimeError::FactSchema)
-        );
-
-        for body in [
-            "#{ outcome: \"no_match\", facts: #{} }",
-            "#{ outcome: \"ambiguous\", count: 2 }",
-            "#{ outcome: \"match\", facts: #{}, candidates: [] }",
-            "#{ outcome: \"unknown\" }",
-        ] {
-            let source = format!("fn extract(source_response, parameters) {{ {body} }}");
-            let script = runtime.compile_extraction(&source).expect("compiles");
-            assert_eq!(
-                runtime.extract(&script, &json!({}), &json!({}), &|_: &Value| true),
-                Err(RhaiRuntimeError::ExtractionResult)
-            );
-        }
-    }
-
-    #[test]
-    fn to_string_formats_only_canonical_integer_and_boolean_query_values() {
-        let runtime = runtime();
-        let script = runtime
-            .compile_preparation(
-                r#"
-                fn pair(name, value) { #{name: name, value: value} }
-                fn prepare(selectors, context) {
-                    #{
-                        query: [
-                            pair("minimum", to_string(selectors.subject.values.minimum)),
-                            pair("maximum", to_string(selectors.subject.values.maximum)),
-                            pair("yes", to_string(selectors.subject.values.yes)),
-                            pair("no", to_string(selectors.subject.values.no))
-                        ],
-                        body: ()
-                    }
-                }
-                "#,
-            )
-            .expect("canonical request-text script compiles");
-        let prepared = runtime
-            .prepare(
-                &script,
-                &json!({"subject":{"values":{"minimum":i64::MIN,"maximum":i64::MAX,"yes":true,"no":false}}}),
-                &json!({}),
-                &request_limits(
-                    RequestPartRequirement::Required,
-                    RequestPartRequirement::Forbidden,
-                ),
-            )
-            .expect("canonical query values prepare");
-        assert_eq!(
-            prepared.query,
-            vec![
-                QueryPair {
-                    name: "minimum".to_owned(),
-                    value: i64::MIN.to_string()
-                },
-                QueryPair {
-                    name: "maximum".to_owned(),
-                    value: i64::MAX.to_string()
-                },
-                QueryPair {
-                    name: "yes".to_owned(),
-                    value: "true".to_owned()
-                },
-                QueryPair {
-                    name: "no".to_owned(),
-                    value: "false".to_owned()
-                },
-            ]
-        );
-    }
-
-    #[test]
-    fn to_string_refuses_values_outside_its_integer_and_boolean_overloads() {
-        let runtime = runtime();
-        for (case, expression) in [
-            ("float", "1.25"),
-            ("Decimal", "parse_decimal(\"1.25\")"),
-            ("string", "\"plain-canary\""),
-            ("map", "#{key: \"value\"}"),
-            ("array", "[1, 2]"),
-            ("unit", "()"),
-            ("opaque seed", "entity_reference_seed(\"protected-canary\")"),
-        ] {
-            let source = format!(
-                "fn prepare(selectors, context) {{ #{{query: [#{{name: \"value\", value: to_string({expression})}}], body: ()}} }}"
-            );
-            let script = runtime
-                .compile_preparation(&source)
-                .unwrap_or_else(|error| panic!("{case} expression compiles: {error:?}"));
-            assert_eq!(
-                runtime.prepare(
-                    &script,
-                    &json!({}),
-                    &json!({}),
-                    &request_limits(
-                        RequestPartRequirement::Required,
-                        RequestPartRequirement::Forbidden,
-                    ),
-                ),
-                Err(RhaiRuntimeError::Invocation),
-                "{case} must not acquire a string-conversion overload"
-            );
-        }
-    }
-
-    #[test]
-    fn selector_aware_extraction_checks_exact_alternative_identity_before_facts() {
-        let runtime = runtime();
-        let script = runtime
-            .compile_extraction(
-                r#"
-fn extract(response, selectors, context) {
-    let subject = selectors.subject;
-    let fields = ["code"];
-    if subject.profile == "by-code-and-region" {
-        fields.push("region");
-    } else if subject.profile != "by-code" {
-        return #{outcome: "no_match"};
-    }
-    for field in fields {
-        let returned = required(get_path(response, "/" + field), "required_fact_missing");
-        let expected = subject.values[field];
-        if type_of(returned) != type_of(expected) { return #{outcome: "no_match"}; }
-        if returned != expected { return #{outcome: "no_match"}; }
-    }
-    #{outcome: "match", facts: #{active: response.active}}
-}
-"#,
-            )
-            .expect("selector-aware extraction compiles");
-        let schema = jsonschema::JSONSchema::compile(&json!({
-            "type":"object", "additionalProperties":false, "required":["active"],
-            "properties":{"active":{"type":"boolean"}}
-        }))
-        .unwrap();
-        let single = json!({"subject":{"profile":"by-code","values":{"code":"A"}}});
-        let composite =
-            json!({"subject":{"profile":"by-code-and-region","values":{"code":"A","region":7}}});
-        for selectors in [&single, &composite] {
-            assert_eq!(
-                runtime.extract_with_selectors(
-                    &script,
-                    &json!({"code":"A","region":7,"active":true}),
-                    selectors,
-                    &json!({}),
-                    &BTreeMap::new(),
-                    &schema
-                ),
-                Ok(LookupResult::Match(BTreeMap::from([(
-                    "active".to_owned(),
-                    json!(true)
-                )])))
-            );
-        }
-        for response in [
-            json!({"code":"B","region":7,"active":true}),
-            json!({"code":"A","region":8,"active":true}),
-            json!({"code":"A","region":7.0,"active":true}),
-            json!({"code":"A","region":"7","active":true}),
-            json!({"code":"A","region":true,"active":true}),
-        ] {
-            assert_eq!(
-                runtime.extract_with_selectors(
-                    &script,
-                    &response,
-                    &composite,
-                    &json!({}),
-                    &BTreeMap::new(),
-                    &schema
-                ),
-                Ok(LookupResult::NoMatch)
-            );
-        }
-        assert_eq!(
-            runtime.extract_with_selectors(
-                &script,
-                &json!({"code":"A","active":true}),
-                &composite,
-                &json!({}),
-                &BTreeMap::new(),
-                &schema
-            ),
-            Err(RhaiRuntimeError::Unavailable)
-        );
-        assert_eq!(
-            runtime.extract_with_selectors(
-                &script,
-                &json!({"code":"A","active":"true"}),
-                &single,
-                &json!({}),
-                &BTreeMap::new(),
-                &schema
-            ),
-            Err(RhaiRuntimeError::FactSchema)
-        );
-    }
-
-    /// The runtime owns the `extract/3` arity and its refusal to pair with an
-    /// optimized batch; the returned-identity comparison itself belongs to the
-    /// adapter, which a source exporter generates and a hand-written adapter
-    /// must carry. Pin the comparison a compliant adapter performs, so the
-    /// enforcement point the security matrix names has an executable proof: a
-    /// returned identity that is not the selected profile's exact scalar stops
-    /// the evaluation as a source-protocol failure instead of reaching facts.
-    #[test]
-    fn an_exported_adapter_refuses_a_returned_identity_that_is_not_the_selector() {
-        let runtime = runtime();
-        let script = runtime
-            .compile_extraction(
-                r#"
-fn extract(response, selectors, context) {
-    let subject = selectors["subject"];
-    let record = response["data"]["domainData"];
-    if subject["profile"] == "by-code-and-region" {
-        if is_missing(record["code"]) || type_of(record["code"]) != type_of(subject["values"]["code"]) || record["code"] != subject["values"]["code"] { throw "source_protocol_error"; }
-        if is_missing(record["region"]) || type_of(record["region"]) != type_of(subject["values"]["region"]) || record["region"] != subject["values"]["region"] { throw "source_protocol_error"; }
-    } else { throw "unsupported source selector profile"; }
-    if is_missing(record["active"]) { return #{outcome: "no_match"}; }
-    #{outcome: "match", facts: #{active: record["active"]}}
-}
-"#,
-            )
-            .expect("the exported adapter shape compiles");
-        let schema = jsonschema::JSONSchema::compile(&json!({
-            "type":"object", "additionalProperties":false, "required":["active"],
-            "properties":{"active":{"type":"boolean"}}
-        }))
-        .unwrap();
-        let selectors =
-            json!({"subject":{"profile":"by-code-and-region","values":{"code":"A","region":7}}});
-        let returned = |code: Value, region: Value| json!({"data": {"domainData": {"code": code, "region": region, "active": true}}});
-
-        assert_eq!(
-            runtime.extract_with_selectors(
-                &script,
-                &returned(json!("A"), json!(7)),
-                &selectors,
-                &json!({}),
-                &BTreeMap::new(),
-                &schema
-            ),
-            Ok(LookupResult::Match(BTreeMap::from([(
-                "active".to_owned(),
-                json!(true)
-            )])))
-        );
-
-        for (reason, response) in [
-            ("a different value", returned(json!("B"), json!(7))),
-            (
-                "the selected value as a string",
-                returned(json!("A"), json!("7")),
-            ),
-            (
-                "the selected value as a float",
-                returned(json!("A"), json!(7.0)),
-            ),
-        ] {
-            assert_eq!(
-                runtime.extract_with_selectors(
-                    &script,
-                    &response,
-                    &selectors,
-                    &json!({}),
-                    &BTreeMap::new(),
-                    &schema
-                ),
-                Err(RhaiRuntimeError::SourceProtocol),
-                "a returned identity carrying {reason} reached the facts"
-            );
-        }
-    }
-
-    #[test]
-    fn selector_aware_extraction_has_fresh_inputs_and_no_ambiguous_abi() {
-        let runtime = runtime();
-        for source in [
-            "fn extract(a) { no_match() }",
-            "fn extract(a,b,c,d) { no_match() }",
-            "fn extract(a,b) { no_match() } fn extract(a,b,c) { no_match() }",
-        ] {
-            assert!(matches!(
-                runtime.compile_extraction(source),
-                Err(RhaiRuntimeError::EntryPoint)
-            ));
-        }
-        let selectors = json!({"subject":{"profile":"by-code","values":{"code":"A"}}});
-        let script = runtime
-            .compile_extraction(
-                r#"
-fn extract(response, selectors, context) {
-    if selectors.subject.values.code != "A" { return #{outcome: "ambiguous"}; }
-    if selectors.contains("other") || context.contains("selectors") { return #{outcome: "ambiguous"}; }
-    selectors.subject.values.code = "B";
-    #{outcome: "no_match"}
-}
-"#,
-            )
-            .unwrap();
-        for _ in 0..2 {
-            assert_eq!(
-                runtime.extract_with_selectors(
-                    &script,
-                    &json!({}),
-                    &selectors,
-                    &json!({}),
-                    &BTreeMap::new(),
-                    &|_: &Value| true
-                ),
-                Ok(LookupResult::NoMatch)
-            );
-        }
-        assert_eq!(selectors["subject"]["values"]["code"], "A");
-        let legacy = runtime.compile_extraction(r#"fn extract(response, context) { if context.contains("selectors") { return #{outcome: "ambiguous"}; } #{outcome: "no_match"} }"#).unwrap();
-        assert_eq!(
-            runtime.extract_with_selectors(
-                &legacy,
-                &json!({}),
-                &selectors,
-                &json!({}),
-                &BTreeMap::new(),
-                &|_: &Value| true
-            ),
-            Ok(LookupResult::NoMatch)
-        );
-    }
-
-    #[test]
-    fn extraction_source_input_uses_the_configured_one_mebibyte_boundary() {
-        fn sized_json_array(serialized_bytes: usize, items: usize) -> Value {
-            let payload_bytes = serialized_bytes
-                .checked_sub(1 + 3 * items)
-                .expect("serialized target fits array framing");
-            let base = payload_bytes / items;
-            let remainder = payload_bytes % items;
-            let values = (0..items)
-                .map(|index| Value::String("x".repeat(base + usize::from(index < remainder))))
-                .collect::<Vec<_>>();
-            let value = Value::Array(values);
-            assert_eq!(
-                serde_json::to_vec(&value).expect("serializes").len(),
-                serialized_bytes
-            );
-            value
-        }
-
-        let runtime = runtime();
-        let script = runtime
-            .compile_extraction(
-                "fn extract(source_response, parameters) { #{ outcome: \"no_match\" } }",
-            )
-            .expect("compiles");
-        for size in [MAXIMUM_RESULT_BYTES + 1, MAXIMUM_SOURCE_INPUT_BYTES] {
-            assert_eq!(
-                runtime.extract(
-                    &script,
-                    &sized_json_array(size, 64),
-                    &json!({}),
-                    &|_: &Value| true,
-                ),
-                Ok(LookupResult::NoMatch),
-                "source input of {size} bytes remains valid"
-            );
-        }
-        assert_eq!(
-            runtime.extract(
-                &script,
-                &sized_json_array(MAXIMUM_SOURCE_INPUT_BYTES + 1, 64),
-                &json!({}),
-                &|_: &Value| true,
-            ),
-            Err(RhaiRuntimeError::InputBound)
-        );
     }
 
     #[test]
@@ -4043,34 +2238,6 @@ fn extract(response, selectors, context) {
     }
 
     #[test]
-    fn request_parts_debug_redacts_query_and_body_values() {
-        let parts = RequestParts {
-            query: vec![QueryPair {
-                name: "query-name-debug-canary".to_owned(),
-                value: "query-value-debug-canary".to_owned(),
-            }],
-            body: Some(serde_json::json!({
-                "body-name-debug-canary": "body-value-debug-canary"
-            })),
-        };
-
-        let diagnostic = format!("{parts:?}");
-        for protected in [
-            "query-name-debug-canary",
-            "query-value-debug-canary",
-            "body-name-debug-canary",
-            "body-value-debug-canary",
-        ] {
-            assert!(
-                !diagnostic.contains(protected),
-                "request parts debug leaked protected material"
-            );
-        }
-        assert!(diagnostic.contains("query_pairs: 1"));
-        assert!(diagnostic.contains("body_present: true"));
-    }
-
-    #[test]
     fn codelist_required_missing_and_exact_collections_work() {
         let runtime = runtime();
         let script = runtime
@@ -4255,15 +2422,24 @@ fn extract(response, selectors, context) {
 
         fn resolved(runtime: &RhaiRuntime, response: &Value, body: &str) -> Value {
             let script = runtime
-                .compile_extraction(&format!(
-                    "fn extract(source_response, parameters) {{
-                        #{{ outcome: \"match\", facts: #{{ value: {body} }} }}
+                .compile_derivation(&format!(
+                    "fn derive(facts, selectors, evaluation_context) {{
+                        let source_response = facts.source_response;
+                        [#{{ concept_id: \"value\", value: {body} }}]
                     }}"
                 ))
                 .expect("compiles");
-            match runtime.extract(&script, response, &json!({}), &|_: &Value| true) {
-                Ok(LookupResult::Match(facts)) => facts["value"].clone(),
-                other => panic!("expected a match, got {other:?}"),
+            match runtime.derive(
+                &script,
+                &BTreeMap::from([("source_response".to_owned(), response.clone())]),
+                &json!({}),
+                context(json!({}), BTreeMap::new()),
+            ) {
+                Ok(values) => match &values[0].value {
+                    DerivedValue::Json(value) => value.clone(),
+                    other => panic!("expected JSON, got {other:?}"),
+                },
+                other => panic!("expected a derived value, got {other:?}"),
             }
         }
 
@@ -4304,17 +2480,21 @@ fn extract(response, selectors, context) {
         }
 
         let unavailable = runtime
-            .compile_extraction(
-                r#"fn extract(source_response, context) {
-                    let parameters = context.parameters;
-                    #{ outcome: "match", facts: #{ value: required(get_path(source_response, "/absent"), "required_fact_missing") } }
+            .compile_derivation(
+                r#"fn derive(facts, selectors, evaluation_context) {
+                    [#{ concept_id: "value", value: required(get_path(facts.source_response, "/absent"), "required_fact_missing") }]
                 }"#,
             )
             .expect("compiles");
-        assert_eq!(
-            runtime.extract(&unavailable, &response, &json!({}), &|_: &Value| true),
+        assert!(matches!(
+            runtime.derive(
+                &unavailable,
+                &BTreeMap::from([("source_response".to_owned(), response)]),
+                &json!({}),
+                context(json!({}), BTreeMap::new())
+            ),
             Err(RhaiRuntimeError::Unavailable)
-        );
+        ));
     }
 
     #[test]
@@ -4336,15 +2516,22 @@ fn extract(response, selectors, context) {
             deep_pointer.as_str(), // beyond the pointer segment ceiling
         ] {
             let script = runtime
-                .compile_extraction(&format!(
-                    "fn extract(source_response, parameters) {{
-                        #{{ outcome: \"match\", facts: #{{ value: get_path(source_response, \"{pointer}\") }} }}
+                .compile_derivation(&format!(
+                    "fn derive(facts, selectors, evaluation_context) {{
+                        [#{{ concept_id: \"value\", value: get_path(facts.source_response, \"{pointer}\") }}]
                     }}"
                 ))
                 .expect("compiles");
-            assert_eq!(
-                runtime.extract(&script, &response, &json!({}), &|_: &Value| true),
-                Err(RhaiRuntimeError::Invocation),
+            assert!(
+                matches!(
+                    runtime.derive(
+                        &script,
+                        &BTreeMap::from([("source_response".to_owned(), response.clone())]),
+                        &json!({}),
+                        context(json!({}), BTreeMap::new())
+                    ),
+                    Err(RhaiRuntimeError::Invocation)
+                ),
                 "{pointer}"
             );
         }
@@ -4356,32 +2543,32 @@ fn extract(response, selectors, context) {
             "/x".repeat(MAXIMUM_POINTER_SEGMENTS),
         ] {
             let script = runtime
-                .compile_extraction(&format!(
-                    "fn extract(source_response, parameters) {{
-                        #{{ outcome: \"match\", facts: #{{ value: is_missing(get_path(source_response, \"{pointer}\")) }} }}
+                .compile_derivation(&format!(
+                    "fn derive(facts, selectors, evaluation_context) {{
+                        [#{{ concept_id: \"value\", value: is_missing(get_path(facts.source_response, \"{pointer}\")) }}]
                     }}"
                 ))
                 .expect("compiles");
-            assert_eq!(
-                runtime.extract(&script, &response, &json!({}), &|_: &Value| true),
-                Ok(LookupResult::Match(BTreeMap::from([(
-                    "value".to_string(),
-                    json!(true)
-                )]))),
+            let values = runtime
+                .derive(
+                    &script,
+                    &BTreeMap::from([("source_response".to_owned(), response.clone())]),
+                    &json!({}),
+                    context(json!({}), BTreeMap::new()),
+                )
+                .expect("pointer at the boundary resolves");
+            assert!(
+                matches!(&values[0].value, DerivedValue::Json(value) if value == &json!(true)),
                 "{pointer}"
             );
         }
     }
 
     #[test]
-    fn all_four_acceptance_script_pairs_run_through_one_runtime() {
+    fn all_four_retained_acceptance_derivations_run_through_one_runtime() {
         let runtime = runtime();
 
-        let adult_facts = matched_facts(
-            &runtime,
-            ADULT_EXTRACTION,
-            json!({"total": 1, "date_of_birth": "2008-08-02"}),
-        );
+        let adult_facts = BTreeMap::from([("date_of_birth".to_owned(), json!("2008-08-02"))]);
         let adult = runtime
             .derive(
                 &runtime
@@ -4394,11 +2581,8 @@ fn extract(response, selectors, context) {
             .expect("adult derives");
         assert!(matches!(&adult[0].value, DerivedValue::Json(value) if value == &json!(true)));
 
-        let residence_facts = matched_facts(
-            &runtime,
-            RESIDENCE_EXTRACTION,
-            json!({"total": 1, "official_residence_code": "R-101"}),
-        );
+        let residence_facts =
+            BTreeMap::from([("official_residence_code".to_owned(), json!("R-101"))]);
         let region_map = CodelistHandle::new(BTreeMap::from([
             ("R-101".to_string(), "REGION-NORTH".to_string()),
             ("R-201".to_string(), "REGION-SOUTH".to_string()),
@@ -4421,19 +2605,11 @@ fn extract(response, selectors, context) {
             matches!(&residence[0].value, DerivedValue::Json(value) if value == &json!("REGION-NORTH"))
         );
 
-        let licence_facts = matched_facts(
-            &runtime,
-            LICENCE_EXTRACTION,
-            json!({
-                "total": 1,
-                "records": [{
-                    "licence_state": "CURRENT",
-                    "valid_from": "2025-01-01",
-                    "valid_until": "2026-08-20",
-                    "historical_states": ["PENDING"]
-                }]
-            }),
-        );
+        let licence_facts = BTreeMap::from([
+            ("licence_state".to_owned(), json!("CURRENT")),
+            ("valid_from".to_owned(), json!("2025-01-01")),
+            ("valid_until".to_owned(), json!("2026-08-20")),
+        ]);
         let licence = runtime
             .derive(
                 &runtime
@@ -4460,20 +2636,25 @@ fn extract(response, selectors, context) {
             matches!(&licence[1].value, DerivedValue::Json(value) if value == &json!("within-30-days"))
         );
 
-        let relationship_facts = matched_facts(
-            &runtime,
-            RELATIONSHIP_EXTRACTION,
-            json!({
-                "total": 1,
-                "records": [{
-                    "returned_child_reference": "synthetic-child-record-001",
-                    "parent_references": ["synthetic-parent-reference-001"],
-                    "reference_namespace": "urn:example:fixture:person-reference",
-                    "relationship_set_contract": "urn:example:fixture:legal-parent-set:v1",
-                    "relationship_set_complete": true
-                }]
-            }),
-        );
+        let relationship_facts = BTreeMap::from([
+            (
+                "returned_child_reference".to_owned(),
+                json!("synthetic-child-record-001"),
+            ),
+            (
+                "parent_references".to_owned(),
+                json!(["synthetic-parent-reference-001"]),
+            ),
+            (
+                "reference_namespace".to_owned(),
+                json!("urn:example:fixture:person-reference"),
+            ),
+            (
+                "relationship_set_contract".to_owned(),
+                json!("urn:example:fixture:legal-parent-set:v1"),
+            ),
+            ("relationship_set_complete".to_owned(), json!(true)),
+        ]);
         let relationship = runtime
             .derive(
                 &runtime
@@ -4658,25 +2839,22 @@ fn extract(response, selectors, context) {
         assert!(matches!(&values[0].value, DerivedValue::Json(value) if value == &json!("last")));
 
         let computed_key = runtime
-            .compile_extraction(
-                r#"fn extract(source_response, context) {
-                    let field = context.parameters.field;
-                    #{ outcome: "match", facts: #{ code: source_response["record"][field] } }
+            .compile_derivation(
+                r#"fn derive(facts, selectors, evaluation_context) {
+                    let field = evaluation_context.parameters.field;
+                    [#{ concept_id: "code", value: facts.record[field] }]
                 }"#,
             )
             .expect("computed map key compiles");
-        assert_eq!(
-            runtime.extract(
+        let values = runtime
+            .derive(
                 &computed_key,
-                &json!({"record": {"code": "A"}}),
-                &json!({"field": "code"}),
-                &|_: &Value| true,
-            ),
-            Ok(LookupResult::Match(BTreeMap::from([(
-                "code".to_string(),
-                json!("A")
-            )])))
-        );
+                &BTreeMap::from([("record".to_owned(), json!({"code": "A"}))]),
+                &json!({}),
+                context(json!({"field": "code"}), BTreeMap::new()),
+            )
+            .expect("computed map key derives");
+        assert!(matches!(&values[0].value, DerivedValue::Json(value) if value == &json!("A")));
 
         assert_eq!(
             runtime
@@ -4727,10 +2905,10 @@ fn extract(response, selectors, context) {
             "let a = { 1 };",
         ] {
             let source = format!(
-                "fn prepare(selectors, parameters) {{ {rejected} #{{ query: [], body: () }} }}"
+                "fn derive(facts, selectors, evaluation_context) {{ let parameters = evaluation_context.parameters; {rejected} [#{{ concept_id: \"x\", value: true }}] }}"
             );
             assert!(
-                runtime.compile_preparation(&source).is_err(),
+                runtime.compile_derivation(&source).is_err(),
                 "accepted: {rejected}"
             );
         }
@@ -4747,17 +2925,17 @@ fn extract(response, selectors, context) {
             "if true { let b = 1; } else if false { let b = 2; }",
         ] {
             let source = format!(
-                "fn prepare(selectors, parameters) {{ {accepted} #{{ query: [], body: () }} }}"
+                "fn derive(facts, selectors, evaluation_context) {{ let parameters = evaluation_context.parameters; {accepted} [#{{ concept_id: \"x\", value: true }}] }}"
             );
             assert!(
-                runtime.compile_preparation(&source).is_ok(),
+                runtime.compile_derivation(&source).is_ok(),
                 "rejected: {accepted}"
             );
         }
         assert_eq!(
             runtime
-                .compile_preparation(
-                    "let leaked = 1; fn prepare(selectors, parameters) { #{ query: [], body: () } }",
+                .compile_derivation(
+                    "let leaked = 1; fn derive(facts, selectors, evaluation_context) { [] }",
                 )
                 .unwrap_err(),
             RhaiRuntimeError::Compilation
@@ -4828,58 +3006,14 @@ fn extract(response, selectors, context) {
         assert!(
             matches!(&values[1].value, DerivedValue::Decimal(value) if value.canonical() == "1.25")
         );
-
-        let extraction = runtime
-            .compile_extraction(
-                "fn extract(source_response, parameters) { #{ outcome: \"match\", facts: #{ ratio: source_response.ratio } } }",
-            )
-            .expect("compiles");
-        assert_eq!(
-            runtime.extract(
-                &extraction,
-                &json!({"ratio": 1.25}),
-                &json!({}),
-                &|_: &Value| true
-            ),
-            Ok(LookupResult::Match(BTreeMap::from([(
-                "ratio".to_string(),
-                json!(1.25)
-            )])))
-        );
-
-        let limits = request_limits(
-            RequestPartRequirement::Optional,
-            RequestPartRequirement::Optional,
-        );
-        let preparation = runtime
-            .compile_preparation(
-                "fn prepare(selectors, parameters) { #{ query: [], body: #{ ratio: 1.25 } } }",
-            )
-            .expect("compiles");
-        assert_eq!(
-            runtime
-                .prepare(&preparation, &json!({}), &json!({}), &limits)
-                .expect("finite adapter floats remain available")
-                .body,
-            Some(json!({"ratio": 1.25}))
-        );
-        let non_finite = runtime
-            .compile_preparation(
-                "fn prepare(selectors, parameters) { #{ query: [], body: #{ ratio: 0.0 / 0.0 } } }",
-            )
-            .expect("compiles");
-        assert_eq!(
-            runtime.prepare(&non_finite, &json!({}), &json!({}), &limits),
-            Err(RhaiRuntimeError::PreparationResult)
-        );
     }
 
     #[test]
     fn out_of_range_json_integer_tokens_fail_before_rhai() {
         let runtime = runtime();
-        let script = runtime
-            .compile_extraction(
-                "fn extract(source_response, parameters) { #{ outcome: \"no_match\" } }",
+        let derivation = runtime
+            .compile_derivation(
+                "fn derive(facts, selectors, evaluation_context) { [#{ concept_id: \"x\", value: true }] }",
             )
             .expect("compiles");
         let response = |token: &str| {
@@ -4892,11 +3026,14 @@ fn extract(response, selectors, context) {
             "1.25",
             "1e3",
         ] {
-            assert_eq!(
-                runtime.extract(&script, &response(accepted), &json!({}), &|_: &Value| true),
-                Ok(LookupResult::NoMatch),
-                "{accepted}"
-            );
+            runtime
+                .derive(
+                    &derivation,
+                    &BTreeMap::from([("value".to_owned(), response(accepted)["value"].clone())]),
+                    &json!({}),
+                    context(json!({}), BTreeMap::new()),
+                )
+                .unwrap_or_else(|error| panic!("{accepted}: {error:?}"));
         }
         for rejected in [
             "9223372036854775808",
@@ -4904,40 +3041,30 @@ fn extract(response, selectors, context) {
             "99999999999999999999999",
             "1e30",
         ] {
-            assert_eq!(
-                runtime.extract(&script, &response(rejected), &json!({}), &|_: &Value| true),
-                Err(RhaiRuntimeError::InputBound),
+            assert!(
+                matches!(
+                    runtime.derive(
+                        &derivation,
+                        &BTreeMap::from([(
+                            "value".to_owned(),
+                            response(rejected)["value"].clone()
+                        )]),
+                        &json!({}),
+                        context(json!({}), BTreeMap::new())
+                    ),
+                    Err(RhaiRuntimeError::InputBound)
+                ),
                 "{rejected}"
             );
         }
-        assert_eq!(
-            runtime.extract(
-                &script,
-                &json!({"value": "99999999999999999999999"}),
-                &json!({}),
-                &|_: &Value| true
-            ),
-            Ok(LookupResult::NoMatch),
-            "an identifier outside the signed 64-bit range must arrive as a string"
-        );
-
-        let derivation = runtime
-            .compile_derivation(
-                "fn derive(facts, selectors, evaluation_context) { [#{ concept_id: \"x\", value: true }] }",
-            )
-            .expect("compiles");
-        assert!(matches!(
-            runtime.derive(
+        runtime
+            .derive(
                 &derivation,
-                &BTreeMap::from([(
-                    "value".to_string(),
-                    response("99999999999999999999999")["value"].clone()
-                )]),
+                &BTreeMap::from([("value".to_owned(), json!("99999999999999999999999"))]),
                 &json!({}),
-                context(json!({}), BTreeMap::new())
-            ),
-            Err(RhaiRuntimeError::InputBound)
-        ));
+                context(json!({}), BTreeMap::new()),
+            )
+            .expect("an identifier outside the signed 64-bit range remains a string");
     }
 
     #[test]
@@ -5001,59 +3128,6 @@ fn extract(response, selectors, context) {
             "maximumExclusive": {"type": "decimal", "value": maximum},
             "code": code
         })
-    }
-
-    fn matched_facts(
-        runtime: &RhaiRuntime,
-        source: &str,
-        response: Value,
-    ) -> BTreeMap<String, Value> {
-        let label = if source == ADULT_EXTRACTION {
-            "adult"
-        } else if source == RESIDENCE_EXTRACTION {
-            "residence"
-        } else if source == LICENCE_EXTRACTION {
-            "licence"
-        } else {
-            "relationship"
-        };
-        let script = runtime
-            .compile_extraction(&candidate_extraction(source))
-            .expect("extraction compiles");
-        let parameters = match label {
-            "licence" => {
-                json!({"requestedFields": "licence_state,valid_from,valid_until", "resultLimit": "2"})
-            }
-            "relationship" => json!({
-                "requestedFields": [
-                    "returned_child_reference",
-                    "parent_references",
-                    "reference_namespace",
-                    "relationship_set_contract",
-                    "relationship_set_complete"
-                ],
-                "resultLimit": 2,
-                "referenceNamespace": "urn:example:fixture:person-reference",
-                "relationshipSetContract": "urn:example:fixture:legal-parent-set:v1",
-                "relationshipSetComplete": true
-            }),
-            _ => json!({}),
-        };
-        match runtime
-            .extract(&script, &response, &parameters, &|_: &Value| true)
-            .unwrap_or_else(|error| panic!("{label} extraction failed: {error}"))
-        {
-            LookupResult::Match(facts) => facts,
-            other => panic!("expected match, got {other:?}"),
-        }
-    }
-
-    fn candidate_extraction(source: &str) -> String {
-        source.replacen(
-            "fn extract(source_response)",
-            "fn extract(source_response, parameters)",
-            1,
-        )
     }
 
     fn candidate_derivation(source: &str) -> String {

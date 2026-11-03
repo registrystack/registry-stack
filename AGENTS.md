@@ -49,10 +49,11 @@ remain supporting services beside their product, not products of their own.
 | `crates/registry-documents-client` | Bounded Rust Document Store client over the runtime's HTTP contract |
 | `products/documents` | Document Store product contracts, starter example, generated schemas and OpenAPI document, and contributor check scripts |
 | `crates/registry-adapter-core` | Source-neutral Adapter model, wire DTOs, `adapter.*` problem codes, and pure authoring checks |
-| `crates/registry-adapter` | Adapter runtime: governed facade, call-plan interpreter, security surface, and audit journal |
+| `crates/registry-adapter-engine` | Shared bounded integration execution, compilation, components and replay; no listener, PostgreSQL client or product runtime |
+| `crates/registry-adapter` | Adapter facade: serving, caller admission, write custody and audit journal over the shared engine |
 | `crates/registry-adapterctl` | Adapter authoring and operator tooling and the `adapterctl` binary |
-| `crates/registry-adapter-job` | Adapter ingestion-job host and the `adapter-job` binary: item table, pass, interval trigger, and destination seam; identity and position only, never payloads |
-| `crates/registry-adapter-connectors` | Parked BReg connector over `registry-breg-client`, behind an off-by-default feature; linked by no facade binary and no job path while the governed-ingestion delivery design is decided, and `products/adapter/scripts/check_dependency_direction.py` holds that boundary |
+| `crates/registry-adapter-job` | Adapter ingestion-job host and the `adapter-job` binary: item table, pass, interval and authenticated hook triggers, and destination seam; identity and position only, never payloads |
+| `crates/registry-adapter-connectors` | BReg connector over `registry-breg-client`, reachable only through the job host's explicit off-by-default `direct-breg` feature; never through the engine or facade; the dependency gate enforces this boundary |
 | `products/adapter` | Adapter product contract (`CONCEPT.md`), delivery plan, schemas, profiles, packs, examples, fixtures, and contributor check scripts |
 | `crates/registry-discovery` | Immutable Registry Discovery index runtime and the `discovery` binary |
 | `crates/registry-discovery-profile` | Closed provider-publication profile implemented by Evidence; published v1alpha1 resources retain their historical broader vocabulary |
@@ -199,13 +200,15 @@ public HTTP (`BREG_BIN`, `BREGCTL_BIN`, `BREG_REVIEW_NATIVE_BIN`,
 `BREG_TEST_DATABASE_URL`) in the BReg `postgres` CI lane.
 
 **Evidence** (`registry-evidence`, one crate and one `evidence` binary) is a
-minimum-disclosure assertion product. It may consume a protected API through
-its fixed HTTP source contract, or a BReg route as a fixed source, and
-inherits none of that source's authorization or policy model. Rust owns
-authentication, authorization, fixed source execution, bounded script
-execution, output validation, evidence construction, signing, and audit; Rhai
-owns bounded request preparation, source extraction, and requirement-specific
-derivation over deterministic, domain-neutral primitives supplied by Rust.
+minimum-disclosure assertion product. Source acquisition uses reviewed Adapter
+pack routes through `registry-adapter-core` and `registry-adapter-engine`,
+linked as libraries under Evidence's read-only execution profile. Evidence
+links no Adapter facade, job or connector runtime and inherits no source
+authorization or policy model. Rust owns authentication, authorization,
+minimized inputs, acquisition bounds, output validation, construction, signing
+and audit. Pack routes own provider interaction and normalization; Evidence
+retains bounded requirement-specific derivation. The engine has no listener,
+PostgreSQL client or product runtime dependency.
 Adult status, residence region, professional licence status, and legal-parent
 relationship are coequal full-path acceptance definitions, and none may become
 a Rust domain type, built-in operation, special route, or implementation
@@ -301,15 +304,15 @@ source access, trust, or native-client behavior. The clients may search,
 resolve, validate, and persist inert exact selections, but never turn catalog
 metadata into trust or credentials.
 
-**Registry Adapter** (`registry-adapter-core`, `registry-adapter`,
+**Registry Adapter** (`registry-adapter-core`, `registry-adapter-engine`, `registry-adapter`,
 `registry-adapterctl`, `registry-adapter-job`, `registry-adapter-connectors`) exposes a compiled,
 standard registry API over a source an institution already operates, from a
 reviewed, digest-pinned pack. The core is the source-neutral model and
 authoring checks; the runtime is a bounded port of Apache Camel concepts
 whose port table is the contract (`products/adapter/CONCEPT.md` section
 8.10); `adapterctl` is authoring and operator tooling. The connector crate
-is parked: it reaches exactly `registry-breg-client` behind an
-off-by-default feature, is linked by no facade binary and no job path,
+reaches exactly `registry-breg-client` behind the job host's explicit
+off-by-default `direct-breg` feature, is linked by no engine or facade binary,
 never reaches a product runtime, CLI, database crate, or any Coordinator
 crate, and
 `products/adapter/scripts/check_dependency_direction.py` enforces that

@@ -2,28 +2,39 @@
 
 //! The `adapter-job` binary entry point: the operator surface of the
 //! governed-ingestion job (`products/adapter/CONCEPT.md` section 17.4).
-//! Check compiles a job the engine compiles, pass runs one bounded pass
-//! or the trigger loop, status counts what the item table holds, inspect
-//! reads one item's row, and rescan marks a rescan due and runs it. The
-//! output is value-free by default: no item value, no projection, no
-//! secret. The store holds no payload to leak.
+//! Init-store applies the job-store schema without running a job, check
+//! compiles a job the engine compiles, pass runs one bounded pass or the
+//! trigger loop, status counts what the item table holds, inspect reads
+//! one item's row, and rescan marks a rescan due and runs it. The output
+//! is value-free by default: no item value, no projection, no secret. The
+//! store holds no payload to leak.
 
 use clap::Parser;
 use deadpool_postgres::Pool;
-use registry_adapter::engine::job::{compile_job_with, JobError, JobProgram};
-use registry_adapter_core::{AdapterJob, ComponentKind};
+use registry_adapter_core::AdapterJob;
+use registry_adapter_engine::job::{compile_job_with_runtime, JobError, JobProgram};
+use registry_adapter_engine::job_sources::JobRuntimeConfig;
 use registry_adapter_job::cli::{Cli, Command, WorkspaceArgs};
-use registry_adapter_job::destination::{FixtureDestination, NullDestination};
+use registry_adapter_job::destination::{
+    FixtureDestination, JobDestination as DestinationSeam, NullDestination,
+};
 use registry_adapter_job::pass::{run_pass, PassOptions, PassReport, StopReason};
+use registry_adapter_job::runtime_destination::{activate_destination, check_destination_runtime};
 use registry_adapter_job::store;
-use registry_adapter_job::trigger::{self, Edits, JobState, LastPass, Step};
-use registry_platform_config::{SecretProvider, SecretResolver};
+use registry_adapter_job::trigger::{self, Edits, HookPassGate, JobState, LastPass, Step};
+use registry_platform_config::SecretResolver;
 use std::path::Path;
 use std::process::ExitCode;
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    #[cfg(feature = "job-rabbitmq")]
+    if let Err(error) = registry_adapter_job::tls_provider::initialize() {
+        eprintln!("adapter-job: {error}");
+        return ExitCode::FAILURE;
+    }
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -35,6 +46,9 @@ fn main() -> ExitCode {
         }
     };
     let outcome = match &cli.command {
+        Command::InitStore {
+            runtime: runtime_path,
+        } => runtime.block_on(init_store(runtime_path)),
         Command::Check {
             job_yaml,
             pack,
@@ -102,6 +116,24 @@ fn main() -> ExitCode {
     }
 }
 
+/// Initialize or advance only the job-store schema. The typed runtime reader
+/// checks the whole document, but this command extracts and resolves only its
+/// store block: no job is compiled and no source or destination is activated.
+async fn init_store(runtime_path: &Path) -> Result<ExitCode, String> {
+    let runtime = load_runtime(runtime_path)?;
+    let resolver = runtime_secret_resolver(&runtime)?;
+    let _pool = open_pool(&runtime, &resolver).await?;
+    let report = serde_json::json!({
+        "ok": true,
+        "schemaVersion": store::SUPPORTED_SCHEMA_VERSION,
+    });
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&report).expect("a plain object renders")
+    );
+    Ok(ExitCode::SUCCESS)
+}
+
 /// Compile the job the way the engine compiles it and print the
 /// value-free report.
 fn check(
@@ -110,7 +142,37 @@ fn check(
     runtime: &Path,
     workspace: &WorkspaceArgs,
 ) -> Result<ExitCode, String> {
-    let program = compile(pack, job_yaml, runtime, workspace)?;
+    let runtime_config = load_runtime(runtime)?;
+    let resolver = runtime_secret_resolver(&runtime_config)?;
+    let program = compile(
+        pack,
+        job_yaml,
+        &runtime_config,
+        Arc::clone(&resolver),
+        workspace,
+    )?;
+    check_hook_runtime(&program.job, &runtime_config)?;
+    #[cfg(feature = "job-sftp")]
+    registry_adapter_job::sftp_source::validate_sftp_host_bindings(&program)?;
+    check_destination_runtime(&program.job, &runtime_config)?;
+    let destination = match &program.job.destination {
+        registry_adapter_core::JobDestination::DirectBreg { binding, mode, .. } => {
+            serde_json::json!({
+                "type": "direct-breg",
+                "binding": binding.as_str(),
+                "mode": match mode {
+                    registry_adapter_core::DirectBregMode::Immediate => "immediate",
+                    registry_adapter_core::DirectBregMode::Proposal => "proposal",
+                }
+            })
+        }
+        registry_adapter_core::JobDestination::SignedCoordinatorEvent { binding, .. } => {
+            serde_json::json!({
+                "type": "signed-coordinator-event",
+                "binding": binding.as_str(),
+            })
+        }
+    };
     let report = serde_json::json!({
         "ok": true,
         "job": {
@@ -125,6 +187,7 @@ fn check(
             "route": program.job.source.route,
         },
         "projectionDigest": program.job.projection_digest(),
+        "destination": destination,
     });
     println!(
         "{}",
@@ -147,73 +210,143 @@ async fn pass(
     refusal_limit: u32,
     show_values: bool,
 ) -> Result<ExitCode, String> {
-    let program = compile(pack, job_yaml, runtime_path, workspace)?;
-    let pool = pass_pool(runtime_path, dry_run).await?;
+    let runtime = load_runtime(runtime_path)?;
+    let resolver = runtime_secret_resolver(&runtime)?;
+    let mut program = compile(pack, job_yaml, &runtime, Arc::clone(&resolver), workspace)?;
+    check_hook_runtime(&program.job, &runtime)?;
+    activate_sources(&mut program, &resolver)?;
+    let pool = pass_pool(&runtime, &resolver, dry_run).await?;
     let preview = NullDestination::new();
     if once {
+        let destination =
+            activate_pass_destination(&program, &runtime, &resolver, fixture, fixture_url, dry_run)
+                .await?;
         let options = PassOptions {
             refusal_limit,
             dry_run,
             ..PassOptions::default()
         };
-        let report = bounded_pass(
-            &program,
-            &pool,
-            &preview,
-            options,
-            fixture,
-            fixture_url,
-            dry_run,
-        )
-        .await?;
+        let report =
+            bounded_pass(&program, &pool, &preview, destination.as_deref(), options).await?;
         print_pass_report(&report, dry_run, show_values, &preview);
         return Ok(pass_exit_code(&report));
     }
-    // The loop: the interval trigger decides when a pass starts, a
-    // rescan source's declared delay decides when a scan runs from the
-    // first page, and greedy restarts after a pass that read at least
-    // one item. Only a settled page bypasses the schedule; the decision
-    // itself is `trigger::next_step`.
     let edits = source_edits(&program)?;
     if trigger::interval_trigger(&program.job).is_none() {
         return Err(
             "the job declares no interval trigger, so the loop has no schedule; declare one interval trigger".to_string(),
         );
     }
+    let destination =
+        activate_pass_destination(&program, &runtime, &resolver, fixture, fixture_url, dry_run)
+            .await?;
+    let gate = Arc::new(HookPassGate::default());
+    #[cfg(feature = "job-hook")]
+    if let Some(plan) = registry_adapter_job::hook_ingress::activate(
+        &program.job,
+        &runtime,
+        &resolver,
+        Arc::clone(&gate),
+    )
+    .map_err(|error| error.to_string())?
+    {
+        let server = plan.bind().await.map_err(|error| error.to_string())?;
+        let hook_address = server.local_addr().map_err(|error| error.to_string())?;
+        eprintln!("adapter.job.hook-listening address={hook_address}");
+        let shutdown = Arc::new(tokio::sync::Notify::new());
+        let loop_future = run_pass_loop(
+            &program,
+            &pool,
+            &preview,
+            destination
+                .as_deref()
+                .expect("a loop always has a non-preview destination"),
+            &edits,
+            gate,
+            refusal_limit,
+            show_values,
+        );
+        let shutdown_for_server = Arc::clone(&shutdown);
+        let server_future = server.serve(async move {
+            shutdown_for_server.notified().await;
+        });
+        tokio::pin!(loop_future);
+        tokio::pin!(server_future);
+        return tokio::select! {
+            result = &mut loop_future => {
+                shutdown.notify_one();
+                server_future.await.map_err(|error| error.to_string())?;
+                result
+            }
+            result = &mut server_future => {
+                result.map_err(|error| error.to_string())?;
+                Err("adapter.job.hook-serve".to_string())
+            }
+        };
+    }
+    run_pass_loop(
+        &program,
+        &pool,
+        &preview,
+        destination
+            .as_deref()
+            .expect("a loop always has a non-preview destination"),
+        &edits,
+        gate,
+        refusal_limit,
+        show_values,
+    )
+    .await
+}
+
+/// Run the one serialized pass loop. Hook requests only wake this loop; all
+/// source, cursor, rescan, and destination choices remain compiled artifacts.
+#[allow(clippy::too_many_arguments)]
+async fn run_pass_loop(
+    program: &JobProgram,
+    pool: &Pool,
+    preview: &NullDestination,
+    destination: &dyn DestinationSeam,
+    edits: &Edits,
+    gate: Arc<HookPassGate>,
+    refusal_limit: u32,
+    show_values: bool,
+) -> Result<ExitCode, String> {
     let mut last = LastPass::NotYet;
-    let started = std::time::SystemTime::now();
+    let started = SystemTime::now();
     loop {
         let now = std::time::SystemTime::now();
-        let state = job_state(&pool, &program.job).await?;
-        let step = trigger::next_step(&program.job, &edits, &state, last, now, started)
+        let state = job_state(pool, &program.job).await?;
+        let step = trigger::next_step(&program.job, edits, &state, last, now, started)
             .ok_or_else(|| "the job declares no interval trigger".to_string())?;
         let rescan = match step {
             Step::Wait(wait) => {
                 tokio::select! {
-                    _ = tokio::time::sleep(wait) => {}
+                    _ = tokio::time::sleep(wait) => {
+                        last = LastPass::NotYet;
+                        continue;
+                    }
+                    _ = gate.wait_for_hook() => {
+                        let now = SystemTime::now();
+                        state.rescan_active || trigger::rescan_due(edits, &state, now)
+                    }
                     _ = tokio::signal::ctrl_c() => return Ok(ExitCode::SUCCESS),
                 }
-                last = LastPass::NotYet;
-                continue;
             }
             Step::Run { rescan } => rescan,
         };
+        if !gate.begin_pass() {
+            return Err("adapter.job.hook-pass-already-running".to_string());
+        }
         let options = PassOptions {
             refusal_limit,
             rescan,
             dry_run: false,
         };
-        let report = bounded_pass(
-            &program,
-            &pool,
-            &preview,
-            options,
-            fixture,
-            fixture_url,
-            false,
-        )
-        .await?;
-        print_pass_report(&report, false, show_values, &preview);
+        let report = bounded_pass(program, pool, preview, Some(destination), options).await;
+        gate.end_pass();
+        let report = report?;
+        print_pass_report(&report, false, show_values, preview);
         last = match report.stopped {
             None => LastPass::Settled {
                 items_read: report.items_read,
@@ -238,15 +371,22 @@ async fn rescan(
     refusal_limit: u32,
     show_values: bool,
 ) -> Result<ExitCode, String> {
-    let program = compile(pack, job_yaml, runtime_path, workspace)?;
+    let runtime = load_runtime(runtime_path)?;
+    let resolver = runtime_secret_resolver(&runtime)?;
+    let mut program = compile(pack, job_yaml, &runtime, Arc::clone(&resolver), workspace)?;
+    check_hook_runtime(&program.job, &runtime)?;
+    activate_sources(&mut program, &resolver)?;
     let edits = source_edits(&program)?;
     if !matches!(edits, Edits::Rescan { .. }) {
         return Err(
             "the job's source route declares edits: ordered, whose edits the position finds; only an edits: rescan source rescans".to_string(),
         );
     }
-    let pool = pass_pool(runtime_path, dry_run).await?;
+    let pool = pass_pool(&runtime, &resolver, dry_run).await?;
     let preview = NullDestination::new();
+    let destination =
+        activate_pass_destination(&program, &runtime, &resolver, fixture, fixture_url, dry_run)
+            .await?;
     if !dry_run {
         let client = pool
             .get()
@@ -264,46 +404,51 @@ async fn rescan(
         rescan: true,
         dry_run,
     };
-    let report = bounded_pass(
-        &program,
-        &pool,
-        &preview,
-        options,
-        fixture,
-        fixture_url,
-        dry_run,
-    )
-    .await?;
+    let report = bounded_pass(&program, &pool, &preview, destination.as_deref(), options).await?;
     print_pass_report(&report, dry_run, show_values, &preview);
     Ok(pass_exit_code(&report))
 }
 
-/// One bounded pass with the named destination: the fixture destination
-/// at its loopback URL, or the preview destination of the dry run. A
-/// real destination is its own brief; the seam is the hand-off point it
-/// plugs into.
-async fn bounded_pass(
-    program: &JobProgram,
-    pool: &Pool,
-    preview: &NullDestination,
-    options: PassOptions,
+/// Activate one immutable destination client for this command or loop.
+/// Preview never resolves destination credentials, and an explicit fixture
+/// never falls through to an operational destination.
+async fn activate_pass_destination<'a>(
+    program: &'a JobProgram,
+    runtime: &JobRuntimeConfig,
+    resolver: &SecretResolver,
     fixture: bool,
     fixture_url: Option<&str>,
     dry_run: bool,
-) -> Result<PassReport, String> {
-    if !dry_run && !fixture {
-        return Err(
-            "name a destination: --destination with --fixture-url, or --dry-run for the operator preview; a real destination plugs into the same seam".to_string(),
-        );
+) -> Result<Option<Box<dyn DestinationSeam + 'a>>, String> {
+    if dry_run {
+        return Ok(None);
     }
     if fixture {
         let url =
             fixture_url.ok_or_else(|| "--fixture-url names the fixture receiver".to_string())?;
         let destination = FixtureDestination::new(url)
             .map_err(|reason| format!("the fixture url was refused: {reason}"))?;
-        Ok(run_pass(pool, program, &destination, options).await)
-    } else {
+        return Ok(Some(Box::new(destination)));
+    }
+    activate_destination(program, runtime, resolver)
+        .await
+        .map(Some)
+}
+
+/// One bounded pass through the destination captured for this process.
+async fn bounded_pass(
+    program: &JobProgram,
+    pool: &Pool,
+    preview: &NullDestination,
+    destination: Option<&dyn DestinationSeam>,
+    options: PassOptions,
+) -> Result<PassReport, String> {
+    if options.dry_run {
         Ok(run_pass(pool, program, preview, options).await)
+    } else {
+        let destination =
+            destination.ok_or_else(|| "adapter.job.destination-not-activated".to_string())?;
+        Ok(run_pass(pool, program, destination, options).await)
     }
 }
 
@@ -316,10 +461,24 @@ fn print_pass_report(
     preview: &NullDestination,
 ) {
     let stopped = report.stopped.as_ref().map(|reason| {
-        serde_json::json!({
+        let mut stopped = serde_json::json!({
             "reason": stop_reason_name(reason),
             "code": reason.stop_text(),
-        })
+        });
+        if let StopReason::PageFault {
+            record: Some(record),
+            ..
+        } = reason
+        {
+            stopped
+                .as_object_mut()
+                .expect("a stop report is an object")
+                .insert(
+                    "record".to_string(),
+                    serde_json::json!({"ordinal": record.ordinal}),
+                );
+        }
+        stopped
     });
     let mut body = serde_json::json!({
         "itemsRead": report.items_read,
@@ -329,7 +488,9 @@ fn print_pass_report(
         "itemsSkipped": report.items_skipped,
         "itemsAcknowledged": report.items_acknowledged,
         "itemsRefused": report.items_refused,
+        "itemsHeld": report.items_held,
         "refusalsByCode": report.refusals_by_code,
+        "holdsByCode": report.holds_by_code,
         "malformedLines": report.malformed_lines,
         "stopped": stopped,
         "stopNotRecorded": report.stop_record_failure,
@@ -389,11 +550,14 @@ fn pass_exit_code(report: &PassReport) -> ExitCode {
 /// Count what the item table holds, value-free.
 async fn status(job_yaml: &Path, runtime_path: &Path) -> Result<ExitCode, String> {
     let job = read_job(job_yaml)?;
-    let pool = read_pool(runtime_path)?;
+    let runtime = load_runtime(runtime_path)?;
+    let resolver = runtime_secret_resolver(&runtime)?;
+    let pool = read_pool(&runtime, &resolver)?;
     let client = pool
         .get()
         .await
         .map_err(|error| format!("the job store could not be reached: {error}"))?;
+    require_current_schema(&client, "status").await?;
     // Status is a read: a job no pass has run yet reports the default
     // state, and no row is written for it.
     let job_id = job.job.id.as_str();
@@ -404,20 +568,57 @@ async fn status(job_yaml: &Path, runtime_path: &Path) -> Result<ExitCode, String
         .await
         .map_err(|error| format!("the job store refused: {error}"))?
         .unwrap_or_default();
-    let state = trigger_state(&row);
-    // A never-run job anchors its initial delay to this read's own
-    // start, so status reports not yet due rather than overdue.
-    let now = std::time::SystemTime::now();
-    let overdue =
-        trigger::next_due(&job, &state, now, now).is_some_and(|due| due == Duration::ZERO);
+    let now = SystemTime::now();
+    let overdue = status_overdue(&job, &row, now);
+    let receipt_horizon = match &job.destination {
+        registry_adapter_core::JobDestination::DirectBreg {
+            receipt_retention_days,
+            ..
+        } => {
+            let horizon =
+                store::receipt_horizon_counts(&client, job_id, now, *receipt_retention_days)
+                    .await
+                    .map_err(|error| format!("the job store refused: {error}"))?;
+            Some(serde_json::json!({
+                "receiptRetentionDays": receipt_retention_days,
+                "pendingNearingHorizon": horizon.nearing,
+                "pendingPastHorizon": horizon.expired,
+            }))
+        }
+        registry_adapter_core::JobDestination::SignedCoordinatorEvent { .. } => None,
+    };
+    let hold_guidance = counts
+        .holds_by_code
+        .keys()
+        .filter_map(|code| {
+            let mut guidance = hold_guidance(
+                &job.destination,
+                store::ItemStatus::Held,
+                Some(code),
+                HoldGuidanceScope::Aggregate,
+            )?;
+            guidance
+                .as_object_mut()
+                .expect("hold guidance is an object")
+                .insert(
+                    "count".to_string(),
+                    serde_json::json!(counts.holds_by_code[code]),
+                );
+            Some(guidance)
+        })
+        .collect::<Vec<_>>();
     let report = serde_json::json!({
         "job": {"id": job.job.id.as_str(), "version": job.job.version},
         "items": {
             "pending": counts.pending,
             "acknowledged": counts.acknowledged,
             "refused": counts.refused,
+            "held": counts.held,
         },
         "refusalsByCode": counts.refusals_by_code,
+        "holdsByCode": counts.holds_by_code,
+        "holdGuidance": hold_guidance,
+        "receiptHorizon": receipt_horizon,
         "schedule": {
             "overdue": overdue,
             "lastPassAt": optional_time(row.last_pass_at),
@@ -440,30 +641,44 @@ async fn status(job_yaml: &Path, runtime_path: &Path) -> Result<ExitCode, String
 /// Read one item's row, value-free.
 async fn inspect(job_yaml: &Path, runtime_path: &Path, key: &str) -> Result<ExitCode, String> {
     let job = read_job(job_yaml)?;
-    let pool = read_pool(runtime_path)?;
+    let runtime = load_runtime(runtime_path)?;
+    let resolver = runtime_secret_resolver(&runtime)?;
+    let pool = read_pool(&runtime, &resolver)?;
     let client = pool
         .get()
         .await
         .map_err(|error| format!("the job store could not be reached: {error}"))?;
+    require_current_schema(&client, "inspect").await?;
     let record = store::inspect_item(&client, job.job.id.as_str(), key)
         .await
         .map_err(|error| format!("the job store refused: {error}"))?;
     let report = match record {
-        Some(record) => serde_json::json!({
-            "found": true,
-            "item": {
-                "key": record.key,
-                "lastDigest": record.last_digest,
-                "sequence": record.sequence,
-                "status": record.status.as_str(),
-                "code": record.code,
-                "runId": record.run_id,
-                "priorRunId": record.prior_run_id,
-                "admittedBefore": record.admitted_before,
-                "firstSeen": optional_time(Some(record.first_seen)),
-                "lastSeen": optional_time(Some(record.last_seen)),
-            },
-        }),
+        Some(record) => {
+            let hold = hold_guidance(
+                &job.destination,
+                record.status,
+                record.code.as_deref(),
+                HoldGuidanceScope::Item(
+                    record.run_id.as_deref().or(record.prior_run_id.as_deref()),
+                ),
+            );
+            serde_json::json!({
+                "found": true,
+                "item": {
+                    "key": record.key,
+                    "lastDigest": record.last_digest,
+                    "sequence": record.sequence,
+                    "status": record.status.as_str(),
+                    "code": record.code,
+                    "runId": record.run_id,
+                    "priorRunId": record.prior_run_id,
+                    "admittedBefore": record.admitted_before,
+                    "firstSeen": optional_time(Some(record.first_seen)),
+                    "lastSeen": optional_time(Some(record.last_seen)),
+                    "hold": hold,
+                },
+            })
+        }
         None => serde_json::json!({"found": false, "key": key}),
     };
     println!(
@@ -473,11 +688,103 @@ async fn inspect(job_yaml: &Path, runtime_path: &Path, key: &str) -> Result<Exit
     Ok(ExitCode::SUCCESS)
 }
 
+/// Whether an existing job's next interval pass is already due. A job
+/// with no completed or stopped pass is due according to its initial
+/// delay, but is not overdue: there is no prior operator deadline to
+/// have missed. The trigger retains its own due-now behavior.
+fn status_overdue(job: &AdapterJob, row: &store::JobStateRow, now: SystemTime) -> bool {
+    if row.last_pass_at.is_none() {
+        return false;
+    }
+    trigger::next_due(job, &trigger_state(row), now, now).is_some_and(|due| due == Duration::ZERO)
+}
+
+/// Whether guidance describes aggregate status or one inspected item.
+#[derive(Clone, Copy)]
+enum HoldGuidanceScope<'a> {
+    /// Status knows counts and codes, not per-item references.
+    Aggregate,
+    /// Inspect knows the stored destination reference, when one exists.
+    Item(Option<&'a str>),
+}
+
+/// Static, value-free guidance for a held item. Destination outcomes
+/// stay under destination authority, while a changed RabbitMQ delivery
+/// also needs broker-policy resolution. The job offers no mutation that
+/// releases, accepts, acknowledges, or reconciles held work.
+fn hold_guidance(
+    destination: &registry_adapter_core::JobDestination,
+    status: store::ItemStatus,
+    code: Option<&str>,
+    scope: HoldGuidanceScope<'_>,
+) -> Option<serde_json::Value> {
+    if status != store::ItemStatus::Held {
+        return None;
+    }
+    let code = code?;
+    let destination_reference = match scope {
+        HoldGuidanceScope::Aggregate => None,
+        HoldGuidanceScope::Item(reference) => reference,
+    };
+    let (action_owner, next_action) = if code == "adapter.job.rabbitmq-event-changed" {
+        let action = match scope {
+            HoldGuidanceScope::Aggregate => {
+                "Use inspect on each held item before claiming a destination reference. First establish any possible destination outcome under the destination's own authority. Then the broker operator must resolve the old unsettled delivery by dead-lettering or removing it under approved broker policy. Only after those steps may the publisher/source operator correct its immutable-identity and version-handling logic before publishing legitimate future work under a new immutable message ID. Do not rekey uncertain or already accepted work to force a fresh registration. Publishing a new message ID alone does not clear the old delivery; the Adapter keeps the row held and does not acknowledge or release it, and the unsettled delivery can block later messages at the queue head."
+            }
+            HoldGuidanceScope::Item(Some(_)) => {
+                "First establish the possible outcome for destinationReference under the destination's own authority. Then the broker operator must resolve the old unsettled delivery by dead-lettering or removing it under approved broker policy. Only after those steps may the publisher/source operator correct its immutable-identity and version-handling logic before publishing legitimate future work under a new immutable message ID. Do not rekey uncertain or already accepted work to force a fresh registration. Publishing a new message ID alone does not clear the old delivery; the Adapter keeps the row held and does not acknowledge or release it, and the unsettled delivery can block later messages at the queue head."
+            }
+            HoldGuidanceScope::Item(None) => {
+                "No destination reference is established. First inspect destination admission and idempotency records to establish any possible outcome under the destination's own authority. Then the broker operator must resolve the old unsettled delivery by dead-lettering or removing it under approved broker policy. Only after those steps may the publisher/source operator correct its immutable-identity and version-handling logic before publishing legitimate future work under a new immutable message ID. Do not rekey uncertain or already accepted work to force a fresh registration. Publishing a new message ID alone does not clear the old delivery; the Adapter keeps the row held and does not acknowledge or release it, and the unsettled delivery can block later messages at the queue head."
+            }
+        };
+        ("broker-operator", action)
+    } else {
+        match destination {
+            registry_adapter_core::JobDestination::DirectBreg { .. } => {
+                let action = match scope {
+                    HoldGuidanceScope::Aggregate => {
+                        "Use inspect on each held item before claiming a destination reference. Resolve any BReg outcome under BReg's own authority. The Adapter keeps held items held; unchanged rescans skip them."
+                    }
+                    HoldGuidanceScope::Item(Some(_)) => {
+                        "Resolve the outcome for destinationReference in BReg under BReg's own authority. The Adapter keeps this item held; unchanged rescans skip it."
+                    }
+                    HoldGuidanceScope::Item(None) => {
+                        "No destination reference is established. Inspect BReg admission and idempotency records, then resolve the outcome under BReg's own authority. The Adapter keeps this item held; unchanged rescans skip it."
+                    }
+                };
+                ("breg", action)
+            }
+            registry_adapter_core::JobDestination::SignedCoordinatorEvent { .. } => {
+                let action = match scope {
+                    HoldGuidanceScope::Aggregate => {
+                        "Use inspect on each held item before claiming a destination reference. Resolve any Run and linked review under Coordinator's own authority. The Adapter keeps held items held; unchanged rescans skip them."
+                    }
+                    HoldGuidanceScope::Item(Some(_)) => {
+                        "Resolve the Run named by destinationReference and any linked review under Coordinator's own authority. The Adapter keeps this item held; unchanged rescans skip it."
+                    }
+                    HoldGuidanceScope::Item(None) => {
+                        "No destination reference is established. Inspect Coordinator admission and event-idempotency records, then resolve the outcome under Coordinator's own authority. The Adapter keeps this item held; unchanged rescans skip it."
+                    }
+                };
+                ("coordinator", action)
+            }
+        }
+    };
+    Some(serde_json::json!({
+        "code": code,
+        "destinationReference": destination_reference,
+        "actionOwner": action_owner,
+        "nextAction": next_action,
+    }))
+}
+
 /// Compile the job the engine compiles.
 fn compile(
     pack: &Path,
     job_yaml: &Path,
-    runtime: &Path,
+    runtime: &JobRuntimeConfig,
+    resolver: Arc<SecretResolver>,
     workspace: &WorkspaceArgs,
 ) -> Result<JobProgram, String> {
     let directory = pack.parent().unwrap_or_else(|| Path::new("."));
@@ -489,46 +796,52 @@ fn compile(
         .project
         .clone()
         .unwrap_or_else(|| directory.join("project.yaml"));
-    refuse_unserved_sources(pack)?;
-    compile_job_with(pack, job_yaml, runtime, &profile, &project)
+    compile_job_with_runtime(pack, job_yaml, runtime, resolver, &profile, &project)
         .map_err(|error| job_error_message(&error))
 }
 
-/// Refuse a pack that declares a file, sftp, or postgres endpoint: this
-/// host serves HTTP and GraphQL sources only, whatever source features a
-/// workspace build compiled into the engine. A pack that does not read
-/// is left to the compiler, which reports its own diagnostics.
-fn refuse_unserved_sources(pack: &Path) -> Result<(), String> {
-    let Ok((declared, _bytes)) =
-        registry_adapter::engine::load::read_artifact::<registry_adapter_core::AdapterPack>(
-            pack,
-            registry_adapter_core::ADAPTER_PACK_KIND,
-            registry_adapter_core::ADAPTER_PACK_API_VERSION,
-        )
-    else {
-        return Ok(());
-    };
-    let unserved = declared
-        .endpoints
-        .iter()
-        .filter(|endpoint| {
-            matches!(
-                endpoint.component,
-                ComponentKind::File | ComponentKind::Sftp | ComponentKind::Postgres
-            )
-        })
-        .map(|endpoint| {
-            format!(
-                "adapter.job.component-unavailable at /endpoints/{} this host serves no file, sftp, or postgres source",
-                endpoint.id.as_str()
-            )
-        })
-        .collect::<Vec<_>>();
-    if unserved.is_empty() {
-        Ok(())
-    } else {
-        Err(format!("the job was refused: {}", unserved.join("; ")))
+fn require_compiled_hooks(job: &AdapterJob) -> Result<(), &'static str> {
+    if job.triggers.iter().any(|trigger| trigger.kind == "hook") && !cfg!(feature = "job-hook") {
+        return Err("adapter.job.hook-not-compiled");
     }
+    Ok(())
+}
+
+fn check_hook_runtime(job: &AdapterJob, runtime: &JobRuntimeConfig) -> Result<(), String> {
+    require_compiled_hooks(job).map_err(str::to_string)?;
+    #[cfg(feature = "job-hook")]
+    {
+        registry_adapter_job::hook_ingress::validate_hook_runtime(job, runtime)
+            .map_err(|error| error.to_string())
+    }
+    #[cfg(not(feature = "job-hook"))]
+    {
+        if runtime.hook_ingress.is_some() {
+            return Err("adapter.job.hook-not-compiled".to_string());
+        }
+        Ok(())
+    }
+}
+
+/// Install the host clients for the enabled source protocols. HTTP/GraphQL
+/// and local files execute directly; other protocols use host-owned clients.
+fn activate_sources(
+    program: &mut JobProgram,
+    resolver: &Arc<SecretResolver>,
+) -> Result<(), String> {
+    #[cfg(feature = "job-postgres")]
+    registry_adapter_job::postgres_source::activate_postgres_sources(program, resolver.as_ref())?;
+    #[cfg(feature = "job-rabbitmq")]
+    registry_adapter_job::rabbitmq_source::activate_rabbitmq_sources(program, resolver.as_ref())?;
+    #[cfg(feature = "job-sftp")]
+    registry_adapter_job::sftp_source::activate_sftp_sources(program, Arc::clone(resolver))?;
+    #[cfg(not(any(
+        feature = "job-postgres",
+        feature = "job-sftp",
+        feature = "job-rabbitmq"
+    )))]
+    let _ = (program, resolver);
+    Ok(())
 }
 
 /// The value-free rendering of a compile refusal: every diagnostic the
@@ -584,10 +897,9 @@ fn trigger_state(row: &store::JobStateRow) -> JobState {
 
 /// Open the job store: one pool from the store block's connection
 /// reference, migrated before it serves.
-async fn open_pool(runtime_path: &Path) -> Result<Pool, String> {
-    let store_config = read_store(runtime_path)?;
-    let resolver = secret_resolver()?;
-    let pool = store::build_pool(&store_config, &resolver).map_err(|error| error.to_string())?;
+async fn open_pool(runtime: &JobRuntimeConfig, resolver: &SecretResolver) -> Result<Pool, String> {
+    let store_config = runtime_store(runtime)?;
+    let pool = store::build_pool(store_config, resolver).map_err(|error| error.to_string())?;
     let client = pool
         .get()
         .await
@@ -601,11 +913,16 @@ async fn open_pool(runtime_path: &Path) -> Result<Pool, String> {
 /// The pool a pass or rescan runs on: migrated before it serves, or,
 /// for a dry run, read-only and refused unless the store already holds
 /// this release's schema, so a preview never changes the database.
-async fn pass_pool(runtime_path: &Path, dry_run: bool) -> Result<Pool, String> {
+async fn pass_pool(
+    runtime: &JobRuntimeConfig,
+    resolver: &SecretResolver,
+    dry_run: bool,
+) -> Result<Pool, String> {
     if !dry_run {
-        return open_pool(runtime_path).await;
+        return open_pool(runtime, resolver).await;
     }
-    let pool = read_pool(runtime_path)?;
+    let recovery = "run adapter-job init-store --runtime <runtime-config>";
+    let pool = read_pool(runtime, resolver)?;
     let client = pool
         .get()
         .await
@@ -613,9 +930,7 @@ async fn pass_pool(runtime_path: &Path, dry_run: bool) -> Result<Pool, String> {
     match store::schema_current(&client).await {
         Ok(()) => {}
         Err(error @ store::StoreError::SchemaBehind { .. }) => {
-            return Err(format!(
-                "the dry run refused: {error}; run a pass without --dry-run to migrate it"
-            ))
+            return Err(format!("the dry run refused: {error}; {recovery}"))
         }
         Err(error) => return Err(format!("the dry run refused: {error}")),
     }
@@ -623,24 +938,41 @@ async fn pass_pool(runtime_path: &Path, dry_run: bool) -> Result<Pool, String> {
     Ok(pool)
 }
 
-/// The read-only pool of the status and inspect surfaces, from the
-/// runtime config's store block.
-fn read_pool(runtime_path: &Path) -> Result<Pool, String> {
-    let store_config = read_store(runtime_path)?;
-    let resolver = secret_resolver()?;
-    store::build_pool(&store_config, &resolver).map_err(|error| error.to_string())
+/// Keep observational commands read-only while giving an uninitialized or
+/// older store one explicit recovery command. A newer store is incompatible
+/// with this release and retains its own refusal without migration advice.
+async fn require_current_schema(
+    client: &impl deadpool_postgres::GenericClient,
+    operation: &str,
+) -> Result<(), String> {
+    match store::schema_current(client).await {
+        Ok(()) => Ok(()),
+        Err(error @ store::StoreError::SchemaBehind { .. }) => Err(format!(
+            "the {operation} refused: {error}; run adapter-job init-store --runtime <runtime-config>"
+        )),
+        Err(error) => Err(format!("the {operation} refused: {error}")),
+    }
 }
 
-fn secret_resolver() -> Result<SecretResolver, String> {
-    SecretResolver::new([SecretProvider::Environment], "")
-        .map_err(|error| format!("the secret resolver could not start: {error:?}"))
+/// The read-only pool of the status and inspect surfaces, from the
+/// runtime config's store block.
+fn read_pool(runtime: &JobRuntimeConfig, resolver: &SecretResolver) -> Result<Pool, String> {
+    let store_config = runtime_store(runtime)?;
+    store::build_pool(store_config, resolver).map_err(|error| error.to_string())
+}
+
+fn runtime_secret_resolver(runtime: &JobRuntimeConfig) -> Result<Arc<SecretResolver>, String> {
+    runtime
+        .secret_resolver()
+        .map(Arc::new)
+        .map_err(|_| "the secret resolver could not start".to_string())
 }
 
 /// Read the job definition: the engine boundary's public artifact
 /// read, the same envelope, expression, and unknown-key discipline the
 /// compile path reads the job through.
 fn read_job(path: &Path) -> Result<AdapterJob, String> {
-    registry_adapter::engine::load::read_artifact::<AdapterJob>(
+    registry_adapter_engine::load::read_artifact::<AdapterJob>(
         path,
         registry_adapter_core::ADAPTER_JOB_KIND,
         registry_adapter_core::ADAPTER_JOB_API_VERSION,
@@ -652,11 +984,14 @@ fn read_job(path: &Path) -> Result<AdapterJob, String> {
 /// Read the job store block of the operator runtime config through the
 /// one reader the compile path shares (`engine::job_sources`), which
 /// refuses an undeclared member of the block like any other.
-fn read_store(path: &Path) -> Result<store::JobStoreConfig, String> {
-    let document = registry_adapter::engine::job_sources::JobRuntimeConfig::load(path)
-        .map_err(|error| format!("the runtime config was refused: {error}"))?;
-    document
+fn load_runtime(path: &Path) -> Result<JobRuntimeConfig, String> {
+    JobRuntimeConfig::load(path).map_err(|error| format!("the runtime config was refused: {error}"))
+}
+
+fn runtime_store(runtime: &JobRuntimeConfig) -> Result<&store::JobStoreConfig, String> {
+    runtime
         .store
+        .as_ref()
         .ok_or_else(|| "the runtime config carries no store block for the job store".to_string())
 }
 
@@ -671,4 +1006,250 @@ fn optional_time(at: Option<std::time::SystemTime>) -> Option<String> {
             .unwrap_or(chrono::DateTime::UNIX_EPOCH)
             .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use registry_adapter_job::store::ItemStatus;
+    use std::time::UNIX_EPOCH;
+
+    fn example_job(file: &str) -> AdapterJob {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        read_job(
+            &root
+                .join("products/adapter/examples/kobotoolbox-job")
+                .join(file),
+        )
+        .expect("the maintained example job reads")
+    }
+
+    #[test]
+    fn hook_jobs_require_the_explicit_host_feature() {
+        let mut job = example_job("job.yaml");
+        job.triggers.push(
+            serde_json::from_value(serde_json::json!({
+                "kind": "hook",
+                "path": "/hooks/kobo",
+                "binding": "kobo"
+            }))
+            .expect("a hook trigger"),
+        );
+
+        #[cfg(feature = "job-hook")]
+        assert_eq!(require_compiled_hooks(&job), Ok(()));
+        #[cfg(not(feature = "job-hook"))]
+        assert_eq!(
+            require_compiled_hooks(&job),
+            Err("adapter.job.hook-not-compiled")
+        );
+    }
+
+    #[test]
+    fn fresh_status_is_not_overdue_while_the_scheduler_remains_due_now() {
+        let job = example_job("job.yaml");
+        let row = store::JobStateRow::default();
+        let now = UNIX_EPOCH + Duration::from_secs(10_000);
+
+        assert!(
+            !status_overdue(&job, &row, now),
+            "a never-run job is due now, not overdue"
+        );
+        assert_eq!(
+            trigger::next_due(&job, &trigger_state(&row), now, now),
+            Some(Duration::ZERO),
+            "the loop still starts the default zero-initial-delay job immediately"
+        );
+    }
+
+    #[test]
+    fn status_reports_an_existing_late_job_overdue() {
+        let job = example_job("job.yaml");
+        let now = UNIX_EPOCH + Duration::from_secs(10_000);
+        let row = store::JobStateRow {
+            last_pass_at: Some(now - Duration::from_secs(61)),
+            ..store::JobStateRow::default()
+        };
+
+        assert!(
+            status_overdue(&job, &row, now),
+            "an existing job past its sixty-second interval is overdue"
+        );
+    }
+
+    #[test]
+    fn every_current_hold_code_has_value_free_destination_guidance() {
+        let direct = example_job("job.yaml");
+        let coordinator = example_job("job.coordinator.yaml");
+        let cases = [
+            (
+                &direct.destination,
+                "adapter.job.revised-item",
+                "proposal-revised",
+                "breg",
+            ),
+            (
+                &direct.destination,
+                "adapter.job.breg-receipt-horizon",
+                "proposal-horizon",
+                "breg",
+            ),
+            (
+                &direct.destination,
+                "idempotency.key-reused",
+                "proposal-reused",
+                "breg",
+            ),
+            (
+                &direct.destination,
+                "idempotency.expired",
+                "proposal-expired",
+                "breg",
+            ),
+            (
+                &coordinator.destination,
+                "adapter.job.revised-item",
+                "run-revised",
+                "coordinator",
+            ),
+            (
+                &coordinator.destination,
+                "coordinator.event.start-conflict",
+                "run-conflict",
+                "coordinator",
+            ),
+            (
+                &direct.destination,
+                "adapter.job.rabbitmq-event-changed",
+                "message-reference",
+                "broker-operator",
+            ),
+        ];
+
+        for (destination, code, reference, owner) in cases {
+            let guidance = hold_guidance(
+                destination,
+                ItemStatus::Held,
+                Some(code),
+                HoldGuidanceScope::Item(Some(reference)),
+            )
+            .unwrap_or_else(|| panic!("{code} has hold guidance"));
+            assert_eq!(guidance["code"], code);
+            assert_eq!(guidance["destinationReference"], reference);
+            assert_eq!(guidance["actionOwner"], owner);
+            let action = guidance["nextAction"]
+                .as_str()
+                .filter(|action| !action.is_empty())
+                .unwrap_or_else(|| panic!("{code} names an operator action"));
+            if code == "adapter.job.rabbitmq-event-changed" {
+                assert!(action.contains("destination's own authority"));
+                assert!(action.contains("under approved broker policy"));
+                assert!(action.contains("publisher/source operator"));
+                assert!(action.contains("legitimate future work"));
+                assert!(action.contains("Do not rekey uncertain or already accepted work"));
+                assert!(action.contains("Publishing a new message ID alone does not clear"));
+                assert!(action.contains("Adapter keeps the row held"));
+                assert!(action.contains("does not acknowledge or release it"));
+                assert!(action.contains("can block later messages at the queue head"));
+                assert!(!action.contains("remains head-blocking"));
+            } else {
+                assert!(action.contains("own authority"));
+                assert!(action.contains("keeps this item held"));
+                assert!(action.contains("unchanged rescans skip it"));
+                assert!(!action.contains("retry"));
+            }
+            assert_eq!(
+                guidance.as_object().expect("guidance is an object").len(),
+                4,
+                "guidance carries only code, reference, owner, and a static action"
+            );
+        }
+
+        assert!(
+            hold_guidance(
+                &direct.destination,
+                ItemStatus::Acknowledged,
+                None,
+                HoldGuidanceScope::Item(None),
+            )
+            .is_none(),
+            "settled non-held items gain no recovery instruction"
+        );
+    }
+
+    #[test]
+    fn aggregate_and_reference_free_holds_state_what_the_operator_knows() {
+        let direct = example_job("job.yaml");
+        let coordinator = example_job("job.coordinator.yaml");
+        for (destination, code, authority, records) in [
+            (
+                &direct.destination,
+                "idempotency.expired",
+                "BReg's own authority",
+                "BReg admission and idempotency records",
+            ),
+            (
+                &coordinator.destination,
+                "coordinator.event.start-conflict",
+                "Coordinator's own authority",
+                "Coordinator admission and event-idempotency records",
+            ),
+        ] {
+            let aggregate = hold_guidance(
+                destination,
+                ItemStatus::Held,
+                Some(code),
+                HoldGuidanceScope::Aggregate,
+            )
+            .expect("aggregate status has guidance");
+            assert_eq!(aggregate["destinationReference"], serde_json::Value::Null);
+            let aggregate_action = aggregate["nextAction"]
+                .as_str()
+                .expect("aggregate status names an action");
+            assert!(aggregate_action.contains("Use inspect on each held item"));
+            assert!(aggregate_action.contains(authority));
+            assert!(aggregate_action.contains("keeps held items held"));
+            assert!(aggregate_action.contains("unchanged rescans skip them"));
+            assert!(!aggregate_action.contains("referenced"));
+            assert!(!aggregate_action.contains("retry"));
+
+            let without_reference = hold_guidance(
+                destination,
+                ItemStatus::Held,
+                Some(code),
+                HoldGuidanceScope::Item(None),
+            )
+            .expect("the held item has guidance");
+            assert_eq!(
+                without_reference["destinationReference"],
+                serde_json::Value::Null
+            );
+            let item_action = without_reference["nextAction"]
+                .as_str()
+                .expect("the held item names an action");
+            assert!(item_action.contains("No destination reference is established"));
+            assert!(item_action.contains(records));
+            assert!(item_action.contains(authority));
+            assert!(item_action.contains("keeps this item held"));
+            assert!(item_action.contains("unchanged rescans skip it"));
+            assert!(!item_action.contains("retry"));
+        }
+    }
+
+    #[test]
+    fn hold_guidance_never_carries_an_item_value_or_a_mutation() {
+        let direct = example_job("job.yaml");
+        let guidance = hold_guidance(
+            &direct.destination,
+            ItemStatus::Held,
+            Some("idempotency.key-reused"),
+            HoldGuidanceScope::Item(Some("proposal-a")),
+        )
+        .expect("the held item has guidance");
+        let rendered = serde_json::to_string(&guidance).expect("guidance renders");
+
+        assert!(!rendered.contains("never-project-this-source-value"));
+        assert!(!rendered.contains("mark-accepted"));
+        assert!(!rendered.contains("reconcile"));
+    }
 }

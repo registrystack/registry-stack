@@ -239,8 +239,34 @@ print(binaries[0])
       exit 2
     }
     export BREG_TEST_EVIDENCE_BINARY="$evidence_binary"
+    evidencectl_binary=$(cargo build --locked -p registry-evidencectl --bin evidencectl --message-format=json | python3 -c '
+import json, sys
+artifacts = [json.loads(line) for line in sys.stdin]
+binaries = [item["executable"] for item in artifacts if item.get("reason") == "compiler-artifact" and item.get("target", {}).get("name") == "evidencectl" and item.get("executable")]
+if len(binaries) != 1:
+    raise SystemExit("expected exactly one built evidencectl executable")
+print(binaries[0])
+')
+    [[ -x "$evidencectl_binary" ]] || {
+      printf '%s\n' 'Built evidencectl executable is unavailable.' >&2
+      exit 2
+    }
+    export BREG_TEST_EVIDENCECTL_BINARY="$evidencectl_binary"
+    python_environment="${CARGO_TARGET_DIR:-target}/breg-test-python"
+    python_binary="$python_environment/bin/python"
+    if [[ ! -x "$python_binary" ]] || ! "$python_binary" -c 'import yaml; assert yaml.__version__ == "6.0.3"' >/dev/null 2>&1; then
+      uv venv "$python_environment"
+      uv pip install --python "$python_binary" PyYAML==6.0.3
+    fi
+    if [[ ! -x "$python_binary" ]] || ! "$python_binary" -c 'import yaml; assert yaml.__version__ == "6.0.3"' >/dev/null; then
+      printf '%s\n' 'Unable to provision the required PyYAML-enabled Python interpreter with uv.' >&2
+      exit 2
+    fi
+    export BREG_TEST_PYTHON_BINARY="$python_binary"
+    "$BREG_TEST_PYTHON_BINARY" \
+      products/breg/acceptance/farmer-landholding-evidence/evidence/tests/test-provider-pack.py
     # The trio runs as one unit on its owning shard, never split further.
-    uv run --no-project --with PyYAML==6.0.2 cargo test --locked -p registry-breg --features postgres-test,tooling,schema \
+    cargo test --locked -p registry-breg --features postgres-test,tooling,schema \
       --test postgres_action_evidence \
       --test postgres_action_evidence_targets \
       --test postgres_action_evidence_retention

@@ -20,6 +20,8 @@ test('examples archive is repeatable and contains only reviewed inputs', async (
     }
     await mkdir(join(root, 'standalone/.generated/secrets'), { recursive: true });
     await writeFile(join(root, 'standalone/.generated/secrets/signing-key'), 'MUST NOT BE PACKAGED');
+    await mkdir(join(root, 'standalone/__pycache__'), { recursive: true });
+    await writeFile(join(root, 'standalone/__pycache__/serve-source.cpython-311.pyc'), 'MUST NOT BE PACKAGED');
     await packageExamples(root, join(root, 'first.tar.gz'));
     await packageExamples(root, join(root, 'second.tar.gz'));
     assert.deepEqual(await readFile(join(root, 'first.tar.gz')), await readFile(join(root, 'second.tar.gz')));
@@ -40,7 +42,7 @@ test('the inventory names every file of the maintained example projects', async 
     for (const entry of await readdir(join(examples, project), { recursive: true, withFileTypes: true })) {
       if (!entry.isFile()) continue;
       const relative = join(entry.parentPath, entry.name).slice(examples.length + 1);
-      if (relative.includes('/.generated/') || relative.includes('/.evidence/')) continue;
+      if (relative.includes('/.generated/') || relative.includes('/.evidence/') || relative.includes('/__pycache__/')) continue;
       found.push(relative);
     }
   }
@@ -78,8 +80,31 @@ test('the source recipe inventory names every maintained recipe file', async () 
   for (const entry of await readdir(recipes, { recursive: true, withFileTypes: true })) {
     if (!entry.isFile()) continue;
     const relative = join(entry.parentPath, entry.name).slice(recipes.length + 1);
-    if (relative.includes('/.generated/') || relative.includes('/.evidence/')) continue;
+    if (relative.includes('/.generated/') || relative.includes('/.evidence/') || relative.includes('/__pycache__/')) continue;
     found.push(relative);
   }
   assert.deepEqual(found.sort(), sourceRecipeFiles);
+});
+
+test('downloaded projects expose pack acquisition without retired source scripts', () => {
+  const retiredExamples = [
+    'standalone/functions/extract-licence.rhai',
+    'standalone/functions/extract-parents.rhai',
+    'standalone/functions/extract-person.rhai',
+  ];
+  const retiredRecipes = [
+    'dhis2-tracker/adapters/dhis2-tracker-extract.rhai',
+    'dhis2-tracker/adapters/dhis2-tracker-prepare.rhai',
+    'dhis2-tracker/fixture-validation/functions/validation-seed-extract.rhai',
+    'opencrvs-event-search/adapters/opencrvs-event-search-extract.rhai',
+    'opencrvs-event-search/adapters/opencrvs-event-search-prepare.rhai',
+    'opencrvs-event-search/fixture-validation/functions/validation-seed-extract.rhai',
+  ];
+  for (const file of retiredExamples) assert.ok(!exampleFiles.includes(file), file);
+  for (const file of retiredRecipes) assert.ok(!sourceRecipeFiles.includes(file), file);
+  assert.ok(exampleFiles.includes('standalone/adapter-packs/synthetic-register/scripts/lookup.rhai'));
+  for (const recipe of ['dhis2-tracker', 'opencrvs-event-search']) {
+    assert.ok(sourceRecipeFiles.includes(`${recipe}/adapter-packs/${recipe}/scripts/source-recipe.rhai`));
+    assert.ok(sourceRecipeFiles.includes(`${recipe}/fixture-validation/adapter-packs/validation-seed/scripts/lookup.rhai`));
+  }
 });

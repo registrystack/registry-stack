@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+- BREAKING: Source acquisition moves into reviewed Adapter packs. Authored
+  Sources now declare `pack`, `route`, `connection` and `inputs`; the tagged
+  `http-json`/`sqlite-extract` form and `source-prepare/v1`/`source-extract/v1`
+  Functions are retired. Keep `assertion-derive/v1` Functions for requirement
+  derivation. Rebuild projects and packages with a matching compiler/runtime;
+  the 0.44.0 tools cannot read the pack form. Follow the
+  [migration steps](reference/authoring-projects/CONFIG.md#migrate-a-retired-source-project)
+  before importing current source exports.
+- BREAKING: new singular and request-batch authorized-material audit entries use
+  `registry.evidence.audit/v3` and
+  `registry.evidence.audit.request-batch/v3`. Every `/v3` access-attempt record
+  requires a closed `executionBounds` object containing the effective positive
+  `maximumDataOperations`, `acquisitionDeadlineMilliseconds`, and `maximumResponseBytes`
+  captured from immutable runtime configuration before credentials or source
+  effects. Terminal records omit the object. Retained authorized-material
+  `/v2` entries remain readable history and must omit it;
+  `registry.evidence.audit.authorization-refusal/v2` and
+  `registry.evidence.local-audit-operation/v2` are unchanged. Update semantic
+  audit readers before routing traffic to this runtime.
+- The acquisition deadline now also gates admission to the terminal
+  disclosure-release append, which is the disclosure-begin boundary. No release
+  append is admitted after expiry. An append admitted before expiry completes without
+  cancellation, and the exact audited
+  response bytes may return afterward, so the deadline is not a hard response
+  wall-clock cutoff. A signed source's verified `validUntil` remains an
+  independent data-validity bound.
 - BREAKING: The Node and Python clients rename the `requirement` member of a
   `request` to `handle`.
 - BREAKING: The clients add error kinds `invalid-request` and `unavailable`, with
@@ -47,6 +73,11 @@
 - `evidencectl explain` JSON reports each assertion definition's
   `validitySeconds` beside its `representations` and `subjectBinding`. The
   field is additive; the report `apiVersion` is unchanged.
+- `evidencectl fixtures record-facts PROJECT --target TARGET --fixture FIXTURE
+  --write` refreshes optional coequal `expectedFacts` from the matching
+  Evidence runtime's final offline Adapter pack matches. It accepts editable
+  synthetic projects only, preserves ordinary fixture expectations, omits
+  facts for non-matches, and keeps fact values out of reports and diagnostics.
 
 ## 0.44.0 - 2026-10-27
 

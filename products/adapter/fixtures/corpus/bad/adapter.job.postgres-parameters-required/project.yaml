@@ -1,0 +1,39 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.job.postgres-parameters-required: the checker must emit this exact code. All data is synthetic.
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-api-example
+  version: '1'
+profile:
+  id: case-api
+  version: '1'
+  digest: sha256:b6a0ed6f751beda1a05448f8306a0bc47d2f6f26032b52714dce86482d8d483b
+pack:
+  id: case-api-pack
+  version: '1'
+  digest: sha256:78de453e920f3e49d45cdded92bce427df635ec83a94b1dbedbcb461c880c5fc
+recordTypes:
+- name: case
+  fields:
+  - name: case_type
+    type: string
+    required: true
+templatedRoutes:
+- routeTemplate: find-cases
+  routeId: case-find
+bindings:
+- id: case-get
+  operation: cases-get
+  recordType: case
+  route: case-find
+  maximumUpstreamCalls: 4
+accessProfiles:
+- id: case-reader
+  scopes:
+  - cases.read
+  operations:
+  - cases-get
+  recordTypes:
+  - case

@@ -40,6 +40,12 @@ pub(crate) type PositiveU32 = BoundedU32<1, { u32::MAX }>;
 /// A breaker filter cannot contain more entries than the closed class model.
 pub const MAXIMUM_ERROR_CLASSES_PER_FILTER: usize = ErrorClass::ALL.len();
 
+/// The read-only virtual exchange-property namespace through which a later
+/// send reads a source identifier checkpointed by an earlier send. The engine
+/// keeps these values outside the ordinary exchange property map, so scripts,
+/// debug output and authored property mutation cannot observe or replace them.
+pub const RESUME_PROPERTY_PREFIX: &str = "AdapterResume.";
+
 /// A route as Camel's YAML DSL writes it: one `from`, `direct:` only, and
 /// an ordered step list (`products/adapter/CONCEPT.md` section 8.3). Pack
 /// templates carry the same steps without the `from`; the instantiated
@@ -111,6 +117,10 @@ pub enum Step {
     Filter(FilterStep),
     /// A failing predicate raises the `validation` class.
     Validate(ValidateStep),
+    /// Validate the complete provider response body against one reviewed,
+    /// digest-pinned JSON Schema before extraction. A mismatch is a terminal
+    /// source-protocol refusal, not a catchable route validation outcome.
+    ValidateSchema(crate::model::ScriptReference),
     /// Stop routing the exchange.
     Stop(StopStep),
     /// Raise a closed error class now; the route's clauses handle it like
@@ -163,7 +173,7 @@ pub struct ToStep {
 
 /// The parameters of an upstream send, Camel's `http` component options
 /// (`products/adapter/CONCEPT.md` section 8.8). The path template's
-/// `{name}` segments are filled from `pathParameters` expressions and
+/// `{{name}}` segments are filled from `pathParameters` expressions and
 /// percent-encoded by the engine as single segments; query members are
 /// engine-encoded.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -175,7 +185,7 @@ pub struct ToParameters {
     /// `crate::checks`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub http_method: Option<HttpMethod>,
-    /// The path template, e.g. `/v2/cases/{type}`.
+    /// The path template, e.g. `/v2/cases/{{type}}`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
     /// An origin-pinned link carried as an expression instead of `path`
@@ -658,7 +668,7 @@ pub struct EnrichStep {
 
 /// A `pollEnrich` step, the bounded job-only port of Camel's Poll Enricher
 /// (`products/adapter/CONCEPT.md` sections 17.1 and 17.2). It reads one
-/// bounded page from a static `file:` or `sftp:` endpoint the pack
+/// bounded page from a static `file:`, `rabbitmq:`, or `sftp:` endpoint the pack
 /// declares; no dynamic endpoint expression and no `consumerSendTo` are
 /// ported. Absent a strategy, the page replaces the body, as `enrich`
 /// replaces it. `timeoutMilliseconds` is mandatory: the checks refuse its
@@ -670,8 +680,8 @@ pub struct EnrichStep {
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PollEnrichStep {
-    /// The static job source URI: `file:<endpointId>` or
-    /// `sftp:<endpointId>`, naming a declared pack endpoint of the matching
+    /// The static job source URI: `file:<endpointId>`,
+    /// `rabbitmq:<endpointId>`, or `sftp:<endpointId>`, naming a declared pack endpoint of the matching
     /// component. The authoring checks refuse an unknown endpoint
     /// (`adapter.job.poll-endpoint-unknown`) and an endpoint whose
     /// component does not match the scheme
@@ -683,19 +693,71 @@ pub struct PollEnrichStep {
     /// The decoder the read applies: absent, `raw`, the file bytes' digest
     /// page; `csv` decodes rows with the options of [`CsvDecoder`], written
     /// either as the bare name `csv` or as a mapping of its options;
-    /// `jsonl` decodes one bounded JSON value per line. The checks refuse
-    /// any other name under `adapter.job.decoder-unknown`.
+    /// `jsonl` decodes one bounded JSON value per line. `rabbitmq-json`
+    /// decodes exactly one bounded broker message and is valid only for a
+    /// `rabbitmq:` source. The checks refuse any other name or a mismatched
+    /// profile under `adapter.job.decoder-unknown`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decoder: Option<PollDecoder>,
+    /// RFC 6901 selector of the opaque business-key string in a decoded row.
+    /// Required for CSV and JSONL, forbidden for raw files and broker messages.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_pointer: Option<String>,
     /// The aggregation strategy, Camel's Poll Enricher aggregation;
     /// absent, the page replaces the body, like `enrich` with no strategy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aggregation_strategy: Option<AggregationStrategy>,
 }
 
+impl PollEnrichStep {
+    /// Whether this decoder carries exactly the row identity selector it needs.
+    pub fn valid_key_pointer(&self) -> bool {
+        let row_decoder = self
+            .decoder
+            .as_ref()
+            .is_some_and(|decoder| matches!(decoder.name(), "csv" | "jsonl"));
+        match (row_decoder, self.key_pointer.as_deref()) {
+            (false, None) => true,
+            (true, Some(pointer)) => {
+                if pointer.len() > 512 || (!pointer.is_empty() && !pointer.starts_with('/')) {
+                    return false;
+                }
+                let mut chars = pointer.chars();
+                while let Some(character) = chars.next() {
+                    if character == '~' && !matches!(chars.next(), Some('0' | '1')) {
+                        return false;
+                    }
+                }
+                if self
+                    .decoder
+                    .as_ref()
+                    .is_some_and(|decoder| decoder.name() == "csv")
+                {
+                    let Some(token) = pointer.strip_prefix('/') else {
+                        return false;
+                    };
+                    if token.contains('/') {
+                        return false;
+                    }
+                    if matches!(self.decoder.as_ref(), Some(PollDecoder::Csv(options)) if !options.header)
+                        && (token.is_empty()
+                            || (token.len() > 1 && token.starts_with('0'))
+                            || !token.bytes().all(|byte| byte.is_ascii_digit())
+                            || token.parse::<u64>().is_err())
+                    {
+                        return false;
+                    }
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
 /// The decoder a `pollEnrich` step selects. A mapping form is a `csv`
 /// declaration with its options, the only decoder that carries options; a
-/// bare string names one of `csv`, `jsonl`, or `raw`. One member carries
+/// bare string names one of `csv`, `jsonl`, `rabbitmq-json`, or `raw`. One member carries
 /// both forms, so `decoder: csv` and `decoder: {"delimiter": ";"}` read
 /// the same way.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -1724,6 +1786,22 @@ mod tests {
         );
     }
 
+    /// `validateSchema` is the Adapter's provider-envelope validation step:
+    /// the schema itself is reviewed, digest-pinned pack input.
+    #[test]
+    fn validate_schema_step_round_trips() {
+        let step: Step = serde_json::from_str(
+            r#"{ "validateSchema": { "path": "schemas/provider.json", "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111" } }"#,
+        )
+        .expect("parse");
+        let Step::ValidateSchema(reference) = &step else {
+            panic!("expected a validateSchema step");
+        };
+        assert_eq!(reference.path, "schemas/provider.json");
+        let back = serde_json::to_string(&step).expect("serialize");
+        assert_eq!(serde_json::from_str::<Step>(&back).ok(), Some(step));
+    }
+
     /// `stop`, ported from
     /// <https://camel.apache.org/components/next/eips/stop-eip.html>.
     #[test]
@@ -2563,5 +2641,23 @@ mod tests {
         let json = serde_json::to_value(&enrich).expect("serialize");
         assert_eq!(json["parameters"]["httpMethod"], "GET");
         assert_eq!(json["parameters"]["operation"], "cases-find");
+    }
+    #[test]
+    fn headerless_csv_key_pointer_is_a_canonical_array_index() {
+        for (pointer, accepted) in [
+            ("/0", true),
+            ("/12", true),
+            ("/id", false),
+            ("/00", false),
+            ("/-", false),
+            ("/18446744073709551616", false),
+        ] {
+            let poll: PollEnrichStep = serde_json::from_value(serde_json::json!({
+                "uri":"file:rows", "timeoutMilliseconds":1000,
+                "decoder":{"header":false}, "keyPointer":pointer
+            }))
+            .expect("CSV declaration");
+            assert_eq!(poll.valid_key_pointer(), accepted);
+        }
     }
 }

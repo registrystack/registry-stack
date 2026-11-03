@@ -10,236 +10,43 @@ selectorProfiles:
         minimumBytes: 1
         maximumBytes: 64
 functions:
-- id: extract-person
-  interface: source-extract/v1
-  source: functions/extract-person.rhai
 - id: derive-adult-status
   interface: assertion-derive/v1
   source: functions/derive-adult-status.rhai
 - id: derive-residence-region
   interface: assertion-derive/v1
   source: functions/derive-residence-region.rhai
-- id: extract-licence
-  interface: source-extract/v1
-  source: functions/extract-licence.rhai
 - id: derive-licence-status
   interface: assertion-derive/v1
   source: functions/derive-licence-status.rhai
-- id: extract-parents
-  interface: source-extract/v1
-  source: functions/extract-parents.rhai
 - id: derive-parent-relationship
   interface: assertion-derive/v1
   source: functions/derive-parent-relationship.rhai
 sources:
   person-record:
-    type: http-json
+    pack: {id: synthetic-register, version: '1'}
+    route: person
     connection: synthetic-register
     acquisitionPosture: record-transformed
-    selectors:
-    - role: subject
-      profiles:
-      - record-by-id
-    request:
-      method: GET
-      path: /people/{record-id}
-      pathBindings:
-        record-id:
-          selector:
-            role: subject
-            profile: record-by-id
-            field: record-id
-      fixedHeaders:
-      - name: Accept
-        value: application/json
-    response:
-      projection:
-      - /total
-      - /record
-      shape:
-        type: object
-        required:
-        - total
-        properties:
-          total:
-            type: integer
-            minimum: 0
-            maximum: 2
-          record:
-            type: object
-            required:
-            - record_id
-            - birth_date
-            - residence_region
-            - address_canary
-            properties:
-              record_id:
-                type: string
-                minimumBytes: 1
-                maximumBytes: 64
-              birth_date:
-                type: date
-              residence_region:
-                type: string
-                values:
-                - north
-                - south
-              address_canary:
-                type: string
-                minimumBytes: 1
-                maximumBytes: 128
-      maximumBytes: 16384
-    extract:
-      function: extract-person
-    facts:
-      birth-date:
-        type: date
-      residence-region:
-        type: controlled-category
-        values:
-        - north
-        - south
-      address-canary:
-        type: string
-        minimumBytes: 1
-        maximumBytes: 128
-    limits:
-      attemptTimeoutMilliseconds: 2000
-      maximumConcurrency: 8
+    inputs:
+      recordId:
+        selector: {role: subject, profile: record-by-id, field: record-id}
   licence-record:
-    type: http-json
+    pack: {id: synthetic-register, version: '1'}
+    route: licence
     connection: synthetic-register
     acquisitionPosture: record-transformed
-    selectors:
-    - role: licence
-      profiles:
-      - record-by-id
-    request:
-      method: GET
-      path: /licences/{record-id}
-      pathBindings:
-        record-id:
-          selector:
-            role: licence
-            profile: record-by-id
-            field: record-id
-      fixedHeaders:
-      - name: Accept
-        value: application/json
-    response:
-      projection:
-      - /total
-      - /record
-      shape:
-        type: object
-        required:
-        - total
-        properties:
-          total:
-            type: integer
-            minimum: 0
-            maximum: 2
-          record:
-            type: object
-            required:
-            - record_id
-            - status
-            properties:
-              record_id:
-                type: string
-                minimumBytes: 1
-                maximumBytes: 64
-              status:
-                type: string
-                values:
-                - active
-                - suspended
-                - expired
-      maximumBytes: 16384
-    extract:
-      function: extract-licence
-    facts:
-      status:
-        type: controlled-category
-        values:
-        - active
-        - suspended
-        - expired
-    limits:
-      attemptTimeoutMilliseconds: 2000
-      maximumConcurrency: 8
+    inputs:
+      recordId:
+        selector: {role: licence, profile: record-by-id, field: record-id}
   parent-record:
-    type: http-json
+    pack: {id: synthetic-register, version: '1'}
+    route: parents
     connection: synthetic-register
     acquisitionPosture: record-transformed
-    selectors:
-    - role: child
-      profiles:
-      - record-by-id
-    request:
-      method: GET
-      path: /parents/{record-id}
-      pathBindings:
-        record-id:
-          selector:
-            role: child
-            profile: record-by-id
-            field: record-id
-      fixedHeaders:
-      - name: Accept
-        value: application/json
-    response:
-      projection:
-      - /total
-      - /record
-      shape:
-        type: object
-        required:
-        - total
-        properties:
-          total:
-            type: integer
-            minimum: 0
-            maximum: 2
-          record:
-            type: object
-            required:
-            - record_id
-            - complete
-            - parents
-            properties:
-              record_id:
-                type: string
-                minimumBytes: 1
-                maximumBytes: 64
-              complete:
-                type: boolean
-                const: true
-              parents:
-                type: array
-                items:
-                  type: string
-                  minimumBytes: 1
-                  maximumBytes: 64
-                minItems: 0
-                maxItems: 4
-                uniqueItems: true
-      maximumBytes: 16384
-    extract:
-      function: extract-parents
-    facts:
-      parents:
-        type: array
-        items:
-          type: string
-          minimumBytes: 1
-          maximumBytes: 64
-        minItems: 0
-        maxItems: 4
-        uniqueItems: true
-    limits:
-      attemptTimeoutMilliseconds: 2000
-      maximumConcurrency: 8
+    inputs:
+      recordId:
+        selector: {role: child, profile: record-by-id, field: record-id}
 assertionDefinitions:
   adult-status:
     question: Is the subject at least 18 at observation time?
@@ -264,7 +71,6 @@ assertionDefinitions:
       selectors:
       - record-by-id
     acquisition:
-      type: single
       source: person-record
     derive:
       function: derive-adult-status
@@ -301,7 +107,6 @@ assertionDefinitions:
       selectors:
       - record-by-id
     acquisition:
-      type: single
       source: person-record
     derive:
       function: derive-residence-region
@@ -341,7 +146,6 @@ assertionDefinitions:
       selectors:
       - record-by-id
     acquisition:
-      type: single
       source: licence-record
     derive:
       function: derive-licence-status
@@ -385,7 +189,6 @@ assertionDefinitions:
       selectors:
       - record-by-id
     acquisition:
-      type: single
       source: parent-record
     derive:
       function: derive-parent-relationship

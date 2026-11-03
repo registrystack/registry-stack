@@ -14,27 +14,29 @@ use std::sync::Arc;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::Utc;
 use jsonwebtoken::{jwk::JwkSet, Algorithm};
+use registry_adapter_engine::evidence::{
+    EvidenceAcquisitionIntent, EvidenceHookFuture, EvidenceHostHooks,
+};
 use registry_evidence::audit::{
     AuditAuthority, AuditDecision, AuditPhase, AuditSubject, AuthorityKind as AuditAuthorityKind,
-    EvidenceAuditEvent, EvidenceAuditLog, ResponseProtection,
+    EvidenceAuditEvent, EvidenceAuditLog, EvidenceExecutionBounds, ResponseProtection,
 };
 use registry_evidence::auth::{AuthenticatedContext, AuthenticationClaimsConfig, Authenticator};
 use registry_evidence::bundle::{Bundle, BundleError, DeploymentInputs};
 use registry_evidence::config::{AuthorityKind, SelectorInput};
 use registry_evidence::kernel::{
-    EvidenceConstruction, EvidenceScope, KernelOutcome, OfflineKernel, ValueProjection,
+    EvidenceConstruction, EvidenceScope, OfflineKernel, ValueProjection,
 };
 use registry_evidence::model::{
-    Evidence, EvidenceRequest, FlattenedJws, RequestedSelector, RequestedSubject, SelectorValue,
-    SubjectBinding,
+    Evidence, EvidenceRequest, FlattenedJws, LookupResult, RequestedSelector, RequestedSubject,
+    SelectorValue, SubjectBinding,
 };
+use registry_evidence::pack_source::{build_sources, PackSourceExecutor};
 use registry_evidence::secrets::{SecretProvider, SecretResolver};
 use registry_evidence::selector::{
     match_entitlement, resolve_selectors, AuthorizationError, ResolvedAuthorization,
-    ResolvedSelectorValue,
 };
 use registry_evidence::signing::{jwks_document, EvidenceSigner};
-use registry_evidence::source::{ResolvedSourceSelector, SourceExecutor};
 use registry_evidence::verifier::{verify_flattened_jws, EvidenceVerificationPolicy};
 use registry_platform_crypto::{sign, LocalJwkSigner, PrivateJwk, SigningProvider};
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig, TokenVerifier, TokenVerifierConfig};
@@ -65,11 +67,23 @@ struct PreparedService {
     bundle: Arc<Bundle>,
     kernel: OfflineKernel,
     authenticator: Authenticator,
-    sources: BTreeMap<String, SourceExecutor>,
+    sources: BTreeMap<String, PackSourceExecutor>,
     audit: EvidenceAuditLog,
+    execution_bounds: EvidenceExecutionBounds,
     signer: EvidenceSigner,
     server: MockServer,
     audit_path: PathBuf,
+}
+
+// PreparedService appends the durable access event before entering the pack.
+struct AuditedSelectorHooks;
+impl EvidenceHostHooks for AuditedSelectorHooks {
+    fn before_acquisition<'a>(
+        &'a self,
+        _intent: EvidenceAcquisitionIntent,
+    ) -> EvidenceHookFuture<'a> {
+        Box::pin(async { Ok(()) })
+    }
 }
 
 impl PreparedService {
@@ -128,6 +142,7 @@ impl PreparedService {
         );
         access.source_id = Some(source_id.clone());
         access.adapter_id = Some(adapter_id.clone());
+        access.execution_bounds = Some(self.execution_bounds);
         self.audit
             .append(access)
             .await
@@ -137,38 +152,28 @@ impl PreparedService {
             .kernel
             .requirement(&request.requirement)
             .expect("requirement exists");
-        let source = self
-            .bundle
-            .config
+        let executor = self
             .sources
             .get(&source_id)
-            .expect("source exists");
-        let preparation_selectors = selector_value(&resolved, source.selector_inputs());
-        let request_parts = self
-            .kernel
-            .prepare(&request.requirement, &preparation_selectors)
-            .expect("request preparation succeeds");
+            .expect("the source pack exists");
+        let inputs = executor
+            .inputs(&resolved)
+            .expect("only authorized profile fields are projected");
         let observed_at = Utc::now();
-        let source_response = self
-            .sources
-            .get(&source_id)
-            .expect("requirement source executor exists")
-            .execute(
-                &source_selectors(&resolved, source.selector_inputs()),
-                &request_parts,
-                observed_at,
-            )
+        let lookup = executor
+            .execute(inputs, observed_at, Arc::new(AuditedSelectorHooks))
             .await
-            .expect("fixed source executor succeeds")
-            .into_data()
-            .expect("conformance source response carries data");
+            .expect("the actual source pack succeeds after durable access audit");
+        let LookupResult::Match(facts) = lookup else {
+            panic!("positive selector source must resolve exactly one match");
+        };
         let derivation_selectors =
             selector_value(&resolved, &requirement.derivation.selector_inputs);
-        let values = match self
+        let values = self
             .kernel
-            .evaluate_with_selectors(
+            .derive_and_validate_with_selectors(
                 &request.requirement,
-                &source_response,
+                &facts,
                 &derivation_selectors,
                 observed_at,
                 ValueProjection {
@@ -180,13 +185,7 @@ impl PreparedService {
                     binding_key_version: 1,
                 },
             )
-            .expect("extraction, derivation, and output gate succeed")
-        {
-            KernelOutcome::Match(values) => values,
-            KernelOutcome::NoMatch | KernelOutcome::Ambiguous => {
-                panic!("positive selector source must resolve exactly one match")
-            }
-        };
+            .expect("derivation and the output gate succeed over matched pack facts");
         let subjects = resolved
             .subjects
             .iter()
@@ -1071,37 +1070,26 @@ async fn task_grant_context_is_bound_before_selector_or_source_access() {
 
 #[test]
 fn configuration_selector_negatives_are_rejected_at_immutable_bundle_load() {
-    assert_invalid_bundle(|text| {
-        replace_exact(
-            text,
-            "            valueClaims:\n              given_name: identity.given_name\n              family_name: identity.family_name\n              birth_date: identity.birth_date\n",
-            "",
-            1,
-        );
+    assert_invalid_bundle(|config| {
+        config["authorityProfiles"]["subject-bound-v1"]["grants"][0]["subjects"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("valueClaims");
     });
-    assert_invalid_bundle(|text| {
-        replace_exact(
-            text,
-            "              event_reference: grant.subject.event_reference\n",
-            "",
-            1,
-        );
+    assert_invalid_bundle(|config| {
+        config["authorityProfiles"]["institutional-review-v1"]["grants"][0]["subjects"][0]
+            ["valueClaims"]
+            .as_object_mut()
+            .unwrap()
+            .remove("event_reference");
     });
-    assert_invalid_bundle(|text| {
-        replace_exact(
-            text,
-            "              event_reference: grant.subject.event_reference\n",
-            "              event_reference: grant.subject.event_reference\n              extra: grant.subject.extra\n",
-            1,
-        );
+    assert_invalid_bundle(|config| {
+        config["authorityProfiles"]["institutional-review-v1"]["grants"][0]["subjects"][0]
+            ["valueClaims"]["extra"] = json!("grant.subject.extra");
     });
-    assert_invalid_bundle(|text| {
-        replace_exact(
-            text,
-            "          - {role: subject, selectorProfile: opaque-record-v1, valueOrigin: request}\n",
-            "          - role: subject\n            selectorProfile: opaque-record-v1\n            valueOrigin: request\n            valueClaims: {record_reference: caller.record_reference}\n",
-            1,
-        );
+    assert_invalid_bundle(|config| {
+        config["authorityProfiles"]["reviewed-caseworker-v1"]["grants"][0]["subjects"][0]
+            ["valueClaims"] = json!({"record_reference": "caller.record_reference"});
     });
 }
 
@@ -1114,10 +1102,14 @@ async fn prepare_service_for_actor(
     profile_actor: Option<&str>,
 ) -> PreparedService {
     let temporary = tempfile::tempdir().expect("temporary selector conformance root");
-    let bundle_root = temporary.path().join("bundle");
-    let secret_root = temporary.path().join("secrets");
-    let audit_path = temporary.path().join("audit.jsonl");
-    let runtime_path = temporary.path().join("runtime.yaml");
+    let root = temporary
+        .path()
+        .canonicalize()
+        .expect("canonical selector root");
+    let bundle_root = root.join("bundle");
+    let secret_root = root.join("secrets");
+    let audit_path = root.join("audit.jsonl");
+    let runtime_path = root.join("runtime.yaml");
     fs::create_dir(&bundle_root).expect("bundle root is created");
     fs::create_dir(&secret_root).expect("secret root is created");
     #[cfg(unix)]
@@ -1153,27 +1145,21 @@ async fn prepare_service_for_actor(
     let deployment =
         DeploymentInputs::load(&runtime_path).expect("closed selector deployment inputs load");
     assert!(deployment.bundle().package_digest().starts_with("sha256:"));
-    let bundle = Arc::new(deployment.into_parts().0);
+    let (bundle, document) = deployment.into_parts();
+    let bundle = Arc::new(bundle);
     let kernel = OfflineKernel::compile(Arc::clone(&bundle)).expect("selector kernel compiles");
     let secrets = Arc::new(
         SecretResolver::new([SecretProvider::File], &secret_root)
             .expect("selector secret resolver initializes"),
     );
-    let sources = bundle
-        .config
-        .sources
-        .iter()
-        .map(|(source_id, config)| {
-            let allowed_selector_sets = bundle.config.source_selector_sets(source_id);
-            SourceExecutor::new_with_selector_sets(
-                config,
-                &allowed_selector_sets,
-                Arc::clone(&secrets),
-            )
-            .map(|executor| (source_id.to_owned(), executor))
-        })
-        .collect::<Result<BTreeMap<_, _>, _>>()
-        .expect("fixed selector source executors initialize");
+    let bounds = document.config.source_acquisition;
+    let execution_bounds = EvidenceExecutionBounds {
+        maximum_data_operations: bounds.maximum_data_operations,
+        deadline_milliseconds: bounds.deadline_milliseconds,
+        maximum_response_bytes: bounds.maximum_response_bytes,
+    };
+    let sources = build_sources(&bundle, &document, &secrets)
+        .expect("current selector pack programs initialize without reading credentials");
     let destination = registry_platform_audit::FileDestination::new(&audit_path)
         .expect("selector audit destination is valid");
     let audit = EvidenceAuditLog::initialize(
@@ -1196,6 +1182,7 @@ async fn prepare_service_for_actor(
         authenticator: authenticator(),
         sources,
         audit,
+        execution_bounds,
         signer,
         server,
         audit_path,
@@ -1411,52 +1398,6 @@ async fn assert_authorization_error(
     }
 }
 
-fn source_selectors(
-    resolved: &ResolvedAuthorization,
-    inputs: &[SelectorInput],
-) -> Vec<ResolvedSourceSelector> {
-    inputs
-        .iter()
-        .map(|input| {
-            let subject = resolved
-                .subjects
-                .iter()
-                .find(|subject| subject.role == input.role)
-                .expect("input role resolves");
-            let alternative = input
-                .alternatives
-                .iter()
-                .find(|alternative| alternative.profile == subject.selector_profile)
-                .expect("input profile resolves");
-            ResolvedSourceSelector {
-                role: subject.role.clone(),
-                profile: subject.selector_profile.clone(),
-                values: alternative
-                    .fields
-                    .iter()
-                    .map(|name| {
-                        let field = subject
-                            .fields
-                            .iter()
-                            .find(|field| &field.name == name)
-                            .expect("input field resolves");
-                        let value = match &field.value {
-                            ResolvedSelectorValue::String(value)
-                            | ResolvedSelectorValue::Date(value)
-                            | ResolvedSelectorValue::ControlledCode(value) => {
-                                SelectorValue::String(value.clone())
-                            }
-                            ResolvedSelectorValue::Integer(value) => SelectorValue::Integer(*value),
-                            ResolvedSelectorValue::Boolean(value) => SelectorValue::Boolean(*value),
-                        };
-                        (field.name.clone(), value)
-                    })
-                    .collect(),
-            }
-        })
-        .collect()
-}
-
 fn selector_value(resolved: &ResolvedAuthorization, inputs: &[SelectorInput]) -> Value {
     Value::Object(
         inputs
@@ -1545,11 +1486,10 @@ fn source_identity(bundle: &Bundle, requirement_id: &str) -> (String, String) {
         .sources
         .get(requirement.initial_source())
         .expect("source is configured");
-    let adapter = Path::new(source.extract_script().as_str())
-        .file_stem()
-        .and_then(|name| name.to_str())
-        .expect("adapter has a local identifier");
-    (requirement.initial_source().to_owned(), adapter.to_owned())
+    (
+        requirement.initial_source().to_owned(),
+        source.route.as_str().to_owned(),
+    )
 }
 
 fn selector_value_canaries() -> &'static [&'static str] {
@@ -1679,15 +1619,16 @@ fn matrix_negative_cases() -> BTreeSet<String> {
     names.into_iter().collect()
 }
 
-fn assert_invalid_bundle(mutate: impl FnOnce(&mut String)) {
+fn assert_invalid_bundle(mutate: impl FnOnce(&mut Value)) {
     let temporary = tempfile::tempdir().expect("temporary invalid bundle root");
     let bundle_root = temporary.path().join("bundle");
     fs::create_dir(&bundle_root).expect("bundle root is created");
     copy_tree(&selector_bundle_root(), &bundle_root);
     let config_path = bundle_root.join("evidence.yaml");
-    let mut config = fs::read_to_string(&config_path).expect("bundle config is readable");
+    let mut config: Value = serde_norway::from_slice(&fs::read(&config_path).unwrap()).unwrap();
     mutate(&mut config);
-    fs::write(config_path, config).expect("invalid config mutation writes");
+    fs::write(config_path, serde_norway::to_string(&config).unwrap())
+        .expect("invalid config mutation writes");
     refresh_package_envelope(&bundle_root);
     make_read_only(&bundle_root);
     assert!(matches!(
@@ -1751,7 +1692,24 @@ fn write_runtime(runtime_path: &Path, bundle_root: &Path, secret_root: &Path, au
         secret_root.display(),
         audit_path.display()
     );
-    fs::write(runtime_path, runtime).expect("closed selector runtime writes");
+    let bundle_config: Value =
+        serde_norway::from_slice(&fs::read(bundle_root.join("evidence.yaml")).unwrap()).unwrap();
+    let mut runtime: Value = serde_norway::from_str(&runtime).unwrap();
+    let connections = bundle_config["sourceConnections"].as_object().unwrap().iter().map(|(name, policy)| {
+        (name.clone(), json!({
+            "id": name,
+            "endpoints": [{
+                "endpoint": "facts",
+                "baseUrl": policy["endpoints"][0]["baseUrl"],
+                "credential": {"type": "static-authorization", "tokenRef": "secret:file/source-token"},
+                "maximumConcurrency": 8
+            }],
+            "allowedPrivateCidrs": []
+        }))
+    }).collect::<serde_json::Map<_, _>>();
+    runtime["sourceConnections"] = Value::Object(connections);
+    fs::write(runtime_path, serde_norway::to_string(&runtime).unwrap())
+        .expect("closed selector runtime writes");
 }
 
 fn replace_exact(text: &mut String, from: &str, to: &str, expected: usize) {
@@ -1801,13 +1759,7 @@ fn refresh_package_envelope(root: &Path) {
     registry_platform_config::write_sum_file(
         root,
         None,
-        &registry_platform_config::PackageLimits {
-            max_files: 1_024,
-            max_file_bytes: 1024 * 1024,
-            max_total_bytes: 16 * 1024 * 1024,
-            max_depth: 3,
-            max_path_bytes: 128,
-        },
+        &registry_evidence::bundle::evidence_package_limits(),
         "evidencectl package",
     )
     .expect("package envelope is refreshed");

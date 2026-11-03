@@ -4,6 +4,7 @@
 //! pool, and the listener. The server refuses to start without OIDC and
 //! without PostgreSQL; there is no open mode.
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -24,13 +25,13 @@ use registry_platform_oidc::{
 use registry_platform_yaml::SecretReference;
 use thiserror::Error;
 use tokio::net::TcpListener;
-use tokio::sync::watch;
+use tokio::sync::{watch, Semaphore};
 use tokio_postgres::Config as PgConfig;
 use zeroize::Zeroizing;
 
 use crate::engine::component::rest::continuation::{ContinuationCodec, CursorKey, CursorTtl};
 use crate::engine::effective_contract::EffectiveContract;
-use crate::engine::load::{load, LoadError};
+use crate::engine::load::{load, LoadError, Loaded};
 use crate::facade::{router, FacadeState};
 use crate::idempotent::{
     self, PostgresIdempotencyStore, MAX_CALLER_IDENTITY_BYTES, MAX_CALLER_ISSUER_BYTES,
@@ -528,6 +529,72 @@ fn journal_retention(retention_days: u32) -> Duration {
     Duration::from_secs(u64::from(retention_days) * 24 * 60 * 60)
 }
 
+fn loaded_artifact_digest(deployment: &str) -> Result<[u8; 32], ServeError> {
+    let Some(hex) = deployment.strip_prefix("sha256:") else {
+        return Err(ServeError::Configuration(
+            "the loaded artifact digest is not sha256".to_owned(),
+        ));
+    };
+    if hex.len() != 64 {
+        return Err(ServeError::Configuration(
+            "the loaded artifact digest has the wrong length".to_owned(),
+        ));
+    }
+    let mut digest = [0_u8; 32];
+    for (index, byte) in digest.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&hex[index * 2..index * 2 + 2], 16).map_err(|_| {
+            ServeError::Configuration("the loaded artifact digest is not hexadecimal".to_owned())
+        })?;
+    }
+    Ok(digest)
+}
+
+fn async_recovery_admission(
+    loaded: &Loaded,
+) -> Result<HashMap<String, Arc<Semaphore>>, ServeError> {
+    let mut admission = HashMap::new();
+    for operation in &loaded.served {
+        let Some(completion) = operation.async_completion.as_ref() else {
+            continue;
+        };
+        let mut endpoint_ids = completion.status.endpoint_ids.iter();
+        let mut minimum = endpoint_ids
+            .next()
+            .and_then(|id| loaded.runtime.endpoints.get(id))
+            .map(|binding| binding.maximum_concurrency.get())
+            .ok_or_else(|| {
+                ServeError::Configuration(
+                    "an asynchronous status route has no runtime endpoint".to_owned(),
+                )
+            })?;
+        for id in endpoint_ids.chain(
+            completion
+                .uncertainty
+                .iter()
+                .flat_map(|recovery| recovery.status.endpoint_ids.iter()),
+        ) {
+            let concurrency = loaded
+                .runtime
+                .endpoints
+                .get(id)
+                .map(|binding| binding.maximum_concurrency.get())
+                .ok_or_else(|| {
+                    ServeError::Configuration(
+                        "an asynchronous recovery route has no runtime endpoint".to_owned(),
+                    )
+                })?;
+            minimum = minimum.min(concurrency);
+        }
+        let permits = usize::try_from(minimum).map_err(|_| {
+            ServeError::Configuration(
+                "an asynchronous recovery concurrency does not fit this host".to_owned(),
+            )
+        })?;
+        admission.insert(operation.binding.clone(), Arc::new(Semaphore::new(permits)));
+    }
+    Ok(admission)
+}
+
 /// Load the deployment, migrate the journal, and serve until a stop signal.
 pub async fn run(
     project_directory: &std::path::Path,
@@ -609,6 +676,30 @@ pub async fn run(
         }
         (false, _) => None,
     };
+    let artifact_digest = loaded_artifact_digest(&loaded.deployment)?;
+    // Every artifact activation advances the one durable deployment fence,
+    // including a successor that removes all asynchronous bindings or all
+    // writes. Otherwise an older artifact could start later and mint fresh
+    // recovery authority under a ledger the successor never advanced. The
+    // fallback store's retention is unused: this call touches only the
+    // artifact-fence table.
+    let artifact_fence = match idempotency.as_ref() {
+        Some((store, _)) => store.clone(),
+        None => PostgresIdempotencyStore::new(journal.clone(), Duration::from_secs(1))
+            .map_err(|error| ServeError::Configuration(format!("idempotency: {error}")))?,
+    };
+    artifact_fence
+        .ensure_async_artifact_compatible(
+            loaded.runtime.id.as_str(),
+            artifact_digest,
+            SystemTime::now(),
+        )
+        .await
+        .map_err(|error| {
+            ServeError::Configuration(format!("asynchronous artifact custody: {error}"))
+        })?;
+    let async_recovery = async_recovery_admission(&loaded)?;
+    let async_retention = idempotency.as_ref().map(|(_, retention)| *retention);
     let facade_idempotency = idempotency.as_ref().map(|(store, _)| store.clone());
     let address: SocketAddr = loaded.runtime.listener.bind.0;
     let listener = TcpListener::bind(address)
@@ -628,6 +719,9 @@ pub async fn run(
         authenticator,
         journal,
         idempotency: facade_idempotency,
+        artifact_digest,
+        async_retention,
+        async_recovery,
     });
     let (shutdown_sender, shutdown_receiver) = watch::channel(false);
     let mut server_shutdown = shutdown_receiver.clone();

@@ -19,17 +19,24 @@ use deadpool_postgres::{
 };
 use registry_platform_config::SecretResolver;
 use serde_json::Value;
+use tokio_postgres::tls::{MakeTlsConnect, TlsConnect};
 use tokio_postgres::Error as PgError;
+use tokio_postgres::Socket;
 
 /// Every schema version, in the order it is applied. Each later
 /// migration takes the next number.
-pub(crate) const MIGRATIONS: [(i64, &str); 2] = [
+pub(crate) const MIGRATIONS: [(i64, &str); 4] = [
     (100, include_str!("store/migrations/0100_job_items.sql")),
     (101, include_str!("store/migrations/0101_rescan_active.sql")),
+    (102, include_str!("store/migrations/0102_held_items.sql")),
+    (
+        103,
+        include_str!("store/migrations/0103_coordinator_delivery_identity.sql"),
+    ),
 ];
 
 /// The newest schema version this release applies.
-pub(crate) const SUPPORTED_SCHEMA_VERSION: i64 = MIGRATIONS[MIGRATIONS.len() - 1].0;
+pub const SUPPORTED_SCHEMA_VERSION: i64 = MIGRATIONS[MIGRATIONS.len() - 1].0;
 
 /// Shared advisory-lock key for schema migration. Its ASCII bytes spell
 /// "ajobstat", distinct from every other migration lock in the product.
@@ -64,6 +71,22 @@ pub enum StoreError {
     /// The pass's lease was no longer held when a write reached the
     /// store: another pass owns the job, and this pass's writes stop.
     LeaseLost,
+    /// A legacy pending row predates persisted receiver identity, so the
+    /// process cannot prove that retrying it reaches the same authority.
+    ReceiverIdentityUnknown,
+    /// A pending retry selected a different public receiver identity than
+    /// the one frozen before its earlier delivery attempt.
+    ReceiverIdentityChanged,
+    /// A legacy pending row predates the persisted canonical body digest.
+    CanonicalBodyIdentityUnknown,
+    /// A pending retry produced canonical envelope bytes other than those
+    /// frozen before its earlier delivery attempt.
+    CanonicalBodyIdentityChanged,
+    /// A pending delivery attempt reached the durable positive bigint bound.
+    DeliveryAttemptExhausted,
+    /// A file/SFTP item identity changed, or legacy state already contains
+    /// traversal/item progress that cannot be attributed to the current read semantics.
+    ItemIdentityMigrationRequired,
     /// The position to save is longer, serialized compactly, than the
     /// engine's `next` cursor bound.
     PositionBound {
@@ -111,6 +134,30 @@ impl fmt::Display for StoreError {
                 formatter,
                 "the pass lease was no longer held; another pass owns the job"
             ),
+            StoreError::ReceiverIdentityUnknown => write!(
+                formatter,
+                "the pending delivery predates stored receiver identity; retry requires explicit recovery"
+            ),
+            StoreError::ReceiverIdentityChanged => write!(
+                formatter,
+                "the selected receiver identity changed while a delivery remains pending"
+            ),
+            StoreError::CanonicalBodyIdentityUnknown => write!(
+                formatter,
+                "the pending delivery predates its stored canonical body identity; retry requires explicit recovery"
+            ),
+            StoreError::CanonicalBodyIdentityChanged => write!(
+                formatter,
+                "the canonical event body changed while a delivery remains pending"
+            ),
+            StoreError::DeliveryAttemptExhausted => write!(
+                formatter,
+                "the pending delivery attempt reached the supported bigint bound"
+            ),
+            StoreError::ItemIdentityMigrationRequired => write!(
+                formatter,
+                "the file or SFTP item identity changed or predates its durable binding; an explicit migration is required"
+            ),
             StoreError::PositionBound { bytes, maximum } => write!(
                 formatter,
                 "the position to save is {bytes} bytes serialized, over the {maximum}-byte cursor bound"
@@ -134,6 +181,12 @@ impl std::error::Error for StoreError {
             | StoreError::MigrationLock
             | StoreError::LeaseHeld
             | StoreError::LeaseLost
+            | StoreError::ReceiverIdentityUnknown
+            | StoreError::ReceiverIdentityChanged
+            | StoreError::CanonicalBodyIdentityUnknown
+            | StoreError::CanonicalBodyIdentityChanged
+            | StoreError::DeliveryAttemptExhausted
+            | StoreError::ItemIdentityMigrationRequired
             | StoreError::PositionBound { .. }
             | StoreError::Pool(_) => None,
             StoreError::Query(error) => Some(error),
@@ -255,7 +308,7 @@ async fn apply_migrations(client: &impl GenericClient) -> Result<(), StoreError>
 
 /// The job store block of the operator runtime config (`store:`), read
 /// by the one job runtime reader the compile path shares.
-pub use registry_adapter::engine::job_sources::JobStoreConfig;
+pub use registry_adapter_engine::job_sources::JobStoreConfig;
 
 /// The margin the pass lease carries beside the profile's page
 /// deadline, renewed at every fenced write, so an operator sees a
@@ -286,33 +339,54 @@ pub fn build_pool(config: &JobStoreConfig, resolver: &SecretResolver) -> Result<
     if postgres.get_user().is_none() || postgres.get_dbname().is_none() {
         return Err(invalid("the connection url names no user or database"));
     }
-    let manager_config = ManagerConfig {
-        recycling_method: RecyclingMethod::Verified,
-    };
     #[cfg(feature = "postgres-test")]
-    let manager = if config.test_only_plaintext {
+    let pool = if config.test_only_plaintext {
         postgres.ssl_mode(tokio_postgres::config::SslMode::Disable);
-        Manager::from_config(postgres, tokio_postgres::NoTls, manager_config)
+        build_verified_pool(postgres, tokio_postgres::NoTls, 4)
     } else {
         postgres.ssl_mode(tokio_postgres::config::SslMode::Require);
-        Manager::from_config(postgres, tls_connector(config, resolver)?, manager_config)
+        build_verified_pool(postgres, tls_connector(config, resolver)?, 4)
     };
     #[cfg(not(feature = "postgres-test"))]
-    let manager = {
+    let pool = {
         if config.test_only_plaintext {
             return Err(invalid("plaintext connections are refused in this build"));
         }
         postgres.ssl_mode(tokio_postgres::config::SslMode::Require);
-        Manager::from_config(postgres, tls_connector(config, resolver)?, manager_config)
+        build_verified_pool(postgres, tls_connector(config, resolver)?, 4)
     };
+    pool.map_err(|error| invalid(&error))
+}
+
+/// Build one finite verified PostgreSQL pool. The store and every source pool
+/// share the same connection-health check and acquisition deadlines; callers
+/// still choose their own connection config and TLS posture.
+pub(crate) fn build_verified_pool<T>(
+    postgres: tokio_postgres::Config,
+    tls: T,
+    maximum_connections: usize,
+) -> Result<Pool, String>
+where
+    T: MakeTlsConnect<Socket> + Clone + Sync + Send + 'static,
+    T::Stream: Sync + Send,
+    T::TlsConnect: Sync + Send,
+    <T::TlsConnect as TlsConnect<Socket>>::Future: Send,
+{
+    let manager = Manager::from_config(
+        postgres,
+        tls,
+        ManagerConfig {
+            recycling_method: RecyclingMethod::Verified,
+        },
+    );
     Pool::builder(manager)
-        .max_size(4)
+        .max_size(maximum_connections)
         .wait_timeout(Some(Duration::from_secs(5)))
         .create_timeout(Some(Duration::from_secs(5)))
         .recycle_timeout(Some(Duration::from_secs(5)))
         .runtime(Runtime::Tokio1)
         .build()
-        .map_err(|error| invalid(&format!("the pool could not be built: {error}")))
+        .map_err(|error| format!("the pool could not be built: {error}"))
 }
 
 /// The TLS connector for the job host's database connections: the
@@ -323,31 +397,127 @@ fn tls_connector(
     resolver: &SecretResolver,
 ) -> Result<tokio_postgres_rustls::MakeRustlsConnect, StoreError> {
     let invalid = |what: &str| StoreError::Pool(format!("store: {what}"));
-    let _ = rustls::crypto::ring::default_provider().install_default();
     let Some(reference) = &config.trusted_root_certificate_ref else {
-        let (connector, warnings) =
-            tokio_postgres_rustls::MakeRustlsConnect::with_native_certs()
-                .map_err(|_| invalid("no platform root certificate could be loaded"))?;
-        for warning in warnings {
-            tracing::warn!("a platform root certificate was skipped: {warning}");
-        }
-        return Ok(connector);
+        return native_postgres_tls()
+            .map_err(|_| invalid("no platform root certificate could be loaded"));
     };
     let protected = resolver
         .resolve(reference.as_str())
         .map_err(|_| invalid("a certificate reference could not be resolved"))?;
-    let mut roots = rustls::RootCertStore::empty();
-    use rustls::pki_types::pem::PemObject as _;
-    for certificate in rustls::pki_types::CertificateDer::pem_slice_iter(protected.expose_secret())
-    {
-        roots
-            .add(certificate.map_err(|_| invalid("a trusted certificate is unreadable"))?)
-            .map_err(|_| invalid("a trusted certificate is unusable"))?;
+    postgres_tls_from_pem(protected.expose_secret())
+        .map_err(|_| invalid("a trusted certificate is unreadable or unusable"))
+}
+
+/// TLS using the platform's native roots, including the existing value-free
+/// warning for a root the platform skipped.
+pub(crate) fn native_postgres_tls() -> Result<tokio_postgres_rustls::MakeRustlsConnect, ()> {
+    let (connector, warnings) =
+        tokio_postgres_rustls::MakeRustlsConnect::with_native_certs().map_err(|_| ())?;
+    for warning in warnings {
+        tracing::warn!("a platform root certificate was skipped: {warning}");
     }
+    Ok(connector)
+}
+
+/// TLS over a caller-supplied bounded PEM bundle. Crypto-provider selection
+/// remains the store's existing ring selection and is reused by source pools.
+pub(crate) fn postgres_tls_from_pem(
+    pem: &[u8],
+) -> Result<tokio_postgres_rustls::MakeRustlsConnect, ()> {
+    postgres_tls_from_root_store(postgres_root_store_from_pem(pem)?)
+}
+
+/// TLS over the platform roots plus a caller-supplied bounded PEM bundle.
+/// Source connections use this additive trust posture; the job store keeps
+/// its existing configured-root replacement behavior above.
+#[cfg(feature = "job-postgres")]
+pub(crate) fn postgres_tls_from_native_and_pem(
+    pem: &[u8],
+) -> Result<tokio_postgres_rustls::MakeRustlsConnect, ()> {
+    let mut roots = native_postgres_root_store()?;
+    if add_pem_roots(&mut roots, pem)? == 0 {
+        return Err(());
+    }
+    postgres_tls_from_root_store(roots)
+}
+
+fn postgres_root_store_from_pem(pem: &[u8]) -> Result<rustls::RootCertStore, ()> {
+    let mut roots = rustls::RootCertStore::empty();
+    let _ = add_pem_roots(&mut roots, pem)?;
+    Ok(roots)
+}
+
+fn add_pem_roots(roots: &mut rustls::RootCertStore, pem: &[u8]) -> Result<usize, ()> {
+    use rustls::pki_types::pem::PemObject as _;
+    let mut count = 0_usize;
+    for certificate in rustls::pki_types::CertificateDer::pem_slice_iter(pem) {
+        roots.add(certificate.map_err(|_| ())?).map_err(|_| ())?;
+        count += 1;
+    }
+    Ok(count)
+}
+
+#[cfg(feature = "job-postgres")]
+fn native_postgres_root_store() -> Result<rustls::RootCertStore, ()> {
+    let native = rustls_native_certs::load_native_certs();
+    for _ in native.errors {
+        tracing::warn!("a platform root certificate was skipped");
+    }
+    if native.certs.is_empty() {
+        return Err(());
+    }
+    let mut roots = rustls::RootCertStore::empty();
+    roots.add_parsable_certificates(native.certs);
+    Ok(roots)
+}
+
+fn postgres_tls_from_root_store(
+    roots: rustls::RootCertStore,
+) -> Result<tokio_postgres_rustls::MakeRustlsConnect, ()> {
+    #[cfg(feature = "job-rabbitmq")]
+    crate::tls_provider::initialize().map_err(|_| ())?;
+    #[cfg(not(feature = "job-rabbitmq"))]
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let client = rustls::ClientConfig::builder()
         .with_root_certificates(roots)
         .with_no_client_auth();
     Ok(tokio_postgres_rustls::MakeRustlsConnect::new(client))
+}
+
+#[cfg(all(test, feature = "job-postgres"))]
+mod postgres_tls_tests {
+    use super::*;
+
+    const PRIVATE_ROOT: &[u8] = b"-----BEGIN CERTIFICATE-----\n\
+MIIBnzCCAUWgAwIBAgIUGSkZVSD93tTafMYk9zXkW+9N+VcwCgYIKoZIzj0EAwIw\n\
+JTEjMCEGA1UEAwwaUmVnaXN0cnkgQWRhcHRlciBUZXN0IFJvb3QwHhcNMjYxMDMw\n\
+MDQ1NDIwWhcNMzYxMDI3MDQ1NDIwWjAlMSMwIQYDVQQDDBpSZWdpc3RyeSBBZGFw\n\
+dGVyIFRlc3QgUm9vdDBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABIDV7zIjqChx\n\
+97aw2DaQUGi02tuThFuNl5IKP4RFr+5lxRclqsvlNfhU0Y4JnNLDuxdToqXgVKz6\n\
+DnA2hpkMqZyjUzBRMB0GA1UdDgQWBBSPV2C1/cYwPYf/YYcSqJMvbWT8OjAfBgNV\n\
+HSMEGDAWgBSPV2C1/cYwPYf/YYcSqJMvbWT8OjAPBgNVHRMBAf8EBTADAQH/MAoG\n\
+CCqGSM49BAMCA0gAMEUCIQDE6ceiEQLBfR3wcAbPoXkClwMWZCs+QRHpi9asKR6w\n\
+GwIgG/WsmuvsVVNeDynYVj92+B5SNtyVRK2+p3eo97VtmF0=\n\
+-----END CERTIFICATE-----\n";
+
+    #[test]
+    fn source_private_roots_are_additive_while_store_private_roots_replace() {
+        let native = native_postgres_root_store().expect("the test host has platform roots");
+        let replacement =
+            postgres_root_store_from_pem(PRIVATE_ROOT).expect("the private root parses");
+        let mut additive = native_postgres_root_store().expect("the platform roots reload");
+        let added = add_pem_roots(&mut additive, PRIVATE_ROOT).expect("the private root appends");
+        assert_eq!(added, 1);
+        assert_eq!(
+            replacement.len(),
+            1,
+            "the store's custom roots still replace"
+        );
+        assert!(
+            additive.len() > native.len(),
+            "the source keeps platform roots and adds its private root"
+        );
+    }
 }
 
 /// The last hand-off's outcome, the closed status set of the item table.
@@ -359,6 +529,8 @@ pub enum ItemStatus {
     Acknowledged,
     /// The destination refused the item with its own code.
     Refused,
+    /// Delivery cannot safely continue without an operator's decision.
+    Held,
 }
 
 impl ItemStatus {
@@ -369,6 +541,7 @@ impl ItemStatus {
             ItemStatus::Pending => "pending",
             ItemStatus::Acknowledged => "acknowledged",
             ItemStatus::Refused => "refused",
+            ItemStatus::Held => "held",
         }
     }
 
@@ -377,6 +550,7 @@ impl ItemStatus {
             "pending" => Some(ItemStatus::Pending),
             "acknowledged" => Some(ItemStatus::Acknowledged),
             "refused" => Some(ItemStatus::Refused),
+            "held" => Some(ItemStatus::Held),
             _ => None,
         }
     }
@@ -441,6 +615,12 @@ pub(crate) struct PriorRow {
     pub prior_run_id: Option<String>,
     /// Whether an earlier digest's receipt may have been lost.
     pub admitted_before: bool,
+    /// The persisted event identity time for this item key.
+    pub first_seen: SystemTime,
+    /// The frozen signed-event time for the current sequence.
+    pub event_time: SystemTime,
+    /// The latest delivery attempt persisted for the current sequence.
+    pub delivery_attempt: i64,
 }
 
 /// The pass's decision for one item against its stored row: a new item
@@ -456,6 +636,7 @@ pub(crate) fn decide(prior: Option<&PriorRow>, digest: &str, retry_refused: bool
             ItemStatus::Acknowledged => Decision::Skip,
             ItemStatus::Refused if retry_refused => Decision::DeliverRedelivery,
             ItemStatus::Refused => Decision::Skip,
+            ItemStatus::Held => Decision::Skip,
         },
         Some(_) => Decision::DeliverChanged,
     }
@@ -476,6 +657,17 @@ pub struct StagedItem {
     pub prior_run_id: Option<String>,
     /// Whether a prior digest's receipt may have been lost.
     pub admitted_before: bool,
+    /// When the key first entered the item table, used for status age.
+    pub first_seen: SystemTime,
+    /// The frozen event time for this sequence. A retry receives the exact
+    /// same value, while a changed digest receives a new sequence time.
+    pub event_time: SystemTime,
+    /// The positive delivery attempt for this sequence. A same-sequence
+    /// re-delivery advances it only after receiver identity agrees.
+    pub delivery_attempt: i64,
+    /// Whether this is a retry of a pending hand-off whose receipt may have
+    /// been lost. Only this state is governed by BReg's receipt horizon.
+    pub receipt_uncertain: bool,
     /// How the staged delivery classifies in the report.
     pub classification: StagedClassification,
 }
@@ -523,8 +715,9 @@ pub async fn stage_item(
         Decision::DeliverNew => {
             tx.execute(
                 "INSERT INTO adapter_job_items \
-                 (job_id, item_key, last_digest, sequence, status, first_seen, last_seen) \
-                 VALUES ($1, $2, $3, 1, 'pending', $4, $4)",
+                 (job_id, item_key, last_digest, sequence, status, first_seen, last_seen, \
+                  event_time, delivery_attempt, receiver_identity_known, canonical_body_identity_known) \
+                 VALUES ($1, $2, $3, 1, 'pending', $4, $4, $4, 1, true, true)",
                 &[&job_id, &key, &digest, &now],
             )
             .await?;
@@ -534,6 +727,10 @@ pub async fn stage_item(
                 digest: digest.to_string(),
                 prior_run_id: None,
                 admitted_before: false,
+                first_seen: now,
+                event_time: now,
+                delivery_attempt: 1,
+                receipt_uncertain: false,
                 classification: StagedClassification::New,
             })
         }
@@ -548,7 +745,9 @@ pub async fn stage_item(
                     "UPDATE adapter_job_items SET \
                      last_digest = $3, sequence = sequence + 1, status = 'pending', \
                      code = NULL, run_id = NULL, prior_run_id = COALESCE(run_id, prior_run_id), \
-                     admitted_before = $4, last_seen = $5 \
+                     admitted_before = $4, last_seen = $5, event_time = $5, \
+                     delivery_attempt = 1, receiver_identity = NULL, receiver_identity_known = true, \
+                     canonical_body_identity = NULL, canonical_body_identity_known = true \
                      WHERE job_id = $1 AND item_key = $2",
                     &[&job_id, &key, &digest, &admitted_before, &now],
                 )
@@ -564,11 +763,19 @@ pub async fn stage_item(
                 digest: digest.to_string(),
                 prior_run_id: prior.run_id.clone().or_else(|| prior.prior_run_id.clone()),
                 admitted_before,
+                first_seen: prior.first_seen,
+                event_time: now,
+                delivery_attempt: 1,
+                receipt_uncertain: false,
                 classification: StagedClassification::Changed,
             })
         }
         Decision::DeliverRedelivery => {
             let prior = prior.as_ref().expect("a re-delivery implies a prior row");
+            let delivery_attempt = prior
+                .delivery_attempt
+                .checked_add(1)
+                .ok_or(StoreError::DeliveryAttemptExhausted)?;
             tx.execute(
                 "UPDATE adapter_job_items SET status = 'pending', code = NULL, last_seen = $3 \
                  WHERE job_id = $1 AND item_key = $2",
@@ -581,6 +788,10 @@ pub async fn stage_item(
                 digest: digest.to_string(),
                 prior_run_id: prior.run_id.clone().or_else(|| prior.prior_run_id.clone()),
                 admitted_before: prior.admitted_before,
+                first_seen: prior.first_seen,
+                event_time: prior.event_time,
+                delivery_attempt,
+                receipt_uncertain: prior.status == ItemStatus::Pending,
                 classification: StagedClassification::Redelivered,
             })
         }
@@ -602,6 +813,7 @@ pub async fn peek_item(
     key: &str,
     digest: &str,
     retry_refused: bool,
+    now: SystemTime,
 ) -> Result<Option<StagedItem>, StoreError> {
     let prior = read_prior(client, job_id, key, false).await?;
     let decision = decide(prior.as_ref(), digest, retry_refused);
@@ -614,6 +826,10 @@ pub async fn peek_item(
             digest: digest.to_string(),
             prior_run_id: None,
             admitted_before: false,
+            first_seen: now,
+            event_time: now,
+            delivery_attempt: 1,
+            receipt_uncertain: false,
             classification: StagedClassification::New,
         }),
         (Decision::Skip, _) => None,
@@ -624,6 +840,10 @@ pub async fn peek_item(
             prior_run_id: prior.run_id.clone().or_else(|| prior.prior_run_id.clone()),
             admitted_before: prior.admitted_before
                 || matches!(prior.status, ItemStatus::Pending | ItemStatus::Acknowledged),
+            first_seen: prior.first_seen,
+            event_time: now,
+            delivery_attempt: 1,
+            receipt_uncertain: false,
             classification: StagedClassification::Changed,
         }),
         (Decision::DeliverRedelivery, Some(prior)) => Some(StagedItem {
@@ -632,6 +852,13 @@ pub async fn peek_item(
             digest: digest.to_string(),
             prior_run_id: prior.run_id.clone().or_else(|| prior.prior_run_id.clone()),
             admitted_before: prior.admitted_before,
+            first_seen: prior.first_seen,
+            event_time: prior.event_time,
+            delivery_attempt: prior
+                .delivery_attempt
+                .checked_add(1)
+                .ok_or(StoreError::DeliveryAttemptExhausted)?,
+            receipt_uncertain: prior.status == ItemStatus::Pending,
             classification: StagedClassification::Redelivered,
         }),
         // A changed digest or re-delivery implies a prior row; the
@@ -647,21 +874,95 @@ async fn read_prior(
     for_update: bool,
 ) -> Result<Option<PriorRow>, StoreError> {
     let query = if for_update {
-        "SELECT last_digest, sequence, status, run_id, prior_run_id, admitted_before \
+        "SELECT last_digest, sequence, status, run_id, prior_run_id, admitted_before, first_seen, \
+         event_time, delivery_attempt \
          FROM adapter_job_items WHERE job_id = $1 AND item_key = $2 FOR UPDATE"
     } else {
-        "SELECT last_digest, sequence, status, run_id, prior_run_id, admitted_before \
+        "SELECT last_digest, sequence, status, run_id, prior_run_id, admitted_before, first_seen, \
+         event_time, delivery_attempt \
          FROM adapter_job_items WHERE job_id = $1 AND item_key = $2"
     };
     let row = client.query_opt(query, &[&job_id, &key]).await?;
     Ok(row.map(|row| PriorRow {
         last_digest: row.get(0),
         sequence: row.get(1),
-        status: ItemStatus::from_str(row.get(2)).expect("the status check admits three values"),
+        status: ItemStatus::from_str(row.get(2)).expect("the status check admits four values"),
         run_id: row.get(3),
         prior_run_id: row.get(4),
         admitted_before: row.get(5),
+        first_seen: row.get(6),
+        event_time: row.get(7),
+        delivery_attempt: row.get(8),
     }))
+}
+
+/// Freeze or verify the selected public receiver identity before a signed
+/// delivery leaves the process. The write and lease renewal commit together.
+/// A pending retry can proceed only under exact identity equality. A reviewed
+/// rescan of a known refusal may deliberately bind the currently selected
+/// receiver because the earlier refusal is known to have had no effect.
+///
+/// # Errors
+///
+/// A legacy pending row with no identity, a changed identity, a lost lease,
+/// a missing row, or a failed write refuses before the destination is called.
+#[allow(clippy::too_many_arguments)]
+pub async fn bind_delivery_identity(
+    client: &mut Object,
+    job_id: &str,
+    key: &str,
+    receiver_identity: &[u8; 32],
+    canonical_body_identity: &[u8; 32],
+    delivery_attempt: i64,
+    allow_rebind: bool,
+    token: i64,
+    ttl: Duration,
+) -> Result<(), StoreError> {
+    let tx = client.transaction().await?;
+    renew_lease(&tx, job_id, token, ttl).await?;
+    let row = tx
+        .query_opt(
+            "SELECT receiver_identity_known, receiver_identity, \
+                    canonical_body_identity_known, canonical_body_identity \
+             FROM adapter_job_items \
+             WHERE job_id = $1 AND item_key = $2 FOR UPDATE",
+            &[&job_id, &key],
+        )
+        .await?
+        .ok_or_else(missing_item)?;
+    let known: bool = row.get(0);
+    let stored: Option<Vec<u8>> = row.get(1);
+    let body_known: bool = row.get(2);
+    let stored_body: Option<Vec<u8>> = row.get(3);
+    let agrees = stored.as_deref() == Some(receiver_identity.as_slice());
+    let body_agrees = stored_body.as_deref() == Some(canonical_body_identity.as_slice());
+    if !allow_rebind && !known {
+        return Err(StoreError::ReceiverIdentityUnknown);
+    }
+    if !allow_rebind && stored.is_some() && !agrees {
+        return Err(StoreError::ReceiverIdentityChanged);
+    }
+    if !allow_rebind && !body_known {
+        return Err(StoreError::CanonicalBodyIdentityUnknown);
+    }
+    if !allow_rebind && stored_body.is_some() && !body_agrees {
+        return Err(StoreError::CanonicalBodyIdentityChanged);
+    }
+    tx.execute(
+        "UPDATE adapter_job_items SET receiver_identity_known = true, receiver_identity = $3, \
+         canonical_body_identity_known = true, canonical_body_identity = $4, \
+         delivery_attempt = $5 WHERE job_id = $1 AND item_key = $2",
+        &[
+            &job_id,
+            &key,
+            &receiver_identity.as_slice(),
+            &canonical_body_identity.as_slice(),
+            &delivery_attempt,
+        ],
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(())
 }
 
 /// Record an acknowledged hand-off: the row settles, the destination's
@@ -737,6 +1038,44 @@ pub async fn record_refused(
     Ok(())
 }
 
+/// Hold one item for an operator: the code and optional destination
+/// reference are retained, and the row counts as possibly admitted so a
+/// later digest is a revision. A held row has no automatic release or
+/// mark-accepted transition; only a later source digest can move it back
+/// through staging.
+///
+/// # Errors
+///
+/// A lost lease, a missing row, or a failed write refuses; the caller
+/// stops rather than claiming the item was held durably.
+#[allow(clippy::too_many_arguments)]
+pub async fn record_held(
+    client: &mut Object,
+    job_id: &str,
+    key: &str,
+    code: &str,
+    run_id: Option<&str>,
+    now: SystemTime,
+    token: i64,
+    ttl: Duration,
+) -> Result<(), StoreError> {
+    let tx = client.transaction().await?;
+    renew_lease(&tx, job_id, token, ttl).await?;
+    let row = tx
+        .execute(
+            "UPDATE adapter_job_items SET status = 'held', code = $3, \
+             run_id = COALESCE($4, run_id), admitted_before = true, last_seen = $5 \
+             WHERE job_id = $1 AND item_key = $2",
+            &[&job_id, &key, &code, &run_id, &now],
+        )
+        .await?;
+    if row != 1 {
+        return Err(missing_item());
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
 /// Create the job's state row when the job's first pass needs it;
 /// existing rows are untouched.
 ///
@@ -750,6 +1089,68 @@ pub async fn ensure_state(client: &impl GenericClient, job_id: &str) -> Result<(
             &[&job_id],
         )
         .await?;
+    Ok(())
+}
+
+/// Bind the governed file/SFTP item identity function before any source read.
+/// A legacy state may adopt it only while both its cursor and item set are
+/// empty. Equality is recoverable; mismatch or non-empty legacy state requires
+/// an explicit operator migration and never rewrites existing identity.
+///
+/// # Errors
+///
+/// A mismatch, non-empty legacy state, lost lease, missing state row, or failed
+/// query refuses without changing the saved position or item rows.
+pub async fn bind_item_identity(
+    client: &mut Object,
+    job_id: &str,
+    digest: Option<&[u8; 32]>,
+    token: i64,
+    ttl: Duration,
+) -> Result<(), StoreError> {
+    let tx = client.transaction().await?;
+    renew_lease(&tx, job_id, token, ttl).await?;
+    let state = tx
+        .query_opt(
+            "SELECT item_identity_digest, position FROM adapter_job_state \
+             WHERE job_id = $1 FOR UPDATE",
+            &[&job_id],
+        )
+        .await?
+        .ok_or_else(|| {
+            StoreError::Pool("the job state row disappeared while its lease was held".to_string())
+        })?;
+    let stored: Option<Vec<u8>> = state.get(0);
+    let position: Option<Value> = state.get(1);
+    match (stored.as_deref(), digest) {
+        (Some(stored), Some(digest)) if stored == digest.as_slice() => {
+            tx.commit().await?;
+            return Ok(());
+        }
+        (Some(_), _) => return Err(StoreError::ItemIdentityMigrationRequired),
+        (None, None) => {
+            tx.commit().await?;
+            return Ok(());
+        }
+        (None, Some(_)) => {}
+    }
+    let item_count: i64 = tx
+        .query_one(
+            "SELECT count(*) FROM adapter_job_items WHERE job_id = $1",
+            &[&job_id],
+        )
+        .await?
+        .get(0);
+    if position.is_some() || item_count != 0 {
+        return Err(StoreError::ItemIdentityMigrationRequired);
+    }
+    let digest = digest.expect("the none/none identity state returned above");
+    tx.execute(
+        "UPDATE adapter_job_state SET item_identity_digest = $2 WHERE job_id = $1",
+        &[&job_id, &digest.as_slice()],
+    )
+    .await?;
+    tx.commit().await?;
     Ok(())
 }
 
@@ -1050,8 +1451,12 @@ pub struct StatusCounts {
     pub acknowledged: u64,
     /// Rows the destination refused.
     pub refused: u64,
+    /// Rows waiting for an operator without another automatic attempt.
+    pub held: u64,
     /// Refused rows by the destination's own code.
     pub refusals_by_code: BTreeMap<String, u64>,
+    /// Held rows by their value-free reason code.
+    pub holds_by_code: BTreeMap<String, u64>,
 }
 
 /// Count the job's items by status and refusal code.
@@ -1076,8 +1481,21 @@ pub async fn item_counts(
             Some(ItemStatus::Pending) => counts.pending = count.max(0) as u64,
             Some(ItemStatus::Acknowledged) => counts.acknowledged = count.max(0) as u64,
             Some(ItemStatus::Refused) => counts.refused = count.max(0) as u64,
+            Some(ItemStatus::Held) => counts.held = count.max(0) as u64,
             None => {}
         }
+    }
+    for row in client
+        .query(
+            "SELECT code, count(*) FROM adapter_job_items \
+             WHERE job_id = $1 AND status = 'held' AND code IS NOT NULL GROUP BY code",
+            &[&job_id],
+        )
+        .await?
+    {
+        let code: String = row.get(0);
+        let count: i64 = row.get(1);
+        counts.holds_by_code.insert(code, count.max(0) as u64);
     }
     for row in client
         .query(
@@ -1092,6 +1510,46 @@ pub async fn item_counts(
         counts.refusals_by_code.insert(code, count.max(0) as u64);
     }
     Ok(counts)
+}
+
+/// Pending direct-BReg receipts close to, or already past, the job's
+/// declared receipt horizon. The warning window is the last day of the
+/// horizon and carries counts only, never item identity.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ReceiptHorizonCounts {
+    pub nearing: u64,
+    pub expired: u64,
+}
+
+/// Count pending rows in the last day before the receipt horizon and rows
+/// already past it.
+pub async fn receipt_horizon_counts(
+    client: &impl GenericClient,
+    job_id: &str,
+    now: SystemTime,
+    retention_days: u16,
+) -> Result<ReceiptHorizonCounts, StoreError> {
+    let horizon = Duration::from_secs(u64::from(retention_days) * 86_400);
+    let warning_age = horizon.saturating_sub(Duration::from_secs(86_400));
+    let warning_before = now
+        .checked_sub(warning_age)
+        .unwrap_or(SystemTime::UNIX_EPOCH);
+    let expired_before = now.checked_sub(horizon).unwrap_or(SystemTime::UNIX_EPOCH);
+    let row = client
+        .query_one(
+            "SELECT \
+             count(*) FILTER (WHERE first_seen <= $3 AND first_seen > $2), \
+             count(*) FILTER (WHERE first_seen <= $2) \
+             FROM adapter_job_items WHERE job_id = $1 AND status = 'pending'",
+            &[&job_id, &expired_before, &warning_before],
+        )
+        .await?;
+    let nearing: i64 = row.get(0);
+    let expired: i64 = row.get(1);
+    Ok(ReceiptHorizonCounts {
+        nearing: nearing.max(0) as u64,
+        expired: expired.max(0) as u64,
+    })
 }
 
 /// Read one item's row for the operator's inspect surface.
@@ -1116,7 +1574,7 @@ pub async fn inspect_item(
         key: row.get(0),
         last_digest: row.get(1),
         sequence: row.get(2),
-        status: ItemStatus::from_str(row.get(3)).expect("the status check admits three values"),
+        status: ItemStatus::from_str(row.get(3)).expect("the status check admits four values"),
         code: row.get(4),
         run_id: row.get(5),
         prior_run_id: row.get(6),

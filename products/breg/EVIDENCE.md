@@ -27,6 +27,15 @@ bregctl generate evidence-source ./registry \
   --output ./exports/registry-status
 ```
 
+The generated Adapter pack declares the exact authentication kind its endpoint
+binding must use. A direct export defaults to `static-authorization`; select
+`--authentication oauth2-private-key-jwt` when the reviewed Evidence target uses
+that flow. The guided native `evidencectl source add` path selects
+`oauth2-private-key-jwt` together with its dedicated BReg development client.
+Changing the selection changes the pack version and export provenance, so an
+import or update cannot treat different authentication-contract bytes as the
+same immutable pack.
+
 Repeat `--selector` to offer alternatives in the same source. Each request
 chooses exactly one profile and makes one lookup. There is no fallback search.
 Use another export with another `--source-id` when the selected facts, authority

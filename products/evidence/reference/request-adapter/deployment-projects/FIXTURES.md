@@ -82,8 +82,9 @@ the file. Source/response, selector, fact and expected-value trees retain their
 reviewed payload keys and nulls. The existing source, selector and output
 contracts check those trees.
 
-The coequal form uses `source`/`sources`, `expectedValue`/`expectedValues`,
-`expectedLookup`, `expectedPublicProblem`, `derivationRuns` and `signedSuccess`.
+The coequal form uses `source`/`sources`, optional `expectedFacts`,
+`expectedValue`/`expectedValues`, `expectedLookup`, `expectedPublicProblem`,
+`derivationRuns` and `signedSuccess`.
 Its rejection controls are `sourceFailure`, `injectedDerivation` and
 `companionBundle`. Form-specific combinations, source-stage rules, coverage and
 privacy remain runtime semantic checks. Retired snake_case fixture control
@@ -360,7 +361,7 @@ those stages apply. Omission is not treated as a wildcard.
 | `bundle` | `accepted` or `rejected` | Startup bundle result. |
 | `outputGate` | `accepted` or `rejected` | Derived-value gate result. |
 | `rejectedBefore` | `credential`, `source`, `derivation`, or `signing` | Latest boundary that must not be crossed. |
-| `sourceRequestCount` | integer | Exact number of evidence-data operations the production path would attempt. The reference evaluator permits `0` through `2`; fetch-set cases use the coequal fixture form and do not declare this control. For an injected `sourceFailure`, this count is modeled; it does not prove the fixture harness executed the source. |
+| `sourceRequestCount` | integer | Exact number of evidence-data operations in the offline pack replay, excluding OAuth work. The reference evaluator permits `0` through `5`, matching the offline runner's default acquisition budget. Runtime deployments retain their separately configured limits; this expectation does not configure them. For an injected `sourceFailure`, the count is modeled and does not prove source execution. |
 | `expectedTransport` | object | Exact expanded path, encoded query string, and normalized body bytes for a transport-focused case, or the exact statement artifact and bound parameters where the source reads an extract. |
 
 `expectedTransport` is accepted only for the `selectorOverrides` form.
@@ -380,6 +381,41 @@ configured source outcome and maps to `evidence.unavailable`, not
 Every `facts` expectation is exact. If a test cares about only two of four
 facts, it must still list all four. This prevents fixtures from silently
 accepting a new or leaked fact.
+
+The coequal form spells the same expectation `expectedFacts`. When present it
+must be an object valid under the selected source route's final-facts schema.
+The offline runner compares it exactly with the actual final `Match` facts
+before derivation; any non-match, pack failure, or case path that performs no
+acquisition refuses the expectation. Keys and nulls retain the source-owned
+vocabulary. Omission means the facts are not checked and preserves existing
+fixture behavior. Record this object from the offline pack runner's final
+`Match`, never by copying or inferring fields from a raw provider response.
+
+For an editable project, record the maintained fact assertions explicitly:
+
+```text
+evidencectl fixtures record-facts PROJECT \
+  --target TARGET \
+  --fixture fixtures/requirement.yaml \
+  --write
+```
+
+The command accepts only an exact project-referenced fixture with
+`syntheticOnly: true` and `coequalAcceptanceDefinition: true`. It compiles the
+selected target, delegates the complete fixture evaluation to the matching
+Evidence runtime, and writes facts only for final Adapter pack `Match`
+outcomes. A non-match, ambiguous, unresolved, source-failure, or case with no
+acquisition has no `expectedFacts` member. Existing `expectedFacts` values are
+ignored only while this recording command refreshes them; ordinary fixture
+evaluation continues to compare them exactly.
+
+`--write` is the explicit mutation and private-value opt-in. Fact keys and
+values are captured between Evidence and Evidencectl and appear only in the
+updated synthetic fixture, never in the human or JSON command report, explain
+trace, diagnostic, error, or command line. Review the fixture diff and rerun
+the ordinary fixture suite after recording. Every case is evaluated before the
+file is atomically replaced, so a partial refresh cannot leave a mixed fact
+record behind.
 
 `value` and `values` are mutually exclusive, and `values` is exact in the same
 way: it states every concept the requirement discloses, so a new or leaked

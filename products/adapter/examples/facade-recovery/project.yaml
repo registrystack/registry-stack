@@ -1,0 +1,41 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Source-neutral reference project for the closed linear write-resume contract.
+# The maintained breg-records profile supplies the caller-facing API. The local
+# reference pack supplies two controlled provider-idempotent HTTP effects.
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: facade-recovery-reference
+  version: "1"
+profile:
+  id: breg-records
+  version: "1"
+  digest: sha256:b75f2c5e62d6be01f2311fe04e46b6b6a6a5629b6ff34a4a7136c608f6178d31
+pack:
+  id: facade-recovery-reference
+  version: "1"
+  digest: sha256:a6bb8e70ec2dfb8bb6e0fac4482d919ce59492d8acf68043bd5b6d5019a8a752
+recordTypes:
+  - name: person
+    fields:
+      - name: name
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplate: create-and-finalize
+    routeId: person-create-and-finalize
+bindings:
+  - id: person-create
+    operation: records-create
+    recordType: person
+    route: person-create-and-finalize
+    maximumUpstreamCalls: 2
+accessProfiles:
+  - id: records-writer
+    scopes: [records.write]
+    operations: [records-create]
+    recordTypes: [person]
+parameterizedParts:
+  registryIdentifier: facade-recovery-reference
+  datasetIdentifier: people
