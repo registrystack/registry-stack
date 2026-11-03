@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.45.0 - 2026-11-03
+
 - BREAKING: `discoveryctl` adopts the shared report envelope. `status` `passed`
   and `failed` become `complete` and `domain-refusal`. Machine-readable reports
   open with `ok`, `command`, `status`, `apiVersion` and `kind`, command members

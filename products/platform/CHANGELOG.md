@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.45.0 - 2026-11-03
+
 - Update Wasmtime LTS to 48.0.8 for RUSTSEC-2026-0422, RUSTSEC-2026-0423 and
   RUSTSEC-2026-0424.
 - BREAKING: `registry-cli-report` serializes the shared operator report
