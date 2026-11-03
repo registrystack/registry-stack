@@ -44,10 +44,41 @@ loaded Adapter process exposes to an external gateway.
 
 ## Status
 
-Unreleased and pre-1.0. The configuration formats are `v1alpha1` and may
-change without migration. `CONCEPT.md` section 8.10 records each ported
-concept and its evidence. Section 17
-owns the ingestion contract and its declared limits.
+Released from Registry Stack 0.45.1, pre-1.0. The configuration formats are
+`v1alpha1` and may change without migration. `CONCEPT.md` section 8.10
+records each ported concept and its evidence. Section 17 owns the ingestion
+contract and its declared limits.
+
+## Install
+
+From 0.45.1, each Registry Stack release publishes the `adapter` runtime,
+the `adapterctl` author tool, and the `adapter-job` ingestion-job host for
+Linux amd64, Linux arm64, and macOS arm64 on the
+[release page](https://github.com/registrystack/registry-stack/releases),
+checked against the release `SHA256SUMS`. Linux assets are executables named
+`<binary>-<tag>-linux-<arch>`; macOS assets are `.tar.gz` bundles with the
+executable, its AWS-LC-FIPS libraries, and notices. There is no Adapter
+container image; build one from this repository if you need it.
+
+Authenticate the checksum bundle as
+[`release/VERIFY.md`](../../release/VERIFY.md) describes, then install the
+toolset with the release-pinned installer or as an `rstack` component:
+
+```sh
+bash adapter-vX.Y.Z-install.sh
+adapterctl --version
+
+rstack install adapter
+rstack adapter check --help
+```
+
+The installer puts the three binaries in `~/.local/bin`; set
+`ADAPTER_INSTALL_DIR` to change that. `rstack install adapter` installs the
+same three binaries into an `rstack` generation, and `rstack adapter` runs
+`adapterctl`. Neither path needs a Rust toolchain. `adapter-job` ships so
+the toolset stays whole, but governed ingestion is not claimed yet:
+[`CONCEPT.md`](CONCEPT.md) section 17.7 records what the job host serves
+today and what is still to be built.
 
 ## Crates
 
@@ -59,6 +90,7 @@ owns the ingestion contract and its declared limits.
 | `crates/registry-adapter-job` | The source-build `adapter-job` binary: bounded ingestion, item progress, scheduling and explicit destination delivery |
 | `crates/registry-adapter-connectors` | BReg client integration reachable only through the job host's default-off `direct-breg` feature |
 | `crates/registry-adapterctl` | The `adapterctl` binary: `check`, `compile`, `fixtures replay`, `verify --live`, and `schemas` |
+| `crates/registry-adapter-job` | The `adapter-job` binary: the governed-ingestion job host, its item table, passes, and triggers |
 
 ## Layout
 
