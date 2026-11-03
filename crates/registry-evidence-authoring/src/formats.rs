@@ -111,7 +111,7 @@ pub const SUBSTITUTION_NOT_ALLOWED: &str = "config.substitution-not-allowed";
 
 /// Refuses every environment expression in an authored file, at the key or
 /// value it is written in.
-struct AuthoredExpressions;
+pub(crate) struct AuthoredExpressions;
 
 impl AuthoredExpressions {
     fn check(text: &str) -> Result<(), Refusal> {

@@ -15,6 +15,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+#[cfg(feature = "postgres-test")]
+use registry_adapter::engine::component::postgres::PostgresReadBounds;
 use registry_adapter::engine::component::postgres::{
     compile_plan, compile_query, PostgresRead, PostgresReadFault, PostgresRows, PostgresSource,
     SourceRow, SourceScalar,
@@ -56,29 +58,53 @@ fn the_query_compile_refuses_everything_but_one_plain_select() {
         ),
     ];
     for (sql, why) in refused {
-        let fault = compile_query(sql).expect_err(sql).0;
+        let fault = compile_query(sql, &[]).expect_err(sql);
+        let fault = fault.message();
         assert!(fault.contains(why), "{sql} refuses for {why}: {fault}");
     }
     // A plain SELECT with a gap-free parameter set compiles and names
     // its parameters.
-    let query = compile_query("SELECT a FROM t WHERE b = $1 AND c = $2 AND d = $1 ORDER BY a")
-        .expect("the plain select compiles");
+    let names = vec!["lower".to_owned(), "upper".to_owned()];
+    let query = compile_query(
+        "SELECT a FROM t WHERE b = $1 AND c = $2 AND d = $1 ORDER BY a",
+        &names,
+    )
+    .expect("the plain select compiles");
     assert_eq!(
         query.parameter_names,
-        ["$1", "$2"],
-        "the names are the distinct references"
+        ["lower", "upper"],
+        "the reviewed names follow the distinct positions"
     );
-    let gap = compile_query("SELECT a FROM t WHERE b = $1 AND c = $3 ORDER BY a")
-        .expect_err("a parameter gap refuses")
-        .0;
+    let gap = compile_query(
+        "SELECT a FROM t WHERE b = $1 AND c = $3 ORDER BY a",
+        &["one".to_owned(), "two".to_owned(), "three".to_owned()],
+    )
+    .expect_err("a parameter gap refuses")
+    .message();
     assert!(gap.contains("gap"), "the gap is the refusal: {gap}");
+    for sql in [
+        "SELECT a FROM t WHERE b = $17 ORDER BY a",
+        "SELECT a FROM t WHERE b = $100000000 ORDER BY a",
+    ] {
+        let fault = compile_query(sql, &[]).expect_err("an oversized parameter index refuses");
+        assert!(fault.message().contains("more than 16"), "{sql}: {fault:?}");
+    }
+    let sixteen = (1..=16)
+        .map(|index| format!("p{index:02}"))
+        .collect::<Vec<_>>();
+    compile_query(
+        "SELECT a FROM t WHERE p01 = $1 AND p02 = $2 AND p03 = $3 AND p04 = $4 AND p05 = $5 AND p06 = $6 AND p07 = $7 AND p08 = $8 AND p09 = $9 AND p10 = $10 AND p11 = $11 AND p12 = $12 AND p13 = $13 AND p14 = $14 AND p15 = $15 AND p16 = $16 ORDER BY a",
+        &sixteen,
+    )
+    .expect("all sixteen bounded parameter positions compile");
     // Nested SELECTs are subqueries and CTEs of the one root statement,
     // not statements of their own.
     for sql in [
         "SELECT a FROM t WHERE b IN (SELECT x FROM u) AND c = $1 ORDER BY a",
         "WITH w AS (SELECT 1 AS one) SELECT * FROM w WHERE one = $1 ORDER BY one",
     ] {
-        compile_query(sql).unwrap_or_else(|refused| panic!("{sql} compiles: {refused:?}"));
+        compile_query(sql, &["value".to_owned()])
+            .unwrap_or_else(|refused| panic!("{sql} compiles: {refused:?}"));
     }
 }
 
@@ -87,9 +113,10 @@ fn a_parameter_reference_over_the_bound_refuses_before_any_allocation() {
     // The bound is on the reference's index, not only on the count of
     // carried parameters, so a single huge reference refuses at once.
     for sql in ["SELECT $17 ORDER BY 1", "SELECT $100000000 ORDER BY 1"] {
-        let fault = compile_query(sql).expect_err(sql).0;
+        let fault = compile_query(sql, &[]).expect_err(sql);
+        let fault = fault.message();
         assert!(
-            fault.contains("$16"),
+            fault.contains("more than 16"),
             "{sql} refuses for the parameter bound: {fault}"
         );
     }
@@ -97,7 +124,10 @@ fn a_parameter_reference_over_the_bound_refuses_before_any_allocation() {
         .map(|index| format!("${index}"))
         .collect::<Vec<_>>()
         .join(", ");
-    compile_query(&format!("SELECT {at_bound} ORDER BY 1"))
+    let names = (1..=16)
+        .map(|index| format!("p{index:02}"))
+        .collect::<Vec<_>>();
+    compile_query(&format!("SELECT {at_bound} ORDER BY 1"), &names)
         .expect("references up to the bound compile");
 }
 
@@ -151,6 +181,15 @@ fn row(name: &str, age: i64) -> SourceRow {
     }
 }
 
+#[cfg(feature = "postgres-test")]
+const fn read_bounds() -> PostgresReadBounds {
+    PostgresReadBounds {
+        maximum_response_bytes: 16_777_216,
+        maximum_row_bytes: 1_048_576,
+        maximum_field_bytes: 65_536,
+    }
+}
+
 /// The job fixture of a postgres-source pack: the pinned query file,
 /// the runtime config's sources.postgres block, and the caller's rows
 /// bound.
@@ -163,6 +202,16 @@ struct Fixture {
 
 fn fixture_pack(query: &str) -> String {
     let digest = sha256_uri(query.as_bytes());
+    let parameter_order = if query.contains("$1") {
+        "    parameterOrder: [lower, upper]\n"
+    } else {
+        ""
+    };
+    let query_parameters = if query.contains("$1") {
+        r#"{lower: {constant: 1}, upper: {constant: 7}}"#
+    } else {
+        "{}"
+    };
     format!(
         r#"apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
 kind: AdapterPack
@@ -177,7 +226,8 @@ endpoints:
     attemptTimeoutMilliseconds: 10000
     maximumResponseBytes: 16777216
     queryFile: queries/ledger.sql
-queryFiles:
+    keyColumn: name
+{parameter_order}queryFiles:
   - path: queries/ledger.sql
     digest: {digest}
 sourceRoutes:
@@ -189,11 +239,7 @@ sourceRoutes:
       - to:
           uri: postgres:ledger
           parameters:
-            queryParameters:
-              "$1":
-                constant: 1
-              "$2":
-                constant: 7
+            queryParameters: {query_parameters}
 capabilities: {{}}
 "#
     )
@@ -212,6 +258,14 @@ source:
     version: "1"
     digest: {pack_digest}
   route: ledger-page
+destination:
+  type: signed-coordinator-event
+  binding: coordinator-test
+  workflow: ledger-ingestion
+  trigger: submitted
+  source: urn:registry-adapter:job:ledger-daily
+  eventType: org.example.ledger-submitted.v1
+  dataSchema: urn:example:schema:ledger-submitted:v1
 projection:
   fields:
     - name
@@ -347,13 +401,12 @@ async fn a_send_over_the_seam_pages_and_shapes_rows() {
         result.page.items[0].value,
         json!({"name": "alice", "age": 7})
     );
-    let row_json = json!({"age": 7, "name": "alice"});
-    let canonical = registry_platform_canonical_json::canonicalize_json(&row_json)
-        .expect("the row canonicalizes");
+    let canonical = registry_platform_canonical_json::canonicalize_json(&json!("alice"))
+        .expect("the configured key scalar canonicalizes");
     assert_eq!(
         result.page.items[0].key,
         format!("ledger:{}", sha256_uri(&canonical)),
-        "a row is its own identity across pages"
+        "the configured source scalar is the row identity across edits"
     );
     assert_eq!(
         result.page.next,
@@ -458,6 +511,8 @@ async fn the_read_only_transaction_refuses_a_write() {
     });
     let plan = compile_plan(
         "ledger".to_owned(),
+        "id".to_owned(),
+        Vec::new(),
         "SELECT 1 ORDER BY 1",
         Duration::from_millis(10_000),
     )
@@ -470,6 +525,7 @@ async fn the_read_only_transaction_refuses_a_write() {
         sql: plan.query.text.clone(),
         parameters: Vec::new(),
         maximum_rows: 1,
+        bounds: read_bounds(),
     };
     client
         .batch_execute(&read.statements.join("; "))
@@ -517,6 +573,8 @@ async fn a_real_fetch_bounds_its_rows_and_statement() {
     let source = ClientSource { client };
     let plan = compile_plan(
         "ledger".to_owned(),
+        "name".to_owned(),
+        Vec::new(),
         "SELECT name, age FROM bounded_people ORDER BY age",
         Duration::from_millis(10_000),
     )
@@ -530,6 +588,7 @@ async fn a_real_fetch_bounds_its_rows_and_statement() {
             sql: plan.query.text.clone(),
             parameters: Vec::new(),
             maximum_rows: 2,
+            bounds: read_bounds(),
         })
         .await
         .expect("the bounded read");
@@ -537,7 +596,9 @@ async fn a_real_fetch_bounds_its_rows_and_statement() {
     assert!(!rows.complete, "rows stood beyond the bound");
     let slow = compile_plan(
         "ledger".to_owned(),
-        "SELECT pg_sleep(5) IS NULL AS slept ORDER BY 1",
+        "id".to_owned(),
+        Vec::new(),
+        "SELECT 1 AS id FROM (SELECT pg_sleep(5)) AS delayed ORDER BY id",
         Duration::from_millis(200),
     )
     .expect("the slow plan compiles");
@@ -550,6 +611,7 @@ async fn a_real_fetch_bounds_its_rows_and_statement() {
             sql: slow.query.text.clone(),
             parameters: Vec::new(),
             maximum_rows: 10,
+            bounds: read_bounds(),
         })
         .await
         .expect_err("the statement bound cancels the sleep");
@@ -727,6 +789,8 @@ async fn the_seam_shapes_bounded_rows() {
     let source = ClientSource { client };
     let plan = compile_plan(
         "ledger".to_owned(),
+        "one".to_owned(),
+        Vec::new(),
         "SELECT 1 AS one, 'x' AS flag ORDER BY one",
         Duration::from_millis(10_000),
     )
@@ -740,6 +804,7 @@ async fn the_seam_shapes_bounded_rows() {
             sql: plan.query.text.clone(),
             parameters: Vec::new(),
             maximum_rows: 2,
+            bounds: read_bounds(),
         })
         .await
         .expect("the read");
@@ -760,6 +825,8 @@ async fn the_seam_shapes_bounded_rows() {
 fn a_plan_without_parameters_names_none() {
     let plan = compile_plan(
         "ledger".to_owned(),
+        "one".to_owned(),
+        Vec::new(),
         "SELECT 1 ORDER BY 1",
         Duration::from_millis(1_000),
     )

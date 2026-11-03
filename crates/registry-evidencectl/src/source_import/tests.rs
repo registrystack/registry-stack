@@ -23,23 +23,17 @@ selectorProfiles:
     maximumAggregateBytes: 64
     fields: {value: {type: string, minimumBytes: 1, maximumBytes: 64}}
 functions:
-- id: other-extract
-  interface: source-extract/v1
-  source: functions/other-extract.rhai
 - id: other-derive
   interface: assertion-derive/v1
   source: functions/other-derive.rhai
 sources:
   other:
-    type: http-json
+    pack: {id: other-pack, version: "1"}
+    route: lookup
     connection: other
     acquisitionPosture: record-transformed
-    selectors: [{role: subject, profiles: [other-reference]}]
-    request: {method: GET, path: /other}
-    response: {projection: [/matched], shape: {type: object, properties: {matched: {type: boolean}}}, maximumBytes: 1024}
-    extract: {function: other-extract}
-    facts: {matched: {type: boolean}}
-    limits: {attemptTimeoutMilliseconds: 1000, maximumConcurrency: 1}
+    inputs:
+      value: {selector: {role: subject, profile: other-reference, field: value}}
 # This authored boundary comment is outside the collections source import owns.
 assertionDefinitions:
   other:
@@ -48,7 +42,7 @@ assertionDefinitions:
     purpose: test
     grantCeiling: {authorities: [organizational], actorKinds: [service], valueOrigins: [request], audiences: ["urn:example:audience:test"]}
     subjects: [{role: subject, selectors: [other-reference]}]
-    acquisition: {type: single, source: other}
+    acquisition: {source: other}
     derive: {function: other-derive}
     outputs: {matched: {concept: "urn:example:concept:matched", type: boolean}}
     validitySeconds: 60
@@ -58,13 +52,43 @@ assertionDefinitions:
         );
         put(
             &project,
-            "functions/other-extract.rhai",
-            "fn extract(response, context) { #{outcome: \"match\", facts: #{matched: response[\"matched\"]}} }\n",
+            "functions/other-derive.rhai",
+            "fn derive(facts, selectors, context) { [#{output: \"matched\", value: facts[\"matched\"]}] }\n",
+        );
+        let inputs = serde_json::to_string_pretty(&json!({
+            "type":"object","additionalProperties":false,"required":["value"],
+            "properties":{"value":{"type":"string","minLength":1,"maxLength":64}}
+        }))
+        .unwrap();
+        let facts = serde_json::to_string_pretty(&json!({
+            "type":"object","additionalProperties":false,"required":["matched"],
+            "properties":{"matched":{"type":"boolean"}}
+        }))
+        .unwrap();
+        put(
+            &project,
+            "adapter-packs/other-pack/schemas/inputs.json",
+            &inputs,
         );
         put(
             &project,
-            "functions/other-derive.rhai",
-            "fn derive(facts, selectors, context) { [#{output: \"matched\", value: facts[\"matched\"]}] }\n",
+            "adapter-packs/other-pack/schemas/facts.json",
+            &facts,
+        );
+        put(
+            &project,
+            "adapter-packs/other-pack/pack.yaml",
+            &serde_json::to_string_pretty(&json!({
+                "apiVersion":"id.registrystack.org/formats/adapter/pack/v1alpha1",
+                "kind":"AdapterPack","id":"other-pack","version":"1",
+                "testedVersions":["test"],
+                "sourceRoutes":[{"id":"lookup","evidence":{
+                    "inputsSchema":{"path":"schemas/inputs.json","digest":format!("sha256:{}",digest(inputs.as_bytes()))},
+                    "factsSchema":{"path":"schemas/facts.json","digest":format!("sha256:{}",digest(facts.as_bytes()))}
+                },"steps":[{"setBody":{"constant":{"lookup":"matched","facts":{"matched":true}}}}]}],
+                "capabilities":{"languages":["constant"],"eips":["setBody"]}
+            }))
+            .unwrap(),
         );
         Self { root, project }
     }
@@ -85,12 +109,13 @@ assertionDefinitions:
             .unwrap_or("synthetic source");
         let extract = artifacts
             .iter()
-            .find(|(path, _)| path.starts_with("adapters/") && path.ends_with(".rhai"))
+            .find(|(path, _)| *path == format!("adapter-packs/{id}/scripts/lookup.rhai"))
             .map(|(path, text)| ((*path).to_owned(), (*text).to_owned()))
             .unwrap_or_else(|| {
                 (
                     format!("adapters/{id}.rhai"),
-                    "fn extract(response, context) { #{outcome: \"match\", facts: #{matched: response[\"matched\"]}} }\n".to_owned(),
+                    "fn lookup(exchange) { #{lookup: \"matched\", facts: #{matched: true}} }\n"
+                        .to_owned(),
                 )
             });
         let selector_id = artifacts
@@ -105,18 +130,56 @@ assertionDefinitions:
             .iter()
             .find_map(|(path, text)| path.starts_with("selectors/").then_some(*text))
             .unwrap_or("synthetic selector");
+        let version = format!("sha256:{}", digest(source_revision.as_bytes()));
+        let input_name = "value";
         let source = format!(
-            "apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1\nkind: EvidenceSource\ntype: http-json\nposture: record-transformed\nconnection: {id}\nbehaviorRevision: {}\nrequest:\n  method: GET\n  path: /lookup\n  selectorInputs:\n    - role: subject\n      alternatives: [{{profile: {selector_id}}}]\n  projection: [/matched]\n  prepareScript: adapters/{id}-prepare.rhai\n  adapterParameters: {{}}\n  adapterParametersSchema: schemas/{id}-parameters.schema.yaml\n  redirects: deny\n  attemptTimeoutMilliseconds: 1000\n  maximumResponseBytes: 1024\nresponseSchema: schemas/{id}-response.schema.yaml\nextractScript: {}\nfactSchema: schemas/{id}-facts.schema.yaml\n",
-            digest(source_revision.as_bytes()),
-            extract.0
+            "apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1\nkind: EvidenceSource\npack: {{id: {id}, version: {version:?}}}\nroute: lookup\nconnection: {id}\ninputs:\n  {input_name}: {{selector: {{role: subject, profile: {selector_id}, field: value}}}}\nacquisitionPosture: record-transformed\n"
         );
+        let script_path = format!("adapter-packs/{id}/scripts/lookup.rhai");
+        let script = extract.1;
+        let inputs_path = format!("adapter-packs/{id}/schemas/inputs.json");
+        let inputs = serde_json::to_string_pretty(&json!({
+            "type":"object","additionalProperties":false,"required":[input_name],
+            "properties":{input_name:{"type":"string","minLength":1,"maxLength":64}}
+        }))
+        .unwrap();
+        let facts_path = format!("adapter-packs/{id}/schemas/facts.json");
+        let facts = serde_json::to_string_pretty(&json!({
+            "type":"object","additionalProperties":false,"required":["matched"],
+            "properties":{"matched":{"type":"boolean"}}
+        }))
+        .unwrap();
+        let pack_path = format!("adapter-packs/{id}/pack.yaml");
+        let mut scripts = vec![json!({
+            "path":"scripts/lookup.rhai",
+            "digest":format!("sha256:{}",digest(script.as_bytes()))
+        })];
+        for (path, text) in artifacts.iter().filter(|(path, _)| {
+            path.starts_with(&format!("adapter-packs/{id}/scripts/"))
+                && *path != format!("adapter-packs/{id}/scripts/lookup.rhai")
+        }) {
+            scripts.push(json!({
+                "path":path.strip_prefix(&format!("adapter-packs/{id}/")).unwrap(),
+                "digest":format!("sha256:{}",digest(text.as_bytes()))
+            }));
+        }
+        let pack = serde_json::to_string_pretty(&json!({
+            "apiVersion":"id.registrystack.org/formats/adapter/pack/v1alpha1",
+            "kind":"AdapterPack","id":id,"version":version,"testedVersions":["test"],
+            "sourceRoutes":[{"id":"lookup","evidence":{
+                "inputsSchema":{"path":"schemas/inputs.json","digest":format!("sha256:{}",digest(inputs.as_bytes()))},
+                "factsSchema":{"path":"schemas/facts.json","digest":format!("sha256:{}",digest(facts.as_bytes()))}
+            },"steps":[{"setBody":{"rhai":{"file":"scripts/lookup.rhai","entrypoint":"lookup"}}}]}],
+            "scripts":scripts,
+            "capabilities":{"languages":["rhai"],"eips":["setBody"]}
+        }))
+        .unwrap();
         let mut materialized = BTreeMap::from([
             (source_path, source),
-            (
-                format!("adapters/{id}-prepare.rhai"),
-                "fn prepare(selectors, context) { #{method: \"GET\", path: \"/lookup\"} }\n".to_owned(),
-            ),
-            extract,
+            (script_path, script),
+            (inputs_path, inputs),
+            (facts_path, facts),
+            (pack_path, pack),
             (
                 selector_path,
                 format!(
@@ -124,21 +187,9 @@ assertionDefinitions:
                     digest(selector_revision.as_bytes())
                 ),
             ),
-            (
-                format!("schemas/{id}-parameters.schema.yaml"),
-                "type: object\nadditionalProperties: false\nproperties: {}\n".to_owned(),
-            ),
-            (
-                format!("schemas/{id}-response.schema.yaml"),
-                "type: object\nrequired: [matched]\nproperties: {matched: {type: boolean}}\nadditionalProperties: false\n".to_owned(),
-            ),
-            (
-                format!("schemas/{id}-facts.schema.yaml"),
-                "type: object\nrequired: [matched]\nproperties: {matched: {type: boolean}}\nadditionalProperties: false\n".to_owned(),
-            ),
         ]);
         for (path, text) in artifacts {
-            if *path != format!("sources/{id}.yaml") && !path.starts_with("selectors/") {
+            if path.starts_with("adapter-packs/") {
                 materialized.insert((*path).to_owned(), (*text).to_owned());
             }
         }
@@ -240,20 +291,31 @@ fn canonical_block_project_imports_and_preserves_unowned_authored_text() {
         candidate_text.as_bytes(),
     )
     .unwrap();
-    assert!(decoded
-        .value
-        .functions
-        .iter()
-        .any(|function| function.id.as_str() == "lookup-extract"));
     let imported = decoded
         .value
         .sources
-        .values()
-        .find(|source| source.adapter_parameters.is_some())
+        .iter()
+        .find_map(|(id, source)| (id.as_str() == "lookup").then_some(source))
         .unwrap();
-    assert_eq!(imported.adapter_parameters, Some(json!({})));
-    assert!(imported.request.get("adapterParameters").is_none());
-    assert!(imported.request.get("redirects").is_none());
+    assert_eq!(imported.pack.id.as_str(), "lookup");
+    assert_eq!(imported.route.as_str(), "lookup");
+    assert!(candidate
+        .project()
+        .join("adapter-packs/lookup/pack.yaml")
+        .is_file());
+    assert!(!decoded
+        .value
+        .functions
+        .iter()
+        .any(|function| function.id.as_str().starts_with("lookup-")));
+    let (project, scripts) = crate::normalized::read(candidate.project()).unwrap();
+    let pack_routes = crate::normalized::read_pack_routes(candidate.project(), &project).unwrap();
+    registry_evidence_authoring::compile::compile_with_pack_routes(
+        &project,
+        &scripts,
+        &pack_routes,
+    )
+    .expect("the imported current pack closure compiles without a legacy Function");
     candidate.validate(|_| Ok(())).unwrap();
     candidate.apply(&lock).unwrap();
     assert_eq!(
@@ -413,7 +475,7 @@ fn import_refuses_invalid_source_and_selector_headers_without_leaking_values() {
 #[test]
 fn flow_and_empty_project_collections_import_without_partial_entries() {
     for functions in [
-        "[{id: existing, interface: source-extract/v1, source: functions/existing.rhai}]",
+        "[{id: existing, interface: assertion-derive/v1, source: functions/existing.rhai}]",
         "\n  []",
     ] {
         let project = format!(
@@ -429,18 +491,11 @@ fn flow_and_empty_project_collections_import_without_partial_entries() {
                 ),
             )
             .unwrap();
-        let replacement = json!([
-            {
-                "id": "imported-prepare",
-                "interface": "source-prepare/v1",
-                "source": "functions/imported-prepare.rhai"
-            },
-            {
-                "id": "imported-extract",
-                "interface": "source-extract/v1",
-                "source": "functions/imported-extract.rhai"
-            }
-        ]);
+        let replacement = json!([{
+            "id": "imported-derive",
+            "interface": "assertion-derive/v1",
+            "source": "functions/imported-derive.rhai"
+        }]);
         let replaced =
             replace_project_sections(&project, &document, [("/functions", &replacement)]).unwrap();
         registry_platform_yaml::Reader::new("evidence.yaml")
@@ -486,86 +541,39 @@ fn json_project_import_remains_valid() {
 }
 
 #[test]
-fn adapter_parameters_move_to_the_source_without_losing_values() {
+fn pinned_pack_artifact_tampering_is_refused_without_authored_changes() {
     let fixture = Fixture::new();
     let export = fixture.export("export", "lookup", "v1", &[]);
-    let source_path = "sources/lookup.yaml";
-    let source = fs::read_to_string(export.join(source_path))
-        .unwrap()
-        .replace(
-            "adapterParameters: {}",
-            "adapterParameters: {strategy: exact}",
-        );
-    replace_export_artifact(&export, source_path, &source);
-    let lock = ProjectLock::acquire(&fixture.project).unwrap();
-    let candidate = prepare(&lock, &[export], &BTreeMap::new()).unwrap();
-    let candidate_text = fs::read_to_string(candidate.project().join("evidence.yaml")).unwrap();
-    let decoded = registry_evidence_authoring::project::read_project(
-        "evidence.yaml",
-        candidate_text.as_bytes(),
-    )
-    .unwrap();
-    let imported = decoded
-        .value
-        .sources
-        .values()
-        .find(|source| source.adapter_parameters.is_some())
-        .unwrap();
-    assert_eq!(
-        imported.adapter_parameters,
-        Some(json!({"strategy": "exact"}))
+    let script = "adapter-packs/lookup/scripts/lookup.rhai";
+    replace_export_artifact(
+        &export,
+        script,
+        "fn lookup(exchange) { #{lookup: \"unresolved\"} }\n",
     );
+    let before = snapshot(&fixture.project).unwrap();
+    let lock = ProjectLock::acquire(&fixture.project).unwrap();
+    let error = prepare(&lock, &[export], &BTreeMap::new())
+        .err()
+        .expect("a digest-pin mismatch is refused");
+    assert!(error.to_string().contains("does not match its digest pin"));
+    assert_eq!(snapshot(&fixture.project).unwrap(), before);
 }
 
 #[test]
-fn root_adapter_parameters_are_refused_without_overwriting_request_parameters() {
+fn retired_inline_source_contract_is_refused_without_a_converter() {
     let fixture = Fixture::new();
     let export = fixture.export("export", "lookup", "v1", &[]);
     let source_path = "sources/lookup.yaml";
     let mut source = fs::read_to_string(export.join(source_path)).unwrap();
-    source.push_str("adapterParameters: {unexpected: root}\n");
+    source.push_str("request: {method: GET, path: /lookup}\nextractScript: adapter-packs/lookup/scripts/lookup.rhai\n");
     replace_export_artifact(&export, source_path, &source);
     let before = snapshot(&fixture.project).unwrap();
     let lock = ProjectLock::acquire(&fixture.project).unwrap();
     let error = prepare(&lock, &[export], &BTreeMap::new())
         .err()
-        .expect("root adapter parameters are outside the export contract");
-    assert_eq!(
-        error.to_string(),
-        "exported Source requires adapterParameters inside request"
-    );
+        .expect("retired request/extract members are refused");
+    assert!(error.to_string().contains("current pack binding"));
     assert_eq!(snapshot(&fixture.project).unwrap(), before);
-    assert!(!fixture.project.join(STATE_PATH).exists());
-    assert!(!fixture.project.join(JOURNAL_PATH).exists());
-}
-
-#[test]
-fn missing_or_non_deny_redirect_policy_is_refused_without_authored_changes() {
-    for (name, replacement, message) in [
-        ("missing", "", "exported Source requires redirects"),
-        (
-            "follow",
-            "redirects: follow",
-            "exported Source requires redirects to be `deny`",
-        ),
-    ] {
-        let fixture = Fixture::new();
-        let export = fixture.export(name, "lookup", "v1", &[]);
-        let source_path = "sources/lookup.yaml";
-        let source = fs::read_to_string(export.join(source_path))
-            .unwrap()
-            .replace("redirects: deny", replacement);
-        replace_export_artifact(&export, source_path, &source);
-        let before = snapshot(&fixture.project).unwrap();
-        let lock = ProjectLock::acquire(&fixture.project).unwrap();
-        let error = prepare(&lock, &[export], &BTreeMap::new())
-            .err()
-            .expect("missing or unsafe redirect policy is refused");
-        assert_eq!(error.to_string(), message);
-        assert_eq!(snapshot(&fixture.project).unwrap(), before);
-        assert!(!fixture.project.join(STATE_PATH).exists());
-        assert!(!fixture.project.join(JOURNAL_PATH).exists());
-    }
 }
 
 #[test]
@@ -576,12 +584,9 @@ fn moved_exports_and_reordered_inventory_are_true_no_ops() {
         "lookup",
         "v1",
         &[
+            ("sources/lookup.yaml", "source revision one\n"),
             (
-                "sources/lookup.yaml",
-                "extractScript: adapters/lookup.rhai\n",
-            ),
-            (
-                "adapters/lookup.rhai",
+                "adapter-packs/lookup/scripts/lookup.rhai",
                 "fn extract(response, context) { response }\n",
             ),
         ],
@@ -616,18 +621,15 @@ fn customization_conflicts_finish_with_keep_adopt_and_resolved_file() {
             "lookup",
             "v1",
             &[
-                (
-                    "sources/lookup.yaml",
-                    "extractScript: adapters/lookup.rhai\n",
-                ),
-                ("adapters/lookup.rhai", "upstream-one\n"),
+                ("sources/lookup.yaml", "source revision one\n"),
+                ("adapter-packs/lookup/scripts/lookup.rhai", "upstream-one\n"),
             ],
         );
         let lock = ProjectLock::acquire(&fixture.project).unwrap();
         accepted(&lock, &[original], BTreeMap::new());
         put(
             &fixture.project,
-            "functions/lookup-extract.rhai",
+            "adapter-packs/lookup/scripts/lookup.rhai",
             "authored-customization\n",
         );
         put(
@@ -640,17 +642,14 @@ fn customization_conflicts_finish_with_keep_adopt_and_resolved_file() {
             "lookup",
             "v2",
             &[
-                (
-                    "sources/lookup.yaml",
-                    "extractScript: adapters/lookup.rhai\n",
-                ),
-                ("adapters/lookup.rhai", "upstream-two\n"),
+                ("sources/lookup.yaml", "source revision two\n"),
+                ("adapter-packs/lookup/scripts/lookup.rhai", "upstream-two\n"),
             ],
         );
         let mut conflict = prepare(&lock, std::slice::from_ref(&next), &BTreeMap::new()).unwrap();
         assert_eq!(
             conflict.report().conflicts,
-            ["functions/lookup-extract.rhai"]
+            ["adapter-packs/lookup/scripts/lookup.rhai"]
         );
         assert!(conflict.validate(|_| Ok(())).is_err());
         let resolved = fixture.root.path().join("resolved.rhai");
@@ -663,10 +662,18 @@ fn customization_conflicts_finish_with_keep_adopt_and_resolved_file() {
         accepted(
             &lock,
             std::slice::from_ref(&next),
-            BTreeMap::from([("functions/lookup-extract.rhai".to_owned(), resolution)]),
+            BTreeMap::from([(
+                "adapter-packs/lookup/scripts/lookup.rhai".to_owned(),
+                resolution,
+            )]),
         );
         assert_eq!(
-            fs::read_to_string(fixture.project.join("functions/lookup-extract.rhai")).unwrap(),
+            fs::read_to_string(
+                fixture
+                    .project
+                    .join("adapter-packs/lookup/scripts/lookup.rhai")
+            )
+            .unwrap(),
             expected
         );
         assert_eq!(
@@ -680,11 +687,11 @@ fn customization_conflicts_finish_with_keep_adopt_and_resolved_file() {
         )
         .unwrap();
         assert_eq!(
-            state.imports["lookup"].upstream["functions/lookup-extract.rhai"],
+            state.imports["lookup"].upstream["adapter-packs/lookup/scripts/lookup.rhai"],
             "upstream-two\n"
         );
         assert_eq!(
-            state.accepted["functions/lookup-extract.rhai"].as_deref(),
+            state.accepted["adapter-packs/lookup/scripts/lookup.rhai"].as_deref(),
             Some(expected)
         );
         assert!(accepted(&lock, &[next], BTreeMap::new()));
@@ -750,7 +757,7 @@ fn shared_changes_require_one_consistent_multi_export_candidate() {
 }
 
 #[test]
-fn deleting_obsolete_artifacts_preserves_customization_and_authored_references() {
+fn deleting_obsolete_pack_artifacts_preserves_explicit_customization() {
     let fixture = Fixture::new();
     let initial = fixture.export(
         "initial",
@@ -759,24 +766,26 @@ fn deleting_obsolete_artifacts_preserves_customization_and_authored_references()
         &[
             ("sources/lookup.yaml", "kind: initial\n"),
             (
-                "adapters/lookup.rhai",
+                "adapter-packs/lookup/scripts/lookup.rhai",
                 "fn extract(response, context) { response }\n",
             ),
-            ("adapters/unused.rhai", "generated\n"),
-            ("adapters/referenced.rhai", "generated\n"),
-            ("adapters/custom.rhai", "generated\n"),
+            (
+                "adapter-packs/lookup/scripts/unused.rhai",
+                "fn unused(exchange) { exchange.body }\n",
+            ),
+            (
+                "adapter-packs/lookup/scripts/custom.rhai",
+                "fn custom(exchange) { exchange.body }\n",
+            ),
         ],
     );
     let lock = ProjectLock::acquire(&fixture.project).unwrap();
     accepted(&lock, &[initial], BTreeMap::new());
-    let project_path = fixture.project.join("evidence.yaml");
-    let project = fs::read_to_string(&project_path).unwrap();
-    fs::write(
-        &project_path,
-        project.replace("functions/other-extract.rhai", "functions/referenced.rhai"),
-    )
-    .unwrap();
-    put(&fixture.project, "functions/custom.rhai", "customized\n");
+    put(
+        &fixture.project,
+        "adapter-packs/lookup/scripts/custom.rhai",
+        "fn custom(exchange) { #{customized: true} }\n",
+    );
     let next = fixture.export(
         "next",
         "lookup",
@@ -786,7 +795,10 @@ fn deleting_obsolete_artifacts_preserves_customization_and_authored_references()
     let mut candidate = prepare(
         &lock,
         &[next],
-        &BTreeMap::from([("functions/custom.rhai".to_owned(), Resolution::Keep {})]),
+        &BTreeMap::from([(
+            "adapter-packs/lookup/scripts/custom.rhai".to_owned(),
+            Resolution::Keep {},
+        )]),
     )
     .unwrap();
     assert_eq!(
@@ -794,31 +806,25 @@ fn deleting_obsolete_artifacts_preserves_customization_and_authored_references()
             .report()
             .changes
             .iter()
-            .find(|change| change.path == "functions/unused.rhai")
+            .find(|change| change.path == "adapter-packs/lookup/scripts/unused.rhai")
             .unwrap()
             .action,
         "delete"
     );
-    assert_eq!(
-        candidate
-            .report()
-            .changes
-            .iter()
-            .find(|change| change.path == "functions/referenced.rhai")
-            .unwrap()
-            .action,
-        "retained"
-    );
     candidate.validate(|_| Ok(())).unwrap();
     candidate.apply(&lock).unwrap();
-    assert!(!fixture.project.join("functions/unused.rhai").exists());
+    assert!(!fixture
+        .project
+        .join("adapter-packs/lookup/scripts/unused.rhai")
+        .exists());
     assert_eq!(
-        fs::read_to_string(fixture.project.join("functions/referenced.rhai")).unwrap(),
-        "generated\n"
-    );
-    assert_eq!(
-        fs::read_to_string(fixture.project.join("functions/custom.rhai")).unwrap(),
-        "customized\n"
+        fs::read_to_string(
+            fixture
+                .project
+                .join("adapter-packs/lookup/scripts/custom.rhai")
+        )
+        .unwrap(),
+        "fn custom(exchange) { #{customized: true} }\n"
     );
 }
 
@@ -890,7 +896,7 @@ fn candidate_contains_no_secret_target_or_local_service_state() {
     assert!(project.contains("\"lookup\""));
     assert!(candidate
         .project()
-        .join("functions/lookup-extract.rhai")
+        .join("adapter-packs/lookup/scripts/lookup.rhai")
         .exists());
 }
 
@@ -916,7 +922,7 @@ fn interrupted_replacement_and_baseline_advance_restore_the_complete_prior_state
             "v1",
             &[
                 ("sources/lookup.yaml", "version: 1\n"),
-                ("adapters/lookup.rhai", "original\n"),
+                ("adapter-packs/lookup/scripts/lookup.rhai", "original\n"),
             ],
         );
         let lock = ProjectLock::acquire(&fixture.project).unwrap();
@@ -933,10 +939,10 @@ fn interrupted_replacement_and_baseline_advance_restore_the_complete_prior_state
                 }),
             },
             Operation {
-                path: "functions/lookup-extract.rhai".to_owned(),
+                path: "adapter-packs/lookup/scripts/lookup.rhai".to_owned(),
                 before: read(
                     &fixture.project,
-                    "functions/lookup-extract.rhai",
+                    "adapter-packs/lookup/scripts/lookup.rhai",
                     MAX_FILE_BYTES,
                 )
                 .unwrap(),
@@ -976,7 +982,12 @@ fn interrupted_replacement_and_baseline_advance_restore_the_complete_prior_state
             project_before
         );
         assert_eq!(
-            fs::read_to_string(fixture.project.join("functions/lookup-extract.rhai")).unwrap(),
+            fs::read_to_string(
+                fixture
+                    .project
+                    .join("adapter-packs/lookup/scripts/lookup.rhai")
+            )
+            .unwrap(),
             "original\n"
         );
         assert_eq!(
@@ -1209,7 +1220,7 @@ fn exact_authored_destination_collision_requires_an_explicit_ownership_choice() 
     let fixture = Fixture::new();
     put(
         &fixture.project,
-        "functions/lookup-extract.rhai",
+        "adapter-packs/lookup/scripts/lookup.rhai",
         "locally authored\n",
     );
     let export = fixture.export(
@@ -1222,13 +1233,13 @@ fn exact_authored_destination_collision_requires_an_explicit_ownership_choice() 
     let candidate = prepare(&lock, std::slice::from_ref(&export), &BTreeMap::new()).unwrap();
     assert_eq!(
         candidate.report().conflicts,
-        ["functions/lookup-extract.rhai"]
+        ["adapter-packs/lookup/scripts/lookup.rhai"]
     );
     accepted(
         &lock,
         &[export],
         BTreeMap::from([(
-            "functions/lookup-extract.rhai".to_owned(),
+            "adapter-packs/lookup/scripts/lookup.rhai".to_owned(),
             Resolution::Keep {},
         )]),
     );
@@ -1238,7 +1249,10 @@ fn exact_authored_destination_collision_requires_an_explicit_ownership_choice() 
         "v2",
         &[
             ("sources/lookup.yaml", "version: 2\n"),
-            ("adapters/lookup.rhai", "upstream changed\n"),
+            (
+                "adapter-packs/lookup/scripts/lookup.rhai",
+                "upstream changed\n",
+            ),
         ],
     );
     assert_eq!(
@@ -1246,14 +1260,14 @@ fn exact_authored_destination_collision_requires_an_explicit_ownership_choice() 
             .unwrap()
             .report()
             .conflicts,
-        ["functions/lookup-extract.rhai"]
+        ["adapter-packs/lookup/scripts/lookup.rhai"]
     );
 }
 
 #[test]
 fn structural_impact_follows_source_dependencies_without_inventing_revisions() {
     let fixture = Fixture::new();
-    const SOURCE: &str = "extractScript: adapters/lookup.rhai\n";
+    const SOURCE: &str = "source revision one\n";
     const EXTRACT_ONE: &str = "one\n";
     let first = fixture.export(
         "first",
@@ -1261,33 +1275,31 @@ fn structural_impact_follows_source_dependencies_without_inventing_revisions() {
         "v1",
         &[
             ("sources/lookup.yaml", SOURCE),
-            ("adapters/lookup.rhai", EXTRACT_ONE),
+            ("adapter-packs/lookup/scripts/lookup.rhai", EXTRACT_ONE),
         ],
     );
     let lock = ProjectLock::acquire(&fixture.project).unwrap();
     accepted(&lock, &[first], BTreeMap::new());
     let project_path = fixture.project.join("evidence.yaml");
-    let project = fs::read_to_string(&project_path).unwrap();
-    fs::write(
-        &project_path,
-        project
-            .replace(
-                "subjects: [{role: subject, selectors: [other-reference]}]",
-                "subjects: [{role: subject, selectors: [imported-reference]}]",
-            )
-            .replace(
-                "acquisition: {type: single, source: other}",
-                "acquisition: {type: single, source: lookup}",
-            ),
+    let decoded = registry_evidence_authoring::project::read_project(
+        "evidence.yaml",
+        &fs::read(&project_path).unwrap(),
     )
     .unwrap();
+    let mut project = serde_json::to_value(decoded.value).unwrap();
+    project["apiVersion"] = json!(registry_evidence_authoring::project::PROJECT_API_VERSION);
+    project["kind"] = json!(registry_evidence_authoring::project::PROJECT_KIND);
+    project["assertionDefinitions"]["other"]["subjects"][0]["selectors"] =
+        json!(["imported-reference"]);
+    project["assertionDefinitions"]["other"]["acquisition"] = json!({"source":"lookup"});
+    fs::write(&project_path, serde_json::to_vec_pretty(&project).unwrap()).unwrap();
     let next = fixture.export(
         "next",
         "lookup",
         "v2",
         &[
             ("sources/lookup.yaml", SOURCE),
-            ("adapters/lookup.rhai", "two\n"),
+            ("adapter-packs/lookup/scripts/lookup.rhai", "two\n"),
         ],
     );
     let candidate = prepare(&lock, &[next], &BTreeMap::new()).unwrap();
@@ -1303,7 +1315,7 @@ fn structural_impact_follows_source_dependencies_without_inventing_revisions() {
         "v2",
         &[
             ("sources/lookup.yaml", SOURCE),
-            ("adapters/lookup.rhai", EXTRACT_ONE),
+            ("adapter-packs/lookup/scripts/lookup.rhai", EXTRACT_ONE),
         ],
     );
     replace_export_artifact(
@@ -1333,8 +1345,9 @@ fn provenance_only_unconsumed_update_ignores_consumed_function_declaration_order
     let mut project = serde_json::to_value(decoded.value).unwrap();
     project["apiVersion"] = json!(registry_evidence_authoring::project::PROJECT_API_VERSION);
     project["kind"] = json!(registry_evidence_authoring::project::PROJECT_KIND);
-    project["assertionDefinitions"]["other"]["acquisition"] =
-        json!({"type":"single", "source":"lookup"});
+    project["assertionDefinitions"]["other"]["acquisition"] = json!({"source":"lookup"});
+    project["assertionDefinitions"]["other"]["subjects"][0]["selectors"] =
+        json!(["imported-reference"]);
     project["functions"]
         .as_array_mut()
         .unwrap()
@@ -1361,36 +1374,51 @@ fn deleting_obsolete_artifact_with_a_local_edit_requires_an_explicit_resolution(
         &[
             ("sources/lookup.yaml", "kind: initial\n"),
             (
-                "adapters/lookup.rhai",
+                "adapter-packs/lookup/scripts/lookup.rhai",
                 "fn extract(response, context) { response }\n",
             ),
-            ("adapters/custom.rhai", "generated\n"),
+            (
+                "adapter-packs/lookup/scripts/custom.rhai",
+                "fn custom(exchange) { exchange.body }\n",
+            ),
         ],
     );
     let lock = ProjectLock::acquire(&fixture.project).unwrap();
     accepted(&lock, &[initial], BTreeMap::new());
     let state_before = fs::read(fixture.project.join(STATE_PATH)).unwrap();
-    put(&fixture.project, "functions/custom.rhai", "customized\n");
+    put(
+        &fixture.project,
+        "adapter-packs/lookup/scripts/custom.rhai",
+        "fn custom(exchange) { #{customized: true} }\n",
+    );
     let next = fixture.export(
         "next",
         "lookup",
         "v2",
         &[("sources/lookup.yaml", "kind: next\n")],
     );
-    // Unlike `deleting_obsolete_artifacts_preserves_customization_and_authored_references`,
+    // Unlike `deleting_obsolete_pack_artifacts_preserves_explicit_customization`,
     // no resolution is supplied for the edited, now-obsolete artifact, so the
     // conflict must reach `validate` unresolved instead of being silently
     // decided by an implicit keep or delete.
     let mut candidate = prepare(&lock, &[next], &BTreeMap::new()).unwrap();
-    assert_eq!(candidate.report().conflicts, ["functions/custom.rhai"]);
+    assert_eq!(
+        candidate.report().conflicts,
+        ["adapter-packs/lookup/scripts/custom.rhai"]
+    );
     let error = candidate.validate(|_| Ok(())).unwrap_err();
     assert_eq!(
         error.to_string(),
         "source candidate has unresolved conflicts; choose keep, adopt, or an explicit resolved file"
     );
     assert_eq!(
-        fs::read_to_string(fixture.project.join("functions/custom.rhai")).unwrap(),
-        "customized\n"
+        fs::read_to_string(
+            fixture
+                .project
+                .join("adapter-packs/lookup/scripts/custom.rhai")
+        )
+        .unwrap(),
+        "fn custom(exchange) { #{customized: true} }\n"
     );
     assert!(!fixture.project.join(JOURNAL_PATH).exists());
     assert_eq!(

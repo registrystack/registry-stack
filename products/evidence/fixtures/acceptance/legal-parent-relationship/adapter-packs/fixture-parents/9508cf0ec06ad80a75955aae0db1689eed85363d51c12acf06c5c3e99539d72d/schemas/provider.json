@@ -1,0 +1,58 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "total",
+    "records"
+  ],
+  "properties": {
+    "total": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1000000
+    },
+    "records": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 2,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+
+        ],
+        "properties": {
+          "returned_child_reference": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 96
+          },
+          "parent_references": {
+            "type": "array",
+            "minItems": 0,
+            "maxItems": 2,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "reference_namespace": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "relationship_set_contract": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "relationship_set_complete": {
+            "type": "boolean"
+          }
+        }
+      }
+    }
+  }
+}

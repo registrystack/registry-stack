@@ -45,6 +45,10 @@
       "additionalProperties": false,
       "description": "One binding of a concrete contract operation to a route\n(`products/adapter/CONCEPT.md` section 7): one concrete operation per\n(profile operation, record type) pair, with the static worst-case\nupstream-call budget the checks hold the route to.",
       "properties": {
+        "asyncCompletion": {
+          "$ref": "#/$defs/BindingAsyncCompletion",
+          "description": "The asynchronous response policy, absent for every synchronous\nbinding."
+        },
         "filters": {
           "description": "The declared fields of the bound record type a search binding\nfilters on (`products/adapter/CONCEPT.md` section 8.11.1); the\nfacade offers exactly these as typed equality query parameters.\nEvery declared filter is required: a call that leaves one out is\nrefused as an invalid field before any script runs or source is\ncalled.\nEvery entry must name a declared field, checked at the project\nchecks; the list is unique (CFG-ID-6).",
           "items": {
@@ -85,6 +89,60 @@
         "maximumUpstreamCalls"
       ],
       "type": "object"
+    },
+    "BindingAsyncCompletion": {
+      "description": "How one asynchronous binding answers while the source operation remains\npending. Both modes use the same profile-owned status link; bounded wait\nspends only the declared finite interval and poll count first.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Return the committed accepted response immediately.",
+          "properties": {
+            "type": {
+              "const": "status-link",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Poll within all three authored bounds, then return either a proven\nterminal response or the same committed accepted response.",
+          "properties": {
+            "maximumPolls": {
+              "format": "uint64",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "pollIntervalMilliseconds": {
+              "format": "uint64",
+              "maximum": 10000,
+              "minimum": 10,
+              "type": "integer"
+            },
+            "type": {
+              "const": "bounded-wait",
+              "type": "string"
+            },
+            "waitTimeoutMilliseconds": {
+              "format": "uint64",
+              "maximum": 30000,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "type",
+            "waitTimeoutMilliseconds",
+            "pollIntervalMilliseconds",
+            "maximumPolls"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "Digest": {
       "description": "A SHA-256 digest: `sha256:` followed by 64 lowercase hex digits.",

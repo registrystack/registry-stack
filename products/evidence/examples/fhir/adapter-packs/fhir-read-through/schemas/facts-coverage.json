@@ -1,0 +1,24 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "status",
+    "beneficiary-reference"
+  ],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": [
+        "active",
+        "cancelled",
+        "draft",
+        "entered-in-error"
+      ]
+    },
+    "beneficiary-reference": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    }
+  }
+}

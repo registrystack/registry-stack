@@ -1,0 +1,67 @@
+apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: protected-registry-read
+version: '1'
+testedVersions: []
+endpoints:
+- id: records
+  component: http
+  authentication:
+    type: oauth2-client-credentials
+  attemptTimeoutMilliseconds: 3000
+  maximumResponseBytes: 65536
+  requestHeaders:
+  - accept
+  testedVersions: []
+sourceRoutes:
+- id: residence-region
+  evidence:
+    inputsSchema:
+      path: schemas/inputs.json
+      digest: sha256:d450153fac5c668013644682fe8b45c4434105b561951f453484da58f1cb37be
+    factsSchema:
+      path: schemas/facts.json
+      digest: sha256:bd409cb7746bd45f8d944f8b01f1a4c19f69b3645f3bb902fbce2c8b341f0df7
+    acquisitionPosture: field-projected
+  steps:
+  - setHeader:
+      name: accept
+      value:
+        constant: application/json
+  - to:
+      uri: http:records
+      parameters:
+        httpMethod: GET
+        path: "/v2/resources/residence-record/records"
+        query:
+          recordReference:
+            jsonpath: "$.recordReference"
+          fields:
+            constant: recordReference,region
+          pageSize:
+            constant: '2'
+  - setBody:
+      rhai:
+        file: scripts/residence.rhai
+        entrypoint: project
+  - validateSchema:
+      path: schemas/provider.json
+      digest: sha256:9ed9aae3dc7460ae35958b0b9a77da3e09c4a7a5e85f5107da9ffd6fea787758
+  - setBody:
+      rhai:
+        file: scripts/residence.rhai
+        entrypoint: lookup
+scripts:
+- path: scripts/residence.rhai
+  digest: sha256:475066a1697d4bd1ee09a0d3d29320929d5652eefd8e1b29e80a9b0c338c1740
+capabilities:
+  components:
+  - http
+  languages:
+  - constant
+  - jsonpath
+  - rhai
+  eips:
+  - setBody
+  - setHeader
+  - to

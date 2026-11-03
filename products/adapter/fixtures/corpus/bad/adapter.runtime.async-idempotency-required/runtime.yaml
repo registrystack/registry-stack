@@ -1,0 +1,27 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/runtime/runtime.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.runtime.async-idempotency-required: the checker must emit this exact code. All data is synthetic.
+apiVersion: id.registrystack.org/formats/adapter/runtime/v1alpha1
+kind: AdapterRuntimeConfig
+id: case-deployment
+endpoints:
+- endpoint: cases
+  baseUrl: https://cases.example.invalid
+  credential:
+    type: basic
+    usernameRef: secret:env/CASES_USER
+    passwordRef: secret:env/CASES_PASSWORD
+allowedPrivateCidrs:
+- 10.0.0.0/8
+listener:
+  bind: 127.0.0.1:8080
+database:
+  runtimeUrlRef: secret:env/DB_RUNTIME
+  migrationUrlRef: secret:env/DB_MIGRATION
+oidc:
+  issuer: https://issuer.example.invalid
+  audience: case-api
+allowedClients:
+- registry-adapter-example-client
+audit:
+  retentionDays: 90

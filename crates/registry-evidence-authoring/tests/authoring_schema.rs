@@ -483,7 +483,7 @@ fn the_project_schema_closes_its_shape_and_requires_the_normalized_keys() {
 }
 
 #[test]
-fn the_project_schema_exposes_presentation_variants_and_function_contracts() {
+fn the_project_schema_exposes_pack_bindings_and_derivation_contracts() {
     let documents = documents().expect("the authoring schemas generate");
     let document = &documents[PROJECT_SCHEMA_FILE];
     for member in [
@@ -491,15 +491,26 @@ fn the_project_schema_exposes_presentation_variants_and_function_contracts() {
         "selectorProfiles",
         "label",
         "description",
-        "source-prepare/v1",
-        "source-extract/v1",
         "assertion-derive/v1",
-        "search-then-fetch",
-        "search-then-fetch-set",
-        "selectorInputs",
+        "pack",
+        "route",
+        "connection",
+        "inputs",
+        "acquisitionPosture",
     ] {
         assert!(document.contains(member), "schema omits {member}");
     }
+}
+
+#[test]
+fn source_input_map_keys_use_the_shared_external_identifier_contract() {
+    let documents = documents().expect("the authoring schemas generate");
+    let value: Value =
+        serde_json::from_str(&documents[PROJECT_SCHEMA_FILE]).expect("the project schema is JSON");
+    assert_eq!(
+        value["$defs"]["Source"]["properties"]["inputs"]["propertyNames"]["$ref"],
+        "#/$defs/ExternalId"
+    );
 }
 
 #[test]
@@ -524,7 +535,7 @@ fn canonical_project_target_and_authority_satisfy_schema_and_reader() {
 fn target_collision_report_counts_the_file_and_points_to_both_authored_keys() {
     let document = NORMALIZED_TARGET.replacen(
         "secretProviders:",
-        "  synthetic_register:\n    origin: http://127.0.0.1:8081\n    authentication:\n      type: bearer\n      tokenRef: secret:file/synthetic-source-token\nsecretProviders:",
+        "  synthetic_register:\n    endpoints:\n      register:\n        origin: http://127.0.0.1:8081\n        authentication:\n          type: bearer\n          tokenRef: secret:file/synthetic-source-token\nsecretProviders:",
         1,
     );
     let report = target::read_target("local-target.yaml", document.as_bytes())
@@ -538,7 +549,7 @@ fn target_collision_report_counts_the_file_and_points_to_both_authored_keys() {
         .expect("the connection collision is reported");
     assert_eq!(diagnostic.path, "/connections/synthetic_register");
     let source = diagnostic.source.as_ref().expect("primary source position");
-    assert_eq!((source.line, source.column), (Some(39), Some(3)));
+    assert_eq!((source.line, source.column), (Some(41), Some(3)));
     assert_eq!(diagnostic.related.len(), 1);
     assert_eq!(
         diagnostic.related[0].path,
@@ -705,13 +716,13 @@ fn the_target_model_retains_complete_production_deployment_options() {
     document["authentication"]["oidc"]["tlsTrustProfile"] = serde_json::json!("private-ca");
     document["authentication"]["oidc"]["revokedKeyIds"] = serde_json::json!([]);
     document["connections"] = serde_json::json!({
-        "none":{"origin":"http://127.0.0.1:8081","authentication":{"type":"none"}},
-        "basic":{"origin":"https://basic.invalid","authentication":{"type":"basic","usernameRef":"secret:file/user","passwordRef":"secret:file/password"}},
-        "bearer":{"origin":"https://bearer.invalid","authentication":{"type":"bearer","tokenRef":"secret:file/token","scheme":"Bearer"}},
-        "authorization":{"origin":"https://authorization.invalid","authentication":{"type":"static-authorization","tokenRef":"secret:file/token"}},
-        "api-key":{"origin":"https://api.invalid","authentication":{"type":"static-api-key","headerName":"X-Api-Key","valueRef":"secret:file/api-key"}},
-        "oauth-secret":{"origin":"https://oauth.invalid","authentication":{"type":"oauth2-client-credentials","tokenEndpoint":"https://issuer.invalid/token","clientIdRef":"secret:file/client-id","clientSecretRef":"secret:file/client-secret","scope":"evidence.read","audience":"evidence","resource":"urn:example:resource","credentialPlacement":"basic-header","maximumCacheSeconds":300,"assumedLifetimeSeconds":300},"tlsTrustProfile":"private-ca","maximumConcurrency":8,"admissionTimeoutMilliseconds":2000,"tokenTimeoutMilliseconds":2000},
-        "oauth-jwt":{"origin":"https://jwt.invalid","authentication":{"type":"oauth2-private-key-jwt","tokenEndpoint":"https://issuer.invalid/token","clientIdRef":"secret:file/client-id","clientAssertionKeyRef":"secret:file/client-key","clientAssertionAudience":"urn:example:issuer","scope":"evidence.read","audience":"evidence","resource":"urn:example:resource","maximumCacheSeconds":300,"assumedLifetimeSeconds":300}}
+        "none":{"endpoints":{"source":{"origin":"http://127.0.0.1:8081","authentication":{"type":"none"}}}},
+        "basic":{"endpoints":{"source":{"origin":"https://basic.invalid","authentication":{"type":"basic","usernameRef":"secret:file/user","passwordRef":"secret:file/password"}}}},
+        "bearer":{"endpoints":{"source":{"origin":"https://bearer.invalid","authentication":{"type":"bearer","tokenRef":"secret:file/token","scheme":"Bearer"}}}},
+        "authorization":{"endpoints":{"source":{"origin":"https://authorization.invalid","authentication":{"type":"static-authorization","tokenRef":"secret:file/token"}}}},
+        "api-key":{"endpoints":{"source":{"origin":"https://api.invalid","authentication":{"type":"static-api-key","headerName":"X-Api-Key","valueRef":"secret:file/api-key"}}}},
+        "oauth-secret":{"endpoints":{"source":{"origin":"https://oauth.invalid","authentication":{"type":"oauth2-client-credentials","tokenEndpoint":"https://issuer.invalid/token","clientIdRef":"secret:file/client-id","clientSecretRef":"secret:file/client-secret","scope":"evidence.read","audience":"evidence","resource":"urn:example:resource","credentialPlacement":"basic-header","maximumCacheSeconds":300,"assumedLifetimeSeconds":300},"tlsTrustProfile":"private-ca","attemptTimeoutMilliseconds":2000}}},
+        "oauth-jwt":{"endpoints":{"source":{"origin":"https://jwt.invalid","authentication":{"type":"oauth2-private-key-jwt","tokenEndpoint":"https://issuer.invalid/token","clientIdRef":"secret:file/client-id","clientAssertionKeyRef":"secret:file/client-key","clientAssertionAudience":"urn:example:issuer","scope":"evidence.read","audience":"evidence","resource":"urn:example:resource","maximumCacheSeconds":300,"assumedLifetimeSeconds":300}}}}
     });
     document["secretProviders"]["environment"] = serde_json::json!({});
     document["signer"] = serde_json::json!({
@@ -819,18 +830,19 @@ fn target_secret_references_use_one_shared_syntax_at_every_retained_position() {
     ];
     for (authentication, members) in variants {
         let mut valid = base.clone();
-        valid["connections"]["probe"] =
-            serde_json::json!({"origin":"https://source.invalid", "authentication":authentication});
+        valid["connections"]["probe"] = serde_json::json!({
+            "endpoints":{"source":{"origin":"https://source.invalid", "authentication":authentication}}
+        });
         assert!(schema(TARGET_SCHEMA_FILE).is_valid(&valid));
         target::read_target("target.yaml", &serde_json::to_vec(&valid).unwrap())
             .expect("valid shared references read");
         for member in members {
             let mut invalid = valid.clone();
-            invalid["connections"]["probe"]["authentication"][member] =
+            invalid["connections"]["probe"]["endpoints"]["source"]["authentication"][member] =
                 serde_json::json!("TARGET-PRIVATE-CANARY");
             assert_target_value_refused(
                 &invalid,
-                &format!("/connections/probe/authentication/{member}"),
+                &format!("/connections/probe/endpoints/source/authentication/{member}"),
             );
         }
     }
@@ -1183,13 +1195,15 @@ fn a_bad_typed_value_is_rejected_by_schema_and_reader_at_the_authored_field() {
 
 #[test]
 fn source_function_refs_are_closed_while_derivation_calls_expose_bindings() {
-    let document = NORMALIZED_PROJECT.replacen(
-        "extract:\n      function: extract-person",
-        "extract:\n      function: extract-person\n      parameters: {}",
-        1,
-    );
-    assert!(!schema(PROJECT_SCHEMA_FILE).is_valid(&yaml_as_json(&document)));
-    assert!(project::read_project("evidence.yaml", document.as_bytes()).is_err());
+    let mut retired = yaml_as_json(NORMALIZED_PROJECT);
+    retired["sources"]["person-record"]["extract"] =
+        serde_json::json!({"function":"extract-person","parameters":{}});
+    assert!(!schema(PROJECT_SCHEMA_FILE).is_valid(&retired));
+    assert!(project::read_project(
+        "evidence.yaml",
+        &serde_json::to_vec(&retired).expect("project renders")
+    )
+    .is_err());
 
     let document = NORMALIZED_PROJECT.replacen(
         "derive:\n      function: derive-adult-status",

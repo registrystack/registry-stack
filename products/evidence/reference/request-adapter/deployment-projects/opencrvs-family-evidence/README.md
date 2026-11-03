@@ -17,10 +17,18 @@ listener settings are in `runtime.yaml`. Deployments review and mount both
 inputs read-only, but staging and production may use different runtime files
 without changing evidence semantics.
 
-Both OpenCRVS sources reuse `birth-event-prepare.rhai`; the closed
-`selectorRole` parameter selects the already validated `subject` or `child`
-role. Extraction remains separate because the two sources validate and emit
-different facts.
+Both Sources select the maintained `opencrvs-events` Adapter pack, through
+`evidence-birth-date` or `evidence-birth-parents`. Each binding maps only the
+already authorized subject or child tracking ID to the route's `trackingId`
+input. The digest-pinned copy under `bundle/adapter-packs/` is byte-for-byte the
+pack maintained under `products/adapter/packs/opencrvs-events/`.
+
+The Evidence routes reuse the facade's registered-event query construction.
+Their projection, pinned provider schemas and closed lookup results retain the
+different facts each assertion needs. Fixtures replay exact data and synthetic
+OAuth exchanges without live credentials. These synthetic checks do not
+establish compatibility with a live OpenCRVS deployment; `testedVersions`
+remains empty.
 
 The event lookup sends only the child tracking ID. Extraction retains the
 returned tracking ID as a narrow fact, and each derivation requires it to equal
@@ -60,8 +68,8 @@ The example's closed source contract also states that:
   and
 - at least one registered parent reference is required for this project.
 
-Those statements are trusted deployment governance, enforced through adapter
-parameters, fact schema constants, and derivation checks. They are not inferred
+Those statements are trusted deployment governance, enforced through reviewed
+pack logic, fact schema constants, and derivation checks. They are not inferred
 from generic OpenCRVS behavior.
 
 A country may instead review a deterministic tuple comparison over returned
@@ -98,7 +106,7 @@ Locally, the complete token URL, body, response, and debug output must be
 stripped or redacted, redirects denied, and token responses bounded.
 
 The token endpoint returns only `access_token` and `token_type`. RFC 6749
-section 5.1 makes `expires_in` recommended rather than required, so the bundle
+section 5.1 makes `expires_in` recommended rather than required, so the runtime binding
 states `assumedLifetimeSeconds` and the cache stays clamped to
 `maximumCacheSeconds`.
 

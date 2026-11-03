@@ -1,5 +1,8 @@
+# Historical inline Source contract. Current Evidence Sources bind reviewed Adapter packs.
+# These retired fields are refused by the current bundle grammar.
 contract: registry.evidence.fixed-http-json-source/v1
-status: frozen
+status: retired
+replacement: ../../adapter/CONCEPT.md
 ownership:
   governed_bundle:
     - requirement acquisition kind, every source that kind fixes, each fetch stage's declared prior-fact allowlist, and any whole-acquisition ceiling the kind declares
@@ -71,7 +74,7 @@ evidence_data_request:
       parsing.
     transport_outcome: >-
       Rust emits a data-free explicit DeclaredUnresolved outcome rather than a
-      SourceError. No problem member or body reaches response projection,
+      categorical source failure. No problem member or body reaches response projection,
       response-schema validation, Rhai, assertions, audit, or logs.
     acquisition_mapping: >-
       A singular acquisition or search stage maps the explicit outcome to public

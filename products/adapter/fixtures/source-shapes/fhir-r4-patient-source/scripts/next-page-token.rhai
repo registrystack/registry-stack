@@ -2,14 +2,14 @@
 //
 // FHIR R4 says paging links are opaque to the client
 // (https://hl7.org/fhir/R4/http.html#paging). The http component takes a
-// fixed path template and fixed query keys, so it cannot follow an opaque
-// absolute URL. This script is the workaround the grammar forces: it
-// assumes the server is HAPI FHIR, whose next link reads
+// origin-pinned `httpUri` form can now follow the absolute URL. This older
+// example instead reconstructs the link's query and therefore assumes the
+// server is HAPI FHIR, whose next link reads
 // `<base>?_getpages=<id>&_getpagesoffset=<n>&_count=<n>&_bundletype=searchset`,
 // and extracts the `_getpages` value. Any other server (or a HAPI version
-// that changes its spelling) breaks it. The script also cannot check that
-// the link's origin is the bound base URL, since the base URL never
-// enters the exchange. Pure and deterministic; no I/O.
+// that changes its spelling) breaks it. A current pack should pass the full
+// link through `httpUri`, where the engine checks the configured endpoint
+// origin and base path. Pure and deterministic; no I/O.
 fn next_page_token(exchange) {
     query_value(next_url(exchange), "_getpages")
 }

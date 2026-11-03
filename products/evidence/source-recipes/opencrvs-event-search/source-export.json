@@ -5,16 +5,16 @@
   "provenance": {
     "producer": "Registry Stack maintained source recipes",
     "providerContract": "OpenCRVS v2 Event Search pinned reference shape",
-    "revision": "2026-10-26",
-    "validation": "sanitized reference adapter and local synthetic fixtures"
+    "revision": "2026-11-02",
+    "validation": "checked Adapter pack closure and local synthetic fixture replay"
   },
   "artifacts": [
-    {"path": "adapters/opencrvs-event-search-extract.rhai", "digest": "sha256:390941ddbed1f4e63d365e3e23ffb5d5df9834f09a8401a8bb5f7fc3d4d8e4a2"},
-    {"path": "adapters/opencrvs-event-search-prepare.rhai", "digest": "sha256:c688b34c515be86f6b34abe62a6cba5126dd650b6cac9a0e4a8a48f13709b58e"},
-    {"path": "schemas/opencrvs-event-search-facts.yaml", "digest": "sha256:fc9babb51b2c8425d584202a3e63f69d334de219d7d266cdd2c98ae0fdb16485"},
-    {"path": "schemas/opencrvs-event-search-parameters.yaml", "digest": "sha256:f749015332a3234afc5952b36ba000cd631bf95c628b68caf5b3cffefcdc7794"},
-    {"path": "schemas/opencrvs-event-search-response.yaml", "digest": "sha256:83c79fc52b26d6d19dd5df858d2a520abd720204ce4ac723f3f19c267dc181c3"},
+    {"path": "adapter-packs/opencrvs-event-search/pack.yaml", "digest": "sha256:c0ae5f97ccba94c6cf3652b45583928c30c3154da2ccf2393df9d24ba7eaf8ca"},
+    {"path": "adapter-packs/opencrvs-event-search/schemas/facts.json", "digest": "sha256:df2a43be66f46935417d4b095d9026d1f9679c188e36dcf78db4856edc58d830"},
+    {"path": "adapter-packs/opencrvs-event-search/schemas/inputs.json", "digest": "sha256:3ecf0b2b918b62de0987dd862c2208437645e8586df12843e3b54218e3a4c28c"},
+    {"path": "adapter-packs/opencrvs-event-search/schemas/provider-response.json", "digest": "sha256:3bdbcfdc4dc3ced6677a096600723496e16fb5612bd14e1cc0f050337c967c91"},
+    {"path": "adapter-packs/opencrvs-event-search/scripts/source-recipe.rhai", "digest": "sha256:6e7fec1678bd08b17b03fad8aa7bff9369db4b20570fb6f710f33e7015ff9eb3"},
     {"path": "selectors/opencrvs-tracking-id-v1.yaml", "digest": "sha256:503f0a471107052f7253071f9d9ce4ac1fbc42ab17da019bb88b791229455109"},
-    {"path": "sources/opencrvs-event-search.yaml", "digest": "sha256:295b7939e061137e439a0ee1c464efe99fc2d1e9b87c5e7e1b94ec6473c34bcc"}
+    {"path": "sources/opencrvs-event-search.yaml", "digest": "sha256:7bc55ae16e0e8825e00500dcf6077f1c6201a039977b602f63f00c5a00c5ee7c"}
   ]
 }

@@ -90,13 +90,7 @@ policy, script, selector, and audit configuration.
 
 ## Provider prerequisites
 
-Decide compatibility before authoring scripts. These are the prerequisites for
-an `http-json` source, which reads the provider's own API. A provider that meets
-none of them may still be reachable as a `sqlite-extract` source, whose
-prerequisite is a different one: the publisher must be able to produce a
-snapshot of the data and to state when it was published.
-
-An `http-json` provider must:
+Decide compatibility before binding an Adapter pack. A live provider must:
 
 - expose a bounded lookup at a fixed origin over HTTPS, except numeric loopback
   HTTP used only by deterministic local tests;
@@ -105,18 +99,20 @@ An `http-json` provider must:
 - let one response distinguish zero, one, and multiple matches, either through
   a trustworthy total count plus at most one minimized result, or through a
   caller-controlled hard result limit of at least two;
-- not require page traversal, a response-provided next URL, or a retry. A
-  provider may require the closed search-then-fetch profile, but both endpoints
-  and the scalar fact binding must be reviewable and fixed before startup;
+- fit a closed Adapter route whose complete endpoint set, operation graph,
+  bounded retries, and final facts are reviewable before startup;
 - support a query/body/path lookup narrow enough that Evidence does not fetch
   a broad candidate set; and
 - provide the complete facts and relationship-set completeness needed by the
   requirement, or expose a governed intermediary that does.
 
 An unbounded array without a trustworthy count or hard result limit is not
-adaptable in Version 1. Neither is a provider that requires broad retrieval and
-local candidate selection. Use or build a governed bounded-lookup facade
-outside Evidence rather than weakening the one-request and no-matcher boundary.
+adaptable. Neither is a provider that requires broad retrieval and local
+candidate selection. Use or build a governed bounded-lookup facade rather than
+weakening the no-matcher boundary. A snapshot provider may instead use a pinned
+SQLite route when it can publish immutable data and authoritative publication
+metadata; runtime then binds the reviewed route to one captured read-only
+extract.
 
 The hard result limit itself is governed adapter policy. Its value, such as
 `resultLimit: 2` in the source's `adapterParameters`, is declared by the
@@ -148,11 +144,10 @@ The governed file is `bundle/evidence.yaml`.
 | `rateLimits` | yes | Governed anti-enumeration and request limits. |
 | `signing` | yes | Evidence/JWS format, algorithm, key references, validity, JWKS path, and rollover policy. |
 | `responseFormats` | no | Response formats the whole deployment permits. Omission means `[signed-jws]`. Declare it explicitly in production bundles. |
-| `acquisitionCapabilities` | no | Gated acquisition kinds and source optimizations this bundle opts in to, at most two entries: `search-then-fetch-set` and `source-batch`. Omission and `[]` both enable nothing. |
 | `maximumHolderBoundBatchSize` | no | Ceiling of 1 through 16 on how many assertions one holder-bound release may carry. Omission means 1, so a bundle written before batch release cannot serve a batch. |
 | `selectorProfiles` | yes | Closed caller/grant/context selector shapes. |
-| `sourceConnections` | no | Optional named owners of fixed HTTP endpoints, workload credentials, TLS profiles and shared per-process resource bounds. |
-| `sources` | yes | Fixed source authorities, transport policy, scripts, schemas, and bounds. |
+| `sourceConnections` | no | Reviewed non-secret endpoint, authentication-authority, client-identity, and trust policy for each named source connection. Runtime material must match it exactly. |
+| `sources` | yes | Digest-pinned Adapter pack and Evidence route bindings, authorized selector-to-input projections, acquisition posture, and facts schema. |
 | `authorityProfiles` | yes | Empty for normalized project packages. Otherwise the compiled bundle authority profiles. Normalized runtime authority comes only from the activated target snapshot. |
 | `requirements` | yes | Evidence semantics, source, derivation, concepts, fixtures, and disclosure family. |
 
@@ -393,36 +388,10 @@ Each requirement declares these fields:
 | `disclosureGuard.families` | yes | Non-empty reviewed disclosure-family URI set. Reuse across enabled requirements is rejected; distinct labels still require human combined-disclosure review. |
 | `existenceDisclosure` | yes | Exactly `collapse-unresolved` in Version 1. |
 
-`acquisition.type` selects one of three closed shapes:
-
-| `type` | Other keys | Call ceiling |
-|---|---|---|
-| `single` | `source` | One. |
-| `search-then-fetch` | `search`, `fetch` (one source id), optional `onFetchNoMatch` | Two. |
-| `search-then-fetch-set` | `search`, `fetch` (2 through 4 members), `maximumAcquisitionMilliseconds` | One plus the declared member count. |
-
-For `search-then-fetch`, `onFetchNoMatch` defaults to `dependency-failure`.
-Set it to `unavailable` only when the fetch may legitimately find no record.
-A declared unresolved 404 or extracted no-match then returns 422
-`evidence.unavailable` and an `Unresolved` audit decision. Sequential request
-batches return an unavailable item. Ambiguous fetches and transport failures
-remain 503, and no absent record reaches derivation or assertion signing.
-
-`search-then-fetch-set` is a gated kind. It serves only where this bundle names
-it under `acquisitionCapabilities` and the operator separately names it under
-the runtime file's `acquisitionCapabilities`; a bundle missing either half is
-refused before the listener binds. Each `fetch[]` member declares its own
-`source` and a `factInputs` allowlist of 1 through 16 validated search fact
-names, which is the only search-derived data that member receives through any
-channel, including the body its preparation builds. Members must be distinct
-from each other and from the search source, and each fact name must be a
-required fact of the search source's fact schema. Members are called in
-declared order after the search resolves to a unique schema-valid match, and
-derivation receives the union of the stage FactSets, whose names startup proved
-disjoint. `maximumAcquisitionMilliseconds` is 1 through 30,000 and bounds the
-whole acquisition, including the transitions between stages; exceeding it fails
-the requirement as a dependency failure and never cancels a durable audit
-append.
+`acquisition` is a closed `{source: <id>}` object. The source id names one
+pack-route binding from `sources`. The route contains the complete reviewed
+sequence of provider operations, so the requirement cannot add a second source,
+choose a route from caller data, or extend the operation budget.
 
 Supported concept forms, written as the concept's `type`, are `boolean`, `controlled-code`,
 `controlled-category`, `bounded-identifier`, `bounded-integer`, `bounded-decimal`, `date-bucket`,
@@ -473,894 +442,226 @@ closed JSON Schema and the narrower conversion described in
 [`ADAPTER-API.md`](../ADAPTER-API.md#inputs). Neither parameter map may contain
 secrets or runtime authority.
 
-### Source
+### Pack-owned provider protocols
 
-A source declares its transport in `type`, and that tag decides the rest of the object.
-Version 1 defines two, and they are peers. `http-json` reaches a fixed HTTPS
-origin over the network. `sqlite-extract` runs one reviewed SQL statement
-against a read-only SQLite extract file mounted beside the process. A key
-belonging to the other transport is an unknown key rather than an ignored one,
-so `baseUrl` on a `sqlite-extract` source fails startup instead of being
-skipped.
+HTTP, GraphQL, SQLite, and product-specific protocol behavior belongs to the
+digest-pinned Adapter pack. A pack endpoint fixes its component, wire
+authentication kind, attempt and response bounds, and operation ids. Evidence
+adds only the reviewed connection policy and matching runtime material.
 
-Every source carries the same keys whichever transport it names:
+A signed Evidence source uses the built-in `signed-evidence-v1` host protocol
+on an authenticated HTTP endpoint. Its digest-pinned configuration contains
+one reviewed Evidence definitions contract, trusted public JWKs, revoked key
+ids, assertion-lifetime ceiling, and clock skew. The route must send a closed
+`POST /v1/evidence` request with no query and a selector-only JSON body. Rust
+creates a fresh nonce, requests the signed JWS media type, validates status
+and canonical response headers, verifies the exact response bytes, and exposes
+only the closed `values` projection to later route steps. Signed bytes, keys,
+nonces, subject bindings, and assertion metadata never reach scripts.
 
-| Key | Required | Meaning |
-|---|---|---|
-| `type` | yes | `http-json` or `sqlite-extract`. Selects which further keys the source declares. |
-| `posture` | yes | `source-derived`, `field-projected`, or `record-transformed`, describing what crosses the source boundary. |
-| `request` | yes | One fixed request plan, shaped by the transport. |
-| `responseSchema` | yes | Bundle-relative closed JSON Schema for the projected source response. Checked before the declared `extract/2` or `extract/3` runs. |
-| `extractScript` | yes | Bundle-relative Rhai script implementing existing `extract/2` or optional selector-aware `extract/3`; choose exactly one signature. |
-| `factSchema` | yes | Bundle-relative closed JSON Schema for match facts. |
+The protocol refuses an endpoint whose authentication kind is `none`.
+Upstream failure, unavailable evidence, signature failure, expiry, nonce or
+audience mismatch, and schema failure remain dependency failures. They never
+become `no-match`, and no unverified value reaches derivation.
 
-Choosing a transport is a choice about where the authoritative data sits and
-what the deployment can promise about it. `http-json` reads the authority live,
-so the answer is as current as the provider's own API, and the deployment
-carries an origin, a credential, a TLS trust decision, and a network failure
-mode. `sqlite-extract` reads a published snapshot, so the deployment carries a
-file and a declared staleness tolerance and no credential at all, and the answer
-is exactly as current as the snapshot states it is. Nothing after the request
-differs: both transports run the same projection, the same response schema
-check, the same declared extraction ABI, and the same fact schema.
-
-`responseSchema` states the shape the adapter was reviewed against, so the
-script never has to prove it by hand. A response outside that shape is a
-source-protocol failure and no script runs. Two rules differ from the fact and
-adapter-parameter roles, because the projected tree is not what the source
-returned:
-
-- A response schema may require fewer members than it declares properties.
-  Projection drops a selected leaf the record did not carry, and a page decided
-  ambiguous is never read record by record, so a record on that page need not
-  be complete.
-- A response schema node may write its type as the pair `[T, "null"]`. A source
-  that reports an explicit null where it holds no value has that null carried
-  through projection verbatim; the script reads it with `is_missing`, exactly as
-  it reads an absent leaf. This is the only union the subset admits.
-
-What stays with the script is what a shape cannot state: how a reported total
-agrees with the records returned, page-count arithmetic, uniqueness across
-fields, and which values must agree with the closed adapter parameters.
-
-### HTTP source
-
-An HTTP source can consume another Evidence service by declaring `evidence`.
-The upstream service independently authorizes the source credential for its
-requirement, purpose, subjects, and audience. Use the ordinary OAuth client
-credentials configuration and a fixed `POST /v1/evidence` path, optionally
-under the upstream deployment's path prefix. Declare `query: forbidden` and
-`jsonBody: required`; omit an `Accept` header. The executor requests signed
-JWS and creates a fresh 32-byte request nonce for every acquisition.
-
-The `evidence` object contains:
-
-| Key | Required | Meaning |
-|---|---|---|
-| `contract` | yes | An independently reviewed `registry.evidence-definitions/v1` document containing exactly one audience-scoped definition that supports `signed-jws` and whose selectors all declare `valueOrigin: request`. Keep its audience, issuer, provider, assurance, requirement, purpose, revision, subjects, selector bounds, and output forms intact. Wherever a value form is named, `type` is the tag: a requirement's own concept carries it directly, beside the `constraints` it selects, and a concept of this contract or of a verification policy's `expectedOutputs` carries it inside `form`, as `form: {type: boolean}` or `form: {type: list, items: string, minimumItems: 1, maximumItems: 8, unique: true}`. A form written as a bare name is refused with `config.invalid-type`, and a list whose members sit under a `list` key is refused with `config.removed-key`. |
-| `trustedJwks` | yes | A JWKS object with 1 through 33 explicitly accepted public signing keys. Each key has exactly the members `alg` (`ES256`), `crv` (`P-256`), `kty` (`EC`), `x`, `y`, and `kid`, which must be the key's RFC 7638 SHA-256 thumbprint. Private key material and unusable keys are refused. |
-| `revokedKeyIds` | no | Up to 33 distinct thumbprint key identifiers that must be refused, including keys still present in `trustedJwks`. Omission means none. |
-| `maximumAssertionLifetimeSeconds` | yes | Maximum accepted upstream assertion lifetime, from 1 through 31536000 seconds. Choose the shortest lifetime the integration needs. |
-| `clockSkewSeconds` | no | Accepted clock skew from 0 through 300 seconds. Defaults to zero. |
-
-Obtain the definition using the source client's authenticated discovery view,
-retain the single request shape this source needs, and review it together with
-the upstream public keys before packaging. Discovery does not establish key
-trust. A running source never refreshes its definition or keys from a response.
-When the upstream requirement revision or accepted signing keys change, review
-and deploy an updated downstream package. A mismatched or revoked key, expired
-assertion, wrong nonce, or any other verification failure produces a dependency
-failure and releases no downstream evidence.
-
-The upstream signer remains responsible for resolving the authorized selector.
-The client checks the response nonce and declared subject roles; it accepts the
-upstream's opaque subject bindings on first use because it cannot derive them.
-This source keeps no subject-binding store. Review the upstream's selector
-resolution and authorization as part of accepting that source.
-
-Your preparation script returns only the declared subjects in its JSON body:
-
-```rhai
-fn prepare(selectors, context) {
-    #{query: [], body: #{subjects: [#{
-        role: "subject",
-        selector: #{
-            profile: "record-reference-v1",
-            values: #{reference: selectors.subject.values.reference}
-        }
-    }]}}
-}
-```
-
-Use the roles and profiles in your pinned definition. Every selector in that
-definition must declare `valueOrigin: request`, and the script supplies its
-values. The upstream authenticates this service's own source credential, not
-the downstream caller, so it would resolve an `authenticated-context` selector
-from that credential and cannot receive an `authenticated-grant` selector's
-task grant. Configuration validation refuses either origin. Scripts cannot
-override the requirement, purpose, nonce, trust policy, or format. The request
-size limit includes the runtime's complete Evidence envelope.
-
-After verification, the source exposes only
-`{"values": {"<concept-handle>": <verified-value>}}`. Point `projection` at
-the required `/values/<concept-handle>` members and describe that projected
-shape in `responseSchema`. Your extract script maps those values into its
-declared facts. An optional absent concept is absent from `values`. Signed
-bytes, subject bindings, nonces, and assertion metadata never reach Rhai.
-Source response fixtures use this verified-values shape; they test extraction,
-while live source execution always performs signature verification first.
-
-Signed Evidence sources use the existing fixed acquisition stages and HTTP
-limits, TLS, credential handling, named connections, and audit. They do not
-cache assertions and cannot declare optimized `batch` or `unresolvedProblem`:
-an upstream refusal or unavailable assertion is a dependency failure. They also
-cannot set `forwardAccessAttribution: true`. The upstream Evidence service
-authorizes and audits this service's own source credential and does not read
-the reserved attribution headers, so forwarding would only send the downstream
-caller's requester and purpose to another deployment. For the same reason a
-signed Evidence source must authenticate: configuration validation refuses
-`authentication: {type: none}` even under the local assurance profile, because
-the upstream Evidence service answers only an authenticated, authorized source
-credential. The
-downstream requirement can issue its own independently authorized wallet
-credential after acquiring these verified facts.
-
-### Ordinary HTTP source example
+### Adapter pack source example
 
 ```yaml
 sources:
   source-a:
-    type: http-json
-    baseUrl: https://registry.gov.example
+    pack:
+      id: civil-registry
+      version: 1.0.0
+      digest: sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      artifactPrefix: adapter-packs/civil-registry/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+    route: evidence-by-reference
+    connection: shared-read
+    inputs:
+      recordReference:
+        selector:
+          role: subject
+          profile: record-reference-v1
+          field: reference
     posture: record-transformed
-    tlsTrustProfile: government-internal-pki
-    authentication:
-      type: static-authorization
-      tokenRef: secret:file/source-token
-    request: {}
-    responseSchema: schemas/source-a-response.schema.yaml
-    extractScript: adapters/source-a-extract.rhai
     factSchema: schemas/source-a-facts.schema.yaml
 ```
 
-Beyond the shared keys, an `http-json` source declares:
+Each source is a thin governed binding to an Adapter pack route:
 
 | Key | Required | Meaning |
 |---|---|---|
-| `connection` | no | Explicit `sourceConnections` owner. Every copied endpoint, authentication, TLS and concurrency value must equal that owner at startup. |
-| `behaviorRevision` | no | Provider-selected behavior digest, exactly `sha256:` followed by 64 lowercase hexadecimal characters. This reached source dependency changes its questions' revisions independently of export provenance. |
-| `forwardAccessAttribution` | no | Defaults to `false`. When `true`, Rust sends the verified authorized requester and purpose as base64url UTF-8 in the reserved `Registry-Access-Requester` and `Registry-Access-Purpose` headers. The authenticated source must independently trust this Evidence service as an intermediary; the headers grant no source authority. A source that declares `evidence` cannot set it. |
-| `baseUrl` | yes | Fixed HTTPS origin, except for the `type: none` local loopback boundary below. No path, query, fragment, user information, wildcard, or runtime substitution. |
-| `tlsTrustProfile` | no | Logical profile name bound by `runtime.yaml`. Omission uses configured system roots only. |
-| `authentication` | yes | One closed source-authentication profile below. `type: none` is restricted to explicit local authoring at a numeric-loopback origin, and a source that declares `evidence` cannot use it. |
-| `unresolvedProblem` | no | Exact source-neutral `{status: 404, type: absolute HTTPS URI, code: bounded problem id}` tuple. Only an exact six-member `application/problem+json` response becomes explicit unresolved; omission leaves every 404 a dependency failure. Incompatible with `batch`. |
-| `batch` | no | Reviewed one-call optimization for the multi-subject request-batch route. It is fixed-path-only and requires both bundle and runtime `source-batch` capability. |
+| `pack` | yes | Exact Adapter pack `id`, `version`, `digest`, and package-relative captured `artifactPrefix`. The pack file digest and every pinned artifact are verified before compilation. |
+| `route` | yes | Evidence route id declared by the pinned pack. The route contract fixes its input schema, facts schema, and acquisition posture. |
+| `connection` | yes | Governed `sourceConnections` owner and matching runtime resource id. SQLite-only and no-send routes still use a named empty owner, which grants no network authority. |
+| `inputs` | when the route declares inputs | Named route inputs, each projected from one authorized selector `role`, `profile`, and `field`. Caller values cannot select another input or endpoint. |
+| `posture` | yes | `source-derived`, `field-projected`, or `record-transformed`, exactly equal to the digest-pinned route contract. |
+| `factSchema` | yes | Bundle-relative schema under `schemas/`, with JSON meaning equal to the pinned route facts schema. Nested objects, arrays, and optional declared fields are preserved. |
 
-Its `request` is the fixed evidence-data request plan in
-[Request](#request).
+The pack owns the closed HTTP, GraphQL, SQLite, extraction, and response-
+validation steps. Evidence does not compile a second inline request language
+from the bundle.
 
-`unresolvedProblem` does not teach Evidence a provider protocol. It declares
-one exact tuple for this source. The response must have status 404, exactly one
-`Content-Type: application/problem+json`, and exactly the six Problem Details
-members `type`, `title`, `status`, `detail`, `code`, and `traceId`; duplicate,
-missing, extra, mistyped, mismatched, or oversized bodies remain dependency
-failures. The body is discarded before projection or Rhai. A singular or
-search-stage outcome becomes Evidence unavailable under the neutral audit
-decision `unresolved`; the same outcome from a fetch or member after unique
-search is a dependency failure.
+### Governed source connection policy
 
-Every other 404 stays `source.unavailable` for the caller, whether the source
-declares no `unresolvedProblem` or the response is not exactly the declared
-tuple, because a distinct answer would disclose subject absence the bundle
-never declared. The operator log names the cause instead, with a rate-limited
-`source answered 404 with an undeclared shape` record carrying the source
-identifier and whether the tuple is not declared or not matched, and nothing
-from the response; see
-[Source diagnostics](../../../OPERATOR-CONTRACT.md#source-diagnostics).
-
-### Optional shared source connections
-
-Inline sources remain supported without a connection declaration. The same
-HTTP and OpenAPI adapters work unchanged. A named connection is a convenience
-for several fixed operations using one reviewed workload identity:
+`sourceConnections` reviews non-secret endpoint authority. Secret references
+and operational limits are deliberately absent:
 
 ```yaml
 sourceConnections:
   shared-read:
-    baseUrl: https://registry.gov.example
-    tlsTrustProfile: government-internal-pki
-    authentication:
-      type: oauth2-private-key-jwt
-      tokenEndpoint: https://identity.gov.example/token
-      clientIdRef: secret:file/workload-client-id
-      clientAssertionKeyRef: secret:file/workload-client-key
-      clientAssertionAudience: https://identity.gov.example/client-auth
-      audience: https://registry.gov.example
-      resource: https://registry.gov.example
-      maximumCacheSeconds: 60
-    maximumConcurrency: 4
-    admissionTimeoutMilliseconds: 5000
-    tokenTimeoutMilliseconds: 5000
+    endpoints:
+      - endpoint: records
+        baseUrl: https://registry.gov.example
+        tlsTrustProfile: government-internal-pki
+        clientIdentity: forbidden
+        authentication:
+          type: oauth2-private-key-jwt
+          tokenEndpoint: https://identity.gov.example/token
+          clientAssertionAudience: https://identity.gov.example/client-auth
+          audience: https://registry.gov.example
+          resource: https://registry.gov.example
 ```
 
-The authentication object is the complete existing union documented below:
-local `none`, Basic, static authorization, static API key, OAuth client
-credentials with a shared secret, or OAuth client credentials with a signed
-client assertion. Resource
-`audience`, `resource`, and `clientAssertionAudience` retain their distinct
-meanings. The logical `tlsTrustProfile` retains its additive runtime CA binding.
+Each connection contains a unique endpoint-policy list. An empty list is valid
+for a SQLite-only or no-send route and grants no HTTP authority.
 
 | Connection key | Required | Meaning |
 |---|---|---|
-| `baseUrl`, `authentication` | yes | Sole authored owner of origin and workload identity. `baseUrl` is a fixed HTTPS origin, or an HTTP numeric-loopback origin when `authentication.type` is `none`, with no path, query, fragment, or user information; `type: none` additionally requires an explicit port. |
-| `tlsTrustProfile` | no | Sole authored TLS profile; omission uses system roots. |
-| `maximumConcurrency` | no | Aggregate source-call capacity for this name in one process, 1 to 256; default 4. |
-| `admissionTimeoutMilliseconds` | no | Maximum wait for capacity or an in-progress OAuth refresh, 1 to 30,000; default 5,000. |
-| `tokenTimeoutMilliseconds` | no | OAuth request and body-read timeout, 1 to 30,000; default 5,000. |
+| `endpoints[].endpoint` | yes | Exact endpoint id in the pinned pack. A reachable HTTP or GraphQL endpoint must match exactly one policy. |
+| `endpoints[].baseUrl` | yes | Exact normalized destination URL, including any reviewed base path. Runtime must repeat it exactly. |
+| `endpoints[].tlsTrustProfile` | no | Logical private trust profile the runtime must bind. Omission uses system roots. |
+| `endpoints[].clientIdentity` | yes | `required` requires an mTLS identity in the runtime binding; `forbidden` refuses one. |
+| `endpoints[].authentication` | yes | Reviewed authentication kind. Static kinds carry only `type`; OAuth policies additionally pin the non-secret token endpoint, scope, audience, resource, assertion audience, and credential placement that apply. |
 
-In an authored source, `connection: shared-read` replaces `baseUrl`,
-`authentication`, `tlsTrustProfile` and `request.maximumConcurrency`; those keys
-must be absent, so source overrides have no precedence rule. Build resolves
-the reference into concrete values in the governed candidate and retains the
-connection identity and owner. Startup rejects missing owners and mismatched
-copies. Runtime configuration cannot retarget the source. A definition revision
-covers its acquisition and reached source behavior, selector contracts, function
-assets, output semantics and package release ceilings. Deployment authority and
-connection-owner metadata have separate package or authority identities and do
-not independently churn the definition pin.
-
-The operation still owns its method, fixed path, headers, preparation limits,
-projection, response schemas, response byte limit and
-`request.attemptTimeoutMilliseconds`. None of these has a connection override.
-Sources under one name share one eligible HTTP connection pool, one aggregate
-admission semaphore and one OAuth cache with single-flight refresh. Cancellation
-and timeout drop admission permits and refresh locks. Facts, assertions and
-authorization decisions remain request-local. Separate names and inline
-sources have independent resources even when credentials happen to be equal.
-The limit is per process; replicas and separate deployments do not share a
-distributed budget.
+One connection name in one process shares endpoint resources, admission
+permits, and OAuth cache state across every source program that reaches it.
+Different names remain isolated even when their destinations or credentials
+match. No facts or authorization decisions are shared. Cancellation and
+timeouts release permits and refresh locks. The concurrency limit is per
+process, so the fleet maximum is the per-process endpoint limit multiplied by
+the number of replicas.
 
 For file-secret changes and immediate token replacement, follow
 [Source credential rotation](SOURCE-CREDENTIAL-ROTATION.md).
 
 ### Source authentication
 
-All secret references are logical. Rust resolves them only after authorization,
-durable access audit, and complete request-parts validation. No secret is passed
-to Rhai.
+Authentication has three agreeing owners. The Adapter pack endpoint fixes the
+wire kind and, for static authorization or API keys, the scheme or header name.
+The governed connection policy repeats the kind and pins non-secret OAuth
+authority. The runtime endpoint binding supplies matching secret references
+and token-cache bounds. Startup refuses any disagreement before a source call.
+
+Static governed policies carry only their type:
 
 ```yaml
-# No outbound credential, for local authoring only
 authentication:
-  type: none
+  type: basic
+```
 
-# HTTP Basic
-authentication:
+The closed static types are `none`, `basic`, `static-authorization`, and
+`static-api-key`. A `none` policy grants no credential. A signed Evidence host
+protocol refuses `none`, because it requires an authenticated source identity.
+For static authorization and API keys, the pack endpoint owns the reviewed
+scheme or header name. Runtime supplies only the secret:
+
+```yaml
+# Basic
+credential:
   type: basic
   usernameRef: secret:file/source-username
   passwordRef: secret:file/source-password
 
-# Authorization: Bearer <secret>
-authentication:
+# The pack endpoint owns the Authorization scheme.
+credential:
   type: static-authorization
   tokenRef: secret:file/source-token
 
-# Authorization: Token <secret>, for a source that names another scheme
-authentication:
-  type: static-authorization
-  tokenRef: secret:file/source-token
-  scheme: Token
-
-# A provider-specific API-key header
-authentication:
+# The pack endpoint owns the API-key header name.
+credential:
   type: static-api-key
-  headerName: X-API-Key
   valueRef: secret:file/source-api-key
+```
 
-# OAuth 2.0 client credentials, client-secret form
+OAuth policy pins the authorization server and request semantics without
+containing a client id, secret, or private key:
+
+```yaml
 authentication:
+  type: oauth2-client-credentials
+  tokenEndpoint: https://auth.registry.gov.example/token
+  scope: recordsearch
+  audience: https://api.registry.gov.example/
+  resource: https://api.registry.gov.example/
+  credentialPlacement: basic-header
+```
+
+The runtime repeats every non-secret member exactly and adds secret references:
+
+```yaml
+credential:
   type: oauth2-client-credentials
   tokenEndpoint: https://auth.registry.gov.example/token
   clientIdRef: secret:file/source-client-id
   clientSecretRef: secret:file/source-client-secret
   scope: recordsearch
-  credentialPlacement: basic-header
-  maximumCacheSeconds: 300
-
-# OAuth 2.0 client credentials, private_key_jwt form
-authentication:
-  type: oauth2-private-key-jwt
-  tokenEndpoint: https://auth.registry.gov.example/token
-  clientIdRef: secret:file/source-client-id
-  clientAssertionKeyRef: secret:file/source-client-key
-  # Only for a server that expects an identifier it is not reached at; the
-  # default is tokenEndpoint. Distinct from the audience below, which is a
-  # token-request parameter rather than a claim in the signed assertion.
-  clientAssertionAudience: https://auth.registry.gov.example/
-  scope: recordsearch
   audience: https://api.registry.gov.example/
   resource: https://api.registry.gov.example/
+  credentialPlacement: basic-header
   maximumCacheSeconds: 300
 ```
 
-`type: none` is accepted only when the bundle declares
-`assuranceProfile: local` and `baseUrl` is an exact canonical
-`http://<numeric-loopback>:<non-zero-port>` origin. It accepts no other
-members, cannot use `tlsTrustProfile`, and sends no `Authorization` or other
-authentication header. Hostnames such as `localhost`, omitted or noncanonical
-ports, user information, paths, queries, fragments, HTTPS origins, and
-non-loopback addresses are rejected. Production and evidence-grade bundles
-reject this kind.
-
-`static-authorization` sends `Authorization: Bearer <secret>` unless `scheme`
-names another one. RFC 9110 section 11.1 leaves the scheme to the origin, so a
-source expecting `Token`, `SSWS`, or another provider scheme states it here; the
-value is validated as an HTTP token of at most 32 bytes. `static-api-key` cannot
-serve those sources, because its `headerName` denylist refuses `Authorization`.
-
-`static-api-key.headerName` cannot be `Authorization`, `Host`, `Cookie`,
-`Set-Cookie`, `Content-Length`, `Content-Type`, `Transfer-Encoding`, a
-hop-by-hop header, forwarding/proxy header, or tracing header. Names are
-validated as HTTP field names. Secret values are bounded and reject controls,
-CR, and LF.
-
-An OAuth source declares exactly one client authentication form, and `type`
-names it. `type: oauth2-client-credentials` is the client-secret form and
-requires `clientSecretRef` and `credentialPlacement`;
-`type: oauth2-private-key-jwt` is `private_key_jwt`, requires
-`clientAssertionKeyRef`, and admits neither of the other two. A member written
-under the type that does not carry it is refused at the key. The referenced
-key file holds a private JWK, and the runtime
-signs a short-lived assertion under the algorithm that key declares: SMART on
-FHIR Backend Services names ES384 and RS384, and requires this form rather than
-a client secret. RFC 7523 section 2.2 fixes the client-assertion type, so it is
-not configurable, and the assertion lifetime is fixed rather than governed. A
-key the runtime cannot read fails the request before any token call.
-
-`clientAssertionAudience` is the assertion's `aud` claim, and it defaults to
-`tokenEndpoint` exactly as the bundle spells it, which is the value SMART on
-FHIR Backend Services requires.
-State it only for a server that expects an identifier it is not reached at: one
-behind a proxy, or one naming its issuer. RFC 7523 section 3 asks only that the
-value identify the authorization server, says the token endpoint URL MAY be
-used, and leaves the string to out-of-band agreement, so no relationship to
-`tokenEndpoint` is imposed and the value is not a URL to the runtime. Section 3
-has the server compare it by Simple String Comparison, so it is signed byte for
-byte: a default port or trailing slash written here survives into the claim. It
-is admitted only under `type: oauth2-private-key-jwt`, because a shared secret
-carries no claim to put it in, and it names who may accept the assertion, never where
-the token request is sent. Register one assertion key per authorization server:
-a key registered at two servers is what lets an audience meant for one be
-presented to the other.
-
-OAuth `credentialPlacement` is one of `basic-header` or `form-body`. RFC 6749
-section 2.3.1 requires the client identifier and secret to travel in the
-Authorization header or the request body and never in the request URI, so
-Version 1 offers no query-string placement and no credential can reach a token
-URL log. Token redirects are denied and token responses are bounded. The token
-request is credential bootstrap, not a second evidence-data lookup.
-
-`audience` is sent as a token-request parameter only when the bundle states it.
-An authorization server that scopes a token to a named API needs it; without it,
-it returns a token the source will reject. It is not
-`clientAssertionAudience`: this one is a form field of the token request, that
-one is a claim inside the signed assertion, and a server may want both, neither,
-or different values for each.
-
-`resource` is the optional RFC 8707 resource indicator. It is a separate
-token-request form field naming one intended resource server as an absolute URI
-without a fragment or user information. Evidence sends the exact configured
-string and never derives it from a caller, adapter, source response, or the
-source URL. Use it when the authorization server supports resource indicators;
-the existing `audience` parameter remains available for providers that require
-it. Neither field changes where the token request is sent.
-
-RFC 6749 section 5.1 makes `expires_in` recommended rather than required, so a
-compliant provider may return only `access_token` and `token_type`. A token
-response omitting `expires_in` is a credential failure unless
-`assumedLifetimeSeconds` states the lifetime to credit. The runtime never
-infers a lifetime from the token, and the credited lifetime is still clamped by
-`maximumCacheSeconds`.
-
-Secret files are byte strings, not base64 fields. Do not base64-encode the
-audit or subject-binding key unless those encoded ASCII bytes are intentionally
-the key. Generate independent random values of at least 32 bytes and store the
-raw bytes in their owner-only files. Source usernames, passwords, tokens,
-client ids, and client secrets use their provider-defined lexical form and the
-runtime's generic secret bounds. A `clientAssertionKeyRef` file instead holds
-the JSON private JWK itself, including its `alg` and `kid`.
-
-For inbound access tokens, `tokenTypes: [at+jwt]` requires a protected JWT
-header with `typ: at+jwt`; `application/at+jwt` requires that exact alternative.
-A sanitized shape for the reference projects is:
-
-```json
-{"alg":"ES256","kid":"issuer-owned-key-id","typ":"at+jwt"}
-{"iss":"https://identity.example","aud":"registry-evidence","iat":1999999700,"exp":2000000000,"sub":"service-client","evidence_tags":["approved-requester"],"evidence_audience":"https://consumer.example"}
-```
-
-These are decoded shapes, not usable tokens. The configured issuer, audience,
-algorithm, token type, principal claim, requester-tag claim, and evidence
-audience claim must all match. Grant-derived selectors additionally require
-the configured grant id and authority claims.
-
-### Request
-
-This is the `request` an `http-json` source declares. A `sqlite-extract`
-source declares the statement request in
-[Statement request](#statement-request) instead.
-
-```yaml
-request:
-  method: POST
-  path: /v1/search
-  fixedHeaders:
-    - {name: Accept, value: application/fhir+json}
-    - {name: X-API-Version, value: "2026-01"}
-  selectorInputs:
-    - role: subject
-      alternatives:
-        - {profile: record-reference-v1, fields: [record_reference]}
-  prepareScript: adapters/source-a-prepare.rhai
-  adapterParameters: {resultLimit: 2}
-  adapterParametersSchema: schemas/source-a-parameters.schema.yaml
-  preparationLimits:
-    query: forbidden
-    jsonBody: required
-    maximumJsonDepth: 12
-    maximumCollectionItems: 32
-    maximumStringBytes: 512
-    maximumNormalizedBytes: 8192
-  projection:
-    - /total
-    - /results/*/status
-  redirects: deny
-  attemptTimeoutMilliseconds: 3000
-  maximumResponseBytes: 65536
-  maximumConcurrency: 8
-```
-
-| Key | Required | Meaning |
-|---|---|---|
-| `method` | yes | Fixed `GET` or `POST`. |
-| `path` | yes | Fixed absolute path, 2 to 2048 bytes: a literal, or a template with complete-segment placeholders resolved by Rust. |
-| `pathBindings` | with placeholders | Closed tagged placeholder bindings from an authorized selector, or on fetch only from a scalar prior fact. Required exactly when `path` names a placeholder. |
-| `fixedHeaders` | no | Ordered non-secret constants. Names are unique after ASCII case folding. |
-| `selectorInputs` | yes | Exact minimized authorized selector alternatives visible to `prepare` and optional three-argument `extract`; an empty array is valid only for a fetch source. |
-| `prepareScript` | yes | Bundle-relative Rhai script implementing `prepare/2`. |
-| `adapterParameters` | yes | Closed non-secret JSON parameters shared by preparation and extraction. `{}` is valid. |
-| `adapterParametersSchema` | yes | Closed bundle-relative JSON Schema for those parameters. |
-| `preparationLimits` | yes | Per-channel policy and stricter output bounds. |
-| `projection` | yes | Non-empty Rust-enforced response allowlist defined by `ADAPTER-API.md`. |
-| `redirects` | yes | Exactly `deny` in Version 1. |
-| `attemptTimeoutMilliseconds` | yes | Positive source-request timeout within the global ceiling. |
-| `maximumResponseBytes` | yes | Positive pre-projection response limit within the global ceiling. |
-| `maximumConcurrency` | yes | Positive per-source request concurrency limit for inline sources; an explicit named connection supplies its aggregate limit in a resolved candidate. |
-
-Fixed headers cannot set authentication, host/routing, cookies, body framing,
-content length/type, connection, forwarding, proxy, or tracing headers. Rust
-sets `Content-Type: application/json` when a JSON body is present and owns all
-authentication headers. Scripts cannot add, remove, or change a header.
-
-Query components in `RequestParts` are lexical strings even if a provider
-interprets them as numbers or booleans. Write query constants as `"2"` and
-`"true"`. JSON body parameters retain JSON types, so body constants may be `2`
-and `true`. Rust performs no implicit conversion.
-
-### Path templates
-
-Use a path template only when the provider lacks a safe query/body lookup:
-
-```yaml
-request:
-  method: GET
-  path: /api/records/{record_reference}
-  pathBindings:
-    record_reference:
-      type: selector
-      role: subject
-      profile: record-reference-v1
-      field: record_reference
-```
-
-Each placeholder occupies one complete path segment and has exactly one tagged
-binding. Rust reads `type: selector` directly from an already validated and
-authorized selector. On a fetch source, `type: prior-fact` may instead name a
-scalar property required by the search fact schema. Scripts do not choose path
-binding origins or return path values. A value must be non-empty bounded
-UTF-8 and cannot contain `/`, `\`, `%`, controls, `.` or `..`. Rust
-percent-encodes it exactly once. Templates cannot contain a scheme, authority,
-query, fragment, empty segment, or dot segment. Exact expanded-path fixtures
-are required.
-
-### Preparation limits
-
-These are the preparation limits of an `http-json` request, whose output
-channels are a query string and a JSON body. A statement request has neither,
-so it bounds its own two-key preparation in
-[Statement request](#statement-request).
-
-`query` and `jsonBody` are independently `required`, `allowed`, or `forbidden`.
-The remaining keys are optional stricter limits beneath the ABI hard ceilings:
-
-| Key | Bounds |
-|---|---|
-| `maximumQueryPairs` | How many query pairs `prepare` returns. |
-| `maximumQueryNameBytes` | Each query-pair name, measured before percent-encoding. |
-| `maximumQueryValueBytes` | Each query-pair value, measured before percent-encoding. |
-| `maximumJsonDepth` | Nesting depth of the JSON body. |
-| `maximumCollectionItems` | Entries in each JSON body array and members in each JSON body object. |
-| `maximumStringBytes` | Every string `prepare` returns: query names and values, and JSON body strings and object member names. |
-| `maximumNormalizedBytes` | Serialized size of the query pairs and body together. |
-
-`maximumStringBytes` applies to query names and values in addition to
-`maximumQueryNameBytes` and `maximumQueryValueBytes`, so the smaller of the two
-applicable bounds is the effective one. A returned value exceeding any bound
-fails preparation, and no source request is made.
-
-At least one output channel must be usable. `required` means non-empty. For a
-JSON body, JSON `null` is absent; an empty object or array is present.
-
-### Optional HTTP source batch
-
-An `http-json` source whose ordinary request uses `path` may declare one
-optimized call for a complete multi-subject request batch:
-
-```yaml
-acquisitionCapabilities: [source-batch]
-sources:
-  source-a:
-    type: http-json
-    # ordinary baseUrl, posture, authentication, request, and schemas omitted
-    batch:
-      maximumItems: 16
-      prepareScript: adapters/source-a-batch-prepare.rhai
-      extractScript: adapters/source-a-batch-extract.rhai
-      responseSchema: schemas/source-a-batch-response.schema.yaml
-      projection: [/results/*/slot, /results/*/outcome, /results/*/facts]
-```
-
-| Key | Required | Meaning |
-|---|---|---|
-| `maximumItems` | yes | Integer 1 through 16. A larger outer request uses ordinary sequential execution from the start and is not split. |
-| `prepareScript` | yes | Bundle-relative script implementing `prepare_batch(items, {parameters})`. |
-| `extractScript` | yes | Bundle-relative script implementing `extract_batch(response, {parameters, slots})`. |
-| `responseSchema` | yes | Closed schema applied after the batch projection and before batch extraction. |
-| `projection` | yes | Non-empty extended JSON Pointer allowlist under the ordinary projection and 65,536-byte input bounds. |
-
-This block carries no transport authority. It reuses the ordinary method,
-origin, fixed path, authentication, headers, TLS trust, redirect denial,
-timeout, response-byte limit, concurrency semaphore, adapter parameters, and
-preparation limits. A batch block beside a path template, or without both
-capability gates, is a startup error. Omitting the block on a path-template,
-SQLite, or multi-stage path, or exceeding `maximumItems`, selects sequential
-execution before any source I/O. Once an optimized attempt begins, no error
-retries as sequential fanout.
-
-A source using `extract(response, selectors, context)` must omit `batch` so its
-selected identity check runs for every item. Existing two-argument extraction
-and `extract_batch(response, context)` remain compatible with this block.
-
-`prepare_batch` receives ordered exact `{slot, selectors}` maps. `slot` is an
-opaque Rust integer; `selectors` is the ordinary minimized source selector
-object for that item. `extract_batch` returns exact `{slot, result}` maps where
-`result` is the ordinary closed lookup union. Rust permits output reordering but
-requires every supplied slot exactly once. Missing, duplicate, extra, negative,
-non-integer, or out-of-range slots abort the outer request.
-
-### Extract source
-
-An extract is a published snapshot, not a live authoritative read. The
-deployment answers from it because the publisher stated what it holds and when,
-and the runtime carries that statement rather than inferring one.
-
-Every extract carries the reserved `evidence_extract` metadata table, with the
-columns `published_at`, `publisher`, and `extract_id` and exactly one row. A
-file without that table, with any other row count, or with a value the runtime
-cannot read is refused at startup, so a mis-published extract stops the process
-rather than answering a request from it. The three values reach the statement
-result as `publishedAt`, `publisher`, and `extractId` under `/extract`, and a
-projection selects them the way it selects a row value.
-
-The published instant is read from that table and never from the file's
-modification time. An mtime records when a byte range last landed on this host.
-That is an artifact of the filesystem the file was copied across, not a
-statement by the publisher about the data inside.
-
-`maximumExtractAgeSeconds` is bundle-declared because staleness tolerance is a
-property of the concept being asserted rather than of the deployment. A snapshot
-a month old is irrelevant to adult status, because a date of birth does not
-change once recorded. It is material to professional licence status, because a
-licence can be revoked on any day. The bundle is where that judgement was
-reviewed, so the bundle is where it is written. The bound is inclusive and is
-checked against the evaluation instant before any row is read.
-
-```yaml
-sources:
-  source-b:
-    type: sqlite-extract
-    # Only this aggregate crosses the source boundary.
-    posture: source-derived
-    extractProfile: reference-extract
-    maximumExtractAgeSeconds: 604800
-    request:
-      statement: queries/source-b-lookup.sql
-      columns:
-        - {name: match_count, type: integer}
-      selectorInputs:
-        - role: subject
-          alternatives:
-            - {profile: record-reference-v1, fields: [record_reference]}
-      parameterBindings:
-        record_reference:
-          type: selector
-          role: subject
-          profile: record-reference-v1
-          field: record_reference
-      projection:
-        - /rows/*/match_count
-        - /extract/publishedAt
-      maximumRows: 1
-      maximumCellBytes: 256
-      maximumStatementSteps: 100000
-      attemptTimeoutMilliseconds: 2000
-      maximumResponseBytes: 8192
-      maximumConcurrency: 8
-    responseSchema: schemas/source-b-response.schema.yaml
-    extractScript: adapters/source-b-extract.rhai
-    factSchema: schemas/source-b-facts.schema.yaml
-```
-
-with `queries/source-b-lookup.sql`:
-
-```sql
-SELECT COUNT(*) AS match_count
-FROM records
-WHERE reference = :record_reference;
-```
-
-and the operator's binding in `runtime.yaml`:
-
-```yaml
-sourceExtracts:
-  reference-extract:
-    path: /var/lib/registry-evidence/extracts/reference-2026-08-01.sqlite
-```
-
-That is the common case, and it declares no `prepareScript` and no
-`preparationLimits`. It needs neither: `parameterBindings` already states where
-every parameter comes from, so Rust resolves the authorized selector field and
-binds the value with no script standing between the selector and the statement.
-
-Beyond the shared keys, a `sqlite-extract` source declares:
-
-| Key | Required | Meaning |
-|---|---|---|
-| `extractProfile` | yes | Logical extract name bound by `runtime.yaml` under `sourceExtracts`. The bundle never names a filesystem location. |
-| `maximumExtractAgeSeconds` | yes | 1 through 2,592,000 seconds. |
-
-The bound file must be a regular, non-symlink, read-only file, and read-only is
-a correctness requirement rather than hygiene. The runtime opens the extract
-with SQLite's `immutable=1`, which tells SQLite the bytes will not change while
-the connection is open and lets it skip locking and journal replay. That flag is
-sound only because the read-only check passed. A file the process or anything
-else can still write makes the promise false, and an immutable connection over a
-file that changes is undefined behaviour rather than a stale read, because
-SQLite is entitled to trust pages it has already cached. Publish a new extract
-as a new file, mount it read-only, and restart. Startup captures each bound
-file's identity and content digest, so a replacement is refused instead of
-passing silently.
-
-Digesting the file and opening it are not the same moment: the bundle, the
-kernel, and the audit log are read in between. Startup therefore checks once
-more, after the connections are open, that the bound path still names the file
-it digested, and refuses to start if it does not. A refresh that lands mid
-startup fails the deployment instead of answering from bytes the runtime
-revision does not name. That narrows the window rather than closing it, so
-publishing to a new path and restarting remains the supported workflow.
-
-Startup opens one connection for each `maximumConcurrency` permit, reads the
-metadata, and runs the statement against the real extract. A statement whose
-result columns disagree with `columns`, a parameter no binding supplies, and a
-binding the statement never names all fail before the listener binds.
-`evidencectl package` reaches this same statement check earlier, without a
-mounted extract, through `evidence bundle-check`: an internal Evidencectl seam
-hidden from `evidence --help`, not a command an adopter runs directly. It
-settles that the artifact holds exactly one statement, that the statement
-parses, and that the authorizer accepts it. It cannot settle columns,
-parameters, metadata, or age, because only the extract can. That check never
-reports a false failure, only an incomplete pass. `evidencectl test`
-reaches `bundle-check` the same way, but only for an editable project; run
-against a deployment project like this one, it instead runs the offline
-`evidence check` against the runtime file, which settles the same statement
-properties without opening the extract. The check against the real extract
-described above runs at startup and under
-`evidence check --require-runtime-dependencies` on the target host.
-
-The internal `evidence bundle-check --bundle <directory> --json` tooling seam
-returns `packageDigest` and a `requirements` array of `id` and
-`configurationRevision` after validation. Those revisions come from the same
-bundle closure used by signed answers. The document contains identifiers and
-digests only; the default command output remains a human-readable check result.
-
-### Statement request
-
-This is the `request` a `sqlite-extract` source declares.
-
-| Key | Required | Meaning |
-|---|---|---|
-| `statement` | yes | Bundle-relative `queries/*.sql` artifact holding exactly one statement, hash-identified and reviewed with the bundle. |
-| `columns` | yes | 1 through 64 declared result columns in result order. Names are unique, and each `type` is `string`, `integer`, `number`, or `boolean`. |
-| `selectorInputs` | yes | Exact minimized authorized selector alternatives the bindings and optional three-argument `extract` may draw on. `[]` is valid for a statement that binds no selector. |
-| `parameterBindings` | no | At most 64 bindings, keyed by the parameter name the statement uses, each stating its one origin. Omission and `{}` are the same. |
-| `prepareScript` | no | Bundle-relative Rhai script implementing `prepare/2`. Declared together with `preparationLimits`, and with at least one `prepared` binding, or not at all. |
-| `adapterParameters` | no | Closed non-secret JSON constants, at most 64, read by the extraction script. |
-| `adapterParametersSchema` | with parameters | Closed bundle-relative JSON Schema for those parameters, required as soon as `adapterParameters` is non-empty. |
-| `preparationLimits` | with script | `maximumParameters` 1 through 64, never below the declared `prepared` binding count, and `maximumParameterValueBytes` 1 through 4,096. |
-| `projection` | yes | 1 through 64 unique pointers of 2 through 256 bytes each, over `/rows` and `/extract`, using the allowlist defined by `ADAPTER-API.md`. It must preserve every declared row column; it may not narrow the SQL select list after execution. |
-| `maximumRows` | yes | 1 through 256 rows. A statement matching more broadly than intended fails here rather than moving a bulk result into the runtime. |
-| `maximumCellBytes` | yes | 1 through 65,536 bytes for one returned value. |
-| `maximumStatementSteps` | yes | 1 through 1,000,000 virtual-machine steps. |
-| `attemptTimeoutMilliseconds` | yes | 1 through 30,000 milliseconds. One absolute deadline covers concurrency admission, blocking-worker queueing, and statement execution. |
-| `maximumResponseBytes` | yes | 1 through 1,048,576 bytes for the assembled result before projection. |
-| `maximumConcurrency` | yes | 1 through 256 statements held against this extract at once. |
-
-`maximumStatementSteps` and `attemptTimeoutMilliseconds` bound different things. The
-timeout is one elapsed-time deadline across admission, blocking-worker queueing,
-and execution. The step budget bounds work itself, so a statement that scans
-more than the author expected is stopped on a fast host as well as a slow one.
-Set both, and keep the outer request and acquisition ceilings no shorter than
-the source work they admit.
-
-`maximumCellBytes`, `maximumResponseBytes`, and `maximumConcurrency` are one
-process-capacity decision, not independent validation knobs. Set them
-conservatively against both publisher capacity and the Evidence process memory
-budget.
-
-Each `parameterBindings` entry is keyed by the parameter name as the statement
-writes it, without its sigil, and Rust accepts `:name`, `@name`, and `$name`.
-Positional parameters have no name to bind, so `?` reads as an undeclared
-parameter and fails. Each entry is a closed tagged binding whose `type` states
-the one origin its value comes from.
-
-A `type: selector` binding is filled from an authorized selector field and from
-nothing else, so a preparation script cannot stand in for an authorized value:
-
-| Key | Required | Meaning |
-|---|---|---|
-| `type` | yes | Exactly `selector`. |
-| `role` | yes | Subject role the value comes from, which `selectorInputs` must declare. |
-| `profile` | yes | Selector profile the value comes from, which must be an alternative that role declares. |
-| `field` | yes | Exact field of that profile whose resolved value Rust binds. |
-
-A `type: prepared` binding is filled by `prepareScript` and by nothing else,
-which is how a value no selector holds, such as a normalized reference or a
-derived bound, reaches the statement:
-
-| Key | Required | Meaning |
-|---|---|---|
-| `type` | yes | Exactly `prepared`. The entry names no selector, because naming one would give the parameter a second origin. |
-
-A parameter has one origin and exactly one, so reading the declared bindings is
-enough to know where every value the statement binds came from. Four request-time
-failures hold that line, each naming the statement artifact: the script returned
-a value for a `selector` parameter, the script returned a name no binding
-declares, the script returned the reserved `evidence_now` name, and the script
-returned no value for a declared `prepared` parameter.
-
-A `prepareScript` and a `prepared` binding exist for each other, and startup
-refuses either half alone. A script with nothing prepared to fill could only ever
-return a name the source refuses, and a `prepared` parameter with no script could
-never be filled at all. `maximumParameters` is refused below the declared
-`prepared` count for the same reason: a script allowed to return fewer parameters
-than the source declares prepared can never fill them all.
-
-A value reaches the statement only as a bound parameter. Nothing concatenates,
-interpolates, or substitutes into the statement text, and a string, integer, and
-boolean bind as SQLite text, integer, and integer 0 or 1 respectively. A null in
-the extract is admitted for any declared column type; every other type mismatch
-is a source-protocol failure rather than a coercion.
-
-### Statement SQL
-
-The statement is a reviewed, hash-identified bundle artifact, so it is allowed
-to be a real query. Joins, `GROUP BY`, common table expressions, and window
-functions are all in scope. Pushing aggregation down into SQL is a
-minimum-disclosure win rather than a shortcut: `SELECT COUNT(*)` moves one
-number across the source boundary, where fetching 500 rows so the extraction
-script can count them moves 500 records. Declare the aggregate as the only
-column, project it, and the script never observes a record at all.
-
-That aggregate is `source-derived` on the same terms as an aggregate returned
-by an API: it is the only fact that crossed the source boundary. Rhai may still
-map it to the asserted concept.
-
-Everything else is refused by the authorizer while the statement is prepared,
-before a row is read: every write and every DDL statement, `ATTACH`, `DETACH`,
-every `PRAGMA`, extension loading, transaction and savepoint control, and any
-action the authorizer does not recognize. A file holding more than one statement
-is refused, so a second statement cannot ride in behind a `;`.
-
-These functions are denied by name:
-
-```text
-changes            current_date       current_time       current_timestamp
-date               datetime           julianday          last_insert_rowid
-load_extension     random             randomblob         sqlite_offset
-strftime           time               timediff           total_changes
-unixepoch
-```
-
-The time functions in that list are denied for one reason: the deployment has
-exactly one clock, and it is the runtime's evaluation instant. Where the
-statement names the reserved parameter `evidence_now`, Rust binds that instant
-as fixed-width RFC 3339 UTC text in whole seconds, the same rendering the
-assertion reports. A direct lexical comparison is correct only when the stored
-column is restricted to that exact `YYYY-MM-DDTHH:MM:SSZ` form. General RFC
-3339 text may contain fractional seconds, and a value such as
-`2026-08-08T03:00:00.500Z` does not sort chronologically against the shorter
-whole-second form. A bundle cannot bind the reserved name itself; startup
-rejects a `parameterBindings` entry that uses it. One clock is
-what makes a pinned fixture run reproduce exactly: the same extract and the
-same pinned instant give the same rows on every run and on every host.
-
-### Building an extract
-
-An extract is an ordinary SQLite file, which is why the transport reads one. A
-deployment whose authoritative data lives elsewhere converts it with tooling it
-already has, and each of these is one command:
-
-| Source | Path |
-|---|---|
-| CSV, Parquet, XLSX | DuckDB, reading the file and writing through `ATTACH '<file>' (TYPE sqlite)` |
-| CSV, JSON | `sqlite-utils insert` |
-| PostgreSQL, MySQL, SQL Server, Oracle | `db-to-sqlite`, or DuckDB's database scanners writing through the same `ATTACH` |
-| An existing SQLite database | `sqlite3` with `.dump`, or `VACUUM INTO` for a consistent copy |
-
-Publish the result the way the deployment publishes any reviewed artifact: add
-the `evidence_extract` row, make the file read-only, and give it a name that
-identifies the snapshot. Selecting only the columns an assertion needs at
-conversion time is worth doing, because a column that is not in the extract
-cannot be disclosed by any later mistake.
-
-Publish one whole file. The immutable open that lets the runtime trust the
-snapshot is also an open that skips SQLite's sidecars, so committed rows sitting
-in a `-wal` would be read straight past, and a `-journal` left behind by a writer
-that died mid-transaction would be read as though the rows it never committed
-were real. Startup refuses an extract with either file beside it. `VACUUM INTO`
-and `.dump` both produce a checkpointed single file, so a deployment following
-the table above is already there; copying a directory, or globbing
-`registry.db*`, is what lands in the refusal. Copying the main file alone out of
-a database that is still being written leaves nothing beside it to find, which is
-why this is an obligation on the publisher and not only a check.
-
-The supported publication handoff is deliberately explicit because
-`evidencectl` does not create, convert, approve, or publish extracts:
-
-1. Build a new file on the publisher side. Do not edit the file currently
-   mounted by Evidence.
-2. Select only the columns the reviewed statements need. Where a statement
-   compares timestamp text lexically with `evidence_now`, write the exact
-   whole-second UTC form `YYYY-MM-DDTHH:MM:SSZ`.
-3. Insert exactly one `evidence_extract` row with the publisher's publication
-   instant, publisher identifier, and snapshot identifier.
-4. Checkpoint into one main file with no `-wal` or `-journal`, using `VACUUM
-   INTO`, or replay a `.dump` SQL script into a newly created database and then
-   validate the resulting file and absence of sidecars. An equivalent
-   publisher-controlled export is also valid.
-5. Run the deployment project's fixtures against the same schema and statement
-   contract. A source claiming `source-derived` must return only the narrow fact
-   it declares, such as an aggregate rather than the records behind it.
-6. Transfer the new file under a new versioned path, make it non-writable to the
-   Evidence identity, update only the matching `runtime.yaml` binding, and
-   restart. Never replace the bytes behind an open immutable connection.
-7. Run `evidence check --require-runtime-dependencies` against the exact runtime
-   and mounted extract. The check refuses an extract that is already older than
-   its source permits. Then run every referenced fixture, real startup, and
-   `/ready` before routing traffic.
-   Retain the runtime file and governed extract profile in the deployment
-   record. Do not copy publisher-controlled metadata values into logs, audit,
-   or error tickets.
+`oauth2-private-key-jwt` follows the same split. Its policy may additionally
+pin `clientAssertionAudience`; its runtime credential supplies `clientIdRef`
+and `clientAssertionKeyRef`. Omission uses the exact token endpoint as the
+assertion audience. State another audience only when the authorization server
+expects a different exact identifier, such as an issuer behind a proxy.
+
+OAuth `credentialPlacement` is `basic-header` or `form-body`. Client secrets
+never travel in a query string. `audience` is a token-request parameter, while
+`clientAssertionAudience` is a claim inside the private-key assertion.
+`resource` is the optional RFC 8707 resource indicator. The runtime derives
+none of them from caller data, scripts, responses, or destination URLs.
+
+If a token response omits `expires_in`, the runtime credential must state
+`assumedLifetimeSeconds` or the response is refused. Credited lifetime remains
+bounded by `maximumCacheSeconds`. Token redirects are denied and response bytes
+are bounded. Token acquisition is credential bootstrap, not another Evidence
+data operation.
+
+All secret references are logical. Rust resolves them only after authorization,
+durable access intent, and complete request-shape validation. No secret reaches
+Adapter scripts. Username, password, token, client-id, and client-secret files
+contain their provider-defined byte strings. A `clientAssertionKeyRef` file
+contains the private JWK, including `alg` and `kid`.
+
+### Adapter route execution
+
+The digest-pinned Adapter pack owns the complete acquisition program:
+endpoint selection, HTTP or GraphQL request construction, SQLite statements,
+bounded retries, response transformation, schema validation, and the final
+closed lookup result. Evidence supplies only the source binding's authorized
+named inputs and the finite runtime acquisition budget. Neither caller data
+nor runtime configuration can add a route step, endpoint, request, or schema.
+
+Every referenced pack artifact is captured under the source's `artifactPrefix`
+and verified against its digest before compilation. This includes scripts,
+query files, OpenAPI, SQLite statements, host-protocol configuration, Evidence
+input and facts schemas, and nested `validateSchema` references. Remote schema
+resolution is unavailable. A missing, extra-authority, or digest-mismatched
+artifact refuses the bundle before any credential or source operation.
+
+An HTTP or GraphQL step may reach only an endpoint covered by exactly one
+policy in the source's governed connection. A SQLite-only or no-send route
+uses an empty endpoint-policy list and receives no network authority. SQLite
+statements are pinned pack artifacts; `runtime.yaml` supplies the named
+immutable extract file under `sourceExtracts` without supplying SQL.
+
+The route returns exactly one closed lookup outcome: `matched` with facts,
+`no-match`, or `ambiguous`. Dependency, transport, authentication, budget,
+schema, and script failures never collapse into `no-match`. Matched facts are
+validated against the pinned route facts schema and the semantically equal
+bundle `factSchema` before requirement derivation runs.
 
 ### Requirement derivation selector inputs
 
@@ -1454,13 +755,47 @@ audit:
   retentionDays: 90
 outboundTls:
   systemRoots: true
-  trustProfiles:
-    government-internal-pki:
-      caBundleFile: /etc/registry-evidence/ca/government-internal.pem
-sourceExtracts:
-  reference-extract:
-    path: /var/lib/registry-evidence/extracts/reference-2026-08-01.sqlite
+  trustProfiles: {}
+sourceConnections:
+  shared-read:
+    id: shared-read
+    endpoints:
+      - endpoint: records
+        baseUrl: https://registry.gov.example
+        credential:
+          type: oauth2-private-key-jwt
+          tokenEndpoint: https://identity.gov.example/token
+          clientIdRef: secret:file/workload-client-id
+          clientAssertionKeyRef: secret:file/workload-client-key
+          clientAssertionAudience: https://identity.gov.example/client-auth
+          audience: https://registry.gov.example
+          resource: https://registry.gov.example
+          maximumCacheSeconds: 60
+        attemptTimeoutMilliseconds: 5000
+        maximumResponseBytes: 1048576
+        maximumConcurrency: 8
+        tlsTrustProfile: government-internal-pki
+    outboundTls:
+      trustProfiles:
+        government-internal-pki:
+          caBundleFile: /etc/registry-evidence/ca/government-internal.pem
+    allowedPrivateCidrs: []
+sourceAcquisition:
+  maximumDataOperations: 5
+  acquisitionDeadlineMilliseconds: 30000
+  maximumResponseBytes: 1048576
 ```
+
+An authored `EvidenceTarget` lists its reviewed private trust profiles once
+under `outboundTls.trustProfiles`. Compilation scopes that inventory into the
+runtime owners shown above. For an accepted target, root `outboundTls` contains
+only profiles selected by root authentication, while each
+`sourceConnections.<name>.outboundTls` contains only profiles selected by that
+connection's endpoints. A missing selection remains missing and is refused at
+runtime; compilation never copies an unrelated profile into a scope to satisfy
+it. When an invalid target contains an inventory entry selected nowhere,
+compilation projects that entry into root `outboundTls` solely so the runtime's
+existing unused-profile check refuses the target.
 
 | Key | Required | Meaning and Version 1 bounds |
 |---|---|---|
@@ -1488,11 +823,23 @@ sourceExtracts:
 | `audit.rotateBytes` | no | 1,048,576 through 4,294,967,295 bytes; 104,857,600 (100 MiB) by default. Reaching it seals the active file under an ascending sequence number and opens a fresh one at `path`. A write or sync failure, not rotation itself, is what fails closed. Refused for `stdout`. |
 | `audit.retentionDays` | no | 1 through 36,500 days; 90 by default. When the writer opens or rotates, sealed files last modified longer ago than this are deleted; the active file never is. Refused for `stdout`. |
 | `outboundTls.systemRoots` | yes | Literal `true`. |
-| `outboundTls.trustProfiles` | yes | Closed map of at most 64 logical profile ids, each a local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`. It may be empty when neither a source nor `authentication` names a private trust profile. |
+| `outboundTls.trustProfiles` | yes | For an accepted target, root-authentication trust profiles only, as a closed map of at most 64 logical profile ids. Each id is a local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`. It is empty when root authentication names no private trust profile; source profiles live in their connection-local maps below. During validation of an invalid target, a globally unreferenced inventory profile is projected here solely so the unused-profile check refuses it. |
 | `outboundTls.trustProfiles.<id>.caBundleFile` | for each profile | Absolute path to one bounded PEM CA file. Profile names must exactly match bundle `tlsTrustProfile` references. |
+| `sourceConnections` | for every governed connection | Process-local endpoint and credential material. Every governed connection name must appear once, no extra runtime name is accepted, and each value's `id` must equal its map key. |
+| `sourceConnections.<name>.endpoints` | yes | Runtime endpoint bindings keyed by the pack endpoint id. Every reached HTTP or GraphQL endpoint must match exactly one governed endpoint policy in id, base URL, trust profile, client-identity posture, authentication kind, and non-secret OAuth authority. An empty list is valid only where the reached program needs no network endpoint. |
+| `sourceConnections.<name>.endpoints[].credential` | when the governed authentication is not `none` | Secret-bearing runtime credential. Its type and non-secret OAuth settings must exactly match the governed policy. Credential references are resolved only after authorization, durable access intent, and request-shape validation. |
+| `sourceConnections.<name>.endpoints[].attemptTimeoutMilliseconds` | no | Finite positive timeout for one endpoint attempt. It does not extend the acquisition deadline or a smaller pack ceiling. |
+| `sourceConnections.<name>.endpoints[].maximumResponseBytes` | no | 1 through 1,048,576 bytes for one response. The effective bound is also constrained by the pack and `sourceAcquisition.maximumResponseBytes`. |
+| `sourceConnections.<name>.endpoints[].maximumConcurrency` | no | 1 through 256, default 8. The same connection name shares its capacity across programs in one process; different names remain isolated. Replicas do not share a distributed permit, so the fleet can place this limit multiplied by the replica count in flight. |
+| `sourceConnections.<name>.endpoints[].tlsTrustProfile` | when the governed policy names one | Exact logical trust profile repeated from the governed policy and bound under this connection's `outboundTls.trustProfiles`. |
+| `sourceConnections.<name>.endpoints[].mtlsIdentity` | when `clientIdentity` is `required` | Certificate and private-key secret references. It is refused when the governed policy says `forbidden`. |
+| `sourceConnections.<name>.outboundTls.trustProfiles` | when a governed endpoint names a private trust profile | Connection-local map containing only the logical ids selected by that connection's endpoints, each bound to a bounded CA bundle file and captured once at startup. Extra and missing profiles are refused. |
+| `sourceConnections.<name>.allowedPrivateCidrs` | no | Additional private CIDR authority for this connection. Omission or `[]` grants none. Numeric loopback development endpoints use their separate loopback rule and do not require `127.0.0.0/8` here. |
+| `sourceAcquisition.maximumDataOperations` | no | Finite positive data-operation budget for one pack-route acquisition, default 5. Token acquisition and credential refresh follow their own bounded accounting. |
+| `sourceAcquisition.acquisitionDeadlineMilliseconds` | no | Finite positive elapsed-time budget for one acquisition, default 30,000 milliseconds. It includes endpoint admission and data operations and cannot be extended by an endpoint attempt timeout. |
+| `sourceAcquisition.maximumResponseBytes` | no | Finite positive aggregate response-byte budget for one acquisition, default 1,048,576 bytes. Per-endpoint and pack response ceilings still apply. |
 | `sourceExtracts` | no | Closed map of at most 64 logical extract names, each a local identifier of the same grammar. Omission binds none, which is what a runtime file for a bundle with no extract source says. |
 | `sourceExtracts.<name>.path` | for each name | Absolute path to one read-only regular file. Names must exactly match bundle `extractProfile` references. |
-| `acquisitionCapabilities` | no | Gated acquisition kinds and source optimizations this deployment enables, at most two entries: `search-then-fetch-set` and `source-batch`. Omission and `[]` both enable nothing, so a bundle carrying a source batch block or needing a gated kind is refused before the listener binds. |
 
 A runtime file written in the earlier grammar is refused before anything else
 is read, with the replacement named: `version` gives way to `apiVersion` and
@@ -1597,82 +944,85 @@ credentials to another authority.
 
 ## Authoring and production-build workflow
 
-Treat an editable project like reviewed source code. The OpenAPI form of
-`evidencectl init` creates empty authoring directories. The `--transport
-sqlite-extract` form creates a source-neutral synthetic statement, source,
-schemas, question, derivation, and fixture that can run immediately with
-`evidencectl test <dir> --explain`. Both forms create
-owner-only disposable local P-256 Evidence signing material plus distinct audit
-and subject-binding masters. Neither creates deployment input or a real
-extract. `evidencectl dev` creates session-scoped caller and holder keys
-automatically for HTTP-source local sessions and starts the pinned stock issuer.
-While authoring, use only synthetic responses and selectors. Add the smallest
-provider-shaped `prepare/2`, `extract/2`, and requirement `derive/3` scripts,
-then add exact positive, legitimate-false, boundary, unresolved,
-malformed-provider, transport-failure, and privacy-canary cases.
+Treat the editable `EvidenceProject` as reviewed source code.
+It contains `evidence.yaml`, owned Adapter packs, derivation Functions, schemas,
+codelists, and sanitized fixtures.
+The OpenAPI form of `evidencectl init` retains a provider description for pack
+authoring, and `source suggest` emits an incomplete pack and Source binding for
+review.
+The SQLite form creates a source-neutral synthetic project that can run through
+`evidencectl test` immediately.
+Use only synthetic responses and selectors while authoring.
+Do not author `bundle/evidence.yaml` or a runtime file; `evidencectl package`
+compiles those deployment artifacts from the normalized project and target.
 
-The compact local question format may omit `governance`. When it is present,
-local development uses the declared requirement semantics but retains its
-explicit local assurance and authentication. A production build requires that
-block, stable concept identifiers, and exactly one project-relative
-`fixtures/<name>.yaml` regular file for every question. It never derives or
-invents requirement, framework, Evidence Type, concept, or disclosure-family
-URIs.
+Keep each environment in one complete target directory containing:
 
-The compact question may also declare `responseFormats: [signed-jws,
-sd-jwt-vc]`. Omission means `[signed-jws]`; signed JWS is mandatory, entries are
-unique, and no other format is accepted in this authoring surface. Local
-development compiles the list into both the bundle ceiling and that question's
-local grant. A reviewed structured answer with an `sdJwtVc` projection must
-declare `sd-jwt-vc`; scalar and unprojected answers may declare it to use the
-profile's one root disclosure. Production response-format authority still
-comes only from the complete deployment-target governance and its exact
-authority grants.
+- `target.yaml`, an `EvidenceTarget` that binds the project, connection
+  endpoints, non-secret authentication policy, secret references, signer,
+  audit destination, process paths, and package installation root;
+- the `EvidenceTargetAuthority` file that `target.yaml` names, normally
+  `authority.yaml`, with complete identity profiles and grants for that target;
+  and
+- every public signing JWK that `target.yaml` names under `public-keys/`.
 
-Create explicit `deployment-targets/<environment>/` directories containing
-complete `governance.yaml` and `runtime.yaml` documents plus every governed
-public JWK referenced by governance under `public-keys/`. `governance.yaml` is
-closed, opens with `apiVersion:
-id.registrystack.org/formats/evidence/target-governance/v1alpha1` and `kind:
-EvidenceTargetGovernance`, and supplies the existing bundle-shaped service,
-issuer, authentication, audit, subject-binding, rate-limit, signing,
-response-format, and authority-profile values. It may not contain selectors,
-sources, or requirements, which the compiler obtains from the editable
-project. It permits logical `secret:file/<name>` references only, never secret
-values or absolute secret paths. `runtime.yaml` is the ordinary closed runtime
-document; the build copies its bytes unchanged and the target host remains
-authoritative for path, owner, permission, secret, private-CA, and Transit
-validation. Staging and production are separate complete targets built from
-the same reviewed source revision. They are not overlays and do not inherit
-from each other. Ready-to-copy layouts and Transit proxy-policy examples are
-under [`../../deployment-targets/`](../../deployment-targets/).
+Secret values and private keys remain outside the authored project and target.
+Use separate complete targets for staging and production, built from the same
+reviewed project revision.
+Do not use overlays or edit a staging candidate into a production candidate.
+The ready-to-copy layout and Transit proxy-policy examples are under
+[`../../deployment-targets/`](../../deployment-targets/).
+
+Use `evidencectl` and `evidence` from the same release or immutable development
+candidate.
+The tooling refuses a version mismatch before it delegates compilation or
+fixture evaluation.
+Check the normalized project, complete target, and fixture behavior before
+packaging:
+
+```sh
+evidencectl check '<editable-project>' \
+  --target '<deployment-target>/target.yaml' \
+  --production \
+  --deny-warnings
+evidencectl test '<editable-project>' \
+  --target '<deployment-target>/target.yaml' \
+  --deny-warnings
+```
+
+These commands make no identity-provider or source-data request and resolve no
+deployment secret.
+The production check requires an explicit `production` or `evidence-grade`
+target, complete public inputs, resolved review markers, and complete authority.
+The fixture run compiles the selected pack routes and replays only their
+sanitized exchanges.
+If either command refuses, correct the named project or target field and rerun
+it before creating a candidate.
 
 Run the create-only compiler with explicit target and output paths:
 
 ```sh
-evidencectl package <editable-project> \
-  --target <editable-project>/deployment-targets/<environment> \
-  --output <new-candidate-directory>
+evidencectl package '<editable-project>' \
+  --target '<deployment-target>/target.yaml' \
+  --output '<new-candidate-directory>'
 ```
 
-The compiler follows no authored symlink, accepts no reference outside allowed
-project directories, rejects unreferenced generated artifacts, and removes only
-its own failed private staging. It requires authenticated HTTPS for HTTP
-sources and a governed extract profile for every SQLite source,
-complete authority, resolved review markers, complete governance, governed
-public keys, and complete fixtures. It delegates its internal bundle-only check
-and every fixture to the real `evidence` binary without generating a temporary
-signing key or other validation secret, and publishes nothing on failure. It
-makes no identity-provider or source-data call; opens no listener; and
-writes no production audit event. The editable project and `.evidence` local
-state remain unchanged.
+The output directory must not already exist and must remain outside the
+editable project.
+Packaging captures one project snapshot, follows no authored symlink, includes
+only referenced artifacts, delegates static bundle validation and every fixture
+to the matching `evidence` binary, and publishes the candidate atomically.
+A refusal publishes no new candidate; correct the reported input and choose a
+new output directory for the next attempt.
 
-The package contains `SHA256SUMS` at its root with only referenced adapters,
-derivations, schemas, codelists, fixtures, and public keys. Given identical
-authoring files, target governance, and toolset release, package bytes and
-digest are identical. Environment-specific runtime configuration remains in
-the target and is not part of the package digest or signed
-`configurationRevision`.
+The candidate contains the immutable bundle closure at
+`<new-candidate-directory>/bundle/SHA256SUMS`, the operator runtime at
+`<new-candidate-directory>/runtime.yaml`, and the separately compiled target
+authority at `<new-candidate-directory>/compiled-authority.yaml`.
+Given identical authoring files, target, and toolset release, the bundle bytes
+and digest are identical.
+The target's environment-specific runtime bindings are outside the bundle
+digest and each signed `configurationRevision`.
 
 The package digest identifies the whole reviewed package and is what an operator
 records at approval. A signed `configurationRevision` is narrower: it covers
@@ -1692,22 +1042,49 @@ stays in every requirement's closure. An edit
 outside a requirement's closure leaves its revision unchanged, so it does not
 force every relying party to re-review.
 
-After approval, transfer the exact package to the stable `package.root`, provision independent owner-only
-secrets under the configured secret root, make the package and runtime non-writable
-to the service identity, and run the grouped handoff once whenever candidate
-bytes, runtime bindings, trust files, or secrets change:
+After approval, install the exact candidate `bundle/` at the `package.root`
+recorded in the emitted runtime.
+Provision the referenced owner-only secrets, private trust files, extract files,
+and signer transport at the paths that runtime names.
+Make the installed bundle, runtime, and other immutable inputs non-writable to
+the service identity.
+
+Activate the candidate's compiled authority, then run the target-host preflight
+against that same runtime:
 
 ```sh
-evidencectl doctor --runtime-config '<deployment-target>/runtime.yaml'
-evidencectl test '<editable-project>' --target '<deployment-target>'
-evidence check --runtime-config '<deployment-target>/runtime.yaml' --require-runtime-dependencies
-evidence serve --runtime-config '<deployment-target>/runtime.yaml'
+evidence authority activate \
+  --runtime-config '/absolute/path/to/<new-candidate-directory>/runtime.yaml' \
+  --document '/absolute/path/to/<new-candidate-directory>/compiled-authority.yaml'
+evidencectl doctor \
+  --runtime-config '/absolute/path/to/<new-candidate-directory>/runtime.yaml'
+evidence check \
+  --runtime-config '/absolute/path/to/<new-candidate-directory>/runtime.yaml' \
+  --require-runtime-dependencies
 ```
 
-Then route only after `/ready`, retain one authorized synthetic-subject
-response, verify it under independently prepared production policy and trusted
-keys, and confirm the audit entries reached the operator's append-only store. A provider API or governance change produces
-a newly reviewed package digest and reruns the fixture matrix.
+Authority activation commits a snapshot for the exact project, target, package
+digest, and grant ceilings.
+Doctor and `evidence check --require-runtime-dependencies` prove the installed
+package, secret material, extracts, audit destination, signer, source
+credentials, and issuer key access without opening the public listener or
+requesting an assertion.
+If startup later reports only `runtime bundle initialization failed`, rerun
+these preflights to obtain the value-free artifact and cause before retrying.
+
+Start the service with the runtime that passed preflight:
+
+```sh
+evidence serve \
+  --runtime-config '/absolute/path/to/<new-candidate-directory>/runtime.yaml'
+```
+
+Route traffic only after `/ready` succeeds.
+Retain one authorized synthetic-subject response, verify it under independently
+prepared production policy and trusted keys, and confirm the audit entries
+reached the operator's append-only store.
+A provider API, target, authority, or governed project change produces a new
+candidate and reruns the check, fixture, activation, and preflight sequence.
 
 Configure an OIDC issuer independently and register each workload with the exact
 resource, scopes, client identity, and public key required by its approved
@@ -1760,8 +1137,6 @@ and document the new keys in the prose above.
 
 <!-- evidence-bundle-key-paths:start -->
 ```text
-acquisitionCapabilities
-acquisitionCapabilities[]
 apiVersion
 assuranceProfile
 audit
@@ -1850,16 +1225,7 @@ rateLimits.requestsPerPrincipalPerMinute
 requirements
 requirements[]
 requirements[].acquisition
-requirements[].acquisition.fetch
-requirements[].acquisition.fetch[]
-requirements[].acquisition.fetch[].factInputs
-requirements[].acquisition.fetch[].factInputs[]
-requirements[].acquisition.fetch[].source
-requirements[].acquisition.maximumAcquisitionMilliseconds
-requirements[].acquisition.onFetchNoMatch
-requirements[].acquisition.search
 requirements[].acquisition.source
-requirements[].acquisition.type
 requirements[].concepts
 requirements[].concepts[]
 requirements[].concepts[].constraints
@@ -1973,195 +1339,37 @@ signing.revokedKeyIds[]
 signing.verifierClockSkewSeconds
 sourceConnections
 sourceConnections.*
-sourceConnections.*.admissionTimeoutMilliseconds
-sourceConnections.*.authentication
-sourceConnections.*.authentication.assumedLifetimeSeconds
-sourceConnections.*.authentication.audience
-sourceConnections.*.authentication.clientAssertionAudience
-sourceConnections.*.authentication.clientAssertionKeyRef
-sourceConnections.*.authentication.clientIdRef
-sourceConnections.*.authentication.clientSecretRef
-sourceConnections.*.authentication.credentialPlacement
-sourceConnections.*.authentication.headerName
-sourceConnections.*.authentication.maximumCacheSeconds
-sourceConnections.*.authentication.passwordRef
-sourceConnections.*.authentication.resource
-sourceConnections.*.authentication.scheme
-sourceConnections.*.authentication.scope
-sourceConnections.*.authentication.tokenEndpoint
-sourceConnections.*.authentication.tokenRef
-sourceConnections.*.authentication.type
-sourceConnections.*.authentication.usernameRef
-sourceConnections.*.authentication.valueRef
-sourceConnections.*.baseUrl
-sourceConnections.*.maximumConcurrency
-sourceConnections.*.tlsTrustProfile
-sourceConnections.*.tokenTimeoutMilliseconds
+sourceConnections.*.endpoints
+sourceConnections.*.endpoints[]
+sourceConnections.*.endpoints[].authentication
+sourceConnections.*.endpoints[].authentication.audience
+sourceConnections.*.endpoints[].authentication.clientAssertionAudience
+sourceConnections.*.endpoints[].authentication.credentialPlacement
+sourceConnections.*.endpoints[].authentication.resource
+sourceConnections.*.endpoints[].authentication.scope
+sourceConnections.*.endpoints[].authentication.tokenEndpoint
+sourceConnections.*.endpoints[].authentication.type
+sourceConnections.*.endpoints[].baseUrl
+sourceConnections.*.endpoints[].clientIdentity
+sourceConnections.*.endpoints[].endpoint
+sourceConnections.*.endpoints[].tlsTrustProfile
 sources
 sources.*
-sources.*.authentication
-sources.*.authentication.assumedLifetimeSeconds
-sources.*.authentication.audience
-sources.*.authentication.clientAssertionAudience
-sources.*.authentication.clientAssertionKeyRef
-sources.*.authentication.clientIdRef
-sources.*.authentication.clientSecretRef
-sources.*.authentication.credentialPlacement
-sources.*.authentication.headerName
-sources.*.authentication.maximumCacheSeconds
-sources.*.authentication.passwordRef
-sources.*.authentication.resource
-sources.*.authentication.scheme
-sources.*.authentication.scope
-sources.*.authentication.tokenEndpoint
-sources.*.authentication.tokenRef
-sources.*.authentication.type
-sources.*.authentication.usernameRef
-sources.*.authentication.valueRef
-sources.*.baseUrl
-sources.*.batch
-sources.*.batch.extractScript
-sources.*.batch.maximumItems
-sources.*.batch.prepareScript
-sources.*.batch.projection
-sources.*.batch.projection[]
-sources.*.batch.responseSchema
-sources.*.behaviorRevision
 sources.*.connection
-sources.*.evidence
-sources.*.evidence.clockSkewSeconds
-sources.*.evidence.contract
-sources.*.evidence.contract.assuranceProfile
-sources.*.evidence.contract.audience
-sources.*.evidence.contract.definitions
-sources.*.evidence.contract.definitions[]
-sources.*.evidence.contract.definitions[].concepts
-sources.*.evidence.contract.definitions[].concepts[]
-sources.*.evidence.contract.definitions[].concepts[].concept
-sources.*.evidence.contract.definitions[].concepts[].form
-sources.*.evidence.contract.definitions[].concepts[].form.items
-sources.*.evidence.contract.definitions[].concepts[].form.maximumItems
-sources.*.evidence.contract.definitions[].concepts[].form.minimumItems
-sources.*.evidence.contract.definitions[].concepts[].form.type
-sources.*.evidence.contract.definitions[].concepts[].form.unique
-sources.*.evidence.contract.definitions[].concepts[].handle
-sources.*.evidence.contract.definitions[].concepts[].required
-sources.*.evidence.contract.definitions[].configurationRevision
-sources.*.evidence.contract.definitions[].evidenceType
-sources.*.evidence.contract.definitions[].handle
-sources.*.evidence.contract.definitions[].kind
-sources.*.evidence.contract.definitions[].purpose
-sources.*.evidence.contract.definitions[].referenceFrameworks
-sources.*.evidence.contract.definitions[].referenceFrameworks[]
-sources.*.evidence.contract.definitions[].requirement
-sources.*.evidence.contract.definitions[].responseFormats
-sources.*.evidence.contract.definitions[].responseFormats[]
-sources.*.evidence.contract.definitions[].subjectBindingMode
-sources.*.evidence.contract.definitions[].subjects
-sources.*.evidence.contract.definitions[].subjects[]
-sources.*.evidence.contract.definitions[].subjects[].cardinality
-sources.*.evidence.contract.definitions[].subjects[].role
-sources.*.evidence.contract.definitions[].subjects[].selector
-sources.*.evidence.contract.definitions[].subjects[].selector.fields
-sources.*.evidence.contract.definitions[].subjects[].selector.fields[]
-sources.*.evidence.contract.definitions[].subjects[].selector.fields[].maximum
-sources.*.evidence.contract.definitions[].subjects[].selector.fields[].maximumBytes
-sources.*.evidence.contract.definitions[].subjects[].selector.fields[].minimum
-sources.*.evidence.contract.definitions[].subjects[].selector.fields[].minimumBytes
-sources.*.evidence.contract.definitions[].subjects[].selector.fields[].name
-sources.*.evidence.contract.definitions[].subjects[].selector.fields[].scheme
-sources.*.evidence.contract.definitions[].subjects[].selector.fields[].type
-sources.*.evidence.contract.definitions[].subjects[].selector.fields[].version
-sources.*.evidence.contract.definitions[].subjects[].selector.profile
-sources.*.evidence.contract.definitions[].subjects[].selector.valueOrigin
-sources.*.evidence.contract.issuedBy
-sources.*.evidence.contract.maximumHolderBoundBatchSize
-sources.*.evidence.contract.providedBy
-sources.*.evidence.contract.schema
-sources.*.evidence.maximumAssertionLifetimeSeconds
-sources.*.evidence.revokedKeyIds
-sources.*.evidence.revokedKeyIds[]
-sources.*.evidence.trustedJwks
-sources.*.evidence.trustedJwks.keys
-sources.*.evidence.trustedJwks.keys[]
-sources.*.evidence.trustedJwks.keys[].alg
-sources.*.evidence.trustedJwks.keys[].crv
-sources.*.evidence.trustedJwks.keys[].kid
-sources.*.evidence.trustedJwks.keys[].kty
-sources.*.evidence.trustedJwks.keys[].x
-sources.*.evidence.trustedJwks.keys[].y
-sources.*.extractProfile
-sources.*.extractScript
 sources.*.factSchema
-sources.*.forwardAccessAttribution
-sources.*.maximumExtractAgeSeconds
+sources.*.inputs
+sources.*.inputs.*
+sources.*.inputs.*.selector
+sources.*.inputs.*.selector.field
+sources.*.inputs.*.selector.profile
+sources.*.inputs.*.selector.role
+sources.*.pack
+sources.*.pack.artifactPrefix
+sources.*.pack.digest
+sources.*.pack.id
+sources.*.pack.version
 sources.*.posture
-sources.*.request
-sources.*.request.adapterParameters
-sources.*.request.adapterParameters.*
-sources.*.request.adapterParameters.*.*
-sources.*.request.adapterParameters.*[]
-sources.*.request.adapterParametersSchema
-sources.*.request.attemptTimeoutMilliseconds
-sources.*.request.columns
-sources.*.request.columns[]
-sources.*.request.columns[].name
-sources.*.request.columns[].type
-sources.*.request.fixedHeaders
-sources.*.request.fixedHeaders[]
-sources.*.request.fixedHeaders[].name
-sources.*.request.fixedHeaders[].value
-sources.*.request.maximumCellBytes
-sources.*.request.maximumConcurrency
-sources.*.request.maximumResponseBytes
-sources.*.request.maximumRows
-sources.*.request.maximumStatementSteps
-sources.*.request.method
-sources.*.request.parameterBindings
-sources.*.request.parameterBindings.*
-sources.*.request.parameterBindings.*.field
-sources.*.request.parameterBindings.*.profile
-sources.*.request.parameterBindings.*.role
-sources.*.request.parameterBindings.*.type
-sources.*.request.path
-sources.*.request.pathBindings
-sources.*.request.pathBindings.*
-sources.*.request.pathBindings.*.field
-sources.*.request.pathBindings.*.profile
-sources.*.request.pathBindings.*.role
-sources.*.request.pathBindings.*.type
-sources.*.request.preparationLimits
-sources.*.request.preparationLimits.jsonBody
-sources.*.request.preparationLimits.maximumCollectionItems
-sources.*.request.preparationLimits.maximumJsonDepth
-sources.*.request.preparationLimits.maximumNormalizedBytes
-sources.*.request.preparationLimits.maximumParameterValueBytes
-sources.*.request.preparationLimits.maximumParameters
-sources.*.request.preparationLimits.maximumQueryNameBytes
-sources.*.request.preparationLimits.maximumQueryPairs
-sources.*.request.preparationLimits.maximumQueryValueBytes
-sources.*.request.preparationLimits.maximumStringBytes
-sources.*.request.preparationLimits.query
-sources.*.request.prepareScript
-sources.*.request.projection
-sources.*.request.projection[]
-sources.*.request.redirects
-sources.*.request.selectorInputs
-sources.*.request.selectorInputs[]
-sources.*.request.selectorInputs[].alternatives
-sources.*.request.selectorInputs[].alternatives[]
-sources.*.request.selectorInputs[].alternatives[].fields
-sources.*.request.selectorInputs[].alternatives[].fields[]
-sources.*.request.selectorInputs[].alternatives[].profile
-sources.*.request.selectorInputs[].role
-sources.*.request.statement
-sources.*.responseSchema
-sources.*.tlsTrustProfile
-sources.*.type
-sources.*.unresolvedProblem
-sources.*.unresolvedProblem.code
-sources.*.unresolvedProblem.status
-sources.*.unresolvedProblem.type
+sources.*.route
 subjectBinding
 subjectBinding.keyVersion
 subjectBinding.secretRef
@@ -2172,8 +1380,6 @@ subjectBinding.secretRef
 
 <!-- evidence-runtime-key-paths:start -->
 ```text
-acquisitionCapabilities
-acquisitionCapabilities[]
 apiVersion
 audit
 audit.destination
@@ -2215,6 +1421,48 @@ signer.mount
 signer.privateKeyRef
 signer.type
 signer.unixSocketPath
+sourceAcquisition
+sourceAcquisition.acquisitionDeadlineMilliseconds
+sourceAcquisition.maximumDataOperations
+sourceAcquisition.maximumResponseBytes
+sourceConnections
+sourceConnections.*
+sourceConnections.*.allowedPrivateCidrs
+sourceConnections.*.allowedPrivateCidrs[]
+sourceConnections.*.endpoints
+sourceConnections.*.endpoints[]
+sourceConnections.*.endpoints[].anonymousHttps
+sourceConnections.*.endpoints[].attemptTimeoutMilliseconds
+sourceConnections.*.endpoints[].baseUrl
+sourceConnections.*.endpoints[].credential
+sourceConnections.*.endpoints[].credential.assumedLifetimeSeconds
+sourceConnections.*.endpoints[].credential.audience
+sourceConnections.*.endpoints[].credential.clientAssertionAudience
+sourceConnections.*.endpoints[].credential.clientAssertionKeyRef
+sourceConnections.*.endpoints[].credential.clientIdRef
+sourceConnections.*.endpoints[].credential.clientSecretRef
+sourceConnections.*.endpoints[].credential.credentialPlacement
+sourceConnections.*.endpoints[].credential.maximumCacheSeconds
+sourceConnections.*.endpoints[].credential.passwordRef
+sourceConnections.*.endpoints[].credential.resource
+sourceConnections.*.endpoints[].credential.scope
+sourceConnections.*.endpoints[].credential.tokenEndpoint
+sourceConnections.*.endpoints[].credential.tokenRef
+sourceConnections.*.endpoints[].credential.type
+sourceConnections.*.endpoints[].credential.usernameRef
+sourceConnections.*.endpoints[].credential.valueRef
+sourceConnections.*.endpoints[].endpoint
+sourceConnections.*.endpoints[].maximumConcurrency
+sourceConnections.*.endpoints[].maximumResponseBytes
+sourceConnections.*.endpoints[].mtlsIdentity
+sourceConnections.*.endpoints[].mtlsIdentity.certificateRef
+sourceConnections.*.endpoints[].mtlsIdentity.keyRef
+sourceConnections.*.endpoints[].tlsTrustProfile
+sourceConnections.*.id
+sourceConnections.*.outboundTls
+sourceConnections.*.outboundTls.trustProfiles
+sourceConnections.*.outboundTls.trustProfiles.*
+sourceConnections.*.outboundTls.trustProfiles.*.caBundleFile
 sourceExtracts
 sourceExtracts.*
 sourceExtracts.*.path

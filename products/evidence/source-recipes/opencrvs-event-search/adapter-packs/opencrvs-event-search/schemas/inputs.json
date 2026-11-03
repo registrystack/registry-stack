@@ -1,0 +1,8 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["trackingId"],
+  "properties": {
+    "trackingId": {"type": "string", "minLength": 1, "maxLength": 64}
+  }
+}

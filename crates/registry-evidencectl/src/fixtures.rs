@@ -22,6 +22,8 @@ use crate::{build, evidence_binary, source_import::ProjectLock};
 pub enum FixturesCommand {
     /// Run `evidence check` and every bundle fixture through `evidence evaluate`.
     Run(RunArgs),
+    /// Record final offline Adapter facts into one maintained fixture.
+    RecordFacts(crate::fixture_record::RecordFactsArgs),
 }
 
 #[derive(Debug, Args)]
@@ -74,7 +76,7 @@ pub struct RunArgs {
 }
 
 /// The Evidence fixture format, as the `evidence` runtime reads it.
-const FIXTURE_FORMAT: FormatSpec<'static> = FormatSpec {
+pub(crate) const FIXTURE_FORMAT: FormatSpec<'static> = FormatSpec {
     kind: "EvidenceFixture",
     envelope: EnvelopeRule::ApiVersionKind {
         api_versions: &[ApiVersion::current(
@@ -211,13 +213,7 @@ fn failed_run_diagnostic(command: &str) -> JsonValue {
     })
 }
 
-pub fn run(command: FixturesCommand) -> Result<ExitCode> {
-    match command {
-        FixturesCommand::Run(args) => run_fixtures(args),
-    }
-}
-
-fn run_fixtures(args: RunArgs) -> Result<ExitCode> {
+pub(crate) fn run_fixtures(args: RunArgs) -> Result<ExitCode> {
     let runtime_path = args.project.join("runtime.yaml");
     let evidence_bin = evidence_binary::resolve_matching(args.evidence_bin.as_deref())?;
     let mut editable_lock = None;
@@ -370,7 +366,7 @@ fn run_fixtures(args: RunArgs) -> Result<ExitCode> {
 
 /// The fixture files an editable project holds, as project-relative paths in
 /// name order.
-fn project_fixture_paths(project: &Path) -> Result<Vec<String>> {
+pub(crate) fn project_fixture_paths(project: &Path) -> Result<Vec<String>> {
     let bytes = crate::authored::read_authored_file(
         &project.join(registry_evidence_authoring::project::PROJECT_FILE),
         "EvidenceProject",
@@ -439,7 +435,7 @@ fn read_fixture_files(
 /// Preserve the bundle's declared order for a full run, or select one exact
 /// referenced path. The rejected value is deliberately absent from the error:
 /// fixture selectors are operator input and diagnostics stay value-free.
-fn select_fixture_paths<'a>(
+pub(crate) fn select_fixture_paths<'a>(
     fixture_paths: &'a [String],
     selected: Option<&str>,
 ) -> Result<Vec<&'a str>> {

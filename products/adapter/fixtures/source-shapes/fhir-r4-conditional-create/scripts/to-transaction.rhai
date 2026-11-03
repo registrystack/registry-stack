@@ -3,9 +3,10 @@
 //
 // The direct form of a FHIR conditional create is
 // `POST [base]/Patient` with the header `If-None-Exist: identifier=...`
-// (https://hl7.org/fhir/R4/http.html#ccreate). The `to` step declares no
-// request headers, so that form cannot be authored. The transaction form
-// carries the same condition in the body as `entry.request.ifNoneExist`
+// (https://hl7.org/fhir/R4/http.html#ccreate). The current endpoint
+// `requestHeaders` allowlist can author that form. This older shape retains
+// the transaction form and carries the same condition in the body as
+// `entry.request.ifNoneExist`
 // (https://hl7.org/fhir/R4/bundle-definitions.html#Bundle.entry.request.ifNoneExist),
 // which servers process with the conditional-create rules: no match
 // creates (201), one match returns the existing resource (200) without a

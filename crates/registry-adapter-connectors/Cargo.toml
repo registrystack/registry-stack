@@ -21,6 +21,29 @@ default = []
 # synchronous operation contract, so the feature carries the smallest
 # tokio runtime slice.
 breg = ["dep:registry-breg-client", "dep:tokio"]
+# Sends the platform's signed hook envelope to a Coordinator event
+# receiver without linking any Coordinator crate or client.
+coordinator-event = [
+    "dep:registry-platform-crypto",
+    "dep:registry-platform-hooks",
+    "dep:registry-platform-httputil",
+    "dep:time",
+    "dep:tokio",
+    "dep:zeroize",
+]
+# Exposes the maintained real-BReg fixture to cross-crate native tests.
+# It is never enabled by a runtime or facade feature.
+native-test-support = [
+    "breg",
+    "dep:chrono",
+    "dep:registry-platform-crypto",
+    "dep:registry-platform-testing",
+    "dep:reqwest",
+    "dep:serde_norway",
+    "dep:tempfile",
+    "dep:tokio-postgres",
+    "dep:url",
+]
 
 [dependencies]
 registry-adapter-core.workspace = true
@@ -30,6 +53,18 @@ thiserror.workspace = true
 uuid.workspace = true
 tokio = { workspace = true, features = ["rt"], optional = true }
 registry-breg-client = { workspace = true, optional = true }
+chrono = { workspace = true, optional = true }
+registry-platform-crypto = { workspace = true, optional = true }
+registry-platform-hooks = { workspace = true, optional = true }
+registry-platform-httputil = { workspace = true, optional = true }
+registry-platform-testing = { workspace = true, features = ["test-authorization-server"], optional = true }
+reqwest = { workspace = true, optional = true }
+serde_norway = { workspace = true, optional = true }
+tempfile = { workspace = true, optional = true }
+tokio-postgres = { workspace = true, optional = true }
+time = { workspace = true, optional = true }
+url = { workspace = true, optional = true }
+zeroize = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

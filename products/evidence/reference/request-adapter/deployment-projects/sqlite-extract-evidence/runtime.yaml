@@ -28,6 +28,11 @@ audit:
 outboundTls:
   systemRoots: true
   trustProfiles: {}
+sourceConnections:
+  licence-register-extract:
+    id: licence-register-extract
+    endpoints: []
+    allowedPrivateCidrs: []
 # The operator binds the bundle's logical extract name to a file on this host.
 # The file name carries the snapshot it holds, because publishing a new extract
 # means mounting a new file and restarting rather than writing over this one:

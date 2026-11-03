@@ -37,6 +37,8 @@ fs2.workspace = true
 http.workspace = true
 jsonschema.workspace = true
 jsonwebtoken.workspace = true
+registry-adapter-core.workspace = true
+registry-adapter-engine = { workspace = true, features = ["sqlite-extract"] }
 registry-evidence-verifier.workspace = true
 registry-evidence-client.workspace = true
 registry-discovery-profile.workspace = true
@@ -65,6 +67,7 @@ serde_norway.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 time.workspace = true
+tempfile.workspace = true
 tokio.workspace = true
 tokio-postgres.workspace = true
 tower.workspace = true
@@ -85,7 +88,6 @@ proptest.workspace = true
 rcgen.workspace = true
 registry-evidence-authoring.workspace = true
 serde_norway.workspace = true
-tempfile.workspace = true
 tokio-rustls.workspace = true
 wiremock.workspace = true
 

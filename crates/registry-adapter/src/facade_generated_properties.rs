@@ -115,6 +115,7 @@ fn project_for(model: &GeneratedModel) -> (AdapterProject, Binding) {
         })
         .collect();
     let binding = Binding {
+        async_completion: None,
         id: local("find-records"),
         operation: external("records-find"),
         record_type: local("generated-record"),
@@ -180,6 +181,7 @@ fn served_operation(record_schema: Value, paginated: bool) -> ServedOperation {
         record_type: "generated-record".to_owned(),
         route_id: "generated-route".to_owned(),
         steps: Arc::new(Vec::new()),
+        resume: None,
         resilience: crate::engine::resilience::ResilienceRuntime::empty(),
         maximum_upstream_calls: 1,
         response_envelope: crate::engine::envelope::CompiledEnvelope::compile(
@@ -196,6 +198,7 @@ fn served_operation(record_schema: Value, paginated: bool) -> ServedOperation {
             page_size_maximum: 100,
             page_size_default: Some(20),
         }),
+        async_completion: None,
     }
 }
 
@@ -269,6 +272,7 @@ fn profile_with_problem_mapping(
         id: local("generated-profile"),
         version: "1".to_owned(),
         operations: UniqueIdList::new(vec![ProfileOperation {
+            async_completion: None,
             id: local("records-find"),
             method: HttpMethod::Get,
             path: "/records/{type}".to_owned(),

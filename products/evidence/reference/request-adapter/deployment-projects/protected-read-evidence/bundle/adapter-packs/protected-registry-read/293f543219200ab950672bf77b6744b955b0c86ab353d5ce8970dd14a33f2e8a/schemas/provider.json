@@ -1,0 +1,60 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "items",
+    "pageInfo"
+  ],
+  "properties": {
+    "items": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 2,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "domainData"
+        ],
+        "properties": {
+          "domainData": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+
+            ],
+            "properties": {
+              "recordReference": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "region": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 32
+              }
+            }
+          }
+        }
+      }
+    },
+    "pageInfo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "nextCursor"
+      ],
+      "properties": {
+        "nextCursor": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 256
+        }
+      }
+    }
+  }
+}

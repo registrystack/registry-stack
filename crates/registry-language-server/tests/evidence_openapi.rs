@@ -21,7 +21,7 @@ fn unreferenced_openapi_does_not_change_project_symbols_or_diagnostics() {
 #[test]
 fn operation_source_is_rejected_by_the_one_shared_model() {
     let p = Project::new(&SOURCE.replace(
-        "    acquisition: {type: single, source: person}",
+        "    acquisition: {source: person}",
         "    source: {operation: readPerson}",
     ));
     assert!(!p.index().diagnostics().is_empty());

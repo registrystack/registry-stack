@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Unit tests for the Evidence configuration key-path parity check."""
 
+import re
 import shutil
 import sys
 import tempfile
@@ -12,6 +13,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import evidence_config_key_paths as checker
+import yaml
 
 
 class KeyPathCollectionTests(unittest.TestCase):
@@ -350,6 +352,34 @@ class ContractAddressingTests(unittest.TestCase):
                 self.assertEqual(contract.reference, reference)
 
 
+class WorkflowReferenceTests(unittest.TestCase):
+    def test_request_adapter_workflow_uses_the_normalized_target_handoff(self):
+        root = checker.repository_root()
+        reference = (
+            root
+            / "products/evidence/reference/request-adapter/deployment-projects/CONFIG.md"
+        ).read_text(encoding="utf-8")
+
+        for retired in (
+            "The compact local question format",
+            "complete `governance.yaml` and `runtime.yaml` documents",
+            "The package contains `SHA256SUMS` at its root",
+            "--runtime-config '<deployment-target>/runtime.yaml'",
+        ):
+            with self.subTest(retired=retired):
+                self.assertNotIn(retired, reference)
+
+        for required in (
+            "`target.yaml`",
+            "`EvidenceTargetAuthority`",
+            "<new-candidate-directory>/bundle/SHA256SUMS",
+            "--runtime-config '/absolute/path/to/<new-candidate-directory>/runtime.yaml'",
+            "--document '/absolute/path/to/<new-candidate-directory>/compiled-authority.yaml'",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, reference)
+
+
 class PerEntryAddressingTests(unittest.TestCase):
     """Schemas outside one directory, documented into more than one reference."""
 
@@ -488,6 +518,30 @@ class PerEntryAddressingTests(unittest.TestCase):
         self.assertTrue(changed)
         self.assertEqual(written, [self.root / "one/CONFIG.md"])
         self.assertIn("gamma", self.read("one/CONFIG.md"))
+
+
+class PackAcquisitionDocumentationTests(unittest.TestCase):
+    def test_concept_sources_select_pack_routes_instead_of_inline_transports(self):
+        root = checker.repository_root()
+        text = (root / "products/evidence/CONCEPT.md").read_text()
+        section = text.split("## 9. Deployment bundle and source adapters", 1)[1]
+        section = section.split("### 9.3", 1)[0]
+        source_count = 0
+        retired = {"type", "request", "extractScript", "extract_script", "base_url"}
+        for fence in re.findall(r"```yaml\n(.*?)```", section, re.DOTALL):
+            document = yaml.safe_load(fence)
+            for source in document.get("sources", {}).values():
+                source_count += 1
+                self.assertFalse(retired.intersection(source), source)
+                self.assertTrue({"pack", "route", "connection", "inputs"} <= source.keys())
+        self.assertGreaterEqual(source_count, 2)
+
+    def test_explanation_functions_match_the_current_authoring_interface(self):
+        root = checker.repository_root()
+        text = (root / "docs/site/src/content/docs/explanation/how-evidence-works.mdx").read_text()
+        self.assertIn("`assertion-derive/v1`", text)
+        self.assertNotIn("`source-extract/v1`", text)
+        self.assertNotIn("`source-prepare/v1`", text)
 
 
 class CommittedParityTests(unittest.TestCase):

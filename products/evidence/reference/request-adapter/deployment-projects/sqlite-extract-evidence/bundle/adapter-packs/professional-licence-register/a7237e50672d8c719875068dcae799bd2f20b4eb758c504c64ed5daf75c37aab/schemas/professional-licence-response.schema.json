@@ -1,0 +1,34 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["rows", "extract"],
+  "properties": {
+    "rows": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 2,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["active_licence_count"],
+        "properties": {
+          "active_licence_count": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000000
+          }
+        }
+      }
+    },
+    "extract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["publishedAt", "publisher", "extractId"],
+      "properties": {
+        "publishedAt": {"type": "string", "format": "date-time"},
+        "publisher": {"type": "string", "minLength": 1, "maxLength": 512},
+        "extractId": {"type": "string", "minLength": 1, "maxLength": 512}
+      }
+    }
+  }
+}

@@ -1,0 +1,49 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/job/job.v1alpha1.schema.json
+#
+# The signed-Coordinator variant over the same Kobo provider pack, source
+# route, item shape, projection, trigger and bounds as job.yaml. It is for a
+# form that needs a lookup, choice, wait or person before BReg submission.
+# Coordinator owns the named workflow and its BReg Proposal lifecycle; this
+# job ends when Coordinator admits the signed event.
+apiVersion: id.registrystack.org/formats/adapter/job/v1alpha1
+kind: AdapterJob
+job:
+  id: kobotoolbox-submissions-workflow-example
+  version: "1"
+source:
+  pack:
+    id: kobotoolbox
+    version: "1"
+    digest: sha256:cb1c31044611e3f23464291f6dd2697b00be427da0b9523d0b717fe776e5d667
+  route: kobo-submissions
+destination:
+  type: signed-coordinator-event
+  binding: household-workflow
+  workflow: register-household
+  trigger: submission-received
+  source: urn:registry-adapter:job:kobotoolbox-submissions-workflow-example
+  eventType: org.openspp.registry.household-submitted.v1
+  dataSchema: urn:registry-adapter:schema:household-submitted:v1
+  revisedReceiver:
+    trigger: submission-revised
+    eventType: org.openspp.registry.household-revised.v1
+    dataSchema: urn:registry-adapter:schema:household-revised:v1
+projection:
+  fields:
+    - _id
+    - respondent_name
+    - household.household_size
+triggers:
+  - kind: interval
+    delayMilliseconds: 60000
+profile:
+  pageDeadlineMilliseconds: 300000
+  maximumResponseBytes: 1048576
+  maximumPageItems: 100
+  maximumPageBytes: 1048576
+  maximumUpstreamCalls: 8
+  read:
+    maximumFileBytes: 1073741824
+    maximumRowBytes: 1048576
+    maximumFieldBytes: 65536
+    maximumRowsPerPage: 100

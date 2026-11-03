@@ -1,0 +1,53 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json
+#
+# Synthetic negative fixture. No FHIR server produced these exact bytes. It
+# exercises the engine's upstream.http class and the profile mapping without
+# allowing the pack to construct a profile-specific problem body.
+apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
+kind: AdapterFixture
+id: fhir-r4-patient-search-server-error
+pack: fhir-r4-patient
+upstreamVersion: "4.0.1 synthetic"
+provenance:
+  type: documented
+  reference: https://hl7.org/fhir/R4/operationoutcome.html
+intercepts:
+  - type: token-endpoint
+    endpoint: fhir
+  - type: endpoint
+    endpoint: fhir
+entries:
+  - facadeRequest:
+      operation: records-search
+      path: /v1/records/patient
+      query: national_id=NID-ERROR-0001&limit=50
+    upstream:
+      - request:
+          endpoint: fhir
+          tokenRequest: true
+          method: POST
+          path: /oauth/token
+        response:
+          status: 200
+          body:
+            access_token: synthetic-replay-token
+            token_type: Bearer
+            expires_in: 300
+      - request:
+          endpoint: fhir
+          method: GET
+          path: /Patient
+          query: _count=50&_format=json&identifier=https%3A%2F%2Fid.example.invalid%2Fnational-id%7CNID-ERROR-0001
+        response:
+          status: 503
+          body:
+            resourceType: OperationOutcome
+            issue:
+              - severity: error
+                code: transient
+                diagnostics: synthetic unavailable response
+    expected:
+      type: problem
+      class: upstream.http
+      code: source.upstream-error
+

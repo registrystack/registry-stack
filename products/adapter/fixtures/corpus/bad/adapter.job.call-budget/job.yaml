@@ -18,6 +18,14 @@ source:
     version: "1"
     digest: sha256:e041fd2fa85220353cd604b2fa42c1943ac1647ae6a391393b3948d63d4f8022
   route: kobo-submissions
+destination:
+  type: signed-coordinator-event
+  binding: coordinator-test
+  workflow: case-ingestion
+  trigger: submitted
+  source: urn:registry-adapter:job:kobo-daily
+  eventType: org.example.case-submitted.v1
+  dataSchema: urn:example:schema:case-submitted:v1
 projection:
   fields:
     - submission.id

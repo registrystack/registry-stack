@@ -11,44 +11,99 @@ common:
 cases:
 - id: positive
   source:
-    total: 1
-    record:
-      record_id: licence
-      status: active
+    intercepts:
+    - type: endpoint
+      endpoint: register
+    exchanges:
+    - request:
+        endpoint: register
+        method: GET
+        path: "/licences/licence"
+      response:
+        status: 200
+        body:
+          total: 1
+          record:
+            record_id: licence
+            status: active
   expectedValue: active
   expectedLookup: match
   derivationRuns: true
   signedSuccess: true
 - id: suspended
   source:
-    total: 1
-    record:
-      record_id: licence
-      status: suspended
+    intercepts:
+    - type: endpoint
+      endpoint: register
+    exchanges:
+    - request:
+        endpoint: register
+        method: GET
+        path: "/licences/licence"
+      response:
+        status: 200
+        body:
+          total: 1
+          record:
+            record_id: licence
+            status: suspended
   expectedValue: suspended
   expectedLookup: match
   derivationRuns: true
   signedSuccess: true
 - id: expired
   source:
-    total: 1
-    record:
-      record_id: licence
-      status: expired
+    intercepts:
+    - type: endpoint
+      endpoint: register
+    exchanges:
+    - request:
+        endpoint: register
+        method: GET
+        path: "/licences/licence"
+      response:
+        status: 200
+        body:
+          total: 1
+          record:
+            record_id: licence
+            status: expired
   expectedValue: expired
   expectedLookup: match
   derivationRuns: true
   signedSuccess: true
 - id: no-match
   source:
-    total: 0
+    intercepts:
+    - type: endpoint
+      endpoint: register
+    exchanges:
+    - request:
+        endpoint: register
+        method: GET
+        path: "/licences/licence"
+      response:
+        status: 200
+        body:
+          total: 0
   expectedLookup: no_match
   expectedPublicProblem: evidence.unavailable
   derivationRuns: false
   signedSuccess: false
 - id: ambiguous
   source:
-    total: 2
+    intercepts:
+    - type: endpoint
+      endpoint: register
+    exchanges:
+    - request:
+        endpoint: register
+        method: GET
+        path: "/licences/licence"
+      response:
+        status: 200
+        body:
+          total: 2
   expectedLookup: ambiguous
   expectedPublicProblem: evidence.unavailable
   derivationRuns: false
@@ -59,10 +114,21 @@ cases:
   signedSuccess: false
 - id: boundary-declared-value
   source:
-    total: 1
-    record:
-      record_id: licence
-      status: expired
+    intercepts:
+    - type: endpoint
+      endpoint: register
+    exchanges:
+    - request:
+        endpoint: register
+        method: GET
+        path: "/licences/licence"
+      response:
+        status: 200
+        body:
+          total: 1
+          record:
+            record_id: licence
+            status: expired
   expectedValue: expired
   expectedLookup: match
   derivationRuns: true
@@ -74,9 +140,20 @@ cases:
   expected: output-gate-rejection
 - id: missing-required-fact
   source:
-    total: 1
-    record:
-      record_id: licence
+    intercepts:
+    - type: endpoint
+      endpoint: register
+    exchanges:
+    - request:
+        endpoint: register
+        method: GET
+        path: "/licences/licence"
+      response:
+        status: 200
+        body:
+          total: 1
+          record:
+            record_id: licence
   derivationRuns: false
   signedSuccess: false
   expectedPublicProblem: source.unavailable

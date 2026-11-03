@@ -73,7 +73,7 @@ digest pins and the GraphQL query-file checks). Route findings report
 once at the authored position: `/routeTemplates/N` when the defect sits
 in a template body,
 `/routes/{id}` otherwise, so every member refuses with exactly one
-finding per code. The corpus holds 156 members.
+finding per code. The corpus holds 169 members.
 
 `base-job/` is the clean governed-ingestion control (CONCEPT section 17):
 a pack whose source route polls a bounded `file` endpoint through
@@ -105,8 +105,10 @@ into the sweep also teaches it the `job.rs` registry.
 | `adapter.job.poll-endpoint-kind` | The source route polls `file:dropbox`, but `dropbox` is an `sftp` endpoint | `adapter.job.poll-endpoint-kind` | checks |
 | `adapter.job.poll-timeout` | The source route's `pollEnrich` declares no `timeoutMilliseconds` | `adapter.job.poll-timeout` | checks |
 | `adapter.job.decoder-unknown` | The source route's poll names `decoder: parquet`, outside the closed set | `adapter.job.decoder-unknown` | checks |
+| `adapter.job.postgres-key-required` | The `postgres` endpoint names no stable result key column | `adapter.job.postgres-key-required` | checks |
 | `adapter.job.postgres-query-unpinned` | The `postgres` endpoint names no `queryFile` | `adapter.job.postgres-query-unpinned` | checks |
-| `adapter.job.postgres-parameters-unbounded` | The source route's postgres send carries 17 named parameters, one past the bound of 16 | `adapter.job.postgres-parameters-unbounded` | checks |
+| `adapter.job.postgres-parameters-required` | A non-PostgreSQL endpoint carries a SQL parameter order | `adapter.job.postgres-parameters-required` | checks |
+| `adapter.job.postgres-parameters-unbounded` | The `postgres` endpoint declares 17 ordered parameter names, one past the bound of 16 | `adapter.job.postgres-parameters-unbounded` | checks |
 | `adapter.job.endpoint-response-bound` | The bound facade template's endpoint declares `maximumResponseBytes: 2097152`, above the facade ceiling | `adapter.job.endpoint-response-bound` | checks |
 | `adapter.job.route-unknown` | The job names source route `nope`; the workspace is clean, `check_job` refuses over `job.yaml` | `adapter.job.route-unknown` | checks (job) |
 | `adapter.job.profile-bound` | The job profile's `pageDeadlineMilliseconds` is `600001`, above its bound | `adapter.job.profile-bound` | checks (job) |
@@ -117,8 +119,24 @@ into the sweep also teaches it the `job.rs` registry.
 | `adapter.job.triggers-required` | The job declares an empty trigger list, so no pass would ever start | `adapter.job.triggers-required` | checks (job) |
 | `adapter.job.trigger-kind` | The job's only trigger names `kind: timer`, outside the closed interval-and-hook set | `adapter.job.trigger-kind` | checks (job) |
 | `adapter.job.trigger-bound` | The job's interval trigger declares `delayMilliseconds: 500`, below its 1000 floor | `adapter.job.trigger-bound` | checks (job) |
-| `adapter.job.trigger-hook-unserved` | The job declares a `hook` trigger, the contract-only seam no engine serves yet | `adapter.job.trigger-hook-unserved` | checks (job) |
+| `adapter.job.trigger-hook-unserved` | A clean `hook` trigger has no runtime authentication and rate binding | `adapter.job.trigger-hook-unserved` | checks (job) |
 | `adapter.job.call-budget` | The job's `maximumUpstreamCalls` is 1, below its source route's worst case of 2 (a loop of two sends) | `adapter.job.call-budget` | checks (job) |
+
+### Asynchronous completion and recovery
+
+These synthetic members keep the profile, initial write, private status route,
+and deployment custody aligned. Each refuses with its directory's exact code.
+
+| Member | Defect | Layer |
+|---|---|---|
+| `adapter.pack.async-status-route-invalid` | The source operation names a missing status route | checks |
+| `adapter.pack.async-status-route-reachable` | A normal GET binding independently exposes the private status route | checks |
+| `adapter.pack.async-status-route-unsafe` | The status closure contains an idempotent custody processor | checks |
+| `adapter.profile.async-status-path-collision` | An ordinary concrete GET path collides with the host status path | checks |
+| `adapter.project.async-declaration-mismatch` | The binding omits completion while profile and source declare it | checks |
+| `adapter.route.resume-invalid` | A safe single-send route carries a resume binding outside an admitted linear write plan | checks |
+| `adapter.runtime.async-idempotency-required` | The runtime omits exact-response custody for an asynchronous binding | checks with runtime |
+| `adapter.runtime.async-wait-exceeds-retention` | The bounded wait equals, rather than stays below, custody retention | checks with runtime |
 
 ### Profile members
 
@@ -149,6 +167,7 @@ into the sweep also teaches it the `job.rs` registry.
 | Member | Defect | Expected code | Layer |
 |---|---|---|---|
 | `adapter.pack.endpoint-component-invalid` | Endpoint declares component `direct`, not a producer | `adapter.pack.endpoint-component-invalid` | checks |
+| `adapter.pack.sqlite-extract-invalid` | SQLite producer omits its reviewed statement and bounds | `adapter.pack.sqlite-extract-invalid` | checks |
 | `adapter.pack.graphql-query-required` | `graphql` endpoint names no `queryFile` | `adapter.pack.graphql-query-required` | checks |
 | `adapter.pack.reserved-header-name` | `static-api-key` declares the reserved header `Authorization` | `adapter.pack.reserved-header-name` | checks |
 | `adapter.pack.invalid-header-name` | `static-api-key` declares the header name `bad=header`, not an RFC 9110 token | `adapter.pack.invalid-header-name` | checks |

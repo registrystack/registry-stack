@@ -606,8 +606,9 @@ fn check_pack_and_the_filter_build_refuse_the_same_allowlists() {
                 },
                 None => EndpointAuthentication::Oauth2ClientCredentials {},
             },
-            attempt_timeout_milliseconds: registry_platform_yaml::BoundedU64::new(10_000)
-                .expect("attempt timeout"),
+            attempt_timeout_milliseconds: Some(
+                registry_platform_yaml::BoundedU64::new(10_000).expect("attempt timeout"),
+            ),
             maximum_response_bytes: registry_platform_yaml::BoundedU64::new(1_048_576)
                 .expect("response bound"),
             response_headers: UniqueList::new(response.iter().map(|name| id(name)).collect())
@@ -615,6 +616,7 @@ fn check_pack_and_the_filter_build_refuse_the_same_allowlists() {
             request_headers: UniqueList::new(request.iter().map(|name| id(name)).collect())
                 .expect("unique"),
             operations: vec![EndpointOperation {
+                async_completion: None,
                 id: local("cases-find"),
                 idempotent_upstream: true,
                 safe_upstream: false,
@@ -624,6 +626,10 @@ fn check_pack_and_the_filter_build_refuse_the_same_allowlists() {
             query_file: None,
             operation_name: None,
             variables: None,
+            sqlite_extract: None,
+            key_column: None,
+            parameter_order: None,
+            host_protocol: None,
         }
     }
     fn pack(endpoint: &Endpoint) -> AdapterPack {
@@ -638,6 +644,7 @@ fn check_pack_and_the_filter_build_refuse_the_same_allowlists() {
             code_maps: UniqueIdList::<CodeMap>::new(Vec::new()).expect("empty"),
             scripts: UniqueList::new(Vec::new()).expect("empty"),
             query_files: UniqueList::new(Vec::new()).expect("empty"),
+            open_api: None,
             capabilities: Capabilities::default(),
         }
     }

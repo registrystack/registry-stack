@@ -36,6 +36,7 @@ sourceRoutes:
           uri: file:dropbox
           timeoutMilliseconds: 10000
           decoder: jsonl
+          keyPointer: /id
 capabilities: {}
 "#
     .to_owned()
@@ -54,6 +55,14 @@ source:
     version: "1"
     digest: {pack_digest}
   route: drop-page
+destination:
+  type: signed-coordinator-event
+  binding: coordinator-test
+  workflow: drop-ingestion
+  trigger: submitted
+  source: urn:registry-adapter:job:drop-daily
+  eventType: org.example.drop-submitted.v1
+  dataSchema: urn:example:schema:drop-submitted:v1
 projection:
   fields:
     - a
@@ -182,7 +191,7 @@ async fn a_malformed_line_continues_with_a_count() {
     let fixture = write_fixture(100);
     std::fs::write(
         fixture.files.join("events.jsonl"),
-        b"{\"a\":1}\nbroken\n{\"a\":2}\n",
+        b"{\"id\":\"001\",\"a\":1}\nbroken\n{\"id\":\"002\",\"a\":2}\n",
     )
     .expect("the candidate file");
     let program =
@@ -190,8 +199,8 @@ async fn a_malformed_line_continues_with_a_count() {
     let page = run_job_page(&program, None).await.expect("the read runs");
     assert_eq!(page.page.items.len(), 2);
     assert_eq!(page.malformed_lines, 1, "the skipped line is counted");
-    assert_eq!(page.page.items[0].value, json!({"a": 1}));
-    assert_eq!(page.page.items[1].value, json!({"a": 2}));
+    assert_eq!(page.page.items[0].value, json!({"id": "001", "a": 1}));
+    assert_eq!(page.page.items[1].value, json!({"id": "002", "a": 2}));
     assert_eq!(
         page.page.next, None,
         "every line is consumed, so the scan ends"
@@ -206,7 +215,7 @@ async fn jsonl_pages_at_the_rows_bound() {
     let fixture = write_fixture(2);
     std::fs::write(
         fixture.files.join("events.jsonl"),
-        b"{\"a\":1}\n{\"a\":2}\n{\"a\":3}\n{\"a\":4}\n",
+        b"{\"id\":\"001\",\"a\":1}\n{\"id\":\"002\",\"a\":2}\n{\"id\":\"003\",\"a\":3}\n{\"id\":\"004\",\"a\":4}\n",
     )
     .expect("the candidate file");
     let program =
@@ -228,12 +237,13 @@ async fn jsonl_pages_at_the_rows_bound() {
         .expect("the second page runs");
     assert_eq!(second.page.items.len(), 2);
     assert_eq!(second.page.next, None);
-    let file_digest = sha256_uri(b"{\"a\":1}\n{\"a\":2}\n{\"a\":3}\n{\"a\":4}\n");
+    let file_digest = sha256_uri(
+        b"{\"id\":\"001\",\"a\":1}\n{\"id\":\"002\",\"a\":2}\n{\"id\":\"003\",\"a\":3}\n{\"id\":\"004\",\"a\":4}\n",
+    );
     assert_eq!(digest, file_digest);
     assert_eq!(
-        second.page.items[0].key,
-        format!("exports:{file_digest}:2"),
-        "the line ordinal counts every line of the file"
+        second.page.items[0].key, "file-row-v1:7:exports:003",
+        "the declared opaque business key survives paging"
     );
 }
 
@@ -245,7 +255,7 @@ async fn an_oversized_line_refuses_the_read() {
     let fixture = write_fixture(100);
     std::fs::write(
         fixture.files.join("events.jsonl"),
-        format!("{{\"a\": \"{}\"}}\n", "w".repeat(2_000_000)),
+        format!("{{\"id\":\"001\",\"a\": \"{}\"}}\n", "w".repeat(2_000_000)),
     )
     .expect("the candidate file");
     let program =

@@ -143,9 +143,10 @@ rather than restarting, which can lose queued entries.
 
 ## Read what an entry establishes
 
-Each entry is one JSON line whose `schema` is `registry.evidence.audit/v2`,
-`registry.evidence.audit.request-batch/v2`, or
-`registry.evidence.audit.authorization-refusal/v2`. Entries are not chained. The
+Each entry is one JSON line. New authorized operations use
+`registry.evidence.audit/v3` or `registry.evidence.audit.request-batch/v3`;
+authorization refusals keep `registry.evidence.audit.authorization-refusal/v2`.
+Retained authorized `/v2` entries remain readable history. Entries are not chained. The
 [`audit-event.schema.yaml`](https://github.com/registrystack/registry-stack/blob/main/products/evidence/contracts/audit-event.schema.yaml)
 and
 [`request-batch-audit-event.schema.yaml`](https://github.com/registrystack/registry-stack/blob/main/products/evidence/contracts/request-batch-audit-event.schema.yaml)
@@ -154,7 +155,7 @@ what the entry establishes:
 
 | Record phase | What it establishes | What it does not establish |
 |---|---|---|
-| `access-attempt` | Authentication and the complete authority path were accepted before source credentials or data were touched. | That the source returned a record or that anything was released. |
+| `access-attempt` | Authentication and the complete authority path were accepted before source credentials or data were touched. In a current `/v3` record, `executionBounds` captures the positive operation, deadline, and response-byte limits that govern the acquisition. | That the source returned a record or that anything was released. The bounds carry no endpoint, credential, secret, or source value. |
 | `disclosure-release` | The named concepts were serialized and durably recorded before the response bytes left the service. | That the source fact was true or that the caller used it correctly. |
 | `denial` | The operation was refused, either as an authenticated authorization refusal or as an evaluation that decided no answer. | The rejected requirement, selector, or source value behind it. |
 | `transient-failure` | An admitted operation failed in one closed, value-free class a retry may clear. | The selector, source value, or credential that triggered it. |
@@ -167,8 +168,20 @@ to build one. On a local development session, `evidencectl audit show` reads the
 as [Stop and read the audit](../../tutorials/request-evidence-as-sd-jwt-vc/#stop-and-read-the-audit)
 shows.
 
+The closed `executionBounds` object appears only on current `/v3` access attempts. Its members are
+`maximumDataOperations`, `acquisitionDeadlineMilliseconds`, and `maximumResponseBytes`. Evidence captures the
+effective values from the immutable runtime configuration before credential resolution or source
+effects. When `sourceAcquisition` is omitted, the values are `5`, `30000`, and `1048576`.
+Terminal `/v3` records and retained `/v2` records omit the object. The deadline gates admission to
+the terminal release append, the disclosure-begin boundary. If that append is admitted before expiry,
+it completes without cancellation and the exact audited bytes may return after expiry; this is not
+a hard wall-clock response cutoff.
+A signed source's verified `validUntil` remains an independent data-validity bound.
+
 {/* Evidence: crates/registry-evidence/src/audit.rs, AUDIT_SCHEMA, REQUEST_BATCH_AUDIT_SCHEMA,
     AUTHORIZATION_REFUSAL_AUDIT_SCHEMA, AuditPhase, AuditDecision, and requester_pseudonym;
+    crates/registry-evidence/src/runtime.rs, execute_source_stage, evaluate, and
+    evaluate_request_batch;
     crates/registry-platform-audit/src/writer.rs, AuditEntry;
     products/evidence/OPERATOR-CONTRACT.md, "Audit and operational data". */}
 

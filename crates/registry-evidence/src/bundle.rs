@@ -5,9 +5,16 @@ use std::fmt;
 use std::fs::{self, File, Metadata};
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use base64::Engine as _;
 use jsonschema::{Draft, JSONSchema};
+use registry_adapter_core::{AdapterPack, ADAPTER_PACK_API_VERSION, ADAPTER_PACK_KIND};
+use registry_adapter_engine::artifacts::PackArtifactBytes;
+use registry_adapter_engine::evidence::{
+    check_schema, compile_evidence_pack_with_protocols, EvidenceCompileError, EvidenceLimits,
+    EvidenceSchemaKind,
+};
 use registry_platform_config::{
     package::is_envelope_file, require_trusted_runtime_path, sha256_uri, verify_package,
     PackageError, PackageLimits, VerifiedPackage, SUM_FILE,
@@ -16,7 +23,7 @@ use registry_platform_crypto::{
     canonicalize_json, PublicJwk, SigningAlgorithm as ProviderSigningAlgorithm,
 };
 use registry_platform_sqlite::{CapturedSnapshot, ErrorKind as SqliteErrorKind};
-use registry_platform_yaml::{Reader, Report};
+use registry_platform_yaml::{ApiVersion, EnvelopeRule, Expect, FormatSpec, Reader, Report};
 use rhai::{Engine, AST};
 use serde::de::{self, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
@@ -27,8 +34,8 @@ use thiserror::Error;
 
 use crate::config::{
     ArtifactPath, AssuranceProfile, ConceptConfig, ConceptForm, ConfigError, EvidenceConfig,
-    OrderedMap, RequirementConfig, RuntimeConfig, SchemaFault, SelectorField, TextLocation,
-    SOURCE_BATCH_CAPABILITY,
+    OrderedMap, RequirementConfig, RuntimeConfig, SchemaFault, SelectorField,
+    SourceInputPresenceContract, SourceInputPresenceRequirement, TextLocation,
 };
 
 pub const MAX_BUNDLE_FILES: usize = 1_024;
@@ -45,16 +52,25 @@ const REQUIREMENT_REVISION_DOMAIN: &[u8] = b"registry.evidence.requirement-revis
 /// closure. An artifact path can hold no `#`, so this can never collide with a
 /// bundle file.
 const PROJECTION_PATH: &str = "evidence.yaml#requirement";
-/// Projected member holding the bundle's declared acquisition capabilities.
-const ACQUISITION_CAPABILITIES: &str = "acquisitionCapabilities";
 const PROVIDER_PUBLICATION: &str = "publication";
+const SOURCE_AUTHORITY_PATH_REFUSAL: &str =
+    "an authority path that can activate a source does not supply every required route input";
+const ADAPTER_PACK_FORMAT: FormatSpec<'static> = FormatSpec {
+    kind: ADAPTER_PACK_KIND,
+    envelope: EnvelopeRule::ApiVersionKind {
+        api_versions: &[ApiVersion::current(ADAPTER_PACK_API_VERSION)],
+        retired_api_versions: &[],
+    },
+    removed_keys: &[],
+};
 pub(crate) const MAX_CA_BUNDLE_BYTES: u64 = 1024 * 1024;
 /// Bytes folded into an extract's digest per read. An extract is sized by the
 /// register it holds rather than by a byte cap, so it is digested in chunks of
 /// this size and never held whole.
 #[cfg(test)]
 const EXTRACT_DIGEST_CHUNK_BYTES: usize = 64 * 1024;
-const ALLOWED_DIRECTORIES: [&str; 7] = [
+const ALLOWED_DIRECTORIES: [&str; 8] = [
+    "adapter-packs",
     "adapters",
     "derivations",
     "schemas",
@@ -307,6 +323,7 @@ pub struct Bundle {
     package_digest: String,
     requirement_revisions: BTreeMap<String, String>,
     files: BTreeMap<String, Vec<u8>>,
+    source_packs: BTreeMap<String, SourcePack>,
     discovery_description: Option<Vec<u8>>,
     pub scripts: BTreeMap<String, CompiledScript>,
     pub fact_schemas: BTreeMap<String, JsonValue>,
@@ -314,6 +331,29 @@ pub struct Bundle {
     pub fixtures: BTreeMap<String, JsonValue>,
     pub active_public_jwk: PublicJwk,
     pub published_public_jwks: BTreeMap<String, PublicJwk>,
+}
+
+/// One source's parsed, digest-checked Adapter pack and its exact captured
+/// artifact bytes. Both values are shared with compiled source programs, so a
+/// request never reparses or reopens package files.
+#[derive(Debug, Clone)]
+pub struct SourcePack {
+    pack: Arc<AdapterPack>,
+    artifacts: Arc<PackArtifactBytes>,
+    artifact_paths: BTreeSet<String>,
+    input_presence: SourceInputPresenceContract,
+}
+
+impl SourcePack {
+    #[must_use]
+    pub fn pack(&self) -> Arc<AdapterPack> {
+        Arc::clone(&self.pack)
+    }
+
+    #[must_use]
+    pub fn artifacts(&self) -> Arc<PackArtifactBytes> {
+        Arc::clone(&self.artifacts)
+    }
 }
 
 /// One captured operator runtime configuration and its bound trust anchors.
@@ -327,6 +367,10 @@ pub struct RuntimeDocument {
     pub config: RuntimeConfig,
     bytes: Vec<u8>,
     pub ca_bundles: BTreeMap<String, Vec<u8>>,
+    /// Public CA trust anchors captured for each source connection before
+    /// serving. Endpoint compilation consumes these bytes, never a later path
+    /// reread; credentials and mTLS private keys remain post-intent material.
+    pub source_ca_bundles: BTreeMap<String, BTreeMap<String, Vec<u8>>>,
     pub source_extracts: BTreeMap<String, SourceExtract>,
 }
 
@@ -440,24 +484,23 @@ impl RuntimeDocument {
 
         let mut ca_bundles = BTreeMap::new();
         for (profile, binding) in config.outbound_tls.trust_profiles.iter() {
-            let ca_path = Path::new(&binding.ca_bundle_file);
-            let ca_metadata =
-                fs::symlink_metadata(ca_path).map_err(|_| BundleError::Unavailable)?;
-            if ca_metadata.file_type().is_symlink() || !ca_metadata.is_file() {
-                return Err(BundleError::InvalidPath);
+            ca_bundles.insert(
+                profile.to_owned(),
+                capture_ca_bundle(&binding.ca_bundle_file)?,
+            );
+        }
+        let mut source_ca_bundles = BTreeMap::new();
+        for (connection, bindings) in config.source_connections.iter() {
+            let mut profiles = BTreeMap::new();
+            if let Some(outbound_tls) = &bindings.outbound_tls {
+                for (profile, binding) in &outbound_tls.trust_profiles {
+                    profiles.insert(
+                        profile.to_owned(),
+                        capture_ca_bundle(&binding.ca_bundle_file)?,
+                    );
+                }
             }
-            let ca_filesystem_read_only = filesystem_is_read_only(ca_path)?;
-            let writable_ca = "the TLS CA bundle the runtime file names is writable";
-            validate_read_only(&ca_metadata, ca_filesystem_read_only, writable_ca)?;
-            let ca_bytes = read_stable_file(
-                ca_path,
-                &ca_metadata,
-                MAX_CA_BUNDLE_BYTES,
-                ca_filesystem_read_only,
-                writable_ca,
-            )?;
-            validate_ca_bundle(&ca_bytes).map_err(|error| error.in_artifact(RUNTIME_FILE))?;
-            ca_bundles.insert(profile.to_owned(), ca_bytes);
+            source_ca_bundles.insert(connection.to_owned(), profiles);
         }
 
         let mut source_extracts = BTreeMap::new();
@@ -471,6 +514,7 @@ impl RuntimeDocument {
             config,
             bytes,
             ca_bundles,
+            source_ca_bundles,
             source_extracts,
         })
     }
@@ -482,6 +526,26 @@ impl RuntimeDocument {
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
     }
+}
+
+fn capture_ca_bundle(path: &str) -> Result<Vec<u8>, BundleError> {
+    let path = Path::new(path);
+    let metadata = fs::symlink_metadata(path).map_err(|_| BundleError::Unavailable)?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(BundleError::InvalidPath);
+    }
+    let filesystem_read_only = filesystem_is_read_only(path)?;
+    let writable = "the TLS CA bundle the runtime file names is writable";
+    validate_read_only(&metadata, filesystem_read_only, writable)?;
+    let bytes = read_stable_file(
+        path,
+        &metadata,
+        MAX_CA_BUNDLE_BYTES,
+        filesystem_read_only,
+        writable,
+    )?;
+    validate_ca_bundle(&bytes).map_err(|error| error.in_artifact(RUNTIME_FILE))?;
+    Ok(bytes)
 }
 
 /// The two independently captured, closed startup inputs.
@@ -509,7 +573,7 @@ impl DeploymentInputs {
         let runtime = RuntimeDocument::load(runtime_path)?;
         let mut bundle = Bundle::load_pinned(&runtime.config.package)?;
         bundle.bind_target_authority(runtime.config.authority.as_ref())?;
-        validate_runtime_bindings(&bundle.config, &runtime.config)?;
+        validate_runtime_bindings(&bundle, &runtime.config)?;
         Ok(Self { bundle, runtime })
     }
 
@@ -570,7 +634,9 @@ impl Bundle {
         let config_bytes = files.get(CONFIG_FILE).ok_or(BundleError::Unavailable)?;
         let config = EvidenceConfig::parse_yaml(config_bytes)
             .map_err(|error| configuration_error(CONFIG_FILE, &root.join(CONFIG_FILE), error))?;
-        validate_file_closure(&config, &files)?;
+        let source_packs = load_source_packs(&config, &files)?;
+        validate_source_authority_paths(&config, &source_packs)?;
+        validate_file_closure(&config, &source_packs, &files)?;
         let expected_description = crate::discovery::render(&config)
             .map_err(|_| invalid_artifact("the provider discovery description is invalid"))?;
         let discovery_description = match expected_description {
@@ -596,12 +662,11 @@ impl Bundle {
 
         let scripts = load_scripts(&config, &files)?;
         let fact_schemas = load_fact_schemas(&config, &files)?;
-        validate_prior_fact_bindings(&config, &fact_schemas)?;
         let codelists = load_codelists(root, &config, &files)?;
         validate_codelist_references(&config, &codelists)?;
         let fixtures = load_fixtures(root, &config, &files)?;
         let (active_public_jwk, published_public_jwks) = load_public_jwks(&config, &files)?;
-        let requirement_revisions = compute_requirement_revisions(&config, &files)?;
+        let requirement_revisions = compute_requirement_revisions(&config, &source_packs, &files)?;
 
         Ok(Self {
             authority_snapshot: None,
@@ -611,6 +676,7 @@ impl Bundle {
             package_digest: verified.digest().to_owned(),
             requirement_revisions,
             files,
+            source_packs,
             discovery_description,
             scripts,
             fact_schemas,
@@ -619,6 +685,62 @@ impl Bundle {
             active_public_jwk,
             published_public_jwks,
         })
+    }
+
+    /// The captured, checked pack closure selected by one configured source.
+    #[must_use]
+    pub fn source_pack(&self, source_id: &str) -> Option<&SourcePack> {
+        self.source_packs.get(source_id)
+    }
+
+    /// Validate a compiled target authority against both package ceilings and
+    /// the required input shape of every captured Source route. This performs
+    /// no activation, credential resolution, source access or other effect.
+    pub fn validate_target_authority(
+        &self,
+        target: &str,
+        document: &crate::authority::AuthorityDocument,
+    ) -> Result<(), BundleError> {
+        document.validate_for(target, &self.config).map_err(|_| {
+            invalid_artifact("effective target authority violates the package contract")
+        })?;
+        let mut effective = self.config.clone();
+        effective.authority_profiles = document.access_profiles.clone();
+        validate_source_authority_paths(&effective, &self.source_packs)
+    }
+
+    /// Audit and activate one target authority against this captured package.
+    /// Package-specific validation runs after the request audit is durable and
+    /// before the authority lock, commit, credentials or source effects.
+    pub async fn activate_target_authority(
+        &self,
+        root: &Path,
+        target: &str,
+        document: &crate::authority::AuthorityDocument,
+        operator_reference: Option<&str>,
+        audit: &crate::audit::EvidenceAuditLog,
+    ) -> Result<crate::authority::AuthoritySnapshot, crate::authority::ActivationError> {
+        crate::authority::activate_bundle_with_operator(
+            self,
+            root,
+            target,
+            document,
+            operator_reference,
+            audit,
+        )
+        .await
+    }
+
+    pub(crate) fn validate_target_authority_for_activation(
+        &self,
+        target: &str,
+        document: &crate::authority::AuthorityDocument,
+    ) -> Result<(), crate::authority::AuthorityError> {
+        document.validate_for(target, &self.config)?;
+        let mut effective = self.config.clone();
+        effective.authority_profiles = document.access_profiles.clone();
+        validate_source_authority_paths(&effective, &self.source_packs)
+            .map_err(|_| crate::authority::AuthorityError::SourceRouteInputs)
     }
 
     /// Bind exactly one activated target authority before initialization.
@@ -650,10 +772,13 @@ impl Bundle {
         let digest = snapshot
             .effective_grant_digest(&self.config)
             .map_err(|_| invalid_artifact("effective target authority does not canonicalize"))?;
-        self.config.authority_profiles = snapshot.profiles().clone();
-        self.config.validate().map_err(|_| {
+        let mut effective = self.config.clone();
+        effective.authority_profiles = snapshot.profiles().clone();
+        effective.validate().map_err(|_| {
             invalid_artifact("effective target authority violates the package contract")
         })?;
+        validate_source_authority_paths(&effective, &self.source_packs)?;
+        self.config = effective;
         self.effective_grant_digest = Some(digest);
         self.authority_snapshot = Some(snapshot);
         Ok(())
@@ -725,13 +850,15 @@ pub fn load_bundle(root: impl AsRef<Path>) -> Result<Bundle, BundleError> {
     Bundle::load(root)
 }
 
-pub(crate) fn evidence_package_limits() -> PackageLimits {
+/// Package bounds used by both startup and offline verified capture.
+/// Callers of `Bundle::load_as_found` verify against these same limits.
+pub fn evidence_package_limits() -> PackageLimits {
     PackageLimits {
         max_files: MAX_BUNDLE_FILES,
         max_file_bytes: MAX_ARTIFACT_BYTES,
         max_total_bytes: MAX_BUNDLE_BYTES,
-        max_depth: 3,
-        max_path_bytes: 128,
+        max_depth: 16,
+        max_path_bytes: 512,
     }
 }
 
@@ -971,9 +1098,15 @@ fn filesystem_is_read_only(_path: &Path) -> Result<bool, BundleError> {
 fn file_size_cap(path: &str) -> u64 {
     // A statement is reviewed, bounded, executable text, so it is bounded like
     // the other executable artifacts rather than like a data file.
+    let pack_relative = path
+        .strip_prefix("adapter-packs/")
+        .and_then(|rest| rest.splitn(3, '/').nth(2));
     if path.starts_with("adapters/")
         || path.starts_with("derivations/")
         || path.starts_with("queries/")
+        || pack_relative.is_some_and(|relative| {
+            relative.starts_with("scripts/") || relative.starts_with("queries/")
+        })
     {
         MAX_SCRIPT_BYTES
     } else if path.starts_with("public-keys/") {
@@ -1187,14 +1320,19 @@ fn same_file(left: &Metadata, right: &Metadata) -> bool {
 
 fn validate_file_closure(
     config: &EvidenceConfig,
+    source_packs: &BTreeMap<String, SourcePack>,
     files: &BTreeMap<String, Vec<u8>>,
 ) -> Result<(), BundleError> {
     let mut expected = BTreeSet::from([CONFIG_FILE.to_owned()]);
     if config.publication.is_some() {
         expected.insert(DISCOVERY_DESCRIPTION_FILE.to_owned());
     }
-    for (_, source) in config.sources.iter() {
-        expected.extend(source_artifact_paths(source));
+    for (source_id, source) in config.sources.iter() {
+        expected.insert(source.fact_schema().as_str().to_owned());
+        let pack = source_packs
+            .get(source_id)
+            .ok_or_else(|| invalid_artifact("a configured source pack closure is missing"))?;
+        expected.extend(pack.artifact_paths.iter().cloned());
     }
     for requirement in &config.requirements {
         expected.insert(requirement.derivation.script.as_str().to_owned());
@@ -1242,32 +1380,831 @@ fn validate_file_closure(
     Ok(())
 }
 
-/// Every bundle artifact one source references, whatever its transport.
-///
-/// A transport that declares no request preparation, no adapter parameters, or
-/// no statement contributes nothing for that role rather than a placeholder,
-/// so bundle closure stays exact in both directions.
-fn source_artifact_paths(source: &crate::config::SourceConfig) -> Vec<String> {
-    let mut paths = [
-        source.statement(),
-        source.prepare_script(),
-        Some(source.extract_script()),
-        source.adapter_parameters_schema(),
-        Some(source.response_schema()),
-        Some(source.fact_schema()),
-    ]
-    .into_iter()
-    .flatten()
-    .map(|path| path.as_str().to_owned())
-    .collect::<Vec<_>>();
-    if let Some(batch) = source.batch() {
-        paths.extend([
-            batch.prepare_script.as_str().to_owned(),
-            batch.extract_script.as_str().to_owned(),
-            batch.response_schema.as_str().to_owned(),
-        ]);
+fn load_source_packs(
+    config: &EvidenceConfig,
+    files: &BTreeMap<String, Vec<u8>>,
+) -> Result<BTreeMap<String, SourcePack>, BundleError> {
+    let mut source_packs = BTreeMap::new();
+    for (source_id, source) in config.sources.iter() {
+        source_packs.insert(source_id.to_owned(), load_source_pack(source, files)?);
     }
-    paths
+    Ok(source_packs)
+}
+
+fn validate_source_authority_paths(
+    config: &EvidenceConfig,
+    source_packs: &BTreeMap<String, SourcePack>,
+) -> Result<(), BundleError> {
+    let contracts = source_packs
+        .iter()
+        .map(|(source_id, pack)| (source_id.clone(), pack.input_presence.clone()))
+        .collect::<BTreeMap<_, _>>();
+    config
+        .validate_source_authority_paths(&contracts)
+        .map_err(|_| invalid_artifact(SOURCE_AUTHORITY_PATH_REFUSAL).in_artifact(CONFIG_FILE))
+}
+
+fn load_source_pack(
+    source: &crate::config::SourceConfig,
+    files: &BTreeMap<String, Vec<u8>>,
+) -> Result<SourcePack, BundleError> {
+    let prefix = source.pack.artifact_prefix.as_str();
+    let pack_path = format!("{prefix}/pack.yaml");
+    let pack_bytes = files
+        .get(&pack_path)
+        .ok_or_else(|| unknown_file(&pack_path, "the source pack document is missing"))?;
+    if sha256_uri(pack_bytes) != source.pack.digest.as_str() {
+        return Err(
+            invalid_artifact("the source pack digest does not match its captured bytes")
+                .in_artifact(&pack_path),
+        );
+    }
+    let pack = Reader::new(pack_path.as_str())
+        .decode::<AdapterPack>(pack_bytes, &Expect::one(&ADAPTER_PACK_FORMAT))
+        .map(|decoded| decoded.value)
+        .map_err(|_| {
+            invalid_artifact("the source pack document does not match the Adapter pack contract")
+                .in_artifact(&pack_path)
+        })?;
+    if pack.id != source.pack.id || pack.version != source.pack.version {
+        return Err(invalid_artifact(
+            "the source pack id and version do not match the source binding",
+        )
+        .in_artifact(&pack_path));
+    }
+
+    let route = pack
+        .source_routes
+        .get(source.route.as_str())
+        .ok_or_else(|| invalid_artifact("the selected source route is not declared by the pack"))?;
+    let evidence = route
+        .evidence
+        .as_ref()
+        .ok_or_else(|| invalid_artifact("the selected source route has no Evidence contract"))?;
+
+    let mut references = BTreeMap::new();
+    for reference in pack.pinned_files() {
+        insert_pack_reference(&mut references, &reference.path, reference.digest.as_str())?;
+    }
+
+    let mut artifact_paths = BTreeSet::from([pack_path.clone()]);
+    let mut artifact_bytes = Vec::with_capacity(references.len());
+    for (relative, digest) in &references {
+        let path = format!("{prefix}/{relative}");
+        let bytes = files
+            .get(&path)
+            .ok_or_else(|| unknown_file(&path, "the source pack artifact is missing"))?;
+        if sha256_uri(bytes) != *digest {
+            return Err(invalid_artifact(
+                "a source pack artifact does not match its pinned digest",
+            )
+            .in_artifact(&path));
+        }
+        artifact_paths.insert(path);
+        artifact_bytes.push((relative.clone(), bytes.clone()));
+    }
+    let prefix_with_slash = format!("{prefix}/");
+    if let Some(extra) = files.keys().find(|path| {
+        path.starts_with(&prefix_with_slash) && !artifact_paths.contains(path.as_str())
+    }) {
+        return Err(unknown_file(
+            extra,
+            "the source pack directory contains an artifact the pack does not pin",
+        ));
+    }
+
+    let input_bytes = files
+        .get(&format!("{prefix}/{}", evidence.inputs_schema.path))
+        .ok_or_else(|| invalid_artifact("the selected route input schema is missing"))?;
+    let input_schema: JsonValue = serde_json::from_slice(input_bytes)
+        .map_err(|_| invalid_artifact("the selected route input schema is not JSON"))?;
+    check_schema(EvidenceSchemaKind::Inputs, input_schema.clone()).map_err(|_| {
+        invalid_artifact("the selected route input schema is not a bounded closed schema")
+    })?;
+    let input_presence = source_input_presence_contract(&input_schema)?;
+    validate_source_input_mapping(source, &input_schema, &input_presence)?;
+
+    let facts_bytes = files
+        .get(&format!("{prefix}/{}", evidence.facts_schema.path))
+        .ok_or_else(|| invalid_artifact("the selected route facts schema is missing"))?;
+    let facts_schema: JsonValue = serde_json::from_slice(facts_bytes)
+        .map_err(|_| invalid_artifact("the selected route facts schema is not JSON"))?;
+    check_schema(EvidenceSchemaKind::Facts, facts_schema.clone()).map_err(|_| {
+        invalid_artifact("the selected route facts schema is not a bounded closed schema")
+    })?;
+    let projected_facts = files.get(source.fact_schema().as_str()).ok_or_else(|| {
+        unknown_file(
+            source.fact_schema().as_str(),
+            "the source facts schema is missing",
+        )
+    })?;
+    let projected_schema: JsonValue = serde_json::from_slice(projected_facts).map_err(|_| {
+        invalid_artifact("the source facts schema is not JSON")
+            .in_artifact(source.fact_schema().as_str())
+    })?;
+    // Both artifacts remain covered by the package digest; the original pack
+    // schema also retains its exact pin. Formatting a generated projection
+    // cannot change which facts the already-checked schema permits.
+    if projected_schema != facts_schema {
+        return Err(invalid_artifact(
+            "the source facts schema does not equal the selected pack route's pinned schema",
+        )
+        .in_artifact(source.fact_schema().as_str()));
+    }
+
+    Ok(SourcePack {
+        pack: Arc::new(pack),
+        artifacts: Arc::new(PackArtifactBytes::new(artifact_bytes)),
+        artifact_paths,
+        input_presence,
+    })
+}
+
+fn source_input_presence_contract(
+    schema: &JsonValue,
+) -> Result<SourceInputPresenceContract, BundleError> {
+    let properties = schema
+        .get("properties")
+        .and_then(JsonValue::as_object)
+        .ok_or_else(|| {
+            invalid_artifact("the selected route input schema must declare properties")
+        })?;
+    let declared = properties
+        .keys()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let mut analysis = PresenceAnalysis::new();
+    let requirement = root_presence_requirement(
+        schema,
+        schema,
+        &declared,
+        &mut BTreeSet::new(),
+        &mut analysis,
+        0,
+    )?;
+    let Some(branches) = schema.get("oneOf").and_then(JsonValue::as_array) else {
+        return Ok(SourceInputPresenceContract::new(requirement, None));
+    };
+    let presence_only = !branches.is_empty()
+        && branches.iter().all(|branch| {
+            branch.as_object().is_some_and(|members| {
+                members.contains_key("required")
+                    && members.keys().all(|key| {
+                        matches!(
+                            key.as_str(),
+                            "required" | "type" | "title" | "description" | "$comment"
+                        )
+                    })
+                    && members
+                        .get("type")
+                        .is_none_or(|kind| kind.as_str() == Some("object"))
+            })
+        });
+    if !presence_only {
+        // Value constraints can distinguish branches that have the same
+        // presence shape. The full validator retains exact oneOf semantics;
+        // startup proves that at least one branch's required names are mapped.
+        return Ok(SourceInputPresenceContract::new(requirement, None));
+    }
+
+    let base = required_input_names(schema)?;
+    let mut alternatives = Vec::with_capacity(branches.len());
+    for branch in branches {
+        let mut required = base.clone();
+        required.extend(required_input_names(branch)?);
+        if required
+            .iter()
+            .any(|input| !declared.contains(input.as_str()))
+        {
+            return Err(invalid_artifact(
+                "a selected route input alternative requires an undeclared input",
+            ));
+        }
+        alternatives.push(required);
+    }
+    Ok(SourceInputPresenceContract::new(
+        requirement,
+        Some(alternatives),
+    ))
+}
+
+const MAXIMUM_PRESENCE_ANALYSIS_NODES: usize = 8_192;
+const MAXIMUM_PRESENCE_ANALYSIS_DEPTH: usize = 64;
+
+struct PresenceAnalysis {
+    remaining_nodes: usize,
+}
+
+impl PresenceAnalysis {
+    fn new() -> Self {
+        Self {
+            remaining_nodes: MAXIMUM_PRESENCE_ANALYSIS_NODES,
+        }
+    }
+
+    fn visit(&mut self, depth: usize) -> Result<(), BundleError> {
+        if depth > MAXIMUM_PRESENCE_ANALYSIS_DEPTH || self.remaining_nodes == 0 {
+            return Err(invalid_artifact(
+                "route input presence analysis exceeds its bound",
+            ));
+        }
+        self.remaining_nodes -= 1;
+        Ok(())
+    }
+}
+
+/// Derive only root-property presence predicates. Nested property value rules,
+/// formats and other value constraints stay with the checked runtime schema;
+/// unknown value predicates are never treated as exact presence proofs.
+fn root_presence_requirement(
+    schema: &JsonValue,
+    root: &JsonValue,
+    declared: &BTreeSet<&str>,
+    resolving: &mut BTreeSet<String>,
+    analysis: &mut PresenceAnalysis,
+    depth: usize,
+) -> Result<SourceInputPresenceRequirement, BundleError> {
+    analysis.visit(depth)?;
+    if let Some(boolean) = schema.as_bool() {
+        return Ok(if boolean {
+            SourceInputPresenceRequirement::Always
+        } else {
+            SourceInputPresenceRequirement::Never
+        });
+    }
+    let Some(object) = schema.as_object() else {
+        return Ok(SourceInputPresenceRequirement::Always);
+    };
+
+    let required = required_input_names(schema)?;
+    validate_declared_required_inputs(&required, declared)?;
+    let mut all = vec![SourceInputPresenceRequirement::Required(required)];
+
+    for keyword in ["$ref", "$dynamicRef", "$recursiveRef"] {
+        if let Some(reference) = object.get(keyword).and_then(JsonValue::as_str) {
+            let resolution = format!("{keyword}:{reference}");
+            if resolving.insert(resolution.clone()) {
+                let referenced = resolve_local_schema(root, reference, analysis, depth + 1)?
+                    .ok_or_else(|| {
+                        invalid_artifact(
+                            "the selected route input schema has an unresolved reference",
+                        )
+                    })?;
+                all.push(root_presence_requirement(
+                    referenced,
+                    root,
+                    declared,
+                    resolving,
+                    analysis,
+                    depth + 1,
+                )?);
+                resolving.remove(&resolution);
+            }
+        }
+    }
+
+    if let Some(negated) = object.get("not") {
+        if let Some(requirement) =
+            exact_presence_requirement(negated, root, declared, resolving, analysis, depth + 1)?
+        {
+            all.push(SourceInputPresenceRequirement::Not(Box::new(requirement)));
+        }
+    }
+
+    for keyword in ["allOf"] {
+        if let Some(branches) = object.get(keyword).and_then(JsonValue::as_array) {
+            for branch in branches {
+                all.push(root_presence_requirement(
+                    branch,
+                    root,
+                    declared,
+                    resolving,
+                    analysis,
+                    depth + 1,
+                )?);
+            }
+        }
+    }
+    if let Some(branches) = object.get("anyOf").and_then(JsonValue::as_array) {
+        let mut requirements = Vec::with_capacity(branches.len());
+        for branch in branches {
+            requirements.push(root_presence_requirement(
+                branch,
+                root,
+                declared,
+                resolving,
+                analysis,
+                depth + 1,
+            )?);
+        }
+        all.push(SourceInputPresenceRequirement::Any(requirements));
+    }
+    if let Some(branches) = object.get("oneOf").and_then(JsonValue::as_array) {
+        let mut requirements = Vec::with_capacity(branches.len());
+        let mut exact = Vec::with_capacity(branches.len());
+        let mut all_exact = true;
+        for branch in branches {
+            requirements.push(root_presence_requirement(
+                branch,
+                root,
+                declared,
+                resolving,
+                analysis,
+                depth + 1,
+            )?);
+            if let Some(requirement) =
+                exact_presence_requirement(branch, root, declared, resolving, analysis, depth + 1)?
+            {
+                exact.push(requirement);
+            } else {
+                all_exact = false;
+            }
+        }
+        all.push(if all_exact {
+            SourceInputPresenceRequirement::ExactlyOne(exact)
+        } else {
+            SourceInputPresenceRequirement::Any(requirements)
+        });
+    }
+
+    if let Some(condition_schema) = object.get("if") {
+        let condition = root_presence_requirement(
+            condition_schema,
+            root,
+            declared,
+            resolving,
+            analysis,
+            depth + 1,
+        )?;
+        let then_requirement = object
+            .get("then")
+            .map(|branch| {
+                root_presence_requirement(branch, root, declared, resolving, analysis, depth + 1)
+            })
+            .transpose()?
+            .unwrap_or(SourceInputPresenceRequirement::Always);
+        let else_requirement = object
+            .get("else")
+            .map(|branch| {
+                root_presence_requirement(branch, root, declared, resolving, analysis, depth + 1)
+            })
+            .transpose()?
+            .unwrap_or(SourceInputPresenceRequirement::Always);
+        let alternatives = if let Some(exact_condition) = exact_presence_requirement(
+            condition_schema,
+            root,
+            declared,
+            resolving,
+            analysis,
+            depth + 1,
+        )? {
+            vec![
+                SourceInputPresenceRequirement::All(vec![
+                    exact_condition.clone(),
+                    then_requirement,
+                ]),
+                SourceInputPresenceRequirement::All(vec![
+                    SourceInputPresenceRequirement::Not(Box::new(exact_condition)),
+                    else_requirement,
+                ]),
+            ]
+        } else {
+            // A value constraint may make the condition false even when its
+            // required names are present. The true path still needs the
+            // condition's presence proof; the false path needs only `else`.
+            vec![
+                SourceInputPresenceRequirement::All(vec![condition, then_requirement]),
+                else_requirement,
+            ]
+        };
+        all.push(SourceInputPresenceRequirement::Any(alternatives));
+    }
+
+    if let Some(dependencies) = object
+        .get("dependentRequired")
+        .and_then(JsonValue::as_object)
+    {
+        for (trigger, names) in dependencies {
+            if !declared.contains(trigger.as_str()) {
+                return Err(invalid_artifact(
+                    "the selected route input schema has an undeclared dependency trigger",
+                ));
+            }
+            let required = required_input_names(&serde_json::json!({"required": names}))?;
+            validate_declared_required_inputs(&required, declared)?;
+            all.push(SourceInputPresenceRequirement::DependentRequired {
+                trigger: trigger.clone(),
+                required,
+            });
+        }
+    }
+    if let Some(dependencies) = object
+        .get("dependentSchemas")
+        .and_then(JsonValue::as_object)
+    {
+        for (trigger, dependent) in dependencies {
+            if !declared.contains(trigger.as_str()) {
+                return Err(invalid_artifact(
+                    "the selected route input schema has an undeclared dependency trigger",
+                ));
+            }
+            all.push(SourceInputPresenceRequirement::DependentSchema {
+                trigger: trigger.clone(),
+                requirement: Box::new(root_presence_requirement(
+                    dependent,
+                    root,
+                    declared,
+                    resolving,
+                    analysis,
+                    depth + 1,
+                )?),
+            });
+        }
+    }
+
+    Ok(SourceInputPresenceRequirement::All(all))
+}
+
+fn resolve_local_schema<'a>(
+    root: &'a JsonValue,
+    reference: &str,
+    analysis: &mut PresenceAnalysis,
+    depth: usize,
+) -> Result<Option<&'a JsonValue>, BundleError> {
+    let Some(fragment) = reference.strip_prefix('#') else {
+        return Ok(None);
+    };
+    if fragment.is_empty() {
+        return Ok(Some(root));
+    }
+    if fragment.starts_with('/') {
+        return Ok(root.pointer(fragment));
+    }
+    find_schema_anchor(root, fragment, analysis, depth)
+}
+
+fn find_schema_anchor<'a>(
+    value: &'a JsonValue,
+    anchor: &str,
+    analysis: &mut PresenceAnalysis,
+    depth: usize,
+) -> Result<Option<&'a JsonValue>, BundleError> {
+    analysis.visit(depth)?;
+    let JsonValue::Object(members) = value else {
+        return Ok(None);
+    };
+    if members.get("$anchor").and_then(JsonValue::as_str) == Some(anchor)
+        || members.get("$dynamicAnchor").and_then(JsonValue::as_str) == Some(anchor)
+    {
+        return Ok(Some(value));
+    }
+
+    for keyword in [
+        "$defs",
+        "definitions",
+        "properties",
+        "patternProperties",
+        "dependentSchemas",
+    ] {
+        if let Some(schemas) = members.get(keyword).and_then(JsonValue::as_object) {
+            for schema in schemas.values() {
+                if let Some(found) = find_schema_anchor(schema, anchor, analysis, depth + 1)? {
+                    return Ok(Some(found));
+                }
+            }
+        }
+    }
+    for keyword in ["allOf", "anyOf", "oneOf", "prefixItems"] {
+        if let Some(schemas) = members.get(keyword).and_then(JsonValue::as_array) {
+            for schema in schemas {
+                if let Some(found) = find_schema_anchor(schema, anchor, analysis, depth + 1)? {
+                    return Ok(Some(found));
+                }
+            }
+        }
+    }
+    for keyword in [
+        "not",
+        "if",
+        "then",
+        "else",
+        "items",
+        "additionalProperties",
+        "contains",
+        "propertyNames",
+        "unevaluatedItems",
+        "unevaluatedProperties",
+        "contentSchema",
+    ] {
+        if let Some(schema) = members.get(keyword) {
+            if let Some(found) = find_schema_anchor(schema, anchor, analysis, depth + 1)? {
+                return Ok(Some(found));
+            }
+        }
+    }
+    Ok(None)
+}
+
+fn exact_presence_requirement(
+    schema: &JsonValue,
+    root: &JsonValue,
+    declared: &BTreeSet<&str>,
+    resolving: &mut BTreeSet<String>,
+    analysis: &mut PresenceAnalysis,
+    depth: usize,
+) -> Result<Option<SourceInputPresenceRequirement>, BundleError> {
+    analysis.visit(depth)?;
+    if let Some(boolean) = schema.as_bool() {
+        return Ok(Some(if boolean {
+            SourceInputPresenceRequirement::Always
+        } else {
+            SourceInputPresenceRequirement::Never
+        }));
+    }
+    let Some(object) = schema.as_object() else {
+        return Ok(None);
+    };
+    if object.keys().any(|key| {
+        !matches!(
+            key.as_str(),
+            "required"
+                | "type"
+                | "allOf"
+                | "anyOf"
+                | "oneOf"
+                | "not"
+                | "if"
+                | "then"
+                | "else"
+                | "dependentRequired"
+                | "dependentSchemas"
+                | "$ref"
+                | "$dynamicRef"
+                | "$recursiveRef"
+                | "$anchor"
+                | "$dynamicAnchor"
+                | "title"
+                | "description"
+                | "$comment"
+        )
+    }) || object
+        .get("type")
+        .is_some_and(|kind| kind.as_str() != Some("object"))
+    {
+        return Ok(None);
+    }
+
+    let required = required_input_names(schema)?;
+    validate_declared_required_inputs(&required, declared)?;
+    let mut all = vec![SourceInputPresenceRequirement::Required(required)];
+    for keyword in ["$ref", "$dynamicRef", "$recursiveRef"] {
+        if let Some(reference) = object.get(keyword).and_then(JsonValue::as_str) {
+            let resolution = format!("exact:{keyword}:{reference}");
+            if resolving.insert(resolution.clone()) {
+                let Some(referenced) = resolve_local_schema(root, reference, analysis, depth + 1)?
+                else {
+                    return Err(invalid_artifact(
+                        "the selected route input schema has an unresolved reference",
+                    ));
+                };
+                let Some(requirement) = exact_presence_requirement(
+                    referenced,
+                    root,
+                    declared,
+                    resolving,
+                    analysis,
+                    depth + 1,
+                )?
+                else {
+                    resolving.remove(&resolution);
+                    return Ok(None);
+                };
+                resolving.remove(&resolution);
+                all.push(requirement);
+            }
+        }
+    }
+    for keyword in ["allOf", "anyOf", "oneOf"] {
+        if let Some(branches) = object.get(keyword).and_then(JsonValue::as_array) {
+            let mut requirements = Vec::with_capacity(branches.len());
+            for branch in branches {
+                let Some(requirement) = exact_presence_requirement(
+                    branch,
+                    root,
+                    declared,
+                    resolving,
+                    analysis,
+                    depth + 1,
+                )?
+                else {
+                    return Ok(None);
+                };
+                requirements.push(requirement);
+            }
+            all.push(match keyword {
+                "allOf" => SourceInputPresenceRequirement::All(requirements),
+                "anyOf" => SourceInputPresenceRequirement::Any(requirements),
+                _ => SourceInputPresenceRequirement::ExactlyOne(requirements),
+            });
+        }
+    }
+    if let Some(negated) = object.get("not") {
+        let Some(requirement) =
+            exact_presence_requirement(negated, root, declared, resolving, analysis, depth + 1)?
+        else {
+            return Ok(None);
+        };
+        all.push(SourceInputPresenceRequirement::Not(Box::new(requirement)));
+    }
+    if let Some(condition_schema) = object.get("if") {
+        let Some(condition) = exact_presence_requirement(
+            condition_schema,
+            root,
+            declared,
+            resolving,
+            analysis,
+            depth + 1,
+        )?
+        else {
+            return Ok(None);
+        };
+        let then_requirement = match object.get("then") {
+            Some(branch) => {
+                let Some(requirement) = exact_presence_requirement(
+                    branch,
+                    root,
+                    declared,
+                    resolving,
+                    analysis,
+                    depth + 1,
+                )?
+                else {
+                    return Ok(None);
+                };
+                requirement
+            }
+            None => SourceInputPresenceRequirement::Always,
+        };
+        let else_requirement = match object.get("else") {
+            Some(branch) => {
+                let Some(requirement) = exact_presence_requirement(
+                    branch,
+                    root,
+                    declared,
+                    resolving,
+                    analysis,
+                    depth + 1,
+                )?
+                else {
+                    return Ok(None);
+                };
+                requirement
+            }
+            None => SourceInputPresenceRequirement::Always,
+        };
+        all.push(SourceInputPresenceRequirement::Any(vec![
+            SourceInputPresenceRequirement::All(vec![condition.clone(), then_requirement]),
+            SourceInputPresenceRequirement::All(vec![
+                SourceInputPresenceRequirement::Not(Box::new(condition)),
+                else_requirement,
+            ]),
+        ]));
+    }
+    if let Some(dependencies) = object
+        .get("dependentRequired")
+        .and_then(JsonValue::as_object)
+    {
+        for (trigger, names) in dependencies {
+            if !declared.contains(trigger.as_str()) {
+                return Err(invalid_artifact(
+                    "the selected route input schema has an undeclared dependency trigger",
+                ));
+            }
+            let required = required_input_names(&serde_json::json!({"required": names}))?;
+            validate_declared_required_inputs(&required, declared)?;
+            all.push(SourceInputPresenceRequirement::DependentRequired {
+                trigger: trigger.clone(),
+                required,
+            });
+        }
+    }
+    if let Some(dependencies) = object
+        .get("dependentSchemas")
+        .and_then(JsonValue::as_object)
+    {
+        for (trigger, dependent) in dependencies {
+            if !declared.contains(trigger.as_str()) {
+                return Err(invalid_artifact(
+                    "the selected route input schema has an undeclared dependency trigger",
+                ));
+            }
+            let Some(requirement) = exact_presence_requirement(
+                dependent,
+                root,
+                declared,
+                resolving,
+                analysis,
+                depth + 1,
+            )?
+            else {
+                return Ok(None);
+            };
+            all.push(SourceInputPresenceRequirement::DependentSchema {
+                trigger: trigger.clone(),
+                requirement: Box::new(requirement),
+            });
+        }
+    }
+    Ok(Some(SourceInputPresenceRequirement::All(all)))
+}
+
+fn validate_declared_required_inputs(
+    required: &BTreeSet<String>,
+    declared: &BTreeSet<&str>,
+) -> Result<(), BundleError> {
+    if required
+        .iter()
+        .any(|input| !declared.contains(input.as_str()))
+    {
+        return Err(invalid_artifact(
+            "the selected route input schema requires an undeclared input",
+        ));
+    }
+    Ok(())
+}
+
+fn required_input_names(schema: &JsonValue) -> Result<BTreeSet<String>, BundleError> {
+    let Some(required) = schema.get("required") else {
+        return Ok(BTreeSet::new());
+    };
+    let required = required.as_array().ok_or_else(|| {
+        invalid_artifact("the selected route input schema has an invalid required member")
+    })?;
+    required
+        .iter()
+        .map(|name| {
+            name.as_str().map(ToOwned::to_owned).ok_or_else(|| {
+                invalid_artifact("the selected route input schema has an invalid required member")
+            })
+        })
+        .collect()
+}
+
+fn validate_source_input_mapping(
+    source: &crate::config::SourceConfig,
+    schema: &JsonValue,
+    contract: &SourceInputPresenceContract,
+) -> Result<(), BundleError> {
+    let properties = schema
+        .get("properties")
+        .and_then(JsonValue::as_object)
+        .ok_or_else(|| {
+            invalid_artifact("the selected route input schema must declare properties")
+        })?;
+    if source
+        .inputs
+        .keys()
+        .any(|input| !properties.contains_key(input))
+    {
+        return Err(invalid_artifact(
+            "a source input mapping names an input the selected route does not declare",
+        ));
+    }
+    let mapped = source
+        .inputs
+        .keys()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    if !contract.has_mappable_alternative(&mapped) {
+        return Err(invalid_artifact(
+            "source input mappings do not cover a required route input alternative",
+        ));
+    }
+    Ok(())
+}
+
+fn insert_pack_reference(
+    references: &mut BTreeMap<String, String>,
+    path: &str,
+    digest: &str,
+) -> Result<(), BundleError> {
+    if path.is_empty()
+        || path.starts_with('/')
+        || path
+            .split('/')
+            .any(|segment| segment.is_empty() || matches!(segment, "." | ".."))
+    {
+        return Err(invalid_artifact("a source pack artifact path is invalid"));
+    }
+    if references
+        .insert(path.to_owned(), digest.to_owned())
+        .is_some_and(|existing| existing != digest)
+    {
+        return Err(invalid_artifact(
+            "one source pack artifact path has conflicting digest pins",
+        ));
+    }
+    Ok(())
 }
 
 /// Every concept the configuration declares, in configuration order.
@@ -1355,28 +2292,6 @@ fn load_scripts(
     files: &BTreeMap<String, Vec<u8>>,
 ) -> Result<BTreeMap<String, CompiledScript>, BundleError> {
     let mut expected = BTreeMap::new();
-    for (_, source) in config.sources.iter() {
-        if let Some(prepare_script) = source.prepare_script() {
-            insert_script_contract(&mut expected, prepare_script.as_str(), ("prepare", 2))?;
-        }
-        insert_script_contract(
-            &mut expected,
-            source.extract_script().as_str(),
-            ("extract", 2),
-        )?;
-        if let Some(batch) = source.batch() {
-            insert_script_contract(
-                &mut expected,
-                batch.prepare_script.as_str(),
-                ("prepare_batch", 2),
-            )?;
-            insert_script_contract(
-                &mut expected,
-                batch.extract_script.as_str(),
-                ("extract_batch", 2),
-            )?;
-        }
-    }
     for requirement in &config.requirements {
         insert_script_contract(
             &mut expected,
@@ -1505,329 +2420,10 @@ fn reject_prohibited_script_capabilities(source: &str) -> Result<(), BundleError
     Ok(())
 }
 
-/// Which contract one bundle schema artifact carries. Configuration keeps the
-/// three roles disjoint, so every path resolves to exactly one of them.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum SchemaRole {
-    /// Closed startup parameters; the empty parameter set is legitimate.
-    AdapterParameters,
-    /// Shape of one projected source response. Projection drops a missing
-    /// selected leaf, so a declared property may legitimately be absent.
-    Response,
-    /// Closed fact set handed to derivation, and the reviewed concept schemas held
-    /// to the same rule; every declared property is required.
-    Facts,
-}
-
-fn load_fact_schemas(
-    config: &EvidenceConfig,
-    files: &BTreeMap<String, Vec<u8>>,
-) -> Result<BTreeMap<String, JsonValue>, BundleError> {
-    let parameter_paths = config
-        .sources
-        .iter()
-        .filter_map(|(_, source)| source.adapter_parameters_schema())
-        .map(|schema| schema.as_str())
-        .collect::<BTreeSet<_>>();
-    let response_paths = config
-        .sources
-        .iter()
-        .flat_map(|(_, source)| {
-            std::iter::once(source.response_schema().as_str())
-                .chain(source.batch().map(|batch| batch.response_schema.as_str()))
-        })
-        .collect::<BTreeSet<_>>();
-    let mut paths = config
-        .sources
-        .iter()
-        .flat_map(|(_, source)| {
-            [
-                Some(source.fact_schema()),
-                Some(source.response_schema()),
-                source.adapter_parameters_schema(),
-            ]
-            .into_iter()
-            .flatten()
-            .chain(source.batch().map(|batch| &batch.response_schema))
-        })
-        .map(|schema| schema.as_str().to_owned())
-        .collect::<BTreeSet<_>>();
-    paths.extend(reviewed_schema_paths(all_concepts(config), files)?);
-    let mut schemas = BTreeMap::new();
-    for path in paths {
-        let role = if parameter_paths.contains(path.as_str()) {
-            SchemaRole::AdapterParameters
-        } else if response_paths.contains(path.as_str()) {
-            SchemaRole::Response
-        } else {
-            SchemaRole::Facts
-        };
-        let schema =
-            load_fact_schema(&path, role, files).map_err(|error| error.in_artifact(&path))?;
-        schemas.insert(path, schema);
-    }
-    for (_, source) in config.sources.iter() {
-        let schema_path = source
-            .adapter_parameters_schema()
-            .map_or(CONFIG_FILE, |schema| schema.as_str());
-        validate_adapter_parameters(source, &schemas)
-            .map_err(|error| error.in_artifact(schema_path))?;
-    }
-    Ok(schemas)
-}
-
-/// Prove at startup that every Rust-owned fetch path binding can be filled by
-/// the exact search fact schema that precedes it. Fact schemas require their
-/// complete closed property set, so a declared scalar property exists on every
-/// validated search match.
-fn validate_prior_fact_bindings(
-    config: &EvidenceConfig,
-    schemas: &BTreeMap<String, JsonValue>,
-) -> Result<(), BundleError> {
-    for requirement in &config.requirements {
-        // Exhaustive on purpose: a new acquisition form must state how its
-        // prior-fact bindings are proven, and refusing the bundle is the only
-        // safe answer until it does.
-        match &requirement.acquisition {
-            crate::config::AcquisitionConfig::Single { .. } => {}
-            crate::config::AcquisitionConfig::SearchThenFetch { search, fetch, .. } => {
-                let search_source = config
-                    .sources
-                    .get(search)
-                    .ok_or(invalid_artifact("search source is unavailable"))?;
-                let fetch_source = config
-                    .sources
-                    .get(fetch)
-                    .ok_or(invalid_artifact("fetch source is unavailable"))?;
-                let search_schema = schemas
-                    .get(search_source.fact_schema().as_str())
-                    .and_then(JsonValue::as_object)
-                    .and_then(|schema| schema.get("properties"))
-                    .and_then(JsonValue::as_object)
-                    .ok_or(invalid_artifact("search fact schema is unavailable"))?;
-                // Version 1 froze this form on the single fetch receiving the
-                // whole search FactSet, so every declared search fact is
-                // bindable and there is no allowlist to narrow it.
-                validate_bound_prior_facts(fetch_source, search_schema, None)?;
-            }
-            crate::config::AcquisitionConfig::SearchThenFetchSet { search, fetch, .. } => {
-                validate_fetch_set_fact_schemas(config, schemas, search, fetch)?;
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Prove every prior-fact path binding one source declares names a search fact
-/// it may read, and one the search carries as a scalar.
-///
-/// `declared` is the member's own allowlist, and `None` is the frozen
-/// `search-then-fetch` reading where the single fetch receives every search
-/// fact. A path binding is one of two channels a prior fact can leave through:
-/// the other is the JSON body the source's own `prepare` script builds, which
-/// no static check reads and which the allowlist projection bounds instead.
-fn validate_bound_prior_facts(
-    fetch_source: &crate::config::SourceConfig,
-    search_properties: &JsonMap<String, JsonValue>,
-    declared: Option<&BTreeSet<&str>>,
-) -> Result<(), BundleError> {
-    for field in fetch_source.prior_fact_bindings() {
-        if declared.is_some_and(|allowlist| !allowlist.contains(field)) {
-            return Err(invalid_artifact(
-                "fetch path binding references a fact the member did not declare",
-            ));
-        }
-        let property = search_properties
-            .get(field)
-            .and_then(JsonValue::as_object)
-            .ok_or(invalid_artifact(
-                "fetch path binding references an unknown search fact",
-            ))?;
-        let scalar_type = property
-            .get("type")
-            .and_then(JsonValue::as_str)
-            .is_some_and(|value| matches!(value, "string" | "integer" | "boolean"));
-        let scalar_const = property
-            .get("const")
-            .is_some_and(|value| value.is_string() || value.is_i64() || value.is_boolean());
-        if !scalar_type && !scalar_const {
-            return Err(invalid_artifact(
-                "fetch path binding requires a scalar search fact",
-            ));
-        }
-    }
-    Ok(())
-}
-
-/// The fact names one acquisition stage contributes to the derivation.
-struct StageFacts<'a> {
-    /// Every name the stage may contribute, which is what a merge collides on.
-    properties: &'a JsonMap<String, JsonValue>,
-    /// The subset a validated match always fills, which is what a later stage
-    /// may read and what the merged set actually counts.
-    required: BTreeSet<&'a str>,
-}
-
-fn stage_facts<'a>(
-    schemas: &'a BTreeMap<String, JsonValue>,
-    source: &crate::config::SourceConfig,
-    unavailable: &'static str,
-) -> Result<StageFacts<'a>, BundleError> {
-    let schema = schemas
-        .get(source.fact_schema().as_str())
-        .and_then(JsonValue::as_object)
-        .ok_or(invalid_artifact(unavailable))?;
-    let properties = schema
-        .get("properties")
-        .and_then(JsonValue::as_object)
-        .ok_or(invalid_artifact(unavailable))?;
-    let required = schema
-        .get("required")
-        .and_then(JsonValue::as_array)
-        .map(|fields| fields.iter().filter_map(JsonValue::as_str).collect())
-        .ok_or(invalid_artifact(unavailable))?;
-    Ok(StageFacts {
-        properties,
-        required,
-    })
-}
-
-/// Prove one fetch set hands its derivation a well-formed merged fact set.
-///
-/// Each member reads a closed allowlist of the search FactSet and produces a
-/// FactSet of its own, and the derivation receives all of them merged. That
-/// leaves three things the runtime could not recover once acquisition has
-/// started, so the bundle proves them here: every allowlisted name is a fact
-/// the search always fills, no two stages claim one fact name, and the merged
-/// set stays inside the bound a derivation accepts.
-fn validate_fetch_set_fact_schemas(
-    config: &EvidenceConfig,
-    schemas: &BTreeMap<String, JsonValue>,
-    search: &str,
-    members: &[crate::config::FetchSetMember],
-) -> Result<(), BundleError> {
-    let search_source = config
-        .sources
-        .get(search)
-        .ok_or(invalid_artifact("search source is unavailable"))?;
-    let search_facts = stage_facts(schemas, search_source, "search fact schema is unavailable")?;
-    let mut merged = search_facts
-        .properties
-        .keys()
-        .map(String::as_str)
-        .collect::<BTreeSet<_>>();
-    let mut required_facts = search_facts.required.len();
-
-    for member in members {
-        let member_source = config
-            .sources
-            .get(&member.source)
-            .ok_or(invalid_artifact("fetch source is unavailable"))?;
-        let member_facts = stage_facts(
-            schemas,
-            member_source,
-            "fetch member fact schema is unavailable",
-        )?;
-
-        // An allowlisted name a validated search match might not carry would
-        // reach the member as an absent input rather than as a refusal.
-        for input in &member.fact_inputs {
-            if !search_facts.required.contains(input.as_str()) {
-                return Err(invalid_artifact(
-                    "fetch member fact input is not a required search fact",
-                ));
-            }
-        }
-        // Two stages naming one fact would overwrite silently in the merge, so
-        // the collision is refused rather than resolved by declaration order.
-        for name in member_facts.properties.keys() {
-            if !merged.insert(name.as_str()) {
-                return Err(invalid_artifact(
-                    "fetch set stages must declare disjoint fact names",
-                ));
-            }
-        }
-        required_facts = required_facts.saturating_add(member_facts.required.len());
-
-        let allowlist = member
-            .fact_inputs
-            .iter()
-            .map(String::as_str)
-            .collect::<BTreeSet<_>>();
-        validate_bound_prior_facts(member_source, search_facts.properties, Some(&allowlist))?;
-    }
-
-    // Disjoint names make this sum the exact size of the merged fact set, so
-    // reading it here is what keeps the derivation's own input bound from
-    // refusing an otherwise valid request at acquisition time.
-    if required_facts > crate::rhai_runtime::MAXIMUM_FACT_ENTRIES {
-        return Err(invalid_artifact(
-            "fetch set declares more facts than one derivation accepts",
-        ));
-    }
-    Ok(())
-}
-
-fn load_fact_schema(
-    path: &str,
-    role: SchemaRole,
-    files: &BTreeMap<String, Vec<u8>>,
-) -> Result<JsonValue, BundleError> {
-    let bytes = files
-        .get(path)
-        .ok_or(invalid_artifact("missing fact schema"))?;
-    // A fact schema is JSON Schema written in the shared YAML subset, so the
-    // reader positions any structural problem; the schema grammar itself is
-    // checked below.
-    let schema = Reader::new(path)
-        .scan(bytes)
-        .map_err(|report| BundleError::Refused(Box::new(report)))?
-        .ok_or(invalid_artifact("fact schema is empty"))?
-        .to_json_value();
-    validate_closed_schema(&schema, role)?;
-    JSONSchema::options()
-        .with_draft(Draft::Draft202012)
-        .should_validate_formats(true)
-        .with_format("uuid", crate::selector::canonical_uuid)
-        .compile(&schema)
-        .map_err(|_| invalid_artifact("fact schema is not valid JSON Schema"))?;
-    Ok(schema)
-}
-
-fn validate_adapter_parameters(
-    source: &crate::config::SourceConfig,
-    schemas: &BTreeMap<String, JsonValue>,
-) -> Result<(), BundleError> {
-    let Some(schema_path) = source.adapter_parameters_schema() else {
-        // A source that declares no schema for adapter parameters may declare
-        // no adapter parameters either, which the configuration has proven.
-        return source
-            .adapter_parameters()
-            .is_empty()
-            .then_some(())
-            .ok_or(invalid_artifact("missing adapter-parameter schema"));
-    };
-    let schema = schemas
-        .get(schema_path.as_str())
-        .ok_or(invalid_artifact("missing adapter-parameter schema"))?;
-    let compiled = JSONSchema::options()
-        .with_draft(Draft::Draft202012)
-        .should_validate_formats(true)
-        .with_format("uuid", crate::selector::canonical_uuid)
-        .compile(schema)
-        .map_err(|_| invalid_artifact("adapter-parameter schema is not valid JSON Schema"))?;
-    let parameters = serde_json::to_value(source.adapter_parameters())
-        .map_err(|_| invalid_artifact("adapter parameters are not JSON-compatible"))?;
-    if !compiled.is_valid(&parameters) {
-        return Err(invalid_artifact(
-            "adapter parameters do not satisfy their closed schema",
-        ));
-    }
-    Ok(())
-}
-
-fn validate_closed_schema(schema: &JsonValue, role: SchemaRole) -> Result<(), BundleError> {
-    let allow_empty_root = role == SchemaRole::AdapterParameters;
+/// Reviewed output structures keep their established YAML schema grammar and
+/// identifier contract. Adapter source schemas use their own full JSON Schema
+/// contract and cannot change which structured values Evidence may release.
+fn validate_reviewed_output_schema(schema: &JsonValue) -> Result<(), BundleError> {
     let root = schema
         .as_object()
         .ok_or(invalid_artifact("fact schema must be an object"))?;
@@ -1843,7 +2439,7 @@ fn validate_closed_schema(schema: &JsonValue, role: SchemaRole) -> Result<(), Bu
         .get("properties")
         .and_then(JsonValue::as_object)
         .ok_or(invalid_artifact("fact schema must declare properties"))?;
-    if (!allow_empty_root && properties.is_empty()) || properties.len() > 64 {
+    if properties.is_empty() || properties.len() > 64 {
         return Err(invalid_artifact("fact schema property count is invalid"));
     }
     let required = root
@@ -1858,72 +2454,40 @@ fn validate_closed_schema(schema: &JsonValue, role: SchemaRole) -> Result<(), Bu
     if required
         .iter()
         .any(|field| !properties.contains_key(*field))
-        || (role != SchemaRole::Response
-            && properties
-                .keys()
-                .any(|property| !required.contains(property.as_str())))
+        || properties
+            .keys()
+            .any(|property| !required.contains(property.as_str()))
     {
         return Err(invalid_artifact(
             "fact schema must require its exact closed field set",
         ));
     }
-    validate_schema_node_with_empty_root(schema, role, allow_empty_root)
+    validate_reviewed_output_node(schema)
 }
 
-/// Reads the one type a schema node declares, and returns `None` for a node that
-/// declares a bounded const instead.
-///
-/// A response schema may write that type as the pair `[T, "null"]`. Sources do
-/// report an explicit null where they hold no value, and the projection carries
-/// that null through verbatim, so a response shape has to be able to say so. The
-/// pair is the only union the subset admits, and only in the response role: a
-/// fact or an adapter parameter is never null. `null` reaches the script as the
-/// same unit marker `is_missing` already reads, so one script test covers both an
-/// absent leaf and an explicitly null one.
-fn schema_node_type(
+fn reviewed_output_node_type(
     object: &JsonMap<String, JsonValue>,
-    role: SchemaRole,
 ) -> Result<Option<&str>, BundleError> {
     match object.get("type") {
         Some(JsonValue::String(name)) => Ok(Some(name.as_str())),
-        Some(JsonValue::Array(members)) => {
-            let [JsonValue::String(name), JsonValue::String(null_member)] = members.as_slice()
-            else {
-                return Err(invalid_artifact(
-                    "schema node type is outside the closed Version 1 subset",
-                ));
-            };
-            if role != SchemaRole::Response || null_member != "null" || name == "null" {
-                return Err(invalid_artifact(
-                    "schema node type is outside the closed Version 1 subset",
-                ));
-            }
-            Ok(Some(name.as_str()))
-        }
-        Some(_) => Err(invalid_artifact(
+        None => Ok(None),
+        _ => Err(invalid_artifact(
             "schema node type is outside the closed Version 1 subset",
         )),
-        None => Ok(None),
     }
 }
 
-fn validate_schema_node(node: &JsonValue, role: SchemaRole) -> Result<(), BundleError> {
-    validate_schema_node_with_empty_root(node, role, false)
-}
-
-fn validate_schema_node_with_empty_root(
-    node: &JsonValue,
-    role: SchemaRole,
-    allow_empty_root: bool,
-) -> Result<(), BundleError> {
+fn validate_reviewed_output_node(node: &JsonValue) -> Result<(), BundleError> {
     let object = node
         .as_object()
         .ok_or(invalid_artifact("every schema node must be a typed object"))?;
-    let Some(value_type) = schema_node_type(object, role)? else {
+    let Some(value_type) = reviewed_output_node_type(object)? else {
         if object
             .keys()
             .all(|key| matches!(key.as_str(), "$schema" | "$id" | "const"))
-            && object.get("const").is_some_and(schema_const_is_bounded)
+            && object
+                .get("const")
+                .is_some_and(reviewed_output_const_is_bounded)
         {
             return Ok(());
         }
@@ -1988,9 +2552,7 @@ fn validate_schema_node_with_empty_root(
             let properties = object
                 .get("properties")
                 .and_then(JsonValue::as_object)
-                .filter(|properties| {
-                    (allow_empty_root || !properties.is_empty()) && properties.len() <= 64
-                })
+                .filter(|properties| !properties.is_empty() && properties.len() <= 64)
                 .ok_or(invalid_artifact(
                     "schema objects must declare bounded properties",
                 ))?;
@@ -2009,17 +2571,16 @@ fn validate_schema_node_with_empty_root(
             if required
                 .iter()
                 .any(|field| !properties.contains_key(*field))
-                || (role != SchemaRole::Response
-                    && properties
-                        .keys()
-                        .any(|property| !required.contains(property.as_str())))
+                || properties
+                    .keys()
+                    .any(|property| !required.contains(property.as_str()))
             {
                 return Err(invalid_artifact(
                     "schema objects must require their exact property set",
                 ));
             }
             for property in properties.values() {
-                validate_schema_node(property, role)?;
+                validate_reviewed_output_node(property)?;
             }
         }
         "array" => {
@@ -2030,7 +2591,7 @@ fn validate_schema_node_with_empty_root(
                 return Err(invalid_artifact("schema array uniqueness flag is invalid"));
             }
             if let Some(value) = object.get("const") {
-                if !value.is_array() || !schema_const_is_bounded(value) {
+                if !value.is_array() || !reviewed_output_const_is_bounded(value) {
                     return Err(invalid_artifact("schema array const is invalid"));
                 }
             }
@@ -2048,11 +2609,10 @@ fn validate_schema_node_with_empty_root(
             {
                 return Err(invalid_artifact("schema array bounds are invalid"));
             }
-            validate_schema_node(
+            validate_reviewed_output_node(
                 object
                     .get("items")
                     .ok_or(invalid_artifact("schema arrays must close their item type"))?,
-                role,
             )?;
         }
         "string" => {
@@ -2133,22 +2693,70 @@ fn validate_schema_node_with_empty_root(
     Ok(())
 }
 
-fn schema_const_is_bounded(value: &JsonValue) -> bool {
+fn reviewed_output_const_is_bounded(value: &JsonValue) -> bool {
     match value {
         JsonValue::Bool(_) => true,
         JsonValue::Number(value) => value.as_i64().is_some(),
         JsonValue::String(value) => value.len() <= 65_536,
         JsonValue::Array(values) => {
-            values.len() <= 256 && values.iter().all(schema_const_is_bounded)
+            values.len() <= 256 && values.iter().all(reviewed_output_const_is_bounded)
         }
         JsonValue::Object(values) => {
             values.len() <= 256
-                && values
-                    .iter()
-                    .all(|(name, value)| name.len() <= 1_024 && schema_const_is_bounded(value))
+                && values.iter().all(|(name, value)| {
+                    name.len() <= 1_024 && reviewed_output_const_is_bounded(value)
+                })
         }
         JsonValue::Null => false,
     }
+}
+
+fn load_fact_schemas(
+    config: &EvidenceConfig,
+    files: &BTreeMap<String, Vec<u8>>,
+) -> Result<BTreeMap<String, JsonValue>, BundleError> {
+    let source_paths = config
+        .sources
+        .iter()
+        .map(|(_, source)| source.fact_schema().as_str().to_owned())
+        .collect::<BTreeSet<_>>();
+    let mut paths = source_paths.clone();
+    paths.extend(reviewed_schema_paths(all_concepts(config), files)?);
+    let mut schemas = BTreeMap::new();
+    for path in paths {
+        let bytes = files
+            .get(&path)
+            .ok_or_else(|| invalid_artifact("missing facts schema").in_artifact(&path))?;
+        let schema = if source_paths.contains(&path) {
+            let schema: JsonValue = serde_json::from_slice(bytes)
+                .map_err(|_| invalid_artifact("facts schema is not JSON").in_artifact(&path))?;
+            check_schema(EvidenceSchemaKind::Facts, schema.clone()).map_err(|_| {
+                invalid_artifact("facts schema is not a bounded closed schema").in_artifact(&path)
+            })?;
+            schema
+        } else {
+            let schema = Reader::new(path.as_str())
+                .scan(bytes)
+                .map_err(|report| BundleError::Refused(Box::new(report)))?
+                .ok_or_else(|| {
+                    invalid_artifact("reviewed output schema is empty").in_artifact(&path)
+                })?
+                .to_json_value();
+            validate_reviewed_output_schema(&schema).map_err(|error| error.in_artifact(&path))?;
+            JSONSchema::options()
+                .with_draft(Draft::Draft202012)
+                .should_validate_formats(true)
+                .with_format("uuid", crate::selector::canonical_uuid)
+                .compile(&schema)
+                .map_err(|_| {
+                    invalid_artifact("reviewed output schema is not valid JSON Schema")
+                        .in_artifact(&path)
+                })?;
+            schema
+        };
+        schemas.insert(path, schema);
+    }
+    Ok(schemas)
 }
 
 fn load_codelists(
@@ -2270,17 +2878,7 @@ fn load_fixtures(
         if fixtures.contains_key(path) {
             continue;
         }
-        let declared_unresolved = config
-            .sources
-            .get(requirement.initial_source())
-            .is_some_and(|source| source.unresolved_problem().is_some());
-        let fixture = load_fixture(
-            root,
-            path,
-            files,
-            declared_unresolved,
-            config.assurance_profile,
-        )?;
+        let fixture = load_fixture(root, path, files, false, config.assurance_profile)?;
         fixtures.insert(path.to_owned(), fixture);
     }
     Ok(fixtures)
@@ -2466,11 +3064,24 @@ fn concept_constraint_string<'a>(
         .ok_or(invalid_artifact("concept codelist constraint is invalid"))
 }
 
-fn validate_runtime_bindings(
+fn validate_runtime_bindings(bundle: &Bundle, runtime: &RuntimeConfig) -> Result<(), BundleError> {
+    let findings = runtime_binding_findings(bundle, runtime)
+        .map_err(RuntimeBindingPlanError::into_bundle_error)?;
+    match findings.into_iter().next() {
+        Some(finding) => Err(finding.error),
+        None => Ok(()),
+    }
+}
+
+#[cfg(test)]
+fn validate_config_runtime_bindings(
     bundle: &EvidenceConfig,
     runtime: &RuntimeConfig,
 ) -> Result<(), BundleError> {
-    match runtime_binding_findings(bundle, runtime).into_iter().next() {
+    match config_runtime_binding_findings(bundle, runtime)
+        .into_iter()
+        .next()
+    {
         Some(finding) => Err(finding.error),
         None => Ok(()),
     }
@@ -2488,10 +3099,147 @@ pub struct BindingFinding {
     pub action: &'static str,
 }
 
+/// Why the selected pack routes could not state their runtime extract needs.
+///
+/// The underlying engine error remains typed for the source-plan pass that
+/// owns its diagnostic. Display is deliberately categorical so a pack-owned
+/// route string or artifact detail never enters a runtime-file diagnostic.
+#[derive(Debug, Error)]
+pub enum RuntimeBindingPlanError {
+    #[error("the runtime source acquisition limits are invalid")]
+    Limits,
+    #[error("the Evidence host protocol registry is unavailable")]
+    HostProtocols,
+    #[error("a selected Evidence source pack route cannot compile")]
+    SourcePlan {
+        artifact_prefix: String,
+        #[source]
+        error: EvidenceCompileError,
+    },
+    #[error("a selected Evidence source pack closure is unavailable")]
+    SourcePack,
+}
+
+impl RuntimeBindingPlanError {
+    /// A safe governed-artifact diagnosis retained by a structured compiler
+    /// failure. Other plan categories remain categorical at this boundary.
+    #[must_use]
+    pub fn artifact_fault(&self) -> Option<ArtifactFault> {
+        let Self::SourcePlan {
+            artifact_prefix,
+            error: EvidenceCompileError::Sqlite(fault),
+        } = self
+        else {
+            return None;
+        };
+        let cause = match fault.cause() {
+            registry_adapter_engine::component::sqlite_extract::SqliteExtractError::Statement(
+                kind,
+            ) => kind.cause(),
+            registry_adapter_engine::component::sqlite_extract::SqliteExtractError::InvalidPlan => {
+                "the reviewed SQLite extract plan is invalid"
+            }
+            _ => "the reviewed SQLite extract plan cannot compile",
+        };
+        Some(ArtifactFault::new(
+            format!("{artifact_prefix}/{}", fault.artifact()),
+            SchemaFault::because(cause),
+        ))
+    }
+
+    pub(crate) fn into_bundle_error(self) -> BundleError {
+        match self.artifact_fault() {
+            Some(fault) => BundleError::InvalidArtifact(fault),
+            None => {
+                invalid_artifact("a selected source pack route cannot compile for runtime binding")
+            }
+        }
+    }
+}
+
 /// Every way the runtime file fails to bind the bundle, in the order deployment
 /// checks them, so an offline check reports them all and deployment refuses
 /// with the first.
 pub fn runtime_binding_findings(
+    bundle: &Bundle,
+    runtime: &RuntimeConfig,
+) -> Result<Vec<BindingFinding>, RuntimeBindingPlanError> {
+    let mut findings = config_runtime_binding_findings(&bundle.config, runtime);
+    let named_extracts = required_extract_profiles(bundle, runtime)?;
+    let bound_extracts = runtime
+        .source_extracts
+        .keys()
+        .map(ToOwned::to_owned)
+        .collect::<BTreeSet<_>>();
+
+    for unbound in named_extracts.difference(&bound_extracts) {
+        findings.push(BindingFinding {
+            code: "evidence.runtime.source-extract-unbound",
+            pointer: "/sourceExtracts".to_owned(),
+            error: invalid_artifact(
+                "the runtime configuration binds no file for a source extract profile the bundle names",
+            )
+            .in_artifact(&source_extract_artifact(unbound)),
+            action: "Bind the extract profile the bundle names under sourceExtracts, with the path of its extract file.",
+        });
+    }
+    for unused in bound_extracts.difference(&named_extracts) {
+        findings.push(BindingFinding {
+            code: "evidence.runtime.source-extract-unused",
+            pointer: format!(
+                "/sourceExtracts/{}",
+                registry_platform_yaml::escape_pointer_segment(unused)
+            ),
+            error: invalid_artifact(
+                "the runtime configuration binds a source extract profile no bundle source names",
+            )
+            .in_artifact(&source_extract_artifact(unused)),
+            action: "Remove the extract binding, or name the profile from a bundle source.",
+        });
+    }
+    Ok(findings)
+}
+
+/// Compile the selected pack routes from their captured, digest-checked bytes
+/// and return only the process-local extract profiles those routes can reach.
+/// No runtime path, extract file, secret, credential, or network resource is
+/// opened. A plan error stays explicit rather than becoming an empty set.
+fn required_extract_profiles(
+    bundle: &Bundle,
+    runtime: &RuntimeConfig,
+) -> Result<BTreeSet<String>, RuntimeBindingPlanError> {
+    let limits: EvidenceLimits = runtime
+        .source_acquisition
+        .limits()
+        .map_err(|_| RuntimeBindingPlanError::Limits)?;
+    let protocols =
+        crate::host_protocol::registry().map_err(|_| RuntimeBindingPlanError::HostProtocols)?;
+    let mut profiles = BTreeSet::new();
+    for (source_id, source) in bundle.config.sources.iter() {
+        let closure = bundle
+            .source_pack(source_id)
+            .ok_or(RuntimeBindingPlanError::SourcePack)?;
+        let pack = closure.pack();
+        let artifacts = closure.artifacts();
+        let program = compile_evidence_pack_with_protocols(
+            &pack,
+            source.route.as_str(),
+            &artifacts,
+            limits,
+            &protocols,
+        )
+        .map_err(|error| RuntimeBindingPlanError::SourcePlan {
+            artifact_prefix: source.pack.artifact_prefix.as_str().to_owned(),
+            error,
+        })?;
+        profiles.extend(program.required_extract_profiles());
+    }
+    Ok(profiles)
+}
+
+/// Findings that need only the governed configuration projection. Pack-owned
+/// runtime resources are added by [`runtime_binding_findings`].
+fn config_runtime_binding_findings(
     bundle: &EvidenceConfig,
     runtime: &RuntimeConfig,
 ) -> Vec<BindingFinding> {
@@ -2521,21 +3269,10 @@ pub fn runtime_binding_findings(
     // A governed reference resolves only through a provider the operator
     // enabled, so the bundle cannot reach the process environment unless the
     // runtime file opts in to it.
-    let governed_refs = bundle
-        .sources
-        .iter()
-        .filter_map(|(_, source)| source.authentication())
-        .chain(
-            bundle
-                .source_connections
-                .iter()
-                .map(|(_, connection)| connection.authentication.as_ref()),
-        )
-        .flat_map(|authentication| authentication.secret_refs())
-        .chain([
-            &bundle.audit.key.hash_key_ref,
-            &bundle.subject_binding.secret_ref,
-        ]);
+    let governed_refs = [
+        &bundle.audit.key.hash_key_ref,
+        &bundle.subject_binding.secret_ref,
+    ];
     if governed_refs.into_iter().any(|reference| {
         runtime
             .secret_providers
@@ -2594,18 +3331,16 @@ pub fn runtime_binding_findings(
             );
         }
     }
-    // The binding is exact in both directions, but the two directions are
-    // different repairs in different files: a profile the bundle names and the
-    // runtime does not bind is missing trust material the deployment must add,
-    // while a profile the runtime binds that neither a source nor the issuer
-    // names is trust the deployment grants nobody asked for. One cause
-    // covering both leaves the operator to diff the two files by hand to learn
-    // which way round it went.
+    // Global trust profiles belong to the access-token issuer. The binding is
+    // exact in both directions: a profile the issuer names must be present,
+    // while a global profile the issuer does not name grants unrequested
+    // authority and must be removed.
     let required = bundle
-        .sources
+        .authentication
+        .oidc
+        .tls_trust_profile
         .iter()
-        .filter_map(|(_, source)| source.tls_trust_profile())
-        .chain(bundle.authentication.oidc.tls_trust_profile.as_deref())
+        .map(String::as_str)
         .collect::<BTreeSet<_>>();
     let configured = runtime
         .outbound_tls
@@ -2634,69 +3369,72 @@ pub fn runtime_binding_findings(
                 unused,
                 "the runtime configuration binds a TLS trust profile the bundle does not name",
             ),
-            "Remove the trust profile, or name it from a bundle source or the issuer.",
+            "Remove the trust profile, or name it from the access-token issuer.",
         );
     }
-    // Extracts bind exactly, in both directions, and each direction says which
-    // profile is at fault. An unbound profile is a deployment that cannot
-    // answer; a profile nothing names is a file the operator believes is in
-    // use and is not. The remedies differ, so the diagnostics do too.
-    let named_extracts = bundle
-        .sources
-        .iter()
-        .filter_map(|(_, source)| source.extract_profile())
-        .collect::<BTreeSet<_>>();
-    let bound_extracts = runtime.source_extracts.keys().collect::<BTreeSet<_>>();
-    for unbound in named_extracts.difference(&bound_extracts) {
+    // Source trust material is scoped to its named connection. This preflight
+    // checks only that a governed endpoint's selected profile exists under the
+    // matching runtime connection. Program compilation still owns exact
+    // endpoint binding and captured-CA validation, and extra source profiles
+    // confer no authority because no governed policy can select them.
+    for (connection, policies) in bundle.source_connections.iter() {
+        let Some(bindings) = runtime.source_connections.get(connection) else {
+            continue;
+        };
+        let required_profiles = policies
+            .endpoints
+            .iter()
+            .filter_map(|policy| {
+                policy
+                    .tls_trust_profile
+                    .as_ref()
+                    .map(|profile| profile.as_str())
+            })
+            .collect::<BTreeSet<_>>();
+        for profile in required_profiles {
+            let present = bindings
+                .outbound_tls
+                .as_ref()
+                .is_some_and(|tls| tls.trust_profiles.contains_key(profile));
+            if !present {
+                find(
+                    "evidence.runtime.source-trust-profile-unbound",
+                    format!(
+                        "/sourceConnections/{}/outboundTls/trustProfiles",
+                        registry_platform_yaml::escape_pointer_segment(connection)
+                    ),
+                    trust_profile_fault(
+                        profile,
+                        "the runtime configuration does not bind a TLS trust profile the bundle names",
+                    ),
+                    "Bind the profile under this source connection's outboundTls.trustProfiles, with its CA bundle file.",
+                );
+            }
+        }
+    }
+    let governed_connections = bundle.source_connections.keys().collect::<BTreeSet<_>>();
+    let runtime_connections = runtime.source_connections.keys().collect::<BTreeSet<_>>();
+    for _unbound in governed_connections.difference(&runtime_connections) {
         find(
-            "evidence.runtime.source-extract-unbound",
-            "/sourceExtracts".to_owned(),
+            "evidence.runtime.source-connection-unbound",
+            "/sourceConnections".to_owned(),
             invalid_artifact(
-                "the runtime configuration binds no file for a source extract profile the bundle names",
-            )
-            .in_artifact(&source_extract_artifact(unbound)),
-            "Bind the extract profile the bundle names under sourceExtracts, with the path of its extract file.",
+                "the runtime configuration does not bind a governed source connection",
+            ),
+            "Bind every governed source connection under runtime sourceConnections with the same id.",
         );
     }
-    for unused in bound_extracts.difference(&named_extracts) {
+    for unused in runtime_connections.difference(&governed_connections) {
         find(
-            "evidence.runtime.source-extract-unused",
+            "evidence.runtime.source-connection-unused",
             format!(
-                "/sourceExtracts/{}",
+                "/sourceConnections/{}",
                 registry_platform_yaml::escape_pointer_segment(unused)
             ),
             invalid_artifact(
-                "the runtime configuration binds a source extract profile no bundle source names",
-            )
-            .in_artifact(&source_extract_artifact(unused)),
-            "Remove the extract binding, or name the profile from a bundle source.",
-        );
-    }
-    // The operator half of the acquisition gate, and the half that gates.
-    // A bundle declaring the kinds it needs states an intent beside the
-    // requirement that uses it; the deployment decides separately whether it
-    // may serve them. Silence means no, so a deployment that never heard of a
-    // gated form refuses the bundle here, before it serves anything, rather
-    // than acquiring from sources nobody enabled it to reach.
-    let requirement_capability_missing = bundle.requirements.iter().any(|requirement| {
-        requirement
-            .acquisition
-            .required_capability()
-            .is_some_and(|capability| !runtime.enables_acquisition_capability(capability))
-    });
-    let batch_capability_missing = bundle
-        .acquisition_capabilities
-        .iter()
-        .any(|capability| capability == SOURCE_BATCH_CAPABILITY)
-        && !runtime.enables_acquisition_capability(SOURCE_BATCH_CAPABILITY);
-    if requirement_capability_missing || batch_capability_missing {
-        find(
-            "evidence.runtime.acquisition-capability-missing",
-            "/acquisitionCapabilities".to_owned(),
-            invalid_artifact(
-                "the runtime configuration does not enable an acquisition capability the bundle requires",
+                "the runtime configuration binds no governed source connection by this name",
             ),
-            "List every gated acquisition kind the bundle requires under acquisitionCapabilities.",
+            "Remove the runtime source connection, or declare its reviewed policy in the bundle.",
         );
     }
     findings
@@ -2788,6 +3526,7 @@ pub(crate) fn validate_ca_bundle(bytes: &[u8]) -> Result<(), BundleError> {
 /// invalidate the revision a relying party pinned for another.
 fn compute_requirement_revisions(
     config: &EvidenceConfig,
+    source_packs: &BTreeMap<String, SourcePack>,
     files: &BTreeMap<String, Vec<u8>>,
 ) -> Result<BTreeMap<String, String>, BundleError> {
     let mut revisions = BTreeMap::new();
@@ -2796,7 +3535,7 @@ fn compute_requirement_revisions(
             PROJECTION_PATH.to_owned(),
             canonical_projection(config, requirement)?,
         )]);
-        for path in requirement_artifact_paths(config, requirement, files)? {
+        for path in requirement_artifact_paths(config, source_packs, requirement, files)? {
             // The bundle-wide closure check ran first, so a referenced artifact
             // is present. A miss here would silently shrink the digest, so it
             // fails instead.
@@ -2827,6 +3566,7 @@ fn compute_requirement_revisions(
 /// and the package digest still covers them.
 fn requirement_artifact_paths(
     config: &EvidenceConfig,
+    source_packs: &BTreeMap<String, SourcePack>,
     requirement: &RequirementConfig,
     files: &BTreeMap<String, Vec<u8>>,
 ) -> Result<BTreeSet<String>, BundleError> {
@@ -2835,7 +3575,11 @@ fn requirement_artifact_paths(
         let source = config.sources.get(source_id).ok_or_else(|| {
             invalid_artifact("the requirement names a source the configuration does not define")
         })?;
-        paths.extend(source_artifact_paths(source));
+        let pack = source_packs
+            .get(source_id)
+            .ok_or_else(|| invalid_artifact("the requirement's source pack closure is missing"))?;
+        paths.extend(pack.artifact_paths.iter().cloned());
+        paths.insert(source.fact_schema().as_str().to_owned());
     }
     paths.insert(requirement.derivation.script.as_str().to_owned());
     for concept in &requirement.concepts {
@@ -2906,7 +3650,6 @@ fn canonical_projection(
         "rateLimits",
         "signing",
         "authorityProfiles",
-        "sourceConnections",
         "assuranceProfile",
     ] {
         members.remove(deployment_member);
@@ -2956,20 +3699,15 @@ fn canonical_projection(
     retain_members(members, "sources", |name| {
         acquisition_sources.contains(name)
     })?;
-    // The logical connection name and reviewed read behavior stay in the
-    // source contract. Endpoint, credentials and TLS trust are target bindings.
-    if let Some(sources) = members
-        .get_mut("sources")
-        .and_then(JsonValue::as_object_mut)
-    {
-        for source in sources.values_mut().filter_map(JsonValue::as_object_mut) {
-            for binding in ["baseUrl", "authentication", "tlsTrustProfile"] {
-                source.remove(binding);
-            }
-        }
-    }
+    let source_connections = acquisition_sources
+        .iter()
+        .filter_map(|source_id| config.sources.get(source_id))
+        .map(|source| source.connection())
+        .collect::<BTreeSet<_>>();
+    retain_members(members, "sourceConnections", |name| {
+        source_connections.contains(name)
+    })?;
     retain_members(members, "selectorProfiles", |name| profiles.contains(name))?;
-    retain_acquisition_capability(members, requirement)?;
     preserve_selector_field_order(members, config, &profiles)?;
     // RFC 8785 canonicalization, shared with the rest of the stack, makes
     // order-insensitive mappings and number formatting deterministic. The one
@@ -2977,37 +3715,6 @@ fn canonical_projection(
     // a sequence first, so canonicalization cannot erase that distinction.
     canonicalize_json(&document)
         .map_err(|_| invalid_artifact("the projection does not canonicalize"))
-}
-
-/// Keep only the acquisition capability this requirement's own form needs.
-///
-/// The declaration is bundle-wide but it gates one requirement at a time: a
-/// requirement acquiring through a frozen Version 1 form behaves identically
-/// whether or not some other requirement in the same bundle opted in to a
-/// gated form. Projecting the whole list would make it behave otherwise, and
-/// adopting a gated form for one requirement would move the revision every
-/// relying party pinned for all the others. An empty projection drops the
-/// member, so a bundle that adopts nothing projects exactly as it did before
-/// the declaration existed.
-fn retain_acquisition_capability(
-    members: &mut JsonMap<String, JsonValue>,
-    requirement: &RequirementConfig,
-) -> Result<(), BundleError> {
-    if !members.contains_key(ACQUISITION_CAPABILITIES) {
-        return Ok(());
-    }
-    let declared = members
-        .get_mut(ACQUISITION_CAPABILITIES)
-        .and_then(JsonValue::as_array_mut)
-        .ok_or_else(|| {
-            invalid_artifact("the acquisition capabilities do not project as a sequence")
-        })?;
-    let required = requirement.acquisition.required_capability();
-    declared.retain(|capability| capability.as_str() == required);
-    if declared.is_empty() {
-        members.remove(ACQUISITION_CAPABILITIES);
-    }
-    Ok(())
 }
 
 /// Keep only the named members of one projected configuration mapping.
@@ -3117,6 +3824,434 @@ mod tests {
     use crate::config::AssuranceProfile;
     use crate::kernel::OfflineKernel;
 
+    fn mapped_inputs<'a>(names: &'a [&'a str]) -> BTreeSet<&'a str> {
+        names.iter().copied().collect()
+    }
+
+    #[test]
+    fn constrained_one_of_retains_each_branch_required_input_set() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "licence_reference": {"type": "string"},
+                "registry_region": {"type": "string"}
+            },
+            "oneOf": [
+                {
+                    "required": ["licence_reference", "registry_region"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "licence_reference": {"type": "string", "pattern": "^A"},
+                        "registry_region": {"type": "string"}
+                    }
+                },
+                {
+                    "required": ["licence_reference", "registry_region"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "licence_reference": {"type": "string"},
+                        "registry_region": {"type": "string", "const": "B"}
+                    }
+                }
+            ]
+        });
+        check_schema(EvidenceSchemaKind::Inputs, schema.clone())
+            .expect("the constrained oneOf is a supported checked input schema");
+        let contract = source_input_presence_contract(&schema)
+            .expect("the bounded constrained oneOf has a presence contract");
+
+        assert!(!contract.has_mappable_alternative(&mapped_inputs(&["licence_reference"])));
+        assert!(!contract.has_mappable_alternative(&mapped_inputs(&["registry_region"])));
+        assert!(contract
+            .has_mappable_alternative(&mapped_inputs(&["licence_reference", "registry_region"])));
+    }
+
+    #[test]
+    fn root_presence_analysis_composes_any_all_and_conditionals() {
+        let contract = source_input_presence_contract(&serde_json::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "a": {"type": "string"},
+                "b": {"type": "string"},
+                "c": {"type": "string"}
+            },
+            "allOf": [
+                {"anyOf": [{"required": ["a"]}, {"required": ["c"]}]},
+                {
+                    "if": {"required": ["a"]},
+                    "then": {"required": ["b"]},
+                    "else": {"required": ["c"]}
+                }
+            ]
+        }))
+        .expect("the composed root presence grammar is supported");
+
+        assert!(!contract.accepts_path(&mapped_inputs(&["a"])));
+        assert!(contract.accepts_path(&mapped_inputs(&["a", "b"])));
+        assert!(contract.accepts_path(&mapped_inputs(&["c"])));
+        assert!(!contract.accepts_path(&mapped_inputs(&["a", "c"])));
+    }
+
+    #[test]
+    fn pure_one_of_exactness_is_conjunctive_with_other_root_requirements() {
+        let contract = source_input_presence_contract(&serde_json::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "a": {"type": "string"},
+                "b": {"type": "string"},
+                "shared": {"type": "string"}
+            },
+            "allOf": [{"required": ["shared"]}],
+            "oneOf": [{"required": ["a"]}, {"required": ["b"]}]
+        }))
+        .expect("the pure oneOf and root allOf have one presence contract");
+
+        assert!(!contract.accepts_path(&mapped_inputs(&["a"])));
+        assert!(contract.accepts_path(&mapped_inputs(&["a", "shared"])));
+        assert!(!contract.accepts_path(&mapped_inputs(&["a", "b", "shared"])));
+    }
+
+    #[test]
+    fn referenced_nested_pure_one_of_retains_exactly_one_semantics() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "a": {"type": "string"},
+                "b": {"type": "string"}
+            },
+            "$defs": {
+                "choice": {
+                    "oneOf": [{"required": ["a"]}, {"required": ["b"]}]
+                }
+            },
+            "allOf": [{"$ref": "#/$defs/choice"}]
+        });
+        check_schema(EvidenceSchemaKind::Inputs, schema.clone())
+            .expect("the referenced nested oneOf is a supported input schema");
+        let contract = source_input_presence_contract(&schema)
+            .expect("the referenced nested oneOf has a presence contract");
+
+        assert!(contract.accepts_path(&mapped_inputs(&["a"])));
+        assert!(contract.accepts_path(&mapped_inputs(&["b"])));
+        assert!(!contract.accepts_path(&mapped_inputs(&["a", "b"])));
+    }
+
+    #[test]
+    fn nested_one_of_retains_exact_dependent_presence_semantics() {
+        for structural_branch in [
+            serde_json::json!({"dependentRequired": {"a": ["b"]}}),
+            serde_json::json!({"dependentSchemas": {"a": {"required": ["b"]}}}),
+            serde_json::json!({
+                "if": {"required": ["a"]},
+                "then": {"required": ["b"]}
+            }),
+        ] {
+            let contract = source_input_presence_contract(&serde_json::json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "a": {"type": "string"},
+                    "b": {"type": "string"}
+                },
+                "allOf": [{
+                    "oneOf": [structural_branch, {"required": ["a"]}]
+                }]
+            }))
+            .expect("the dependent presence oneOf is supported");
+
+            assert!(contract.accepts_path(&mapped_inputs(&["a"])));
+            assert!(!contract.accepts_path(&mapped_inputs(&["a", "b"])));
+        }
+    }
+
+    #[test]
+    fn named_anchor_and_pure_double_negation_retain_required_presence() {
+        for schema in [
+            serde_json::json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {"a": {"type": "string"}},
+                "$defs": {
+                    "anchored": {"$anchor": "needs-a", "required": ["a"]}
+                },
+                "allOf": [{"$ref": "#needs-a"}]
+            }),
+            serde_json::json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {"a": {"type": "string"}},
+                "not": {"not": {"required": ["a"]}}
+            }),
+        ] {
+            check_schema(EvidenceSchemaKind::Inputs, schema.clone())
+                .expect("the structural presence schema is supported");
+            let contract = source_input_presence_contract(&schema)
+                .expect("the structural schema has a presence contract");
+            assert!(!contract.accepts_path(&mapped_inputs(&[])));
+            assert!(contract.accepts_path(&mapped_inputs(&["a"])));
+        }
+    }
+
+    #[test]
+    fn named_anchor_resolution_ignores_anchor_shaped_instance_values() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {"a": {"type": "string"}},
+            "$defs": {
+                "a-fake": {"const": {"$anchor": "needs-a"}},
+                "z-real": {"$anchor": "needs-a", "required": ["a"]}
+            },
+            "allOf": [{"$ref": "#needs-a"}]
+        });
+        check_schema(EvidenceSchemaKind::Inputs, schema.clone())
+            .expect("anchor-shaped instance data is not a schema anchor");
+        let contract = source_input_presence_contract(&schema)
+            .expect("the real named anchor has a presence contract");
+
+        assert!(!contract.accepts_path(&mapped_inputs(&[])));
+        assert!(contract.accepts_path(&mapped_inputs(&["a"])));
+    }
+
+    #[test]
+    fn duplicated_reference_expansion_is_bounded() {
+        const LEVELS: usize = 14;
+        let mut definitions = serde_json::Map::new();
+        for level in 0..LEVELS {
+            let next = format!("#/$defs/level{}", level + 1);
+            definitions.insert(
+                format!("level{level}"),
+                serde_json::json!({"allOf": [{"$ref": next}, {"$ref": next}]}),
+            );
+        }
+        definitions.insert(
+            format!("level{LEVELS}"),
+            serde_json::json!({"required": ["a"]}),
+        );
+        let schema = serde_json::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {"a": {"type": "string"}},
+            "$defs": definitions,
+            "allOf": [{"$ref": "#/$defs/level0"}]
+        });
+        check_schema(EvidenceSchemaKind::Inputs, schema.clone())
+            .expect("the duplicated acyclic reference DAG is a valid checked schema");
+
+        let error = source_input_presence_contract(&schema)
+            .expect_err("presence analysis must stop at its total expansion budget");
+        assert!(
+            error
+                .to_string()
+                .contains("route input presence analysis exceeds its bound"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn package_mappability_does_not_treat_every_optional_mapping_as_one_target_path() {
+        let contract = source_input_presence_contract(&serde_json::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "a": {"type": "string"},
+                "optional": {"type": "string"}
+            },
+            "oneOf": [
+                {"required": ["a"], "not": {"required": ["optional"]}},
+                {"required": ["optional"], "not": {"required": ["a"]}}
+            ]
+        }))
+        .expect("the mutually exclusive optional mappings have a presence contract");
+
+        assert!(contract.has_mappable_alternative(&mapped_inputs(&["a", "optional"])));
+        assert!(contract.accepts_path(&mapped_inputs(&["a"])));
+        assert!(contract.accepts_path(&mapped_inputs(&["optional"])));
+        assert!(!contract.accepts_path(&mapped_inputs(&["a", "optional"])));
+    }
+
+    fn captured_pack_source() -> (crate::config::SourceConfig, BTreeMap<String, Vec<u8>>) {
+        captured_pack_source_with_schemas(
+            serde_json::json!({
+                "type":"object",
+                "additionalProperties":false,
+                "required":["personId"],
+                "properties":{"personId":{"type":"string"}}
+            }),
+            serde_json::json!({
+                "type":"object",
+                "additionalProperties":false,
+                "required":["parents"],
+                "properties":{"parents":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["name"],"properties":{"name":{"type":"string"},"verified":{"type":"boolean"}}}}}
+            }),
+        )
+    }
+
+    fn captured_pack_source_with_schemas(
+        inputs: JsonValue,
+        facts: JsonValue,
+    ) -> (crate::config::SourceConfig, BTreeMap<String, Vec<u8>>) {
+        let inputs = serde_json::to_vec(&inputs).unwrap();
+        let facts = serde_json::to_vec(&facts).unwrap();
+        let pack_bytes = serde_json::to_vec(&serde_json::json!({
+            "apiVersion":"id.registrystack.org/formats/adapter/pack/v1alpha1",
+            "kind":"AdapterPack",
+            "id":"synthetic-register",
+            "version":"0.1.0",
+            "testedVersions":[],
+            "sourceRoutes":[{
+                "id":"evidence-family",
+                "evidence":{
+                    "inputsSchema":{"path":"schemas/inputs.json","digest":sha256_uri(&inputs)},
+                    "factsSchema":{"path":"schemas/facts.json","digest":sha256_uri(&facts)}
+                }
+            }]
+        }))
+        .unwrap();
+        let digest = sha256_uri(&pack_bytes);
+        let prefix = format!(
+            "adapter-packs/synthetic-register/{}",
+            digest.strip_prefix("sha256:").unwrap()
+        );
+        let source = serde_json::from_value(serde_json::json!({
+            "pack":{"id":"synthetic-register","version":"0.1.0","digest":digest,"artifactPrefix":prefix},
+            "route":"evidence-family",
+            "connection":"register",
+            "inputs":{"personId":{"selector":{"role":"person","profile":"person-by-id","field":"person-id"}}},
+            "posture":"record-transformed",
+            "factSchema":"schemas/source-facts/family.json"
+        }))
+        .unwrap();
+        let files = BTreeMap::from([
+            (format!("{prefix}/pack.yaml"), pack_bytes),
+            (format!("{prefix}/schemas/inputs.json"), inputs),
+            (format!("{prefix}/schemas/facts.json"), facts.clone()),
+            ("schemas/source-facts/family.json".to_owned(), facts),
+        ]);
+        (source, files)
+    }
+
+    #[test]
+    fn captured_pack_closure_is_exact_and_preserves_nested_optional_facts() {
+        let (source, files) = captured_pack_source();
+        let checked = load_source_pack(&source, &files).expect("exact pack closure loads");
+        assert_eq!(checked.pack.id.as_str(), "synthetic-register");
+        assert_eq!(checked.pack.version, "0.1.0");
+
+        let mut changed = files.clone();
+        changed.insert(
+            "schemas/source-facts/family.json".to_owned(),
+            br#"{"type":"object","additionalProperties":false}"#.to_vec(),
+        );
+        assert!(load_source_pack(&source, &changed).is_err());
+
+        let mut overclaimed = files;
+        let prefix = source.pack.artifact_prefix.as_str();
+        overclaimed.insert(format!("{prefix}/unreviewed.txt"), b"extra".to_vec());
+        assert!(load_source_pack(&source, &overclaimed).is_err());
+    }
+
+    #[test]
+    fn a_selected_pack_may_share_one_schema_path_only_under_one_digest_pin() {
+        fn repin(
+            source: &mut crate::config::SourceConfig,
+            files: &mut BTreeMap<String, Vec<u8>>,
+            pack: &JsonValue,
+        ) {
+            let old_prefix = source.pack.artifact_prefix.as_str().to_owned();
+            let pack_bytes = serde_json::to_vec(pack).expect("pack serializes");
+            let digest = sha256_uri(&pack_bytes);
+            let new_prefix = format!(
+                "adapter-packs/{}/{}",
+                source.pack.id,
+                digest.strip_prefix("sha256:").unwrap()
+            );
+            let old_root = format!("{old_prefix}/");
+            let moved = files
+                .iter()
+                .filter_map(|(path, bytes)| {
+                    path.strip_prefix(&old_root)
+                        .map(|relative| (format!("{new_prefix}/{relative}"), bytes.clone()))
+                })
+                .collect::<Vec<_>>();
+            files.retain(|path, _| !path.starts_with(&old_root));
+            files.extend(moved);
+            files.insert(format!("{new_prefix}/pack.yaml"), pack_bytes);
+            source.pack.digest = registry_platform_yaml::Digest::new(digest).unwrap();
+            source.pack.artifact_prefix = crate::config::ArtifactPath::parse(&new_prefix).unwrap();
+        }
+
+        let (mut shared_source, mut shared_files) = captured_pack_source();
+        let shared_prefix = shared_source.pack.artifact_prefix.as_str().to_owned();
+        let shared_pack_path = format!("{shared_prefix}/pack.yaml");
+        let shared_schema_path = format!("{shared_prefix}/schemas/inputs.json");
+        let displaced_facts_path = format!("{shared_prefix}/schemas/facts.json");
+        let shared_schema = shared_files[&shared_schema_path].clone();
+        let mut shared_pack: JsonValue =
+            serde_json::from_slice(&shared_files[&shared_pack_path]).unwrap();
+        shared_pack["sourceRoutes"][0]["evidence"]["factsSchema"] = serde_json::json!({
+            "path": "schemas/inputs.json",
+            "digest": sha256_uri(&shared_schema)
+        });
+        shared_files.remove(&displaced_facts_path);
+        shared_files.insert(
+            shared_source.fact_schema().as_str().to_owned(),
+            shared_schema,
+        );
+        repin(&mut shared_source, &mut shared_files, &shared_pack);
+        load_source_pack(&shared_source, &shared_files)
+            .expect("one reviewed schema may serve both declared roles");
+
+        let (mut conflicting_source, mut conflicting_files) = captured_pack_source();
+        let conflicting_prefix = conflicting_source.pack.artifact_prefix.as_str().to_owned();
+        let conflicting_pack_path = format!("{conflicting_prefix}/pack.yaml");
+        let conflicting_facts_path = format!("{conflicting_prefix}/schemas/facts.json");
+        let mut conflicting_pack: JsonValue =
+            serde_json::from_slice(&conflicting_files[&conflicting_pack_path]).unwrap();
+        conflicting_pack["sourceRoutes"][0]["evidence"]["factsSchema"]["path"] =
+            "schemas/inputs.json".into();
+        conflicting_files.remove(&conflicting_facts_path);
+        repin(
+            &mut conflicting_source,
+            &mut conflicting_files,
+            &conflicting_pack,
+        );
+        assert_eq!(
+            refusal_cause(
+                load_source_pack(&conflicting_source, &conflicting_files)
+                    .expect_err("one path cannot carry conflicting digest pins")
+            ),
+            "one source pack artifact path has conflicting digest pins"
+        );
+    }
+
+    #[test]
+    fn captured_pack_requires_the_adapter_pack_envelope() {
+        let (source, files) = captured_pack_source();
+        let path = format!("{}/pack.yaml", source.pack.artifact_prefix.as_str());
+
+        for mutation in [
+            |document: &mut JsonValue| {
+                document.as_object_mut().unwrap().remove("apiVersion");
+                document.as_object_mut().unwrap().remove("kind");
+            },
+            |document: &mut JsonValue| document["kind"] = serde_json::json!("AdapterProject"),
+        ] {
+            let mut changed = files.clone();
+            let mut document: JsonValue = serde_json::from_slice(&changed[&path]).unwrap();
+            mutation(&mut document);
+            let bytes = serde_json::to_vec(&document).unwrap();
+            changed.insert(path.clone(), bytes.clone());
+            let mut source = source.clone();
+            source.pack.digest = registry_platform_yaml::Digest::new(sha256_uri(&bytes)).unwrap();
+            assert!(load_source_pack(&source, &changed).is_err());
+        }
+    }
+
     #[cfg(unix)]
     fn copy_acceptance_bundle(case: &str, destination: &Path) {
         let source = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -3176,31 +4311,33 @@ mod tests {
         // Normalize both sides through the same JSON roundtrip, which sorts
         // the selector-field map before the binding-order projection.
         let baseline = project(&document);
-        let source = &document["sources"][&source_id];
-        let connection = serde_json::json!({
-            "baseUrl": source["baseUrl"], "authentication": source["authentication"],
-            "maximumConcurrency": source["request"]["maximumConcurrency"]
-        });
-        document["sourceConnections"] = serde_json::json!({"unreached": connection.clone()});
+        let connection = document["sourceConnections"]["provider"].clone();
+        document["sourceConnections"]["unreached"] = connection;
         assert!(
             baseline == project(&document),
-            "unreached connections must not change a requirement"
+            "an unselected governed connection must not change a requirement"
         );
-        document["sources"][&source_id]["connection"] = "shared".into();
-        document["sourceConnections"]["shared"] = connection;
-        let shared = project(&document);
-        assert!(baseline != shared);
-        document["sourceConnections"]["unreached"]["tokenTimeoutMilliseconds"] = 5001.into();
-        assert!(shared == project(&document));
-        document["sourceConnections"]["shared"]["tokenTimeoutMilliseconds"] = 5001.into();
+
+        let selected = project(&document);
+        document["sourceConnections"]["unreached"]["endpoints"][0]["baseUrl"] =
+            "https://unselected.invalid".into();
+        assert_eq!(selected, project(&document));
+        document["sourceConnections"]["provider"]["endpoints"][0]["baseUrl"] =
+            "https://reviewed-source.invalid".into();
         assert!(
-            shared == project(&document),
-            "target connection timing cannot alter the portable definition behavior pin"
+            selected != project(&document),
+            "the selected governed connection authority changes the behavior pin"
         );
-        let before_behavior = project(&document);
-        document["sources"][&source_id]["behaviorRevision"] =
-            format!("sha256:{}", "a".repeat(64)).into();
-        assert!(before_behavior != project(&document));
+
+        let before_pack = project(&document);
+        document["sources"][&source_id]["pack"]["version"] = "2".into();
+        assert_ne!(before_pack, project(&document));
+        assert!(
+            !String::from_utf8(project(&document))
+                .unwrap()
+                .contains("tokenRef"),
+            "process-local credential bindings are absent from the governed projection"
+        );
     }
 
     #[test]
@@ -3453,28 +4590,65 @@ mod tests {
         );
     }
 
-    /// Declaring a gated acquisition capability is a bundle-wide statement that
-    /// gates one requirement at a time. A requirement acquiring through a
-    /// frozen Version 1 form behaves identically whether or not some sibling
-    /// opted in, so its revision must not move. Without the projection keeping
-    /// only the capability a requirement's own form needs, adopting a new
-    /// acquisition form for one requirement would silently break the pin every
-    /// other relying party holds.
+    /// Acquisition capabilities now enter through selected pack routes. A
+    /// reviewed pack edit changes the requirement selecting that source, but
+    /// not siblings selecting other sources from the same bundle.
     #[cfg(unix)]
     #[test]
     fn declaring_an_acquisition_capability_leaves_the_other_revisions_alone() {
+        const EDITED: &str = "urn:example:fixture:requirement:adult-status:v1";
         let (before, after) = revisions_across_edit(|root| {
-            let config = root.join("evidence.yaml");
-            let text = fs::read_to_string(&config).expect("the configuration reads");
-            fs::write(
-                &config,
-                format!("acquisitionCapabilities: [search-then-fetch-set]\n{text}"),
-            )
-            .expect("the configuration writes");
+            let path = root.join(CONFIG_FILE);
+            let mut document: JsonValue =
+                serde_norway::from_slice(&fs::read(&path).expect("the configuration reads"))
+                    .expect("the configuration parses");
+            let source = &document["sources"]["source-a"]["pack"];
+            let pack_id = source["id"].as_str().expect("pack id").to_owned();
+            let old_prefix = source["artifactPrefix"]
+                .as_str()
+                .expect("pack artifact prefix")
+                .to_owned();
+            let old_pack_root = root.join(&old_prefix);
+            let script_path = old_pack_root.join("scripts/provider.rhai");
+            let mut script = fs::read(&script_path).expect("pack script reads");
+            script.extend_from_slice(b"\n// independently reviewed capability edit\n");
+            fs::write(&script_path, &script).expect("pack script changes");
+
+            let pack_path = old_pack_root.join("pack.yaml");
+            let mut pack: JsonValue =
+                serde_json::from_slice(&fs::read(&pack_path).expect("pack reads"))
+                    .expect("pack parses");
+            let script_entry = pack["scripts"]
+                .as_array_mut()
+                .unwrap()
+                .iter_mut()
+                .find(|entry| entry["path"] == "scripts/provider.rhai")
+                .expect("provider script pin");
+            script_entry["digest"] = sha256_uri(&script).into();
+            let pack_bytes = serde_json::to_vec_pretty(&pack).expect("pack serializes");
+            fs::write(&pack_path, &pack_bytes).expect("pack pin changes");
+
+            let pack_digest = sha256_uri(&pack_bytes);
+            let pack_hex = pack_digest.strip_prefix("sha256:").unwrap();
+            let new_prefix = format!("adapter-packs/{pack_id}/{pack_hex}");
+            fs::rename(&old_pack_root, root.join(&new_prefix))
+                .expect("pack moves under its new digest prefix");
+            document["sources"]["source-a"]["pack"]["digest"] = pack_digest.into();
+            document["sources"]["source-a"]["pack"]["artifactPrefix"] = new_prefix.into();
+            fs::write(&path, serde_norway::to_string(&document).unwrap())
+                .expect("source pin changes");
         });
 
-        assert!(!before.is_empty(), "the fixture configures requirements");
-        assert_eq!(before, after);
+        assert_eq!(before.len(), 4, "the fixture configures four requirements");
+        assert_ne!(before[EDITED], after[EDITED]);
+        for (requirement, revision) in &before {
+            if requirement != EDITED {
+                assert_eq!(
+                    revision, &after[requirement],
+                    "`{requirement}` does not select the edited pack"
+                );
+            }
+        }
     }
 
     #[cfg(unix)]
@@ -3482,46 +4656,8 @@ mod tests {
     fn source_batch_artifacts_change_bundle_and_requirement_revisions() {
         let directory = tempfile::tempdir().expect("temporary bundle");
         copy_acceptance_bundle("adult-status", directory.path());
-        let config_path = directory.path().join(CONFIG_FILE);
-        let text = fs::read_to_string(&config_path).expect("configuration reads");
-        let text = text
-            .replacen(
-                "kind: EvidenceBundle\n",
-                "kind: EvidenceBundle\nacquisitionCapabilities: [source-batch]\n",
-                1,
-            )
-            .replace(
-                "    factSchema: schemas/facts.schema.yaml\n",
-                "    factSchema: schemas/facts.schema.yaml\n    batch:\n      maximumItems: 2\n      prepareScript: adapters/source-prepare-batch.rhai\n      extractScript: adapters/source-extract-batch.rhai\n      responseSchema: schemas/source-batch-response.schema.yaml\n      projection: [/total, /date_of_birth]\n",
-            );
-        fs::write(&config_path, text).expect("configuration writes");
-
-        let ordinary_prepare =
-            fs::read_to_string(directory.path().join("adapters/source-a-prepare.rhai"))
-                .expect("ordinary preparation reads");
-        fs::write(
-            directory.path().join("adapters/source-prepare-batch.rhai"),
-            ordinary_prepare.replacen("fn prepare(", "fn prepare_batch(", 1),
-        )
-        .expect("batch preparation writes");
-        let ordinary_extract = fs::read_to_string(directory.path().join("adapters/source-a.rhai"))
-            .expect("ordinary extraction reads");
-        fs::write(
-            directory.path().join("adapters/source-extract-batch.rhai"),
-            ordinary_extract.replacen("fn extract(", "fn extract_batch(", 1),
-        )
-        .expect("batch extraction writes");
-        fs::copy(
-            directory.path().join("schemas/response.schema.yaml"),
-            directory
-                .path()
-                .join("schemas/source-batch-response.schema.yaml"),
-        )
-        .expect("batch response schema writes");
-
-        refresh_package_envelope(directory.path());
         set_tree_mode(directory.path(), 0o555, 0o444);
-        let before = Bundle::load(directory.path()).expect("batch bundle loads");
+        let before = Bundle::load(directory.path()).expect("current pack bundle loads");
         let requirement_id = before.config.requirements[0].id.clone();
         let before_package = before.package_digest().to_owned();
         let before_requirement = before
@@ -3530,16 +4666,48 @@ mod tests {
             .to_owned();
 
         set_tree_mode(directory.path(), 0o755, 0o644);
-        let batch_prepare = directory.path().join("adapters/source-prepare-batch.rhai");
-        let source = fs::read_to_string(&batch_prepare).expect("batch preparation reads");
-        fs::write(
-            &batch_prepare,
-            format!("{source}\n// reviewed batch edit\n"),
-        )
-        .expect("batch preparation changes");
+        let source = before
+            .config
+            .sources
+            .get("source-a")
+            .expect("fixture source");
+        let old_prefix = source.pack.artifact_prefix.as_str();
+        let old_pack_root = directory.path().join(old_prefix);
+        let script_path = old_pack_root.join("scripts/provider.rhai");
+        let mut script = fs::read(&script_path).expect("pack script reads");
+        script.extend_from_slice(b"\n// reviewed pack edit\n");
+        fs::write(&script_path, &script).expect("pack script changes");
+
+        let pack_path = old_pack_root.join("pack.yaml");
+        let mut pack: JsonValue =
+            serde_json::from_slice(&fs::read(&pack_path).expect("pack reads")).unwrap();
+        let script_entry = pack["scripts"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|entry| entry["path"] == "scripts/provider.rhai")
+            .expect("provider script pin");
+        script_entry["digest"] = sha256_uri(&script).into();
+        let pack_bytes = serde_json::to_vec_pretty(&pack).expect("pack serializes");
+        fs::write(&pack_path, &pack_bytes).expect("pack pin changes");
+
+        let pack_digest = sha256_uri(&pack_bytes);
+        let pack_hex = pack_digest.strip_prefix("sha256:").unwrap();
+        let new_prefix = format!("adapter-packs/{}/{pack_hex}", source.pack.id);
+        fs::rename(&old_pack_root, directory.path().join(&new_prefix))
+            .expect("pack moves under its new digest prefix");
+
+        let config_path = directory.path().join(CONFIG_FILE);
+        let mut config: JsonValue =
+            serde_norway::from_slice(&fs::read(&config_path).expect("configuration reads"))
+                .unwrap();
+        config["sources"]["source-a"]["pack"]["digest"] = pack_digest.into();
+        config["sources"]["source-a"]["pack"]["artifactPrefix"] = new_prefix.into();
+        fs::write(&config_path, serde_norway::to_string(&config).unwrap())
+            .expect("source pin changes");
         refresh_package_envelope(directory.path());
         set_tree_mode(directory.path(), 0o555, 0o444);
-        let after = Bundle::load(directory.path()).expect("edited batch bundle loads");
+        let after = Bundle::load(directory.path()).expect("edited pack bundle loads");
         assert_ne!(before_package, after.package_digest());
         assert_ne!(
             before_requirement,
@@ -3598,14 +4766,28 @@ mod tests {
             let path = root.join(CONFIG_FILE);
             let text = fs::read_to_string(&path).expect("the configuration reads");
             let original = concat!(
-                "      given_name: {type: string, minimumBytes: 1, maximumBytes: 200}\n",
-                "      family_name: {type: string, minimumBytes: 1, maximumBytes: 200}\n",
-                "      birth_date: {type: date}\n",
+                "      given_name:\n",
+                "        type: string\n",
+                "        minimumBytes: 1\n",
+                "        maximumBytes: 200\n",
+                "      family_name:\n",
+                "        type: string\n",
+                "        minimumBytes: 1\n",
+                "        maximumBytes: 200\n",
+                "      birth_date:\n",
+                "        type: date\n",
             );
             let reordered = concat!(
-                "      birth_date: {type: date}\n",
-                "      family_name: {type: string, minimumBytes: 1, maximumBytes: 200}\n",
-                "      given_name: {type: string, minimumBytes: 1, maximumBytes: 200}\n",
+                "      birth_date:\n",
+                "        type: date\n",
+                "      family_name:\n",
+                "        type: string\n",
+                "        minimumBytes: 1\n",
+                "        maximumBytes: 200\n",
+                "      given_name:\n",
+                "        type: string\n",
+                "        minimumBytes: 1\n",
+                "        maximumBytes: 200\n",
             );
             assert_eq!(text.matches(original).count(), 1);
             fs::write(&path, text.replace(original, reordered)).expect("the configuration writes");
@@ -3818,6 +5000,7 @@ mod tests {
         let expected = BTreeSet::from([
             "requirements",
             "sources",
+            "sourceConnections",
             "selectorProfiles",
             "responseFormats",
         ]);
@@ -3832,10 +5015,34 @@ mod tests {
         );
         assert_eq!(projected["requirements"].as_array().map(Vec::len), Some(1));
         assert_eq!(projected["sources"].as_object().map(JsonMap::len), Some(1));
+        assert_eq!(
+            projected["sourceConnections"].as_object().map(JsonMap::len),
+            Some(1)
+        );
+        assert_eq!(projected["sources"]["source-a"]["route"], "lookup");
+        assert_eq!(
+            projected["sources"]["source-a"]["factSchema"],
+            "schemas/adult-status-facts.schema.yaml"
+        );
         assert!(projected["sources"]["source-a"].get("baseUrl").is_none());
         assert!(projected["sources"]["source-a"]
             .get("authentication")
             .is_none());
+        let connection = &projected["sourceConnections"]["source-a"]["endpoints"][0];
+        assert_eq!(connection["baseUrl"], "https://source.invalid");
+        assert_eq!(connection["authentication"]["type"], "static-authorization");
+        assert!(connection["authentication"].get("tokenRef").is_none());
+        for runtime_member in [
+            "credential",
+            "attemptTimeoutMilliseconds",
+            "maximumResponseBytes",
+            "maximumConcurrency",
+        ] {
+            assert!(
+                connection.get(runtime_member).is_none(),
+                "runtime-only member {runtime_member} entered the governed projection"
+            );
+        }
         for member in [
             "service",
             "issuer",
@@ -3845,7 +5052,6 @@ mod tests {
             "rateLimits",
             "signing",
             "authorityProfiles",
-            "sourceConnections",
         ] {
             assert!(
                 projected.get(member).is_none(),
@@ -4019,12 +5225,14 @@ mod tests {
             fs::write(&config_path, configuration).expect("configuration writes");
 
             let fixtures_path = directory.path().join("fixtures/cases.yaml");
-            let fixtures = fs::read_to_string(&fixtures_path)
-                .expect("fixtures read")
-                .lines()
-                .filter(|line| !line.contains("id: anti-reconstruction"))
-                .collect::<Vec<_>>()
-                .join("\n");
+            let fixtures = fs::read_to_string(&fixtures_path).expect("fixtures read");
+            let (covered_cases, removed_case) = fixtures
+                .split_once("  - id: anti-reconstruction\n")
+                .expect("the strict fixture carries its anti-reconstruction case");
+            let (_, privacy_expectation) = removed_case
+                .split_once("privacyExpectation:\n")
+                .expect("the removed case ends before the privacy expectation");
+            let fixtures = format!("{covered_cases}privacyExpectation:\n{privacy_expectation}");
             fs::write(&fixtures_path, fixtures).expect("partial fixtures write");
             refresh_package_envelope(directory.path());
             set_tree_mode(directory.path(), 0o555, 0o444);
@@ -4059,22 +5267,20 @@ mod tests {
         copy_acceptance_bundle("adult-status", directory.path());
         let schema_path = directory.path().join("schemas/facts.schema.yaml");
         let mut schema = fs::read_to_string(&schema_path).expect("fact schema reads");
+        serde_json::from_str::<JsonValue>(&schema)
+            .expect("the current source fact schema is owned as JSON");
         schema.push_str("type: object\n");
         fs::write(&schema_path, schema).expect("fact schema writes");
         refresh_package_envelope(directory.path());
         set_tree_mode(directory.path(), 0o555, 0o444);
 
-        let error = Bundle::load(directory.path()).expect_err("duplicate key loaded");
-        let BundleError::Refused(report) = &error else {
-            panic!("fact schema failed for an unexpected reason: {error}");
-        };
-        let [diagnostic] = report.diagnostics() else {
-            panic!("expected one diagnostic");
-        };
-        assert_eq!(diagnostic.code, "yaml.duplicate-key");
-        let source = diagnostic.source.as_ref().expect("positioned diagnostic");
-        assert_eq!(source.file, "schemas/facts.schema.yaml");
-        assert_eq!(source.line, Some(6));
+        let error = Bundle::load(directory.path())
+            .expect_err("YAML appended outside the owned JSON form loaded");
+        let fault = error
+            .artifact_fault()
+            .unwrap_or_else(|| panic!("fact schema failed for an unexpected reason: {error}"));
+        assert_eq!(fault.artifact(), "schemas/facts.schema.yaml");
+        assert_eq!(fault.fault().cause(), "the source facts schema is not JSON");
     }
 
     #[test]
@@ -4108,8 +5314,8 @@ mod tests {
                 .expect("the configured requirement has a revision");
             assert!(revision.starts_with("sha256:"));
             assert_eq!(revision.len(), 71);
-            assert_eq!(bundle.scripts.len(), 3);
-            assert_eq!(bundle.fact_schemas.len(), 3);
+            assert_eq!(bundle.scripts.len(), 1);
+            assert_eq!(bundle.fact_schemas.len(), 1);
             assert_eq!(bundle.fixtures.len(), 1);
 
             set_tree_mode(directory.path(), 0o755, 0o444);
@@ -4126,8 +5332,8 @@ mod tests {
         let bundle = Bundle::load(directory.path()).expect("combined bundle loads");
         assert_eq!(bundle.config.requirements.len(), 4);
         assert_eq!(bundle.config.sources.len(), 4);
-        assert_eq!(bundle.scripts.len(), 12);
-        assert_eq!(bundle.fact_schemas.len(), 12);
+        assert_eq!(bundle.scripts.len(), 4);
+        assert_eq!(bundle.fact_schemas.len(), 4);
         assert_eq!(bundle.fixtures.len(), 4);
         assert_eq!(bundle.codelists.len(), 3);
 
@@ -4164,48 +5370,60 @@ mod tests {
     }
 
     #[test]
-    fn only_adapter_parameter_roots_allow_an_empty_closed_object() {
+    fn source_fact_schemas_use_the_shared_closed_schema_checker() {
         let empty = serde_json::json!({
             "type": "object", "additionalProperties": false,
             "required": [], "properties": {},
         });
-        validate_closed_schema(&empty, SchemaRole::AdapterParameters)
-            .expect("a source can declare no startup parameters");
-        for role in [SchemaRole::Facts, SchemaRole::Response] {
-            assert!(validate_closed_schema(&empty, role).is_err());
-        }
+        check_schema(EvidenceSchemaKind::Facts, empty.clone())
+            .expect("the shared grammar admits an empty closed fact object");
         let nested = serde_json::json!({
-            "type": "object", "additionalProperties": false,
-            "required": ["nested"], "properties": {"nested": empty},
+            "type": "object", "additionalProperties": false, "required": [],
+            "properties": {"nested": {
+                "type": "object", "additionalProperties": false,
+                "required": [], "properties": {"value": {"type": "integer"}}
+            }},
         });
-        assert!(validate_closed_schema(&nested, SchemaRole::AdapterParameters).is_err());
-        let mut outside_subset = empty.clone();
-        outside_subset["patternProperties"] = serde_json::json!({});
-        assert!(validate_closed_schema(&outside_subset, SchemaRole::AdapterParameters).is_err());
+        check_schema(EvidenceSchemaKind::Facts, nested)
+            .expect("nested and optional facts use the same shared grammar");
+        let open = serde_json::json!({"type":"object", "properties":{}});
+        assert!(check_schema(EvidenceSchemaKind::Facts, open).is_err());
     }
 
     #[cfg(unix)]
     #[test]
     fn bundle_load_accepts_an_empty_closed_adapter_parameter_schema() {
-        let directory = tempfile::tempdir().expect("temporary bundle");
-        copy_acceptance_bundle("adult-status", directory.path());
-        let path = directory.path().join("evidence.yaml");
-        let mut config: JsonValue = serde_norway::from_slice(&fs::read(&path).unwrap()).unwrap();
-        for source in config["sources"].as_object_mut().unwrap().values_mut() {
-            source["request"]["adapterParameters"] = serde_json::json!({});
-        }
-        fs::write(&path, serde_norway::to_string(&config).unwrap()).unwrap();
-        fs::write(
-            directory
-                .path()
-                .join("schemas/adapter-parameters.schema.yaml"),
-            "type: object\nadditionalProperties: false\nrequired: []\nproperties: {}\n",
-        )
-        .unwrap();
-        refresh_package_envelope(directory.path());
-        set_tree_mode(directory.path(), 0o555, 0o444);
-        Bundle::load(directory.path()).expect("a closed empty startup contract loads");
-        set_tree_mode(directory.path(), 0o755, 0o644);
+        let empty = serde_json::json!({
+            "type":"object",
+            "additionalProperties":false,
+            "required":[],
+            "properties":{}
+        });
+        let facts = serde_json::json!({
+            "type":"object",
+            "additionalProperties":false,
+            "required":[],
+            "properties":{}
+        });
+        let (mut source, files) = captured_pack_source_with_schemas(empty, facts);
+        source.inputs.clear();
+        load_source_pack(&source, &files)
+            .expect("the bundle loader accepts an empty closed route input schema");
+
+        let (mut open_source, open_files) = captured_pack_source_with_schemas(
+            serde_json::json!({"type":"object","properties":{}}),
+            serde_json::json!({
+                "type":"object",
+                "additionalProperties":false,
+                "required":[],
+                "properties":{}
+            }),
+        );
+        open_source.inputs.clear();
+        assert!(
+            load_source_pack(&open_source, &open_files).is_err(),
+            "an open route input schema is refused"
+        );
     }
 
     #[cfg(unix)]
@@ -4215,8 +5433,27 @@ mod tests {
         copy_acceptance_bundle("adult-status", directory.path());
         let config_path = directory.path().join("evidence.yaml");
         let config = fs::read_to_string(&config_path).expect("read configuration");
-        let original = "    concepts: [{handle: is_adult, uri: urn:example:fixture:concept:adult-status, type: boolean, required: true, constraints: {}}]\n";
-        let replacement = "    concepts: [{handle: is_adult, uri: urn:example:fixture:concept:adult-status, type: boolean, required: true, constraints: {}}, {handle: structured, uri: urn:example:fixture:concept:structured, type: reviewed-structured-value, required: false, constraints: {schema: urn:example:fixture:schema:structured:v1, maximumSerializedBytes: 512}}]\n";
+        let original = concat!(
+            "      - handle: is_adult\n",
+            "        uri: urn:example:fixture:concept:adult-status\n",
+            "        type: boolean\n",
+            "        required: true\n",
+            "        constraints: {}\n",
+        );
+        let replacement = concat!(
+            "      - handle: is_adult\n",
+            "        uri: urn:example:fixture:concept:adult-status\n",
+            "        type: boolean\n",
+            "        required: true\n",
+            "        constraints: {}\n",
+            "      - handle: structured\n",
+            "        uri: urn:example:fixture:concept:structured\n",
+            "        type: reviewed-structured-value\n",
+            "        required: false\n",
+            "        constraints:\n",
+            "          schema: urn:example:fixture:schema:structured:v1\n",
+            "          maximumSerializedBytes: 512\n",
+        );
         let config = config.replacen(original, replacement, 1);
         assert_ne!(
             config,
@@ -4289,100 +5526,24 @@ mod tests {
     /// half rather than leave the author to guess which of three admitted forms
     /// was meant.
     #[test]
-    fn an_integer_bounded_on_one_side_is_refused_by_the_whole_rule() {
-        let admitted = [
+    fn integer_fact_nodes_follow_the_shared_json_schema_grammar() {
+        for node in [
             "{type: integer, minimum: 0, maximum: 64}",
             "{type: integer, enum: [1, 2]}",
             "{type: integer, const: 1}",
-        ];
-        for node in admitted {
-            let node: JsonValue = serde_norway::from_str(node).expect("admitted integer node");
-            assert!(
-                validate_schema_node(&node, SchemaRole::Facts).is_ok(),
-                "the subset admits this integer: {node}"
-            );
-        }
-
-        for node in [
             "{type: integer, minimum: 0}",
             "{type: integer, maximum: 64}",
             "{type: integer}",
         ] {
-            let node: JsonValue = serde_norway::from_str(node).expect("unbounded integer node");
-            let refused = validate_schema_node(&node, SchemaRole::Facts)
-                .expect_err("an integer bounded on one side is refused");
-            assert_eq!(
-                refused.artifact_fault().map(ArtifactFault::fault),
-                Some(&SchemaFault::because(
-                    "schema integers need both a minimum and a maximum, or an enum, or a const"
-                )),
-                "the refusal must name the whole rule: {node}"
-            );
+            let property: JsonValue = serde_norway::from_str(node).expect("integer node");
+            let schema = serde_json::json!({
+                "type":"object", "additionalProperties":false,
+                "properties":{"value":property}, "required":[]
+            });
+            check_schema(EvidenceSchemaKind::Facts, schema)
+                .expect("the shared JSON Schema checker owns integer constraints");
         }
     }
-
-    /// The fact schema of the acceptance bundle's first source, which every
-    /// rewritten acquisition below uses as its search.
-    const SEARCH_FACT_SCHEMA: &str = "schemas/adult-status-facts.schema.yaml";
-    const FIRST_MEMBER_FACT_SCHEMA: &str = "schemas/first-member-facts.schema.yaml";
-    const SECOND_MEMBER_FACT_SCHEMA: &str = "schemas/second-member-facts.schema.yaml";
-
-    /// One declared fetch member: the ordinary fixed request every Version 1
-    /// source already is, bound to the reference the search resolved.
-    const FIRST_MEMBER_SOURCE: &str = r#"  source-e:
-    type: http-json
-    baseUrl: https://source.invalid
-    posture: field-projected
-    authentication: {type: static-authorization, tokenRef: secret:file/source-e-token}
-    request:
-      method: GET
-      path: /v1/first/{record_id}
-      pathBindings:
-        record_id: {type: prior-fact, field: record_id}
-      fixedHeaders: [{name: Accept, value: application/json}]
-      selectorInputs: []
-      prepareScript: adapters/first-member-prepare.rhai
-      adapterParameters: {profile: first}
-      adapterParametersSchema: schemas/first-member-adapter-parameters.schema.yaml
-      preparationLimits: {query: allowed, jsonBody: forbidden, maximumNormalizedBytes: 4096}
-      projection: [/total]
-      redirects: deny
-      attemptTimeoutMilliseconds: 3000
-      maximumResponseBytes: 65536
-      maximumConcurrency: 8
-    responseSchema: schemas/first-member-response.schema.yaml
-    extractScript: adapters/first-member-source.rhai
-    factSchema: schemas/first-member-facts.schema.yaml
-"#;
-
-    const SECOND_MEMBER_SOURCE: &str = r#"  source-f:
-    type: http-json
-    baseUrl: https://source.invalid
-    posture: field-projected
-    authentication: {type: static-authorization, tokenRef: secret:file/source-f-token}
-    request:
-      method: GET
-      path: /v1/second/{record_id}
-      pathBindings:
-        record_id: {type: prior-fact, field: record_id}
-      fixedHeaders: [{name: Accept, value: application/json}]
-      selectorInputs: []
-      prepareScript: adapters/second-member-prepare.rhai
-      adapterParameters: {profile: second}
-      adapterParametersSchema: schemas/second-member-adapter-parameters.schema.yaml
-      preparationLimits: {query: allowed, jsonBody: forbidden, maximumNormalizedBytes: 4096}
-      projection: [/total]
-      redirects: deny
-      attemptTimeoutMilliseconds: 3000
-      maximumResponseBytes: 65536
-      maximumConcurrency: 8
-    responseSchema: schemas/second-member-response.schema.yaml
-    extractScript: adapters/second-member-source.rhai
-    factSchema: schemas/second-member-facts.schema.yaml
-"#;
-
-    const SEARCH_THEN_FETCH: &str =
-        "    acquisition:\n      type: search-then-fetch\n      search: source-a\n      fetch: source-e\n";
 
     /// The value-free cause one bundle refusal carries.
     fn refusal_cause(error: BundleError) -> &'static str {
@@ -4393,340 +5554,64 @@ mod tests {
             .cause()
     }
 
-    /// The declared member sources, followed by the acceptance bundle's own
-    /// second source, which the rewrite displaced.
-    fn member_sources(blocks: &[&str]) -> String {
-        format!("{}  source-b:\n", blocks.concat())
-    }
-
-    /// A closed fact schema over the named fields.
-    ///
-    /// `required` is what a validated match always fills and `optional` is
-    /// declared without being required. A source fact schema is never the
-    /// second shape, which is exactly why the allowlist rule is proven against
-    /// the required set rather than against the declared one.
-    fn fact_schema(required: &[&str], optional: &[&str]) -> JsonValue {
-        let properties = required
-            .iter()
-            .chain(optional)
-            .map(|field| ((*field).to_owned(), serde_json::json!({"type": "string"})))
-            .collect::<JsonMap<_, _>>();
-        serde_json::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "required": required,
-            "properties": properties,
-        })
-    }
-
-    /// A closed fact schema carrying `count` required fields under one prefix,
-    /// for reading the bound on the merged fact set.
-    fn wide_fact_schema(prefix: &str, count: usize) -> JsonValue {
-        let fields = (0..count)
-            .map(|index| format!("{prefix}_{index}"))
-            .collect::<Vec<_>>();
-        let properties = fields
-            .iter()
-            .map(|field| (field.clone(), serde_json::json!({"type": "string"})))
-            .collect::<JsonMap<_, _>>();
-        serde_json::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "required": fields,
-            "properties": properties,
-        })
-    }
-
-    fn fetch_set_schemas(
-        search: JsonValue,
-        first: JsonValue,
-        second: JsonValue,
-    ) -> BTreeMap<String, JsonValue> {
-        BTreeMap::from([
-            (SEARCH_FACT_SCHEMA.to_owned(), search),
-            (FIRST_MEMBER_FACT_SCHEMA.to_owned(), first),
-            (SECOND_MEMBER_FACT_SCHEMA.to_owned(), second),
-        ])
-    }
-
-    /// One acceptance bundle rewritten onto a multi-call acquisition. The
-    /// rewrite parses, so the fact-schema rules under test are the only thing
-    /// left that can refuse it.
-    fn multi_call_config(acquisition: &str, sources: &str) -> EvidenceConfig {
-        let yaml = include_str!(
-            "../../../products/evidence/fixtures/acceptance/all-definitions/evidence.yaml"
-        );
-        let declared = yaml.replace(
-            "\nselectorProfiles:\n",
-            "\nacquisitionCapabilities: [search-then-fetch-set]\n\nselectorProfiles:\n",
-        );
-        assert_ne!(declared, yaml, "the capability declaration applies");
-        let acquired = declared.replace(
-            "    acquisition:\n      type: single\n      source: source-a\n",
-            acquisition,
-        );
-        assert_ne!(acquired, declared, "the acquisition rewrite applies");
-        let with_sources = acquired.replace("  source-b:\n", sources);
-        assert_ne!(with_sources, acquired, "the declared sources apply");
-        EvidenceConfig::parse_yaml(with_sources.as_bytes())
-            .expect("the rewritten bundle is configuration a deployment could load")
-    }
-
-    /// The declared fetch set: one search resolving a reference, and two
-    /// members reading it under the allowlist each one declares.
-    fn fetch_set_config(first_inputs: &str, second_inputs: &str) -> EvidenceConfig {
-        multi_call_config(
-            &format!(
-                "    acquisition:\n      type: search-then-fetch-set\n      search: source-a\n      fetch:\n        - {{source: source-e, factInputs: [{first_inputs}]}}\n        - {{source: source-f, factInputs: [{second_inputs}]}}\n      maximumAcquisitionMilliseconds: 8000\n"
-            ),
-            &member_sources(&[FIRST_MEMBER_SOURCE, SECOND_MEMBER_SOURCE]),
-        )
-    }
-
-    /// A member's allowlist is the whole of what its request may read, so a
-    /// name the search does not always produce is refused at load rather than
-    /// becoming a silently absent input at acquisition time.
+    /// Search/fetch sequencing and intermediate-property visibility now live
+    /// in the reviewed Adapter route itself. The bundle owns the route choice
+    /// and its pinned schema closure, not a second authored source graph. A
+    /// missing route is therefore refused at the current binding boundary.
     #[test]
-    fn a_fetch_member_declares_only_facts_the_search_always_produces() {
-        for (allowlist, reason) in [
-            ("record_id, record_absent", "a name no stage produces"),
-            (
-                "record_id, record_hint",
-                "a name the search declares without requiring",
-            ),
-            ("record_id, second_status", "a name a later member produces"),
-        ] {
-            let config = fetch_set_config(allowlist, "record_id");
-            let schemas = fetch_set_schemas(
-                fact_schema(&["record_id", "record_namespace"], &["record_hint"]),
-                fact_schema(&["first_status"], &[]),
-                fact_schema(&["second_status"], &[]),
-            );
-            assert_eq!(
-                refusal_cause(
-                    validate_prior_fact_bindings(&config, &schemas)
-                        .expect_err("the allowlist is refused")
-                ),
-                "fetch member fact input is not a required search fact",
-                "{reason}"
-            );
-        }
-    }
-
-    /// The derivation receives every stage's facts merged into one map, so two
-    /// stages naming one fact would silently overwrite. Disjointness is proven
-    /// over every declared name, not only the required ones, because a merge
-    /// cannot tell them apart.
-    #[test]
-    fn fetch_set_stages_declare_disjoint_fact_names() {
-        let config = fetch_set_config("record_id", "record_id");
-        for (first, second, reason) in [
-            (
-                fact_schema(&["record_id"], &[]),
-                fact_schema(&["second_status"], &[]),
-                "a member repeats a search fact",
-            ),
-            (
-                fact_schema(&["first_status"], &["shared_detail"]),
-                fact_schema(&["second_status"], &["shared_detail"]),
-                "two members repeat one name",
-            ),
-        ] {
-            let schemas = fetch_set_schemas(
-                fact_schema(&["record_id", "record_namespace"], &[]),
-                first,
-                second,
-            );
-            assert_eq!(
-                refusal_cause(
-                    validate_prior_fact_bindings(&config, &schemas)
-                        .expect_err("the collision is refused")
-                ),
-                "fetch set stages must declare disjoint fact names",
-                "{reason}"
-            );
-        }
-    }
-
-    /// The allowlist is per member, not per acquisition: one member declaring
-    /// a fact does not license another to bind it, which is the whole reason a
-    /// set of members discloses less than a single fetch would.
-    #[test]
-    fn a_fetch_member_binds_only_the_facts_it_declared() {
-        let schemas = || {
-            fetch_set_schemas(
-                fact_schema(&["record_id", "record_namespace"], &[]),
-                fact_schema(&["first_status"], &[]),
-                fact_schema(&["second_status"], &[]),
-            )
-        };
-
-        // Both members bind `record_id`, and only the first declares it.
-        let narrowed = fetch_set_config("record_id", "record_namespace");
+    fn a_source_binding_selects_one_declared_pack_route() {
+        let (mut source, files) = captured_pack_source();
+        source.route = serde_json::from_value(serde_json::json!("unreviewed-route")).unwrap();
         assert_eq!(
             refusal_cause(
-                validate_prior_fact_bindings(&narrowed, &schemas())
-                    .expect_err("a binding outside the member's own allowlist is refused")
+                load_source_pack(&source, &files)
+                    .expect_err("a source cannot select a route the pack did not review")
             ),
-            "fetch path binding references a fact the member did not declare"
-        );
-
-        // Declaring the bound fact is the only difference.
-        let declared = fetch_set_config("record_id", "record_id, record_namespace");
-        validate_prior_fact_bindings(&declared, &schemas())
-            .expect("a member may bind what it declared");
-    }
-
-    /// Rule 4 makes the merged fact names disjoint, so the merged count is the
-    /// sum of the stage counts exactly. Reading it at load is what keeps the
-    /// derivation's own input bound from failing an otherwise valid request.
-    #[test]
-    fn a_fetch_set_declares_no_more_facts_than_one_derivation_accepts() {
-        let config = fetch_set_config("record_id", "record_id");
-        let search = || fact_schema(&["record_id", "record_namespace"], &[]);
-        assert_eq!(2 + 31 + 31, crate::rhai_runtime::MAXIMUM_FACT_ENTRIES);
-
-        let inside = fetch_set_schemas(
-            search(),
-            wide_fact_schema("first", 31),
-            wide_fact_schema("second", 31),
-        );
-        validate_prior_fact_bindings(&config, &inside)
-            .expect("the merged fact set reaches the bound and stays inside it");
-
-        let beyond = fetch_set_schemas(
-            search(),
-            wide_fact_schema("first", 31),
-            wide_fact_schema("second", 32),
-        );
-        assert_eq!(
-            refusal_cause(
-                validate_prior_fact_bindings(&config, &beyond)
-                    .expect_err("one fact past the bound is refused")
-            ),
-            "fetch set declares more facts than one derivation accepts"
+            "the selected source route is not declared by the pack"
         );
     }
 
-    /// A path binding carries one value into a request path, so a fact that is
-    /// not a scalar has never been bindable. A second multi-call form does not
-    /// relax it.
+    /// Fact merging, request-property provenance, and route execution bounds
+    /// are compiled by Adapter. The bundle still refuses an input or fact
+    /// contract that is not a bounded closed Evidence schema before that
+    /// reviewed route can execute.
     #[test]
-    fn a_prior_fact_binding_still_requires_a_scalar_fact() {
-        let structured = serde_json::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["record_id", "record_namespace"],
-            "properties": {
-                "record_id": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": ["value"],
-                    "properties": {"value": {"type": "string"}},
-                },
-                "record_namespace": {"type": "string"},
-            },
+    fn a_source_pack_route_requires_bounded_closed_evidence_schemas() {
+        let closed_inputs = serde_json::json!({
+            "type": "object", "additionalProperties": false,
+            "required": ["personId"],
+            "properties": {"personId": {"type": "string"}}
         });
-
-        let chained = multi_call_config(SEARCH_THEN_FETCH, &member_sources(&[FIRST_MEMBER_SOURCE]));
-        assert_eq!(
-            refusal_cause(
-                validate_prior_fact_bindings(
-                    &chained,
-                    &BTreeMap::from([(SEARCH_FACT_SCHEMA.to_owned(), structured.clone())]),
-                )
-                .expect_err("a structured search fact is not bindable")
-            ),
-            "fetch path binding requires a scalar search fact"
-        );
-
-        let set = fetch_set_config("record_id", "record_id");
-        assert_eq!(
-            refusal_cause(
-                validate_prior_fact_bindings(
-                    &set,
-                    &fetch_set_schemas(
-                        structured,
-                        fact_schema(&["first_status"], &[]),
-                        fact_schema(&["second_status"], &[]),
-                    ),
-                )
-                .expect_err("a structured search fact is not bindable")
-            ),
-            "fetch path binding requires a scalar search fact"
-        );
-    }
-
-    /// The frozen single fetch reads the whole search FactSet, so its bindings
-    /// are proven against the search schema alone and against no allowlist.
-    /// Admitting the set form through the same exhaustive match must leave that
-    /// reading exactly where Version 1 froze it.
-    #[test]
-    fn search_then_fetch_bindings_are_proven_against_the_whole_search_fact_set() {
-        let two_bindings = FIRST_MEMBER_SOURCE.replace(
-            "      path: /v1/first/{record_id}\n      pathBindings:\n        record_id: {type: prior-fact, field: record_id}\n",
-            "      path: /v1/first/{record_id}/{namespace}\n      pathBindings:\n        record_id: {type: prior-fact, field: record_id}\n        namespace: {type: prior-fact, field: record_namespace}\n",
-        );
-        assert_ne!(
-            two_bindings, FIRST_MEMBER_SOURCE,
-            "the second binding applies"
-        );
-        let config = multi_call_config(SEARCH_THEN_FETCH, &member_sources(&[&two_bindings]));
-
-        for (search, reason) in [
+        let closed_facts = serde_json::json!({
+            "type": "object", "additionalProperties": false,
+            "required": ["status"],
+            "properties": {"status": {"type": "string"}}
+        });
+        let open = serde_json::json!({
+            "type": "object",
+            "properties": {"value": {"type": "string"}}
+        });
+        for (inputs, facts, cause) in [
             (
-                fact_schema(&["record_id", "record_namespace"], &[]),
-                "one fetch binds every required search fact",
+                open.clone(),
+                closed_facts.clone(),
+                "the selected route input schema is not a bounded closed schema",
             ),
             (
-                fact_schema(&["record_id"], &["record_namespace"]),
-                "and every declared one",
+                closed_inputs.clone(),
+                open.clone(),
+                "the selected route facts schema is not a bounded closed schema",
             ),
         ] {
-            validate_prior_fact_bindings(
-                &config,
-                &BTreeMap::from([(SEARCH_FACT_SCHEMA.to_owned(), search)]),
-            )
-            .unwrap_or_else(|_| panic!("{reason}"));
+            let (source, files) = captured_pack_source_with_schemas(inputs, facts);
+            assert_eq!(
+                refusal_cause(
+                    load_source_pack(&source, &files)
+                        .expect_err("an open route schema is refused before execution")
+                ),
+                cause
+            );
         }
-
-        assert_eq!(
-            refusal_cause(
-                validate_prior_fact_bindings(
-                    &config,
-                    &BTreeMap::from([(
-                        SEARCH_FACT_SCHEMA.to_owned(),
-                        fact_schema(&["record_id"], &[]),
-                    )]),
-                )
-                .expect_err("a fact the search does not declare is refused")
-            ),
-            "fetch path binding references an unknown search fact"
-        );
-    }
-
-    /// The whole set rule read together: two members, each declaring exactly
-    /// the search facts it binds, over three disjoint fact schemas whose merged
-    /// names stay inside the derivation's input bound.
-    #[test]
-    fn a_well_formed_fetch_set_satisfies_every_fact_schema_rule() {
-        let config = fetch_set_config("record_id", "record_id");
-        let schemas = fetch_set_schemas(
-            fact_schema(&["record_id", "record_namespace"], &[]),
-            fact_schema(&["first_status", "first_recorded_on"], &[]),
-            fact_schema(&["second_status", "second_recorded_on"], &[]),
-        );
-        validate_prior_fact_bindings(&config, &schemas).expect("the declared fetch set loads");
-
-        let mut incomplete = schemas;
-        incomplete.remove(SECOND_MEMBER_FACT_SCHEMA);
-        assert_eq!(
-            refusal_cause(
-                validate_prior_fact_bindings(&config, &incomplete)
-                    .expect_err("a member without a fact schema is refused")
-            ),
-            "fetch member fact schema is unavailable"
-        );
     }
 
     #[cfg(unix)]
@@ -4813,12 +5698,14 @@ mod tests {
         copy_acceptance_bundle("adult-status", unconfigured.path());
         let config_path = unconfigured.path().join(CONFIG_FILE);
         let config = fs::read_to_string(&config_path).expect("read configuration");
-        let without_publication = config
-            .lines()
-            .filter(|line| !line.starts_with("publication:"))
-            .collect::<Vec<_>>()
-            .join("\n")
-            + "\n";
+        let (before_publication, publication_and_after) = config
+            .split_once("publication:\n")
+            .expect("the bundle declares publication");
+        let (_, after_publication) = publication_and_after
+            .split_once("authentication:\n")
+            .expect("authentication follows publication");
+        let without_publication =
+            format!("{before_publication}authentication:\n{after_publication}");
         fs::write(&config_path, without_publication).expect("remove publication declaration");
         refresh_package_envelope(unconfigured.path());
         set_tree_mode(unconfigured.path(), 0o555, 0o444);
@@ -4840,17 +5727,155 @@ mod tests {
 
         let directory = tempfile::tempdir().expect("temporary bundle");
         copy_acceptance_bundle("adult-status", directory.path());
+        let config = EvidenceConfig::parse_yaml(
+            &fs::read(directory.path().join(CONFIG_FILE)).expect("configuration reads"),
+        )
+        .expect("configuration parses");
+        let source = config.sources.get("source-a").expect("fixture source");
         let outside = tempfile::NamedTempFile::new().expect("outside script");
-        let adapter = directory.path().join("adapters/source-a.rhai");
-        fs::remove_file(&adapter).expect("remove copied adapter");
-        symlink(outside.path(), adapter).expect("create symlink");
+        let script = directory
+            .path()
+            .join(source.pack.artifact_prefix.as_str())
+            .join("scripts/provider.rhai");
+        fs::remove_file(&script).expect("remove copied pack script");
+        symlink(outside.path(), &script).expect("create symlink");
         set_tree_mode(directory.path(), 0o555, 0o444);
         let error = Bundle::load(directory.path()).expect_err("a symlink is refused");
+        let rendered = error.to_string();
         assert!(
-            error.to_string().contains("adapters/source-a.rhai"),
-            "{error}"
+            matches!(error, BundleError::Package(_)),
+            "package verification must refuse the symlink before artifact reads: {rendered}"
+        );
+        assert!(rendered.contains(source.pack.artifact_prefix.as_str()));
+        assert!(rendered.contains("scripts/provider.rhai"));
+        assert!(rendered.contains("symbolic link"));
+        assert!(
+            !rendered.contains(&outside.path().to_string_lossy().to_string()),
+            "the refusal must name the governed package path, not follow or disclose the target"
         );
         set_tree_mode(directory.path(), 0o755, 0o444);
+    }
+
+    #[cfg(unix)]
+    fn runtime_with_ca_bindings(
+        root: &Path,
+        global_ca: Option<&Path>,
+        source_ca: Option<&Path>,
+    ) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = root.canonicalize().expect("canonical runtime root");
+        let secret_root = root.join("secrets");
+        fs::create_dir(&secret_root).expect("create secret root");
+        fs::set_permissions(&secret_root, fs::Permissions::from_mode(0o700))
+            .expect("lock secret root");
+        let global = global_ca.map_or_else(
+            || "outboundTls:\n  systemRoots: true\n  trustProfiles: {}\n".to_owned(),
+            |path| {
+                format!(
+                    "outboundTls:\n  systemRoots: true\n  trustProfiles:\n    global-pki: {{caBundleFile: {}}}\n",
+                    path.display()
+                )
+            },
+        );
+        let source = source_ca.map_or_else(String::new, |path| {
+            format!(
+                "sourceConnections:\n  register:\n    id: register\n    endpoints:\n      - endpoint: provider\n        baseUrl: https://source.invalid\n        credential: {{type: static-authorization, tokenRef: secret:file/source-token}}\n        tlsTrustProfile: source-pki\n    outboundTls:\n      trustProfiles:\n        source-pki: {{caBundleFile: {}}}\n    allowedPrivateCidrs: []\n",
+                path.display()
+            )
+        });
+        let runtime_path = root.join(RUNTIME_FILE);
+        fs::write(
+            &runtime_path,
+            format!(
+                "apiVersion: id.registrystack.org/formats/evidence/runtime/v1alpha1\nkind: EvidenceRuntimeConfig\npackage:\n  root: /etc/registry-evidence/bundle\nlistener:\n  bind: 127.0.0.1:8080\n  tlsTermination: operator-controlled-upstream\n  trustProxyIdentityHeaders: false\n  maximumRequestBytes: 65536\n  maximumConcurrentRequests: 64\n  requestTimeoutMilliseconds: 10000\n  shutdownGraceMilliseconds: 30000\nsecretProviders:\n  file: {{root: {}}}\nsigner:\n  type: transit\n  unixSocketPath: /run/registry-evidence/transit-proxy.sock\n  mount: transit\n  keyName: evidence-signing\n  keyVersion: 7\n  attemptTimeoutMilliseconds: 2000\naudit:\n  path: /var/lib/registry-evidence/audit/evidence.jsonl\n{global}{source}",
+                secret_root.display()
+            ),
+        )
+        .expect("write runtime document");
+        fs::set_permissions(&runtime_path, fs::Permissions::from_mode(0o444))
+            .expect("lock runtime document");
+        runtime_path
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn runtime_ca_capture_refuses_indirect_malformed_and_writable_files_for_each_scope() {
+        use std::os::unix::fs::{symlink, PermissionsExt as _};
+
+        const VALID_CA: &[u8] =
+            b"-----BEGIN CERTIFICATE-----\nMAMCAQE=\n-----END CERTIFICATE-----\n";
+        for scope in ["global", "source"] {
+            let load = |root: &Path, ca: &Path| {
+                let runtime = if scope == "global" {
+                    runtime_with_ca_bindings(root, Some(ca), None)
+                } else {
+                    runtime_with_ca_bindings(root, None, Some(ca))
+                };
+                RuntimeDocument::load(runtime)
+            };
+
+            let directory = tempfile::tempdir().expect("symlink CA runtime root");
+            let target = directory.path().join("target.pem");
+            fs::write(&target, VALID_CA).expect("write target CA");
+            fs::set_permissions(&target, fs::Permissions::from_mode(0o444)).unwrap();
+            let indirect = directory.path().join("indirect.pem");
+            symlink(&target, &indirect).expect("create CA symlink");
+            let error = load(directory.path(), &indirect).expect_err("symlink CA is refused");
+            assert!(
+                matches!(error, BundleError::InvalidPath),
+                "{scope}: {error:?}"
+            );
+
+            let directory = tempfile::tempdir().expect("malformed CA runtime root");
+            let malformed = directory.path().join("malformed.pem");
+            fs::write(&malformed, b"not a certificate").unwrap();
+            fs::set_permissions(&malformed, fs::Permissions::from_mode(0o444)).unwrap();
+            let error = load(directory.path(), &malformed).expect_err("malformed CA is refused");
+            assert!(matches!(error, BundleError::InvalidArtifact(_)));
+
+            let directory = tempfile::tempdir().expect("writable CA runtime root");
+            let writable = directory.path().join("writable.pem");
+            fs::write(&writable, VALID_CA).unwrap();
+            let error = load(directory.path(), &writable).expect_err("writable CA is refused");
+            assert_eq!(
+                error.artifact_fault().map(|fault| fault.fault().cause()),
+                Some("the TLS CA bundle the runtime file names is writable")
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn runtime_retains_global_and_source_ca_bytes_after_the_named_files_change() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        const ORIGINAL: &[u8] =
+            b"-----BEGIN CERTIFICATE-----\nMAMCAQE=\n-----END CERTIFICATE-----\n";
+        let directory = tempfile::tempdir().expect("temporary runtime root");
+        let global = directory.path().join("global.pem");
+        let source = directory.path().join("source.pem");
+        for path in [&global, &source] {
+            fs::write(path, ORIGINAL).unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o444)).unwrap();
+        }
+        let runtime_path = runtime_with_ca_bindings(directory.path(), Some(&global), Some(&source));
+        let runtime = RuntimeDocument::load(runtime_path).expect("runtime captures both CA scopes");
+        assert_eq!(runtime.ca_bundles["global-pki"], ORIGINAL);
+        assert_eq!(
+            runtime.source_ca_bundles["register"]["source-pki"],
+            ORIGINAL
+        );
+
+        for path in [&global, &source] {
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+            fs::write(path, b"changed after capture").unwrap();
+        }
+        assert_eq!(runtime.ca_bundles["global-pki"], ORIGINAL);
+        assert_eq!(
+            runtime.source_ca_bundles["register"]["source-pki"],
+            ORIGINAL
+        );
     }
 
     #[cfg(unix)]
@@ -4966,104 +5991,54 @@ audit:
 outboundTls:
   systemRoots: true
   trustProfiles: {}
+sourceConnections:
+  provider:
+    id: provider
+    endpoints:
+      - endpoint: provider
+        baseUrl: https://source.invalid
+        credential: {type: static-authorization, tokenRef: secret:file/source-token}
+        attemptTimeoutMilliseconds: 3000
+        maximumResponseBytes: 65536
+    allowedPrivateCidrs: []
 ";
 
-    /// Both halves of the acquisition gate, from inside the loader.
-    ///
-    /// The bundle declaring the kind it needs states that intent beside the
-    /// requirement that uses it, which gates nothing: the same person wrote
-    /// both lines in the same file. The deployment that will serve it decides
-    /// separately, in a file the bundle author does not write, and silence
-    /// there means no.
-    #[test]
-    fn a_gated_acquisition_kind_binds_only_where_the_operator_enabled_it() {
-        let declared = fetch_set_config("record_id", "record_id");
-        let silent = RuntimeConfig::parse_yaml(OPERATOR_RUNTIME_DOCUMENT.as_bytes())
-            .expect("the operator runtime document parses");
-        assert_eq!(
-            refusal_cause(
-                validate_runtime_bindings(&declared, &silent)
-                    .expect_err("a silent deployment refuses the bundle")
-            ),
-            "the runtime configuration does not enable an acquisition capability the bundle requires"
-        );
-
-        let enabled = RuntimeConfig::parse_yaml(
-            format!(
-                "{OPERATOR_RUNTIME_DOCUMENT}acquisitionCapabilities: [search-then-fetch-set]\n"
-            )
-            .as_bytes(),
-        )
-        .expect("the enabled operator runtime document parses");
-        validate_runtime_bindings(&declared, &enabled)
-            .expect("the deployment that enabled the kind binds the bundle");
-
-        let source_batch_document = std::str::from_utf8(include_bytes!(
-            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
-        ))
-        .expect("fixture is UTF-8")
-        .replacen(
-            "kind: EvidenceBundle\n",
-            "kind: EvidenceBundle\nacquisitionCapabilities: [source-batch]\n",
-            1,
-        )
-        .replace(
-            "    factSchema: schemas/facts.schema.yaml\n",
-            "    factSchema: schemas/facts.schema.yaml\n    batch:\n      maximumItems: 2\n      prepareScript: adapters/source-prepare-batch.rhai\n      extractScript: adapters/source-extract-batch.rhai\n      responseSchema: schemas/source-batch-response.schema.yaml\n      projection: [/results/*]\n",
-        );
-        let source_batch = EvidenceConfig::parse_yaml(source_batch_document.as_bytes())
-            .expect("the source batch declaration validates");
-        assert_eq!(
-            refusal_cause(
-                validate_runtime_bindings(&source_batch, &silent)
-                    .expect_err("a silent deployment refuses source batching")
-            ),
-            "the runtime configuration does not enable an acquisition capability the bundle requires"
-        );
-        let source_enabled = RuntimeConfig::parse_yaml(
-            format!("{OPERATOR_RUNTIME_DOCUMENT}acquisitionCapabilities: [source-batch]\n")
-                .as_bytes(),
-        )
-        .expect("the source-batch operator runtime document parses");
-        validate_runtime_bindings(&source_batch, &source_enabled)
-            .expect("both authors enabled source batching");
-
-        // A bundle acquiring through the frozen Version 1 forms asks the
-        // operator for nothing, so every deployment that predates the gate
-        // keeps binding exactly the bundles it already bound.
-        let frozen = EvidenceConfig::parse_yaml(include_bytes!(
-            "../../../products/evidence/fixtures/acceptance/all-definitions/evidence.yaml"
-        ))
-        .expect("the acceptance bundle validates");
-        validate_runtime_bindings(&frozen, &silent)
-            .expect("a Version 1 bundle needs no operator capability");
-    }
-
-    /// The exact trust-profile binding can fail two ways, and the two are
-    /// different edits: the runtime is missing trust material a source needs,
-    /// or it carries trust material no source reaches. An operator told only
-    /// that the two sets differ has to diff them by hand to learn which, so
-    /// each direction states its own cause and names the profile it means.
+    /// A governed source trust profile must be present under the matching
+    /// runtime connection. Global trust profiles are issuer authority, so an
+    /// unused global profile remains a separate exact-binding refusal.
     #[test]
     fn a_trust_profile_binding_refusal_names_its_direction_and_its_profile() {
         const ACCEPTANCE: &str = include_str!(
-            "../../../products/evidence/fixtures/acceptance/all-definitions/evidence.yaml"
+            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
         );
 
-        let naming = EvidenceConfig::parse_yaml(
-            ACCEPTANCE
-                .replace(
-                    "sources:\n  source-a:\n    type: http-json\n",
-                    "sources:\n  source-a:\n    type: http-json\n    tlsTrustProfile: internal-pki\n",
-                )
-                .as_bytes(),
-        )
-        .expect("a bundle naming a trust profile validates");
+        let naming = ACCEPTANCE.replace(
+            "        baseUrl: https://source.invalid\n",
+            "        baseUrl: https://source.invalid\n        tlsTrustProfile: internal-pki\n",
+        );
+        assert_ne!(naming, ACCEPTANCE, "the governed policy mutation applies");
+        let naming = EvidenceConfig::parse_yaml(naming.as_bytes())
+            .expect("a bundle naming a trust profile validates");
         let silent = RuntimeConfig::parse_yaml(OPERATOR_RUNTIME_DOCUMENT.as_bytes())
             .expect("the operator runtime document parses");
-        let missing = validate_runtime_bindings(&naming, &silent)
-            .expect_err("a profile the runtime does not bind is refused");
+        let findings = config_runtime_binding_findings(&naming, &silent);
+        let [missing] = findings.as_slice() else {
+            panic!("one missing source trust profile: {findings:?}");
+        };
+        assert_eq!(
+            missing.code,
+            "evidence.runtime.source-trust-profile-unbound"
+        );
+        assert_eq!(
+            missing.pointer,
+            "/sourceConnections/provider/outboundTls/trustProfiles"
+        );
+        assert_eq!(
+            missing.action,
+            "Bind the profile under this source connection's outboundTls.trustProfiles, with its CA bundle file."
+        );
         let fault = missing
+            .error
             .artifact_fault()
             .expect("the refusal names the profile");
         assert_eq!(fault.artifact(), "trustProfiles/internal-pki");
@@ -5075,20 +6050,38 @@ outboundTls:
         let binding = RuntimeConfig::parse_yaml(
             OPERATOR_RUNTIME_DOCUMENT
                 .replace(
+                    "        maximumResponseBytes: 65536\n    allowedPrivateCidrs: []\n",
+                    "        maximumResponseBytes: 65536\n        tlsTrustProfile: internal-pki\n    outboundTls:\n      trustProfiles:\n        internal-pki: {caBundleFile: /etc/registry-evidence/internal-pki.pem}\n    allowedPrivateCidrs: []\n",
+                )
+                .as_bytes(),
+        )
+        .expect("a runtime binding the source trust profile parses");
+        validate_config_runtime_bindings(&naming, &binding)
+            .expect("the deployment that bound the profile binds the bundle");
+
+        let frozen = EvidenceConfig::parse_yaml(ACCEPTANCE.as_bytes())
+            .expect("the acceptance bundle validates");
+        let global = RuntimeConfig::parse_yaml(
+            OPERATOR_RUNTIME_DOCUMENT
+                .replace(
                     "  trustProfiles: {}\n",
                     "  trustProfiles: {internal-pki: {caBundleFile: /etc/registry-evidence/internal-pki.pem}}\n",
                 )
                 .as_bytes(),
         )
-        .expect("a runtime binding a trust profile parses");
-        validate_runtime_bindings(&naming, &binding)
-            .expect("the deployment that bound the profile binds the bundle");
-
-        let frozen = EvidenceConfig::parse_yaml(ACCEPTANCE.as_bytes())
-            .expect("the acceptance bundle validates");
-        let unused = validate_runtime_bindings(&frozen, &binding)
-            .expect_err("a profile no source names is refused");
+        .expect("a runtime binding a global issuer profile parses");
+        let findings = config_runtime_binding_findings(&frozen, &global);
+        let [unused] = findings.as_slice() else {
+            panic!("one unused global issuer trust profile: {findings:?}");
+        };
+        assert_eq!(unused.code, "evidence.runtime.trust-profile-unused");
+        assert_eq!(unused.pointer, "/outboundTls/trustProfiles/internal-pki");
+        assert_eq!(
+            unused.action,
+            "Remove the trust profile, or name it from the access-token issuer."
+        );
         let fault = unused
+            .error
             .artifact_fault()
             .expect("the refusal names the profile");
         assert_eq!(fault.artifact(), "trustProfiles/internal-pki");
@@ -5098,13 +6091,13 @@ outboundTls:
         );
     }
 
-    /// The issuer's trust profile joins the same exact binding as the
-    /// sources': the runtime must bind the profile `authentication` names, and
-    /// a profile only the issuer names is not unused trust.
+    /// The issuer's trust profile is exact in the global trust namespace. A
+    /// source profile is instead connection-scoped and requires presence under
+    /// that connection without rejecting unselected source CA material.
     #[test]
-    fn the_issuer_trust_profile_is_bound_exactly_like_a_source_profile() {
+    fn the_issuer_trust_profile_is_bound_in_the_global_trust_namespace() {
         const ACCEPTANCE: &str = include_str!(
-            "../../../products/evidence/fixtures/acceptance/all-definitions/evidence.yaml"
+            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
         );
         let naming = EvidenceConfig::parse_yaml(
             ACCEPTANCE
@@ -5117,7 +6110,7 @@ outboundTls:
         .expect("a bundle naming an issuer trust profile validates");
         let silent = RuntimeConfig::parse_yaml(OPERATOR_RUNTIME_DOCUMENT.as_bytes())
             .expect("the operator runtime document parses");
-        let missing = validate_runtime_bindings(&naming, &silent)
+        let missing = validate_config_runtime_bindings(&naming, &silent)
             .expect_err("an issuer profile the runtime does not bind is refused");
         let fault = missing
             .artifact_fault()
@@ -5137,7 +6130,7 @@ outboundTls:
                 .as_bytes(),
         )
         .expect("a runtime binding the issuer profile parses");
-        validate_runtime_bindings(&naming, &binding)
+        validate_config_runtime_bindings(&naming, &binding)
             .expect("a profile only the issuer names is bound, not unused");
     }
 
@@ -5147,7 +6140,7 @@ outboundTls:
     #[test]
     fn a_bundle_environment_reference_binds_only_where_the_runtime_enables_it() {
         const ACCEPTANCE: &str = include_str!(
-            "../../../products/evidence/fixtures/acceptance/all-definitions/evidence.yaml"
+            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
         );
         let environment = ACCEPTANCE.replace(
             "hashKeyRef: secret:file/audit-hash-key",
@@ -5161,7 +6154,7 @@ outboundTls:
             .expect("a bundle naming an environment secret validates on its own");
         let file_only = RuntimeConfig::parse_yaml(OPERATOR_RUNTIME_DOCUMENT.as_bytes())
             .expect("the operator runtime document parses");
-        let refused = validate_runtime_bindings(&bundle, &file_only)
+        let refused = validate_config_runtime_bindings(&bundle, &file_only)
             .expect_err("the environment provider is not enabled");
         assert_eq!(
             refused.artifact_fault().map(|fault| fault.fault().cause()),
@@ -5179,7 +6172,7 @@ outboundTls:
                 .as_bytes(),
         )
         .expect("a runtime enabling the environment provider parses");
-        validate_runtime_bindings(&bundle, &enabled)
+        validate_config_runtime_bindings(&bundle, &enabled)
             .expect("an enabled environment provider binds the reference");
     }
 
@@ -5207,50 +6200,27 @@ outboundTls:
         assert_eq!((source.line, source.column), (Some(appended_line), Some(1)));
     }
 
-    /// A deployment that does not opt into a capability must not acquire one
-    /// through serde defaults or the serialized runtime projection.
+    /// The retired capability member is neither read nor projected by the
+    /// closed runtime configuration.
     #[test]
-    fn an_absent_acquisition_capability_list_projects_to_nothing() {
+    fn retired_acquisition_capabilities_are_refused_and_project_to_nothing() {
         let config = RuntimeConfig::parse_yaml(OPERATOR_RUNTIME_DOCUMENT.as_bytes())
             .expect("the operator runtime document parses");
-        assert!(config.acquisition_capabilities.is_empty());
         assert!(
             !serde_json::to_string(&config)
                 .expect("the runtime configuration projects")
                 .contains("acquisitionCapabilities"),
             "an absent capability list must serialize to nothing at all"
         );
+        for declaration in [
+            "acquisitionCapabilities: []\n",
+            "acquisitionCapabilities: [source-batch]\n",
+        ] {
+            let candidate = format!("{OPERATOR_RUNTIME_DOCUMENT}{declaration}");
+            RuntimeConfig::parse_yaml(candidate.as_bytes())
+                .expect_err("the runtime reader refuses a retired capability declaration");
+        }
     }
-
-    /// The acceptance bundle's one source, restated on the statement transport.
-    ///
-    /// It keeps the fixture's selector profile, schemas and extraction script,
-    /// so the only thing the rewrite changes is how the source is reached.
-    const STATEMENT_SOURCE: &str = r#"  source-a:
-    type: sqlite-extract
-    posture: field-projected
-    extractProfile: residence-register
-    request:
-      statement: queries/adult-status.sql
-      columns: [{name: total, type: integer}, {name: date_of_birth, type: string}]
-      selectorInputs:
-        - role: subject
-          alternatives:
-            - {profile: person-demographics-v1, fields: [given_name, family_name, birth_date]}
-      parameterBindings:
-        record_reference: {type: selector, role: subject, profile: person-demographics-v1, field: given_name}
-      maximumRows: 2
-      maximumCellBytes: 4096
-      maximumStatementSteps: 50000
-      projection: [/rows/*/total, /rows/*/date_of_birth]
-      attemptTimeoutMilliseconds: 1000
-      maximumResponseBytes: 65536
-      maximumConcurrency: 8
-    maximumExtractAgeSeconds: 86400
-    responseSchema: schemas/response.schema.yaml
-    extractScript: adapters/source-a.rhai
-    factSchema: schemas/facts.schema.yaml
-"#;
 
     const STATEMENT_PATH: &str = "queries/adult-status.sql";
     const STATEMENT_TEXT: &[u8] =
@@ -5259,38 +6229,113 @@ outboundTls:
     const EXTRACT_ARTIFACT: &str = "sourceExtracts/residence-register";
     const EXTRACT_CHANGED: &str = "the source extract changed while it was being read";
 
-    /// The acceptance configuration with its HTTP source restated as a
-    /// statement source.
-    fn statement_configuration() -> String {
-        let fixture = include_str!(
-            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
-        );
-        let (head, rest) = fixture
-            .split_once("sources:\n")
-            .expect("the fixture declares sources");
-        let (_, tail) = rest
-            .split_once("authorityProfiles:\n")
-            .expect("the fixture declares authority profiles after its sources");
-        format!("{head}sources:\n{STATEMENT_SOURCE}authorityProfiles:\n{tail}")
-    }
-
-    /// The acceptance bundle rewritten onto the statement transport, so a whole
-    /// bundle carries a `queries/` artifact.
-    ///
-    /// The statement transport prepares no request and declares no adapter
-    /// parameters, so the artifacts filling those roles leave the closure with
-    /// them.
+    /// Install a real current Adapter pack whose selected Evidence route reads
+    /// one pinned SQLite statement. This helper builds the pack directly; it
+    /// does not translate the retired inline source grammar.
     #[cfg(unix)]
     fn write_statement_bundle(destination: &Path, statement: &[u8]) {
         copy_acceptance_bundle("adult-status", destination);
-        fs::write(destination.join(CONFIG_FILE), statement_configuration())
-            .expect("the statement configuration writes");
-        fs::remove_file(destination.join("adapters/source-a-prepare.rhai"))
-            .expect("remove the displaced preparation script");
-        fs::remove_file(destination.join("schemas/adapter-parameters.schema.yaml"))
-            .expect("remove the displaced adapter-parameter schema");
-        fs::create_dir(destination.join("queries")).expect("create the statement directory");
-        fs::write(destination.join(STATEMENT_PATH), statement).expect("the statement writes");
+        let facts: JsonValue = serde_norway::from_slice(
+            &fs::read(destination.join("schemas/facts.schema.yaml"))
+                .expect("the projected facts schema reads"),
+        )
+        .expect("the projected facts schema parses");
+        let facts = serde_json::to_vec(&facts).expect("the pack facts schema serializes");
+        let inputs = serde_json::to_vec(&serde_json::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["given_name", "family_name", "birth_date"],
+            "properties": {
+                "given_name": {"type": "string"},
+                "family_name": {"type": "string"},
+                "birth_date": {"type": "string"}
+            }
+        }))
+        .expect("the pack input schema serializes");
+        let pack = serde_json::json!({
+            "apiVersion": "id.registrystack.org/formats/adapter/pack/v1alpha1",
+            "kind": "AdapterPack",
+            "id": "fixture-adult-sqlite",
+            "version": "1",
+            "testedVersions": [],
+            "endpoints": [{
+                "id": "adult-extract",
+                "component": "sqlite-extract",
+                "authentication": {"type": "none"},
+                "attemptTimeoutMilliseconds": 1000,
+                "maximumResponseBytes": 65536,
+                "sqliteExtract": {
+                    "extractProfile": EXTRACT_PROFILE,
+                    "statement": {"path": STATEMENT_PATH, "digest": sha256_uri(statement)},
+                    "columns": [
+                        {"name": "total", "type": "integer"},
+                        {"name": "date_of_birth", "type": "string"}
+                    ],
+                    "parameters": [{"name": "record_reference", "required": true}],
+                    "maximumExtractAgeSeconds": 86400,
+                    "maximumRows": 2,
+                    "maximumCellBytes": 4096,
+                    "maximumStatementSteps": 50000,
+                    "concurrency": 8
+                }
+            }],
+            "sourceRoutes": [{
+                "id": "lookup",
+                "evidence": {
+                    "inputsSchema": {"path": "schemas/inputs.json", "digest": sha256_uri(&inputs)},
+                    "factsSchema": {"path": "schemas/facts.json", "digest": sha256_uri(&facts)},
+                    "acquisitionPosture": "field-projected"
+                },
+                "steps": [{"to": {"uri": "sqlite-extract:adult-extract", "parameters": {
+                    "queryParameters": {"record_reference": {"jsonpath": "$.given_name"}}
+                }}}]
+            }],
+            "capabilities": {
+                "components": ["sqlite-extract"],
+                "languages": ["jsonpath"],
+                "eips": ["to"]
+            }
+        });
+        let pack = serde_json::to_vec(&pack).expect("the SQLite pack serializes");
+        let pack_digest = sha256_uri(&pack);
+        let prefix = format!(
+            "adapter-packs/fixture-adult-sqlite/{}",
+            pack_digest
+                .strip_prefix("sha256:")
+                .expect("the pack digest is a sha256 URI")
+        );
+
+        fs::remove_dir_all(destination.join("adapter-packs"))
+            .expect("remove the displaced source pack closure");
+        let pack_root = destination.join(&prefix);
+        fs::create_dir_all(pack_root.join("schemas"))
+            .expect("create the SQLite pack schema directory");
+        fs::create_dir_all(pack_root.join("queries"))
+            .expect("create the SQLite pack query directory");
+        fs::write(pack_root.join("pack.yaml"), pack).expect("write the SQLite pack document");
+        fs::write(pack_root.join("schemas/inputs.json"), inputs)
+            .expect("write the SQLite pack input schema");
+        fs::write(pack_root.join("schemas/facts.json"), facts)
+            .expect("write the SQLite pack fact schema");
+        fs::write(pack_root.join(STATEMENT_PATH), statement).expect("write the pinned statement");
+
+        let config_path = destination.join(CONFIG_FILE);
+        let mut config: JsonValue = serde_norway::from_slice(
+            &fs::read(&config_path).expect("the acceptance configuration reads"),
+        )
+        .expect("the acceptance configuration parses");
+        config["sources"]["source-a"]["pack"] = serde_json::json!({
+            "id": "fixture-adult-sqlite",
+            "version": "1",
+            "digest": pack_digest,
+            "artifactPrefix": prefix
+        });
+        config["sources"]["source-a"]["route"] = serde_json::json!("lookup");
+        fs::write(
+            config_path,
+            serde_norway::to_string(&config).expect("the current source binding serializes"),
+        )
+        .expect("the current source binding writes");
         refresh_package_envelope(destination);
     }
 
@@ -5299,8 +6344,12 @@ outboundTls:
     /// of SQL is not a statement anybody reviewed.
     #[test]
     fn a_statement_is_capped_as_a_script_rather_than_as_a_data_artifact() {
+        let pack = "adapter-packs/local-register/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         assert_eq!(file_size_cap(STATEMENT_PATH), MAX_SCRIPT_BYTES);
-        assert_eq!(file_size_cap("adapters/source-a.rhai"), MAX_SCRIPT_BYTES);
+        assert_eq!(
+            file_size_cap(&format!("{pack}/scripts/provider.rhai")),
+            MAX_SCRIPT_BYTES
+        );
         assert_eq!(
             file_size_cap("derivations/adult-status.rhai"),
             MAX_SCRIPT_BYTES
@@ -5308,6 +6357,19 @@ outboundTls:
         assert_eq!(
             file_size_cap("schemas/facts.schema.yaml"),
             MAX_ARTIFACT_BYTES
+        );
+        assert_eq!(
+            file_size_cap(&format!("{pack}/queries/records.sql")),
+            MAX_SCRIPT_BYTES
+        );
+        assert_eq!(
+            file_size_cap(&format!("{pack}/scripts/lookup.rhai")),
+            MAX_SCRIPT_BYTES
+        );
+        assert_eq!(
+            file_size_cap(&format!("{pack}/schemas/reviewed-data.sql")),
+            MAX_ARTIFACT_BYTES,
+            "a data artifact does not become executable because its suffix looks like SQL"
         );
     }
 
@@ -5352,20 +6414,35 @@ outboundTls:
         write_statement_bundle(directory.path(), STATEMENT_TEXT);
         set_tree_mode(directory.path(), 0o555, 0o444);
         let bundle = Bundle::load(directory.path()).expect("a statement bundle loads");
-        assert_eq!(bundle.artifact(STATEMENT_PATH), Some(STATEMENT_TEXT));
+        let source = bundle
+            .config
+            .sources
+            .get("source-a")
+            .expect("the statement source is configured");
+        let statement_artifact = format!(
+            "{}/{}",
+            source.pack.artifact_prefix.as_str(),
+            STATEMENT_PATH
+        );
+        assert_eq!(bundle.artifact(&statement_artifact), Some(STATEMENT_TEXT));
         assert_eq!(
             bundle
-                .config
-                .sources
-                .get("source-a")
-                .expect("the statement source is configured")
-                .statement()
-                .expect("the statement transport names a statement")
+                .source_pack("source-a")
+                .expect("the source pack is captured")
+                .pack()
+                .endpoints
+                .iter()
+                .find_map(|endpoint| endpoint.sqlite_extract.as_ref())
+                .expect("the pack declares its reviewed SQLite endpoint")
+                .statement
+                .path
                 .as_str(),
             STATEMENT_PATH
         );
         set_tree_mode(directory.path(), 0o755, 0o644);
 
+        fs::create_dir(directory.path().join("queries"))
+            .expect("create the unreferenced query directory");
         fs::write(
             directory.path().join("queries/unreferenced.sql"),
             b"SELECT 1;\n",
@@ -5394,31 +6471,95 @@ outboundTls:
     #[test]
     fn editing_the_statement_moves_the_requirement_revision() {
         const REQUIREMENT: &str = "urn:example:fixture:requirement:adult-status:v1";
-        let directory = tempfile::tempdir().expect("temporary bundle");
-        write_statement_bundle(directory.path(), STATEMENT_TEXT);
-        set_tree_mode(directory.path(), 0o555, 0o444);
-        let before = Bundle::load(directory.path())
+        let before_directory = tempfile::tempdir().expect("first temporary bundle");
+        write_statement_bundle(before_directory.path(), STATEMENT_TEXT);
+        set_tree_mode(before_directory.path(), 0o555, 0o444);
+        let before = Bundle::load(before_directory.path())
             .expect("a statement bundle loads")
             .configuration_revision(REQUIREMENT)
             .expect("the requirement has a revision")
             .to_owned();
+        set_tree_mode(before_directory.path(), 0o755, 0o644);
 
-        set_tree_mode(directory.path(), 0o755, 0o644);
-        fs::write(
-            directory.path().join(STATEMENT_PATH),
+        let after_directory = tempfile::tempdir().expect("second temporary bundle");
+        write_statement_bundle(
+            after_directory.path(),
             b"SELECT total, date_of_birth FROM residents WHERE id = :record_reference LIMIT 1;\n",
-        )
-        .expect("the statement rewrites");
-        refresh_package_envelope(directory.path());
-        set_tree_mode(directory.path(), 0o555, 0o444);
-        let after = Bundle::load(directory.path())
+        );
+        set_tree_mode(after_directory.path(), 0o555, 0o444);
+        let after = Bundle::load(after_directory.path())
             .expect("the edited statement bundle loads")
             .configuration_revision(REQUIREMENT)
             .expect("the requirement has a revision")
             .to_owned();
-        set_tree_mode(directory.path(), 0o755, 0o644);
+        set_tree_mode(after_directory.path(), 0o755, 0o644);
 
         assert_ne!(before, after);
+    }
+
+    /// Static binding compares the selected pack route's extract profiles with
+    /// runtime names in both directions. It reads neither the configured path
+    /// nor a dummy extract, and it compiles under the operator's actual finite
+    /// acquisition limits rather than the engine defaults.
+    #[cfg(unix)]
+    #[test]
+    fn selected_pack_extract_bindings_are_exact_without_opening_their_paths() {
+        let directory = tempfile::tempdir().expect("temporary bundle");
+        write_statement_bundle(directory.path(), STATEMENT_TEXT);
+        set_tree_mode(directory.path(), 0o555, 0o444);
+        let bundle = Bundle::load(directory.path()).expect("the statement bundle loads");
+        set_tree_mode(directory.path(), 0o755, 0o644);
+
+        let missing_path = directory.path().join("never-opened.sqlite");
+        assert!(
+            !missing_path.exists(),
+            "the static check starts without an extract"
+        );
+        let runtime = |profile: Option<&str>| {
+            let acquisition = concat!(
+                "sourceAcquisition:\n",
+                "  maximumDataOperations: 1\n",
+                "  acquisitionDeadlineMilliseconds: 12500\n",
+                "  maximumResponseBytes: 8192\n",
+            );
+            let extracts = profile.map_or_else(String::new, |profile| {
+                format!(
+                    "sourceExtracts:\n  {profile}: {{path: {}}}\n",
+                    missing_path.display()
+                )
+            });
+            RuntimeConfig::parse_yaml(
+                format!("{OPERATOR_RUNTIME_DOCUMENT}{acquisition}{extracts}").as_bytes(),
+            )
+            .expect("the operator runtime document parses")
+        };
+
+        let missing = runtime_binding_findings(&bundle, &runtime(None))
+            .expect("the selected pack route compiles without runtime resources");
+        let [missing] = missing.as_slice() else {
+            panic!("one missing extract binding: {missing:?}");
+        };
+        assert_eq!(missing.code, "evidence.runtime.source-extract-unbound");
+        assert_eq!(missing.pointer, "/sourceExtracts");
+
+        let exact = runtime_binding_findings(&bundle, &runtime(Some(EXTRACT_PROFILE)))
+            .expect("the selected pack route compiles without runtime resources");
+        assert!(exact.is_empty(), "the exact static binding is accepted");
+
+        let mismatched = runtime_binding_findings(&bundle, &runtime(Some("unused-extract")))
+            .expect("the selected pack route compiles without runtime resources");
+        assert!(mismatched.iter().any(|finding| {
+            finding.code == "evidence.runtime.source-extract-unbound"
+                && finding.pointer == "/sourceExtracts"
+        }));
+        assert!(mismatched.iter().any(|finding| {
+            finding.code == "evidence.runtime.source-extract-unused"
+                && finding.pointer == "/sourceExtracts/unused-extract"
+        }));
+        assert!(
+            !missing_path.exists(),
+            "static binding validation never opens or creates the extract"
+        );
     }
 
     /// The operator runtime document in a temporary root, with a secret root
@@ -5756,72 +6897,6 @@ outboundTls:
             EXTRACT_CHANGED
         );
     }
-
-    /// The extract binding is exact in both directions, and each direction is
-    /// somebody's separate job: an unbound profile is a file the deployment
-    /// still has to name, and a bound profile no source reads is a file the
-    /// deployment is holding open for nothing.
-    #[test]
-    fn a_source_extract_binding_must_be_exact_in_both_directions() {
-        const BOUND: &str =
-            "  residence-register: {path: /var/lib/registry-evidence/extracts/residence.sqlite}\n";
-        let bundle = EvidenceConfig::parse_yaml(statement_configuration().as_bytes())
-            .expect("the statement configuration validates");
-
-        let silent = RuntimeConfig::parse_yaml(OPERATOR_RUNTIME_DOCUMENT.as_bytes())
-            .expect("the operator runtime document parses");
-        let unbound = validate_runtime_bindings(&bundle, &silent)
-            .expect_err("a deployment binding no extract refuses the bundle");
-        assert_eq!(
-            named_refusal(&unbound),
-            (
-                EXTRACT_ARTIFACT,
-                "the runtime configuration binds no file for a source extract profile the bundle names"
-            )
-        );
-
-        let exact = RuntimeConfig::parse_yaml(
-            format!("{OPERATOR_RUNTIME_DOCUMENT}sourceExtracts:\n{BOUND}").as_bytes(),
-        )
-        .expect("the bound operator runtime document parses");
-        validate_runtime_bindings(&bundle, &exact)
-            .expect("a deployment binding exactly the named extract accepts the bundle");
-
-        let surplus = RuntimeConfig::parse_yaml(
-            format!(
-                "{OPERATOR_RUNTIME_DOCUMENT}sourceExtracts:\n{BOUND}  civil-register: {{path: /var/lib/registry-evidence/extracts/civil.sqlite}}\n"
-            )
-            .as_bytes(),
-        )
-        .expect("the surplus operator runtime document parses");
-        let unused = validate_runtime_bindings(&bundle, &surplus)
-            .expect_err("a deployment binding an unread extract refuses the bundle");
-        assert_eq!(
-            named_refusal(&unused),
-            (
-                "sourceExtracts/civil-register",
-                "the runtime configuration binds a source extract profile no bundle source names"
-            )
-        );
-
-        // A bundle that reads no extract keeps binding against every runtime
-        // file written before extracts existed.
-        let frozen = EvidenceConfig::parse_yaml(include_bytes!(
-            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
-        ))
-        .expect("the acceptance bundle validates");
-        validate_runtime_bindings(&frozen, &silent)
-            .expect("a bundle reading no extract needs no binding");
-        let orphaned = validate_runtime_bindings(&frozen, &exact)
-            .expect_err("an extract no bundle source reads is refused");
-        assert_eq!(
-            named_refusal(&orphaned),
-            (
-                EXTRACT_ARTIFACT,
-                "the runtime configuration binds a source extract profile no bundle source names"
-            )
-        );
-    }
 }
 
 #[cfg(test)]
@@ -5834,8 +6909,8 @@ mod uuid_format_regressions {
             "type": "object", "additionalProperties": false, "required": ["id"],
             "properties": {"id": {"type": "string", "format": "uuid", "maxLength": 36}}
         });
-        validate_closed_schema(&schema, SchemaRole::Facts)
-            .expect("UUID belongs to the fact vocabulary");
+        check_schema(EvidenceSchemaKind::Facts, schema.clone())
+            .expect("UUID belongs to the shared fact vocabulary");
         let validator = JSONSchema::options()
             .with_draft(Draft::Draft202012)
             .should_validate_formats(true)

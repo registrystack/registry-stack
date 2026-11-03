@@ -15,6 +15,7 @@ use std::{
     collections::BTreeMap,
     fs,
     io::{Read as _, Write as _},
+    net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket},
     os::unix::fs::PermissionsExt as _,
     os::unix::net::{UnixListener, UnixStream},
     path::{Path, PathBuf},
@@ -36,15 +37,31 @@ use jsonwebtoken::{jwk::JwkSet, Algorithm};
 use p256::ecdsa::{
     signature::hazmat::PrehashSigner as _, Signature as P256Signature, SigningKey as P256SigningKey,
 };
+use rcgen::{BasicConstraints, CertificateParams, IsCa, Issuer, KeyPair};
 use registry_evidence_authoring::{
     compile,
-    project::EvidenceProject,
+    project::{AcquisitionPosture, EvidenceProject, PackReference},
     target::{self, EvidenceTargetAuthority},
 };
 use registry_platform_crypto::{sign, PrivateJwk};
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig, TokenVerifier, TokenVerifierConfig};
+use registry_platform_yaml::LocalId;
 use serde_json::{json, Value};
 use tempfile::TempDir;
+use tokio::{
+    io::{copy_bidirectional, AsyncReadExt as _},
+    net::{TcpListener, TcpSocket, TcpStream},
+    sync::Semaphore,
+    task::{JoinHandle, JoinSet},
+    time::timeout,
+};
+use tokio_rustls::{
+    rustls::{
+        pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer},
+        ServerConfig,
+    },
+    TlsAcceptor,
+};
 use wiremock::{
     matchers::{body_json, header, method, path},
     Mock, MockServer, ResponseTemplate,
@@ -105,10 +122,196 @@ const CONCEPT_SET: &str = "urn:example:normalized:concept:active:fetch-set";
 
 struct NormalizedRuntime {
     transit: TransitServer,
+    _source_tls: TlsSourceProxy,
     _temporary: TempDir,
     runtime: Arc<EvidenceRuntime>,
     source: MockServer,
     audit_path: PathBuf,
+}
+
+struct TlsSourceProxy {
+    origin: String,
+    allowed_private_cidr: String,
+    authority_pem: Vec<u8>,
+    listener_address: SocketAddr,
+    worker: JoinHandle<()>,
+}
+
+fn same_host_ipv4_peer(bound: SocketAddr, peer: SocketAddr) -> bool {
+    matches!(
+        (bound.ip(), peer.ip()),
+        (IpAddr::V4(bound), IpAddr::V4(peer)) if bound == peer
+    )
+}
+
+#[tokio::test]
+async fn normalized_tls_source_proxy_rejects_every_non_host_peer_before_tls() {
+    let private = Ipv4Addr::new(10, 64, 0, 7);
+    let bound = SocketAddr::new(IpAddr::V4(private), 443);
+    assert!(same_host_ipv4_peer(
+        bound,
+        SocketAddr::new(IpAddr::V4(private), 49152)
+    ));
+    assert!(!same_host_ipv4_peer(
+        bound,
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 49152)
+    ));
+    assert!(!same_host_ipv4_peer(
+        bound,
+        SocketAddr::new(IpAddr::V6(private.to_ipv6_mapped()), 49152)
+    ));
+    let ipv6 = private.to_ipv6_mapped();
+    assert!(!same_host_ipv4_peer(
+        SocketAddr::new(IpAddr::V6(ipv6), 443),
+        SocketAddr::new(IpAddr::V6(ipv6), 49152)
+    ));
+
+    let source = MockServer::start().await;
+    let proxy = TlsSourceProxy::start(*source.address()).await;
+    let socket = TcpSocket::new_v4().expect("non-host peer socket opens");
+    socket
+        .bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
+        .expect("non-host peer binds to loopback");
+    let mut rejected = socket
+        .connect(proxy.listener_address())
+        .await
+        .expect("loopback peer reaches the private listener");
+    let mut byte = [0_u8; 1];
+    let outcome = timeout(Duration::from_secs(1), rejected.read(&mut byte))
+        .await
+        .expect("non-host peer is rejected without waiting");
+    match outcome {
+        Ok(0) => {}
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted
+            ) => {}
+        other => panic!("non-host peer received bytes or stayed connected: {other:?}"),
+    }
+    assert!(
+        source
+            .received_requests()
+            .await
+            .expect("source request journal is available")
+            .is_empty(),
+        "a rejected peer reaches no upstream source"
+    );
+}
+
+impl TlsSourceProxy {
+    async fn start(upstream: std::net::SocketAddr) -> Self {
+        const MAXIMUM_CONNECTIONS: usize = 8;
+
+        let source_address = assigned_private_ipv4();
+        let mut authority_parameters =
+            CertificateParams::new(Vec::<String>::new()).expect("source CA parameters");
+        authority_parameters.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        let authority_key = KeyPair::generate().expect("source CA key");
+        let authority_certificate = authority_parameters
+            .self_signed(&authority_key)
+            .expect("source CA certificate");
+        let server_key = KeyPair::generate().expect("source TLS key");
+        let server_certificate = CertificateParams::new(vec![source_address.to_string()])
+            .expect("source TLS parameters")
+            .signed_by(
+                &server_key,
+                &Issuer::from_params(&authority_parameters, &authority_key),
+            )
+            .expect("source CA signs the TLS certificate");
+        let server_config = ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(
+                vec![server_certificate.der().clone()],
+                PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(server_key.serialize_der())),
+            )
+            .expect("source TLS configuration");
+        let acceptor = TlsAcceptor::from(Arc::new(server_config));
+        let listener = TcpListener::bind((source_address, 0))
+            .await
+            .expect("source TLS proxy binds");
+        let address = listener.local_addr().expect("source TLS proxy address");
+        let connection_slots = Arc::new(Semaphore::new(MAXIMUM_CONNECTIONS));
+        let worker = tokio::spawn(async move {
+            let mut connections = JoinSet::new();
+            loop {
+                while let Some(completed) = connections.try_join_next() {
+                    if let Err(error) = completed {
+                        eprintln!("normalized source TLS connection task failed: {error}");
+                    }
+                }
+                let (stream, peer) = listener
+                    .accept()
+                    .await
+                    .unwrap_or_else(|error| panic!("normalized source TLS accept failed: {error}"));
+                if !same_host_ipv4_peer(address, peer) {
+                    drop(stream);
+                    continue;
+                }
+                let permit = match Arc::clone(&connection_slots).try_acquire_owned() {
+                    Ok(permit) => permit,
+                    Err(error) => {
+                        eprintln!("normalized source TLS connection bound reached: {error}");
+                        drop(stream);
+                        continue;
+                    }
+                };
+                let acceptor = acceptor.clone();
+                connections.spawn(async move {
+                    let _permit = permit;
+                    let mut downstream = match acceptor.accept(stream).await {
+                        Ok(stream) => stream,
+                        Err(error) => {
+                            eprintln!("normalized source TLS handshake failed: {error}");
+                            return;
+                        }
+                    };
+                    let mut upstream = match TcpStream::connect(upstream).await {
+                        Ok(stream) => stream,
+                        Err(error) => {
+                            eprintln!("normalized source proxy connection failed: {error}");
+                            return;
+                        }
+                    };
+                    if let Err(error) = copy_bidirectional(&mut downstream, &mut upstream).await {
+                        eprintln!("normalized source proxy copy failed: {error}");
+                    }
+                });
+            }
+        });
+        Self {
+            origin: format!("https://{address}"),
+            allowed_private_cidr: format!("{source_address}/32"),
+            authority_pem: certificate_pem(authority_certificate.der()),
+            listener_address: address,
+            worker,
+        }
+    }
+
+    const fn listener_address(&self) -> SocketAddr {
+        self.listener_address
+    }
+}
+
+fn assigned_private_ipv4() -> Ipv4Addr {
+    let socket = UdpSocket::bind("0.0.0.0:0").expect("bind route-selection socket");
+    socket
+        .connect("192.0.2.1:9")
+        .expect("select the host's outbound interface");
+    let IpAddr::V4(address) = socket.local_addr().expect("route-selection address").ip() else {
+        panic!("the normalized TLS fixture requires an assigned private IPv4 interface");
+    };
+    assert!(
+        address.is_private(),
+        "the normalized TLS fixture requires an assigned private IPv4 interface"
+    );
+    address
+}
+
+impl Drop for TlsSourceProxy {
+    fn drop(&mut self) {
+        self.worker.abort();
+    }
 }
 
 struct TransitServer {
@@ -294,6 +497,17 @@ fn transit_signature(body: &[u8]) -> Value {
             "signature": format!("vault:v1:{}", URL_SAFE_NO_PAD.encode(signature.to_bytes()))
         }
     })
+}
+
+fn certificate_pem(certificate: &[u8]) -> Vec<u8> {
+    let encoded = STANDARD.encode(certificate);
+    let mut pem = String::from("-----BEGIN CERTIFICATE-----\n");
+    for line in encoded.as_bytes().chunks(64) {
+        pem.push_str(std::str::from_utf8(line).expect("certificate PEM is ASCII"));
+        pem.push('\n');
+    }
+    pem.push_str("-----END CERTIFICATE-----\n");
+    pem.into_bytes()
 }
 
 fn transit_public_pem() -> String {
@@ -507,22 +721,23 @@ async fn normalized_compiler_retains_formats_authority_and_holder_proof() {
 }
 
 #[tokio::test]
-async fn normalized_compiler_retains_source_batch_and_authenticated_provenance() {
+async fn normalized_compiler_retains_sequential_request_batch_and_authenticated_provenance() {
     let fixture = normalized_runtime().await;
     let http = TestServer::new(build_app(Arc::clone(&fixture.runtime)));
 
-    Mock::given(method("POST"))
-        .and(path("/records"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "results": [
-                {"slot": 2, "result": {"outcome": "match", "facts": {"active": true}}},
-                {"slot": 0, "result": {"outcome": "match", "facts": {"active": true}}},
-                {"slot": 1, "result": {"outcome": "match", "facts": {"active": false}}}
-            ]
-        })))
-        .expect(1)
-        .mount(&fixture.source)
-        .await;
+    for (record_id, active) in [("batch-a", true), ("batch-b", false), ("batch-c", true)] {
+        Mock::given(method("POST"))
+            .and(path("/records"))
+            .and(header(
+                "authorization",
+                format!("Bearer {SOURCE_TOKEN}").as_str(),
+            ))
+            .and(body_json(json!({"record_id": record_id})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"active": active})))
+            .expect(1)
+            .mount(&fixture.source)
+            .await;
+    }
     let request_batch = EvidenceRequestBatch {
         requirement: REQUIREMENT_AUDIENCE.to_owned(),
         expected_configuration_revision: None,
@@ -535,26 +750,28 @@ async fn normalized_compiler_retains_source_batch_and_authenticated_provenance()
             })
             .collect(),
     };
-    let optimized = http
+    let sequential = http
         .post("/v1/evidence/batch")
         .add_header("authorization", format!("Bearer {}", access_token(None)))
         .add_header("accept", EVIDENCE_REQUEST_BATCH_MEDIA_TYPE)
         .json(&request_batch)
         .await;
-    optimized.assert_status_ok();
-    let optimized: EvidenceRequestBatchResponse =
-        serde_json::from_str(&optimized.text()).expect("request batch parses");
-    let values = optimized
+    sequential.assert_status_ok();
+    let sequential: EvidenceRequestBatchResponse =
+        serde_json::from_str(&sequential.text()).expect("request batch parses");
+    let evidence = sequential
         .items
         .iter()
         .map(|item| match item {
-            EvidenceRequestBatchResponseItem::Evidence { evidence } => {
-                decode_evidence(evidence).supported_values[0].value.clone()
-            }
+            EvidenceRequestBatchResponseItem::Evidence { evidence } => decode_evidence(evidence),
             EvidenceRequestBatchResponseItem::EvidenceNotAvailable => {
                 panic!("the synthetic source resolves every member")
             }
         })
+        .collect::<Vec<_>>();
+    let values = evidence
+        .iter()
+        .map(|evidence| evidence.supported_values[0].value.clone())
         .collect::<Vec<_>>();
     assert_eq!(
         values,
@@ -563,34 +780,48 @@ async fn normalized_compiler_retains_source_batch_and_authenticated_provenance()
             PublicValue::Boolean(false),
             PublicValue::Boolean(true)
         ],
-        "opaque slots restore logical request order"
+        "sequential acquisitions retain logical request order"
     );
     assert_eq!(
-        fixture
-            .source
-            .received_requests()
-            .await
-            .expect("source journal is available")
-            .len(),
-        1,
-        "the compiled source-batch capability makes one physical call"
+        evidence
+            .iter()
+            .map(|evidence| evidence.request_nonce.as_deref())
+            .collect::<Vec<_>>(),
+        request_batch
+            .items
+            .iter()
+            .map(|item| Some(item.request_nonce.as_str()))
+            .collect::<Vec<_>>(),
+        "each response retains the nonce of the request in the same logical position"
     );
     let physical = fixture
         .source
         .received_requests()
         .await
         .expect("source journal is available");
-    let body: Value = serde_json::from_slice(&physical[0].body).expect("batch body is JSON");
     assert_eq!(
-        body["requests"]
-            .as_array()
-            .expect("batch carries logical requests")
-            .len(),
-        3
+        physical.len(),
+        3,
+        "the maintained baseline performs one complete pack acquisition per item"
     );
     assert_eq!(
-        body["requests"][1]["selectors"]["subject"]["values"]["record-id"], "batch-b",
-        "the normalized batch function receives minimized selector provenance"
+        physical
+            .iter()
+            .map(|request| {
+                let body: Value =
+                    serde_json::from_slice(&request.body).expect("source body is JSON");
+                body["record_id"]
+                    .as_str()
+                    .expect("the minimized record id is present")
+                    .to_owned()
+            })
+            .collect::<Vec<_>>(),
+        vec![
+            "batch-a".to_owned(),
+            "batch-b".to_owned(),
+            "batch-c".to_owned()
+        ],
+        "the pack receives only the minimized selector in request order"
     );
 
     fixture.source.reset().await;
@@ -684,6 +915,39 @@ async fn normalized_compiler_retains_source_batch_and_authenticated_provenance()
         .expect("source journal is available")
         .len();
     let signatures_before = fixture.transit.signatures();
+    let mut wrong_client_claims = task_grant_claims("grant-record");
+    wrong_client_claims["registry_grant_client"] = json!("other-client");
+    let wrong_client = access_token(Some(wrong_client_claims));
+    let refused = http
+        .post("/v1/evidence")
+        .add_header("authorization", format!("Bearer {wrong_client}"))
+        .json(&grant)
+        .await;
+    assert_eq!(refused.status_code(), axum::http::StatusCode::FORBIDDEN);
+    assert_eq!(refused.json::<Value>()["code"], "evidence.denied");
+    assert_eq!(
+        fixture
+            .source
+            .received_requests()
+            .await
+            .expect("source journal is available")
+            .len(),
+        before,
+        "a grant issued for another client reaches no source"
+    );
+    assert_eq!(
+        fixture.transit.signatures(),
+        signatures_before,
+        "a grant issued for another client reaches no signer"
+    );
+
+    let before = fixture
+        .source
+        .received_requests()
+        .await
+        .expect("source journal is available")
+        .len();
+    let signatures_before = fixture.transit.signatures();
     let wrong_task = access_token(Some(task_grant_claims_for(
         "grant-record",
         REQUIREMENT_CONTEXT,
@@ -716,6 +980,7 @@ async fn normalized_compiler_retains_source_batch_and_authenticated_provenance()
         "context-record",
         "caller-substitution",
         "grant-record",
+        "other-client",
         "batch-a",
         "batch-b",
         "batch-c",
@@ -826,7 +1091,7 @@ async fn normalized_authority_without_profile_actor_retains_definition_actor_cei
 }
 
 #[tokio::test]
-async fn normalized_compiler_retains_classic_and_set_search_acquisition() {
+async fn normalized_compiler_retains_classic_and_multimember_pack_acquisition() {
     let fixture = normalized_runtime().await;
     let http = TestServer::new(build_app(Arc::clone(&fixture.runtime)));
     let search_response = json!({
@@ -839,6 +1104,7 @@ async fn normalized_compiler_retains_classic_and_set_search_acquisition() {
 
     Mock::given(method("POST"))
         .and(path("/search"))
+        .and(body_json(json!({"record_id": "selector-private-record"})))
         .respond_with(ResponseTemplate::new(200).set_body_json(search_response))
         .expect(2)
         .mount(&fixture.source)
@@ -940,6 +1206,9 @@ async fn normalized_compiler_retains_classic_and_set_search_acquisition() {
     fixture.source.reset().await;
     Mock::given(method("POST"))
         .and(path("/search"))
+        .and(body_json(
+            json!({"record_id": "unresolved-selector-private-record"}),
+        ))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "found": false,
             "search_ok": false,
@@ -1009,19 +1278,26 @@ async fn normalized_runtime_with_actor_profile() -> NormalizedRuntime {
 
 async fn normalized_runtime_with(include_optional_actor_profile: bool) -> NormalizedRuntime {
     let source = MockServer::start().await;
+    let source_tls = TlsSourceProxy::start(*source.address()).await;
     let temporary = tempfile::tempdir().expect("temporary normalized deployment");
     let package_root = temporary.path().join("package");
     let secret_root = temporary.path().join("secrets");
     let authority_root = temporary.path().join("authority");
     let runtime_path = temporary.path().join("runtime.yaml");
     let audit_path = temporary.path().join("audit.jsonl");
+    let source_ca_path = temporary.path().join("source-ca.pem");
     fs::create_dir(&package_root).expect("package root is created");
     fs::create_dir(&secret_root).expect("secret root is created");
     fs::set_permissions(&secret_root, fs::Permissions::from_mode(0o700))
         .expect("secret root is private");
+    fs::write(&source_ca_path, &source_tls.authority_pem).expect("source CA is written");
+    fs::set_permissions(&source_ca_path, fs::Permissions::from_mode(0o400))
+        .expect("source CA is immutable");
 
     let project = normalized_project();
-    let compiled = compile::compile(&project, &scripts()).expect("normalized project compiles");
+    let pack_routes = pack_routes();
+    let compiled = compile::compile_with_pack_routes(&project, &scripts(), &pack_routes)
+        .expect("normalized project compiles against the exact checked pack closure");
     let mut bundle: Value = serde_norway::from_slice(include_bytes!(
         "../../../products/evidence/fixtures/acceptance/all-definitions/evidence.yaml"
     ))
@@ -1029,7 +1305,6 @@ async fn normalized_runtime_with(include_optional_actor_profile: bool) -> Normal
     let bundle_object = bundle.as_object_mut().expect("bundle is an object");
     for model_member in [
         "project",
-        "acquisitionCapabilities",
         "maximumHolderBoundBatchSize",
         "selectorProfiles",
         "sources",
@@ -1050,9 +1325,13 @@ async fn normalized_runtime_with(include_optional_actor_profile: bool) -> Normal
     ]);
     bundle["sourceConnections"] = json!({
         "records": {
-            "baseUrl": source.uri(),
-            "authentication": {"type": "static-authorization", "tokenRef": "secret:file/source-token"},
-            "maximumConcurrency": 8
+            "endpoints": [{
+                "endpoint": "provider",
+                "baseUrl": source_tls.origin.clone(),
+                "authentication": {"type": "static-authorization"},
+                "clientIdentity": "forbidden",
+                "tlsTrustProfile": "source-pki"
+            }]
         }
     });
     bundle["authorityProfiles"] = json!({});
@@ -1063,16 +1342,6 @@ async fn normalized_runtime_with(include_optional_actor_profile: bool) -> Normal
     {
         bundle[name] = value.clone();
     }
-    for compiled_source in bundle["sources"]
-        .as_object_mut()
-        .expect("compiled sources are an object")
-        .values_mut()
-    {
-        compiled_source["baseUrl"] = json!(source.uri());
-        compiled_source["authentication"] =
-            json!({"type": "static-authorization", "tokenRef": "secret:file/source-token"});
-    }
-
     fs::write(
         package_root.join("evidence.yaml"),
         serde_norway::to_string(&bundle).expect("bundle serializes"),
@@ -1201,16 +1470,30 @@ audit:
 authority:
   root: {}
   target: local
-acquisitionCapabilities: [source-batch, search-then-fetch-set]
 outboundTls:
   systemRoots: true
   trustProfiles: {{}}
+sourceConnections:
+  records:
+    id: records
+    endpoints:
+      - endpoint: provider
+        baseUrl: {}
+        credential: {{type: static-authorization, tokenRef: secret:file/source-token}}
+        tlsTrustProfile: source-pki
+    outboundTls:
+      trustProfiles:
+        source-pki: {{caBundleFile: {}}}
+    allowedPrivateCidrs: [{}]
 "#,
             package_root.display(),
             secret_root.display(),
             transit.socket.display(),
             audit_path.display(),
-            authority_root.display()
+            authority_root.display(),
+            source_tls.origin.as_str(),
+            source_ca_path.display(),
+            source_tls.allowed_private_cidr.as_str()
         ),
     )
     .expect("runtime configuration is written");
@@ -1224,6 +1507,7 @@ outboundTls:
     );
     NormalizedRuntime {
         transit,
+        _source_tls: source_tls,
         _temporary: temporary,
         runtime,
         source,
@@ -1234,7 +1518,6 @@ outboundTls:
 fn normalized_project() -> EvidenceProject {
     let mut document = json!({
         "id": "normalized-retention",
-        "acquisitionCapabilities": ["source-batch", "search-then-fetch-set"],
         "maximumHolderBoundBatchSize": 2,
         "selectorProfiles": {
             "record-by-id": {
@@ -1243,68 +1526,37 @@ fn normalized_project() -> EvidenceProject {
             }
         },
         "functions": [
-            {"id": "prepare-record", "interface": "source-prepare/v1", "source": "functions/prepare.rhai"},
-            {"id": "extract-record", "interface": "source-extract/v1", "source": "functions/extract.rhai"},
-            {"id": "prepare-record-batch", "interface": "source-prepare/v1", "source": "functions/prepare-batch.rhai"},
-            {"id": "extract-record-batch", "interface": "source-extract/v1", "source": "functions/extract-batch.rhai"},
-            {"id": "derive-active", "interface": "assertion-derive/v1", "source": "functions/derive.rhai"}
+            {"id": "derive-active", "interface": "assertion-derive/v1", "source": "functions/derive.rhai"},
+            {"id": "derive-classic", "interface": "assertion-derive/v1", "source": "functions/derive-classic.rhai"},
+            {"id": "derive-members", "interface": "assertion-derive/v1", "source": "functions/derive-members.rhai"}
         ],
         "sources": {
             "records": {
-                "type": "http-json",
+                "pack": {"id": "normalized-retention", "version": "1"},
+                "route": "records",
                 "connection": "records",
-                "acquisitionPosture": "record-transformed",
-                "selectors": [{"role": "subject", "profiles": ["record-by-id"]}],
-                "request": {"method": "POST", "path": "/records", "fixedHeaders": [{"name": "Accept", "value": "application/json"}]},
-                "response": {
-                    "projection": ["/active"],
-                    "shape": {"type": "object", "required": ["active"], "properties": {"active": {"type": "boolean"}}},
-                    "maximumBytes": 4096
+                "inputs": {
+                    "recordId": {"selector": {"role": "subject", "profile": "record-by-id", "field": "record-id"}}
                 },
-                "prepare": {"function": "prepare-record"},
-                "extract": {"function": "extract-record"},
-                "facts": {"active": {"type": "boolean"}},
-                "limits": {"attemptTimeoutMilliseconds": 2000, "maximumConcurrency": 8},
-                "adapterParameters": {},
-                "adapterParametersSchema": {"type": "object", "additionalProperties": false, "properties": {}, "required": []},
-                "preparationLimits": {"query": "forbidden", "jsonBody": "required", "maximumJsonDepth": 8, "maximumCollectionItems": 16, "maximumStringBytes": 128, "maximumNormalizedBytes": 4096},
-                "batch": {
-                    "maximumItems": 4,
-                    "prepare": {"function": "prepare-record-batch"},
-                    "extract": {"function": "extract-record-batch"},
-                    "response": {
-                        "projection": ["/results/*"],
-                        "shape": {
-                            "type": "object",
-                            "required": ["results"],
-                            "properties": {
-                                "results": {
-                                    "type": "array",
-                                    "maxItems": 4,
-                                    "items": {
-                                        "type": "object",
-                                        "required": ["slot", "result"],
-                                        "properties": {
-                                            "slot": {"type": "integer", "minimum": 0, "maximum": 3},
-                                            "result": {
-                                                "type": "object",
-                                                "required": ["outcome", "facts"],
-                                                "properties": {
-                                                    "outcome": {"type": "string", "values": ["match", "no_match", "ambiguous"]},
-                                                    "facts": {
-                                                        "type": "object",
-                                                        "required": ["active"],
-                                                        "properties": {"active": {"type": "boolean"}}
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+                "acquisitionPosture": "record-transformed"
+            },
+            "classic": {
+                "pack": {"id": "normalized-retention", "version": "1"},
+                "route": "classic",
+                "connection": "records",
+                "inputs": {
+                    "recordId": {"selector": {"role": "subject", "profile": "record-by-id", "field": "record-id"}}
+                },
+                "acquisitionPosture": "record-transformed"
+            },
+            "members": {
+                "pack": {"id": "normalized-retention", "version": "1"},
+                "route": "members",
+                "connection": "records",
+                "inputs": {
+                    "recordId": {"selector": {"role": "subject", "profile": "record-by-id", "field": "record-id"}}
+                },
+                "acquisitionPosture": "record-transformed"
             }
         },
         "assertionDefinitions": {
@@ -1342,64 +1594,6 @@ fn normalized_project() -> EvidenceProject {
             )
         }
     });
-    document["functions"]
-        .as_array_mut()
-        .expect("Functions are a sequence")
-        .extend([
-            json!({"id": "prepare-search", "interface": "source-prepare/v1", "source": "functions/prepare-search.rhai"}),
-            json!({"id": "extract-search", "interface": "source-extract/v1", "source": "functions/extract-search.rhai"}),
-            json!({"id": "prepare-classic-fetch", "interface": "source-prepare/v1", "source": "functions/prepare-classic-fetch.rhai"}),
-            json!({"id": "extract-classic-fetch", "interface": "source-extract/v1", "source": "functions/extract-classic-fetch.rhai"}),
-            json!({"id": "prepare-set-left", "interface": "source-prepare/v1", "source": "functions/prepare-set-left.rhai"}),
-            json!({"id": "extract-set-left", "interface": "source-extract/v1", "source": "functions/extract-set-left.rhai"}),
-            json!({"id": "prepare-set-right", "interface": "source-prepare/v1", "source": "functions/prepare-set-right.rhai"}),
-            json!({"id": "extract-set-right", "interface": "source-extract/v1", "source": "functions/extract-set-right.rhai"}),
-            json!({"id": "derive-classic", "interface": "assertion-derive/v1", "source": "functions/derive-classic.rhai"}),
-            json!({"id": "derive-set", "interface": "assertion-derive/v1", "source": "functions/derive-set.rhai"}),
-        ]);
-    document["sources"]["search"] = chained_source(
-        "/search",
-        "prepare-search",
-        "extract-search",
-        ["found", "search_ok", "classic_ref", "left_ref", "right_ref"],
-        json!({
-            "found": {"type": "boolean"},
-            "search_ok": {"type": "boolean"},
-            "classic_ref": {"type": "string", "minimumBytes": 1, "maximumBytes": 64},
-            "left_ref": {"type": "string", "minimumBytes": 1, "maximumBytes": 64},
-            "right_ref": {"type": "string", "minimumBytes": 1, "maximumBytes": 64}
-        }),
-        json!({
-            "search_ok": {"type": "boolean"},
-            "classic_ref": {"type": "string", "minimumBytes": 1, "maximumBytes": 64},
-            "left_ref": {"type": "string", "minimumBytes": 1, "maximumBytes": 64},
-            "right_ref": {"type": "string", "minimumBytes": 1, "maximumBytes": 64}
-        }),
-    );
-    document["sources"]["classic-fetch"] = chained_source(
-        "/classic-fetch",
-        "prepare-classic-fetch",
-        "extract-classic-fetch",
-        ["active"],
-        json!({"active": {"type": "boolean"}}),
-        json!({"classic_active": {"type": "boolean"}}),
-    );
-    document["sources"]["set-left"] = chained_source(
-        "/set-left",
-        "prepare-set-left",
-        "extract-set-left",
-        ["active"],
-        json!({"active": {"type": "boolean"}}),
-        json!({"left_active": {"type": "boolean"}}),
-    );
-    document["sources"]["set-right"] = chained_source(
-        "/set-right",
-        "prepare-set-right",
-        "extract-set-right",
-        ["active"],
-        json!({"active": {"type": "boolean"}}),
-        json!({"right_active": {"type": "boolean"}}),
-    );
     document["assertionDefinitions"]["actor"] = definition(
         REQUIREMENT_ACTOR,
         "actor-check",
@@ -1416,8 +1610,7 @@ fn normalized_project() -> EvidenceProject {
         ["service"],
         ["signed-jws"],
     );
-    classic["acquisition"] =
-        json!({"type": "search-then-fetch", "search": "search", "fetch": "classic-fetch"});
+    classic["acquisition"] = json!({"source": "classic"});
     classic["derive"] = json!({"function": "derive-classic"});
     document["assertionDefinitions"]["classic"] = classic;
     let mut fetch_set = definition(
@@ -1428,52 +1621,275 @@ fn normalized_project() -> EvidenceProject {
         ["service"],
         ["signed-jws"],
     );
-    fetch_set["acquisition"] = json!({
-        "type": "search-then-fetch-set",
-        "search": "search",
-        "fetch": [
-            {"source": "set-left", "factInputs": ["left_ref"]},
-            {"source": "set-right", "factInputs": ["right_ref"]}
-        ],
-        "maximumAcquisitionMilliseconds": 8000
-    });
-    fetch_set["derive"] = json!({"function": "derive-set"});
+    fetch_set["acquisition"] = json!({"source": "members"});
+    fetch_set["derive"] = json!({"function": "derive-members"});
     document["assertionDefinitions"]["fetch-set"] = fetch_set;
     serde_json::from_value(document).expect("normalized project is structurally valid")
 }
 
-fn chained_source<const N: usize>(
-    path: &str,
-    prepare: &str,
-    extract: &str,
-    projected: [&str; N],
-    properties: Value,
-    facts: Value,
-) -> Value {
-    let projection = projected
-        .iter()
-        .map(|name| format!("/{name}"))
-        .collect::<Vec<_>>();
-    let required = projected.to_vec();
-    json!({
-        "type": "http-json",
-        "connection": "records",
-        "acquisitionPosture": "record-transformed",
-        "selectors": [{"role": "subject", "profiles": ["record-by-id"]}],
-        "request": {"method": "POST", "path": path, "fixedHeaders": [{"name": "Accept", "value": "application/json"}]},
-        "response": {
-            "projection": projection,
-            "shape": {"type": "object", "required": required, "properties": properties},
-            "maximumBytes": 4096
-        },
-        "prepare": {"function": prepare},
-        "extract": {"function": extract},
-        "facts": facts,
-        "limits": {"attemptTimeoutMilliseconds": 2000, "maximumConcurrency": 8},
-        "adapterParameters": {},
-        "adapterParametersSchema": {"type": "object", "additionalProperties": false, "properties": {}, "required": []},
-        "preparationLimits": {"query": "forbidden", "jsonBody": "required", "maximumJsonDepth": 8, "maximumCollectionItems": 16, "maximumStringBytes": 128, "maximumNormalizedBytes": 4096}
-    })
+fn pack_routes() -> Vec<compile::CheckedPackRoute> {
+    const ROUTE_SCRIPT: &str = r#"fn required(value) {
+    if value == () { throw "source_protocol_error"; }
+    value
+}
+
+fn record_request(exchange) {
+    #{record_id: exchange.body.recordId}
+}
+
+fn record_result(exchange) {
+    #{lookup: "matched", facts: #{active: required(exchange.body["active"])}}
+}
+
+fn search_request(exchange) {
+    #{record_id: exchange.body.recordId}
+}
+
+fn search_no_match(exchange) {
+    required(exchange.body["found"]) == false
+}
+
+fn classic_ref(exchange) { required(exchange.body["classic_ref"]) }
+fn left_ref(exchange) { required(exchange.body["left_ref"]) }
+fn right_ref(exchange) { required(exchange.body["right_ref"]) }
+fn search_ok(exchange) { required(exchange.body["search_ok"]) }
+
+fn classic_request(exchange) {
+    #{
+        classic_ref: exchange.properties.classicRef,
+        left_ref: exchange.properties.leftRef,
+        right_ref: exchange.properties.rightRef,
+        search_ok: exchange.properties.searchOk
+    }
+}
+
+fn classic_result(exchange) {
+    #{lookup: "matched", facts: #{classic_active: required(exchange.body["active"])}}
+}
+
+fn left_request(exchange) {
+    #{resolved_ref: exchange.properties.leftRef}
+}
+
+fn left_active(exchange) { required(exchange.body["active"]) }
+
+fn right_request(exchange) {
+    #{resolved_ref: exchange.properties.rightRef}
+}
+
+fn members_result(exchange) {
+    #{lookup: "matched", facts: #{
+        members_active: exchange.properties.searchOk
+            && exchange.properties.leftActive
+            && required(exchange.body["active"])
+    }}
+}
+"#;
+
+    let inputs_schema = json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["recordId"],
+        "properties": {
+            "recordId": {"type": "string", "minLength": 1, "maxLength": 64}
+        }
+    });
+    let records_facts = json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["active"],
+        "properties": {"active": {"type": "boolean"}}
+    });
+    let classic_facts = json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["classic_active"],
+        "properties": {"classic_active": {"type": "boolean"}}
+    });
+    let members_facts = json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["members_active"],
+        "properties": {"members_active": {"type": "boolean"}}
+    });
+    let artifacts = BTreeMap::from([
+        (
+            "schemas/inputs.json".to_owned(),
+            serde_json::to_vec(&inputs_schema).expect("pack inputs schema serializes"),
+        ),
+        (
+            "schemas/records-facts.json".to_owned(),
+            serde_json::to_vec(&records_facts).expect("record facts schema serializes"),
+        ),
+        (
+            "schemas/classic-facts.json".to_owned(),
+            serde_json::to_vec(&classic_facts).expect("classic facts schema serializes"),
+        ),
+        (
+            "schemas/members-facts.json".to_owned(),
+            serde_json::to_vec(&members_facts).expect("member facts schema serializes"),
+        ),
+        (
+            "scripts/routes.rhai".to_owned(),
+            ROUTE_SCRIPT.as_bytes().to_vec(),
+        ),
+    ]);
+    let digest = |path: &str| {
+        registry_platform_config::sha256_uri(
+            artifacts
+                .get(path)
+                .unwrap_or_else(|| panic!("pack artifact {path} exists")),
+        )
+    };
+    let evidence_contract = |facts_path: &str| {
+        json!({
+            "inputsSchema": {
+                "path": "schemas/inputs.json",
+                "digest": digest("schemas/inputs.json")
+            },
+            "factsSchema": {"path": facts_path, "digest": digest(facts_path)},
+            "acquisitionPosture": "record-transformed"
+        })
+    };
+    let pack = json!({
+        "apiVersion": "id.registrystack.org/formats/adapter/pack/v1alpha1",
+        "kind": "AdapterPack",
+        "id": "normalized-retention",
+        "version": "1",
+        "testedVersions": [],
+        "endpoints": [{
+            "id": "provider",
+            "component": "http",
+            "authentication": {"type": "static-authorization"},
+            "attemptTimeoutMilliseconds": 2000,
+            "maximumResponseBytes": 16384,
+            "requestHeaders": ["accept"],
+            "operations": [{"id": "lookup", "safeUpstream": true}]
+        }],
+        "scripts": [{
+            "path": "scripts/routes.rhai",
+            "digest": digest("scripts/routes.rhai")
+        }],
+        "sourceRoutes": [
+            {
+                "id": "records",
+                "evidence": evidence_contract("schemas/records-facts.json"),
+                "steps": [
+                    {"setHeader": {"name": "accept", "value": {"constant": "application/json"}}},
+                    {"setBody": {"rhai": {"file": "scripts/routes.rhai", "entrypoint": "record_request"}}},
+                    {"to": {"uri": "http:provider", "parameters": {
+                        "httpMethod": "POST",
+                        "path": "/records",
+                        "operation": "lookup",
+                        "body": {"jsonpath": "$"}
+                    }}},
+                    {"setBody": {"rhai": {"file": "scripts/routes.rhai", "entrypoint": "record_result"}}}
+                ]
+            },
+            {
+                "id": "classic",
+                "evidence": evidence_contract("schemas/classic-facts.json"),
+                "steps": [
+                    {"setHeader": {"name": "accept", "value": {"constant": "application/json"}}},
+                    {"setBody": {"rhai": {"file": "scripts/routes.rhai", "entrypoint": "search_request"}}},
+                    {"to": {"uri": "http:provider", "parameters": {
+                        "httpMethod": "POST",
+                        "path": "/search",
+                        "operation": "lookup",
+                        "body": {"jsonpath": "$"}
+                    }}},
+                    {"choice": {
+                        "when": [{
+                            "rhai": {"file": "scripts/routes.rhai", "entrypoint": "search_no_match"},
+                            "steps": [
+                                {"setBody": {"constant": {"lookup": "no-match"}}},
+                                {"stop": {}}
+                            ]
+                        }],
+                        "otherwise": {"steps": [
+                            {"setProperty": {"name": "classicRef", "value": {"rhai": {"file": "scripts/routes.rhai", "entrypoint": "classic_ref"}}}},
+                            {"setProperty": {"name": "leftRef", "value": {"rhai": {"file": "scripts/routes.rhai", "entrypoint": "left_ref"}}}},
+                            {"setProperty": {"name": "rightRef", "value": {"rhai": {"file": "scripts/routes.rhai", "entrypoint": "right_ref"}}}},
+                            {"setProperty": {"name": "searchOk", "value": {"rhai": {"file": "scripts/routes.rhai", "entrypoint": "search_ok"}}}},
+                            {"setBody": {"rhai": {"file": "scripts/routes.rhai", "entrypoint": "classic_request"}}},
+                            {"to": {"uri": "http:provider", "parameters": {
+                                "httpMethod": "POST",
+                                "path": "/classic-fetch",
+                                "operation": "lookup",
+                                "body": {"jsonpath": "$"}
+                            }}},
+                            {"setBody": {"rhai": {"file": "scripts/routes.rhai", "entrypoint": "classic_result"}}}
+                        ]}
+                    }}
+                ]
+            },
+            {
+                "id": "members",
+                "evidence": evidence_contract("schemas/members-facts.json"),
+                "steps": [
+                    {"setHeader": {"name": "accept", "value": {"constant": "application/json"}}},
+                    {"setBody": {"rhai": {"file": "scripts/routes.rhai", "entrypoint": "search_request"}}},
+                    {"to": {"uri": "http:provider", "parameters": {
+                        "httpMethod": "POST",
+                        "path": "/search",
+                        "operation": "lookup",
+                        "body": {"jsonpath": "$"}
+                    }}},
+                    {"choice": {
+                        "when": [{
+                            "rhai": {"file": "scripts/routes.rhai", "entrypoint": "search_no_match"},
+                            "steps": [
+                                {"setBody": {"constant": {"lookup": "no-match"}}},
+                                {"stop": {}}
+                            ]
+                        }],
+                        "otherwise": {"steps": [
+                            {"setProperty": {"name": "leftRef", "value": {"rhai": {"file": "scripts/routes.rhai", "entrypoint": "left_ref"}}}},
+                            {"setProperty": {"name": "rightRef", "value": {"rhai": {"file": "scripts/routes.rhai", "entrypoint": "right_ref"}}}},
+                            {"setProperty": {"name": "searchOk", "value": {"rhai": {"file": "scripts/routes.rhai", "entrypoint": "search_ok"}}}},
+                            {"setBody": {"rhai": {"file": "scripts/routes.rhai", "entrypoint": "left_request"}}},
+                            {"to": {"uri": "http:provider", "parameters": {
+                                "httpMethod": "POST",
+                                "path": "/set-left",
+                                "operation": "lookup",
+                                "body": {"jsonpath": "$"}
+                            }}},
+                            {"setProperty": {"name": "leftActive", "value": {"rhai": {"file": "scripts/routes.rhai", "entrypoint": "left_active"}}}},
+                            {"setBody": {"rhai": {"file": "scripts/routes.rhai", "entrypoint": "right_request"}}},
+                            {"to": {"uri": "http:provider", "parameters": {
+                                "httpMethod": "POST",
+                                "path": "/set-right",
+                                "operation": "lookup",
+                                "body": {"jsonpath": "$"}
+                            }}},
+                            {"setBody": {"rhai": {"file": "scripts/routes.rhai", "entrypoint": "members_result"}}}
+                        ]}
+                    }}
+                ]
+            }
+        ]
+    });
+    let pack_bytes = serde_json::to_vec(&pack).expect("normalized Adapter pack serializes");
+    let pack_digest = registry_platform_config::sha256_uri(&pack_bytes);
+    let pack_reference = PackReference {
+        id: LocalId::new("normalized-retention").expect("pack id is valid"),
+        version: "1".to_owned(),
+    };
+    let checked = |route: &str, facts_schema: Value| compile::CheckedPackRoute {
+        pack: pack_reference.clone(),
+        route: LocalId::new(route).expect("route id is valid"),
+        digest: pack_digest.clone(),
+        inputs_schema: inputs_schema.clone(),
+        facts_schema,
+        acquisition_posture: AcquisitionPosture::RecordTransformed,
+        pack_bytes: pack_bytes.clone(),
+        artifacts: artifacts.clone(),
+    };
+    vec![
+        checked("records", records_facts),
+        checked("classic", classic_facts),
+        checked("members", members_facts),
+    ]
 }
 
 fn definition<const O: usize, const A: usize, const R: usize>(
@@ -1500,7 +1916,7 @@ fn definition<const O: usize, const A: usize, const R: usize>(
             "audiences": [EVIDENCE_AUDIENCE]
         },
         "subjects": [{"role": "subject", "selectors": ["record-by-id"]}],
-        "acquisition": {"type": "single", "source": "records"},
+        "acquisition": {"source": "records"},
         "derive": {"function": "derive-active"},
         "outputs": {"active": {"concept": format!("urn:example:normalized:concept:active:{}", purpose.trim_end_matches("-check")), "type": "boolean"}},
         "validitySeconds": 300,
@@ -1579,104 +1995,9 @@ fn grant<const R: usize>(
 fn scripts() -> BTreeMap<String, String> {
     BTreeMap::from([
         (
-            "functions/prepare.rhai".to_owned(),
-            r#"fn prepare(selectors, context) {
-    #{query: [], body: #{record_id: selectors["subject"]["values"]["record-id"]}}
-}"#
-            .to_owned(),
-        ),
-        (
-            "functions/extract.rhai".to_owned(),
-            r#"fn extract(response, context) {
-    #{outcome: "match", facts: #{active: response["active"]}}
-}"#
-            .to_owned(),
-        ),
-        (
-            "functions/prepare-batch.rhai".to_owned(),
-            r#"fn prepare(items, context) {
-    #{query: [], body: #{requests: items}}
-}"#
-            .to_owned(),
-        ),
-        (
-            "functions/extract-batch.rhai".to_owned(),
-            r#"fn extract(response, context) {
-    response["results"]
-}"#
-            .to_owned(),
-        ),
-        (
             "functions/derive.rhai".to_owned(),
             r#"fn derive(facts, selectors, context) {
     [#{output: "active", value: facts["active"]}]
-}"#
-            .to_owned(),
-        ),
-        (
-            "functions/prepare-search.rhai".to_owned(),
-            r#"fn prepare(selectors, context) {
-    #{query: [], body: #{record_id: selectors["subject"]["values"]["record-id"]}}
-}"#
-            .to_owned(),
-        ),
-        (
-            "functions/extract-search.rhai".to_owned(),
-            r#"fn extract(response, context) {
-    if !response["found"] { return #{outcome: "no_match"}; }
-    #{outcome: "match", facts: #{
-        search_ok: response["search_ok"],
-        classic_ref: response["classic_ref"],
-        left_ref: response["left_ref"],
-        right_ref: response["right_ref"]
-    }}
-}"#
-            .to_owned(),
-        ),
-        (
-            "functions/prepare-classic-fetch.rhai".to_owned(),
-            r#"fn prepare(selectors, context) {
-    #{query: [], body: #{
-        classic_ref: context.prior_facts.classic_ref,
-        left_ref: context.prior_facts.left_ref,
-        right_ref: context.prior_facts.right_ref,
-        search_ok: context.prior_facts.search_ok
-    }}
-}"#
-            .to_owned(),
-        ),
-        (
-            "functions/extract-classic-fetch.rhai".to_owned(),
-            r#"fn extract(response, context) {
-    #{outcome: "match", facts: #{classic_active: response["active"]}}
-}"#
-            .to_owned(),
-        ),
-        (
-            "functions/prepare-set-left.rhai".to_owned(),
-            r#"fn prepare(selectors, context) {
-    #{query: [], body: #{resolved_ref: context.prior_facts.left_ref}}
-}"#
-            .to_owned(),
-        ),
-        (
-            "functions/extract-set-left.rhai".to_owned(),
-            r#"fn extract(response, context) {
-    #{outcome: "match", facts: #{left_active: response["active"]}}
-}"#
-            .to_owned(),
-        ),
-        (
-            "functions/prepare-set-right.rhai".to_owned(),
-            r#"fn prepare(selectors, context) {
-    #{query: [], body: #{resolved_ref: context.prior_facts.right_ref}}
-}"#
-            .to_owned(),
-        ),
-        (
-            "functions/extract-set-right.rhai".to_owned(),
-            r#"fn extract(response, context) {
-    #{outcome: "match", facts: #{right_active: response["active"]}}
 }"#
             .to_owned(),
         ),
@@ -1688,16 +2009,9 @@ fn scripts() -> BTreeMap<String, String> {
             .to_owned(),
         ),
         (
-            "functions/derive-set.rhai".to_owned(),
+            "functions/derive-members.rhai".to_owned(),
             r#"fn derive(facts, selectors, context) {
-    [#{output: "active", value:
-        facts.search_ok
-        && facts.classic_ref == "classic-private-ref"
-        && facts.left_ref == "left-private-ref"
-        && facts.right_ref == "right-private-ref"
-        && facts.left_active
-        && facts.right_active
-    }]
+    [#{output: "active", value: facts.members_active}]
 }"#
             .to_owned(),
         ),

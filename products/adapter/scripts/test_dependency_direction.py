@@ -17,6 +17,7 @@ SPEC.loader.exec_module(MODULE)
 
 NAMES = {
     "engine": "registry-adapter",
+    "shared-engine": "registry-adapter-engine",
     "core": "registry-adapter-core",
     "ctl": "registry-adapterctl",
     "job": "registry-adapter-job",
@@ -44,15 +45,19 @@ NAMES = {
     "casework": "registry-casework",
     "evidence-core": "registry-evidence-core",
     "coordinator-core": "registry-coordinator-core",
+    "axum-alias": "axum",
+    "postgres-alias": "tokio-postgres",
 }
 
 INTENDED = {
-    "engine": ["core", "platform", "platform-script", "serde", ("platform-testing", "dev")],
+    "engine": ["shared-engine", "core", "platform", "platform-script", "serde", ("platform-testing", "dev")],
+    "shared-engine": ["core", "platform", "platform-script", "serde"],
     "core": ["platform", "serde"],
     "ctl": ["core", ("engine", "dev")],
-    # The parked connector reaches exactly one product client, optional
-    # and feature-gated; the closure check reads it with all features on,
-    # so the fixture lists it as a normal edge.
+    "job": ["shared-engine", "core", "connectors", "platform", "serde"],
+    # The job's off-by-default direct feature reaches a connector with exactly
+    # one product client. The closure check reads it with all features on, so
+    # the fixture lists it as a normal edge.
     "connectors": [
         "core",
         "breg-client",
@@ -77,10 +82,12 @@ INTENDED = {
     "coordinator-client": ["platform"],
     "stack-client": ["breg-client", "coordinator-client"],
     "cli-docs": ["engine", "ctl", "job"],
-    "evidence": ["platform"],
+    "evidence": ["shared-engine", "core", "platform"],
     "casework": ["platform"],
     "evidence-core": ["platform"],
     "coordinator-core": ["platform"],
+    "axum-alias": ["serde"],
+    "postgres-alias": ["serde"],
 }
 
 
@@ -95,8 +102,46 @@ def dependency(entry) -> dict:
 
 def metadata(**changes: list) -> dict:
     edges = {**INTENDED, **{name.replace("_", "-"): deps for name, deps in changes.items()}}
+    packages = [{"id": package_id, "name": name} for package_id, name in NAMES.items()]
+    job = next(package for package in packages if package["name"] == "registry-adapter-job")
+    job["dependencies"] = [
+        {"name": "registry-adapter-connectors", "optional": True},
+    ]
+    job["features"] = {
+        "default": [],
+        "direct-breg": [
+            "dep:registry-adapter-connectors",
+            "dep:registry-platform-crypto",
+            "dep:registry-platform-httputil",
+            "registry-adapter-connectors/breg",
+        ],
+        "native-test-support": [
+            "direct-breg",
+            "registry-adapter-connectors/native-test-support",
+        ],
+        "signed-coordinator-event": [
+            "dep:registry-adapter-connectors",
+            "dep:registry-platform-httputil",
+            "registry-adapter-connectors/coordinator-event",
+        ],
+    }
+    connector = next(
+        package
+        for package in packages
+        if package["name"] == "registry-adapter-connectors"
+    )
+    connector["features"] = {
+        "coordinator-event": [
+            "dep:registry-platform-crypto",
+            "dep:registry-platform-hooks",
+            "dep:registry-platform-httputil",
+            "dep:time",
+            "dep:tokio",
+            "dep:zeroize",
+        ],
+    }
     return {
-        "packages": [{"id": package_id, "name": name} for package_id, name in NAMES.items()],
+        "packages": packages,
         "resolve": {
             "nodes": [
                 {"id": package_id, "deps": [dependency(entry) for entry in entries]}
@@ -111,11 +156,32 @@ def failures(**changes: list) -> str:
 
 
 class EngineTests(unittest.TestCase):
+    def test_the_extracted_engine_crate_is_an_accepted_engine_boundary(self):
+        self.assertEqual(MODULE.violations(metadata()), [])
+
+    def test_the_extracted_engine_cannot_reach_the_facade_host(self):
+        found = failures(**{
+            "shared-engine": [*INTENDED["shared-engine"], "engine"],
+        })
+        self.assertIn("registry-adapter-engine reaches package(s)", found)
+        self.assertIn("registry-adapter", found)
+
+    def test_the_extracted_engine_refuses_aliased_axum_and_postgres_packages(self):
+        for dependency, package in (
+            ("axum-alias", "axum"),
+            ("postgres-alias", "tokio-postgres"),
+        ):
+            with self.subTest(dependency=dependency):
+                found = failures(**{
+                    "shared-engine": [*INTENDED["shared-engine"], dependency],
+                })
+                self.assertIn(package, found)
+
     def test_intended_direction_is_accepted(self):
         self.assertEqual(MODULE.violations(metadata()), [])
 
     def test_an_engine_crate_reaching_a_product_runtime_is_refused(self):
-        for engine in ("engine", "core", "ctl"):
+        for engine in ("engine", "shared-engine", "core", "ctl"):
             for product in ("breg", "scheduling", "documents", "coordinator", "evidence", "casework"):
                 with self.subTest(engine=engine, product=product):
                     self.assertIn(
@@ -132,7 +198,7 @@ class EngineTests(unittest.TestCase):
                 )
 
     def test_an_engine_crate_reaching_the_connector_crate_is_refused(self):
-        for engine in ("engine", "core", "ctl"):
+        for engine in ("engine", "shared-engine", "core", "ctl"):
             with self.subTest(engine=engine):
                 self.assertIn(
                     "registry-adapter-connectors",
@@ -154,7 +220,7 @@ class EngineTests(unittest.TestCase):
     def test_a_dev_dependency_of_a_reached_platform_crate_is_not_followed(self):
         self.assertEqual(
             MODULE.violations(
-                metadata(platform=["serde", ("evidence", "dev")])
+                metadata(platform=["serde", ("casework", "dev")])
             ),
             [],
         )
@@ -168,20 +234,20 @@ class EngineTests(unittest.TestCase):
         self.assertIn("registry-adapter-connectors reaches", found)
 
     def test_the_unified_facade_is_refused_everywhere_in_the_adapter(self):
-        for crate in ("engine", "core", "ctl", "connectors"):
+        for crate in ("engine", "shared-engine", "core", "ctl", "connectors"):
             with self.subTest(crate=crate):
                 found = failures(**{crate: [*INTENDED[crate], "stack-client"]})
                 self.assertIn("registry-stack-client", found)
 
 
 class ConnectorTests(unittest.TestCase):
-    def test_the_parked_connector_reaches_exactly_one_client(self):
+    def test_the_connector_reaches_exactly_one_client(self):
         self.assertEqual(
             MODULE.CONNECTOR_CLIENTS,
             {"registry-breg-client"},
         )
 
-    def test_another_product_client_is_refused_while_parked(self):
+    def test_another_product_client_is_refused(self):
         for client in ("scheduling-client", "documents-client"):
             with self.subTest(client=client):
                 self.assertIn(
@@ -244,14 +310,48 @@ class DependentTests(unittest.TestCase):
     def test_cli_docs_carries_only_the_engine_command_trees(self):
         self.assertEqual(
             MODULE.ALLOWED_DEPENDENTS,
-            {"registry-cli-docs": frozenset(
-                {
-                    "registry-adapter",
-                    "registry-adapter-core",
-                    "registry-adapter-job",
-                    "registry-adapterctl",
-                }
-            )},
+            {
+                "registry-cli-docs": frozenset(
+                    {
+                        "registry-adapter",
+                        "registry-adapter-core",
+                        "registry-adapter-engine",
+                        "registry-adapter-connectors",
+                        "registry-adapter-job",
+                        "registry-adapterctl",
+                    }
+                ),
+                "registry-evidence": frozenset(
+                    {
+                        "registry-adapter-core",
+                        "registry-adapter-engine",
+                    }
+                ),
+                "registry-casework": frozenset(
+                    {
+                        "registry-adapter-core",
+                        "registry-adapter-engine",
+                    }
+                ),
+                "registry-discovery-client": frozenset(
+                    {
+                        "registry-adapter-core",
+                        "registry-adapter-engine",
+                    }
+                ),
+                "registry-evidence-client": frozenset(
+                    {
+                        "registry-adapter-core",
+                        "registry-adapter-engine",
+                    }
+                ),
+                "registry-evidencectl": frozenset(
+                    {
+                        "registry-adapter-core",
+                        "registry-adapter-engine",
+                    }
+                ),
+            },
         )
 
     def test_cli_docs_reaching_the_connector_crate_is_refused(self):
@@ -313,13 +413,13 @@ class CommandTests(unittest.TestCase):
 
 
 class EngineModuleBoundaryTests(unittest.TestCase):
-    """The import-level boundary while the engine is a module."""
+    """The import-level boundary inside the extracted engine crate."""
 
     def tree(self, files: dict[str, str]) -> Path:
         root = tempfile.TemporaryDirectory()
         self.addCleanup(root.cleanup)
         base = Path(root.name)
-        engine = base / "crates/registry-adapter/src/engine"
+        engine = base / "crates/registry-adapter-engine/src"
         engine.mkdir(parents=True)
         for name, body in files.items():
             (engine / name).parent.mkdir(parents=True, exist_ok=True)
@@ -329,7 +429,7 @@ class EngineModuleBoundaryTests(unittest.TestCase):
     def test_a_clean_engine_module_passes(self):
         root = self.tree(
             {
-                "route.rs": "use crate::engine::exchange::Exchange;\nuse serde_json::Value;\n",
+                "route.rs": "use crate::exchange::Exchange;\nuse serde_json::Value;\n",
             }
         )
         self.assertEqual(MODULE.module_violations(root), [])
@@ -365,8 +465,8 @@ class EngineModuleBoundaryTests(unittest.TestCase):
     def test_a_brace_import_naming_a_facade_module_refuses(self):
         for body in (
             "use crate::{facade, journal};\n",
-            "use crate::{engine::exchange, facade::Problems};\n",
-            "use crate::{\n    engine::exchange,\n    journal::Entry,\n};\n",
+            "use crate::{exchange, facade::Problems};\n",
+            "use crate::{\n    exchange,\n    journal::Entry,\n};\n",
         ):
             with self.subTest(body=body):
                 root = self.tree({"route.rs": body})
@@ -375,7 +475,7 @@ class EngineModuleBoundaryTests(unittest.TestCase):
                 )
 
     def test_a_brace_import_of_engine_modules_passes(self):
-        root = self.tree({"route.rs": "use crate::{engine::exchange, engine::route};\n"})
+        root = self.tree({"route.rs": "use crate::{exchange, route};\n"})
         self.assertEqual(MODULE.module_violations(root), [])
 
     def test_a_brace_import_names_each_facade_module_it_lists(self):
@@ -429,7 +529,7 @@ class EngineModuleBoundaryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as empty:
             failures = MODULE.module_violations(Path(empty))
             self.assertEqual(len(failures), 1)
-            self.assertIn("engine module boundary is not assembled", failures[0])
+            self.assertIn("engine crate boundary is not assembled", failures[0])
 
     def test_strip_comments_removes_line_and_block_forms(self):
         text = "let a = 1; // crate::facade\n/* crate::serve */ let b = 2;\n"
@@ -443,8 +543,87 @@ class EngineModuleBoundaryTests(unittest.TestCase):
 class JobHostGraphTests(unittest.TestCase):
     """registry-adapter-job is one of the engine crates."""
 
+    def test_the_direct_breg_edge_is_accepted_only_through_the_job_host(self):
+        self.assertEqual(MODULE.violations(metadata()), [])
+        self.assertEqual(MODULE.job_feature_violations(metadata()), [])
+
+    def test_the_connector_dependency_must_stay_optional(self):
+        document = metadata()
+        job = next(
+            package
+            for package in document["packages"]
+            if package["name"] == "registry-adapter-job"
+        )
+        job["dependencies"][0]["optional"] = False
+        self.assertIn("optional normal dependency", "\n".join(
+            MODULE.job_feature_violations(document)
+        ))
+
+    def test_the_direct_breg_feature_cannot_gain_another_edge(self):
+        document = metadata()
+        job = next(
+            package
+            for package in document["packages"]
+            if package["name"] == "registry-adapter-job"
+        )
+        job["features"]["direct-breg"].append("registry-breg-client")
+        self.assertIn("must contain exactly", "\n".join(
+            MODULE.job_feature_violations(document)
+        ))
+
+    def test_the_signed_event_path_is_platform_only_and_exact(self):
+        document = metadata()
+        self.assertEqual(MODULE.job_feature_violations(document), [])
+        job = next(
+            package
+            for package in document["packages"]
+            if package["name"] == "registry-adapter-job"
+        )
+        job["features"]["signed-coordinator-event"].append(
+            "registry-coordinator-client"
+        )
+        self.assertIn(
+            "signed-coordinator-event must contain exactly",
+            "\n".join(MODULE.job_feature_violations(document)),
+        )
+
+    def test_the_connector_event_feature_cannot_gain_a_coordinator_package(self):
+        document = metadata()
+        connector = next(
+            package
+            for package in document["packages"]
+            if package["name"] == "registry-adapter-connectors"
+        )
+        connector["features"]["coordinator-event"].append(
+            "registry-coordinator"
+        )
+        self.assertIn(
+            "coordinator-event must contain exactly",
+            "\n".join(MODULE.job_feature_violations(document)),
+        )
+
+    def test_the_job_host_cannot_reach_another_product_client(self):
+        found = failures(job=[*INTENDED["job"], "coordinator-client"])
+        self.assertIn("registry-adapter-job reaches package(s)", found)
+        self.assertIn("registry-coordinator-client", found)
+
+    def test_the_job_host_cannot_link_the_breg_client_directly(self):
+        found = failures(job=[*INTENDED["job"], "breg-client"])
+        self.assertIn("registry-adapter-job reaches package(s)", found)
+        self.assertIn("registry-breg-client", found)
+
+    def test_the_job_nonconnector_subtrees_cannot_reach_the_breg_client(self):
+        found = failures(platform=[*INTENDED["platform"], "breg-client"])
+        self.assertIn("registry-adapter-job reaches package(s)", found)
+        self.assertIn("registry-breg-client", found)
+
+    def test_the_job_host_cannot_reach_the_facade_host(self):
+        found = failures(job=[*INTENDED["job"], "engine"])
+        self.assertIn("registry-adapter-job reaches package(s)", found)
+        self.assertIn("registry-adapter", found)
+
     def test_the_job_host_reaching_the_engine_is_accepted(self):
-        edges = {**INTENDED, "job": ["engine", "core", "platform", "serde"]}
+        edges = {**INTENDED, "job": ["shared-engine", "core", "platform", "serde"]}
         names = {**NAMES, "job": "registry-adapter-job"}
         self.assertEqual(
             MODULE.violations(
@@ -464,7 +643,7 @@ class JobHostGraphTests(unittest.TestCase):
         )
 
     def test_the_job_host_reaching_a_product_refuses(self):
-        edges = {**INTENDED, "job": ["engine", "core", "breg"]}
+        edges = {**INTENDED, "job": ["shared-engine", "core", "breg"]}
         names = {**NAMES, "job": "registry-adapter-job"}
         failures = MODULE.violations(
             {

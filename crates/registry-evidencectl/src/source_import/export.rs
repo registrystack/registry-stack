@@ -91,15 +91,35 @@ pub(super) fn read_export_manifest(
         })
 }
 
-/// Translate the public BReg source-export vocabulary into one normalized
-/// EvidenceProject fragment plus named Function assets. The export remains a
-/// technical source contract: it contributes no AssertionDefinition or grant.
+pub(super) fn decode_adapter_pack(
+    path: &str,
+    text: &str,
+) -> Result<registry_adapter_core::AdapterPack> {
+    let format = FormatSpec {
+        kind: registry_adapter_core::ADAPTER_PACK_KIND,
+        envelope: EnvelopeRule::ApiVersionKind {
+            api_versions: &[ApiVersion::current(
+                registry_adapter_core::ADAPTER_PACK_API_VERSION,
+            )],
+            retired_api_versions: &[],
+        },
+        removed_keys: &[],
+    };
+    Reader::new(path)
+        .decode::<registry_adapter_core::AdapterPack>(text.as_bytes(), &Expect::one(&format))
+        .map(|decoded| decoded.value)
+        .map_err(|report| anyhow!("Adapter pack was refused:\n{}", report.render_human()))
+}
+
+/// Normalize one current pack-backed source export. Pack route logic remains
+/// in its exact digest-pinned closure; the importer adds no executable
+/// compatibility Function and contributes no AssertionDefinition or grant.
 pub(super) fn normalize_artifacts(
     source_id: &str,
     artifacts: &BTreeMap<String, String>,
 ) -> Result<BTreeMap<String, String>> {
     let source_path = format!("sources/{source_id}.yaml");
-    let mut source = fragment_value(
+    let source_value = fragment_value(
         &source_path,
         artifacts
             .get(&source_path)
@@ -107,106 +127,53 @@ pub(super) fn normalize_artifacts(
         &SOURCE_FRAGMENT,
         "Evidence source fragment",
     )?;
-    let source_object = source
-        .as_object_mut()
-        .ok_or_else(|| anyhow!("exported Source must be a mapping"))?;
-    if source_object.contains_key("adapterParameters") {
-        bail!("exported Source requires adapterParameters inside request");
+    let source = serde_json::from_value::<registry_evidence_authoring::project::Source>(
+        source_value.clone(),
+    )
+    .context("the exported Source does not fit the current pack binding")?;
+    let pack_root = format!("adapter-packs/{}", source.pack.id);
+    let pack_path = format!("{pack_root}/pack.yaml");
+    let pack_text = artifacts
+        .get(&pack_path)
+        .ok_or_else(|| anyhow!("source export is missing {pack_path}"))?;
+    let pack = decode_adapter_pack(&pack_path, pack_text)?;
+    if pack.id != source.pack.id || pack.version != source.pack.version {
+        bail!("exported Source and Adapter pack identity must agree");
     }
-    let posture = source_object
-        .remove("posture")
-        .ok_or_else(|| anyhow!("exported Source requires posture"))?;
-    source_object.insert("acquisitionPosture".to_owned(), posture);
-    source_object.remove("authentication");
-    source_object.remove("baseUrl");
-
-    let request = source_object
-        .get_mut("request")
-        .and_then(Value::as_object_mut)
-        .ok_or_else(|| anyhow!("exported Source requires a request mapping"))?;
-    let selector_inputs = request
-        .remove("selectorInputs")
-        .unwrap_or_else(|| json!([]));
-    let projection = request.remove("projection").unwrap_or_else(|| json!([]));
-    let prepare_script = request
-        .remove("prepareScript")
-        .and_then(|value| value.as_str().map(str::to_owned))
-        .ok_or_else(|| anyhow!("exported Source requires prepareScript"))?;
-    let adapter_schema_path = request
-        .remove("adapterParametersSchema")
-        .and_then(|value| value.as_str().map(str::to_owned))
-        .ok_or_else(|| anyhow!("exported Source requires adapterParametersSchema"))?;
-    let adapter_parameters = request.remove("adapterParameters");
-    let redirects = request
-        .remove("redirects")
-        .ok_or_else(|| anyhow!("exported Source requires redirects"))?;
-    if redirects.as_str() != Some("deny") {
-        bail!("exported Source requires redirects to be `deny`");
+    let route = pack
+        .source_routes
+        .get(source.route.as_str())
+        .ok_or_else(|| {
+            anyhow!("exported Adapter pack does not declare the selected source route")
+        })?;
+    let evidence = route
+        .evidence
+        .as_ref()
+        .ok_or_else(|| anyhow!("exported source route requires an Evidence contract"))?;
+    if serde_json::to_value(evidence.acquisition_posture)?
+        != serde_json::to_value(source.acquisition_posture)?
+    {
+        bail!("exported Source posture must equal its pinned route contract");
     }
-    let timeout = request
-        .remove("attemptTimeoutMilliseconds")
-        .unwrap_or_else(|| json!(5000));
-    let maximum_bytes = request
-        .remove("maximumResponseBytes")
-        .unwrap_or_else(|| json!(65536));
-    request.remove("maximumConcurrency");
-    let preparation_limits = request.remove("preparationLimits");
 
-    let response_schema_path = source_object
-        .remove("responseSchema")
-        .and_then(|value| value.as_str().map(str::to_owned))
-        .ok_or_else(|| anyhow!("exported Source requires responseSchema"))?;
-    let extract_script = source_object
-        .remove("extractScript")
-        .and_then(|value| value.as_str().map(str::to_owned))
-        .ok_or_else(|| anyhow!("exported Source requires extractScript"))?;
-    let facts_schema_path = source_object
-        .remove("factSchema")
-        .and_then(|value| value.as_str().map(str::to_owned))
-        .ok_or_else(|| anyhow!("exported Source requires factSchema"))?;
-    let response_shape = yaml_value(
-        &response_schema_path,
-        artifacts
-            .get(&response_schema_path)
-            .ok_or_else(|| anyhow!("source export is missing {response_schema_path}"))?,
-    )?;
-    let facts_schema = yaml_value(
-        &facts_schema_path,
-        artifacts
-            .get(&facts_schema_path)
-            .ok_or_else(|| anyhow!("source export is missing {facts_schema_path}"))?,
-    )?;
-    let facts = facts_schema
-        .get("properties")
-        .and_then(Value::as_object)
-        .cloned()
-        .ok_or_else(|| anyhow!("exported fact schema requires properties"))?;
-    let adapter_parameters_schema = yaml_value(
-        &adapter_schema_path,
-        artifacts
-            .get(&adapter_schema_path)
-            .ok_or_else(|| anyhow!("source export is missing {adapter_schema_path}"))?,
-    )?;
+    let mut expected = BTreeMap::from([(source_path.clone(), ()), (pack_path.clone(), ())]);
+    let mut pins = BTreeMap::new();
+    for reference in pack.pinned_files() {
+        if let Some(existing) = pins.insert(reference.path.as_str(), reference.digest.as_str()) {
+            if existing != reference.digest.as_str() {
+                bail!("exported Adapter pack has conflicting pins for one artifact path");
+            }
+        }
+        let path = format!("{pack_root}/{}", reference.path);
+        let text = artifacts
+            .get(&path)
+            .ok_or_else(|| anyhow!("source export is missing pinned pack artifact {path}"))?;
+        if super::files::digest(text.as_bytes()) != reference.digest.hex() {
+            bail!("exported Adapter pack artifact does not match its digest pin: {path}");
+        }
+        expected.insert(path, ());
+    }
 
-    let selectors = selector_inputs
-        .as_array()
-        .into_iter()
-        .flatten()
-        .map(|input| {
-            let role = input
-                .get("role")
-                .cloned()
-                .ok_or_else(|| anyhow!("exported selector input requires role"))?;
-            let profiles = input
-                .get("alternatives")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(|alternative| alternative.get("profile").cloned())
-                .collect::<Vec<_>>();
-            Ok(json!({"role":role,"profiles":profiles}))
-        })
-        .collect::<Result<Vec<_>>>()?;
     let mut selector_profiles = BTreeMap::new();
     for path in artifacts
         .keys()
@@ -230,91 +197,41 @@ pub(super) fn normalize_artifacts(
             )
             .with_context(|| format!("{path} does not fit EvidenceProject"))?;
         selector_profiles.insert(id.to_owned(), serde_json::to_value(profile)?);
+        expected.insert(path.clone(), ());
+    }
+    let referenced_profiles = source
+        .inputs
+        .values()
+        .map(|input| input.selector.profile.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    let exported_profiles = selector_profiles
+        .keys()
+        .map(String::as_str)
+        .collect::<std::collections::BTreeSet<_>>();
+    if referenced_profiles != exported_profiles {
+        bail!("exported selector fragments must exactly cover the Source input bindings");
+    }
+    if artifacts.keys().any(|path| !expected.contains_key(path)) {
+        bail!(
+            "source export contains an artifact outside its current Source and pinned pack closure"
+        );
     }
 
-    let prepare_id = format!("{source_id}-prepare");
-    let extract_id = format!("{source_id}-extract");
-    source_object.insert("selectors".to_owned(), Value::Array(selectors));
-    source_object.insert(
-        "response".to_owned(),
-        json!({"projection":projection,"shape":response_shape,"maximumBytes":maximum_bytes}),
-    );
-    source_object.insert("prepare".to_owned(), json!({"function":prepare_id}));
-    source_object.insert("extract".to_owned(), json!({"function":extract_id}));
-    source_object.insert("facts".to_owned(), Value::Object(facts));
-    source_object.insert(
-        "limits".to_owned(),
-        json!({"attemptTimeoutMilliseconds":timeout,"maximumConcurrency":8}),
-    );
-    source_object.insert(
-        "adapterParametersSchema".to_owned(),
-        adapter_parameters_schema,
-    );
-    if let Some(parameters) = adapter_parameters {
-        source_object.insert("adapterParameters".to_owned(), parameters);
-    }
-    if let Some(limits) = preparation_limits {
-        source_object.insert("preparationLimits".to_owned(), limits);
-    }
-    let source = serde_json::to_value(
-        serde_json::from_value::<registry_evidence_authoring::project::Source>(source)
-            .context("the exported Source does not fit EvidenceProject")?,
-    )?;
-
-    let mut functions = vec![
-        json!({"id":prepare_id,"interface":"source-prepare/v1","source":format!("functions/{source_id}-prepare.rhai")}),
-        json!({"id":extract_id,"interface":"source-extract/v1","source":format!("functions/{source_id}-extract.rhai")}),
-    ];
-    let mut extra_functions = BTreeMap::new();
-    for (path, text) in artifacts.iter().filter(|(path, _)| {
-        path.starts_with("adapters/")
-            && path.ends_with(".rhai")
-            && path.as_str() != prepare_script
-            && path.as_str() != extract_script
-    }) {
-        let id = path
-            .trim_start_matches("adapters/")
-            .trim_end_matches(".rhai");
-        functions.push(json!({"id":id,"interface":"source-extract/v1","source":format!("functions/{id}.rhai")}));
-        extra_functions.insert(format!("functions/{id}.rhai"), text.clone());
-    }
-    let fragment = json!({"functions":functions,"sourceId":source_id,"source":source});
-    let prepare = artifacts
-        .get(&prepare_script)
-        .ok_or_else(|| anyhow!("source export is missing {prepare_script}"))?;
-    let extract = artifacts
-        .get(&extract_script)
-        .ok_or_else(|| anyhow!("source export is missing {extract_script}"))?;
-    let mut normalized = BTreeMap::from([
-        (
-            format!("source-fragments/{source_id}.json"),
-            serde_json::to_string_pretty(&fragment)?,
-        ),
-        (
-            format!("functions/{source_id}-prepare.rhai"),
-            prepare.clone(),
-        ),
-        (
-            format!("functions/{source_id}-extract.rhai"),
-            extract.clone(),
-        ),
-    ]);
+    let fragment = json!({"functions":[],"sourceId":source_id,"source":source_value});
+    let mut normalized = BTreeMap::from([(
+        format!("source-fragments/{source_id}.json"),
+        serde_json::to_string_pretty(&fragment)?,
+    )]);
     for (id, profile) in selector_profiles {
         normalized.insert(
             format!("selector-fragments/{id}.json"),
             serde_json::to_string_pretty(&profile)?,
         );
     }
-    normalized.extend(extra_functions);
-    Ok(normalized)
-}
-
-fn yaml_value(path: &str, text: &str) -> Result<Value> {
-    match Reader::new(path).scan(text.as_bytes()) {
-        Ok(Some(node)) => Ok(node.to_json_value()),
-        Ok(None) => bail!("{path} is empty"),
-        Err(report) => bail!("{path} was refused:\n{}", report.render_human()),
+    for path in expected.keys().filter(|path| path.starts_with(&pack_root)) {
+        normalized.insert(path.clone(), artifacts[path].clone());
     }
+    Ok(normalized)
 }
 
 fn fragment_value(

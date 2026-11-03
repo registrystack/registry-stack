@@ -30,7 +30,9 @@ authentication:
     requiredScopes:
     - evidence:request
     maximumTokenLifetimeSeconds: 300
-connections: {}
+connections:
+  record-status-extract:
+    endpoints: {}
 secretProviders:
   file:
     root: .generated/secrets

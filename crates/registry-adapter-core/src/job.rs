@@ -6,16 +6,17 @@
 //! (`products/adapter/CONCEPT.md` sections 17.1 and 17.2).
 //!
 //! A job pairs one pack source route with an explicit, bounded profile and
-//! runs beside the facade: no listener, no inbound record shape, and no
-//! facade ceiling change. Every bound here is a check-time guarantee the
+//! runs beside the facade with no inbound record shape or facade ceiling
+//! change. An optional authenticated listener only wakes source-reading passes. Every bound here is a check-time guarantee the
 //! engine enforces again at the edge; every refusal carries a value-free
 //! `adapter.job.*` code.
 
 use std::collections::HashSet;
 
-use registry_platform_yaml::{Diagnostic, LocalId};
+use registry_platform_yaml::{Diagnostic, Digest, LocalId};
 use serde::{Deserialize, Serialize};
 
+use crate::model::serialize_tagged_union;
 use crate::pack::AdapterPack;
 use crate::route::Step;
 
@@ -100,7 +101,7 @@ pub const MAXIMUM_NEXT_BYTES: usize = 2048;
 
 /// The closed decoder names a `pollEnrich` step may write. Anything else
 /// refuses under `adapter.job.decoder-unknown`.
-pub const POLL_DECODER_NAMES: &[&str] = &["csv", "jsonl", "raw"];
+pub const POLL_DECODER_NAMES: &[&str] = &["csv", "jsonl", "rabbitmq-json", "raw"];
 
 /// The job's own upstream-call ceiling: the largest
 /// `maximumUpstreamCalls` a job profile may declare. A pass never needs
@@ -121,9 +122,12 @@ pub const MAXIMUM_PROJECTION_SEGMENTS: usize = 8;
 /// The largest serialized projection field list, in bytes.
 pub const MAXIMUM_PROJECTION_BYTES: usize = 2_048;
 
-/// The closed trigger kinds a job may declare: `interval`, the served
-/// kind, and `hook`, the declared seam the checks refuse until it is
-/// built (`adapter.job.trigger-hook-unserved`).
+/// The row-key wire encoding version, also committed into the durable file
+/// identity fence. A changed encoder must change this shared version.
+pub const FILE_ROW_IDENTITY_VERSION: &str = "file-row-v1";
+
+/// The closed trigger kinds a job may declare. Hook ingress requires the
+/// host's explicit feature; interval reconciliation remains mandatory.
 pub const TRIGGER_KIND_VALUES: &[&str] = &["interval", "hook"];
 
 /// The most triggers one job may declare. Coordinator holds its
@@ -131,6 +135,17 @@ pub const TRIGGER_KIND_VALUES: &[&str] = &["interval", "hook"];
 /// (crates/registry-coordinator/src/event_trigger.rs), so a deployment
 /// reasons about one trigger-count shape across products.
 pub const MAXIMUM_JOB_TRIGGERS: usize = 16;
+
+/// The longest direct-BReg receipt horizon a job may declare, in days.
+/// Ten years is deliberately generous while keeping age arithmetic and
+/// operator warning windows bounded.
+pub const MAXIMUM_RECEIPT_RETENTION_DAYS: u16 = 3_650;
+
+/// The longest authored Coordinator event source or data-schema identifier.
+pub const MAXIMUM_EVENT_URI_BYTES: usize = 2_048;
+
+/// The longest authored Coordinator event type.
+pub const MAXIMUM_EVENT_TYPE_BYTES: usize = 256;
 
 /// The shortest interval between two passes, in milliseconds: one
 /// second. Camel's scheduler consumer defaults to a 500-millisecond
@@ -175,6 +190,8 @@ pub enum JobCode {
     CallBudget,
     ComponentFacadeRefused,
     DecoderUnknown,
+    DestinationBound,
+    DestinationShape,
     EndpointResponseBound,
     PageBytesBound,
     PageItemsBound,
@@ -185,6 +202,8 @@ pub enum JobCode {
     PollEndpointUnknown,
     PollFacadeRefused,
     PollTimeout,
+    PostgresKeyRequired,
+    PostgresParametersRequired,
     PostgresParametersUnbounded,
     PostgresQueryUnpinned,
     ProfileBound,
@@ -214,6 +233,8 @@ impl JobCode {
         Self::CallBudget,
         Self::ComponentFacadeRefused,
         Self::DecoderUnknown,
+        Self::DestinationBound,
+        Self::DestinationShape,
         Self::EndpointResponseBound,
         Self::PageBytesBound,
         Self::PageItemsBound,
@@ -224,6 +245,8 @@ impl JobCode {
         Self::PollEndpointUnknown,
         Self::PollFacadeRefused,
         Self::PollTimeout,
+        Self::PostgresKeyRequired,
+        Self::PostgresParametersRequired,
         Self::PostgresParametersUnbounded,
         Self::PostgresQueryUnpinned,
         Self::ProfileBound,
@@ -253,6 +276,8 @@ impl JobCode {
             Self::CallBudget => "adapter.job.call-budget",
             Self::ComponentFacadeRefused => "adapter.job.component-facade-refused",
             Self::DecoderUnknown => "adapter.job.decoder-unknown",
+            Self::DestinationBound => "adapter.job.destination-bound",
+            Self::DestinationShape => "adapter.job.destination-shape",
             Self::EndpointResponseBound => "adapter.job.endpoint-response-bound",
             Self::PageBytesBound => "adapter.job.page-bytes-bound",
             Self::PageItemsBound => "adapter.job.page-items-bound",
@@ -263,6 +288,8 @@ impl JobCode {
             Self::PollEndpointUnknown => "adapter.job.poll-endpoint-unknown",
             Self::PollFacadeRefused => "adapter.job.poll-facade-refused",
             Self::PollTimeout => "adapter.job.poll-timeout",
+            Self::PostgresKeyRequired => "adapter.job.postgres-key-required",
+            Self::PostgresParametersRequired => "adapter.job.postgres-parameters-required",
             Self::PostgresParametersUnbounded => "adapter.job.postgres-parameters-unbounded",
             Self::PostgresQueryUnpinned => "adapter.job.postgres-query-unpinned",
             Self::ProfileBound => "adapter.job.profile-bound",
@@ -300,6 +327,8 @@ impl JobCode {
             | Self::PollEndpointUnknown
             | Self::PollFacadeRefused
             | Self::PollTimeout
+            | Self::PostgresKeyRequired
+            | Self::PostgresParametersRequired
             | Self::PostgresParametersUnbounded
             | Self::PostgresQueryUnpinned
             | Self::SendComponentRefused
@@ -312,6 +341,8 @@ impl JobCode {
             | Self::SourceRescanDelay
             | Self::SourceScanRequired => crate::naming::ADAPTER_PACK_KIND,
             Self::CallBudget
+            | Self::DestinationBound
+            | Self::DestinationShape
             | Self::PageBytesBound
             | Self::PageItemsBound
             | Self::PageKey
@@ -449,6 +480,9 @@ pub struct AdapterJob {
     pub job: JobIdentity,
     /// The pinned pack and the source route the job runs.
     pub source: JobSource,
+    /// The one reviewed destination this job hands every item to. Runtime
+    /// connection material is bound separately by `binding`.
+    pub destination: JobDestination,
     /// The projection of each source item the destination needs; the checks
     /// refuse a job that declares none, so every job's data minimization
     /// is explicit.
@@ -460,6 +494,101 @@ pub struct AdapterJob {
     pub triggers: Vec<JobTrigger>,
     /// The bounded job profile.
     pub profile: JobProfile,
+}
+
+/// The two governed-ingestion destinations. The authored job selects one;
+/// a refusal never selects or falls back to the other.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    remote = "Self",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum JobDestination {
+    /// Map the projection in-process and invoke one BReg Action, either
+    /// immediately or through Proposal start and submit.
+    DirectBreg {
+        /// The runtime destination binding id.
+        binding: LocalId,
+        /// The caller-filtered BReg access profile selected in metadata.
+        access_profile: String,
+        /// The BReg Action identifier selected in metadata.
+        action: String,
+        /// Whether the selected Action is expected to be immediate or a
+        /// Proposal. A metadata mismatch refuses rather than changing mode.
+        mode: DirectBregMode,
+        /// The job-owned, digest-pinned Rhai mapping from the declared
+        /// projection to the operation input.
+        mapping: DestinationMapping,
+        /// The deployment's expected BReg receipt retention horizon.
+        #[cfg_attr(feature = "schema", schemars(range(min = 1, max = 3650)))]
+        receipt_retention_days: u16,
+    },
+    /// Sign the declared projection as an event for one Coordinator workflow
+    /// trigger. Coordinator owns any lookup, choice, wait, or review flow.
+    SignedCoordinatorEvent {
+        /// The runtime destination binding id.
+        binding: LocalId,
+        /// The reviewed Coordinator workflow id.
+        workflow: LocalId,
+        /// The reviewed event trigger id inside the workflow.
+        trigger: LocalId,
+        /// The event source identifier.
+        source: String,
+        /// The event type identifier.
+        event_type: String,
+        /// The schema identifier for the projected event data.
+        data_schema: String,
+        /// Optional receiver for a changed item, inside the same workflow and
+        /// runtime binding. Absent, revised items remain held.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        revised_receiver: Option<RevisedEventReceiver>,
+    },
+}
+
+/// The explicitly reviewed event receiver for revised source items.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RevisedEventReceiver {
+    /// The revised-item trigger inside the destination workflow.
+    pub trigger: LocalId,
+    /// The revised event type identifier.
+    pub event_type: String,
+    /// The revised event data schema identifier.
+    pub data_schema: String,
+}
+
+registry_platform_yaml::tagged_union!(JobDestination, tag = "type");
+serialize_tagged_union!(JobDestination, tag = "type");
+
+/// The fixed operation form the direct destination expects metadata to
+/// disclose. It never changes mode after an item refusal.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DirectBregMode {
+    /// Invoke the Action and receive its terminal receipt.
+    Immediate,
+    /// Start and submit one Proposal.
+    Proposal,
+}
+
+/// One job-owned direct-destination mapping. Its file is resolved relative to
+/// the job document, not the provider pack, so an institution can reuse the
+/// same source integration without forking it for programme semantics.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DestinationMapping {
+    /// The clean relative path of the Rhai source beside the job document.
+    pub file: String,
+    /// The precompiled one-argument entrypoint the job host calls.
+    pub entrypoint: String,
+    /// The exact sha256 digest of the mapping source bytes.
+    pub digest: Digest,
 }
 
 impl AdapterJob {
@@ -605,8 +734,8 @@ fn is_default_digest_of(digest_of: &ProjectionDigestOf) -> bool {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct JobTrigger {
-    /// The trigger kind, one of [`TRIGGER_KIND_VALUES`]: `interval`, the
-    /// served kind, or `hook`, the declared seam. Mandatory in effect:
+    /// The trigger kind, one of [`TRIGGER_KIND_VALUES`]: `interval` or
+    /// `hook`. Mandatory in effect:
     /// the checks refuse a trigger that names no kind, or a kind outside
     /// the closed set, under `adapter.job.trigger-kind`.
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -683,13 +812,13 @@ pub struct JobTrigger {
         schemars(range(min = MINIMUM_TRIGGER_BACKOFF_MULTIPLIER))
     )]
     pub backoff_multiplier: u32,
-    /// The listener path a `hook` trigger waits on. Contract-only: the
-    /// checks refuse every hook trigger under
-    /// `adapter.job.trigger-hook-unserved` until the hook seam is built,
-    /// so no pack or job can silently rely on one; the hook body is
-    /// never trusted or stored, and no listener is built here.
+    /// The clean listener path that wakes a pass. The pass re-reads the
+    /// authoritative source; hook bodies never become source items.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    /// The operator binding supplying this hook's credentials and rate limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binding: Option<LocalId>,
 }
 
 fn default_trigger_delay_milliseconds() -> u64 {
@@ -714,6 +843,15 @@ fn default_trigger_backoff_multiplier() -> u32 {
 
 fn is_default_trigger_backoff_multiplier(value: &u32) -> bool {
     *value == 1
+}
+
+/// A value-free location in a decoded source file. Ordinals include headers
+/// and skipped physical input records according to the decoder contract.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RecordLocator {
+    /// The zero-based source record ordinal, including a CSV header record.
+    pub ordinal: u64,
 }
 
 /// One source item of the item contract
@@ -1080,10 +1218,131 @@ pub fn check_job(job: &AdapterJob, pack: &AdapterPack) -> Vec<Diagnostic> {
     findings.extend(profile_bound_checks(&job.profile));
     findings.extend(profile_consistency_checks(&job.profile));
     findings.extend(profile_endpoint_checks(job, pack));
+    findings.extend(destination_checks(&job.destination));
     findings.extend(projection_checks(&job.projection));
     findings.extend(trigger_checks(&job.triggers));
     findings.extend(call_budget_checks(job, pack));
     findings
+}
+
+/// The authored destination carries no secret or origin, but every selector
+/// and event identifier is still finite and printable. The direct receipt
+/// horizon is mandatory and bounded because it decides when an uncertain
+/// pending delivery must stop retrying and become held.
+fn destination_checks(destination: &JobDestination) -> Vec<Diagnostic> {
+    let mut findings = Vec::new();
+    match destination {
+        JobDestination::DirectBreg {
+            access_profile,
+            action,
+            mapping,
+            receipt_retention_days,
+            ..
+        } => {
+            for (field, value) in [("accessProfile", access_profile), ("action", action)] {
+                if !visible_bounded(value, 128) {
+                    findings.push(job_finding(
+                        JobCode::DestinationShape,
+                        &format!("/destination/{field}"),
+                        "the direct destination selector is empty, contains a control character, or exceeds its bound",
+                        "Declare a printable selector of at most 128 bytes.",
+                    ));
+                }
+            }
+            if !(1..=MAXIMUM_RECEIPT_RETENTION_DAYS).contains(receipt_retention_days) {
+                findings.push(job_finding(
+                    JobCode::DestinationBound,
+                    "/destination/receiptRetentionDays",
+                    "the direct destination receipt horizon lies outside its 1-to-maximum range",
+                    &format!(
+                        "Declare the BReg receipt horizon inside its 1 to {MAXIMUM_RECEIPT_RETENTION_DAYS} day range."
+                    ),
+                ));
+            }
+            if !clean_job_artifact_path(&mapping.file) {
+                findings.push(job_finding(
+                    JobCode::DestinationShape,
+                    "/destination/mapping/file",
+                    "the direct destination mapping path is not a clean bounded job-relative path",
+                    "Declare a non-empty relative path of at most 256 bytes with no empty, dot, parent, or backslash segment.",
+                ));
+            }
+            if !visible_bounded(&mapping.entrypoint, 128) {
+                findings.push(job_finding(
+                    JobCode::DestinationShape,
+                    "/destination/mapping/entrypoint",
+                    "the direct destination mapping entrypoint is empty, contains a control character, or exceeds its bound",
+                    "Declare a printable entrypoint of at most 128 bytes.",
+                ));
+            }
+        }
+        JobDestination::SignedCoordinatorEvent {
+            trigger,
+            source,
+            event_type,
+            data_schema,
+            revised_receiver,
+            ..
+        } => {
+            if let Some(receiver) = revised_receiver {
+                if receiver.trigger == *trigger {
+                    findings.push(job_finding(
+                        JobCode::DestinationShape,
+                        "/destination/revisedReceiver/trigger",
+                        "the revised receiver selects the registration trigger",
+                        "Declare a distinct revised-item trigger in the same workflow.",
+                    ));
+                }
+                for (field, value, maximum) in [
+                    ("eventType", &receiver.event_type, MAXIMUM_EVENT_TYPE_BYTES),
+                    ("dataSchema", &receiver.data_schema, MAXIMUM_EVENT_URI_BYTES),
+                ] {
+                    if !visible_bounded(value, maximum) {
+                        findings.push(job_finding(
+                            JobCode::DestinationShape,
+                            &format!("/destination/revisedReceiver/{field}"),
+                            "the revised-event identifier is outside its printable bound",
+                            &format!("Declare a printable identifier of at most {maximum} bytes."),
+                        ));
+                    }
+                }
+            }
+            for (field, value, maximum) in [
+                ("source", source, MAXIMUM_EVENT_URI_BYTES),
+                ("eventType", event_type, MAXIMUM_EVENT_TYPE_BYTES),
+                ("dataSchema", data_schema, MAXIMUM_EVENT_URI_BYTES),
+            ] {
+                if !visible_bounded(value, maximum) {
+                    findings.push(job_finding(
+                        JobCode::DestinationShape,
+                        &format!("/destination/{field}"),
+                        "the signed-event identifier is empty, contains a control character, or exceeds its bound",
+                        &format!("Declare a printable identifier of at most {maximum} bytes."),
+                    ));
+                }
+            }
+        }
+    }
+    findings
+}
+
+fn clean_job_artifact_path(path: &str) -> bool {
+    !path.is_empty()
+        && path.len() <= 256
+        && !path.starts_with('/')
+        && !path.contains('\\')
+        && !path.contains(':')
+        && path
+            .split('/')
+            .all(|segment| !segment.is_empty() && segment != "." && segment != "..")
+}
+
+fn visible_bounded(value: &str, maximum: usize) -> bool {
+    !value.is_empty()
+        && value.len() <= maximum
+        && value
+            .chars()
+            .all(|character| !character.is_control() && !character.is_whitespace())
 }
 
 /// The profile bounds: every member inside its declared range, the field
@@ -1288,9 +1547,8 @@ fn is_identifier_byte(byte: u8) -> bool {
 /// The trigger checks: the job names at least one trigger and at most
 /// [`MAXIMUM_JOB_TRIGGERS`], every trigger names a kind in
 /// [`TRIGGER_KIND_VALUES`], every interval trigger sits inside its
-/// option bounds, and a hook trigger is refused outright as the
-/// contract-only seam it is. The hook refusal fires at check time so no
-/// pack or job can silently rely on the seam before it is built.
+/// option bounds. Hook bindings and paths are unique and always accompany
+/// an interval trigger, which reconciles notifications lost at the edge.
 fn trigger_checks(triggers: &[JobTrigger]) -> Vec<Diagnostic> {
     let mut findings = Vec::new();
     if triggers.is_empty() {
@@ -1309,6 +1567,18 @@ fn trigger_checks(triggers: &[JobTrigger]) -> Vec<Diagnostic> {
             "Declare at most 16 triggers, the bound Coordinator holds its workflows to.",
         ));
     }
+    if triggers.iter().any(|trigger| trigger.kind == "hook")
+        && !triggers.iter().any(|trigger| trigger.kind == "interval")
+    {
+        findings.push(job_finding(
+            JobCode::TriggersRequired,
+            "/triggers",
+            "a hook job has no interval reconciliation trigger",
+            "Declare an interval trigger so a missed hook cannot strand source changes.",
+        ));
+    }
+    let mut hook_paths = std::collections::BTreeSet::new();
+    let mut hook_bindings = std::collections::BTreeSet::new();
     for (index, trigger) in triggers.iter().enumerate() {
         let prefix = format!("/triggers/{index}");
         match trigger.kind.as_str() {
@@ -1319,6 +1589,14 @@ fn trigger_checks(triggers: &[JobTrigger]) -> Vec<Diagnostic> {
                         &format!("{prefix}/path"),
                         "the interval trigger carries the hook-only path member",
                         "Drop path; only a hook trigger names a path.",
+                    ));
+                }
+                if trigger.binding.is_some() {
+                    findings.push(job_finding(
+                        JobCode::TriggerKind,
+                        &format!("{prefix}/binding"),
+                        "the interval trigger carries the hook-only binding member",
+                        "Drop binding; only a hook trigger names a binding.",
                     ));
                 }
                 let bounds: [(&str, u64, u64, u64); 5] = [
@@ -1364,25 +1642,63 @@ fn trigger_checks(triggers: &[JobTrigger]) -> Vec<Diagnostic> {
                     }
                 }
             }
-            "hook" => match &trigger.path {
-                None => findings.push(job_finding(
-                    JobCode::TriggerKind,
-                    &format!("{prefix}/path"),
-                    "the hook trigger names no path",
-                    "Name the listener path the hook waits on.",
-                )),
-                Some(_) => findings.push(job_finding(
-                    JobCode::TriggerHookUnserved,
-                    &prefix,
-                    "a hook trigger is a contract-only seam no engine serves yet",
-                    "Replace the hook trigger with an interval trigger until the hook seam is built; a hook only starts a pass, which re-reads the source.",
-                )),
-            },
+            "hook" => {
+                let valid_path = trigger.path.as_ref().is_some_and(|path| {
+                    path.len() <= 256
+                        && path.strip_prefix('/').is_some_and(|relative| {
+                            !relative.is_empty()
+                                && relative.split('/').all(|segment| {
+                                    !segment.is_empty()
+                                        && !matches!(segment, "." | "..")
+                                        && segment.bytes().all(|byte| {
+                                            byte.is_ascii_alphanumeric()
+                                                || matches!(byte, b'-' | b'.' | b'_' | b'~')
+                                        })
+                                })
+                        })
+                });
+                if !valid_path || !hook_paths.insert(trigger.path.as_deref()) {
+                    findings.push(job_finding(JobCode::TriggerKind, &format!("{prefix}/path"),
+                        "the hook path is missing, unclean, overbound, or repeated",
+                        "Declare one unique absolute path of at most 256 bytes using slash-separated ASCII unreserved segments, without dot segments."));
+                }
+                if let Some(binding) = trigger.binding.as_ref() {
+                    if !hook_bindings.insert(binding) {
+                        findings.push(job_finding(
+                            JobCode::TriggerKind,
+                            &format!("{prefix}/binding"),
+                            "the hook binding is repeated",
+                            "Declare one unique runtime hook binding.",
+                        ));
+                    }
+                } else {
+                    findings.push(job_finding(
+                        JobCode::TriggerHookUnserved,
+                        &format!("{prefix}/binding"),
+                        "the hook has no runtime authentication and rate binding",
+                        "Declare the unique hookIngress source binding that serves this hook.",
+                    ));
+                }
+                if trigger.delay_milliseconds != DEFAULT_TRIGGER_DELAY_MILLISECONDS
+                    || trigger.initial_delay_milliseconds != 0
+                    || trigger.greedy
+                    || trigger.backoff_idle_threshold != 0
+                    || trigger.backoff_error_threshold != 0
+                    || trigger.backoff_multiplier != 1
+                {
+                    findings.push(job_finding(
+                        JobCode::TriggerKind,
+                        &prefix,
+                        "the hook carries interval scheduling options",
+                        "Declare scheduling options only on the interval trigger.",
+                    ));
+                }
+            }
             _ => findings.push(job_finding(
                 JobCode::TriggerKind,
                 &format!("{prefix}/kind"),
                 "the trigger names no kind in the closed interval-and-hook set",
-                "Declare kind as interval, or hook once the seam is served.",
+                "Declare kind as interval or hook.",
             )),
         }
     }
@@ -1441,24 +1757,30 @@ fn collect_reached_endpoints<'a>(
             Step::To(to) => match to.uri.component {
                 crate::model::SendComponent::Http
                 | crate::model::SendComponent::GraphQl
-                | crate::model::SendComponent::Postgres => {
+                | crate::model::SendComponent::Postgres
+                | crate::model::SendComponent::SqliteExtract => {
                     reached.insert(to.uri.id.clone());
                 }
                 crate::model::SendComponent::Direct => {
                     expand_reached(to.uri.id.as_str(), pack, visiting, depth, reached);
                 }
-                crate::model::SendComponent::File | crate::model::SendComponent::Sftp => {}
+                crate::model::SendComponent::File
+                | crate::model::SendComponent::RabbitMq
+                | crate::model::SendComponent::Sftp => {}
             },
             Step::Enrich(enrich) => match enrich.uri.component {
                 crate::model::SendComponent::Http
                 | crate::model::SendComponent::GraphQl
-                | crate::model::SendComponent::Postgres => {
+                | crate::model::SendComponent::Postgres
+                | crate::model::SendComponent::SqliteExtract => {
                     reached.insert(enrich.uri.id.clone());
                 }
                 crate::model::SendComponent::Direct => {
                     expand_reached(enrich.uri.id.as_str(), pack, visiting, depth, reached);
                 }
-                crate::model::SendComponent::File | crate::model::SendComponent::Sftp => {}
+                crate::model::SendComponent::File
+                | crate::model::SendComponent::RabbitMq
+                | crate::model::SendComponent::Sftp => {}
             },
             // A poll names its endpoint through the step's static URI, not
             // a send; the poll page is bounded by the read bounds, so no
@@ -1578,6 +1900,7 @@ mod tests {
             backoff_error_threshold: 0,
             backoff_multiplier: 1,
             path: None,
+            binding: None,
         }
     }
 
@@ -1605,6 +1928,15 @@ mod tests {
                     digest: Digest::new(DIGEST).expect("digest"),
                 },
                 route: source_route.to_string(),
+            },
+            destination: JobDestination::SignedCoordinatorEvent {
+                binding: LocalId::new("case-coordinator").expect("id"),
+                workflow: LocalId::new("register-household").expect("id"),
+                trigger: LocalId::new("submission-received").expect("id"),
+                source: "urn:registry-adapter:job:kobo-daily".to_string(),
+                event_type: "org.openspp.registry.household-submitted.v1".to_string(),
+                data_schema: "urn:registry-adapter:schema:household-submitted:v1".to_string(),
+                revised_receiver: None,
             },
             projection: projection(),
             triggers: vec![interval_trigger()],
@@ -1689,6 +2021,64 @@ mod tests {
         );
     }
 
+    /// Every job selects exactly one destination in reviewed configuration.
+    /// The destination is required, closed by kind, and carries only authored
+    /// identity and mapping policy. Runtime origins and secrets never enter
+    /// this artifact.
+    #[test]
+    fn job_requires_one_closed_destination() {
+        let mut direct = serde_json::to_value(job("kobo-submissions")).expect("serialize");
+        direct["destination"] = serde_json::json!({
+            "type": "direct-breg",
+            "binding": "civil-registry",
+            "accessProfile": "ingestion",
+            "action": "register-household",
+            "mode": "proposal",
+            "mapping": {
+                "file": "scripts/register-household.rhai",
+                "entrypoint": "map_submission",
+                "digest": DIGEST
+            },
+            "receiptRetentionDays": 7
+        });
+        let parsed = serde_json::from_value::<AdapterJob>(direct.clone())
+            .expect("a direct BReg destination is admitted");
+        assert_eq!(
+            serde_json::to_value(parsed).expect("serialize")["destination"],
+            direct["destination"]
+        );
+
+        let mut coordinator = direct;
+        coordinator["destination"] = serde_json::json!({
+            "type": "signed-coordinator-event",
+            "binding": "case-coordinator",
+            "workflow": "register-household",
+            "trigger": "submission-received",
+            "source": "urn:registry-adapter:job:kobo-daily",
+            "eventType": "org.openspp.registry.household-submitted.v1",
+            "dataSchema": "urn:registry-adapter:schema:household-submitted:v1"
+        });
+        serde_json::from_value::<AdapterJob>(coordinator)
+            .expect("a signed Coordinator event destination is admitted");
+
+        let mut missing = serde_json::to_value(job("kobo-submissions")).expect("serialize");
+        missing
+            .as_object_mut()
+            .expect("a job object")
+            .remove("destination");
+        assert!(
+            serde_json::from_value::<AdapterJob>(missing).is_err(),
+            "a job without a destination is refused"
+        );
+
+        let mut unknown = serde_json::to_value(job("kobo-submissions")).expect("serialize");
+        unknown["destination"] = serde_json::json!({"type": "webhook"});
+        assert!(
+            serde_json::from_value::<AdapterJob>(unknown).is_err(),
+            "the destination set is closed"
+        );
+    }
+
     /// The job checks accept a sound job over a sound pack: the source
     /// route resolves and every profile bound is inside its range.
     #[test]
@@ -1697,6 +2087,50 @@ mod tests {
         assert!(
             findings.is_empty(),
             "a sound job produces no findings: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn check_job_refuses_unbounded_destination_policy() {
+        let mut direct = job("kobo-submissions");
+        direct.destination = serde_json::from_value(serde_json::json!({
+            "type": "direct-breg",
+            "binding": "breg-main",
+            "accessProfile": "writer",
+            "action": "register-household",
+            "mode": "proposal",
+            "mapping": {"file": "map.rhai", "entrypoint": "map_item", "digest": DIGEST},
+            "receiptRetentionDays": 0
+        }))
+        .expect("the numeric value parses before semantic checks");
+        let findings = check_job(&direct, &pack());
+        assert_eq!(
+            findings
+                .iter()
+                .filter(|finding| finding.code == JobCode::DestinationBound.code())
+                .count(),
+            1,
+            "the receipt horizon is governed: {findings:?}"
+        );
+
+        let mut signed = job("kobo-submissions");
+        signed.destination = JobDestination::SignedCoordinatorEvent {
+            binding: LocalId::new("coordinator-main").expect("id"),
+            workflow: LocalId::new("case-ingestion").expect("id"),
+            trigger: LocalId::new("submitted").expect("id"),
+            source: "contains whitespace".to_string(),
+            event_type: "case.submitted".to_string(),
+            data_schema: "urn:example:case-submitted:v1".to_string(),
+            revised_receiver: None,
+        };
+        let findings = check_job(&signed, &pack());
+        assert_eq!(
+            findings
+                .iter()
+                .filter(|finding| finding.code == JobCode::DestinationShape.code())
+                .count(),
+            1,
+            "the signed source identifier is governed: {findings:?}"
         );
     }
 
@@ -2189,6 +2623,7 @@ mod tests {
                 backoff_error_threshold: 100,
                 backoff_multiplier: 10,
                 path: None,
+                binding: None,
             }],
             ..job("kobo-submissions")
         };
@@ -2199,12 +2634,10 @@ mod tests {
         );
     }
 
-    /// A hook trigger is the contract-only seam: refused at check time
-    /// under `adapter.job.trigger-hook-unserved`, so no pack or job can
-    /// silently rely on it, and a hook trigger without its path refuses
-    /// under `adapter.job.trigger-kind`.
+    /// Malformed hook declarations remain refused, including a missing or
+    /// relative path.
     #[test]
-    fn check_job_refuses_a_hook_trigger() {
+    fn check_job_refuses_malformed_hook_triggers() {
         let hook = AdapterJob {
             triggers: vec![JobTrigger {
                 kind: "hook".to_string(),
@@ -2214,9 +2647,13 @@ mod tests {
             ..job("kobo-submissions")
         };
         let findings = check_job(&hook, &pack());
-        assert_eq!(findings.len(), 1, "{findings:?}");
-        assert_eq!(findings[0].code, JobCode::TriggerHookUnserved.code());
-        assert_eq!(findings[0].path, "/triggers/0");
+        assert!(
+            findings
+                .iter()
+                .any(|finding| finding.code == JobCode::TriggerKind.code()
+                    && finding.path == "/triggers/0/path"),
+            "{findings:?}"
+        );
 
         let pathless = AdapterJob {
             triggers: vec![JobTrigger {
@@ -2584,5 +3021,128 @@ mod tests {
         assert_eq!(MINIMUM_TRIGGER_BACKOFF_MULTIPLIER, 1);
         assert_eq!(MAXIMUM_TRIGGER_BACKOFF_MULTIPLIER, 10);
         assert_eq!(DEFAULT_TRIGGER_DELAY_MILLISECONDS, 60_000);
+    }
+    #[test]
+    fn hook_binding_and_revised_receiver_read_as_closed_authored_contracts() {
+        let mut authored = serde_json::to_value(job("kobo-submissions")).expect("job");
+        authored["triggers"]
+            .as_array_mut()
+            .expect("triggers")
+            .push(serde_json::json!({
+                "kind": "hook", "path": "/hooks/submissions", "binding": "kobo-hook"
+            }));
+        authored["destination"]["revisedReceiver"] = serde_json::json!({
+            "trigger": "submission-revised", "eventType": "case.revised",
+            "dataSchema": "urn:example:case-revised:v1"
+        });
+        let parsed: AdapterJob =
+            serde_json::from_value(authored.clone()).expect("closed supported contract");
+        assert!(check_job(&parsed, &pack()).is_empty());
+        authored["destination"]["revisedReceiver"]["workflow"] =
+            serde_json::json!("other-workflow");
+        assert!(serde_json::from_value::<AdapterJob>(authored).is_err());
+    }
+
+    #[test]
+    fn hooks_require_interval_and_unique_clean_paths_and_bindings() {
+        let base = serde_json::to_value(job("kobo-submissions")).expect("job");
+        for path in [
+            "/",
+            "relative",
+            "/trailing/",
+            "/double//path",
+            "/dot/./segment",
+            "/dot/../segment",
+            "/query?x",
+            "/fragment#x",
+            "/encoded%20path",
+            "/hooks/café",
+            "/hooks/colon:segment",
+            "/control\n",
+        ] {
+            let mut authored = base.clone();
+            authored["triggers"]
+                .as_array_mut()
+                .expect("triggers")
+                .push(serde_json::json!({
+                    "kind": "hook", "path": path, "binding": "kobo-hook"
+                }));
+            let parsed: AdapterJob = serde_json::from_value(authored).expect("semantic validation");
+            let findings = check_job(&parsed, &pack());
+            assert!(
+                findings.iter().any(|f| f.path == "/triggers/1/path"),
+                "{findings:?}"
+            );
+        }
+        let mut accepted = base.clone();
+        accepted["triggers"]
+            .as_array_mut()
+            .expect("triggers")
+            .push(serde_json::json!({
+                "kind": "hook",
+                "path": "/hooks/kobo-submissions_v1.~ready",
+                "binding": "kobo-hook"
+            }));
+        let parsed: AdapterJob = serde_json::from_value(accepted).expect("job");
+        assert!(
+            check_job(&parsed, &pack())
+                .iter()
+                .all(|finding| finding.path != "/triggers/1/path"),
+            "RFC 3986 unreserved punctuation is sendable without escaping"
+        );
+        let mut authored = base.clone();
+        authored["triggers"]
+            .as_array_mut()
+            .expect("triggers")
+            .push(serde_json::json!({
+                "kind": "hook", "path": "/hooks/submissions"
+            }));
+        let parsed: AdapterJob = serde_json::from_value(authored).expect("job");
+        let findings = check_job(&parsed, &pack());
+        assert!(
+            findings.iter().any(|finding| {
+                finding.code == JobCode::TriggerHookUnserved.code()
+                    && finding.path == "/triggers/1/binding"
+            }),
+            "a hook with no runtime binding is unserved: {findings:?}"
+        );
+
+        let hook =
+            serde_json::json!({"kind":"hook","path":"/hooks/submissions","binding":"kobo-hook"});
+        let mut authored = base.clone();
+        authored["triggers"] = serde_json::json!([hook.clone()]);
+        let parsed: AdapterJob = serde_json::from_value(authored.clone()).expect("job");
+        assert!(check_job(&parsed, &pack())
+            .iter()
+            .any(|f| f.path == "/triggers"));
+        authored["triggers"] = serde_json::json!([base["triggers"][0], hook.clone(), hook]);
+        let parsed: AdapterJob = serde_json::from_value(authored).expect("job");
+        let findings = check_job(&parsed, &pack());
+        assert!(
+            findings.iter().any(|finding| {
+                finding.code == JobCode::TriggerKind.code() && finding.path == "/triggers/2/path"
+            }),
+            "{findings:?}"
+        );
+        assert!(
+            findings.iter().any(|finding| {
+                finding.code == JobCode::TriggerKind.code() && finding.path == "/triggers/2/binding"
+            }),
+            "a repeated binding is malformed, not unserved: {findings:?}"
+        );
+    }
+    #[test]
+    fn revised_receiver_refuses_the_registration_trigger() {
+        let mut authored = serde_json::to_value(job("kobo-submissions")).expect("job");
+        authored["destination"]["revisedReceiver"] = serde_json::json!({
+            "trigger": authored["destination"]["trigger"],
+            "eventType": authored["destination"]["eventType"],
+            "dataSchema": authored["destination"]["dataSchema"]
+        });
+        let parsed: AdapterJob = serde_json::from_value(authored).expect("semantic validation");
+        assert!(check_job(&parsed, &pack())
+            .iter()
+            .any(|f| f.code == JobCode::DestinationShape.code()
+                && f.path == "/destination/revisedReceiver/trigger"));
     }
 }

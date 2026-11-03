@@ -1,0 +1,12 @@
+apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: destination-corpus
+version: "1"
+testedVersions: []
+sourceRoutes:
+  - id: source
+    scan: ongoing
+    nextRecovery: key-deduplicated
+    edits: ordered
+    steps: []
+capabilities: {}

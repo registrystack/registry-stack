@@ -18,9 +18,9 @@ mod script_response;
 pub const MAX_CLOSED_JSON_ENCODED_BODY_BYTES: usize = 8 * 1_024 * 1_024;
 
 pub use script_response::{
-    decode_script_json, ScriptJsonResponse, ScriptResponseDecodeError, MAX_SCRIPT_JSON_ARRAY_ITEMS,
-    MAX_SCRIPT_JSON_DEPTH, MAX_SCRIPT_JSON_NODES, MAX_SCRIPT_JSON_OBJECT_MEMBERS,
-    MAX_SCRIPT_JSON_STRING_BYTES,
+    decode_protocol_json, decode_script_json, ScriptJsonResponse, ScriptResponseDecodeError,
+    MAX_SCRIPT_JSON_ARRAY_ITEMS, MAX_SCRIPT_JSON_DEPTH, MAX_SCRIPT_JSON_NODES,
+    MAX_SCRIPT_JSON_OBJECT_MEMBERS, MAX_SCRIPT_JSON_STRING_BYTES,
 };
 #[cfg(test)]
 mod tests;

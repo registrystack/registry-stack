@@ -25,6 +25,7 @@ mod dev;
 mod doctor;
 mod evidence_binary;
 mod file_check;
+mod fixture_record;
 mod fixtures;
 mod junit;
 mod jwk;
@@ -493,7 +494,10 @@ fn run_entry() -> ExitCode {
     let junit = cli.output_format == CliFormat::Junit;
     if junit
         && (legacy_json_requested(&cli.command)
-            || !matches!(cli.command, Command::Test(_) | Command::Fixtures(_)))
+            || !matches!(
+                cli.command,
+                Command::Test(_) | Command::Fixtures(fixtures::FixturesCommand::Run(_))
+            ))
     {
         eprint!("{}", unsupported_junit_failure_human(&command_path));
         return ExitCode::from(report::USAGE_EXIT);
@@ -608,7 +612,7 @@ fn run_entry() -> ExitCode {
             let artifact = args.project.display().to_string();
             let project = args.project.clone();
             safe_command(
-                fixtures::run(fixtures::FixturesCommand::Run(fixtures::RunArgs {
+                fixtures::run_fixtures(fixtures::RunArgs {
                     project: args.project,
                     evidence_bin: args.evidence_bin,
                     target: args.target,
@@ -619,7 +623,7 @@ fn run_entry() -> ExitCode {
                     command: "test",
                     explain: args.explain,
                     deny_warnings: args.deny_warnings,
-                }))
+                })
                 .map_err(|error| authored::project_refusal(error, &project, &project)),
                 "evidence.test.failed",
                 artifact,
@@ -655,7 +659,17 @@ fn run_entry() -> ExitCode {
         Command::Fixtures(fixtures::FixturesCommand::Run(mut args)) => {
             args.json |= format == OutputFormat::Json;
             args.junit = junit;
-            fixtures::run(fixtures::FixturesCommand::Run(args))
+            fixtures::run_fixtures(args)
+        }
+        Command::Fixtures(fixtures::FixturesCommand::RecordFacts(args)) => {
+            let artifact = args.fixture.clone();
+            safe_command(
+                fixture_record::run(args, format),
+                "evidence.fixtures-record-facts.failed",
+                artifact,
+                "Evidence could not record the selected fixture facts.",
+                "Correct the editable project, target, or fixture and rerun fixtures record-facts.",
+            )
         }
         Command::Source(command) => source_cli::run(command, format),
         Command::Target(command) => target::run(command, format),
@@ -924,6 +938,7 @@ fn legacy_json_requested(command: &Command) -> bool {
     match command {
         Command::Target(target::TargetCommand::Explain(args)) => args.json,
         Command::Fixtures(fixtures::FixturesCommand::Run(args)) => args.json,
+        Command::Fixtures(fixtures::FixturesCommand::RecordFacts(_)) => false,
         Command::Doctor(args) => args.json(),
         _ => false,
     }
@@ -1057,6 +1072,21 @@ fn safe_command(
         if error.downcast_ref::<SafeCliFailure>().is_some() || authored::report_in(&error).is_some()
         {
             return error;
+        }
+        if let Some(refusal) = error
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<fixture_record::FixtureRecordRefusal>())
+        {
+            return SafeCliFailure {
+                operational: false,
+                code: refusal.code().to_owned(),
+                artifact,
+                path: "$".to_owned(),
+                message: refusal.message().to_owned(),
+                suggested_action: refusal.suggested_action().to_owned(),
+                cause: None,
+            }
+            .into();
         }
         if let Some(diagnostic) = error
             .chain()
@@ -1472,6 +1502,30 @@ mod tests {
     use clap::error::ErrorKind;
 
     #[test]
+    fn fixture_fact_recording_requires_explicit_write_and_its_own_target() {
+        let base = [
+            "evidencectl",
+            "fixtures",
+            "record-facts",
+            "project",
+            "--target",
+            "target.yaml",
+            "--fixture",
+            "fixtures/cases.yaml",
+        ];
+        assert_eq!(
+            command()
+                .try_get_matches_from(base)
+                .expect_err("--write is mandatory")
+                .kind(),
+            ErrorKind::MissingRequiredArgument
+        );
+        assert!(command()
+            .try_get_matches_from(base.into_iter().chain(["--write"]),)
+            .is_ok());
+    }
+
+    #[test]
     fn wallet_delivery_has_a_named_product_subtree() {
         let tree = command();
         let wallet = tree.find_subcommand("oid4vci").expect("oid4vci subtree");
@@ -1564,6 +1618,7 @@ mod tests {
         "jwk from-pem",
         "new",
         "fixtures run",
+        "fixtures record-facts",
         "doctor",
         "artifact inspect",
         "dev start",

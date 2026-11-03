@@ -165,9 +165,23 @@ impl Served {
         runtime_id: &str,
         database: Option<&str>,
     ) -> Self {
+        Self::start_for_deployment_endpoint(upstream_url, project, "tracker", runtime_id, database)
+            .await
+    }
+
+    /// Start one logical deployment with the runtime endpoint id the local
+    /// project declares.
+    pub async fn start_for_deployment_endpoint(
+        upstream_url: &str,
+        project: &Path,
+        endpoint: &str,
+        runtime_id: &str,
+        database: Option<&str>,
+    ) -> Self {
         let mut served = Self::spawn_config_for_deployment(
             upstream_url,
             project,
+            endpoint,
             CURSOR_KEY,
             &[],
             "cursorKeyRef: secret:env/TEST_CURSOR_KEY\n",
@@ -179,6 +193,30 @@ impl Served {
         .await;
         served.wait_until_listening();
         served
+    }
+
+    /// Start one logical deployment over an existing schema and return the
+    /// stderr of an artifact that the durable startup fence refuses.
+    pub async fn refusal_for_deployment(
+        upstream_url: &str,
+        project: &Path,
+        runtime_id: &str,
+        database: &str,
+    ) -> String {
+        let mut served = Self::spawn_config_for_deployment(
+            upstream_url,
+            project,
+            "tracker",
+            CURSOR_KEY,
+            &[],
+            "cursorKeyRef: secret:env/TEST_CURSOR_KEY\n",
+            BASIC_CREDENTIAL,
+            86_400,
+            runtime_id,
+            Some(database),
+        )
+        .await;
+        served.await_refusal()
     }
 
     /// Start with an explicit exact-response custody window.
@@ -200,6 +238,26 @@ impl Served {
     /// Start over the project directory at `project`.
     pub async fn start_with_project(upstream_url: &str, project: &Path) -> Self {
         let mut served = Self::spawn_with_project(upstream_url, project, CURSOR_KEY).await;
+        served.wait_until_listening();
+        served
+    }
+
+    /// Start over `project` with an explicit exact-response custody window.
+    pub async fn start_with_project_retention(
+        upstream_url: &str,
+        project: &Path,
+        seconds: u64,
+    ) -> Self {
+        let mut served = Self::spawn_config(
+            upstream_url,
+            project,
+            CURSOR_KEY,
+            &[],
+            "cursorKeyRef: secret:env/TEST_CURSOR_KEY\n",
+            BASIC_CREDENTIAL,
+            seconds,
+        )
+        .await;
         served.wait_until_listening();
         served
     }
@@ -311,6 +369,7 @@ impl Served {
         Self::spawn_config_for_deployment(
             upstream_url,
             project,
+            "tracker",
             cursor_key,
             omitted_env,
             cursor_lines,
@@ -326,6 +385,7 @@ impl Served {
     async fn spawn_config_for_deployment(
         upstream_url: &str,
         project: &Path,
+        endpoint: &str,
         cursor_key: &str,
         omitted_env: &[&str],
         cursor_lines: &str,
@@ -350,7 +410,7 @@ impl Served {
 kind: AdapterRuntimeConfig
 id: {runtime_id}
 endpoints:
-  - endpoint: tracker
+  - endpoint: {endpoint}
     baseUrl: {upstream_url}
     credential:
 {credential}listener:

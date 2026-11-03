@@ -318,9 +318,107 @@ mod tests {
     use sha2::{Digest as _, Sha256};
     use std::fs;
 
-    const SOURCE: &str = "apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1\nkind: EvidenceSource\ntype: http-json\nposture: record-transformed\nconnection: remote\nrequest:\n  method: GET\n  path: /lookup\n  selectorInputs:\n    - role: subject\n      alternatives: [{profile: record-code, fields: [code]}]\n  projection: [/matched]\n  prepareScript: adapters/lookup-prepare.rhai\n  adapterParameters: {}\n  adapterParametersSchema: schemas/lookup-parameters.yaml\n  redirects: deny\n  attemptTimeoutMilliseconds: 1000\n  maximumResponseBytes: 1024\nresponseSchema: schemas/lookup-response.yaml\nfactSchema: schemas/lookup-facts.yaml\nextractScript: adapters/lookup-extract.rhai\n";
-    const EXTRACT_ONE: &str = "fn extract(response, context) { #{outcome: \"no_match\"} } // one\n";
-    const EXTRACT_TWO: &str = "fn extract(response, context) { #{outcome: \"no_match\"} } // two\n";
+    const EXTRACT_ONE: &str = r#"fn lookup(exchange) {
+    let response = exchange.body;
+    if response.type_of() != "map" || !response.contains("matched") { throw "source_protocol_error"; }
+    if response["matched"] == false { return #{lookup: "no-match"}; }
+    #{lookup: "matched", facts: #{matched: response["matched"]}}
+} // one
+"#;
+    const EXTRACT_TWO: &str = r#"fn lookup(exchange) {
+    let response = exchange.body;
+    if response.type_of() != "map" || !response.contains("matched") { throw "source_protocol_error"; }
+    if response["matched"] == false { return #{lookup: "no-match"}; }
+    #{lookup: "matched", facts: #{matched: response["matched"]}}
+} // two
+"#;
+
+    fn digest_uri(bytes: &[u8]) -> String {
+        format!("sha256:{}", hex::encode(Sha256::digest(bytes)))
+    }
+
+    fn lookup_script(fact: &str, marker: &str) -> String {
+        format!(
+            "fn lookup(exchange) {{\n    let response = exchange.body;\n    if response.type_of() != \"map\" || !response.contains({fact:?}) {{ throw \"source_protocol_error\"; }}\n    #{{lookup: \"matched\", facts: #{{{fact}: response[{fact:?}]}}}}\n}} // {marker}\n"
+        )
+    }
+
+    fn pack_artifacts(
+        id: &str,
+        version: &str,
+        script: &str,
+        facts: &str,
+    ) -> BTreeMap<String, String> {
+        let inputs = serde_json::to_string_pretty(&json!({
+            "type":"object","additionalProperties":false,"required":["value"],
+            "properties":{"value":{"type":"string","minLength":1,"maxLength":128}}
+        }))
+        .unwrap();
+        let facts = Reader::new("facts-schema.yaml")
+            .scan(facts.as_bytes())
+            .expect("scan the facts schema fixture")
+            .expect("facts schema document")
+            .to_json_value();
+        let facts = serde_json::to_string_pretty(&facts).unwrap();
+        let pack = serde_json::to_string_pretty(&json!({
+            "apiVersion":"id.registrystack.org/formats/adapter/pack/v1alpha1",
+            "kind":"AdapterPack","id":id,"version":version,"testedVersions":["test"],
+            "endpoints":[{
+                "id":"remote","component":"http","authentication":{"type":"none"},
+                "attemptTimeoutMilliseconds":1000,"maximumResponseBytes":1024,
+                "requestHeaders":["accept"],"responseHeaders":[],
+                "operations":[{"id":"lookup","safeUpstream":true}],"testedVersions":["test"]
+            }],
+            "sourceRoutes":[{
+                "id":"lookup","scan":"finite","nextRecovery":"exact-replay","edits":"ordered",
+                "evidence":{
+                    "inputsSchema":{"path":"schemas/inputs.json","digest":digest_uri(inputs.as_bytes())},
+                    "factsSchema":{"path":"schemas/facts.json","digest":digest_uri(facts.as_bytes())},
+                    "acquisitionPosture":"record-transformed"
+                },
+                "steps":[
+                    {"setHeader":{"name":"Accept","value":{"constant":"application/json"}}},
+                    {"to":{"uri":"http:remote","parameters":{
+                        "httpMethod":"GET","path":"/lookup","operation":"lookup",
+                        "query":{"code":{"jsonpath":"$.value"}}
+                    }}},
+                    {"setBody":{"rhai":{"file":"scripts/lookup.rhai","entrypoint":"lookup"}}}
+                ]
+            }],
+            "scripts":[{"path":"scripts/lookup.rhai","digest":digest_uri(script.as_bytes())}],
+            "capabilities":{
+                "components":["http"],"languages":["constant","jsonpath","rhai"],
+                "eips":["setBody","setHeader","to"]
+            }
+        }))
+        .unwrap();
+        BTreeMap::from([
+            (format!("adapter-packs/{id}/schemas/inputs.json"), inputs),
+            (format!("adapter-packs/{id}/schemas/facts.json"), facts),
+            (
+                format!("adapter-packs/{id}/scripts/lookup.rhai"),
+                script.to_owned(),
+            ),
+            (format!("adapter-packs/{id}/pack.yaml"), pack),
+        ])
+    }
+
+    fn write_artifacts(root: &Path, artifacts: &BTreeMap<String, String>) {
+        for (path, text) in artifacts {
+            fs::create_dir_all(root.join(path).parent().unwrap()).unwrap();
+            fs::write(root.join(path), text).unwrap();
+        }
+    }
+
+    fn update_script_pin(pack_path: &Path, script: &[u8]) {
+        let mut pack = Reader::new(pack_path.display().to_string())
+            .scan(&fs::read(pack_path).unwrap())
+            .expect("scan the Adapter pack fixture")
+            .expect("Adapter pack document")
+            .to_json_value();
+        pack["scripts"][0]["digest"] = json!(digest_uri(script));
+        fs::write(pack_path, serde_json::to_vec_pretty(&pack).unwrap()).unwrap();
+    }
 
     struct Fixture {
         root: tempfile::TempDir,
@@ -341,19 +439,15 @@ selectorProfiles:
     maximumAggregateBytes: 64
     fields: {value: {type: string, minimumBytes: 1, maximumBytes: 64}}
 functions:
-  - {id: baseline-extract, interface: source-extract/v1, source: functions/baseline-extract.rhai}
   - {id: baseline-derive, interface: assertion-derive/v1, source: functions/baseline-derive.rhai}
 sources:
   baseline:
-    type: http-json
+    pack: {id: baseline-pack, version: '1'}
+    route: lookup
     connection: baseline
     acquisitionPosture: record-transformed
-    selectors: [{role: subject, profiles: [baseline-reference]}]
-    request: {method: GET, path: /baseline}
-    response: {projection: [/matched], shape: {type: object, properties: {matched: {type: boolean}}}, maximumBytes: 1024}
-    extract: {function: baseline-extract}
-    facts: {matched: {type: boolean}}
-    limits: {attemptTimeoutMilliseconds: 1000, maximumConcurrency: 1}
+    inputs:
+      value: {selector: {role: subject, profile: baseline-reference, field: value}}
 assertionDefinitions:
   baseline:
     question: Is the synthetic baseline matched?
@@ -361,7 +455,7 @@ assertionDefinitions:
     purpose: source-command-test
     grantCeiling: {authorities: [organizational], actorKinds: [service], valueOrigins: [request], audiences: ["urn:test:audience"]}
     subjects: [{role: subject, selectors: [baseline-reference]}]
-    acquisition: {type: single, source: baseline}
+    acquisition: {source: baseline}
     derive: {function: baseline-derive}
     outputs: {matched: {concept: "urn:test:concept:matched", type: boolean}}
     validitySeconds: 60
@@ -370,12 +464,16 @@ assertionDefinitions:
 "#,
             )
             .unwrap();
+            write_artifacts(
+                &project,
+                &pack_artifacts(
+                    "baseline-pack",
+                    "1",
+                    EXTRACT_ONE,
+                    "type: object\nrequired: [matched]\nproperties: {matched: {type: boolean}}\nadditionalProperties: false\n",
+                ),
+            );
             fs::create_dir(project.join("functions")).unwrap();
-            fs::write(
-                project.join("functions/baseline-extract.rhai"),
-                "fn extract(response, context) { #{outcome: \"match\", facts: #{matched: response[\"matched\"]}} }\n",
-            )
-            .unwrap();
             fs::write(
                 project.join("functions/baseline-derive.rhai"),
                 "fn derive(facts, selectors, context) { [#{output: \"matched\", value: facts[\"matched\"]}] }\n",
@@ -394,35 +492,21 @@ assertionDefinitions:
 
         fn export_with_facts(&self, name: &str, extract: &str, facts: &str) -> PathBuf {
             let root = self.root.path().join(name);
-            let artifacts = [
-                ("sources/lookup.yaml", SOURCE),
-                (
-                    "selectors/record-code.yaml",
-                    "apiVersion: id.registrystack.org/formats/evidence/selector/v1alpha1\nkind: EvidenceSelector\nmaximumAggregateBytes: 128\nfields: {code: {type: string, minimumBytes: 1, maximumBytes: 128}}\n",
-                ),
-                (
-                    "schemas/lookup-parameters.yaml",
-                    "type: object\nrequired: [matched]\nproperties: {matched: {type: boolean}}\nadditionalProperties: false\n",
-                ),
-                (
-                    "schemas/lookup-response.yaml",
-                    "type: object\nproperties: {}\nadditionalProperties: false\n",
-                ),
-                ("schemas/lookup-facts.yaml", facts),
-                (
-                    "adapters/lookup-prepare.rhai",
-                    "fn prepare(selectors, context) { #{query: [], body: ()} }\n",
-                ),
-                ("adapters/lookup-extract.rhai", extract),
-            ];
-            for (path, text) in &artifacts {
-                fs::create_dir_all(root.join(path).parent().unwrap()).unwrap();
-                fs::write(root.join(path), text).unwrap();
-            }
+            let version = digest_uri(name.as_bytes());
+            let mut artifacts = pack_artifacts("lookup", &version, extract, facts);
+            artifacts.insert(
+                "sources/lookup.yaml".to_owned(),
+                format!("apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1\nkind: EvidenceSource\npack: {{id: lookup, version: {version:?}}}\nroute: lookup\nconnection: remote\ninputs:\n  value: {{selector: {{role: subject, profile: record-code, field: code}}}}\nacquisitionPosture: record-transformed\n"),
+            );
+            artifacts.insert(
+                "selectors/record-code.yaml".to_owned(),
+                "apiVersion: id.registrystack.org/formats/evidence/selector/v1alpha1\nkind: EvidenceSelector\nmaximumAggregateBytes: 128\nfields: {code: {type: string, minimumBytes: 1, maximumBytes: 128}}\n".to_owned(),
+            );
+            write_artifacts(&root, &artifacts);
             fs::write(root.join("source-export.json"), serde_json::to_vec(&json!({
                 "apiVersion": source_import::EXPORT_API_VERSION, "kind": source_import::EXPORT_KIND,
                 "sourceId": "lookup", "provenance": {"producer": "source-command-test", "revision": name},
-                "artifacts": artifacts.iter().map(|(path, text)| json!({"path": path, "digest": format!("sha256:{}", hex::encode(Sha256::digest(text.as_bytes())))})).collect::<Vec<_>>()
+                "artifacts": artifacts.iter().map(|(path, text)| json!({"path": path, "digest": digest_uri(text.as_bytes())})).collect::<Vec<_>>()
             })).unwrap()).unwrap();
             root
         }
@@ -471,7 +555,12 @@ assertionDefinitions:
             before
         );
         assert_eq!(
-            fs::read_to_string(fixture.project.join("functions/lookup-extract.rhai")).unwrap(),
+            fs::read_to_string(
+                fixture
+                    .project
+                    .join("adapter-packs/lookup/scripts/lookup.rhai")
+            )
+            .unwrap(),
             EXTRACT_ONE
         );
     }
@@ -480,11 +569,12 @@ assertionDefinitions:
     fn diff_and_apply_refuse_a_next_fact_schema_that_drops_a_fact_a_derivation_reads() {
         let facts = |name: &str| {
             format!(
-                "type: object\nrequired: [{name}]\nproperties:\n  {name}: {{type: string}}\nadditionalProperties: false\n"
+                "type: object\nrequired: [{name}]\nproperties:\n  {name}: {{type: string, minLength: 1, maxLength: 64}}\nadditionalProperties: false\n"
             )
         };
         let fixture = Fixture::new();
-        let first = fixture.export_with_facts("first", EXTRACT_ONE, &facts("status"));
+        let first_script = lookup_script("status", "one");
+        let first = fixture.export_with_facts("first", &first_script, &facts("status"));
         review_with_revisions(fixture.args(first), true, &mut Vec::new(), no_target).unwrap();
         let project_file = fixture
             .project
@@ -505,7 +595,7 @@ assertionDefinitions:
             "purpose":"record-verification",
             "grantCeiling":{"authorities":["organizational"],"actorKinds":["service"],"valueOrigins":["request"],"audiences":["urn:test:audience"]},
             "subjects":[{"role":"subject","selectors":["record-code"]}],
-            "acquisition":{"type":"single","source":"lookup"},
+            "acquisition":{"source":"lookup"},
             "derive":{"function":"record-active-derive"},
             "outputs":{"active":{"concept":"urn:test:concept:active","type":"boolean"}},
             "validitySeconds":60,
@@ -525,8 +615,9 @@ assertionDefinitions:
         let installed = fs::read(&project_file).unwrap();
 
         for apply in [false, true] {
+            let renamed_script = lookup_script("lifecycle_status", "renamed");
             let renamed =
-                fixture.export_with_facts("renamed", EXTRACT_ONE, &facts("lifecycle_status"));
+                fixture.export_with_facts("renamed", &renamed_script, &facts("lifecycle_status"));
             let mut output = Vec::new();
             let error = review_with_revisions(fixture.args(renamed), apply, &mut output, no_target)
                 .expect_err("a renamed fact the derivation still reads");
@@ -545,11 +636,30 @@ assertionDefinitions:
     fn diff_and_apply_validate_the_complete_graph_and_report_failure_without_installing_files() {
         for apply in [false, true] {
             let fixture = Fixture::new();
-            let malformed = fixture.export("invalid", "fn extract( { incomplete\n");
+            let malformed = fixture.export("invalid", EXTRACT_ONE);
+            let source_path = malformed.join("sources/lookup.yaml");
+            let source = fs::read_to_string(&source_path)
+                .unwrap()
+                .replace("  value:", "  unreviewedValue:");
+            fs::write(&source_path, &source).unwrap();
+            let manifest_path = malformed.join("source-export.json");
+            let mut manifest: Value =
+                serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+            let artifact = manifest["artifacts"]
+                .as_array_mut()
+                .unwrap()
+                .iter_mut()
+                .find(|artifact| artifact["path"] == "sources/lookup.yaml")
+                .unwrap();
+            artifact["digest"] = json!(digest_uri(source.as_bytes()));
+            fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
             let mut output = Vec::new();
-            assert!(
+            let error =
                 review_with_revisions(fixture.args(malformed), apply, &mut output, no_target)
-                    .is_err()
+                    .expect_err("the Source input names do not match its checked pack route");
+            assert!(
+                !output.is_empty(),
+                "validation failed before reporting the candidate: {error:#}"
             );
             let report = parsed(&output);
             assert_eq!(report["validation"]["status"], "failed");
@@ -557,7 +667,7 @@ assertionDefinitions:
                 .as_array()
                 .unwrap()
                 .iter()
-                .any(|change| change["path"] == "functions/lookup-extract.rhai"));
+                .any(|change| change["path"] == "source-fragments/lookup.json"));
             assert!(!fixture.project.join("sources/lookup.yaml").exists());
             assert!(!fixture
                 .project
@@ -571,13 +681,17 @@ assertionDefinitions:
         let fixture = Fixture::new();
         let export = fixture.export("first", EXTRACT_ONE);
         review_with_revisions(fixture.args(export), true, &mut Vec::new(), no_target).unwrap();
-        let custom = "fn extract(response, context) { #{outcome: \"no_match\"} } // customized\n";
-        fs::write(
-            fixture.project.join("functions/lookup-extract.rhai"),
-            custom,
-        )
-        .unwrap();
+        let custom = lookup_script("matched", "institution-owned");
+        let script_path = fixture
+            .project
+            .join("adapter-packs/lookup/scripts/lookup.rhai");
+        fs::write(&script_path, &custom).unwrap();
+        let pack_path = fixture.project.join("adapter-packs/lookup/pack.yaml");
+        update_script_pin(&pack_path, custom.as_bytes());
         let next = fixture.export("next", EXTRACT_TWO);
+        let resolved_pack = fixture.root.path().join("resolved-pack.json");
+        fs::copy(next.join("adapter-packs/lookup/pack.yaml"), &resolved_pack).unwrap();
+        update_script_pin(&resolved_pack, custom.as_bytes());
         let mut output = Vec::new();
         assert!(
             review_with_revisions(fixture.args(next.clone()), true, &mut output, no_target)
@@ -586,24 +700,24 @@ assertionDefinitions:
         assert_eq!(parsed(&output)["validation"]["status"], "conflict");
         assert_eq!(
             parsed(&output)["conflicts"],
-            json!(["functions/lookup-extract.rhai"])
+            json!([
+                "adapter-packs/lookup/pack.yaml",
+                "adapter-packs/lookup/scripts/lookup.rhai"
+            ])
         );
-        assert_eq!(
-            fs::read_to_string(fixture.project.join("functions/lookup-extract.rhai")).unwrap(),
-            custom
-        );
+        assert_eq!(fs::read_to_string(&script_path).unwrap(), custom);
 
         let resolutions = fixture.root.path().join("resolutions.json");
-        fs::write(&resolutions, serde_json::to_vec(&json!({"apiVersion": "id.registrystack.org/formats/evidence/source-resolution/v1alpha1", "kind": "EvidenceSourceResolution", "artifacts": {"functions/lookup-extract.rhai": {"type": "keep"}}})).unwrap()).unwrap();
+        fs::write(&resolutions, serde_json::to_vec(&json!({"apiVersion": "id.registrystack.org/formats/evidence/source-resolution/v1alpha1", "kind": "EvidenceSourceResolution", "artifacts": {
+            "adapter-packs/lookup/pack.yaml": {"type": "file", "path": "resolved-pack.json"},
+            "adapter-packs/lookup/scripts/lookup.rhai": {"type": "keep"}
+        }})).unwrap()).unwrap();
         let mut args = fixture.args(next);
         args.resolutions = Some(resolutions);
         output.clear();
         review_with_revisions(args, true, &mut output, no_target).unwrap();
         assert_eq!(parsed(&output)["application"], "accepted");
-        assert_eq!(
-            fs::read_to_string(fixture.project.join("functions/lookup-extract.rhai")).unwrap(),
-            custom
-        );
+        assert_eq!(fs::read_to_string(&script_path).unwrap(), custom);
     }
 
     #[test]
@@ -621,13 +735,14 @@ assertionDefinitions:
         review_with_revisions(args, false, &mut output, |project, selected| {
             assert_eq!(selected, target);
             calls.push(project.to_path_buf());
-            let revision = if fs::read_to_string(project.join("functions/lookup-extract.rhai"))?
-                == EXTRACT_ONE
-            {
-                "sha256:before"
-            } else {
-                "sha256:after"
-            };
+            let revision =
+                if fs::read_to_string(project.join("adapter-packs/lookup/scripts/lookup.rhai"))?
+                    == EXTRACT_ONE
+                {
+                    "sha256:before"
+                } else {
+                    "sha256:after"
+                };
             Ok(BTreeMap::from([
                 ("urn:test:changed".to_owned(), revision.to_owned()),
                 (
@@ -648,7 +763,12 @@ assertionDefinitions:
         );
         assert_eq!(report["definitionRevisions"][1]["change"], "unchanged");
         assert_eq!(
-            fs::read_to_string(fixture.project.join("functions/lookup-extract.rhai")).unwrap(),
+            fs::read_to_string(
+                fixture
+                    .project
+                    .join("adapter-packs/lookup/scripts/lookup.rhai")
+            )
+            .unwrap(),
             EXTRACT_ONE
         );
     }

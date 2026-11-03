@@ -11,6 +11,7 @@ use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use registry_adapter_core::{AdapterEndpointBindings, EvidenceConnectionPolicy};
 use registry_platform_audit::{AuditDestination, AuditDestinationError, AuditDestinationKind};
 pub use registry_platform_config::SecretReference;
 use registry_platform_config::{
@@ -19,9 +20,10 @@ use registry_platform_config::{
     SecretProvidersConfig,
 };
 use registry_platform_yaml::{
-    local_id_collision_diagnostics, AuthoredId, BoundedU32, BoundedU64, Diagnostic, DisplayText,
-    Document, EnvelopeRule, Expect, FormatSpec, Invalid, Reader, Refusal, Related, Report,
-    RetiredApiVersion, ScalarHook, ScalarSite, Severity, UniqueList,
+    local_id_collision_diagnostics, AuthoredId, BoundedU32, BoundedU64, Diagnostic, Digest,
+    DisplayText, Document, EnvelopeRule, Expect, ExternalId, FormatSpec, Invalid, LocalId, Reader,
+    Refusal, Related, Report, RetiredApiVersion, ScalarHook, ScalarSite, Severity, UniqueIdList,
+    UniqueList,
 };
 use schemars::JsonSchema;
 use serde::de::{self, MapAccess, Visitor};
@@ -36,8 +38,6 @@ use crate::model::EVIDENCE_REQUEST_BATCH_MAX_ITEMS;
 
 pub const MAX_CONFIG_BYTES: usize = 1024 * 1024;
 pub const MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
-pub const MAXIMUM_SOURCE_BATCH_ITEMS: u16 = 16;
-
 /// Writes one tagged union in its documented flat form: the tag member names
 /// the variant and the variant's members follow it. The derived serializer of
 /// a `remote = "Self"` union produces the externally tagged form
@@ -136,16 +136,6 @@ macro_rules! shared_block_host {
             }
         }
     };
-}
-
-/// Whether one logical request batch can use a source's optional one-call
-/// optimization. Selection is complete before preparation, credential
-/// resolution, or source I/O, and an optimized execution never falls back to
-/// the sequential path after it starts.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum SourceBatchPlan {
-    Sequential,
-    Optimized { source_id: String },
 }
 
 #[derive(Debug, Error, Clone, Eq, PartialEq)]
@@ -499,28 +489,8 @@ pub const EVIDENCE_BUNDLE_REMOVED_KEYS: &[registry_platform_yaml::RemovedKey<'st
         replacement: "Declare audit.hashKeyRef instead.",
     },
     registry_platform_yaml::RemovedKey {
-        pointer: "/sources/*/request/timeoutMilliseconds",
-        replacement: "Declare attemptTimeoutMilliseconds instead; keep the value.",
-    },
-    registry_platform_yaml::RemovedKey {
-        pointer: "/sources/*/request/concurrencyLimit",
-        replacement: "Declare maximumConcurrency instead; keep the value.",
-    },
-    registry_platform_yaml::RemovedKey {
         pointer: "/sourceConnections/*/concurrencyLimit",
         replacement: "Declare maximumConcurrency instead; keep the value.",
-    },
-    registry_platform_yaml::RemovedKey {
-        pointer: "/sources/*/request/pathTemplate",
-        replacement: "Declare path instead; keep the value.",
-    },
-    registry_platform_yaml::RemovedKey {
-        pointer: "/sources/*/transport",
-        replacement: "Declare type instead; keep the value.",
-    },
-    registry_platform_yaml::RemovedKey {
-        pointer: "/sources/*/authentication/kind",
-        replacement: "Declare type instead; keep the value.",
     },
     registry_platform_yaml::RemovedKey {
         pointer: "/sourceConnections/*/authentication/kind",
@@ -835,18 +805,11 @@ pub struct EvidenceConfig {
     /// Optional explicit resource owners, resolved into concrete source plans
     /// by the authoring build and checked again when the bundle starts.
     #[serde(default, skip_serializing_if = "OrderedMap::is_empty")]
-    pub source_connections: OrderedMap<SourceConnectionConfig>,
+    pub source_connections: OrderedMap<SourceConnectionPolicies>,
     /// Effective target grants. Normalized packages leave this empty; startup
     /// installs only the atomically activated target authority snapshot.
     #[serde(default, skip_serializing_if = "OrderedMap::is_empty")]
     pub authority_profiles: OrderedMap<AuthorityProfile>,
-    /// Acquisition kinds this bundle opts in to beyond the single fixed call.
-    /// A kind absent from this list cannot be served, so an existing bundle
-    /// keeps serving exactly what it served before. The list is omitted when
-    /// empty because the projected configuration is what a requirement's
-    /// `configurationRevision` digests.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub acquisition_capabilities: Vec<String>,
     /// Ceiling on how many assertions one holder-bound release may carry.
     /// Omission means one, so a bundle written before batch release cannot
     /// serve a batch, and the key is omitted when absent because the projected
@@ -865,35 +828,139 @@ pub use registry_evidence_verifier::AssuranceProfile;
 
 pub type SourceSelectorSet = Vec<(String, String)>;
 
-/// Bound expansion before allocating the Cartesian selector combinations.
-/// This is a compiler resource limit, not an authorization decision.
-const MAXIMUM_SOURCE_SELECTOR_SETS: usize = 4096;
+/// The route-input names one complete authority path must make available.
+///
+/// A root `required` list forms one required set. A presence-only root `oneOf`
+/// forms mutually exclusive required alternatives; inputs not required by the
+/// selected alternative remain optional.
+#[derive(Clone, Debug)]
+pub(crate) struct SourceInputPresenceContract {
+    requirement: SourceInputPresenceRequirement,
+    exclusive_alternatives: Option<Vec<BTreeSet<String>>>,
+}
 
-pub(crate) fn selector_combinations(
-    choices: &[(String, Vec<String>)],
-) -> Result<Vec<SourceSelectorSet>, ConfigError> {
-    let mut sets = vec![Vec::new()];
-    for (role, profiles) in choices {
-        if profiles.is_empty()
-            || sets
-                .len()
-                .checked_mul(profiles.len())
-                .is_none_or(|count| count > MAXIMUM_SOURCE_SELECTOR_SETS)
-        {
-            return invalid("source selector alternatives exceed the supported combination bound");
+impl SourceInputPresenceContract {
+    pub(crate) fn new(
+        requirement: SourceInputPresenceRequirement,
+        exclusive_alternatives: Option<Vec<BTreeSet<String>>>,
+    ) -> Self {
+        Self {
+            requirement,
+            exclusive_alternatives,
         }
-        sets = sets
-            .iter()
-            .flat_map(|set| {
-                profiles.iter().map(|profile| {
-                    let mut candidate = set.clone();
-                    candidate.push((role.clone(), profile.clone()));
-                    candidate
-                })
-            })
-            .collect();
     }
-    Ok(sets)
+
+    /// Whether one actual complete grant can fill the reviewed route shape.
+    pub(crate) fn accepts_path(&self, available: &BTreeSet<&str>) -> bool {
+        if !self.requirement.accepts(available) {
+            return false;
+        }
+        if let Some(alternatives) = &self.exclusive_alternatives {
+            return alternatives
+                .iter()
+                .filter(|required| {
+                    required
+                        .iter()
+                        .all(|input| available.contains(input.as_str()))
+                })
+                .count()
+                == 1;
+        }
+        true
+    }
+
+    /// Whether the Source maps enough names for at least one route alternative.
+    /// This package-only check does not select an alternative: target authority
+    /// does that later, and may legitimately narrow the package ceiling.
+    pub(crate) fn has_mappable_alternative(&self, mapped: &BTreeSet<&str>) -> bool {
+        self.requirement.positively_mappable(mapped)
+    }
+}
+
+/// The bounded root-object presence logic that can be proved independently of
+/// route input values. Value constraints remain owned by the full JSON Schema
+/// validator at execution.
+#[derive(Clone, Debug)]
+pub(crate) enum SourceInputPresenceRequirement {
+    Always,
+    Never,
+    Required(BTreeSet<String>),
+    All(Vec<Self>),
+    Any(Vec<Self>),
+    ExactlyOne(Vec<Self>),
+    Not(Box<Self>),
+    DependentRequired {
+        trigger: String,
+        required: BTreeSet<String>,
+    },
+    DependentSchema {
+        trigger: String,
+        requirement: Box<Self>,
+    },
+}
+
+impl SourceInputPresenceRequirement {
+    fn accepts(&self, available: &BTreeSet<&str>) -> bool {
+        match self {
+            Self::Always => true,
+            Self::Never => false,
+            Self::Required(required) => required
+                .iter()
+                .all(|input| available.contains(input.as_str())),
+            Self::All(requirements) => requirements
+                .iter()
+                .all(|requirement| requirement.accepts(available)),
+            Self::Any(requirements) => requirements
+                .iter()
+                .any(|requirement| requirement.accepts(available)),
+            Self::ExactlyOne(requirements) => {
+                requirements
+                    .iter()
+                    .filter(|requirement| requirement.accepts(available))
+                    .count()
+                    == 1
+            }
+            Self::Not(requirement) => !requirement.accepts(available),
+            Self::DependentRequired { trigger, required } => {
+                !available.contains(trigger.as_str())
+                    || required
+                        .iter()
+                        .all(|input| available.contains(input.as_str()))
+            }
+            Self::DependentSchema {
+                trigger,
+                requirement,
+            } => !available.contains(trigger.as_str()) || requirement.accepts(available),
+        }
+    }
+
+    /// Whether the Source maps the positive names needed by some structural
+    /// path. Negative and trigger-dependent predicates are deliberately left
+    /// to target activation, where one actual projected subset is known.
+    fn positively_mappable(&self, mapped: &BTreeSet<&str>) -> bool {
+        match self {
+            Self::Always => true,
+            Self::Never => false,
+            Self::Required(required) => {
+                required.iter().all(|input| mapped.contains(input.as_str()))
+            }
+            Self::All(requirements) => requirements
+                .iter()
+                .all(|requirement| requirement.positively_mappable(mapped)),
+            Self::Any(requirements) | Self::ExactlyOne(requirements) => requirements
+                .iter()
+                .any(|requirement| requirement.positively_mappable(mapped)),
+            Self::Not(_) | Self::DependentRequired { .. } | Self::DependentSchema { .. } => true,
+        }
+    }
+}
+
+fn source_selector_pairs(source: &SourceConfig) -> BTreeSet<(String, String)> {
+    source
+        .selector_bindings()
+        .into_iter()
+        .map(|binding| (binding.role.to_owned(), binding.profile.to_owned()))
+        .collect()
 }
 
 /// The ceiling one holder-bound release may carry when the bundle declares no
@@ -1188,22 +1255,16 @@ impl EvidenceConfig {
             128,
             "/sourceConnections",
             check_named_map_collisions,
-            |connection| connection.validate(self.assurance_profile),
+            |_| Ok(()),
         )?;
         for (source_id, source) in self.sources.iter() {
-            if let Some(connection_id) = source.connection() {
-                let at = format!("{}/connection", named("/sources", source_id));
-                let connection = self
-                    .source_connections
-                    .get(connection_id)
-                    .ok_or(ConfigError::Invalid(
-                        "source connection reference is not declared",
-                    ))
-                    .at(&at)?;
-                if !connection.matches_source(source) {
-                    return invalid("resolved source differs from its named connection").at(at);
-                }
-            }
+            let at = format!("{}/connection", named("/sources", source_id));
+            self.source_connections
+                .get(source.connection())
+                .ok_or(ConfigError::Invalid(
+                    "source connection reference is not declared",
+                ))
+                .at(&at)?;
         }
         validate_named_map(
             &self.authority_profiles,
@@ -1250,33 +1311,6 @@ impl EvidenceConfig {
         let mut evidence_types = BTreeSet::new();
         let mut concept_ids = BTreeSet::new();
         let mut disclosure_families = BTreeSet::new();
-        // One artifact carries one schema role for the whole bundle: reviewing
-        // it as a response contract must not silently also accept it as a fact
-        // or adapter-parameter contract somewhere else.
-        let response_schemas = self
-            .sources
-            .iter()
-            .flat_map(|(_, source)| {
-                std::iter::once(source.response_schema().as_str())
-                    .chain(source.batch().map(|batch| batch.response_schema.as_str()))
-            })
-            .collect::<BTreeSet<_>>();
-        let fact_schemas = self
-            .sources
-            .iter()
-            .map(|(_, source)| source.fact_schema().as_str())
-            .collect::<BTreeSet<_>>();
-        let parameter_schemas = self
-            .sources
-            .iter()
-            .filter_map(|(_, source)| source.adapter_parameters_schema().map(ArtifactPath::as_str))
-            .collect::<BTreeSet<_>>();
-        if !fact_schemas.is_disjoint(&parameter_schemas)
-            || !response_schemas.is_disjoint(&fact_schemas)
-            || !response_schemas.is_disjoint(&parameter_schemas)
-        {
-            return invalid("source schema roles must not overlap across sources").at("/sources");
-        }
         for (index, requirement) in (0_u32..).zip(&self.requirements) {
             let at = format!("/requirements/{index}");
             requirement.validate().at(&at)?;
@@ -1325,7 +1359,6 @@ impl EvidenceConfig {
             }
         }
 
-        self.validate_acquisition_capabilities()?;
         self.validate_holder_bound_requirements()?;
         self.validate_cross_references()?;
         if self.publication.is_some() && crate::discovery::render(self).is_err() {
@@ -1399,41 +1432,6 @@ impl EvidenceConfig {
         Ok(())
     }
 
-    /// A bundle serves the fetch-set acquisition only where it declared it, so
-    /// adding the form to the runtime cannot widen what an already-deployed
-    /// bundle does. The forms that predate the declaration keep serving
-    /// without one.
-    fn validate_acquisition_capabilities(&self) -> Result<(), Violation> {
-        let declared = declared_acquisition_capabilities(
-            &self.acquisition_capabilities,
-            "bundle acquisition capabilities name an unknown acquisition kind",
-            "bundle acquisition capabilities must be unique",
-            "bundle acquisition capabilities",
-        )
-        .at("/acquisitionCapabilities")?;
-        if let Some((source_id, _)) = self
-            .sources
-            .iter()
-            .find(|(_, source)| source.batch().is_some())
-        {
-            if !declared.contains(SOURCE_BATCH_CAPABILITY) {
-                return invalid("source batch optimization is not a declared bundle capability")
-                    .at(format!("{}/batch", named("/sources", source_id)));
-            }
-        }
-        for (index, requirement) in self.requirements.iter().enumerate() {
-            if requirement
-                .acquisition
-                .required_capability()
-                .is_some_and(|capability| !declared.contains(capability))
-            {
-                return invalid("requirement acquisition kind is not a declared bundle capability")
-                    .at(format!("/requirements/{index}/acquisition"));
-            }
-        }
-        Ok(())
-    }
-
     /// Return the complete selector tuple sets that an authorized request may
     /// activate for one source. The configuration has already proven that
     /// every grant is complete and references the named requirement source.
@@ -1441,7 +1439,7 @@ impl EvidenceConfig {
         let Some(source) = self.sources.get(source_id) else {
             return Vec::new();
         };
-        if self.project.is_some() {
+        if self.project.is_some() && self.authority_profiles.is_empty() {
             return self
                 .declared_source_selector_sets(source_id)
                 .unwrap_or_default();
@@ -1458,27 +1456,77 @@ impl EvidenceConfig {
                 if !requirement_sources.contains(grant.requirement.as_str()) {
                     continue;
                 }
-                let mut set = grant
-                    .subjects
+                let source_pairs = source_selector_pairs(source);
+                let mut set = source_pairs
                     .iter()
-                    .filter(|subject| {
-                        source.selector_inputs().iter().any(|input| {
-                            input.role == subject.role
-                                && input.alternatives.iter().any(|alternative| {
-                                    alternative.profile == subject.selector_profile
-                                })
+                    .filter(|(role, profile)| {
+                        grant.subjects.iter().any(|subject| {
+                            subject.role == *role && subject.selector_profile == *profile
                         })
                     })
-                    .map(|subject| (subject.role.clone(), subject.selector_profile.clone()))
+                    .cloned()
                     .collect::<SourceSelectorSet>();
-                if set.is_empty() && !source.selector_inputs().is_empty() {
-                    continue;
-                }
                 set.sort();
                 sets.insert(set);
             }
         }
         sets.into_iter().collect()
+    }
+
+    /// Prove each effective complete grant can fill the reviewed input shape of
+    /// every Source its requirement may activate. No path may borrow an input
+    /// from another grant. A normalized package deliberately has no effective
+    /// authority before target activation, so package-only compilation stops
+    /// after proving that its Source maps at least one route alternative.
+    pub(crate) fn validate_source_authority_paths(
+        &self,
+        contracts: &BTreeMap<String, SourceInputPresenceContract>,
+    ) -> Result<(), ConfigError> {
+        if self.project.is_some() && self.authority_profiles.is_empty() {
+            return Ok(());
+        }
+
+        let requirements = self
+            .requirements
+            .iter()
+            .map(|requirement| (requirement.id.as_str(), requirement))
+            .collect::<BTreeMap<_, _>>();
+        for (_, authority) in self.authority_profiles.iter() {
+            for grant in &authority.grants {
+                let requirement =
+                    requirements
+                        .get(grant.requirement.as_str())
+                        .ok_or(ConfigError::Invalid(
+                            "authority grant references an unknown requirement",
+                        ))?;
+                for source_id in requirement.acquisition.source_ids() {
+                    let source = self.sources.get(source_id).ok_or(ConfigError::Invalid(
+                        "requirement acquisition references an unknown source",
+                    ))?;
+                    let contract = contracts.get(source_id).ok_or(ConfigError::Invalid(
+                        "configured source input contract is unavailable",
+                    ))?;
+                    let available = source
+                        .inputs
+                        .iter()
+                        .filter(|(_, input)| {
+                            grant.subjects.iter().any(|subject| {
+                                subject.role.as_str() == input.selector.role.as_str()
+                                    && subject.selector_profile.as_str()
+                                        == input.selector.profile.as_str()
+                            })
+                        })
+                        .map(|(name, _)| name.as_str())
+                        .collect::<BTreeSet<_>>();
+                    if !contract.accepts_path(&available) {
+                        return invalid(
+                            "an authority path that can activate a source does not supply every required route input",
+                        );
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     fn declared_source_selector_sets(
@@ -1489,167 +1537,49 @@ impl EvidenceConfig {
             .sources
             .get(source_id)
             .ok_or(ConfigError::Invalid("definition source is unknown"))?;
+        let pairs = source_selector_pairs(source);
         let mut sets = BTreeSet::new();
         for definition in self
             .requirements
             .iter()
             .filter(|definition| definition.acquisition.uses_source(source_id))
         {
-            let choices = source
-                .selector_inputs()
+            let mut set = pairs
                 .iter()
-                .filter_map(|input| {
-                    let role = definition
-                        .subject_roles
-                        .iter()
-                        .find(|role| role.role == input.role)?;
-                    let profiles = input
-                        .alternatives
-                        .iter()
-                        .filter(|alternative| role.selector_profiles.contains(&alternative.profile))
-                        .map(|alternative| alternative.profile.clone())
-                        .collect::<Vec<_>>();
-                    (!profiles.is_empty()).then(|| (input.role.clone(), profiles))
+                .filter(|(role, profile)| {
+                    definition.subject_roles.iter().any(|subject| {
+                        subject.role.as_str() == role
+                            && subject
+                                .selector_profiles
+                                .iter()
+                                .any(|allowed| allowed.as_str() == profile)
+                    })
                 })
-                .collect::<Vec<_>>();
-            if choices.is_empty() && !source.selector_inputs().is_empty() {
+                .cloned()
+                .collect::<SourceSelectorSet>();
+            if set.is_empty() && !pairs.is_empty() {
                 continue;
             }
-            for mut set in selector_combinations(&choices)? {
-                set.sort();
-                sets.insert(set);
-                if sets.len() > MAXIMUM_SOURCE_SELECTOR_SETS {
-                    return invalid(
-                        "source selector alternatives exceed the supported combination bound",
-                    );
-                }
-            }
+            set.sort();
+            sets.insert(set);
         }
         Ok(sets.into_iter().collect())
-    }
-
-    /// Select the optional one-call source optimization for a logical request
-    /// batch, or the ordinary sequential strategy.
-    ///
-    /// The optimized lane is deliberately narrower than ordinary source
-    /// execution: both governed documents opt in, the requirement is a
-    /// `single` acquisition, the source is HTTP with a fixed path and a batch
-    /// block, and the complete item set fits that block's ceiling. Every other
-    /// case is decided as sequential without touching credentials or a source.
-    pub fn source_batch_plan(
-        &self,
-        runtime: &RuntimeConfig,
-        requirement_id: &str,
-        item_count: usize,
-    ) -> SourceBatchPlan {
-        if item_count == 0
-            || !self
-                .acquisition_capabilities
-                .iter()
-                .any(|capability| capability == SOURCE_BATCH_CAPABILITY)
-            || !runtime.enables_acquisition_capability(SOURCE_BATCH_CAPABILITY)
-        {
-            return SourceBatchPlan::Sequential;
-        }
-        let Some(requirement) = self
-            .requirements
-            .iter()
-            .find(|requirement| requirement.id == requirement_id)
-        else {
-            return SourceBatchPlan::Sequential;
-        };
-        let AcquisitionConfig::Single { source } = &requirement.acquisition else {
-            return SourceBatchPlan::Sequential;
-        };
-        let Some(SourceConfig::HttpJson { request, batch, .. }) = self.sources.get(source) else {
-            return SourceBatchPlan::Sequential;
-        };
-        let Some(batch) = batch else {
-            return SourceBatchPlan::Sequential;
-        };
-        if request.path_is_template()
-            || u64::try_from(item_count)
-                .map_or(true, |count| count > u64::from(batch.maximum_items.get()))
-        {
-            return SourceBatchPlan::Sequential;
-        }
-        SourceBatchPlan::Optimized {
-            source_id: source.clone(),
-        }
     }
 
     fn validate_cross_references(&self) -> Result<(), Violation> {
         for (source_id, source) in self.sources.iter() {
             let at = named("/sources", source_id);
-            for input in source.selector_inputs() {
-                for alternative in &input.alternatives {
-                    let profile = self
-                        .selector_profiles
-                        .get(&alternative.profile)
-                        .ok_or(ConfigError::Invalid(
-                            "source selector input references an unknown selector profile",
-                        ))
-                        .at(&at)?;
-                    if alternative
-                        .fields
-                        .iter()
-                        .any(|field| !profile.fields.contains_key(field))
-                    {
-                        return invalid(
-                            "source selector input references an unknown selector field",
-                        )
-                        .at(at);
-                    }
-                }
-            }
             for binding in source.selector_bindings() {
                 let profile_config = self
                     .selector_profiles
                     .get(binding.profile)
                     .ok_or(ConfigError::Invalid(
-                        "source path binding references an unknown selector profile",
+                        "source input references an unknown selector profile",
                     ))
                     .at(&at)?;
                 if !profile_config.fields.contains_key(binding.field) {
-                    return invalid("source path binding references an unknown selector field")
-                        .at(at);
+                    return invalid("source input references an unknown selector field").at(at);
                 }
-                if !source.selector_inputs().iter().any(|input| {
-                    input.role == binding.role
-                        && input.alternatives.iter().any(|alternative| {
-                            alternative.profile == binding.profile
-                                && alternative
-                                    .fields
-                                    .iter()
-                                    .any(|field| field == binding.field)
-                        })
-                }) {
-                    return invalid("source path binding is not declared as a selector input")
-                        .at(at);
-                }
-            }
-        }
-
-        let initial_sources = self
-            .requirements
-            .iter()
-            .map(|requirement| requirement.acquisition.initial_source())
-            .collect::<BTreeSet<_>>();
-        let fetch_sources = self
-            .requirements
-            .iter()
-            .flat_map(|requirement| requirement.acquisition.fetch_sources())
-            .collect::<BTreeSet<_>>();
-        for (source_id, source) in self.sources.iter() {
-            if initial_sources.contains(source_id) && source.selector_inputs().is_empty() {
-                return invalid("single and search sources must declare selector inputs")
-                    .at(named("/sources", source_id));
-            }
-            if !source.prior_fact_bindings().is_empty()
-                && (!fetch_sources.contains(source_id) || initial_sources.contains(source_id))
-            {
-                return invalid("prior-fact path bindings are permitted only on fetch sources")
-                    .at(named("/sources", source_id));
             }
         }
 
@@ -1789,20 +1719,19 @@ impl EvidenceConfig {
                             "requirement acquisition references an unknown source",
                         ))
                         .at(&at)?;
+                    let source_bindings = source.selector_bindings();
                     let mut source_selector_set = grant
                         .subjects
                         .iter()
                         .filter(|subject| {
-                            source.selector_inputs().iter().any(|input| {
-                                input.role == subject.role
-                                    && input.alternatives.iter().any(|alternative| {
-                                        alternative.profile == subject.selector_profile
-                                    })
+                            source_bindings.iter().any(|binding| {
+                                binding.role == subject.role
+                                    && binding.profile == subject.selector_profile
                             })
                         })
                         .map(|subject| (subject.role.clone(), subject.selector_profile.clone()))
                         .collect::<SourceSelectorSet>();
-                    if source_selector_set.is_empty() && !source.selector_inputs().is_empty() {
+                    if source_selector_set.is_empty() && !source_bindings.is_empty() {
                         return invalid(
                             "authority path does not activate any declared source selector input",
                         )
@@ -1882,11 +1811,11 @@ impl EvidenceConfig {
                 .flatten()
                 .map(|(role, profile)| (role.as_str(), profile.as_str()))
                 .collect::<BTreeSet<_>>();
-            if source.selector_inputs().iter().any(|input| {
-                input.alternatives.iter().any(|alternative| {
-                    !reachable.contains(&(input.role.as_str(), alternative.profile.as_str()))
-                })
-            }) {
+            if source
+                .selector_bindings()
+                .iter()
+                .any(|binding| !reachable.contains(&(binding.role, binding.profile)))
+            {
                 return invalid(
                     "source selector input is unreachable from every complete authority path",
                 )
@@ -2129,9 +2058,9 @@ pub const RUNTIME_SECRET_PROVIDERS_CODE: &str = "evidence.runtime.invalid-secret
 pub const RUNTIME_SIGNER_CODE: &str = "evidence.runtime.invalid-signer";
 pub const RUNTIME_AUDIT_CODE: &str = "evidence.runtime.invalid-audit";
 pub const RUNTIME_OUTBOUND_TLS_CODE: &str = "evidence.runtime.invalid-outbound-tls";
+pub const RUNTIME_SOURCE_CONNECTION_CODE: &str = "evidence.runtime.invalid-source-connection";
+pub const RUNTIME_SOURCE_ACQUISITION_CODE: &str = "evidence.runtime.invalid-source-acquisition";
 pub const RUNTIME_SOURCE_EXTRACT_CODE: &str = "evidence.runtime.invalid-source-extract";
-pub const RUNTIME_ACQUISITION_CAPABILITIES_CODE: &str =
-    "evidence.runtime.invalid-acquisition-capabilities";
 
 const ABSOLUTE_PATH_ACTION: &str =
     "Write an absolute path of at most 512 bytes, without . or .. segments.";
@@ -2220,7 +2149,7 @@ fn absolute_path_map_findings<T>(
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RuntimeConfig {
     /// Separately governed target authority, captured once before serving.
@@ -2242,18 +2171,55 @@ pub struct RuntimeConfig {
     /// Where this process writes its audit entries.
     pub audit: RuntimeAuditConfig,
     pub outbound_tls: OutboundTlsConfig,
+    /// Process-local endpoint material for each governed Evidence connection.
+    #[serde(default, skip_serializing_if = "OrderedMap::is_empty")]
+    pub source_connections: OrderedMap<AdapterEndpointBindings>,
+    /// Finite operational budget shared by every pack-route call in one
+    /// Evidence acquisition. Omission uses the engine's maintained defaults.
+    #[serde(default, skip_serializing_if = "SourceAcquisitionConfig::is_default")]
+    pub source_acquisition: SourceAcquisitionConfig,
     /// Process-local files bound to the logical extract names the bundle's
     /// statement sources read. Absent binds none, which is what a runtime file
     /// for a bundle with no extract source says.
     #[serde(default, skip_serializing_if = "OrderedMap::is_empty")]
     pub source_extracts: OrderedMap<SourceExtractBinding>,
-    /// Acquisition kinds this deployment enables beyond the frozen Version 1
-    /// forms. Absent enables none of them, so adopting a form is a deliberate
-    /// operator decision rather than a consequence of the bundle that arrived.
-    /// A bundle requiring a kind absent here is refused before the deployment
-    /// serves anything.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub acquisition_capabilities: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SourceAcquisitionConfig {
+    pub maximum_data_operations: u64,
+    #[serde(rename = "acquisitionDeadlineMilliseconds")]
+    pub deadline_milliseconds: u64,
+    pub maximum_response_bytes: u64,
+}
+
+impl Default for SourceAcquisitionConfig {
+    fn default() -> Self {
+        Self {
+            maximum_data_operations:
+                registry_adapter_engine::evidence::DEFAULT_MAXIMUM_DATA_OPERATIONS,
+            deadline_milliseconds: 30_000,
+            maximum_response_bytes: 1_048_576,
+        }
+    }
+}
+
+impl SourceAcquisitionConfig {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    pub fn limits(self) -> Result<registry_adapter_engine::evidence::EvidenceLimits, ConfigError> {
+        let maximum_response_bytes = usize::try_from(self.maximum_response_bytes)
+            .map_err(|_| ConfigError::Invalid("source acquisition response bound is too large"))?;
+        registry_adapter_engine::evidence::EvidenceLimits::try_new(
+            self.maximum_data_operations,
+            self.deadline_milliseconds,
+            maximum_response_bytes,
+        )
+        .map_err(|_| ConfigError::Invalid("source acquisition limits must be finite and nonzero"))
+    }
 }
 
 /// The target authority store is operator storage, never a package override.
@@ -2400,6 +2366,95 @@ impl RuntimeConfig {
             .findings(&self.secret_providers, providers_enabled, &mut findings);
         self.audit.findings(&mut findings);
         self.outbound_tls.findings(&mut findings);
+        for (name, bindings) in self.source_connections.iter() {
+            let pointer = format!(
+                "/sourceConnections/{}",
+                registry_platform_yaml::escape_pointer_segment(name)
+            );
+            if !valid_shared_local_id(name) || name != bindings.id.as_str() {
+                findings.push(RuntimeFinding::at_key(
+                    RUNTIME_SOURCE_CONNECTION_CODE,
+                    &pointer,
+                    ConfigError::Invalid("source connection key must equal its local binding id"),
+                    "Use the governed connection name as both the mapping key and binding id.",
+                ));
+            }
+            for (endpoint_index, endpoint) in bindings.endpoints.iter().enumerate() {
+                let endpoint_pointer = format!("{pointer}/endpoints/{endpoint_index}");
+                let mut check_reference = |member: &str, reference: &str| {
+                    if providers_enabled
+                        && self
+                            .secret_providers
+                            .check_reference("source connection secret reference", reference)
+                            .is_err()
+                    {
+                        findings.push(RuntimeFinding::at_value(
+                            RUNTIME_SOURCE_CONNECTION_CODE,
+                            &format!("{endpoint_pointer}/{member}"),
+                            ConfigError::Invalid(
+                                "the secret reference names a provider secretProviders does not enable",
+                            ),
+                            "Enable the provider the reference names under secretProviders, or reference the source credential through an enabled provider.",
+                        ));
+                    }
+                };
+                if let Some(credential) = &endpoint.credential {
+                    match credential {
+                        registry_adapter_core::RuntimeCredential::None {} => {}
+                        registry_adapter_core::RuntimeCredential::Basic {
+                            username_ref,
+                            password_ref,
+                        } => {
+                            check_reference("credential/usernameRef", username_ref.as_str());
+                            check_reference("credential/passwordRef", password_ref.as_str());
+                        }
+                        registry_adapter_core::RuntimeCredential::StaticAuthorization {
+                            token_ref,
+                        } => check_reference("credential/tokenRef", token_ref.as_str()),
+                        registry_adapter_core::RuntimeCredential::StaticApiKey { value_ref } => {
+                            check_reference("credential/valueRef", value_ref.as_str());
+                        }
+                        registry_adapter_core::RuntimeCredential::Oauth2ClientCredentials {
+                            client_id_ref,
+                            client_secret_ref,
+                            ..
+                        } => {
+                            check_reference("credential/clientIdRef", client_id_ref.as_str());
+                            check_reference(
+                                "credential/clientSecretRef",
+                                client_secret_ref.as_str(),
+                            );
+                        }
+                        registry_adapter_core::RuntimeCredential::Oauth2PrivateKeyJwt {
+                            client_id_ref,
+                            client_assertion_key_ref,
+                            ..
+                        } => {
+                            check_reference("credential/clientIdRef", client_id_ref.as_str());
+                            check_reference(
+                                "credential/clientAssertionKeyRef",
+                                client_assertion_key_ref.as_str(),
+                            );
+                        }
+                    }
+                }
+                if let Some(identity) = &endpoint.mtls_identity {
+                    check_reference(
+                        "mtlsIdentity/certificateRef",
+                        identity.certificate_ref.as_str(),
+                    );
+                    check_reference("mtlsIdentity/keyRef", identity.key_ref.as_str());
+                }
+            }
+        }
+        if let Err(error) = self.source_acquisition.limits() {
+            findings.push(RuntimeFinding::at_key(
+                RUNTIME_SOURCE_ACQUISITION_CODE,
+                "/sourceAcquisition",
+                error,
+                "Write finite positive acquisition operation, deadline, and response-byte bounds.",
+            ));
+        }
         absolute_path_map_findings(
             &self.source_extracts,
             "/sourceExtracts",
@@ -2408,29 +2463,7 @@ impl RuntimeConfig {
             |binding| &binding.path,
             &mut findings,
         );
-        if let Err(error) = declared_acquisition_capabilities(
-            &self.acquisition_capabilities,
-            "runtime acquisition capabilities name an unknown acquisition kind",
-            "runtime acquisition capabilities must be unique",
-            "runtime acquisition capabilities",
-        ) {
-            findings.push(RuntimeFinding::at_key(
-                RUNTIME_ACQUISITION_CAPABILITIES_CODE,
-                "/acquisitionCapabilities",
-                error,
-                "Name each gated acquisition kind this deployment serves once.",
-            ));
-        }
         findings
-    }
-
-    /// Whether the operator enabled one gated acquisition kind on this
-    /// deployment. The answer is read only through the enabled list, so a
-    /// deployment that says nothing enables nothing.
-    pub fn enables_acquisition_capability(&self, capability: &str) -> bool {
-        self.acquisition_capabilities
-            .iter()
-            .any(|enabled| enabled == capability)
     }
 }
 
@@ -3630,7 +3663,7 @@ impl<'de> Deserialize<'de> for ArtifactPath {
         let value = String::deserialize(deserializer)?;
         Self::parse(&value).map_err(|_| {
             Invalid::expected(
-                "a relative path under adapters/, derivations/, schemas/, codelists/, fixtures/, or queries/, using ASCII letters, digits, dots, underscores, hyphens, and slashes, without . or .. segments",
+                "a relative path under adapter-packs/, adapters/, derivations/, schemas/, codelists/, fixtures/, or queries/, using ASCII letters, digits, dots, underscores, hyphens, and slashes, without . or .. segments",
                 "Name a package file by its relative path under one of the package directories.",
             )
             .into_error()
@@ -3648,7 +3681,8 @@ impl Serialize for ArtifactPath {
 }
 
 fn valid_artifact_path(value: &str) -> bool {
-    const ROOTS: [&str; 6] = [
+    const ROOTS: [&str; 7] = [
+        "adapter-packs/",
         "adapters/",
         "derivations/",
         "schemas/",
@@ -3667,804 +3701,104 @@ fn valid_artifact_path(value: &str) -> bool {
             .all(|component| matches!(component, Component::Normal(_)))
 }
 
-/// One optional, governed owner of HTTP destination, workload credentials,
-/// TLS trust and process-local resource bounds. It never owns source facts or
-/// an authorization result. Independent names always have independent state.
+/// The reviewed endpoint policies one authored connection name may select.
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct SourceConnectionConfig {
-    pub base_url: registry_platform_yaml::Url,
-    pub authentication: Box<SourceAuthentication>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tls_trust_profile: Option<String>,
-    #[serde(default = "default_connection_concurrency")]
-    pub maximum_concurrency: BoundedU32<1, 256>,
-    #[serde(default = "default_connection_timeout")]
-    pub admission_timeout_milliseconds: BoundedU64<1, 30_000>,
-    #[serde(default = "default_connection_timeout")]
-    pub token_timeout_milliseconds: BoundedU64<1, 30_000>,
+pub struct SourceConnectionPolicies {
+    pub endpoints: UniqueIdList<EvidenceConnectionPolicy>,
 }
 
-fn default_connection_concurrency() -> BoundedU32<1, 256> {
-    BoundedU32::new(4).expect("the default connection concurrency is in range")
-}
-fn default_connection_timeout() -> BoundedU64<1, 30_000> {
-    BoundedU64::new(5_000).expect("the default connection timeout is in range")
-}
-
-impl SourceConnectionConfig {
-    fn validate(&self, assurance_profile: AssuranceProfile) -> Result<(), ConfigError> {
-        validate_source_origin(&self.base_url)?;
-        self.authentication.validate()?;
-        if self
-            .tls_trust_profile
-            .as_deref()
-            .is_some_and(|profile| !valid_local_id(profile))
-        {
-            return invalid("source connection TLS trust profile identifier is invalid");
-        }
-        if matches!(*self.authentication, SourceAuthentication::None {}) {
-            if assurance_profile != AssuranceProfile::Local {
-                return invalid("unauthenticated source connections require local assurance");
-            }
-            validate_local_unauthenticated_source_origin(&self.base_url)?;
-            if self.tls_trust_profile.is_some() {
-                return invalid(
-                    "an unauthenticated local HTTP connection cannot use a TLS trust profile",
-                );
-            }
-        }
-        Ok(())
-    }
-
-    pub(crate) fn matches_source(&self, source: &SourceConfig) -> bool {
-        matches!(source, SourceConfig::HttpJson { base_url, authentication, tls_trust_profile, .. }
-            if base_url == &self.base_url && authentication == &self.authentication
-                && tls_trust_profile == &self.tls_trust_profile)
-    }
-}
-
-/// One reviewed source, closed over the transport that reaches it.
-///
-/// The transports agree on the acquisition posture, the three artifact roles,
-/// and the bounds a response is read under, and disagree on request material.
-/// A caller that only needs the agreed contract reads it through the accessors
-/// on this type rather than by matching a transport it does not care about:
-/// `posture`, `tls_trust_profile`, `extract_profile`, `response_schema`,
-/// `extract_script`, `fact_schema`, `statement`, `prepare_script`, `adapter_parameters`,
-/// `adapter_parameters_schema`, `selector_inputs`, `selector_bindings`,
-/// `prior_fact_bindings`, `fixed_headers`, `projection`,
-/// `forwards_access_attribution`,
-/// `attempt_timeout_milliseconds`, `maximum_response_bytes`, and `maximum_concurrency`.
-///
-/// The tag is internal, so a field belonging to one transport is an unknown
-/// field of the other and the closed schema rejects it. Request and credential
-/// material sits behind a pointer, so one transport's request does not set the
-/// size of every source.
+/// One pinned Adapter pack selected by an Evidence Source.
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(remote = "Self", rename_all = "kebab-case", deny_unknown_fields)]
-pub enum SourceConfig {
-    /// One fixed HTTP request against a JSON API.
-    #[serde(rename_all = "camelCase")]
-    HttpJson {
-        base_url: registry_platform_yaml::Url,
-        /// Optional explicit resource owner. The resolved values stay fixed in
-        /// this bundle and must equal the named connection's governed values.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        connection: Option<String>,
-        /// Digest of the provider's selected read behavior, independent of
-        /// unrelated export provenance and whole-provider package changes.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        behavior_revision: Option<String>,
-        /// Forward the verified, authorized Evidence requester and purpose in
-        /// Rust-owned reserved headers to a source that is explicitly prepared
-        /// to account for an intermediary read.
-        #[serde(default, skip_serializing_if = "is_false")]
-        forward_access_attribution: bool,
-        posture: AcquisitionPosture,
-        /// Optional exact upstream Problem Details tuple which means that the
-        /// source deliberately did not resolve this lookup. The transport
-        /// remains source-neutral: no provider code is built in.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        unresolved_problem: Option<DeclaredUnresolvedProblem>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        tls_trust_profile: Option<String>,
-        authentication: Box<SourceAuthentication>,
-        request: Box<FixedRequest>,
-        /// Optional signed Evidence protocol over this same fixed HTTP channel.
-        /// Its governed contract supplies requirement and purpose; Rust owns
-        /// the fresh nonce and verifies the answer before extraction.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        evidence: Option<Box<crate::source_evidence::EvidenceSourceConfig>>,
-        /// Shape contract for the projected response, validated by Rust before
-        /// extraction runs, so the script maps a response it can rely on.
-        response_schema: ArtifactPath,
-        extract_script: ArtifactPath,
-        fact_schema: ArtifactPath,
-        /// Optional reviewed one-call optimization for a logical request
-        /// batch. It reuses the ordinary source authority and all transport
-        /// bounds; only preparation, response projection, and extraction are
-        /// batch-specific.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        batch: Option<Box<HttpBatchConfig>>,
-    },
-    /// One reviewed SQL statement against a read-only extract file.
-    #[serde(rename_all = "camelCase")]
-    SqliteExtract {
-        posture: AcquisitionPosture,
-        /// Logical name of the extract this source reads. The runtime document
-        /// binds the name to a file, so no bundle names a filesystem location.
-        extract_profile: String,
-        request: Box<SqliteRequest>,
-        /// Oldest extract this source accepts, so a stale file is refused
-        /// rather than answered from.
-        maximum_extract_age_seconds: BoundedU64<1, 2_592_000>,
-        /// Shape contract for the projected result, validated by Rust before
-        /// extraction runs, so the script maps a result it can rely on.
-        response_schema: ArtifactPath,
-        extract_script: ArtifactPath,
-        fact_schema: ArtifactPath,
-    },
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SourcePackConfig {
+    pub id: LocalId,
+    pub version: String,
+    pub digest: Digest,
+    pub artifact_prefix: ArtifactPath,
 }
 
-registry_platform_yaml::tagged_union!(SourceConfig);
-serialize_tagged_union!(SourceConfig, tag = "type");
+/// One authorized selector field bound to a named pack route input.
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SourceInputConfig {
+    pub selector: SourceInputSelector,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SourceInputSelector {
+    pub role: LocalId,
+    pub profile: LocalId,
+    pub field: LocalId,
+}
+
+/// One Evidence source binding. Acquisition and extraction are pack route
+/// logic; this contract selects only governed artifacts, authority and inputs.
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SourceConfig {
+    pub pack: SourcePackConfig,
+    pub route: LocalId,
+    pub connection: LocalId,
+    #[serde(
+        default,
+        deserialize_with = "external_id_map",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
+    pub inputs: BTreeMap<String, SourceInputConfig>,
+    pub posture: AcquisitionPosture,
+    pub fact_schema: ArtifactPath,
+}
 
 impl SourceConfig {
-    fn validate(&self, assurance_profile: AssuranceProfile) -> Result<(), ConfigError> {
-        match self {
-            Self::HttpJson {
-                base_url,
-                connection,
-                behavior_revision,
-                tls_trust_profile,
-                authentication,
-                request,
-                batch,
-                unresolved_problem,
-                evidence,
-                forward_access_attribution,
-                ..
-            } => {
-                validate_source_origin(base_url)?;
-                if connection
-                    .as_deref()
-                    .is_some_and(|name| !valid_local_id(name))
-                {
-                    return invalid("source connection identifier is invalid");
-                }
-                if behavior_revision.as_deref().is_some_and(|revision| {
-                    !revision.strip_prefix("sha256:").is_some_and(|digest| {
-                        digest.len() == 64
-                            && digest
-                                .bytes()
-                                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-                    })
-                }) {
-                    return invalid("source behavior revision must be a lowercase sha256 digest");
-                }
-                if tls_trust_profile
-                    .as_deref()
-                    .is_some_and(|profile| !valid_local_id(profile))
-                {
-                    return invalid("source TLS trust profile identifier is invalid");
-                }
-                if matches!(**authentication, SourceAuthentication::None {}) {
-                    if assurance_profile != AssuranceProfile::Local {
-                        return invalid(
-                            "unauthenticated sources are permitted only by the local assurance profile",
-                        );
-                    }
-                    validate_local_unauthenticated_source_origin(base_url)?;
-                    if tls_trust_profile.is_some() {
-                        return invalid(
-                            "an unauthenticated local HTTP source cannot use a TLS trust profile",
-                        );
-                    }
-                }
-                authentication.validate()?;
-                request.validate()?;
-                if let Some(evidence) = evidence {
-                    evidence.validate(request)?;
-                    if batch.is_some() || unresolved_problem.is_some() {
-                        return invalid(
-                            "signed Evidence sources cannot declare source batching or unresolved Problem Details",
-                        );
-                    }
-                    if *forward_access_attribution {
-                        return invalid(
-                            "a signed Evidence source cannot set forwardAccessAttribution, because the upstream authorizes and audits this service's own source credential",
-                        );
-                    }
-                    if matches!(**authentication, SourceAuthentication::None {}) {
-                        return invalid(
-                            "a signed Evidence source requires source authentication, because the upstream authorizes and audits this service's own source credential",
-                        );
-                    }
-                }
-                if let Some(problem) = unresolved_problem {
-                    problem.validate()?;
-                    if batch.is_some() {
-                        return invalid(
-                            "declared unresolved problems are not supported by source batching",
-                        );
-                    }
-                }
-                if let Some(batch) = batch {
-                    if request.path_is_template() {
-                        return invalid("source batch optimization requires a fixed request path");
-                    }
-                    batch.validate()?;
-                }
-            }
-            Self::SqliteExtract {
-                extract_profile,
-                request,
-                ..
-            } => {
-                if !valid_local_id(extract_profile) {
-                    return invalid("source extract profile identifier is invalid");
-                }
-                request.validate()?;
-            }
+    fn validate(&self, _assurance_profile: AssuranceProfile) -> Result<(), ConfigError> {
+        validate_string(&self.pack.version, 1, 128, "source pack version")?;
+        if self.pack.version.chars().any(char::is_whitespace) {
+            return invalid("source pack version must not contain whitespace");
         }
-        let extract_script = self.extract_script();
-        require_artifact_prefix(extract_script, "adapters/")?;
-        if !extract_script.as_str().ends_with(".rhai") {
-            return invalid("source extraction script must be a Rhai file");
+        let expected_prefix = format!("adapter-packs/{}/{}", self.pack.id, self.pack.digest.hex());
+        if self.pack.artifact_prefix.as_str() != expected_prefix {
+            return invalid("source pack artifact prefix must match its id and digest");
         }
-        let adapter_id = Path::new(extract_script.as_str())
-            .file_stem()
-            .and_then(|value| value.to_str())
-            .filter(|value| valid_local_id(value))
-            .ok_or(ConfigError::Invalid(
-                "source adapter name must be a local identifier",
-            ))?;
-        debug_assert!(!adapter_id.is_empty());
-        require_artifact_prefix(self.response_schema(), "schemas/")?;
-        require_artifact_prefix(self.fact_schema(), "schemas/")?;
-        let mut roles = vec![self.response_schema().as_str(), self.fact_schema().as_str()];
-        roles.extend(
-            self.adapter_parameters_schema()
-                .map(|schema| schema.as_str()),
-        );
-        if let Some(batch) = self.batch() {
-            roles.push(batch.response_schema.as_str());
-        }
-        let distinct = roles.iter().collect::<BTreeSet<_>>();
-        if distinct.len() != roles.len() {
-            return invalid("source schema roles must be distinct artifacts");
-        }
+        require_artifact_prefix(&self.fact_schema, "schemas/")?;
         Ok(())
     }
 
-    /// Explicit connection identity. Inline sources never share an owner.
-    pub fn connection(&self) -> Option<&str> {
-        match self {
-            Self::HttpJson { connection, .. } => connection.as_deref(),
-            Self::SqliteExtract { .. } => None,
-        }
+    pub fn connection(&self) -> &str {
+        self.connection.as_str()
     }
 
     pub fn posture(&self) -> AcquisitionPosture {
-        match self {
-            Self::HttpJson { posture, .. } | Self::SqliteExtract { posture, .. } => *posture,
-        }
-    }
-
-    /// The credentials an inline HTTP source presents, where the transport
-    /// opens a connection of its own.
-    pub fn authentication(&self) -> Option<&SourceAuthentication> {
-        match self {
-            Self::HttpJson { authentication, .. } => Some(authentication),
-            Self::SqliteExtract { .. } => None,
-        }
-    }
-
-    /// The private trust profile an outbound connection uses, where the
-    /// transport opens one.
-    pub fn tls_trust_profile(&self) -> Option<&str> {
-        match self {
-            Self::HttpJson {
-                tls_trust_profile, ..
-            } => tls_trust_profile.as_deref(),
-            Self::SqliteExtract { .. } => None,
-        }
-    }
-
-    /// The logical extract a source reads, where the transport reads one. The
-    /// runtime document binds the name to a file; this never names one.
-    pub fn extract_profile(&self) -> Option<&str> {
-        match self {
-            Self::HttpJson { .. } => None,
-            Self::SqliteExtract {
-                extract_profile, ..
-            } => Some(extract_profile),
-        }
-    }
-
-    pub fn response_schema(&self) -> &ArtifactPath {
-        match self {
-            Self::HttpJson {
-                response_schema, ..
-            }
-            | Self::SqliteExtract {
-                response_schema, ..
-            } => response_schema,
-        }
-    }
-
-    pub fn extract_script(&self) -> &ArtifactPath {
-        match self {
-            Self::HttpJson { extract_script, .. } | Self::SqliteExtract { extract_script, .. } => {
-                extract_script
-            }
-        }
+        self.posture
     }
 
     pub fn fact_schema(&self) -> &ArtifactPath {
-        match self {
-            Self::HttpJson { fact_schema, .. } | Self::SqliteExtract { fact_schema, .. } => {
-                fact_schema
-            }
-        }
+        &self.fact_schema
     }
 
-    pub fn batch(&self) -> Option<&HttpBatchConfig> {
-        match self {
-            Self::HttpJson { batch, .. } => batch.as_deref(),
-            Self::SqliteExtract { .. } => None,
-        }
-    }
-
-    /// The exact source-neutral unresolved tuple this HTTP source recognizes.
-    ///
-    /// Callers receive only the governed declaration, never an upstream
-    /// Problem Details body. Statement sources cannot declare this outcome.
-    pub fn unresolved_problem(&self) -> Option<&DeclaredUnresolvedProblem> {
-        match self {
-            Self::HttpJson {
-                unresolved_problem, ..
-            } => unresolved_problem.as_ref(),
-            Self::SqliteExtract { .. } => None,
-        }
-    }
-
-    /// The reviewed statement artifact, where the transport runs one.
-    pub fn statement(&self) -> Option<&ArtifactPath> {
-        match self {
-            Self::HttpJson { .. } => None,
-            Self::SqliteExtract { request, .. } => Some(&request.statement),
-        }
-    }
-
-    /// The request-preparation script, which only a transport that prepares a
-    /// request declares.
-    pub fn prepare_script(&self) -> Option<&ArtifactPath> {
-        match self {
-            Self::HttpJson { request, .. } => Some(&request.prepare_script),
-            Self::SqliteExtract { request, .. } => request.prepare_script.as_ref(),
-        }
-    }
-
-    pub fn adapter_parameters(&self) -> &OrderedMap<AdapterParameterValue> {
-        match self {
-            Self::HttpJson { request, .. } => &request.adapter_parameters,
-            Self::SqliteExtract { request, .. } => &request.adapter_parameters,
-        }
-    }
-
-    /// The closed schema the adapter parameters are validated against, which
-    /// is present exactly when a transport declares parameters.
-    pub fn adapter_parameters_schema(&self) -> Option<&ArtifactPath> {
-        match self {
-            Self::HttpJson { request, .. } => Some(&request.adapter_parameters_schema),
-            Self::SqliteExtract { request, .. } => request.adapter_parameters_schema.as_ref(),
-        }
-    }
-
-    pub fn selector_inputs(&self) -> &[SelectorInput] {
-        match self {
-            Self::HttpJson { request, .. } => &request.selector_inputs,
-            Self::SqliteExtract { request, .. } => &request.selector_inputs,
-        }
-    }
-
-    /// Every request value this source fills from a selector field, whatever
-    /// the transport calls the channel.
     pub fn selector_bindings(&self) -> Vec<SelectorBinding<'_>> {
-        match self {
-            Self::HttpJson { request, .. } => request
-                .path_bindings
-                .iter()
-                .filter_map(|(_, binding)| match binding {
-                    PathBindingConfig::Selector {
-                        role,
-                        profile,
-                        field,
-                    } => Some(SelectorBinding {
-                        role,
-                        profile,
-                        field,
-                    }),
-                    PathBindingConfig::PriorFact { .. } => None,
-                })
-                .collect(),
-            Self::SqliteExtract { request, .. } => request
-                .parameter_bindings
-                .iter()
-                .filter_map(|(_, binding)| match binding {
-                    SqliteParameterBinding::Selector {
-                        role,
-                        profile,
-                        field,
-                    } => Some(SelectorBinding {
-                        role,
-                        profile,
-                        field,
-                    }),
-                    SqliteParameterBinding::Prepared {} => None,
-                })
-                .collect(),
-        }
-    }
-
-    /// Every prior-fact field this source binds into its request. Only a
-    /// transport with a prior-fact channel returns any.
-    pub fn prior_fact_bindings(&self) -> Vec<&str> {
-        match self {
-            Self::HttpJson { request, .. } => request
-                .path_bindings
-                .iter()
-                .filter_map(|(_, binding)| match binding {
-                    PathBindingConfig::PriorFact { field } => Some(field.as_str()),
-                    PathBindingConfig::Selector { .. } => None,
-                })
-                .collect(),
-            Self::SqliteExtract { .. } => Vec::new(),
-        }
-    }
-
-    pub fn fixed_headers(&self) -> &[FixedHeader] {
-        match self {
-            Self::HttpJson { request, .. } => &request.fixed_headers,
-            Self::SqliteExtract { .. } => &[],
-        }
-    }
-
-    /// Whether this fixed HTTP source receives the verified requester and
-    /// authorized purpose as host-owned access-attribution headers.
-    pub fn forwards_access_attribution(&self) -> bool {
-        match self {
-            Self::HttpJson {
-                forward_access_attribution,
-                ..
-            } => *forward_access_attribution,
-            Self::SqliteExtract { .. } => false,
-        }
-    }
-
-    pub fn projection(&self) -> &[String] {
-        match self {
-            Self::HttpJson { request, .. } => &request.projection,
-            Self::SqliteExtract { request, .. } => &request.projection,
-        }
-    }
-
-    pub fn attempt_timeout_milliseconds(&self) -> u64 {
-        match self {
-            Self::HttpJson { request, .. } => request.attempt_timeout_milliseconds.get(),
-            Self::SqliteExtract { request, .. } => request.attempt_timeout_milliseconds.get(),
-        }
-    }
-
-    pub fn maximum_response_bytes(&self) -> u64 {
-        match self {
-            Self::HttpJson { request, .. } => request.maximum_response_bytes.get(),
-            Self::SqliteExtract { request, .. } => request.maximum_response_bytes.get(),
-        }
-    }
-
-    pub fn maximum_concurrency(&self) -> u32 {
-        match self {
-            Self::HttpJson { request, .. } => request.maximum_concurrency.get(),
-            Self::SqliteExtract { request, .. } => request.maximum_concurrency.get(),
-        }
-    }
-}
-
-/// Exact, source-neutral Problem Details tuple an HTTP source may declare as
-/// an explicit unresolved lookup outcome.
-#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct DeclaredUnresolvedProblem {
-    pub status: BoundedU32<404, 404>,
-    #[serde(rename = "type")]
-    pub type_uri: String,
-    pub code: String,
-}
-
-impl DeclaredUnresolvedProblem {
-    fn validate(&self) -> Result<(), ConfigError> {
-        if self.type_uri.chars().count() > 512 {
-            return invalid("declared unresolved problem type is too long");
-        }
-        let uri = Url::parse(&self.type_uri)
-            .map_err(|_| ConfigError::Invalid("declared unresolved problem type is invalid"))?;
-        if uri.scheme() != "https"
-            || uri.host().is_none()
-            || !uri.username().is_empty()
-            || uri.password().is_some()
-        {
-            return invalid("declared unresolved problem type must be an absolute HTTPS URI");
-        }
-        let bytes = self.code.as_bytes();
-        if !(1..=64).contains(&bytes.len())
-            || !matches!(bytes.first(), Some(b'a'..=b'z'))
-            || !bytes.iter().all(|byte| {
-                byte.is_ascii_lowercase()
-                    || byte.is_ascii_digit()
-                    || matches!(byte, b'.' | b'_' | b'-')
+        self.inputs
+            .values()
+            .map(|input| SelectorBinding {
+                role: input.selector.role.as_str(),
+                profile: input.selector.profile.as_str(),
+                field: input.selector.field.as_str(),
             })
-        {
-            return invalid("declared unresolved problem code is invalid");
-        }
-        Ok(())
+            .collect()
     }
 }
 
-/// One request value filled from a named field of a named selector profile.
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub struct SelectorBinding<'a> {
-    pub role: &'a str,
-    pub profile: &'a str,
-    pub field: &'a str,
-}
-
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum AcquisitionPosture {
-    SourceDerived,
-    FieldProjected,
-    RecordTransformed,
-}
-
-impl AcquisitionPosture {
-    /// Return the least-minimized posture in a bounded acquisition. A chained
-    /// requirement may claim no stronger posture than either of its sources.
-    pub fn weakest(self, other: Self) -> Self {
-        use AcquisitionPosture::{FieldProjected, RecordTransformed, SourceDerived};
-        match (self, other) {
-            (RecordTransformed, _) | (_, RecordTransformed) => RecordTransformed,
-            (FieldProjected, _) | (_, FieldProjected) => FieldProjected,
-            (SourceDerived, SourceDerived) => SourceDerived,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(remote = "Self", rename_all = "kebab-case", deny_unknown_fields)]
-pub enum SourceAuthentication {
-    /// No outbound credential is sent.
-    ///
-    /// The containing bundle validator admits this only for the local
-    /// assurance profile and a canonical numeric-loopback HTTP origin with an
-    /// explicit non-zero port. It is not a production authentication mode.
-    None {},
-    Basic {
-        #[serde(rename = "usernameRef")]
-        username_ref: SecretReference,
-        #[serde(rename = "passwordRef")]
-        password_ref: SecretReference,
-    },
-    StaticAuthorization {
-        #[serde(rename = "tokenRef")]
-        token_ref: SecretReference,
-        /// Authentication scheme the resolved token is presented under.
-        ///
-        /// RFC 9110 section 11.1 lets the origin choose the scheme, and
-        /// `static-api-key` cannot reach the Authorization header because its
-        /// header name is refused by the collision denylist. Absent, the
-        /// runtime sends `Bearer`.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        scheme: Option<String>,
-    },
-    StaticApiKey {
-        #[serde(rename = "headerName")]
-        header_name: String,
-        #[serde(rename = "valueRef")]
-        value_ref: SecretReference,
-    },
-    /// The client-credentials grant with a shared client secret, the RFC
-    /// 6749 section 2.3.1 form.
-    Oauth2ClientCredentials {
-        #[serde(rename = "tokenEndpoint")]
-        token_endpoint: String,
-        #[serde(rename = "clientIdRef")]
-        client_id_ref: SecretReference,
-        /// Shared client secret.
-        #[serde(rename = "clientSecretRef")]
-        client_secret_ref: SecretReference,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        scope: Option<String>,
-        /// Fixed `audience` form parameter.
-        ///
-        /// An authorization server may key the issued token to an audience the
-        /// scope cannot express and return a token usable against nothing when
-        /// it is absent.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        audience: Option<String>,
-        /// RFC 8707 resource indicator sent as a token-request form parameter.
-        /// Unlike the assertion audience, this names the intended resource server.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        resource: Option<String>,
-        /// Where the shared client secret travels.
-        #[serde(rename = "credentialPlacement")]
-        credential_placement: CredentialPlacement,
-        #[serde(rename = "maximumCacheSeconds")]
-        maximum_cache_seconds: BoundedU64<0, 86_400>,
-        /// Lifetime assumed when the provider omits `expires_in`.
-        ///
-        /// RFC 6749 section 5.1 makes `expires_in` recommended rather than
-        /// required, so a compliant provider may return only `access_token`
-        /// and `token_type`. The operator states the lifetime here rather than
-        /// the runtime inferring one from the token, and the cache is still
-        /// clamped to `maximumCacheSeconds`.
-        #[serde(
-            rename = "assumedLifetimeSeconds",
-            default,
-            skip_serializing_if = "Option::is_none"
-        )]
-        assumed_lifetime_seconds: Option<BoundedU64<1, 86_400>>,
-    },
-    /// The client-credentials grant with a signed client assertion, the RFC
-    /// 7523 section 2.2 form, which is the client authentication SMART on
-    /// FHIR Backend Services requires.
-    Oauth2PrivateKeyJwt {
-        #[serde(rename = "tokenEndpoint")]
-        token_endpoint: String,
-        #[serde(rename = "clientIdRef")]
-        client_id_ref: SecretReference,
-        /// Private JWK the client assertion is signed with.
-        #[serde(rename = "clientAssertionKeyRef")]
-        client_assertion_key_ref: SecretReference,
-        /// Audience claim of the signed assertion, defaulting to
-        /// `tokenEndpoint`.
-        ///
-        /// RFC 7523 section 3 asks only that the value identify the
-        /// authorization server and leaves the exact string to out-of-band
-        /// agreement, so a server reached through a proxy, or one naming its
-        /// issuer identifier, expects a value the client never dials. The
-        /// server compares it by Simple String Comparison, so it is an opaque
-        /// identifier rather than a URL and travels to the claim byte for byte.
-        #[serde(
-            rename = "clientAssertionAudience",
-            default,
-            skip_serializing_if = "Option::is_none"
-        )]
-        client_assertion_audience: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        scope: Option<String>,
-        /// Fixed `audience` form parameter.
-        ///
-        /// An authorization server may key the issued token to an audience the
-        /// scope cannot express and return a token usable against nothing when
-        /// it is absent.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        audience: Option<String>,
-        /// RFC 8707 resource indicator sent as a token-request form parameter.
-        /// Unlike the assertion audience, this names the intended resource server.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        resource: Option<String>,
-        #[serde(rename = "maximumCacheSeconds")]
-        maximum_cache_seconds: BoundedU64<0, 86_400>,
-        /// Lifetime assumed when the provider omits `expires_in`.
-        ///
-        /// RFC 6749 section 5.1 makes `expires_in` recommended rather than
-        /// required, so a compliant provider may return only `access_token`
-        /// and `token_type`. The operator states the lifetime here rather than
-        /// the runtime inferring one from the token, and the cache is still
-        /// clamped to `maximumCacheSeconds`.
-        #[serde(
-            rename = "assumedLifetimeSeconds",
-            default,
-            skip_serializing_if = "Option::is_none"
-        )]
-        assumed_lifetime_seconds: Option<BoundedU64<1, 86_400>>,
-    },
-}
-
-registry_platform_yaml::tagged_union!(SourceAuthentication);
-serialize_tagged_union!(SourceAuthentication, tag = "type");
-
-impl SourceAuthentication {
-    fn validate(&self) -> Result<(), ConfigError> {
-        match self {
-            Self::None {} => Ok(()),
-            Self::Basic {
-                username_ref: _,
-                password_ref: _,
-            } => Ok(()),
-            Self::StaticAuthorization {
-                token_ref: _,
-                scheme,
-            } => {
-                if let Some(scheme) = scheme {
-                    validate_authorization_scheme(scheme)?;
-                }
-                Ok(())
-            }
-            Self::StaticApiKey {
-                header_name,
-                value_ref: _,
-            } => validate_configurable_header_name(header_name),
-            Self::Oauth2ClientCredentials {
-                token_endpoint,
-                scope,
-                audience,
-                resource,
-                ..
-            } => validate_token_request(
-                token_endpoint,
-                scope.as_deref(),
-                audience.as_deref(),
-                resource.as_deref(),
-            ),
-            Self::Oauth2PrivateKeyJwt {
-                token_endpoint,
-                client_assertion_audience,
-                scope,
-                audience,
-                resource,
-                ..
-            } => {
-                validate_token_request(
-                    token_endpoint,
-                    scope.as_deref(),
-                    audience.as_deref(),
-                    resource.as_deref(),
-                )?;
-                if let Some(client_assertion_audience) = client_assertion_audience {
-                    validate_string(
-                        client_assertion_audience,
-                        1,
-                        512,
-                        "OAuth client assertion audience",
-                    )?;
-                    // Signing refuses a whitespace-only audience, so a bundle
-                    // that carried one would satisfy its own contract and then
-                    // fail at the first token request as a credential error
-                    // naming nothing the operator can act on.
-                    if client_assertion_audience.trim().is_empty() {
-                        return invalid("OAuth client assertion audience is blank");
-                    }
-                }
-                Ok(())
-            }
-        }
-    }
-
-    pub fn secret_refs(&self) -> Vec<&SecretReference> {
-        match self {
-            Self::None {} => Vec::new(),
-            Self::Basic {
-                username_ref,
-                password_ref,
-            } => vec![username_ref, password_ref],
-            Self::StaticAuthorization { token_ref, .. } => vec![token_ref],
-            Self::StaticApiKey { value_ref, .. } => vec![value_ref],
-            Self::Oauth2ClientCredentials {
-                client_id_ref,
-                client_secret_ref,
-                ..
-            } => vec![client_id_ref, client_secret_ref],
-            Self::Oauth2PrivateKeyJwt {
-                client_id_ref,
-                client_assertion_key_ref,
-                ..
-            } => vec![client_id_ref, client_assertion_key_ref],
-        }
-    }
+fn external_id_map<'de, D, V>(deserializer: D) -> Result<BTreeMap<String, V>, D::Error>
+where
+    D: Deserializer<'de>,
+    V: Deserialize<'de>,
+{
+    let map = BTreeMap::<ExternalId, V>::deserialize(deserializer)?;
+    Ok(map
+        .into_iter()
+        .map(|(key, value)| (key.into_string(), value))
+        .collect())
 }
 
 /// An assertion member under another authentication type is refused by the
@@ -4500,428 +3834,33 @@ fn name_the_assertion_type(report: Report) -> Report {
     named
 }
 
-/// The members both client-credentials forms send in the token request.
-fn validate_token_request(
-    token_endpoint: &str,
-    scope: Option<&str>,
-    audience: Option<&str>,
-    resource: Option<&str>,
-) -> Result<(), ConfigError> {
-    let token_endpoint = validate_source_url(token_endpoint, false)?;
-    if token_endpoint.query().is_some() {
-        return invalid("OAuth token endpoint must not contain a query");
-    }
-    if let Some(scope) = scope {
-        validate_string(scope, 1, 512, "OAuth scope")?;
-    }
-    if let Some(audience) = audience {
-        validate_string(audience, 1, 512, "OAuth audience")?;
-        // The token request sends this value as it stands, with no
-        // fallback, so a blank one asks the authorization server
-        // for an audience named by spaces. Refusing it here names
-        // the key the operator must correct; the server's refusal
-        // arrives at readiness and names nothing.
-        if audience.trim().is_empty() {
-            return invalid("OAuth audience is blank");
-        }
-    }
-    if let Some(resource) = resource {
-        validate_oauth_resource(resource)?;
-    }
-    Ok(())
+/// One request value filled from a named field of a named selector profile.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct SelectorBinding<'a> {
+    pub role: &'a str,
+    pub profile: &'a str,
+    pub field: &'a str,
 }
 
-/// Accept an authentication scheme the runtime may prefix to a static token.
-///
-/// RFC 9110 section 11.1 defines the scheme as a token, so the byte set is the
-/// same one field names use. Holding to it keeps a configured value from
-/// carrying a space, a separator, or a line break into the header the runtime
-/// writes.
-fn validate_authorization_scheme(scheme: &str) -> Result<(), ConfigError> {
-    validate_string(scheme, 1, 32, "authentication scheme")?;
-    if !scheme.bytes().all(is_http_token_byte) {
-        return invalid("authentication scheme must be an HTTP token");
-    }
-    Ok(())
-}
-
-/// Where the token request carries the client credentials.
-///
-/// RFC 6749 section 2.3.1 defines Basic authentication and the request-body
-/// parameters and states that those parameters must not be placed in the
-/// request URI, so Version 1 offers no query-string placement.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum CredentialPlacement {
-    BasicHeader,
-    FormBody,
+pub enum AcquisitionPosture {
+    SourceDerived,
+    FieldProjected,
+    RecordTransformed,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct FixedRequest {
-    pub method: HttpMethod,
-    /// The request path: a literal, or a template when it names
-    /// placeholders, which `path_bindings` then fills.
-    pub path: String,
-    #[serde(default, skip_serializing_if = "OrderedMap::is_empty")]
-    pub path_bindings: OrderedMap<PathBindingConfig>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub fixed_headers: Vec<FixedHeader>,
-    pub selector_inputs: Vec<SelectorInput>,
-    pub prepare_script: ArtifactPath,
-    pub adapter_parameters: OrderedMap<AdapterParameterValue>,
-    pub adapter_parameters_schema: ArtifactPath,
-    pub preparation_limits: PreparationLimits,
-    pub projection: UniqueList<String>,
-    pub redirects: RedirectPolicy,
-    pub attempt_timeout_milliseconds: BoundedU64<1, 30_000>,
-    pub maximum_response_bytes: BoundedU64<1, 1_048_576>,
-    pub maximum_concurrency: BoundedU32<1, 256>,
-}
-
-/// Reviewed scripts and response contract for one physical HTTP call serving
-/// several independent logical source lookups.
-#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct HttpBatchConfig {
-    pub maximum_items: BoundedU32<1, { MAXIMUM_SOURCE_BATCH_ITEMS as u32 }>,
-    pub prepare_script: ArtifactPath,
-    pub extract_script: ArtifactPath,
-    pub response_schema: ArtifactPath,
-    pub projection: UniqueList<String>,
-}
-
-impl HttpBatchConfig {
-    fn validate(&self) -> Result<(), ConfigError> {
-        for script in [&self.prepare_script, &self.extract_script] {
-            require_artifact_prefix(script, "adapters/")?;
-            if !script.as_str().ends_with(".rhai") {
-                return invalid("source batch script must be a Rhai file");
-            }
+impl AcquisitionPosture {
+    /// Return the least-minimized posture in a bounded acquisition. A chained
+    /// requirement may claim no stronger posture than either of its sources.
+    pub fn weakest(self, other: Self) -> Self {
+        use AcquisitionPosture::{FieldProjected, RecordTransformed, SourceDerived};
+        match (self, other) {
+            (RecordTransformed, _) | (_, RecordTransformed) => RecordTransformed,
+            (FieldProjected, _) | (_, FieldProjected) => FieldProjected,
+            (SourceDerived, SourceDerived) => SourceDerived,
         }
-        if self.prepare_script == self.extract_script {
-            return invalid("source batch scripts must be distinct artifacts");
-        }
-        Path::new(self.extract_script.as_str())
-            .file_stem()
-            .and_then(|value| value.to_str())
-            .filter(|value| valid_local_id(value))
-            .ok_or(ConfigError::Invalid(
-                "source batch adapter name must be a local identifier",
-            ))?;
-        require_artifact_prefix(&self.response_schema, "schemas/")?;
-        validate_projection(&self.projection)
     }
-}
-
-impl FixedRequest {
-    /// Whether `path` names placeholders. A literal path admits neither
-    /// brace, so one brace is enough to read the member as a template.
-    pub fn path_is_template(&self) -> bool {
-        self.path.contains(['{', '}'])
-    }
-
-    fn validate(&self) -> Result<(), ConfigError> {
-        validate_string(&self.path, 2, 2_048, "source request path")?;
-        if self.path_is_template() {
-            validate_path_template(&self.path, &self.path_bindings)?;
-        } else {
-            validate_normalized_request_path(&self.path)?;
-            if !self.path_bindings.is_empty() {
-                return invalid("a source path without placeholders must not define pathBindings");
-            }
-        }
-        validate_fixed_headers(&self.fixed_headers)?;
-        validate_selector_inputs(&self.selector_inputs)?;
-        require_artifact_prefix(&self.prepare_script, "adapters/")?;
-        if !self.prepare_script.as_str().ends_with(".rhai") {
-            return invalid("source preparation script must be a Rhai file");
-        }
-        validate_len(self.adapter_parameters.len(), 0, 64, "adapter parameters")?;
-        for (name, value) in self.adapter_parameters.iter() {
-            if !valid_parameter_key(name) {
-                return invalid("adapter parameter name is invalid");
-            }
-            value.validate(0)?;
-        }
-        require_artifact_prefix(&self.adapter_parameters_schema, "schemas/")?;
-        self.preparation_limits.validate()?;
-        if self.method == HttpMethod::GET
-            && self.preparation_limits.json_body != PreparationChannelPolicy::Forbidden
-        {
-            return invalid("GET source requests must forbid the JSON body channel");
-        }
-        validate_projection(&self.projection)?;
-
-        Ok(())
-    }
-}
-
-/// A statement's select list is already its minimum-disclosure projection.
-///
-/// The generic projection may retain the whole rows array, every row object, or
-/// each declared member individually. It may add extract metadata paths, but it
-/// must not remove a column after SQLite has already materialized it.
-fn statement_projection_preserves_columns(projection: &[String], columns: &[SqliteColumn]) -> bool {
-    if projection
-        .iter()
-        .any(|path| path == "/rows" || path == "/rows/*")
-    {
-        return true;
-    }
-    columns.iter().all(|column| {
-        let expected = format!("/rows/*/{}", column.name);
-        projection.iter().any(|path| path == &expected)
-    })
-}
-
-/// The parameter name the runtime keeps for its own evaluation instant, so a
-/// statement never reads a clock of its own. A bundle that binds the name is
-/// rejected.
-pub const RESERVED_SQL_PARAMETER: &str = "evidence_now";
-
-/// One reviewed statement, and the bounds its result is read under.
-#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct SqliteRequest {
-    /// The statement itself, held as a bundle artifact so review and revision
-    /// reach it the way they reach a script.
-    pub statement: ArtifactPath,
-    /// The result contract the statement is read against, in result order.
-    pub columns: Vec<SqliteColumn>,
-    pub selector_inputs: Vec<SelectorInput>,
-    /// Statement parameters, by the name the statement binds them under.
-    #[serde(default, skip_serializing_if = "OrderedMap::is_empty")]
-    pub parameter_bindings: OrderedMap<SqliteParameterBinding>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub prepare_script: Option<ArtifactPath>,
-    #[serde(default, skip_serializing_if = "OrderedMap::is_empty")]
-    pub adapter_parameters: OrderedMap<AdapterParameterValue>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub adapter_parameters_schema: Option<ArtifactPath>,
-    /// Bounds on what `prepare_script` may return, written only where there is
-    /// a preparation script to bound.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub preparation_limits: Option<SqlitePreparationLimits>,
-    pub maximum_rows: BoundedU64<1, 256>,
-    pub maximum_cell_bytes: BoundedU64<1, 65_536>,
-    pub maximum_statement_steps: BoundedU64<1, 1_000_000>,
-    pub projection: UniqueList<String>,
-    pub attempt_timeout_milliseconds: BoundedU64<1, 30_000>,
-    pub maximum_response_bytes: BoundedU64<1, 1_048_576>,
-    pub maximum_concurrency: BoundedU32<1, 256>,
-}
-
-impl SqliteRequest {
-    fn validate(&self) -> Result<(), ConfigError> {
-        require_artifact_prefix(&self.statement, "queries/")?;
-        if !self.statement.as_str().ends_with(".sql") {
-            return invalid("source statement must be a SQL file");
-        }
-        validate_len(self.columns.len(), 1, 64, "statement columns")?;
-        let mut column_names = BTreeSet::new();
-        for column in &self.columns {
-            if !valid_field_name(&column.name) || !column_names.insert(column.name.as_str()) {
-                return invalid("statement column names must be valid and unique");
-            }
-        }
-        validate_selector_inputs(&self.selector_inputs)?;
-        validate_len(
-            self.parameter_bindings.len(),
-            0,
-            64,
-            "statement parameter bindings",
-        )?;
-        for (name, binding) in self.parameter_bindings.iter() {
-            if !valid_parameter_key(name) {
-                return invalid("statement parameter name is invalid");
-            }
-            if name == RESERVED_SQL_PARAMETER {
-                return invalid("statement parameter name is reserved by the runtime");
-            }
-            // A prepared name travels back from the preparation script, and the
-            // preparation ABI admits 64 bytes of parameter name, half of what a
-            // binding key may carry. A longer prepared name is a deployment that
-            // loads and can never execute: a script returning the name is
-            // refused by the ABI, and a script omitting it leaves the parameter
-            // unfilled. A selector binding is filled from the request and never
-            // crosses that boundary, so it keeps the full key bound.
-            if matches!(binding, SqliteParameterBinding::Prepared {}) && name.len() > 64 {
-                return invalid("prepared statement parameter name is too long to be prepared");
-            }
-            binding.validate()?;
-        }
-        if let Some(prepare_script) = &self.prepare_script {
-            require_artifact_prefix(prepare_script, "adapters/")?;
-            if !prepare_script.as_str().ends_with(".rhai") {
-                return invalid("source preparation script must be a Rhai file");
-            }
-        }
-        validate_len(self.adapter_parameters.len(), 0, 64, "adapter parameters")?;
-        for (name, value) in self.adapter_parameters.iter() {
-            if !valid_parameter_key(name) {
-                return invalid("adapter parameter name is invalid");
-            }
-            value.validate(0)?;
-        }
-        match &self.adapter_parameters_schema {
-            Some(schema) => require_artifact_prefix(schema, "schemas/")?,
-            // Parameters a reviewer cannot check against a closed schema are
-            // parameters the extraction script reads unchecked.
-            None if !self.adapter_parameters.is_empty() => {
-                return invalid("adapter parameters require their closed schema");
-            }
-            None => {}
-        }
-        // A script with nothing prepared to fill could only ever return a name
-        // the source refuses, and a prepared parameter with no script could
-        // never be filled at all, so the two are written together or not at all.
-        let prepared_parameters = self
-            .parameter_bindings
-            .iter()
-            .filter(|(_, binding)| matches!(binding, SqliteParameterBinding::Prepared {}))
-            .count() as u64;
-        match (&self.prepare_script, prepared_parameters) {
-            (Some(_), 0) => return invalid("statement preparation requires a prepared parameter"),
-            (None, 1..) => return invalid("a prepared parameter requires a preparation script"),
-            _ => {}
-        }
-        // Bounds on a preparation that does not happen say nothing, and a
-        // preparation nobody bounded is unbounded, so the two are written
-        // together or not at all.
-        match (&self.prepare_script, &self.preparation_limits) {
-            (Some(_), Some(limits)) => {
-                // A script allowed to return fewer parameters than the source
-                // declares prepared can never fill them all, so the bound is
-                // read against the work it has to admit.
-                if limits.maximum_parameters.get() < prepared_parameters {
-                    return invalid(
-                        "statement preparation limits must admit every prepared parameter",
-                    );
-                }
-            }
-            (Some(_), None) => {
-                return invalid("statement preparation requires its preparation limits");
-            }
-            (None, Some(_)) => {
-                return invalid("statement preparation limits require a preparation script");
-            }
-            (None, None) => {}
-        }
-        validate_projection(&self.projection)?;
-        if !statement_projection_preserves_columns(&self.projection, &self.columns) {
-            return invalid("statement projection must preserve every declared result column");
-        }
-
-        Ok(())
-    }
-}
-
-/// One column of a statement result, named and typed by the deployment.
-#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct SqliteColumn {
-    pub name: String,
-    #[serde(rename = "type")]
-    pub value_type: SqliteColumnType,
-}
-
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum SqliteColumnType {
-    String,
-    Integer,
-    Number,
-    Boolean,
-}
-
-/// How one statement parameter is filled.
-///
-/// A parameter has one origin and exactly one, so reading the declared bindings
-/// is enough to know where every value the statement binds came from.
-#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(remote = "Self", rename_all = "kebab-case", deny_unknown_fields)]
-pub enum SqliteParameterBinding {
-    Selector {
-        role: String,
-        profile: String,
-        field: String,
-    },
-    /// Filled by the preparation script, for a value no selector holds: a
-    /// normalized reference, a derived bound. It names no selector because
-    /// naming one would be a second origin.
-    ///
-    /// Written as a braced variant with no fields rather than a unit variant,
-    /// because serde applies `deny_unknown_fields` to an internally tagged unit
-    /// variant's siblings and not to the variant itself, so a unit variant would
-    /// silently accept `{type: prepared, role: subject}`.
-    Prepared {},
-}
-
-registry_platform_yaml::tagged_union!(SqliteParameterBinding);
-serialize_tagged_union!(SqliteParameterBinding, tag = "type");
-
-impl SqliteParameterBinding {
-    fn validate(&self) -> Result<(), ConfigError> {
-        match self {
-            Self::Selector {
-                role,
-                profile,
-                field,
-            } => {
-                if !valid_local_id(role) || !valid_local_id(profile) || !valid_field_name(field) {
-                    return invalid("source selector binding identifier is invalid");
-                }
-            }
-            Self::Prepared {} => {}
-        }
-        Ok(())
-    }
-}
-
-/// What a statement source's preparation script may produce.
-///
-/// A statement takes no query string and no request body, so the script's one
-/// output channel is a `parameters` map, and a parameter value is a scalar
-/// bound straight into the statement. Two things about that map are not
-/// settled anywhere else in the source, so they are settled here: how many
-/// entries the script may return, and how large one entry's value may be.
-/// Nothing further needs a bound, because an integer and a boolean are
-/// fixed-width, and a returned parameter is only usable under a name the
-/// source declares as a prepared `parameterBindings` key, which
-/// [`SqliteRequest::validate`] holds to the preparation ABI's own name bound.
-///
-/// `kernel.rs` compiles these bounds into the script host beside the compiled
-/// script, the way it does for the HTTP transport's own [`PreparationLimits`],
-/// and the host applies them to the returned `parameters` map before any value
-/// reaches the statement.
-#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct SqlitePreparationLimits {
-    /// Entries the returned `parameters` map may carry.
-    pub maximum_parameters: BoundedU64<1, 64>,
-    /// Bytes one returned parameter value may carry.
-    pub maximum_parameter_value_bytes: BoundedU64<1, 4_096>,
-}
-
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Deserialize, Serialize)]
-pub enum HttpMethod {
-    GET,
-    POST,
-}
-
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum RedirectPolicy {
-    Deny,
-}
-
-#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct FixedHeader {
-    pub name: String,
-    pub value: String,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
@@ -4936,73 +3875,6 @@ pub struct SelectorInput {
 pub struct SelectorInputAlternative {
     pub profile: String,
     pub fields: UniqueList<String>,
-}
-
-#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(remote = "Self", rename_all = "kebab-case", deny_unknown_fields)]
-pub enum PathBindingConfig {
-    Selector {
-        role: String,
-        profile: String,
-        field: String,
-    },
-    PriorFact {
-        field: String,
-    },
-}
-
-registry_platform_yaml::tagged_union!(PathBindingConfig);
-serialize_tagged_union!(PathBindingConfig, tag = "type");
-
-impl PathBindingConfig {
-    fn validate(&self) -> Result<(), ConfigError> {
-        match self {
-            Self::Selector {
-                role,
-                profile,
-                field,
-            } => {
-                if !valid_local_id(role) || !valid_local_id(profile) || !valid_field_name(field) {
-                    return invalid("source selector binding identifier is invalid");
-                }
-            }
-            Self::PriorFact { field } => {
-                if !valid_field_name(field) {
-                    return invalid("source prior-fact binding identifier is invalid");
-                }
-            }
-        }
-        Ok(())
-    }
-
-    pub fn is_prior_fact(&self) -> bool {
-        matches!(self, Self::PriorFact { .. })
-    }
-}
-
-/// One adapter parameter value: a scalar, a list of values, or a mapping of
-/// values, chosen by the node's kind (CFG-SCHEMA-8).
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub enum AdapterParameterValue {
-    Scalar(ScalarParameter),
-    Array(Vec<AdapterParameterValue>),
-    Object(OrderedMap<AdapterParameterValue>),
-}
-
-registry_platform_yaml::shape_union!(AdapterParameterValue {
-    scalar => Scalar,
-    list => Array,
-    mapping => Object,
-});
-
-impl Serialize for AdapterParameterValue {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        match self {
-            Self::Scalar(value) => value.serialize(serializer),
-            Self::Array(values) => values.serialize(serializer),
-            Self::Object(values) => values.serialize(serializer),
-        }
-    }
 }
 
 /// One scalar parameter value: text, an integer, or a boolean, as the
@@ -5060,77 +3932,6 @@ impl Serialize for ScalarParameter {
             Self::Boolean(value) => serializer.serialize_bool(*value),
         }
     }
-}
-
-impl AdapterParameterValue {
-    fn validate(&self, depth: usize) -> Result<(), ConfigError> {
-        if depth > 32 {
-            return invalid("adapter parameter nesting exceeds Version 1 bounds");
-        }
-        match self {
-            Self::Scalar(ScalarParameter::Boolean(_) | ScalarParameter::Integer(_)) => Ok(()),
-            Self::Scalar(ScalarParameter::String(value)) => {
-                validate_string(value, 0, 16_384, "adapter parameter string")
-            }
-            Self::Array(values) => {
-                validate_len(values.len(), 0, 256, "adapter parameter array")?;
-                for value in values {
-                    value.validate(depth + 1)?;
-                }
-                Ok(())
-            }
-            Self::Object(values) => {
-                validate_len(values.len(), 0, 256, "adapter parameter object")?;
-                for (name, value) in values.iter() {
-                    if !valid_parameter_key(name) {
-                        return invalid("adapter parameter object key is invalid");
-                    }
-                    value.validate(depth + 1)?;
-                }
-                Ok(())
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct PreparationLimits {
-    pub query: PreparationChannelPolicy,
-    pub json_body: PreparationChannelPolicy,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub maximum_query_pairs: Option<BoundedU64<1, 64>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub maximum_query_name_bytes: Option<BoundedU64<1, 64>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub maximum_query_value_bytes: Option<BoundedU64<1, 4_096>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub maximum_json_depth: Option<BoundedU64<1, 32>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub maximum_collection_items: Option<BoundedU64<1, 256>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub maximum_string_bytes: Option<BoundedU64<1, 16_384>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub maximum_normalized_bytes: Option<BoundedU64<1, 65_536>>,
-}
-
-impl PreparationLimits {
-    fn validate(&self) -> Result<(), ConfigError> {
-        if self.query == PreparationChannelPolicy::Forbidden
-            && self.json_body == PreparationChannelPolicy::Forbidden
-        {
-            return invalid("at least one preparation output channel must be usable");
-        }
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum PreparationChannelPolicy {
-    Required,
-    Allowed,
-    Forbidden,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
@@ -5386,328 +4187,31 @@ pub enum ValueOrigin {
     Request,
 }
 
-/// The closed set of acquisition kinds a bundle must opt in to before a
-/// deployment serves them, in the order the forms were added.
-///
-/// The Version 1 forms are deliberately absent: `single` and `search-then-fetch`
-/// are the frozen acquisition surface every bundle already had, so declaring
-/// them would say nothing, and omitting them would have to mean something. A
-/// capability list therefore names only the forms added after that surface
-/// froze, and a bundle written before any of them existed keeps serving exactly
-/// what it served before without carrying a list at all.
-pub const SOURCE_BATCH_CAPABILITY: &str = "source-batch";
-const GATED_ACQUISITION_KINDS: [&str; 2] = ["search-then-fetch-set", SOURCE_BATCH_CAPABILITY];
-
-/// The gated acquisition kinds one document declares, as a set.
-///
-/// The gate has two halves written by two people in two files: the bundle
-/// author names the kinds the bundle needs, and the operator names the kinds
-/// this deployment may serve. Both halves read the same closed vocabulary
-/// through this one derivation, so neither can drift into naming a kind the
-/// other cannot. Each half supplies its own sentences, because an operator
-/// fixes a runtime file and a bundle author fixes a bundle.
-fn declared_acquisition_capabilities<'a>(
-    capabilities: &'a [String],
-    unknown: &'static str,
-    duplicate: &'static str,
-    field: &'static str,
-) -> Result<BTreeSet<&'a str>, ConfigError> {
-    // Entry by entry before the collection bound: with one gated kind the
-    // bound would otherwise answer a duplicate with generic cardinality
-    // where a naming sentence says what to change.
-    let mut declared = BTreeSet::new();
-    for capability in capabilities {
-        if !GATED_ACQUISITION_KINDS.contains(&capability.as_str()) {
-            return invalid(unknown);
-        }
-        if !declared.insert(capability.as_str()) {
-            return invalid(duplicate);
-        }
-    }
-    validate_len(capabilities.len(), 0, GATED_ACQUISITION_KINDS.len(), field)?;
-    Ok(declared)
-}
-
-const MINIMUM_FETCH_SET_MEMBERS: usize = 2;
-const MAXIMUM_FETCH_SET_MEMBERS: usize = 4;
-const MAXIMUM_FETCH_SET_FACT_INPUTS: usize = 16;
-/// The ceiling on the whole fetch-set acquisition, matching the ceiling one
-/// source request already carries.
-const MAXIMUM_ACQUISITION_MILLISECONDS: u64 = 30_000;
-
-/// What a `search-then-fetch` acquisition answers when the fetch finds no
-/// record for the one the search resolved: a dependency failure by default, or
-/// `unavailable` when the fetched record is optional.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum FetchNoMatchPolicy {
-    #[default]
-    DependencyFailure,
-    Unavailable,
-}
-
-impl FetchNoMatchPolicy {
-    fn is_default(&self) -> bool {
-        *self == Self::DependencyFailure
-    }
-}
-
-/// The complete bounded evidence-data acquisition profile for one requirement.
-///
-/// Each named source remains one immutable HTTP request. `search-then-fetch`
-/// and `search-then-fetch-set` are the only multi-call forms, and each names
-/// every call it may make in configuration, so the acquisition ceiling stays
-/// fixed at read time without introducing a general workflow or
-/// source-planning model.
+/// One pinned pack route supplies all acquisition work for a requirement.
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(remote = "Self", rename_all = "kebab-case", deny_unknown_fields)]
-pub enum AcquisitionConfig {
-    Single {
-        source: String,
-    },
-    SearchThenFetch {
-        search: String,
-        fetch: String,
-        #[serde(
-            default,
-            rename = "onFetchNoMatch",
-            skip_serializing_if = "FetchNoMatchPolicy::is_default"
-        )]
-        on_fetch_no_match: FetchNoMatchPolicy,
-    },
-    SearchThenFetchSet {
-        search: String,
-        fetch: Vec<FetchSetMember>,
-        #[serde(rename = "maximumAcquisitionMilliseconds")]
-        maximum_acquisition_milliseconds: BoundedU64<1, MAXIMUM_ACQUISITION_MILLISECONDS>,
-    },
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AcquisitionConfig {
+    pub source: String,
 }
-
-registry_platform_yaml::tagged_union!(AcquisitionConfig);
-serialize_tagged_union!(AcquisitionConfig, tag = "type");
 
 impl AcquisitionConfig {
     fn validate(&self) -> Result<(), ConfigError> {
-        match self {
-            Self::Single { source } => {
-                if !valid_local_id(source) {
-                    return invalid("requirement acquisition source identifier is invalid");
-                }
-            }
-            Self::SearchThenFetch { search, fetch, .. } => {
-                if !valid_local_id(search) || !valid_local_id(fetch) || search == fetch {
-                    return invalid("search-then-fetch source identifiers are invalid");
-                }
-            }
-            Self::SearchThenFetchSet { search, fetch, .. } => {
-                if fetch.len() < MINIMUM_FETCH_SET_MEMBERS {
-                    return invalid("requirement acquisition declares too few fetch members");
-                }
-                if fetch.len() > MAXIMUM_FETCH_SET_MEMBERS {
-                    return invalid("requirement acquisition declares too many fetch members");
-                }
-                if !valid_local_id(search)
-                    || fetch.iter().any(|member| !valid_local_id(&member.source))
-                {
-                    return invalid("search-then-fetch-set source identifiers are invalid");
-                }
-                let mut members = BTreeSet::new();
-                for member in fetch {
-                    if !members.insert(member.source.as_str()) {
-                        return invalid("requirement acquisition fetch members must be distinct");
-                    }
-                    if &member.source == search {
-                        return invalid(
-                            "requirement acquisition fetch member repeats the search source",
-                        );
-                    }
-                    member.validate()?;
-                }
-            }
+        if !valid_local_id(&self.source) {
+            return invalid("requirement acquisition source identifier is invalid");
         }
         Ok(())
     }
 
     pub fn source_ids(&self) -> Vec<&str> {
-        match self {
-            Self::Single { source } => vec![source.as_str()],
-            Self::SearchThenFetch { search, fetch, .. } => {
-                vec![search.as_str(), fetch.as_str()]
-            }
-            Self::SearchThenFetchSet { search, fetch, .. } => std::iter::once(search.as_str())
-                .chain(fetch.iter().map(|member| member.source.as_str()))
-                .collect(),
-        }
+        vec![self.source.as_str()]
     }
 
     pub fn uses_source(&self, source_id: &str) -> bool {
-        self.source_ids().contains(&source_id)
+        self.source == source_id
     }
 
     pub fn initial_source(&self) -> &str {
-        match self {
-            Self::Single { source } => source,
-            Self::SearchThenFetch { search, .. } | Self::SearchThenFetchSet { search, .. } => {
-                search
-            }
-        }
-    }
-
-    /// The sources this acquisition reaches after its search has resolved, and
-    /// therefore the only sources that may bind a prior fact into a request.
-    pub fn fetch_sources(&self) -> Vec<&str> {
-        match self {
-            Self::Single { .. } => Vec::new(),
-            Self::SearchThenFetch { fetch, .. } => vec![fetch.as_str()],
-            Self::SearchThenFetchSet { fetch, .. } => {
-                fetch.iter().map(|member| member.source.as_str()).collect()
-            }
-        }
-    }
-
-    /// The ordered acquisition this requirement performs, read from
-    /// configuration alone: no request, no response, and no clock take part.
-    /// Every form describes itself the same way, so the runtime, the offline
-    /// fixture harness, and adopter tooling read one derivation of the order
-    /// and of what each stage may carry, rather than three that can drift.
-    pub fn plan(&self) -> AcquisitionPlan {
-        let stage = |source: &String, role, inputs| PlannedStage {
-            source: source.clone(),
-            role,
-            inputs,
-        };
-        match self {
-            Self::Single { source } => AcquisitionPlan {
-                stages: vec![stage(source, StageRole::Search, StageInputs::None)],
-                budget_milliseconds: None,
-            },
-            Self::SearchThenFetch { search, fetch, .. } => AcquisitionPlan {
-                stages: vec![
-                    stage(search, StageRole::Search, StageInputs::None),
-                    stage(fetch, StageRole::Member, StageInputs::EveryPriorFact),
-                ],
-                budget_milliseconds: None,
-            },
-            Self::SearchThenFetchSet {
-                search,
-                fetch,
-                maximum_acquisition_milliseconds,
-            } => AcquisitionPlan {
-                stages: std::iter::once(stage(search, StageRole::Search, StageInputs::None))
-                    .chain(fetch.iter().map(|member| {
-                        stage(
-                            &member.source,
-                            StageRole::Member,
-                            StageInputs::Declared(member.fact_inputs.clone()),
-                        )
-                    }))
-                    .collect(),
-                budget_milliseconds: Some(maximum_acquisition_milliseconds.get()),
-            },
-        }
-    }
-
-    /// The acquisition capability a bundle must declare before a deployment
-    /// may serve this requirement, or `None` for the frozen Version 1 forms,
-    /// which every bundle already carried and so declare nothing.
-    pub fn required_capability(&self) -> Option<&'static str> {
-        match self {
-            Self::Single { .. } | Self::SearchThenFetch { .. } => None,
-            Self::SearchThenFetchSet { .. } => Some("search-then-fetch-set"),
-        }
-    }
-}
-
-/// One declared member of a fetch set: a source, and the closed allowlist of
-/// search facts that member's request may read.
-#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct FetchSetMember {
-    pub source: String,
-    pub fact_inputs: Vec<String>,
-}
-
-impl FetchSetMember {
-    fn validate(&self) -> Result<(), ConfigError> {
-        if self.fact_inputs.is_empty() {
-            return invalid("requirement acquisition fetch member declares no fact inputs");
-        }
-        if self.fact_inputs.len() > MAXIMUM_FETCH_SET_FACT_INPUTS {
-            return invalid("requirement acquisition fetch member declares too many fact inputs");
-        }
-        let mut names = BTreeSet::new();
-        for name in &self.fact_inputs {
-            if !valid_field_name(name) {
-                return invalid("requirement acquisition fetch member fact input is invalid");
-            }
-            if !names.insert(name.as_str()) {
-                return invalid("requirement acquisition fetch member fact inputs must be unique");
-            }
-        }
-        Ok(())
-    }
-}
-
-/// The complete ordered acquisition one requirement performs, as a value that
-/// can be printed, compared, and tested without executing anything.
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub struct AcquisitionPlan {
-    pub stages: Vec<PlannedStage>,
-    /// The ceiling on the whole acquisition, where the form declares one. The
-    /// forms that predate the declaration bound each call on its own.
-    pub budget_milliseconds: Option<u64>,
-}
-
-/// One planned source call: which source, why it is called, and what an
-/// earlier stage's facts may contribute to its request.
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub struct PlannedStage {
-    pub source: String,
-    pub role: StageRole,
-    pub inputs: StageInputs,
-}
-
-/// Whether a stage resolves the subject or reads a resolved reference.
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub enum StageRole {
-    Search,
-    Member,
-}
-
-/// What an earlier stage's facts may contribute to one stage's request.
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub enum StageInputs {
-    /// Nothing, because no stage has run yet.
-    None,
-    /// Every fact the preceding stage produced. This is `search-then-fetch` as
-    /// Version 1 froze it, and the reason that form stops at one fetch.
-    EveryPriorFact,
-    /// Only the named search facts, in the order the member declared them.
-    Declared(Vec<String>),
-}
-
-impl StageInputs {
-    /// Narrow the facts an earlier stage produced to what this stage declared.
-    /// For a declared allowlist every name is a required search fact, proven
-    /// when the bundle validated its fact schemas, so a missing name is
-    /// impossible here rather than tolerated: the projection carries no
-    /// failure mode of its own.
-    pub fn project(
-        &self,
-        prior_facts: &BTreeMap<String, serde_json::Value>,
-    ) -> BTreeMap<String, serde_json::Value> {
-        match self {
-            Self::None => BTreeMap::new(),
-            Self::EveryPriorFact => prior_facts.clone(),
-            Self::Declared(names) => names
-                .iter()
-                .filter_map(|name| {
-                    prior_facts
-                        .get(name)
-                        .map(|value| (name.clone(), value.clone()))
-                })
-                .collect(),
-        }
+        &self.source
     }
 }
 
@@ -6369,11 +4873,6 @@ fn require_artifact_prefix(path: &ArtifactPath, prefix: &'static str) -> Result<
     }
 }
 
-fn validate_selector_inputs(inputs: &[SelectorInput]) -> Result<(), ConfigError> {
-    validate_len(inputs.len(), 0, 8, "source selector inputs")?;
-    validate_derivation_input_shape(inputs)
-}
-
 fn validate_derivation_input_shape(inputs: &[SelectorInput]) -> Result<(), ConfigError> {
     validate_len(inputs.len(), 0, 8, "selector inputs")?;
     let mut roles = BTreeSet::new();
@@ -6442,316 +4941,6 @@ fn validate_derivation_selector_inputs(
     Ok(())
 }
 
-fn validate_fixed_headers(headers: &[FixedHeader]) -> Result<(), ConfigError> {
-    validate_len(headers.len(), 0, 32, "fixed headers")?;
-    let mut names = BTreeSet::new();
-    for header in headers {
-        validate_configurable_header_name(&header.name)?;
-        if !names.insert(header.name.to_ascii_lowercase()) {
-            return invalid("fixed header names must be unique ignoring ASCII case");
-        }
-        validate_string(&header.value, 0, 4_096, "fixed header value")?;
-        if header.value.chars().any(char::is_control) {
-            return invalid("fixed header value contains a control character");
-        }
-    }
-    Ok(())
-}
-
-fn validate_configurable_header_name(name: &str) -> Result<(), ConfigError> {
-    if name.is_empty()
-        || name.len() > 64
-        || !name.bytes().all(is_http_token_byte)
-        || is_reserved_header_name(name)
-    {
-        return invalid("configured header name is prohibited");
-    }
-    Ok(())
-}
-
-pub(crate) fn is_http_token_byte(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric()
-        || matches!(
-            byte,
-            b'!' | b'#'
-                | b'$'
-                | b'%'
-                | b'&'
-                | b'\''
-                | b'*'
-                | b'+'
-                | b'-'
-                | b'.'
-                | b'^'
-                | b'_'
-                | b'`'
-                | b'|'
-                | b'~'
-        )
-}
-
-const fn is_false(value: &bool) -> bool {
-    !*value
-}
-
-/// The complete closed set of header names no bundle may configure.
-///
-/// Authentication, host and routing, cookie, framing, hop-by-hop, forwarding,
-/// proxy, and tracing headers are owned by Rust or by the operator's network
-/// path. A bundle that could set them could redirect a source request, forge a
-/// client identity, or smuggle a second request past the reviewed contract.
-const RESERVED_HEADER_NAMES: [&str; 40] = [
-    "authorization",
-    "proxy-authorization",
-    "www-authenticate",
-    "proxy-authenticate",
-    "host",
-    "cookie",
-    "set-cookie",
-    "content-length",
-    "content-type",
-    "transfer-encoding",
-    "expect",
-    "connection",
-    "keep-alive",
-    "te",
-    "trailer",
-    "upgrade",
-    "proxy-connection",
-    "forwarded",
-    "via",
-    "x-real-ip",
-    "x-client-ip",
-    "x-cluster-client-ip",
-    "true-client-ip",
-    "cf-connecting-ip",
-    "fastly-client-ip",
-    "x-appengine-user-ip",
-    "x-azure-clientip",
-    "traceparent",
-    "tracestate",
-    "baggage",
-    "b3",
-    "x-cloud-trace-context",
-    "x-request-id",
-    "x-correlation-id",
-    "x-amzn-trace-id",
-    "x-original-url",
-    "x-rewrite-url",
-    "x-original-method",
-    "registry-access-requester",
-    "registry-access-purpose",
-];
-
-/// The complete closed set of reserved header-name prefix families.
-///
-/// A prefix family is denied before any exact name so that a new vendor
-/// forwarding or tracing member cannot be configured before this contract
-/// learns its exact name.
-const RESERVED_HEADER_PREFIXES: [&str; 7] = [
-    "x-forwarded-",
-    "proxy-",
-    "sec-",
-    "x-b3-",
-    "x-envoy-",
-    "x-datadog-",
-    "x-http-method",
-];
-
-/// Representative reserved names, case variants, and prefix-family members.
-///
-/// Both the startup configuration contract and the source plan compiler are
-/// tested against this one list, which is how their shared classifier is
-/// proven to be a single closed deny set rather than two drifting copies.
-pub const RESERVED_HEADER_CONTRACT_CASES: [&str; 53] = [
-    "Authorization",
-    "authorization",
-    "AUTHORIZATION",
-    "Proxy-Authorization",
-    "Proxy-Authenticate",
-    "WWW-Authenticate",
-    "Host",
-    "Cookie",
-    "Set-Cookie",
-    "Content-Length",
-    "Content-Type",
-    "Transfer-Encoding",
-    "Expect",
-    "Connection",
-    "Keep-Alive",
-    "TE",
-    "Trailer",
-    "Upgrade",
-    "Proxy-Connection",
-    "Forwarded",
-    "Via",
-    "X-Real-IP",
-    "X-Client-IP",
-    "x-client-ip",
-    "X-Cluster-Client-IP",
-    "True-Client-IP",
-    "true-client-ip",
-    "CF-Connecting-IP",
-    "cf-connecting-ip",
-    "Fastly-Client-IP",
-    "X-Appengine-User-IP",
-    "X-Azure-ClientIP",
-    "TraceParent",
-    "Tracestate",
-    "Baggage",
-    "b3",
-    "B3",
-    "X-Cloud-Trace-Context",
-    "X-Request-ID",
-    "X-Correlation-ID",
-    "X-Amzn-Trace-ID",
-    "X-Original-URL",
-    "X-Rewrite-URL",
-    "X-HTTP-Method-Override",
-    "X-Original-Method",
-    "X-Forwarded-For",
-    "X-Forwarded-Proto",
-    "X-B3-TraceId",
-    "X-Envoy-External-Address",
-    "X-Datadog-Trace-Id",
-    "Sec-Fetch-Mode",
-    "Registry-Access-Requester",
-    "Registry-Access-Purpose",
-];
-
-/// The one closed reserved-header classifier.
-///
-/// `name` may be in any ASCII case. Configuration validation rejects a
-/// reserved name at startup and source plan compilation rejects it again
-/// before any credential is resolved, so both call sites share this function
-/// rather than duplicating the deny set.
-pub(crate) fn is_reserved_header_name(name: &str) -> bool {
-    let name = name.to_ascii_lowercase();
-    RESERVED_HEADER_PREFIXES
-        .iter()
-        .any(|prefix| name.starts_with(prefix))
-        || RESERVED_HEADER_NAMES.contains(&name.as_str())
-}
-
-fn validate_path_template(
-    template: &str,
-    bindings: &OrderedMap<PathBindingConfig>,
-) -> Result<(), ConfigError> {
-    if !template.starts_with('/')
-        || template.starts_with("//")
-        || template.contains(['?', '#', '\\'])
-        || !template.is_ascii()
-    {
-        return invalid("source path template is invalid");
-    }
-    let mut placeholders = BTreeSet::new();
-    let mut normalized = String::new();
-    for segment in template.split('/').skip(1) {
-        if segment.is_empty() || matches!(segment, "." | "..") {
-            return invalid("source path template contains an empty or dot segment");
-        }
-        normalized.push('/');
-        if let Some(name) = segment
-            .strip_prefix('{')
-            .and_then(|segment| segment.strip_suffix('}'))
-        {
-            if !valid_shared_local_id(name) {
-                return not_a_local_id("source path-template placeholder");
-            }
-            if !placeholders.insert(name) {
-                return invalid("source path-template placeholders must be unique");
-            }
-            normalized.push('x');
-        } else {
-            if segment.contains(['{', '}']) {
-                return invalid("source path-template placeholder must occupy a complete segment");
-            }
-            normalized.push_str(segment);
-        }
-    }
-    validate_normalized_request_path(&normalized)?;
-    if placeholders.is_empty() || placeholders != bindings.keys().collect::<BTreeSet<_>>() {
-        return invalid("pathBindings must exactly match path-template placeholders");
-    }
-    for (_, binding) in bindings.iter() {
-        binding.validate()?;
-    }
-    Ok(())
-}
-
-fn validate_projection(projection: &[String]) -> Result<(), ConfigError> {
-    validate_strings(projection, 1, 64, 2, 256, "source projection")?;
-    let paths = projection
-        .iter()
-        .map(|path| parse_projection_pointer(path))
-        .collect::<Result<Vec<_>, _>>()?;
-    for (index, left) in paths.iter().enumerate() {
-        for right in paths.iter().skip(index + 1) {
-            if projection_paths_overlap(left, right) {
-                return invalid("source projection paths must not duplicate or overlap");
-            }
-        }
-    }
-    Ok(())
-}
-
-#[derive(Debug, Clone, Eq, PartialEq)]
-enum ProjectionSegment {
-    Wildcard,
-    Key(String),
-}
-
-fn parse_projection_pointer(pointer: &str) -> Result<Vec<ProjectionSegment>, ConfigError> {
-    if !pointer.starts_with('/')
-        || pointer.starts_with("//")
-        || pointer.chars().any(char::is_control)
-    {
-        return invalid("source projection is not an extended JSON Pointer");
-    }
-    pointer[1..]
-        .split('/')
-        .map(|raw| {
-            if raw.is_empty() {
-                return invalid("source projection contains an empty segment");
-            }
-            if raw == "*" {
-                return Ok(ProjectionSegment::Wildcard);
-            }
-            let mut decoded = String::with_capacity(raw.len());
-            let mut chars = raw.chars();
-            while let Some(character) = chars.next() {
-                if character == '~' {
-                    match chars.next() {
-                        Some('0') => decoded.push('~'),
-                        Some('1') => decoded.push('/'),
-                        _ => return invalid("source projection contains an invalid escape"),
-                    }
-                } else {
-                    decoded.push(character);
-                }
-            }
-            Ok(ProjectionSegment::Key(decoded))
-        })
-        .collect()
-}
-
-fn projection_paths_overlap(left: &[ProjectionSegment], right: &[ProjectionSegment]) -> bool {
-    let common = left.len().min(right.len());
-    left.iter().zip(right).take(common).all(|(left, right)| {
-        left == right
-            || matches!(left, ProjectionSegment::Wildcard)
-            || matches!(right, ProjectionSegment::Wildcard)
-    })
-}
-
-fn validate_source_origin(value: &str) -> Result<(), ConfigError> {
-    let url = validate_source_url(value, true)?;
-    if url.path() != "/" || url.query().is_some() {
-        return invalid("source baseUrl must contain only scheme, host, and optional port");
-    }
-    Ok(())
-}
-
 /// Validate the only credential-free source boundary.
 ///
 /// This is deliberately narrower than the numeric-loopback exception used by
@@ -6780,21 +4969,7 @@ pub(crate) fn validate_local_unauthenticated_source_origin(value: &str) -> Resul
     Ok(())
 }
 
-/// Validate an RFC 8707 resource identifier without rewriting its governed bytes.
-/// It is an identifier in a form body, not an origin Evidence will connect to.
-pub(crate) fn validate_oauth_resource(value: &str) -> Result<(), ConfigError> {
-    let invalid_resource = || {
-        ConfigError::Invalid(
-            "OAuth resource must be an absolute URI without a fragment or user information",
-        )
-    };
-    if value.len() > 512 || !registry_platform_httputil::valid_resource_uri(value) {
-        return Err(invalid_resource());
-    }
-    Ok(())
-}
-
-fn validate_source_url(value: &str, origin_only: bool) -> Result<Url, ConfigError> {
+pub(crate) fn validate_source_url(value: &str, origin_only: bool) -> Result<Url, ConfigError> {
     if !value.bytes().all(is_uri_byte) {
         return invalid("source URL contains characters a URI cannot carry");
     }
@@ -6921,74 +5096,6 @@ fn validate_https_issuer(value: &str) -> Result<(), ConfigError> {
         || url.fragment().is_some()
     {
         return invalid("HTTPS issuer violates the exact issuer contract");
-    }
-    Ok(())
-}
-
-fn validate_normalized_request_path(value: &str) -> Result<(), ConfigError> {
-    if value.len() < 2
-        || !value.starts_with('/')
-        || value.starts_with("//")
-        || value.contains(['?', '#', '\\'])
-        || !value.is_ascii()
-    {
-        return invalid("source request path is invalid");
-    }
-    let mut index = 0;
-    let bytes = value.as_bytes();
-    while index < bytes.len() {
-        let byte = bytes[index];
-        if byte == b'%' {
-            if index + 2 >= bytes.len()
-                || !bytes[index + 1].is_ascii_hexdigit()
-                || !bytes[index + 2].is_ascii_hexdigit()
-                || bytes[index + 1].is_ascii_lowercase()
-                || bytes[index + 2].is_ascii_lowercase()
-            {
-                return invalid("source request path contains a non-canonical escape");
-            }
-            let decoded = u8::from_str_radix(&value[index + 1..index + 3], 16)
-                .map_err(|_| ConfigError::Invalid("source request path escape is invalid"))?;
-            if decoded.is_ascii_alphanumeric()
-                || matches!(decoded, b'-' | b'.' | b'_' | b'~' | b'/' | b'\\')
-            {
-                return invalid("source request path contains an ambiguous escape");
-            }
-            index += 3;
-            continue;
-        }
-        if !(byte.is_ascii_alphanumeric()
-            || matches!(
-                byte,
-                b'/' | b'.'
-                    | b'_'
-                    | b'~'
-                    | b'!'
-                    | b'$'
-                    | b'&'
-                    | b'\''
-                    | b'('
-                    | b')'
-                    | b'*'
-                    | b'+'
-                    | b','
-                    | b';'
-                    | b'='
-                    | b':'
-                    | b'@'
-                    | b'-'
-            ))
-        {
-            return invalid("source request path contains a prohibited character");
-        }
-        index += 1;
-    }
-    if value
-        .split('/')
-        .skip(1)
-        .any(|segment| segment.is_empty() || matches!(segment, "." | ".."))
-    {
-        return invalid("source request path contains a dot segment");
     }
     Ok(())
 }
@@ -7450,16 +5557,6 @@ fn valid_field_name(value: &str) -> bool {
     value.len() <= 64 && valid_local_id(value)
 }
 
-fn valid_parameter_key(value: &str) -> bool {
-    let bytes = value.as_bytes();
-    !bytes.is_empty()
-        && bytes.len() <= 128
-        && matches!(bytes.first(), Some(b'A'..=b'Z' | b'a'..=b'z' | b'_'))
-        && bytes[1..]
-            .iter()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
-}
-
 fn valid_code(value: &str) -> bool {
     let bytes = value.as_bytes();
     !bytes.is_empty()
@@ -7555,6 +5652,272 @@ mod tests {
     )]
     use super::*;
 
+    fn current_adapter_contract_accepts(
+        base_url: &str,
+        pack_authentication: serde_json::Value,
+        runtime_credential: serde_json::Value,
+        policy_authentication: serde_json::Value,
+    ) -> bool {
+        use registry_adapter_core::{
+            AdapterPack, AdapterProfile, AdapterProject, EvidenceConnectionPolicy, Workspace,
+        };
+        use registry_adapter_engine::artifacts::PackArtifactBytes;
+        use registry_adapter_engine::evidence::{
+            compile_evidence_with_protocols, EvidenceCompileInputs, EvidenceLimits,
+            EvidenceRuntimeBindings,
+        };
+        use registry_platform_config::{SecretProvider, SecretResolver};
+
+        let inputs = br#"{"type":"object","additionalProperties":false,"properties":{}}"#;
+        let facts = br#"{"type":"object","additionalProperties":false,"properties":{"ok":{"type":"boolean"}}}"#;
+        let pack: AdapterPack = serde_json::from_value(serde_json::json!({
+            "id":"current-source-contract",
+            "version":"1",
+            "testedVersions":[],
+            "endpoints":[{
+                "id":"provider",
+                "component":"http",
+                "authentication":pack_authentication,
+                "attemptTimeoutMilliseconds":1000,
+                "maximumResponseBytes":4096,
+                "requestHeaders":[],
+                "operations":[{"id":"lookup","safeUpstream":true}],
+                "testedVersions":[]
+            }],
+            "sourceRoutes":[{
+                "id":"lookup",
+                "evidence":{
+                    "inputsSchema":{
+                        "path":"schemas/inputs.json",
+                        "digest":registry_platform_config::sha256_uri(inputs)
+                    },
+                    "factsSchema":{
+                        "path":"schemas/facts.json",
+                        "digest":registry_platform_config::sha256_uri(facts)
+                    }
+                },
+                "steps":[{"to":{"uri":"http:provider","parameters":{
+                    "httpMethod":"GET",
+                    "path":"/data",
+                    "operation":"lookup"
+                }}}]
+            }]
+        }))
+        .expect("the current pack shape parses");
+        let artifacts = PackArtifactBytes::new([
+            ("schemas/inputs.json".to_owned(), inputs.to_vec()),
+            ("schemas/facts.json".to_owned(), facts.to_vec()),
+        ]);
+        let mut binding = serde_json::json!({
+            "endpoint":"provider",
+            "baseUrl":base_url,
+            "credential":runtime_credential
+        });
+        if binding["credential"]["type"] == "none" && base_url.starts_with("https://") {
+            binding["anonymousHttps"] = "operator-approved".into();
+        }
+        let Ok(bindings) = serde_json::from_value(serde_json::json!({
+            "id":"current-source",
+            "endpoints":[binding],
+            "allowedPrivateCidrs":[]
+        })) else {
+            return false;
+        };
+        let Ok(resolver) = SecretResolver::new([SecretProvider::Environment], "") else {
+            return false;
+        };
+        let profile: AdapterProfile = serde_json::from_value(serde_json::json!({
+            "id":"unused-profile",
+            "version":"1",
+            "operations":[],
+            "problems":[],
+            "problemEnvelope":"{\"code\":\"{{problemCode}}\"}"
+        }))
+        .expect("minimal profile");
+        let project: AdapterProject = serde_json::from_value(serde_json::json!({
+            "project":{"id":"unused-project","version":"1"},
+            "profile":{
+                "id":"unused-profile",
+                "version":"1",
+                "digest":format!("sha256:{}", "1".repeat(64))
+            },
+            "pack":{
+                "id":"current-source-contract",
+                "version":"1",
+                "digest":format!("sha256:{}", "2".repeat(64))
+            },
+            "recordTypes":[]
+        }))
+        .expect("minimal project");
+        let workspace = Workspace {
+            profile: &profile,
+            pack: &pack,
+            project: &project,
+            runtime: None,
+            fixtures: &[],
+        };
+        if !registry_adapter_core::check_endpoint_bindings(&workspace, &bindings).is_empty() {
+            return false;
+        }
+        let runtime = EvidenceRuntimeBindings::new(bindings, resolver);
+        let Ok(policy): Result<EvidenceConnectionPolicy, _> =
+            serde_json::from_value(serde_json::json!({
+                "endpoint":"provider",
+                "baseUrl":base_url,
+                "clientIdentity":"forbidden",
+                "authentication":policy_authentication
+            }))
+        else {
+            return false;
+        };
+        compile_evidence_with_protocols(
+            &EvidenceCompileInputs {
+                pack: &pack,
+                route: "lookup",
+                runtime: &runtime,
+                connection_id: Some("current-source"),
+                connection: &[policy],
+                pack_artifacts: &artifacts,
+                limits: EvidenceLimits::default(),
+            },
+            &crate::host_protocol::registry().expect("Evidence host protocols"),
+        )
+        .is_ok()
+    }
+
+    fn current_client_credential() -> serde_json::Value {
+        serde_json::json!({
+            "type":"oauth2-client-credentials",
+            "tokenEndpoint":"https://issuer.invalid/token",
+            "clientIdRef":"secret:env/CLIENT_ID",
+            "clientSecretRef":"secret:env/CLIENT_SECRET",
+            "credentialPlacement":"form-body",
+            "maximumCacheSeconds":60
+        })
+    }
+
+    fn current_client_policy() -> serde_json::Value {
+        serde_json::json!({
+            "type":"oauth2-client-credentials",
+            "tokenEndpoint":"https://issuer.invalid/token",
+            "credentialPlacement":"form-body"
+        })
+    }
+
+    fn current_private_key_credential() -> serde_json::Value {
+        serde_json::json!({
+            "type":"oauth2-private-key-jwt",
+            "tokenEndpoint":"https://issuer.invalid/token",
+            "clientIdRef":"secret:env/CLIENT_ID",
+            "clientAssertionKeyRef":"secret:env/CLIENT_ASSERTION_KEY",
+            "maximumCacheSeconds":60
+        })
+    }
+
+    #[test]
+    fn source_acquisition_defaults_are_finite_and_zero_is_refused() {
+        let defaults = SourceAcquisitionConfig::default();
+        let limits = defaults.limits().expect("maintained defaults are valid");
+        assert_eq!(limits.maximum_data_operations(), 5);
+        assert_eq!(limits.deadline().as_millis(), 30_000);
+        assert_eq!(limits.maximum_response_bytes(), 1_048_576);
+
+        for invalid in [
+            SourceAcquisitionConfig {
+                maximum_data_operations: 0,
+                ..defaults
+            },
+            SourceAcquisitionConfig {
+                deadline_milliseconds: 0,
+                ..defaults
+            },
+            SourceAcquisitionConfig {
+                maximum_response_bytes: 0,
+                ..defaults
+            },
+        ] {
+            assert!(invalid.limits().is_err());
+        }
+    }
+
+    #[test]
+    fn pack_source_config_is_the_only_source_shape() {
+        let source = serde_json::json!({
+            "pack": {
+                "id": "synthetic-register",
+                "version": "0.1.0",
+                "digest": format!("sha256:{}", "1".repeat(64)),
+                "artifactPrefix": format!("adapter-packs/synthetic-register/{}", "1".repeat(64))
+            },
+            "route": "evidence-person",
+            "connection": "register",
+            "inputs": {
+                "personId": {"selector":{"role":"person","profile":"person-by-id","field":"person-id"}}
+            },
+            "posture": "record-transformed",
+            "factSchema": "schemas/source-facts/person.schema.json"
+        });
+        let decoded = serde_json::from_value::<SourceConfig>(source.clone())
+            .expect("a Source selects one pinned pack route and reviewed connection policy");
+        decoded
+            .validate(AssuranceProfile::Production)
+            .expect("the pinned pack Source validates without transport DSL");
+
+        let mut wrong_prefix = source.clone();
+        wrong_prefix["pack"]["artifactPrefix"] = serde_json::json!("adapter-packs/other/0000");
+        assert!(serde_json::from_value::<SourceConfig>(wrong_prefix)
+            .unwrap()
+            .validate(AssuranceProfile::Production)
+            .is_err());
+
+        let mut bad_input = source;
+        let binding = bad_input["inputs"]
+            .as_object_mut()
+            .unwrap()
+            .remove("personId")
+            .unwrap();
+        bad_input["inputs"]
+            .as_object_mut()
+            .expect("inputs object")
+            .insert("x".repeat(513), binding);
+        assert!(serde_json::from_value::<SourceConfig>(bad_input).is_err());
+
+        let legacy = serde_json::json!({
+            "type":"http-json",
+            "baseUrl":"https://source.invalid",
+            "authentication":{"type":"none"}
+        });
+        assert!(serde_json::from_value::<SourceConfig>(legacy).is_err());
+    }
+
+    #[test]
+    fn connection_policy_groups_allow_no_network_and_keep_endpoint_ids_unique() {
+        let policy = |endpoint: &str, base_url: &str| {
+            serde_json::json!({
+                "endpoint": endpoint,
+                "baseUrl": base_url,
+                "authentication":{"type":"none"},
+                "clientIdentity": "forbidden"
+            })
+        };
+        let valid: SourceConnectionPolicies = serde_json::from_value(serde_json::json!({
+            "endpoints":[policy("records", "https://source.invalid/api")]
+        }))
+        .expect("one reviewed endpoint policy parses");
+        assert_eq!(valid.endpoints.len(), 1);
+
+        let empty: SourceConnectionPolicies =
+            serde_json::from_value(serde_json::json!({"endpoints":[]})).unwrap();
+        assert!(empty.endpoints.is_empty());
+        let duplicate = serde_json::from_value::<SourceConnectionPolicies>(serde_json::json!({
+            "endpoints":[
+                policy("records", "https://source.invalid/api"),
+                policy("records", "https://other.invalid/api")
+            ]
+        }));
+        assert!(duplicate.is_err());
+    }
+
     #[test]
     fn reference_frameworks_accept_unicode_at_the_character_bound_through_the_bundle_reader() {
         assert_uri_array_character_bound("/requirements/0/referenceFrameworks");
@@ -7602,8 +5965,8 @@ mod tests {
         )
         .expect("acceptance configuration is UTF-8")
         .replace(
-            "requesterTags: [fixture-agency]",
-            "requesterTags: [fixture-agency, fixture-agency]",
+            "    requesterTags:\n      - fixture-agency\n",
+            "    requesterTags:\n      - fixture-agency\n      - fixture-agency\n",
         );
         let ConfigError::Refused(report) =
             EvidenceConfig::parse_yaml(bytes.as_bytes()).expect_err("a repeated tag is refused")
@@ -7720,21 +6083,22 @@ mod tests {
             "/sources/source_a",
         );
 
-        let connection: SourceConnectionConfig = serde_json::from_value(serde_json::json!({
-            "baseUrl": "https://source.example",
-            "authentication": {
-                "type": "oauth2-private-key-jwt",
-                "tokenEndpoint": "https://issuer.example/token",
-                "clientIdRef": "secret:file/client-id",
-                "clientAssertionKeyRef": "secret:file/client-key",
-                "clientAssertionAudience": "https://issuer.example/client-auth",
-                "audience": "https://resource.example",
-                "resource": "https://resource.example/records",
-                "maximumCacheSeconds": 60
-            },
-            "tlsTrustProfile": "private-ca"
+        let connection: SourceConnectionPolicies = serde_json::from_value(serde_json::json!({
+            "endpoints": [{
+                "endpoint": "records",
+                "baseUrl": "https://source.example",
+                "authentication": {
+                    "type": "oauth2-private-key-jwt",
+                    "tokenEndpoint": "https://issuer.example/token",
+                    "clientAssertionAudience": "https://issuer.example/client-auth",
+                    "audience": "https://resource.example",
+                    "resource": "https://resource.example/records"
+                },
+                "tlsTrustProfile": "private-ca",
+                "clientIdentity": "required"
+            }]
         }))
-        .expect("the complete authentication union parses");
+        .expect("the reviewed connection policy parses");
         let mut connections = baseline();
         connections
             .source_connections
@@ -7868,105 +6232,45 @@ mod tests {
     }
 
     #[test]
-    fn named_source_connections_reject_retargeting_and_preserve_authentication_defaults() {
+    fn named_source_connections_bind_sources_to_closed_reviewed_endpoint_policies() {
         let mut config = EvidenceConfig::parse_yaml(include_bytes!(
             "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
         ))
         .expect("acceptance configuration parses");
-        let connection: SourceConnectionConfig = serde_json::from_value(serde_json::json!({
-            "baseUrl": "https://source.example",
-            "authentication": {
-                "type": "oauth2-private-key-jwt",
-                "tokenEndpoint": "https://issuer.example/token",
-                "clientIdRef": "secret:file/client-id",
-                "clientAssertionKeyRef": "secret:file/client-key",
-                "clientAssertionAudience": "https://issuer.example/client-auth",
-                "audience": "https://resource.example",
-                "resource": "https://resource.example/records",
-                "maximumCacheSeconds": 60
-            },
-            "tlsTrustProfile": "private-ca"
-        }))
-        .expect("the complete authentication union parses");
-        assert_eq!(connection.maximum_concurrency.get(), 4);
-        assert_eq!(connection.admission_timeout_milliseconds.get(), 5000);
-        assert_eq!(connection.token_timeout_milliseconds.get(), 5000);
-        if let SourceConfig::HttpJson {
-            base_url,
-            authentication,
-            tls_trust_profile,
-            request,
-            connection: name,
-            ..
-        } = &mut config.sources.0[0].1
-        {
-            *name = Some("shared".to_owned());
-            *base_url = connection.base_url.clone();
-            *authentication = connection.authentication.clone();
-            *tls_trust_profile = connection.tls_trust_profile.clone();
-            request.maximum_concurrency = connection.maximum_concurrency;
-        }
-        config.source_connections = OrderedMap(vec![("shared".to_owned(), connection)]);
-        config.validate().expect("the resolved candidate validates");
-        let before = config.clone();
-        if let SourceConfig::HttpJson { base_url, .. } = &mut config.sources.0[0].1 {
-            *base_url = typed_url("https://another.example");
-        }
-        assert!(
-            config.validate().is_err(),
-            "a copied endpoint cannot retarget a named source"
-        );
-        config = before.clone();
-        if let SourceConfig::HttpJson { authentication, .. } = &mut config.sources.0[0].1 {
-            if let SourceAuthentication::Oauth2PrivateKeyJwt { resource, .. } =
-                authentication.as_mut()
-            {
-                *resource = Some("https://other.example/records".to_owned());
-            } else {
-                panic!("expected OAuth source");
-            }
-        }
-        assert!(
-            config.validate().is_err(),
-            "a source cannot retarget its named connection's OAuth resource"
-        );
-        for field in ["authentication", "tlsTrustProfile"] {
-            config = before.clone();
-            if let SourceConfig::HttpJson {
-                authentication,
-                tls_trust_profile,
-                request,
-                ..
-            } = &mut config.sources.0[0].1
-            {
-                match field {
-                    "authentication" => {
-                        **authentication = SourceAuthentication::StaticAuthorization {
-                            token_ref: SecretReference::parse("secret:file/different-token")
-                                .unwrap(),
-                            scheme: None,
-                        }
-                    }
-                    "tlsTrustProfile" => *tls_trust_profile = None,
-                    _ => {
-                        request.maximum_concurrency =
-                            BoundedU32::new(2).expect("two is a valid concurrency limit");
-                    }
+        let source = &mut config.sources.0[0].1;
+        source.connection = LocalId::new("shared").unwrap();
+        let policy: SourceConnectionPolicies = serde_json::from_value(serde_json::json!({
+            "endpoints": [{
+                "endpoint": "records",
+                "baseUrl": "https://source.example/api",
+                "tlsTrustProfile": "private-ca",
+                "clientIdentity": "required",
+                "authentication": {
+                    "type": "oauth2-private-key-jwt",
+                    "tokenEndpoint": "https://issuer.example/token",
+                    "clientAssertionAudience": "https://issuer.example/client-auth",
+                    "resource": "https://resource.example/records"
                 }
-            }
-            assert!(
-                config.validate().is_err(),
-                "connection-owned fields cannot differ"
-            );
-        }
-        config = before.clone();
-        if let SourceConfig::HttpJson { request, .. } = &mut config.sources.0[0].1 {
-            request.maximum_concurrency = BoundedU32::new(2).unwrap();
-        }
-        config
-            .validate()
-            .expect("package-source and target-connection limits are independently enforced");
-        config = before;
+            }]
+        }))
+        .expect("the closed reviewed policy parses");
+        config.source_connections = OrderedMap(vec![("shared".to_owned(), policy.clone())]);
+        config.validate().expect("the named owner exists");
+
+        assert!(
+            serde_json::from_value::<SourceConnectionPolicies>(serde_json::json!({
+                "endpoints": [{
+                    "endpoint": "records",
+                    "baseUrl": "https://other.example/api",
+                    "clientIdentity": "required",
+                    "authentication": {"type": "none"},
+                    "secretRef": "secret:file/not-governed-here"
+                }]
+            }))
+            .is_err(),
+            "credential material is not part of governed connection authority"
+        );
+
         config.source_connections.0.clear();
         assert!(
             config.validate().is_err(),
@@ -7975,31 +6279,24 @@ mod tests {
     }
 
     #[test]
-    fn source_behavior_revision_is_an_optional_strict_sha256_digest() {
+    fn source_pack_digest_is_strict_sha256_and_part_of_the_binding() {
         let mut config = EvidenceConfig::parse_yaml(include_bytes!(
             "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
         ))
         .unwrap();
-        for revision in [
-            "sha256:short".to_owned(),
-            format!("sha256:{}", "A".repeat(64)),
-            format!("sha512:{}", "a".repeat(64)),
-        ] {
-            if let SourceConfig::HttpJson {
-                behavior_revision, ..
-            } = &mut config.sources.0[0].1
-            {
-                *behavior_revision = Some(revision);
-            }
-            assert!(config.validate().is_err());
-        }
-        if let SourceConfig::HttpJson {
-            behavior_revision, ..
-        } = &mut config.sources.0[0].1
-        {
-            *behavior_revision = Some(format!("sha256:{}", "a".repeat(64)));
-        }
-        config.validate().expect("the versioned digest parses");
+        let source = &mut config.sources.0[0].1;
+        let digest = source.pack.digest.clone();
+        assert!(digest.as_str().starts_with("sha256:"));
+        source.pack.artifact_prefix = ArtifactPath::parse(&format!(
+            "adapter-packs/{}/{}",
+            source.pack.id,
+            "0".repeat(64)
+        ))
+        .unwrap();
+        assert_eq!(
+            config.validate(),
+            invalid("source pack artifact prefix must match its id and digest")
+        );
     }
 
     #[test]
@@ -8060,20 +6357,20 @@ mod tests {
         assert!(validator.is_valid(&bundle_contract_instance(baseline.as_bytes())));
         for (from, to) in [
             (
-                "publicOrigin: https://evidence.invalid,",
-                "publicOrigin: https://operator@evidence.invalid,",
+                "  publicOrigin: https://evidence.invalid\n",
+                "  publicOrigin: https://operator@evidence.invalid\n",
             ),
             (
-                "endpointUrl: https://evidence.example.invalid,",
-                "endpointUrl: https://operator@evidence.example.invalid,",
+                "  endpointUrl: https://evidence.example.invalid\n",
+                "  endpointUrl: https://operator@evidence.example.invalid\n",
             ),
             (
-                "    baseUrl: https://source.invalid\n",
-                "    baseUrl: https://operator@source.invalid\n",
+                "        baseUrl: https://source.invalid\n",
+                "        baseUrl: https://operator@source.invalid\n",
             ),
             (
-                "    baseUrl: https://source.invalid\n",
-                "    baseUrl: source.invalid\n",
+                "        baseUrl: https://source.invalid\n",
+                "        baseUrl: source.invalid\n",
             ),
         ] {
             let document = edited(acceptance_fixture(), from, to);
@@ -8089,10 +6386,10 @@ mod tests {
             r"https://source.invalid?x=\y",
             r"https://source.invalid#\fragment",
         ] {
-            let replacement = format!("    baseUrl: '{url}'\n");
+            let replacement = format!("        baseUrl: '{url}'\n");
             let document = edited(
                 baseline,
-                "    baseUrl: https://source.invalid\n",
+                "        baseUrl: https://source.invalid\n",
                 &replacement,
             );
             assert_eq!(decode_cause(&document), "config.invalid-value", "{url}");
@@ -8181,11 +6478,6 @@ mod tests {
             invalid("requirement concept handles must be unique")
         );
     }
-    // The bound `SqliteRequest::validate` holds a prepared parameter name to,
-    // read from the preparation ABI itself so the two cannot drift apart
-    // unnoticed.
-    use crate::rhai_runtime::MAXIMUM_STATEMENT_PARAMETER_NAME_BYTES;
-
     /// Text as the shared URL type a bundle URL member is read into.
     fn typed_url(text: &str) -> registry_platform_yaml::Url {
         registry_platform_yaml::Url::new(text).expect("the shared URL type accepts the text")
@@ -8200,46 +6492,6 @@ mod tests {
     ) -> bool {
         registry_platform_yaml::Url::new(text).map_or(true, validated)
     }
-
-    /// Borrow the base URL of a parsed fixture's first source.
-    ///
-    /// Every acceptance fixture these tests parse declares one `http-json`
-    /// source, so a test that mutates HTTP request material names the
-    ///
-    /// Every acceptance fixture these tests parse declares one `http-json`
-    /// source, so a test that mutates HTTP request material names the
-    /// transport through these four helpers rather than at each call.
-    fn http_base_url(config: &mut EvidenceConfig) -> &mut registry_platform_yaml::Url {
-        match &mut config.sources.0[0].1 {
-            SourceConfig::HttpJson { base_url, .. } => base_url,
-            SourceConfig::SqliteExtract { .. } => panic!("{NOT_HTTP_JSON}"),
-        }
-    }
-
-    fn http_tls_trust_profile(config: &mut EvidenceConfig) -> &mut Option<String> {
-        match &mut config.sources.0[0].1 {
-            SourceConfig::HttpJson {
-                tls_trust_profile, ..
-            } => tls_trust_profile,
-            SourceConfig::SqliteExtract { .. } => panic!("{NOT_HTTP_JSON}"),
-        }
-    }
-
-    fn http_authentication(config: &mut EvidenceConfig) -> &mut SourceAuthentication {
-        match &mut config.sources.0[0].1 {
-            SourceConfig::HttpJson { authentication, .. } => authentication,
-            SourceConfig::SqliteExtract { .. } => panic!("{NOT_HTTP_JSON}"),
-        }
-    }
-
-    fn http_request(config: &mut EvidenceConfig) -> &mut FixedRequest {
-        match &mut config.sources.0[0].1 {
-            SourceConfig::HttpJson { request, .. } => request,
-            SourceConfig::SqliteExtract { .. } => panic!("{NOT_HTTP_JSON}"),
-        }
-    }
-
-    const NOT_HTTP_JSON: &str = "the fixture source does not use the http-json transport";
 
     #[test]
     fn assurance_profile_is_explicit_and_strict_profiles_require_fixtures() {
@@ -9135,315 +7387,96 @@ mod tests {
     }
 
     #[test]
-    fn unauthenticated_source_is_local_loopback_only_and_matches_the_bundle_schema() {
-        let mut local = EvidenceConfig::parse_yaml(include_bytes!(
-            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
-        ))
-        .expect("strict fixture validates");
-        local.assurance_profile = AssuranceProfile::Local;
-        *http_authentication(&mut local) = SourceAuthentication::None {};
+    fn governed_connection_policies_are_closed_and_carry_no_runtime_secret_material() {
+        let policy: SourceConnectionPolicies = serde_json::from_value(serde_json::json!({
+            "endpoints": [{
+                "endpoint": "records",
+                "baseUrl": "https://source.invalid/api",
+                "tlsTrustProfile": "private-ca",
+                "clientIdentity": "required",
+                "authentication": {
+                    "type": "oauth2-client-credentials",
+                    "tokenEndpoint": "https://issuer.invalid/token",
+                    "scope": "evidence.read",
+                    "credentialPlacement": "form-body"
+                }
+            }]
+        }))
+        .expect("the reviewed non-secret connection authority parses");
+        assert_eq!(policy.endpoints.len(), 1);
 
-        for origin in [
-            "http://127.0.0.1:80",
-            "http://127.0.0.1:18081",
-            "http://127.42.5.9:1",
-            "http://[::1]:65535",
+        for extra in [
+            (
+                "clientSecretRef",
+                serde_json::json!("secret:file/client-secret"),
+            ),
+            ("clientIdRef", serde_json::json!("secret:file/client-id")),
+            ("maximumCacheSeconds", serde_json::json!(60)),
         ] {
-            let mut candidate = local.clone();
-            *http_base_url(&mut candidate) = typed_url(origin);
-            candidate
-                .validate()
-                .unwrap_or_else(|_| panic!("local assurance rejected {origin}"));
-            assert!(http_authentication(&mut candidate).secret_refs().is_empty());
-        }
-
-        for origin in [
-            "https://127.0.0.1:18081",
-            "http://localhost:18081",
-            "http://127.0.0.1",
-            "http://127.0.0.1:0",
-            "http://127.0.0.1:018081",
-            "http://127.0.0.1:65536",
-            "http://127.00.0.1:18081",
-            "http://127.0.0.1:18081/",
-            "http://127.0.0.1:18081/data",
-            "http://127.0.0.1:18081?query=true",
-            "http://127.0.0.1:18081#fragment",
-            "http://user@127.0.0.1:18081",
-            "http://192.168.1.2:18081",
-        ] {
+            let mut candidate = serde_json::to_value(&policy).unwrap();
+            candidate["endpoints"][0][extra.0] = extra.1;
             assert!(
-                url_refused(origin, |url| {
-                    let mut candidate = local.clone();
-                    *http_base_url(&mut candidate) = url;
-                    candidate.validate().is_err()
-                }),
-                "local assurance accepted unauthenticated origin {origin}"
+                serde_json::from_value::<SourceConnectionPolicies>(candidate).is_err(),
+                "runtime credential material {} entered governed policy",
+                extra.0
             );
         }
 
-        let mut with_tls_profile = local.clone();
-        *http_base_url(&mut with_tls_profile) = typed_url("http://127.0.0.1:18081");
-        *http_tls_trust_profile(&mut with_tls_profile) = Some("unused-local-ca".to_owned());
-        assert!(with_tls_profile.validate().is_err());
-
-        for profile in [
-            AssuranceProfile::Production,
-            AssuranceProfile::EvidenceGrade,
+        for base_url in [
+            "https://user@source.invalid/api",
+            "https://source.invalid/api with space",
+            "source.invalid/api",
         ] {
-            let mut candidate = local.clone();
-            candidate.assurance_profile = profile;
-            *http_base_url(&mut candidate) = typed_url("http://127.0.0.1:18081");
+            let candidate = serde_json::json!({
+                "endpoints": [{
+                    "endpoint": "records",
+                    "baseUrl": base_url,
+                    "clientIdentity": "forbidden",
+                    "authentication": {"type": "none"}
+                }]
+            });
             assert!(
-                candidate.validate().is_err(),
-                "{profile:?} accepted an unauthenticated source"
+                serde_json::from_value::<SourceConnectionPolicies>(candidate).is_err(),
+                "invalid reviewed base URL {base_url} parsed"
             );
         }
-
-        let validator = bundle_contract_validator();
-        let mut instance = bundle_contract_instance(include_bytes!(
-            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
-        ));
-        instance["assuranceProfile"] = serde_json::json!("local");
-        instance["sources"]["source-a"]["baseUrl"] = serde_json::json!("http://127.0.0.1:18081");
-        instance["sources"]["source-a"]["authentication"] = serde_json::json!({"type": "none"});
-        assert!(
-            validator.is_valid(&instance),
-            "schema accepts the local form"
-        );
-        instance["assuranceProfile"] = serde_json::json!("production");
-        assert!(
-            !validator.is_valid(&instance),
-            "schema rejects the local exception in a deployable profile"
-        );
-
-        assert!(
-            serde_json::from_value::<SourceAuthentication>(
-                serde_json::json!({"type": "none", "tokenRef": "secret:file/unexpected"})
-            )
-            .is_err(),
-            "the none variant is closed"
-        );
     }
 
-    /// The published bundle contract must refuse a `sourceConnections` entry
-    /// exactly where `SourceConnectionConfig::validate` refuses it. A schema
-    /// that publishes a connection shape the runtime denies describes a
-    /// deployment nobody can load, so both sides read the same document here.
     #[test]
-    fn source_connections_are_constrained_alike_by_the_bundle_schema_and_the_runtime() {
-        let validator = bundle_contract_validator();
-
-        let owned = source_connection_document(
-            acceptance_fixture(),
-            concat!(
-                "    baseUrl: https://source.invalid\n",
-                "    authentication: {type: static-authorization, tokenRef: secret:file/source-a-token}\n",
-                "    maximumConcurrency: 8\n",
-            ),
-        );
-        let owned = edited(
-            &owned,
-            "    type: http-json\n",
-            "    type: http-json\n    connection: shared\n",
-        );
-        EvidenceConfig::parse_yaml(owned.as_bytes())
-            .expect("a source resolved to its named connection validates");
-        assert!(
-            validator.is_valid(&bundle_contract_instance(owned.as_bytes())),
-            "the bundle contract rejected a resolved named connection"
-        );
-
-        let local = edited(
-            acceptance_fixture(),
-            "assuranceProfile: evidence-grade\n",
-            "assuranceProfile: local\n",
-        );
-        let loopback = source_connection_document(
-            &local,
-            "    baseUrl: http://127.0.0.1:18081\n    authentication: {type: none}\n",
-        );
-        EvidenceConfig::parse_yaml(loopback.as_bytes())
-            .expect("an unauthenticated local loopback connection validates");
-        assert!(
-            validator.is_valid(&bundle_contract_instance(loopback.as_bytes())),
-            "the bundle contract rejected the local loopback exception"
-        );
-
-        let mut refused = vec![
-            (
-                "an unauthenticated connection at a public origin",
-                "    baseUrl: https://source.invalid\n    authentication: {type: none}\n"
-                    .to_owned(),
-            ),
-            (
-                "an unauthenticated loopback connection carrying a private trust profile",
-                concat!(
-                    "    baseUrl: http://127.0.0.1:18081\n",
-                    "    authentication: {type: none}\n",
-                    "    tlsTrustProfile: private-ca\n",
-                )
-                .to_owned(),
-            ),
-        ];
-        // The unauthenticated exception is one exact origin spelling, so a
-        // default port, a zero or out-of-range port, a padded port, and a
-        // padded octet all sit outside it.
-        for origin in [
-            "http://127.0.0.1",
-            "http://127.0.0.1:0",
-            "http://127.0.0.1:65536",
-            "http://127.0.0.1:018081",
-            "http://127.00.0.1:18081",
+    fn retired_transport_source_members_are_refused_by_the_pack_binding_grammar() {
+        for retired in [
+            serde_json::json!({
+                "type": "http-json",
+                "baseUrl": "https://source.invalid",
+                "authentication": {"type": "none"}
+            }),
+            serde_json::json!({
+                "type": "sqlite-extract",
+                "extractProfile": "records",
+                "request": {"statement": "queries/records.sql"}
+            }),
         ] {
-            refused.push((
-                "an unauthenticated connection at a non-canonical loopback origin",
-                format!("    baseUrl: {origin}\n    authentication: {{type: none}}\n"),
-            ));
-        }
-        // The authenticated branch is no looser. The runtime refuses user
-        // information, a port outside the range a port can hold, and a
-        // loopback literal that is not the canonical spelling, so the
-        // published contract has to refuse them rather than describe a
-        // connection that only fails at startup.
-        for origin in [
-            "https://user:token@source.invalid",
-            "https://source.invalid:99999",
-            "http://127.0.0.1:99999",
-            "http://127.00.0.1:18081",
-        ] {
-            refused.push((
-                "an authenticated connection at a non-canonical origin",
-                format!(
-                    "    baseUrl: {origin}\n    authentication: {{type: static-authorization, tokenRef: secret:file/source-a-token}}\n"
-                ),
-            ));
-        }
-        for (reason, connection) in refused {
-            let document = source_connection_document(&local, &connection);
-            assert!(
-                EvidenceConfig::parse_yaml(document.as_bytes()).is_err(),
-                "the runtime accepted {reason}"
-            );
-            assert!(
-                !validator.is_valid(&bundle_contract_instance(document.as_bytes())),
-                "the bundle contract accepted {reason}"
-            );
-        }
-
-        // An unused connection is still declared, and the assurance-profile
-        // conditional must refuse it the same way it refuses a declared
-        // source, regardless of whether any requirement resolves to it.
-        let unused_loopback =
-            "    baseUrl: http://127.0.0.1:18081\n    authentication: {type: none}\n";
-        let evidence_grade = source_connection_document(acceptance_fixture(), unused_loopback);
-        let production = source_connection_document(
-            &edited(
-                acceptance_fixture(),
-                "assuranceProfile: evidence-grade\n",
-                "assuranceProfile: production\n",
-            ),
-            unused_loopback,
-        );
-        for (reason, document) in [
-            (
-                "an unauthenticated loopback connection under evidence-grade assurance",
-                evidence_grade,
-            ),
-            (
-                "an unauthenticated loopback connection under production assurance",
-                production,
-            ),
-        ] {
-            assert!(
-                EvidenceConfig::parse_yaml(document.as_bytes()).is_err(),
-                "the runtime accepted {reason}"
-            );
-            assert!(
-                !validator.is_valid(&bundle_contract_instance(document.as_bytes())),
-                "the bundle contract accepted {reason}"
-            );
+            assert!(serde_json::from_value::<SourceConfig>(retired).is_err());
         }
     }
-
-    /// One `sourceConnections` entry named `shared`, spliced into a whole
-    /// document so the runtime and the published contract both read the block
-    /// the way a bundle carries it.
-    fn source_connection_document(document: &str, connection: &str) -> String {
-        edited(
-            document,
-            "sources:\n",
-            &format!("sourceConnections:\n  shared:\n{connection}sources:\n"),
-        )
-    }
-
-    /// The acceptance fixture's one source, restated on the statement
-    /// transport, so a whole document exercises it the way a bundle would.
-    const SQLITE_SOURCE: &str = r#"  source-a:
-    type: sqlite-extract
-    posture: field-projected
-    extractProfile: residence-register
-    request:
-      statement: queries/residence-region.sql
-      columns: [{name: id, type: string}, {name: region, type: string}]
-      selectorInputs:
-        - role: subject
-          alternatives:
-            - {profile: person-demographics-v1, fields: [given_name, family_name, birth_date]}
-      parameterBindings:
-        record_reference: {type: selector, role: subject, profile: person-demographics-v1, field: given_name}
-      maximumRows: 2
-      maximumCellBytes: 4096
-      maximumStatementSteps: 50000
-      projection: [/rows/*/id, /rows/*/region, /extract/publishedAt]
-      attemptTimeoutMilliseconds: 1000
-      maximumResponseBytes: 65536
-      maximumConcurrency: 8
-    maximumExtractAgeSeconds: 86400
-    responseSchema: schemas/response.schema.yaml
-    extractScript: adapters/source-a.rhai
-    factSchema: schemas/facts.schema.yaml
-"#;
 
     fn acceptance_fixture() -> &'static str {
         include_str!("../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml")
     }
 
-    fn source_batch_document() -> String {
-        let with_capability = edited(
-            acceptance_fixture(),
-            "kind: EvidenceBundle\n",
-            "kind: EvidenceBundle\nacquisitionCapabilities: [source-batch]\n",
-        );
-        edited(
-            &with_capability,
-            "    factSchema: schemas/facts.schema.yaml\n",
-            "    factSchema: schemas/facts.schema.yaml\n    batch:\n      maximumItems: 2\n      prepareScript: adapters/source-prepare-batch.rhai\n      extractScript: adapters/source-extract-batch.rhai\n      responseSchema: schemas/source-batch-response.schema.yaml\n      projection: [/results/*]\n",
-        )
-    }
-
-    fn runtime_for_source_batch(enabled: bool) -> RuntimeConfig {
-        let base = include_str!(
-            "../../../products/evidence/reference/request-adapter/deployment-projects/dhis2-tracker-evidence/runtime.yaml"
-        );
-        let document = if enabled {
-            format!("{base}acquisitionCapabilities: [source-batch]\n")
-        } else {
-            base.to_owned()
-        };
-        RuntimeConfig::parse_yaml(document.as_bytes()).expect("runtime configuration validates")
-    }
-
-    /// The acceptance fixture with its HTTP source replaced by a statement one.
+    /// The current pack source with the retired statement surface written
+    /// beside it, so required current members cannot mask the unknown keys.
     fn sqlite_source_document() -> String {
-        let fixture = acceptance_fixture();
-        let (head, rest) = fixture
-            .split_once("sources:\n")
-            .expect("the fixture declares sources");
-        let (_, tail) = rest
-            .split_once("authorityProfiles:\n")
-            .expect("the fixture declares authority profiles after its sources");
-        format!("{head}sources:\n{SQLITE_SOURCE}authorityProfiles:\n{tail}")
+        edited(
+            acceptance_fixture(),
+            "  source-a:\n",
+            concat!(
+                "  source-a:\n",
+                "    type: sqlite-extract\n",
+                "    request:\n",
+                "      statement: queries/residence-region.sql\n",
+            ),
+        )
     }
 
     /// A set built from items the test knows to be distinct.
@@ -9484,486 +7517,40 @@ mod tests {
     }
 
     #[test]
-    fn a_statement_source_parses_and_the_transports_reject_each_others_fields() {
-        let document = sqlite_source_document();
-        let config = EvidenceConfig::parse_yaml(document.as_bytes())
-            .expect("a sqlite-extract source parses and validates");
-        let SourceConfig::SqliteExtract {
-            extract_profile,
-            request,
-            maximum_extract_age_seconds,
-            ..
-        } = &config.sources.0[0].1
-        else {
-            panic!("the restated fixture source uses the sqlite-extract transport");
-        };
-        assert_eq!(extract_profile, "residence-register");
-        assert_eq!(request.statement.as_str(), "queries/residence-region.sql");
-        assert_eq!(maximum_extract_age_seconds.get(), 86_400);
-        assert_eq!(config.sources.0[0].1.prepare_script(), None);
-        assert_eq!(config.sources.0[0].1.adapter_parameters_schema(), None);
-        assert!(config.sources.0[0].1.fixed_headers().is_empty());
-        assert_eq!(config.sources.0[0].1.maximum_concurrency(), 8);
-
-        for (label, candidate) in [
-            (
-                "baseUrl on a statement source",
-                edited(
-                    &document,
-                    "    extractProfile: residence-register\n",
-                    "    extractProfile: residence-register\n    baseUrl: https://source.invalid\n",
-                ),
-            ),
-            (
-                "an unknown key on a statement source",
-                edited(
-                    &document,
-                    "    maximumExtractAgeSeconds: 86400\n",
-                    "    maximumExtractAgeSeconds: 86400\n    surprise: true\n",
-                ),
-            ),
-            (
-                "an unknown key in a statement request",
-                edited(
-                    &document,
-                    "      maximumRows: 2\n",
-                    "      maximumRows: 2\n      surprise: true\n",
-                ),
-            ),
-            (
-                "extractProfile on an HTTP source",
-                edited(
-                    acceptance_fixture(),
-                    "    posture: field-projected\n",
-                    "    posture: field-projected\n    extractProfile: residence-register\n",
-                ),
-            ),
-            (
-                "an unknown key on an HTTP source",
-                edited(
-                    acceptance_fixture(),
-                    "    posture: field-projected\n",
-                    "    posture: field-projected\n    surprise: true\n",
-                ),
-            ),
-        ] {
-            assert_eq!(decode_cause(&candidate), "config.unknown-key", "{label}");
-        }
-
-        assert_eq!(
-            decode_cause(&edited(
-                &document,
-                "    type: sqlite-extract\n",
-                "    type: sqlite-extracts\n",
-            )),
-            "config.unknown-variant",
-        );
-        assert_eq!(
-            decode_cause(&edited(&document, "    type: sqlite-extract\n", "")),
-            "config.missing-key",
-        );
-    }
-
-    #[test]
-    fn a_statement_is_a_reviewed_sql_artifact_under_the_queries_root() {
-        let document = sqlite_source_document();
-        assert_eq!(
-            invalid_reason(&edited(
-                &document,
-                "      statement: queries/residence-region.sql\n",
-                "      statement: adapters/residence-region.sql\n",
-            )),
-            "artifact path has the wrong bundle directory",
-        );
-        assert_eq!(
-            decode_cause(&edited(
-                &document,
-                "      statement: queries/residence-region.sql\n",
-                "      statement: residence-region.sql\n",
-            )),
-            "config.invalid-value",
-            "a path under no bundle root is not an artifact path at all",
-        );
-        assert_eq!(
-            invalid_reason(&edited(
-                &document,
-                "      statement: queries/residence-region.sql\n",
-                "      statement: queries/residence-region.rhai\n",
-            )),
-            "source statement must be a SQL file",
-        );
-    }
-
-    #[test]
-    fn a_statement_projection_cannot_discard_a_declared_result_column() {
-        let document = sqlite_source_document();
-        assert_eq!(
-            invalid_reason(&edited(
-                &document,
-                "      projection: [/rows/*/id, /rows/*/region, /extract/publishedAt]\n",
-                "      projection: [/rows/*/id, /extract/publishedAt]\n",
-            )),
-            "statement projection must preserve every declared result column"
-        );
-
-        EvidenceConfig::parse_yaml(
-            edited(
-                &document,
-                "      projection: [/rows/*/id, /rows/*/region, /extract/publishedAt]\n",
-                "      projection: [/rows, /extract/publishedAt]\n",
-            )
-            .as_bytes(),
-        )
-        .expect("retaining the complete rows array preserves every declared column");
-    }
-
-    #[test]
-    fn statement_parameters_are_named_selector_bindings_and_the_runtime_instant_is_reserved() {
-        let document = sqlite_source_document();
-        assert_eq!(
-            invalid_reason(&edited(
-                &document,
-                "        record_reference: {type: selector,",
-                "        evidence_now: {type: selector,",
-            )),
-            "statement parameter name is reserved by the runtime",
-        );
-        assert_eq!(
-            invalid_reason(&edited(
-                &document,
-                "        record_reference: {type: selector,",
-                "        record reference: {type: selector,",
-            )),
-            "statement parameter name is invalid",
-        );
-        assert_eq!(
-            invalid_reason(&edited(
-                &document,
-                "profile: person-demographics-v1, field: given_name}",
-                "profile: person-demographics-v1, field: unknown_field}",
-            )),
-            "source path binding references an unknown selector field",
-        );
-        assert_eq!(
-            invalid_reason(&edited(
-                &document,
-                "record_reference: {type: selector, role: subject,",
-                "record_reference: {type: selector, role: unbound-role,",
-            )),
-            "source path binding is not declared as a selector input",
-        );
-        assert_eq!(
-            decode_cause(&edited(
-                &document,
-                "record_reference: {type: selector,",
-                "record_reference: {type: prior-fact,",
-            )),
-            "config.unknown-variant",
-        );
-    }
-
-    /// A name one byte past the preparation ABI's own bound.
-    fn overlong_prepared_name() -> String {
-        format!("p{}", "a".repeat(MAXIMUM_STATEMENT_PARAMETER_NAME_BYTES))
-    }
-
-    /// A prepared name is filled by a script across the preparation ABI, which
-    /// admits fewer bytes of name than a binding key may carry. A name in
-    /// between loads and can never execute, so it is refused where the author
-    /// can still act on it.
-    #[test]
-    fn a_prepared_statement_parameter_name_is_held_to_the_preparation_abi() {
-        let document = prepared_statement_document(true, Some(&preparation_limits(8, 1_024)));
-        let named = |name: &str| {
-            edited(
-                &document,
-                PREPARED_BINDING,
-                &format!("        {name}: {{type: prepared}}\n"),
-            )
-        };
-        assert_eq!(
-            invalid_reason(&named(&overlong_prepared_name())),
-            "prepared statement parameter name is too long to be prepared",
-        );
-        EvidenceConfig::parse_yaml(
-            named(&"a".repeat(MAXIMUM_STATEMENT_PARAMETER_NAME_BYTES)).as_bytes(),
-        )
-        .expect("a prepared name of exactly the preparation ABI bound is admitted");
-    }
-
-    /// A selector parameter is filled from the request and never crosses the
-    /// preparation ABI, so the prepared bound stays on prepared names alone.
-    #[test]
-    fn a_selector_statement_parameter_name_keeps_the_full_key_bound() {
-        let long_selector = edited(
-            &sqlite_source_document(),
-            SELECTOR_BINDING,
-            &format!(
-                "        {}: {{type: selector, role: subject, profile: person-demographics-v1, field: given_name}}\n",
-                overlong_prepared_name(),
-            ),
-        );
-        EvidenceConfig::parse_yaml(long_selector.as_bytes())
-            .expect("a selector parameter name is bounded by the binding key alone");
-    }
-
-    #[test]
-    fn statement_columns_declare_a_unique_typed_result_contract() {
-        let document = sqlite_source_document();
-        assert_eq!(
-            invalid_reason(&edited(
-                &document,
-                "columns: [{name: id, type: string}, {name: region, type: string}]",
-                "columns: [{name: id, type: string}, {name: id, type: string}]",
-            )),
-            "statement column names must be valid and unique",
-        );
-        assert_eq!(
-            invalid_reason(&edited(
-                &document,
-                "columns: [{name: id, type: string}, {name: region, type: string}]",
-                "columns: [{name: Id, type: string}, {name: region, type: string}]",
-            )),
-            "statement column names must be valid and unique",
-        );
-        assert_eq!(
-            invalid_reason(&edited(
-                &document,
-                "columns: [{name: id, type: string}, {name: region, type: string}]",
-                "columns: []",
-            )),
-            "collection cardinality is outside Version 1 bounds",
-        );
-        assert_eq!(
-            decode_cause(&edited(
-                &document,
-                "columns: [{name: id, type: string}, {name: region, type: string}]",
-                "columns: [{name: id, type: blob}, {name: region, type: string}]",
-            )),
-            "config.unknown-variant",
-        );
-    }
-
-    #[test]
-    fn statement_source_bounds_reject_zero_and_an_oversized_value() {
-        let document = sqlite_source_document();
-        for (declared, maximum) in [
-            ("      maximumRows: 2", 256_u64),
-            ("      maximumCellBytes: 4096", 65_536),
-            ("      maximumStatementSteps: 50000", 1_000_000),
-            ("      attemptTimeoutMilliseconds: 1000", 30_000),
-            ("      maximumResponseBytes: 65536", 1_048_576),
-            ("      maximumConcurrency: 8", 256),
-            ("    maximumExtractAgeSeconds: 86400", 2_592_000),
-        ] {
-            let (key, _) = declared
-                .split_once(':')
-                .expect("every bound is declared as a mapping entry");
-            for value in [0, maximum + 1] {
-                assert_eq!(
-                    decode_cause(&edited(&document, declared, &format!("{key}: {value}"))),
-                    "config.out-of-range",
-                    "{key} accepted {value}",
-                );
-            }
-            EvidenceConfig::parse_yaml(
-                edited(&document, declared, &format!("{key}: {maximum}")).as_bytes(),
-            )
-            .unwrap_or_else(|error| panic!("{key} rejected its own maximum: {error}"));
-        }
-    }
-
-    /// One statement-source preparation limits mapping, written out in full.
-    fn preparation_limits(parameters: u64, value_bytes: u64) -> String {
-        format!("{{maximumParameters: {parameters}, maximumParameterValueBytes: {value_bytes}}}")
-    }
-
-    /// The selector binding the statement source already declares, restated so
-    /// a test can add a second binding beside it as a unique replacement.
-    const SELECTOR_BINDING: &str = "        record_reference: {type: selector, role: subject, profile: person-demographics-v1, field: given_name}\n";
-
-    /// The prepared parameter a preparation script exists to fill.
-    const PREPARED_BINDING: &str = "        normalized_reference: {type: prepared}\n";
-
-    /// The statement source with a preparation script, its limits, or neither.
-    ///
-    /// The script and its limits are written immediately before `maximumRows`,
-    /// which is the one line of the request every variant keeps. The script also
-    /// brings the prepared parameter it exists to fill, because the source
-    /// refuses the two apart.
-    fn prepared_statement_document(prepare_script: bool, limits: Option<&str>) -> String {
-        let mut document = sqlite_source_document();
-        if let Some(limits) = limits {
-            document = edited(
-                &document,
-                "      maximumRows: 2\n",
-                &format!("      preparationLimits: {limits}\n      maximumRows: 2\n"),
-            );
-        }
-        if prepare_script {
-            document = edited(
-                &document,
-                "      maximumRows: 2\n",
-                "      prepareScript: adapters/source-a-prepare.rhai\n      maximumRows: 2\n",
-            );
-            document = edited(
-                &document,
-                SELECTOR_BINDING,
-                &format!("{SELECTOR_BINDING}{PREPARED_BINDING}"),
-            );
-        }
-        document
-    }
-
-    /// A source that prepares nothing states no bounds on the preparation it
-    /// does not do, and a source that prepares something states them all.
-    #[test]
-    fn statement_preparation_limits_stand_or_fall_with_the_preparation_script() {
-        let limits = preparation_limits(8, 1_024);
-        EvidenceConfig::parse_yaml(prepared_statement_document(false, None).as_bytes())
-            .expect("a statement source that prepares nothing needs no preparation limits");
-        EvidenceConfig::parse_yaml(prepared_statement_document(true, Some(&limits)).as_bytes())
-            .expect("a preparation script and its bounds are accepted together");
-        assert_eq!(
-            invalid_reason(&prepared_statement_document(true, None)),
-            "statement preparation requires its preparation limits",
-        );
-        assert_eq!(
-            invalid_reason(&prepared_statement_document(false, Some(&limits))),
-            "statement preparation limits require a preparation script",
-        );
-        assert_eq!(
-            decode_cause(&prepared_statement_document(
-                true,
-                Some("{maximumParameters: 8, maximumParameterValueBytes: 1024, surprise: 1}"),
-            )),
-            "config.unknown-key",
-        );
-    }
-
-    /// A parameter states where its value comes from, and a prepared parameter
-    /// says the preparation script. Neither half stands alone: a script with
-    /// nothing prepared to fill could only ever return a name the source
-    /// refuses, and a prepared parameter with no script could never be filled.
-    #[test]
-    fn statement_preparation_stands_or_falls_with_a_prepared_parameter() {
-        let limits = preparation_limits(8, 1_024);
-        let script_without_a_prepared_parameter = edited(
-            &prepared_statement_document(true, Some(&limits)),
-            PREPARED_BINDING,
-            "",
-        );
-        let prepared_parameter_without_a_script = edited(
-            &sqlite_source_document(),
-            SELECTOR_BINDING,
-            &format!("{SELECTOR_BINDING}{PREPARED_BINDING}"),
-        );
-        assert_eq!(
-            invalid_reason(&script_without_a_prepared_parameter),
-            "statement preparation requires a prepared parameter",
-        );
-        assert_eq!(
-            invalid_reason(&prepared_parameter_without_a_script),
-            "a prepared parameter requires a preparation script",
-        );
-
-        // The published grammar refuses the same two halves, so an author
-        // editing a bundle against the contract is told before a deployment
-        // reads it.
-        let validator = bundle_contract_validator();
-        for refused in [
-            &script_without_a_prepared_parameter,
-            &prepared_parameter_without_a_script,
-        ] {
-            assert!(
-                !validator.is_valid(&bundle_contract_instance(refused.as_bytes())),
-                "the bundle contract accepted half of a preparation",
-            );
-        }
-        for accepted in [
-            prepared_statement_document(true, Some(&limits)),
-            sqlite_source_document(),
-        ] {
-            assert!(
-                validator.is_valid(&bundle_contract_instance(accepted.as_bytes())),
-                "the bundle contract refused a whole statement source",
-            );
-        }
-    }
-
-    #[test]
-    fn a_prepared_parameter_carries_its_kind_and_nothing_else() {
-        let document = prepared_statement_document(true, Some(&preparation_limits(8, 1_024)));
-        let config = EvidenceConfig::parse_yaml(document.as_bytes())
-            .expect("a prepared parameter binding parses");
-        let SourceConfig::SqliteExtract { request, .. } = &config.sources.0[0].1 else {
-            panic!("the restated fixture source uses the sqlite-extract transport");
-        };
-        assert_eq!(
-            request.parameter_bindings.get("normalized_reference"),
-            Some(&SqliteParameterBinding::Prepared {}),
-        );
-        // A prepared parameter has no selector to name, so naming one is the
-        // author saying two origins where the source admits exactly one.
-        let two_origins = edited(
-            &document,
-            PREPARED_BINDING,
-            "        normalized_reference: {type: prepared, role: subject}\n",
-        );
-        assert_eq!(decode_cause(&two_origins), "config.unknown-key");
+    fn pack_source_exposes_only_its_reviewed_selector_bindings_and_fact_schema() {
+        let config = EvidenceConfig::parse_yaml(acceptance_fixture().as_bytes())
+            .expect("the maintained pack-source fixture validates");
         assert!(
-            !bundle_contract_validator()
-                .is_valid(&bundle_contract_instance(two_origins.as_bytes())),
-            "the bundle contract accepted a prepared parameter naming a selector",
+            bundle_contract_validator()
+                .is_valid(&bundle_contract_instance(acceptance_fixture().as_bytes())),
+            "the normative bundle contract must accept the maintained pack-source fixture"
         );
-    }
-
-    #[test]
-    fn statement_preparation_bounds_must_admit_every_prepared_parameter() {
-        let two_prepared = edited(
-            &prepared_statement_document(true, Some(&preparation_limits(1, 1_024))),
-            PREPARED_BINDING,
-            &format!("{PREPARED_BINDING}        normalized_region: {{type: prepared}}\n"),
-        );
+        let source = &config.sources.0[0].1;
+        assert_eq!(source.fact_schema().as_str(), "schemas/facts.schema.yaml");
         assert_eq!(
-            invalid_reason(&two_prepared),
-            "statement preparation limits must admit every prepared parameter",
+            source
+                .selector_bindings()
+                .into_iter()
+                .map(|binding| (binding.role, binding.profile, binding.field))
+                .collect::<Vec<_>>(),
+            [
+                ("subject", "person-demographics-v1", "birth_date"),
+                ("subject", "person-demographics-v1", "family_name"),
+                ("subject", "person-demographics-v1", "given_name"),
+            ]
         );
-        EvidenceConfig::parse_yaml(
-            edited(
-                &two_prepared,
-                "maximumParameters: 1",
-                "maximumParameters: 2",
-            )
-            .as_bytes(),
-        )
-        .expect("a bound equal to the prepared parameter count is admitted");
+        assert_eq!(source.connection(), "provider");
+        assert_eq!(source.posture(), AcquisitionPosture::FieldProjected);
     }
 
     #[test]
-    fn statement_preparation_bounds_reject_zero_and_an_oversized_value() {
-        // Each bound is moved off its own maximum while the other stays valid,
-        // so the rejection can only have come from the bound under test.
-        for (key, maximum) in [
-            ("maximumParameters", 64),
-            ("maximumParameterValueBytes", 4_096),
-        ] {
-            let limits = |value| match key {
-                "maximumParameters" => preparation_limits(value, 1_024),
-                _ => preparation_limits(8, value),
-            };
-            for value in [0, maximum + 1] {
-                assert_eq!(
-                    decode_cause(&prepared_statement_document(true, Some(&limits(value)))),
-                    "config.out-of-range",
-                    "{key} accepted {value}",
-                );
-            }
-            EvidenceConfig::parse_yaml(
-                prepared_statement_document(true, Some(&limits(maximum))).as_bytes(),
-            )
-            .unwrap_or_else(|error| panic!("{key} rejected its own maximum: {error}"));
-        }
+    fn retired_sqlite_source_request_surface_is_refused_in_a_complete_bundle() {
+        let document = sqlite_source_document();
+        assert_eq!(decode_cause(&document), "config.unknown-key");
+        assert!(
+            !bundle_contract_validator().is_valid(&bundle_contract_instance(document.as_bytes())),
+            "the published bundle schema must refuse the retired transport surface"
+        );
     }
 
     fn bundle_contract_validator() -> jsonschema::JSONSchema {
@@ -9998,6 +7585,52 @@ mod tests {
         serde_json::to_value(value).expect("bundle instance converts to JSON")
     }
 
+    #[test]
+    fn runtime_contract_accepts_current_source_bindings_and_refuses_invalid_bounds() {
+        let base = include_str!(
+            "../../../products/evidence/reference/request-adapter/deployment-projects/opencrvs-family-evidence/runtime.yaml"
+        );
+        let current = format!(
+            "{base}    allowedPrivateCidrs: []\nsourceAcquisition:\n  maximumDataOperations: 5\n  acquisitionDeadlineMilliseconds: 45000\n  maximumResponseBytes: 1048576\n"
+        );
+        RuntimeConfig::parse_yaml(current.as_bytes())
+            .expect("current source runtime bindings parse");
+        let validator = runtime_contract_validator();
+        assert!(
+            validator.is_valid(&bundle_contract_instance(current.as_bytes())),
+            "the normative runtime contract must accept current source bindings"
+        );
+
+        for (field, valid) in [
+            ("maximumDataOperations: 5", "maximumDataOperations: 0"),
+            (
+                "acquisitionDeadlineMilliseconds: 45000",
+                "acquisitionDeadlineMilliseconds: 0",
+            ),
+            ("maximumResponseBytes: 1048576", "maximumResponseBytes: 0"),
+        ] {
+            let invalid = edited(&current, field, valid);
+            assert!(RuntimeConfig::parse_yaml(invalid.as_bytes()).is_err());
+            assert!(!validator.is_valid(&bundle_contract_instance(invalid.as_bytes())));
+        }
+
+        let at_concurrency_limit = edited(
+            &current,
+            "        maximumResponseBytes: 262144\n",
+            "        maximumResponseBytes: 262144\n        maximumConcurrency: 256\n",
+        );
+        RuntimeConfig::parse_yaml(at_concurrency_limit.as_bytes())
+            .expect("the maintained endpoint concurrency ceiling parses");
+        assert!(validator.is_valid(&bundle_contract_instance(at_concurrency_limit.as_bytes())));
+        let over_concurrency_limit = edited(
+            &at_concurrency_limit,
+            "        maximumConcurrency: 256\n",
+            "        maximumConcurrency: 257\n",
+        );
+        assert!(RuntimeConfig::parse_yaml(over_concurrency_limit.as_bytes()).is_err());
+        assert!(!validator.is_valid(&bundle_contract_instance(over_concurrency_limit.as_bytes())));
+    }
+
     /// Canary scalars planted in a malformed document.
     ///
     /// A diagnostic that ever reproduces one of these has leaked a deployment
@@ -10015,8 +7648,8 @@ mod tests {
             "../../../products/evidence/reference/request-adapter/deployment-projects/opencrvs-family-evidence/bundle/evidence.yaml"
         );
         let unknown_nested = reference.replacen(
-            "      attemptTimeoutMilliseconds: 3000",
-            "      attemptTimeoutMilliseconds: 3000\n      surprise: s3cr3t-selector-value",
+            "    factSchema: schemas/birth-adult-facts.schema.yaml",
+            "    factSchema: schemas/birth-adult-facts.schema.yaml\n    surprise: s3cr3t-selector-value",
             1,
         );
         assert_ne!(unknown_nested, reference, "nested mutation applies");
@@ -10030,12 +7663,12 @@ mod tests {
             Option<usize>,
         );
         let out_of_range = reference.replacen(
-            "      attemptTimeoutMilliseconds: 3000",
-            "      attemptTimeoutMilliseconds: 987654321",
+            "    maximumTokenLifetimeSeconds: 300",
+            "    maximumTokenLifetimeSeconds: 987654321",
             1,
         );
         assert_ne!(out_of_range, reference, "range mutation applies");
-        let out_of_range_line = line_of(&out_of_range, "attemptTimeoutMilliseconds: 987654321");
+        let out_of_range_line = line_of(&out_of_range, "maximumTokenLifetimeSeconds: 987654321");
         let cases: [Case; 7] = [
             (
                 "malformed YAML",
@@ -10265,23 +7898,23 @@ mod tests {
         for (from, to) in [
             // The bundle cannot drop the mandatory signed format.
             (
-                "\nresponseFormats: [signed-jws, unsigned-json]",
-                "\nresponseFormats: [unsigned-json]",
+                "\nresponseFormats:\n  - signed-jws\n  - unsigned-json",
+                "\nresponseFormats:\n  - unsigned-json",
             ),
             // Formats must be unique.
             (
-                "\nresponseFormats: [signed-jws, unsigned-json]",
-                "\nresponseFormats: [signed-jws, signed-jws]",
+                "\nresponseFormats:\n  - signed-jws\n  - unsigned-json",
+                "\nresponseFormats:\n  - signed-jws\n  - signed-jws",
             ),
             // A complete grant may narrow the enabled formats, but cannot duplicate one.
             (
-                "        responseFormats: [signed-jws, unsigned-json]\n        subjects:\n          - {role: subject, selectorProfile: person-demographics-v1, valueOrigin: request}",
-                "        responseFormats: [unsigned-json, unsigned-json]\n        subjects:\n          - {role: subject, selectorProfile: person-demographics-v1, valueOrigin: request}",
+                "        responseFormats:\n          - signed-jws\n          - unsigned-json\n        subjects:\n          - role: subject\n            selectorProfile: person-demographics-v1\n            valueOrigin: request",
+                "        responseFormats:\n          - unsigned-json\n          - unsigned-json\n        subjects:\n          - role: subject\n            selectorProfile: person-demographics-v1\n            valueOrigin: request",
             ),
             // The vocabulary is closed.
             (
-                "\nresponseFormats: [signed-jws, unsigned-json]",
-                "\nresponseFormats: [signed-jws, jws-detached]",
+                "\nresponseFormats:\n  - signed-jws\n  - unsigned-json",
+                "\nresponseFormats:\n  - signed-jws\n  - jws-detached",
             ),
         ] {
             let mutated = yaml.replace(from, to);
@@ -10400,26 +8033,26 @@ mod tests {
         for (form, sound, incoherent, out_of_bounds) in [
             (
                 ConceptForm::ControlledCodeList,
-                "minimumItems: 1, maximumItems: 3, unique: true",
+                "          minimumItems: 1\n          maximumItems: 3\n          unique: true",
                 [
-                    "minimumItems: 3, maximumItems: 1, unique: true",
-                    "minimumItems: 1, maximumItems: 3, unique: false",
+                    "          minimumItems: 3\n          maximumItems: 1\n          unique: true",
+                    "          minimumItems: 1\n          maximumItems: 3\n          unique: false",
                 ],
                 [
-                    "minimumItems: 1, maximumItems: 65, unique: true",
-                    "minimumItems: 0, maximumItems: 3, unique: true",
+                    "          minimumItems: 1\n          maximumItems: 65\n          unique: true",
+                    "          minimumItems: 0\n          maximumItems: 3\n          unique: true",
                 ],
             ),
             (
                 ConceptForm::EntityReferenceList,
-                "minimumItems: 1, maximumItems: 2, unique: true",
+                "          minimumItems: 1\n          maximumItems: 2\n          unique: true",
                 [
-                    "minimumItems: 2, maximumItems: 1, unique: true",
-                    "minimumItems: 1, maximumItems: 2, unique: false",
+                    "          minimumItems: 2\n          maximumItems: 1\n          unique: true",
+                    "          minimumItems: 1\n          maximumItems: 2\n          unique: false",
                 ],
                 [
-                    "minimumItems: 1, maximumItems: 65, unique: true",
-                    "minimumItems: 0, maximumItems: 2, unique: true",
+                    "          minimumItems: 1\n          maximumItems: 65\n          unique: true",
+                    "          minimumItems: 0\n          maximumItems: 2\n          unique: true",
                 ],
             ),
         ] {
@@ -10447,8 +8080,8 @@ mod tests {
         // same, so the refusal cannot depend on a question reaching it.
         let unreached = edited(
             SUPPORTED_VALUES,
-            "minimumItems: 1, maximumItems: 2, unique: true",
-            "minimumItems: 2, maximumItems: 1, unique: true",
+            "          minimumItems: 1\n          maximumItems: 2\n          unique: true",
+            "          minimumItems: 2\n          maximumItems: 1\n          unique: true",
         );
         let error = EvidenceConfig::parse_yaml_reporting_rule(unreached.as_bytes())
             .expect_err("an unreached list concept is refused before anything is evaluated");
@@ -10525,36 +8158,40 @@ mod tests {
 
     #[test]
     fn source_schema_roles_are_mandatory_distinct_and_directory_scoped() {
-        let valid = std::str::from_utf8(include_bytes!(
-            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
-        ))
-        .expect("fixture is UTF-8");
-        assert!(EvidenceConfig::parse_yaml(valid.as_bytes()).is_ok());
+        let source = serde_json::json!({
+            "pack": {
+                "id": "synthetic-register",
+                "version": "1",
+                "digest": format!("sha256:{}", "1".repeat(64)),
+                "artifactPrefix": format!("adapter-packs/synthetic-register/{}", "1".repeat(64))
+            },
+            "route": "evidence-person",
+            "connection": "register",
+            "inputs": {},
+            "posture": "record-transformed",
+            "factSchema": "schemas/source-facts/person.schema.json"
+        });
+        let parsed: SourceConfig =
+            serde_json::from_value(source.clone()).expect("the current Source shape parses");
+        parsed
+            .validate(AssuranceProfile::Production)
+            .expect("the Source fact schema is directory-scoped");
 
-        for (from, to) in [
-            // The response contract is mandatory, so extraction never runs
-            // behind an undeclared response shape.
-            ("    responseSchema: schemas/response.schema.yaml\n", ""),
-            // Every schema artifact is directory-scoped like the other roles.
-            (
-                "responseSchema: schemas/response.schema.yaml",
-                "responseSchema: adapters/response.schema.yaml",
-            ),
-            // One artifact cannot carry two schema roles inside one source.
-            (
-                "responseSchema: schemas/response.schema.yaml",
-                "responseSchema: schemas/facts.schema.yaml",
-            ),
-            (
-                "responseSchema: schemas/response.schema.yaml",
-                "responseSchema: schemas/adapter-parameters.schema.yaml",
-            ),
-        ] {
-            let mutated = valid.replace(from, to);
-            assert_ne!(mutated, valid, "fixture mutation must remain effective");
+        let mut missing = source.clone();
+        missing.as_object_mut().unwrap().remove("factSchema");
+        assert!(serde_json::from_value::<SourceConfig>(missing).is_err());
+
+        let mut outside = source.clone();
+        outside["factSchema"] = "adapter-packs/synthetic-register/facts.json".into();
+        let outside: SourceConfig = serde_json::from_value(outside).unwrap();
+        assert!(outside.validate(AssuranceProfile::Production).is_err());
+
+        for retired in ["responseSchema", "adapterParametersSchema"] {
+            let mut legacy = source.clone();
+            legacy[retired] = "schemas/retired.json".into();
             assert!(
-                EvidenceConfig::parse_yaml(mutated.as_bytes()).is_err(),
-                "{to}"
+                serde_json::from_value::<SourceConfig>(legacy).is_err(),
+                "the current Source contract accepted retired {retired}"
             );
         }
     }
@@ -10565,22 +8202,30 @@ mod tests {
             "../../../products/evidence/fixtures/acceptance/all-definitions/evidence.yaml"
         ))
         .expect("fixture is UTF-8");
-        assert!(EvidenceConfig::parse_yaml_reporting_rule(valid.as_bytes()).is_ok());
+        EvidenceConfig::parse_yaml(valid.as_bytes()).expect("the fixture loads");
 
-        // One artifact validating a response for one source and facts for
-        // another would make a single review cover two different contracts.
+        // Source no longer owns response or parameter schema roles. Those
+        // contracts live inside the digest-pinned pack, so a bundle cannot
+        // cross one source's fact schema into another Source-owned role.
         let crossed = valid.replacen(
-            "responseSchema: schemas/adult-status-response.schema.yaml",
-            "responseSchema: schemas/residence-region-facts.schema.yaml",
+            "    factSchema: schemas/adult-status-facts.schema.yaml",
+            concat!(
+                "    factSchema: schemas/adult-status-facts.schema.yaml\n",
+                "    responseSchema: schemas/residence-region-facts.schema.yaml"
+            ),
             1,
         );
         assert_ne!(crossed, valid, "fixture mutation must remain effective");
-        assert!(matches!(
-            EvidenceConfig::parse_yaml_reporting_rule(crossed.as_bytes()),
-            Err(ConfigError::Invalid(
-                "source schema roles must not overlap across sources"
-            ))
-        ));
+        let diagnostics = bundle_refusal(&crossed);
+        let refused = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.path == "/sources/source-a/responseSchema")
+            .unwrap_or_else(|| panic!("the retired schema role was not refused: {diagnostics:?}"));
+        assert_eq!(refused.code, "config.unknown-key");
+        assert!(
+            refused.suggested_action.contains("factSchema"),
+            "the current Source members are named: {refused:?}"
+        );
     }
 
     #[test]
@@ -10594,8 +8239,8 @@ mod tests {
                 .is_err()
         );
         let unexpected = valid.replacen(
-            "service: {providerId: urn:example:fixture:provider:evidence, publicOrigin: https://evidence.invalid, trustDomain: urn:example:fixture:trust-domain:acceptance}",
-            "service: {providerId: urn:example:fixture:provider:evidence, publicOrigin: https://evidence.invalid, trustDomain: urn:example:fixture:trust-domain:acceptance, unexpected: true}",
+            "  trustDomain: urn:example:fixture:trust-domain:acceptance\n",
+            "  trustDomain: urn:example:fixture:trust-domain:acceptance\n  unexpected: true\n",
             1,
         );
         assert_ne!(unexpected, valid, "fixture mutation must remain effective");
@@ -10677,12 +8322,16 @@ mod tests {
             "../../../products/evidence/fixtures/acceptance/legal-parent-relationship/evidence.yaml"
         ))
         .expect("fixture validates");
-        http_request(&mut config).selector_inputs[0]
-            .alternatives
-            .push(SelectorInputAlternative {
-                profile: "person-reference-v1".to_owned(),
-                fields: set(["person_reference".to_owned()]),
-            });
+        config.sources.0[0].1.inputs.insert(
+            "unreachablePerson".to_owned(),
+            SourceInputConfig {
+                selector: SourceInputSelector {
+                    role: LocalId::new("child").unwrap(),
+                    profile: LocalId::new("person-reference-v1").unwrap(),
+                    field: LocalId::new("person_reference").unwrap(),
+                },
+            },
+        );
         assert_eq!(
             config.validate(),
             Err(ConfigError::Invalid(
@@ -10718,18 +8367,17 @@ mod tests {
         grant.subjects[0].role = "alternate-subject".to_owned();
         config.authority_profiles.0[0].1.grants.push(grant);
 
-        let alternative_inputs = http_request(&mut config)
-            .selector_inputs
-            .iter()
-            .cloned()
-            .map(|mut input| {
-                input.role = "alternate-subject".to_owned();
-                input
+        let alternative_inputs = config.sources.0[0]
+            .1
+            .inputs
+            .clone()
+            .into_iter()
+            .map(|(name, mut input)| {
+                input.selector.role = LocalId::new("alternate-subject").unwrap();
+                (format!("alternate_{name}"), input)
             })
             .collect::<Vec<_>>();
-        http_request(&mut config)
-            .selector_inputs
-            .extend(alternative_inputs);
+        config.sources.0[0].1.inputs.extend(alternative_inputs);
         config.requirements.push(alternative);
 
         config
@@ -10754,8 +8402,8 @@ mod tests {
         ))
         .expect("fixture is UTF-8");
         let invalid = valid.replacen(
-            "service: {providerId: urn:example:fixture:provider:evidence, publicOrigin: https://evidence.invalid, trustDomain: urn:example:fixture:trust-domain:acceptance}",
-            "service: {providerId: urn:example:fixture:provider:evidence, publicOrigin: https://evidence.invalid, trustDomains: [urn:example:fixture:trust-domain:a, urn:example:fixture:trust-domain:b]}",
+            "  trustDomain: urn:example:fixture:trust-domain:acceptance\n",
+            "  trustDomains: [urn:example:fixture:trust-domain:a, urn:example:fixture:trust-domain:b]\n",
             1,
         );
         assert_ne!(invalid, valid, "fixture mutation must remain effective");
@@ -10770,7 +8418,15 @@ mod tests {
             "http://127.42.5.9",
             "http://[::1]:18083",
         ] {
-            assert!(validate_source_origin(valid).is_ok(), "{valid}");
+            assert!(
+                current_adapter_contract_accepts(
+                    valid,
+                    serde_json::json!({"type":"none"}),
+                    serde_json::json!({"type":"none"}),
+                    serde_json::json!({"type":"none"}),
+                ),
+                "{valid}"
+            );
         }
         for invalid in [
             "http://localhost:18081",
@@ -10778,11 +8434,27 @@ mod tests {
             "http://127.00.0.1:18081",
             "http://192.168.1.2",
             "https://user@source.invalid",
-            "https://source.invalid/path",
             "https://source.invalid#fragment",
         ] {
-            assert!(validate_source_origin(invalid).is_err(), "{invalid}");
+            assert!(
+                !current_adapter_contract_accepts(
+                    invalid,
+                    serde_json::json!({"type":"none"}),
+                    serde_json::json!({"type":"none"}),
+                    serde_json::json!({"type":"none"}),
+                ),
+                "{invalid}"
+            );
         }
+        assert!(
+            current_adapter_contract_accepts(
+                "https://source.invalid/base/path",
+                serde_json::json!({"type":"none"}),
+                serde_json::json!({"type":"none"}),
+                serde_json::json!({"type":"none"}),
+            ),
+            "a governed Adapter connection may select a reviewed base path"
+        );
     }
 
     /// `Url::parse` is forgiving in ways a deployment contract cannot be. It
@@ -10809,7 +8481,17 @@ mod tests {
         ];
         let accepted = origins
             .iter()
-            .filter(|value| validate_source_origin(value).is_ok())
+            .filter(|value| {
+                current_adapter_contract_accepts(
+                    value,
+                    serde_json::json!({"type":"static-authorization"}),
+                    serde_json::json!({
+                        "type":"static-authorization",
+                        "tokenRef":"secret:env/TOKEN"
+                    }),
+                    serde_json::json!({"type":"static-authorization"}),
+                )
+            })
             .collect::<Vec<_>>();
         assert!(
             accepted.is_empty(),
@@ -10827,7 +8509,21 @@ mod tests {
         ];
         let accepted = endpoints
             .iter()
-            .filter(|value| validate_source_url(value, false).is_ok())
+            .filter(|value| {
+                let mut credential = current_private_key_credential();
+                credential["tokenEndpoint"] = serde_json::json!(value);
+                let mut policy = serde_json::json!({
+                    "type":"oauth2-private-key-jwt",
+                    "tokenEndpoint":"https://issuer.invalid/token"
+                });
+                policy["tokenEndpoint"] = serde_json::json!(value);
+                current_adapter_contract_accepts(
+                    "https://source.invalid",
+                    serde_json::json!({"type":"oauth2-private-key-jwt"}),
+                    credential,
+                    policy,
+                )
+            })
             .collect::<Vec<_>>();
         assert!(
             accepted.is_empty(),
@@ -10836,48 +8532,24 @@ mod tests {
     }
 
     #[test]
-    fn source_adapter_name_is_audit_safe_and_oauth_endpoint_has_no_query() {
-        let valid = std::str::from_utf8(include_bytes!(
-            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
-        ))
-        .expect("fixture is UTF-8");
-
-        let uppercase_adapter = valid.replace(
-            "extractScript: adapters/source-a.rhai",
-            "extractScript: adapters/Source-a.rhai",
-        );
-        assert_eq!(
-            EvidenceConfig::parse_yaml_reporting_rule(uppercase_adapter.as_bytes()),
-            Err(ConfigError::Invalid(
-                "source adapter name must be a local identifier"
-            ))
-        );
-
+    fn oauth_endpoint_has_no_query() {
         for query in [
             "?client_secret=plaintext",
             "?client_id=duplicate",
             "?fixed=true",
         ] {
-            let mut oauth = EvidenceConfig::parse_yaml_reporting_rule(valid.as_bytes())
-                .expect("fixture validates");
-            *http_authentication(&mut oauth) = SourceAuthentication::Oauth2ClientCredentials {
-                token_endpoint: format!("https://source.invalid/token{query}"),
-                client_id_ref: SecretReference::parse("secret:file/oauth-client-id")
-                    .expect("secret ref"),
-                client_secret_ref: SecretReference::parse("secret:file/oauth-client-secret")
-                    .expect("secret ref"),
-                scope: None,
-                audience: None,
-                resource: None,
-                credential_placement: CredentialPlacement::FormBody,
-                maximum_cache_seconds: BoundedU64::new(60).expect("a valid cache bound"),
-                assumed_lifetime_seconds: None,
-            };
-            assert_eq!(
-                oauth.validate(),
-                Err(ConfigError::Invalid(
-                    "OAuth token endpoint must not contain a query"
-                )),
+            let endpoint = format!("https://source.invalid/token{query}");
+            let mut credential = current_client_credential();
+            credential["tokenEndpoint"] = endpoint.clone().into();
+            let mut policy = current_client_policy();
+            policy["tokenEndpoint"] = endpoint.into();
+            assert!(
+                !current_adapter_contract_accepts(
+                    "https://source.invalid",
+                    serde_json::json!({"type":"oauth2-client-credentials"}),
+                    credential,
+                    policy,
+                ),
                 "{query}"
             );
         }
@@ -10919,11 +8591,6 @@ mod tests {
     /// oversized value is a configuration error rather than a silent clamp.
     #[test]
     fn oauth_assumed_token_lifetime_is_a_bounded_positive_duration() {
-        let valid = std::str::from_utf8(include_bytes!(
-            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
-        ))
-        .expect("fixture is UTF-8");
-
         for (assumed_lifetime_seconds, accepted) in [
             (Some(0), false),
             (Some(1), true),
@@ -10931,29 +8598,16 @@ mod tests {
             (Some(86_401), false),
             (None, true),
         ] {
-            // The bound is the member's own type, so a value outside it
-            // cannot be constructed, let alone validated.
-            let Ok(assumed) = assumed_lifetime_seconds.map(BoundedU64::new).transpose() else {
-                assert!(!accepted, "{assumed_lifetime_seconds:?} was refused");
-                continue;
-            };
-            assert!(accepted, "{assumed_lifetime_seconds:?} was constructed");
-            let mut oauth =
-                EvidenceConfig::parse_yaml(valid.as_bytes()).expect("fixture validates");
-            *http_authentication(&mut oauth) = SourceAuthentication::Oauth2ClientCredentials {
-                token_endpoint: "https://source.invalid/token".to_owned(),
-                client_id_ref: SecretReference::parse("secret:file/oauth-client-id")
-                    .expect("secret ref"),
-                client_secret_ref: SecretReference::parse("secret:file/oauth-client-secret")
-                    .expect("secret ref"),
-                scope: None,
-                audience: None,
-                resource: None,
-                credential_placement: CredentialPlacement::FormBody,
-                maximum_cache_seconds: BoundedU64::new(60).expect("a valid cache bound"),
-                assumed_lifetime_seconds: assumed,
-            };
-            assert_eq!(oauth.validate(), Ok(()), "{assumed_lifetime_seconds:?}");
+            let mut credential = current_client_credential();
+            if let Some(value) = assumed_lifetime_seconds {
+                credential["assumedLifetimeSeconds"] = value.into();
+            }
+            assert_eq!(
+                serde_json::from_value::<registry_adapter_core::RuntimeCredential>(credential)
+                    .is_ok(),
+                accepted,
+                "{assumed_lifetime_seconds:?}"
+            );
         }
     }
 
@@ -10964,34 +8618,20 @@ mod tests {
     /// and the runtime and the published contract must agree on that.
     #[test]
     fn oauth_credential_placement_rejects_the_query_string_placement() {
-        let validator = bundle_contract_validator();
         for (placement, accepted) in [
             ("basic-header", true),
             ("form-body", true),
             ("query-string", false),
         ] {
-            let authentication = serde_json::json!({
-                "type": "oauth2-client-credentials",
-                "tokenEndpoint": "https://source.invalid/token",
-                "clientIdRef": "secret:file/oauth-client-id",
-                "clientSecretRef": "secret:file/oauth-client-secret",
-                "credentialPlacement": placement,
-                "maximumCacheSeconds": 60,
-            });
+            let mut authentication = current_client_credential();
+            authentication["credentialPlacement"] = placement.into();
             assert_eq!(
-                serde_json::from_value::<SourceAuthentication>(authentication.clone()).is_ok(),
+                serde_json::from_value::<registry_adapter_core::RuntimeCredential>(
+                    authentication.clone()
+                )
+                .is_ok(),
                 accepted,
                 "{placement} runtime deserialization"
-            );
-
-            let mut instance = bundle_contract_instance(include_bytes!(
-                "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
-            ));
-            instance["sources"]["source-a"]["authentication"] = authentication;
-            assert_eq!(
-                validator.is_valid(&instance),
-                accepted,
-                "{placement} bundle contract"
             );
         }
     }
@@ -11001,7 +8641,6 @@ mod tests {
     /// validation before a credential or token request can be made.
     #[test]
     fn oauth_resource_indicator_is_optional_and_rejects_relative_or_ambiguous_values() {
-        let validator = bundle_contract_validator();
         for (resource, accepted) in [
             (None, true),
             (Some("https://api.invalid:443/records"), true),
@@ -11016,28 +8655,21 @@ mod tests {
             (Some("https://api.invalid/records with space"), false),
             (Some("https://api.invalid/%GG"), false),
         ] {
-            let mut authentication = serde_json::json!({
-                "type": "oauth2-client-credentials",
-                "tokenEndpoint": "https://issuer.invalid/token",
-                "clientIdRef": "secret:file/oauth-client-id",
-                "clientSecretRef": "secret:file/oauth-client-secret",
-                "credentialPlacement": "form-body",
-                "maximumCacheSeconds": 60,
-            });
+            let mut authentication = current_client_credential();
+            let mut policy = current_client_policy();
             if let Some(resource) = resource {
                 authentication["resource"] = serde_json::json!(resource);
+                policy["resource"] = serde_json::json!(resource);
             }
-            let parsed: SourceAuthentication = serde_json::from_value(authentication.clone())
-                .expect("the closed authentication shape deserializes");
-            assert_eq!(parsed.validate().is_ok(), accepted, "runtime: {resource:?}");
-            let mut instance = bundle_contract_instance(include_bytes!(
-                "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
-            ));
-            instance["sources"]["source-a"]["authentication"] = authentication;
             assert_eq!(
-                validator.is_valid(&instance),
+                current_adapter_contract_accepts(
+                    "https://source.invalid",
+                    serde_json::json!({"type":"oauth2-client-credentials"}),
+                    authentication,
+                    policy,
+                ),
                 accepted,
-                "schema: {resource:?}"
+                "{resource:?}"
             );
         }
     }
@@ -11050,7 +8682,6 @@ mod tests {
     /// a second header field.
     #[test]
     fn static_authorization_scheme_is_an_optional_http_token() {
-        let validator = bundle_contract_validator();
         for (scheme, accepted) in [
             (Some("Bearer"), true),
             (Some("Token"), true),
@@ -11064,26 +8695,22 @@ mod tests {
             (Some("Bearer:"), false),
             (None, true),
         ] {
-            let mut authentication = serde_json::json!({
-                "type": "static-authorization",
-                "tokenRef": "secret:file/source-a-token",
-            });
+            let mut authentication = serde_json::json!({"type": "static-authorization"});
             if let Some(scheme) = scheme {
                 authentication["scheme"] = serde_json::json!(scheme);
             }
-
-            let parsed = serde_json::from_value::<SourceAuthentication>(authentication.clone())
-                .expect("the member set is closed but every scheme string parses");
-            assert_eq!(parsed.validate().is_ok(), accepted, "{scheme:?} validation");
-
-            let mut instance = bundle_contract_instance(include_bytes!(
-                "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
-            ));
-            instance["sources"]["source-a"]["authentication"] = authentication;
             assert_eq!(
-                validator.is_valid(&instance),
+                current_adapter_contract_accepts(
+                    "https://source.invalid",
+                    authentication,
+                    serde_json::json!({
+                        "type":"static-authorization",
+                        "tokenRef":"secret:env/TOKEN"
+                    }),
+                    serde_json::json!({"type":"static-authorization"}),
+                ),
                 accepted,
-                "{scheme:?} bundle contract"
+                "{scheme:?}"
             );
         }
     }
@@ -11098,7 +8725,6 @@ mod tests {
     fn oauth_client_authentication_declares_exactly_one_credential_form() {
         const SECRET: Option<&str> = Some("oauth2-client-credentials");
         const ASSERTION: Option<&str> = Some("oauth2-private-key-jwt");
-        let validator = bundle_contract_validator();
         // Each member set is tried under both types; `accepting` names the
         // one type that takes it, if any.
         for (secret_ref, placement, key_ref, accepting) in [
@@ -11166,22 +8792,10 @@ mod tests {
                 let accepted = written == accepting;
                 let label = format!("{written:?}/{secret_ref:?}/{placement:?}/{key_ref:?}");
 
-                let parsed = serde_json::from_value::<SourceAuthentication>(authentication.clone());
-                assert_eq!(
-                    parsed.is_ok_and(|parsed| parsed.validate().is_ok()),
-                    accepted,
-                    "{label} validation"
+                let parsed = serde_json::from_value::<registry_adapter_core::RuntimeCredential>(
+                    authentication,
                 );
-
-                let mut instance = bundle_contract_instance(include_bytes!(
-                    "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
-                ));
-                instance["sources"]["source-a"]["authentication"] = authentication;
-                assert_eq!(
-                    validator.is_valid(&instance),
-                    accepted,
-                    "{label} bundle contract"
-                );
+                assert_eq!(parsed.is_ok(), accepted, "{label} validation");
             }
         }
     }
@@ -11192,24 +8806,21 @@ mod tests {
     /// credential-free.
     #[test]
     fn the_client_assertion_key_is_reported_as_a_bundle_secret() {
-        let key_form = serde_json::from_value::<SourceAuthentication>(serde_json::json!({
-            "type": "oauth2-private-key-jwt",
-            "tokenEndpoint": "https://source.invalid/token",
-            "clientIdRef": "secret:file/oauth-client-id",
-            "clientAssertionKeyRef": "secret:file/oauth-client-key",
-            "maximumCacheSeconds": 60,
-        }))
-        .expect("the key form parses");
+        let key_form = serde_json::from_value::<registry_adapter_core::RuntimeCredential>(
+            current_private_key_credential(),
+        )
+        .expect("the runtime key form parses");
+        let projected = serde_json::to_value(key_form).expect("the credential projects");
         assert_eq!(
-            key_form
-                .secret_refs()
-                .iter()
-                .map(|reference| reference.as_str())
-                .collect::<Vec<_>>(),
-            [
-                "secret:file/oauth-client-id",
-                "secret:file/oauth-client-key"
-            ]
+            projected["clientAssertionKeyRef"],
+            "secret:env/CLIENT_ASSERTION_KEY"
+        );
+        assert!(
+            serde_json::from_value::<registry_adapter_core::EvidenceAuthenticationPolicy>(
+                projected
+            )
+            .is_err(),
+            "credential material cannot move into the governed connection policy"
         );
     }
 
@@ -11219,7 +8830,6 @@ mod tests {
     /// request.
     #[test]
     fn oauth_audience_is_a_bounded_optional_string() {
-        let validator = bundle_contract_validator();
         for (audience, accepted) in [
             (Some("https://api.invalid/"), true),
             (Some("a"), true),
@@ -11232,31 +8842,24 @@ mod tests {
             (Some("a".repeat(513).as_str()), false),
             (None, true),
         ] {
-            let mut authentication = serde_json::json!({
-                "type": "oauth2-client-credentials",
-                "tokenEndpoint": "https://source.invalid/token",
-                "clientIdRef": "secret:file/oauth-client-id",
-                "clientSecretRef": "secret:file/oauth-client-secret",
-                "credentialPlacement": "basic-header",
-                "maximumCacheSeconds": 60,
-            });
+            let mut authentication = current_client_credential();
             if let Some(audience) = audience {
                 authentication["audience"] = serde_json::json!(audience);
             }
             let label = audience.map(str::len);
-
-            let parsed = serde_json::from_value::<SourceAuthentication>(authentication.clone())
-                .expect("the member set is closed but every audience string parses");
-            assert_eq!(parsed.validate().is_ok(), accepted, "{label:?} validation");
-
-            let mut instance = bundle_contract_instance(include_bytes!(
-                "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
-            ));
-            instance["sources"]["source-a"]["authentication"] = authentication;
+            let mut policy = current_client_policy();
+            if let Some(audience) = audience {
+                policy["audience"] = serde_json::json!(audience);
+            }
             assert_eq!(
-                validator.is_valid(&instance),
+                current_adapter_contract_accepts(
+                    "https://source.invalid",
+                    serde_json::json!({"type":"oauth2-client-credentials"}),
+                    authentication,
+                    policy,
+                ),
                 accepted,
-                "{label:?} bundle contract"
+                "{label:?}"
             );
         }
     }
@@ -11267,7 +8870,6 @@ mod tests {
     /// bounded like the sibling `audience` and validated by the same rule.
     #[test]
     fn the_client_assertion_audience_is_a_bounded_optional_string() {
-        let validator = bundle_contract_validator();
         for (audience, accepted) in [
             (Some("https://issuer.invalid/"), true),
             // An issuer identifier that shares no origin with the token
@@ -11284,30 +8886,27 @@ mod tests {
             (Some("a".repeat(513).as_str()), false),
             (None, true),
         ] {
-            let mut authentication = serde_json::json!({
-                "type": "oauth2-private-key-jwt",
-                "tokenEndpoint": "https://source.invalid/token",
-                "clientIdRef": "secret:file/oauth-client-id",
-                "clientAssertionKeyRef": "secret:file/oauth-client-key",
-                "maximumCacheSeconds": 60,
-            });
+            let mut authentication = current_private_key_credential();
             if let Some(audience) = audience {
                 authentication["clientAssertionAudience"] = serde_json::json!(audience);
             }
             let label = audience.map(str::len);
-
-            let parsed = serde_json::from_value::<SourceAuthentication>(authentication.clone())
-                .expect("the member set is closed but every audience string parses");
-            assert_eq!(parsed.validate().is_ok(), accepted, "{label:?} validation");
-
-            let mut instance = bundle_contract_instance(include_bytes!(
-                "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
-            ));
-            instance["sources"]["source-a"]["authentication"] = authentication;
+            let mut policy = serde_json::json!({
+                "type":"oauth2-private-key-jwt",
+                "tokenEndpoint":"https://issuer.invalid/token"
+            });
+            if let Some(audience) = audience {
+                policy["clientAssertionAudience"] = serde_json::json!(audience);
+            }
             assert_eq!(
-                validator.is_valid(&instance),
+                current_adapter_contract_accepts(
+                    "https://source.invalid",
+                    serde_json::json!({"type":"oauth2-private-key-jwt"}),
+                    authentication,
+                    policy,
+                ),
                 accepted,
-                "{label:?} bundle contract"
+                "{label:?}"
             );
         }
     }
@@ -11318,52 +8917,27 @@ mod tests {
     /// never was.
     #[test]
     fn a_client_assertion_audience_without_an_assertion_key_is_refused() {
-        let validator = bundle_contract_validator();
-        let authentication = serde_json::json!({
-            "type": "oauth2-client-credentials",
-            "tokenEndpoint": "https://source.invalid/token",
-            "clientIdRef": "secret:file/oauth-client-id",
-            "clientSecretRef": "secret:file/oauth-client-secret",
-            "credentialPlacement": "basic-header",
-            "clientAssertionAudience": "https://issuer.invalid/",
-            "maximumCacheSeconds": 60,
-        });
+        let mut authentication = current_client_credential();
+        authentication["clientAssertionAudience"] = "https://issuer.invalid/".into();
 
         assert!(
-            serde_json::from_value::<SourceAuthentication>(authentication.clone()).is_err(),
+            serde_json::from_value::<registry_adapter_core::RuntimeCredential>(authentication)
+                .is_err(),
             "an assertion audience was accepted beside a client secret"
-        );
-
-        let mut instance = bundle_contract_instance(include_bytes!(
-            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
-        ));
-        instance["sources"]["source-a"]["authentication"] = authentication;
-        assert!(
-            !validator.is_valid(&instance),
-            "the bundle contract accepted an assertion audience beside a client secret"
         );
     }
 
     #[test]
-    fn get_sources_must_forbid_the_json_body_channel() {
-        let mut config = EvidenceConfig::parse_yaml(include_bytes!(
-            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
-        ))
-        .expect("fixture validates");
-        http_request(&mut config).method = HttpMethod::GET;
-        assert_eq!(
-            config.validate(),
-            Err(ConfigError::Invalid(
-                "GET source requests must forbid the JSON body channel"
-            ))
-        );
-
-        let validator = bundle_contract_validator();
+    fn pack_sources_cannot_reintroduce_an_authored_http_request_channel() {
         let mut instance = bundle_contract_instance(include_bytes!(
             "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
         ));
-        instance["sources"]["source-a"]["request"]["method"] = serde_json::json!("GET");
-        assert!(!validator.is_valid(&instance));
+        instance["sources"]["source-a"]["request"] = serde_json::json!({
+            "method": "GET",
+            "path": "/records"
+        });
+        assert!(serde_json::from_value::<EvidenceConfig>(instance.clone()).is_err());
+        assert!(!bundle_contract_validator().is_valid(&instance));
     }
 
     #[test]
@@ -11800,346 +9374,95 @@ outboundTls:
         assert!(!validator.is_valid(&bundle_contract_instance(unknown.as_bytes())));
     }
 
-    /// The operator half of the acquisition gate. A capability list a bundle
-    /// author writes beside the requirement that uses it gates nothing, so the
-    /// deployment states separately which gated kinds it may serve. Absent
-    /// enables none of them, which is what every runtime file written before a
-    /// gated form existed says.
     #[test]
-    fn the_optional_operator_acquisition_capabilities_enable_nothing_by_default() {
-        let base = r#"
-apiVersion: id.registrystack.org/formats/evidence/runtime/v1alpha1
-kind: EvidenceRuntimeConfig
-package:
-  root: /etc/registry-evidence/bundle
-listener:
-  bind: 127.0.0.1:8080
-  tlsTermination: operator-controlled-upstream
-  trustProxyIdentityHeaders: false
-  maximumRequestBytes: 65536
-  maximumConcurrentRequests: 64
-  requestTimeoutMilliseconds: 10000
-  shutdownGraceMilliseconds: 30000
-secretProviders:
-  file: {root: /run/secrets/registry-evidence}
-signer:
-  type: transit
-  unixSocketPath: /run/registry-evidence/transit-proxy.sock
-  mount: transit
-  keyName: evidence-signing
-  keyVersion: 7
-  attemptTimeoutMilliseconds: 2000
-audit:
-  path: /var/lib/registry-evidence/audit/evidence.jsonl
-outboundTls:
-  systemRoots: true
-  trustProfiles: {}
-"#;
+    fn published_runtime_contract_refuses_retired_acquisition_capabilities() {
         let validator = runtime_contract_validator();
-        let default = RuntimeConfig::parse_yaml(base.as_bytes()).expect("closed runtime parses");
-        assert!(
-            default.acquisition_capabilities.is_empty(),
-            "a deployment that enabled no gated acquisition kind must not get one"
-        );
-        assert!(!default.enables_acquisition_capability("search-then-fetch-set"));
-        assert!(
-            !serde_json::to_string(&default)
-                .expect("the runtime configuration projects")
-                .contains("acquisitionCapabilities"),
-            "an absent capability list must serialize to nothing at all"
-        );
-
-        // Writing the list out and enabling nothing says what silence says, so
-        // both halves of the closed surface have to read it the same way. The
-        // loader accepts it, so the published contract must too: a schema
-        // stricter than the loader refuses a file the deployment would load.
-        let empty = format!("{base}acquisitionCapabilities: []\n");
-        assert!(
-            validator.is_valid(&bundle_contract_instance(empty.as_bytes())),
-            "the contract refused an empty list startup accepts"
-        );
-        let parsed = RuntimeConfig::parse_yaml(empty.as_bytes()).expect("an empty list parses");
-        assert!(!parsed.enables_acquisition_capability("search-then-fetch-set"));
-        assert!(
-            !serde_json::to_string(&parsed)
-                .expect("the runtime configuration projects")
-                .contains("acquisitionCapabilities"),
-            "an empty capability list must project as the absent one does"
-        );
-
         for declaration in [
-            "acquisitionCapabilities: [search-then-fetch-set]\n",
-            // The same declaration in block form, which is what an operator
-            // editing the file by hand is most likely to write.
-            "acquisitionCapabilities:\n  - search-then-fetch-set\n",
+            "acquisitionCapabilities: []\n",
+            "acquisitionCapabilities: [source-batch]\n",
         ] {
-            let enabled = format!("{base}{declaration}");
-            assert!(
-                validator.is_valid(&bundle_contract_instance(enabled.as_bytes())),
-                "the contract refused a declaration startup accepts: {declaration}"
-            );
-            let parsed = RuntimeConfig::parse_yaml(enabled.as_bytes())
-                .expect("the enabled capability parses");
-            assert_eq!(parsed.acquisition_capabilities, ["search-then-fetch-set"]);
-            assert!(parsed.enables_acquisition_capability("search-then-fetch-set"));
-            assert!(!parsed.enables_acquisition_capability("search-then-fetch"));
-        }
-
-        let source_batch = format!("{base}acquisitionCapabilities: [source-batch]\n");
-        let parsed = RuntimeConfig::parse_yaml(source_batch.as_bytes())
-            .expect("the source-batch capability parses");
-        assert!(parsed.enables_acquisition_capability(SOURCE_BATCH_CAPABILITY));
-        assert!(!parsed.enables_acquisition_capability("search-then-fetch-set"));
-
-        for (declaration, expected) in [
-            (
-                "acquisitionCapabilities: [search-then-fetch-sets]\n",
-                "runtime acquisition capabilities name an unknown acquisition kind",
-            ),
-            // The frozen Version 1 forms are not nameable here. Every
-            // deployment already serves them, so naming one would say nothing
-            // and leaving one out would have to mean something.
-            (
-                "acquisitionCapabilities: [single]\n",
-                "runtime acquisition capabilities name an unknown acquisition kind",
-            ),
-            (
-                "acquisitionCapabilities: [search-then-fetch]\n",
-                "runtime acquisition capabilities name an unknown acquisition kind",
-            ),
-            (
-                "acquisitionCapabilities: [search-then-fetch-set, search-then-fetch-set]\n",
-                "runtime acquisition capabilities must be unique",
-            ),
-            (
-                "acquisitionCapabilities: [source-batch, source-batch]\n",
-                "runtime acquisition capabilities must be unique",
-            ),
-        ] {
-            let candidate = format!("{base}{declaration}");
-            assert_eq!(
-                RuntimeConfig::parse_yaml(candidate.as_bytes()).err(),
-                Some(ConfigError::Invalid(expected)),
-                "{declaration}"
-            );
+            let candidate = format!("{LOADER_RUNTIME_DOCUMENT}{declaration}");
             assert!(
                 !validator.is_valid(&bundle_contract_instance(candidate.as_bytes())),
-                "the contract accepted a declaration startup refuses: {declaration}"
+                "the contract accepted retired runtime acquisition capabilities: {declaration}"
             );
-        }
-
-        // The list is a list of names, and the document stays closed around it.
-        for malformed in [
-            "acquisitionCapabilities: search-then-fetch-set\n",
-            "acquisitionCapabilities: {searchThenFetchSet: true}\n",
-            "acquisitionCapabilitie: [search-then-fetch-set]\n",
-        ] {
-            let candidate = format!("{base}{malformed}");
             assert!(
                 RuntimeConfig::parse_yaml(candidate.as_bytes()).is_err(),
-                "{malformed}"
-            );
-            assert!(
-                !validator.is_valid(&bundle_contract_instance(candidate.as_bytes())),
-                "{malformed}"
+                "the runtime reader accepted retired acquisition capabilities: {declaration}"
             );
         }
     }
 
     #[test]
-    fn source_batch_optimization_is_fixed_route_two_author_and_pre_io_planned() {
-        let document = source_batch_document();
-        let config = EvidenceConfig::parse_yaml_reporting_rule(document.as_bytes())
-            .expect("batch source validates");
-        let requirement = &config.requirements[0].id;
-        let runtime = runtime_for_source_batch(true);
-        assert_eq!(
-            config.source_batch_plan(&runtime, requirement, 2),
-            SourceBatchPlan::Optimized {
-                source_id: "source-a".to_owned()
-            }
-        );
-        assert_eq!(
-            config.source_batch_plan(&runtime, requirement, 3),
-            SourceBatchPlan::Sequential,
-            "a logical batch over the source ceiling must be selected sequentially"
-        );
-        assert_eq!(
-            config.source_batch_plan(&runtime_for_source_batch(false), requirement, 2),
-            SourceBatchPlan::Sequential,
-            "the bundle author cannot activate the optimization without the operator"
-        );
+    fn requirement_acquisition_names_one_pack_source_and_retired_workflow_fields_are_refused() {
+        let config = EvidenceConfig::parse_yaml(acceptance_fixture().as_bytes())
+            .expect("the maintained bundle parses");
+        let acquisition = &config.requirements[0].acquisition;
+        assert_eq!(acquisition.source_ids(), ["source-a"]);
+        assert!(acquisition.uses_source("source-a"));
+        assert!(!acquisition.uses_source("other"));
 
-        let without_bundle_capability =
-            edited(&document, "acquisitionCapabilities: [source-batch]\n", "");
-        assert_eq!(
-            EvidenceConfig::parse_yaml_reporting_rule(without_bundle_capability.as_bytes()).err(),
-            Some(ConfigError::Invalid(
-                "source batch optimization is not a declared bundle capability"
-            )),
-            "the source block cannot activate itself without the bundle author"
-        );
-
-        let templated = edited(
-            &document,
-            "      path: /v1/facts\n",
-            "      path: /v1/facts/{subject}\n      pathBindings:\n        subject: {type: selector, role: subject, profile: person-demographics-v1, field: given_name}\n",
-        );
-        assert_eq!(
-            EvidenceConfig::parse_yaml_reporting_rule(templated.as_bytes()).err(),
-            Some(ConfigError::Invalid(
-                "source batch optimization requires a fixed request path"
-            ))
-        );
-
-        let unsafe_adapter = edited(
-            &document,
-            "      extractScript: adapters/source-extract-batch.rhai\n",
-            "      extractScript: adapters/Source-extract-batch.rhai\n",
-        );
-        assert_eq!(
-            EvidenceConfig::parse_yaml_reporting_rule(unsafe_adapter.as_bytes()).err(),
-            Some(ConfigError::Invalid(
-                "source batch adapter name must be a local identifier"
-            )),
-            "the batch adapter identity emitted to audit must use the closed local grammar"
-        );
-
-        let unresolved_batch = edited(
-            &document,
-            "    batch:\n",
-            "    unresolvedProblem: {status: 404, type: https://id.example.invalid/problems/unresolved, code: consultation.unresolved}\n    batch:\n",
-        );
-        assert_eq!(
-            EvidenceConfig::parse_yaml_reporting_rule(unresolved_batch.as_bytes()).err(),
-            Some(ConfigError::Invalid(
-                "declared unresolved problems are not supported by source batching"
-            )),
-            "one physical response cannot resolve one logical batch item"
-        );
-    }
-
-    #[test]
-    fn declared_unresolved_problem_tuple_is_closed_and_bounded() {
-        DeclaredUnresolvedProblem {
-            status: BoundedU32::new(404).expect("404 is the declared status"),
-            type_uri: "https://id.example.invalid/problems/unresolved".to_owned(),
-            code: "consultation.unresolved".to_owned(),
-        }
-        .validate()
-        .expect("the exact source-neutral tuple validates");
-
-        for (label, problem) in [
+        for (label, candidate) in [
             (
-                "type",
-                DeclaredUnresolvedProblem {
-                    status: BoundedU32::new(404).expect("404 is the declared status"),
-                    type_uri: "http://id.example.invalid/problems/unresolved".to_owned(),
-                    code: "consultation.unresolved".to_owned(),
-                },
+                "source batch",
+                edited(
+                    acceptance_fixture(),
+                    "    factSchema: schemas/facts.schema.yaml\n",
+                    "    factSchema: schemas/facts.schema.yaml\n    batch: {maximumItems: 2}\n",
+                ),
             ),
             (
-                "code",
-                DeclaredUnresolvedProblem {
-                    status: BoundedU32::new(404).expect("404 is the declared status"),
-                    type_uri: "https://id.example.invalid/problems/unresolved".to_owned(),
-                    code: "Consultation Unresolved".to_owned(),
-                },
+                "source unresolved problem",
+                edited(
+                    acceptance_fixture(),
+                    "    factSchema: schemas/facts.schema.yaml\n",
+                    "    factSchema: schemas/facts.schema.yaml\n    unresolvedProblem: {status: 404, type: https://source.invalid/unresolved, code: source.unresolved}\n",
+                ),
+            ),
+            (
+                "bundle acquisition capabilities",
+                edited(
+                    acceptance_fixture(),
+                    "kind: EvidenceBundle\n",
+                    "kind: EvidenceBundle\nacquisitionCapabilities: [source-batch]\n",
+                ),
             ),
         ] {
-            assert!(problem.validate().is_err(), "{label}");
+            assert!(
+                EvidenceConfig::parse_yaml(candidate.as_bytes()).is_err(),
+                "retired {label} wire surface parsed"
+            );
+            assert!(
+                !bundle_contract_validator().is_valid(&bundle_contract_instance(candidate.as_bytes())),
+                "the published schema accepted retired {label}"
+            );
         }
-
-        // Only 404 is representable, so another status is refused as the
-        // bundle is read rather than by the tuple's own rule.
-        let other_status = acceptance_fixture().replacen(
-            "    posture: field-projected\n",
-            "    posture: field-projected\n    unresolvedProblem: {status: 403, type: https://id.example.invalid/problems/unresolved, code: consultation.unresolved}\n",
-            1,
-        );
-        assert!(
-            bundle_refusal(&other_status)
-                .iter()
-                .any(|diagnostic| diagnostic.code == "config.out-of-range"),
-            "a status other than 404 is out of range"
-        );
-
-        let overlong_type = format!("https://id.example.invalid/problems/{}", "a".repeat(513));
-        let candidate = acceptance_fixture().replacen(
-            "    posture: field-projected\n",
-            &format!(
-                "    posture: field-projected\n    unresolvedProblem: {{status: 404, type: {overlong_type}, code: consultation.unresolved}}\n"
-            ),
-            1,
-        );
-        assert_eq!(
-            EvidenceConfig::parse_yaml_reporting_rule(candidate.as_bytes()).err(),
-            Some(ConfigError::Invalid(
-                "declared unresolved problem type is too long"
-            )),
-            "runtime parsing must enforce the schema's 512-character type ceiling"
-        );
-
-        assert!(
-            DeclaredUnresolvedProblem {
-                status: BoundedU32::new(404).expect("404 is the declared status"),
-                type_uri: "https://id.example.invalid/problems/unresolved".to_owned(),
-                code: format!("a{}", "x".repeat(63)),
-            }
-            .validate()
-            .is_ok(),
-            "the bounded ASCII code grammar admits exactly 64 characters"
-        );
-        assert!(
-            DeclaredUnresolvedProblem {
-                status: BoundedU32::new(404).expect("404 is the declared status"),
-                type_uri: "https://id.example.invalid/problems/unresolved".to_owned(),
-                code: format!("a{}", "x".repeat(64)),
-            }
-            .validate()
-            .is_err(),
-            "the bounded ASCII code grammar rejects 65 characters"
-        );
     }
 
     #[test]
-    fn source_batch_optimization_is_silent_without_a_block_and_never_applies_to_multistage() {
-        let with_capability = edited(
-            acceptance_fixture(),
-            "kind: EvidenceBundle\n",
-            "kind: EvidenceBundle\nacquisitionCapabilities: [source-batch]\n",
-        );
-        let mut config = EvidenceConfig::parse_yaml(with_capability.as_bytes())
-            .expect("a capability with no batch block leaves the source unchanged");
-        let requirement = config.requirements[0].id.clone();
-        let runtime = runtime_for_source_batch(true);
-        assert_eq!(
-            config.source_batch_plan(&runtime, &requirement, 2),
-            SourceBatchPlan::Sequential
-        );
+    fn requirement_acquisition_is_closed_and_rejects_retired_multistage_forms() {
+        let current: AcquisitionConfig =
+            serde_json::from_value(serde_json::json!({"source": "source-a"}))
+                .expect("the one-source pack route acquisition parses");
+        assert_eq!(current.initial_source(), "source-a");
 
-        config = EvidenceConfig::parse_yaml(source_batch_document().as_bytes())
-            .expect("batch source validates");
-        config.requirements[0].acquisition = AcquisitionConfig::SearchThenFetch {
-            on_fetch_no_match: Default::default(),
-            search: "source-a".to_owned(),
-            fetch: "source-a".to_owned(),
-        };
-        assert_eq!(
-            config.source_batch_plan(&runtime, &requirement, 2),
-            SourceBatchPlan::Sequential,
-            "multi-stage acquisitions stay on their declared sequential plan"
-        );
-
-        let sqlite = EvidenceConfig::parse_yaml(sqlite_source_document().as_bytes())
-            .expect("statement source fixture validates");
-        assert_eq!(
-            sqlite.source_batch_plan(&runtime, &requirement, 2),
-            SourceBatchPlan::Sequential,
-            "statement sources never enter HTTP batch execution"
-        );
+        for retired in [
+            serde_json::json!({"type": "single", "source": "source-a"}),
+            serde_json::json!({
+                "type": "search-then-fetch",
+                "search": "source-a",
+                "fetch": "source-b"
+            }),
+            serde_json::json!({
+                "type": "search-then-fetch-set",
+                "search": "source-a",
+                "fetch": [{"source": "source-b", "factInputs": ["record_id"]}],
+                "maximumAcquisitionMilliseconds": 30000
+            }),
+        ] {
+            assert!(serde_json::from_value::<AcquisitionConfig>(retired).is_err());
+        }
     }
-
     /// Port 0 is not a port. The kernel picks an arbitrary one, so the socket an
     /// operator firewalls, health-checks, and puts behind their TLS terminator
     /// is not the socket the service opens, and it changes on every restart.
@@ -12209,45 +9532,57 @@ outboundTls:
 
     #[test]
     fn path_templates_headers_and_projection_fail_closed() {
-        let bindings: OrderedMap<PathBindingConfig> = serde_norway::from_str(
-            "record_reference: {type: selector, role: subject, profile: record-reference-v1, field: record_reference}\n",
-        )
-        .expect("path binding parses");
-        assert!(validate_path_template("/records/{record_reference}", &bindings).is_ok());
+        assert_eq!(
+            registry_adapter_core::placeholders("/records/{{record_reference}}"),
+            vec![("record_reference".to_owned(), false)]
+        );
         for invalid_template in [
-            "/records/{record_reference}/",
-            "/records/prefix-{record_reference}",
-            "/records/{missing}",
-            "/records/../{record_reference}",
-            "/records/{record_reference}/{record_reference}",
+            "/records/{{}}",
+            "/records/{{record.reference}}",
+            "/records/{{record reference}}",
+            "/records/{{record_reference",
         ] {
-            assert!(validate_path_template(invalid_template, &bindings).is_err());
+            assert!(
+                registry_adapter_core::has_malformed_placeholder(invalid_template),
+                "{invalid_template}"
+            );
         }
 
-        assert!(validate_configurable_header_name("X-API-Version").is_ok());
-        for forbidden in RESERVED_HEADER_CONTRACT_CASES {
+        assert!(registry_adapter_core::is_header_token("X-API-Version"));
+        assert!(!registry_adapter_core::is_reserved_header_name(
+            "X-API-Version"
+        ));
+        for forbidden in registry_adapter_core::RESERVED_HEADER_NAMES {
             assert!(
-                validate_configurable_header_name(forbidden).is_err(),
+                registry_adapter_core::is_reserved_header_name(forbidden),
                 "{forbidden}"
             );
         }
 
-        assert!(validate_projection(&[
-            "/total".to_owned(),
-            "/results/*/status".to_owned(),
-            "/declaration/mother.personReference".to_owned(),
-        ])
-        .is_ok());
-        for paths in [
-            vec!["/results".to_owned(), "/results/*/status".to_owned()],
-            vec![
-                "/results/*/status".to_owned(),
-                "/results/0/status".to_owned(),
-            ],
-            vec!["/bad/~2escape".to_owned()],
-        ] {
-            assert!(validate_projection(&paths).is_err());
-        }
+        let mut source = serde_json::json!({
+            "pack": {
+                "id": "synthetic-register",
+                "version": "1",
+                "digest": format!("sha256:{}", "1".repeat(64)),
+                "artifactPrefix": format!("adapter-packs/synthetic-register/{}", "1".repeat(64))
+            },
+            "route": "lookup",
+            "connection": "register",
+            "inputs": {},
+            "posture": "record-transformed",
+            "factSchema": "schemas/facts.json"
+        });
+        source["request"] = serde_json::json!({"path":"/records/{{record_reference}}"});
+        assert!(
+            serde_json::from_value::<SourceConfig>(source.clone()).is_err(),
+            "request construction belongs to the governed Adapter pack"
+        );
+        source.as_object_mut().unwrap().remove("request");
+        source["projection"] = serde_json::json!(["/results/*/status"]);
+        assert!(
+            serde_json::from_value::<SourceConfig>(source).is_err(),
+            "inline response projection is not a Source member"
+        );
     }
 
     #[test]
@@ -12872,6 +10207,89 @@ outboundTls:
     }
 
     #[test]
+    fn source_credentials_and_mtls_keys_require_an_enabled_secret_provider() {
+        const SOURCE_BINDING: &str = "sourceConnections:
+  provider:
+    id: provider
+    endpoints:
+      - endpoint: provider
+        baseUrl: https://source.invalid
+        credential:
+          type: oauth2-private-key-jwt
+          tokenEndpoint: https://identity.invalid/token
+          clientIdRef: secret:env/SOURCE_CLIENT_ID
+          clientAssertionKeyRef: secret:env/SOURCE_CLIENT_KEY
+          maximumCacheSeconds: 60
+        mtlsIdentity:
+          certificateRef: secret:env/SOURCE_CLIENT_CERTIFICATE
+          keyRef: secret:env/SOURCE_MTLS_KEY
+    allowedPrivateCidrs: []
+";
+        let disabled = format!("{LOADER_RUNTIME_DOCUMENT}{SOURCE_BINDING}");
+        let decoded = RuntimeConfig::decode_yaml_with(disabled.as_bytes(), |_| None)
+            .expect("the closed runtime wire shape decodes before semantic validation");
+        let findings = decoded.config.findings();
+        let expected = [
+            "/sourceConnections/provider/endpoints/0/credential/clientIdRef",
+            "/sourceConnections/provider/endpoints/0/credential/clientAssertionKeyRef",
+            "/sourceConnections/provider/endpoints/0/mtlsIdentity/certificateRef",
+            "/sourceConnections/provider/endpoints/0/mtlsIdentity/keyRef",
+        ];
+        assert_eq!(findings.len(), expected.len());
+        for (finding, pointer) in findings.iter().zip(expected) {
+            assert_eq!(finding.code, RUNTIME_SOURCE_CONNECTION_CODE);
+            assert_eq!(finding.pointer, pointer);
+            assert!(!finding.at_key, "the reference value is at fault");
+            assert_eq!(
+                finding.message(),
+                "the secret reference names a provider secretProviders does not enable"
+            );
+        }
+        assert_eq!(
+            RuntimeConfig::parse_yaml(disabled.as_bytes()),
+            Err(ConfigError::Invalid(
+                "the secret reference names a provider secretProviders does not enable"
+            ))
+        );
+        let rendered = format!("{findings:?}");
+        for protected in [
+            "SOURCE_CLIENT_ID",
+            "SOURCE_CLIENT_KEY",
+            "SOURCE_CLIENT_CERTIFICATE",
+            "SOURCE_MTLS_KEY",
+        ] {
+            assert!(
+                !rendered.contains(protected),
+                "the refusal repeated a configured secret reference"
+            );
+        }
+
+        let enabled = disabled.replace(
+            "file: {root: /run/secrets/registry-evidence}",
+            "file: {root: /run/secrets/registry-evidence}\n  environment: {}",
+        );
+        RuntimeConfig::parse_yaml(enabled.as_bytes())
+            .expect("declaring the environment provider admits its source references");
+
+        let file_bound = disabled
+            .replace(
+                "secret:env/SOURCE_CLIENT_ID",
+                "secret:file/source-client-id",
+            )
+            .replace(
+                "secret:env/SOURCE_CLIENT_KEY",
+                "secret:file/source-client-key",
+            )
+            .replace(
+                "secret:env/SOURCE_CLIENT_CERTIFICATE",
+                "secret:file/source-client-certificate",
+            )
+            .replace("secret:env/SOURCE_MTLS_KEY", "secret:file/source-mtls-key");
+        RuntimeConfig::parse_yaml(file_bound.as_bytes())
+            .expect("the existing file provider admits source credential and mTLS references");
+    }
+
+    #[test]
     fn an_expected_package_digest_must_be_a_sha256_label() {
         let pinned = LOADER_RUNTIME_DOCUMENT.replace(
             "  root: /etc/registry-evidence/bundle\n",
@@ -12961,6 +10379,43 @@ outboundTls:
         .expect("fixture is UTF-8")
     }
 
+    #[test]
+    fn a_legacy_transport_member_is_an_unknown_source_key() {
+        let valid = acceptance_bundle();
+        let legacy = valid.replacen(
+            "  source-a:\n",
+            "  source-a:\n    transport: http-json\n",
+            1,
+        );
+        assert_ne!(legacy, valid, "the legacy Source mutation applies");
+
+        let diagnostics = bundle_refusal(&legacy);
+        assert_eq!(
+            diagnostics.len(),
+            1,
+            "one closed-reader refusal: {diagnostics:?}"
+        );
+        let diagnostic = &diagnostics[0];
+        assert_eq!(diagnostic.code, "config.unknown-key");
+        assert_eq!(diagnostic.path, "/sources/source-a/transport");
+        assert_eq!(
+            diagnostic.source.as_ref().and_then(|source| source.line),
+            Some(line_of(&legacy, "transport: http-json"))
+        );
+        assert_eq!(
+            diagnostic.source.as_ref().and_then(|source| source.column),
+            Some(5)
+        );
+        assert_eq!(
+            diagnostic.message,
+            "`transport` is not a member of this mapping"
+        );
+        assert_eq!(
+            diagnostic.suggested_action,
+            "Remove `transport`; the accepted keys are `pack`, `route`, `connection`, `inputs`, `posture`, `factSchema`."
+        );
+    }
+
     /// The diagnostics a refused bundle carries.
     fn bundle_refusal(text: &str) -> Vec<registry_platform_yaml::Diagnostic> {
         match EvidenceConfig::parse_yaml(text.as_bytes()) {
@@ -12972,60 +10427,53 @@ outboundTls:
 
     /// The one-based line on which `needle` first appears in `text`.
     fn line_of(text: &str, needle: &str) -> usize {
-        text.lines()
-            .position(|line| line.contains(needle))
-            .expect("the needle is in the text")
+        text[..text.find(needle).expect("the needle is in the text")]
+            .bytes()
+            .filter(|byte| *byte == b'\n')
+            .count()
             + 1
     }
 
     #[test]
     fn the_respelled_request_bounds_are_read_and_the_old_spellings_refused() {
-        let valid = acceptance_bundle();
-        let config = EvidenceConfig::parse_yaml(valid.as_bytes())
-            .expect("the bundle with the respelled request bounds loads");
-        let projection = serde_json::to_value(&config).expect("the bundle projects");
-        let request = &projection["sources"]["source-a"]["request"];
-        assert_eq!(request["attemptTimeoutMilliseconds"], 3000);
-        assert_eq!(request["maximumConcurrency"], 8);
-        assert!(request.get("timeoutMilliseconds").is_none());
-        assert!(request.get("concurrencyLimit").is_none());
+        let current = serde_json::json!({
+            "id": "provider",
+            "endpoints": [{
+                "endpoint": "provider",
+                "baseUrl": "https://source.invalid",
+                "credential": {
+                    "type": "static-authorization",
+                    "tokenRef": "secret:file/source-token"
+                },
+                "attemptTimeoutMilliseconds": 3000,
+                "maximumResponseBytes": 65536,
+                "maximumConcurrency": 8
+            }],
+            "allowedPrivateCidrs": []
+        });
+        let bindings: registry_adapter_core::AdapterEndpointBindings =
+            serde_json::from_value(current.clone()).expect("the current endpoint bounds read");
+        let projection = serde_json::to_value(bindings).expect("the bindings project");
+        let endpoint = &projection["endpoints"][0];
+        assert_eq!(endpoint["attemptTimeoutMilliseconds"], 3000);
+        assert_eq!(endpoint["maximumResponseBytes"], 65536);
+        assert_eq!(endpoint["maximumConcurrency"], 8);
 
-        let cases = [
-            (
-                "      attemptTimeoutMilliseconds: 3000",
-                "      timeoutMilliseconds: 3001",
-                "/sources/source-a/request/timeoutMilliseconds",
-                "attemptTimeoutMilliseconds",
-            ),
-            (
-                "      maximumConcurrency: 8",
-                "      concurrencyLimit: 9",
-                "/sources/source-a/request/concurrencyLimit",
-                "maximumConcurrency",
-            ),
-        ];
-        for (new, old, pointer, replacement) in cases {
-            let candidate = valid.replacen(new, old, 1);
-            assert_ne!(candidate, valid, "{pointer}: the mutation applies");
-            let diagnostics = bundle_refusal(&candidate);
-            let removed = diagnostics
-                .iter()
-                .find(|diagnostic| diagnostic.code == "config.removed-key")
-                .unwrap_or_else(|| panic!("{pointer}: no config.removed-key in {diagnostics:?}"));
-            assert_eq!(removed.path, pointer);
-            assert_eq!(
-                removed.source.as_ref().and_then(|source| source.line),
-                Some(line_of(&candidate, old.trim_start())),
-                "{pointer}"
-            );
+        for (current_name, retired_name) in [
+            ("attemptTimeoutMilliseconds", "timeoutMilliseconds"),
+            ("maximumResponseBytes", "maximumResponseSize"),
+            ("maximumConcurrency", "concurrencyLimit"),
+        ] {
+            let mut candidate = current.clone();
+            let endpoint = candidate["endpoints"][0]
+                .as_object_mut()
+                .expect("endpoint mapping");
+            let value = endpoint.remove(current_name).expect("current member");
+            endpoint.insert(retired_name.to_owned(), value);
             assert!(
-                removed.suggested_action.contains(replacement),
-                "{pointer}: the fix names the replacement: {removed:?}"
-            );
-            let rendered = format!("{diagnostics:?}");
-            assert!(
-                !rendered.contains("3001"),
-                "{pointer}: a diagnostic repeated a value"
+                serde_json::from_value::<registry_adapter_core::AdapterEndpointBindings>(candidate)
+                    .is_err(),
+                "the runtime reader accepted retired `{retired_name}`"
             );
         }
     }
@@ -13033,17 +10481,28 @@ outboundTls:
     #[test]
     fn a_requirement_repeating_a_uri_is_refused_with_the_shared_code_at_the_copy() {
         let valid = acceptance_bundle();
-        let (_, requirement) = valid
+        let (before_requirements, requirements_and_after) = valid
             .split_once("requirements:\n")
-            .expect("the fixture declares its requirements last");
-        let repeated = format!("{valid}{requirement}");
+            .expect("the fixture declares requirements");
+        let (requirement, after_requirements) = requirements_and_after
+            .split_once("sourceConnections:\n")
+            .expect("source connections follow the requirements");
+        let repeated = format!(
+            "{before_requirements}requirements:\n{requirement}{requirement}sourceConnections:\n{after_requirements}"
+        );
         let diagnostics = bundle_refusal(&repeated);
         assert_eq!(diagnostics.len(), 1, "one problem: {diagnostics:?}");
         let duplicate = &diagnostics[0];
         assert_eq!(duplicate.code, "config.duplicate-id");
         assert_eq!(duplicate.path, "/requirements/1/uri");
-        let first_line = line_of(&valid, "    uri: urn:example:fixture:requirement:");
-        let copy_line = valid.lines().count() + first_line - line_of(&valid, "requirements:");
+        let uri = "    uri: urn:example:fixture:requirement:";
+        let first_line = line_of(&valid, uri);
+        let copy_byte = repeated
+            .match_indices(uri)
+            .nth(1)
+            .expect("the repeated requirement carries a second URI")
+            .0;
+        let copy_line = repeated[..copy_byte].lines().count() + 1;
         assert_eq!(
             duplicate.source.as_ref().and_then(|source| source.line),
             Some(copy_line)
@@ -13183,19 +10642,29 @@ outboundTls:
         const SUPPORTED_VALUES: &str = include_str!(
             "../../../products/evidence/fixtures/conformance/supported-values/evidence.yaml"
         );
-        let sound = "constraints: {minimumItems: 1, maximumItems: 2, unique: true}";
-        let line = line_of(SUPPORTED_VALUES, sound);
+        let sound = "          minimumItems: 1\n          maximumItems: 2\n          unique: true";
         for (replacement, member) in [
             (
-                "constraints: {minimumItems: 0, maximumItems: 2, unique: true}",
+                "          minimumItems: 0\n          maximumItems: 2\n          unique: true",
                 "minimumItems",
             ),
             (
-                "constraints: {minimumItems: 1, maximumItems: 65, unique: true}",
+                "          minimumItems: 1\n          maximumItems: 65\n          unique: true",
                 "maximumItems",
             ),
         ] {
             let document = edited(SUPPORTED_VALUES, sound, replacement);
+            let member_index = document
+                .find(replacement)
+                .expect("the replacement is present")
+                + replacement
+                    .find(member)
+                    .expect("the replacement names the member");
+            let line = document.as_bytes()[..member_index]
+                .iter()
+                .filter(|byte| **byte == b'\n')
+                .count()
+                + 1;
             let diagnostics = bundle_refusal(&document);
             assert_eq!(diagnostics.len(), 1, "one problem: {diagnostics:?}");
             let refusal = &diagnostics[0];
@@ -13213,36 +10682,52 @@ outboundTls:
 
     #[test]
     fn a_source_connection_written_with_the_old_concurrency_key_is_refused() {
-        let valid = acceptance_bundle();
-        let connection = "sourceConnections:\n  shared:\n    baseUrl: https://source.invalid\n    authentication: {type: static-authorization, tokenRef: secret:file/source-a-token}\n";
-        let respelled = valid.replacen(
-            "sources:\n",
-            &format!("{connection}    maximumConcurrency: 4\nsources:\n"),
-            1,
-        );
-        assert_ne!(respelled, valid, "the connection is staged");
-        let config = EvidenceConfig::parse_yaml(respelled.as_bytes())
-            .expect("the connection with maximumConcurrency loads");
-        let projection = serde_json::to_value(&config).expect("the bundle projects");
+        let governed = serde_json::json!({
+            "endpoints": [{
+                "endpoint": "provider",
+                "baseUrl": "https://source.invalid",
+                "authentication": {"type": "static-authorization"},
+                "clientIdentity": "forbidden"
+            }]
+        });
+        serde_json::from_value::<SourceConnectionPolicies>(governed.clone())
+            .expect("the governed connection policy loads");
+        for member in ["maximumConcurrency", "concurrencyLimit"] {
+            let mut candidate = governed.clone();
+            candidate["endpoints"][0][member] = 4.into();
+            assert!(
+                serde_json::from_value::<SourceConnectionPolicies>(candidate).is_err(),
+                "governed connection authority accepted runtime member `{member}`"
+            );
+        }
+
+        let runtime = serde_json::json!({
+            "id": "provider",
+            "endpoints": [{
+                "endpoint": "provider",
+                "baseUrl": "https://source.invalid",
+                "credential": {
+                    "type": "static-authorization",
+                    "tokenRef": "secret:file/source-token"
+                },
+                "maximumConcurrency": 4
+            }],
+            "allowedPrivateCidrs": []
+        });
+        let parsed: registry_adapter_core::AdapterEndpointBindings =
+            serde_json::from_value(runtime.clone()).expect("runtime concurrency loads");
         assert_eq!(
-            projection["sourceConnections"]["shared"]["maximumConcurrency"],
+            serde_json::to_value(parsed).unwrap()["endpoints"][0]["maximumConcurrency"],
             4
         );
-
-        let old = respelled.replacen(
-            "    maximumConcurrency: 4\n",
-            "    concurrencyLimit: 4\n",
-            1,
-        );
-        let diagnostics = bundle_refusal(&old);
-        let removed = diagnostics
-            .iter()
-            .find(|diagnostic| diagnostic.code == "config.removed-key")
-            .unwrap_or_else(|| panic!("no config.removed-key in {diagnostics:?}"));
-        assert_eq!(removed.path, "/sourceConnections/shared/concurrencyLimit");
+        let mut retired = runtime;
+        let endpoint = retired["endpoints"][0].as_object_mut().unwrap();
+        endpoint.remove("maximumConcurrency");
+        endpoint.insert("concurrencyLimit".to_owned(), 4.into());
         assert!(
-            removed.suggested_action.contains("maximumConcurrency"),
-            "the fix names the replacement: {removed:?}"
+            serde_json::from_value::<registry_adapter_core::AdapterEndpointBindings>(retired)
+                .is_err(),
+            "the runtime reader accepted retired `concurrencyLimit`"
         );
     }
 
@@ -13270,196 +10755,145 @@ outboundTls:
         );
     }
 
-    /// A client that proves itself with a signed assertion is its own
-    /// authentication type, so `type` alone tells it from the shared-secret
-    /// form and never which members are present (CFG-ID-7).
     #[test]
     fn a_request_path_is_a_literal_or_a_template_and_path_template_is_refused() {
-        let valid = acceptance_bundle();
-        let written = "      path: /v1/facts\n";
-        let with = |request: &str| {
-            let candidate = valid.replacen(written, request, 1);
-            assert_ne!(candidate, valid, "the mutation applies");
-            candidate
+        use registry_adapter_core::{AdapterPack, AdapterProject};
+
+        let findings = |path: &str, path_parameters: serde_json::Value| {
+            let pack: AdapterPack = serde_json::from_value(serde_json::json!({
+                "id": "current-source-contract",
+                "version": "1",
+                "testedVersions": [],
+                "endpoints": [{
+                    "id": "provider",
+                    "component": "http",
+                    "authentication": {"type": "none"},
+                    "maximumResponseBytes": 4096,
+                    "operations": [{"id": "lookup", "safeUpstream": true}]
+                }],
+                "sourceRoutes": [{
+                    "id": "lookup",
+                    "steps": [{"to": {"uri": "http:provider", "parameters": {
+                        "httpMethod": "GET",
+                        "path": path,
+                        "pathParameters": path_parameters,
+                        "operation": "lookup"
+                    }}}]
+                }]
+            }))
+            .expect("the current pack path shape parses");
+            let project: AdapterProject = serde_json::from_value(serde_json::json!({
+                "project": {"id": "unused-project", "version": "1"},
+                "profile": {
+                    "id": "unused-profile",
+                    "version": "1",
+                    "digest": format!("sha256:{}", "1".repeat(64))
+                },
+                "pack": {
+                    "id": "current-source-contract",
+                    "version": "1",
+                    "digest": format!("sha256:{}", "2".repeat(64))
+                },
+                "recordTypes": []
+            }))
+            .expect("minimal project");
+            registry_adapter_core::check_routes(&pack, &project)
         };
-        let bindings = "      pathBindings:\n        given_name: {type: selector, role: subject, profile: person-demographics-v1, field: given_name}\n";
+        let path_faults = |path: &str, parameters: serde_json::Value| {
+            findings(path, parameters)
+                .into_iter()
+                .filter(|finding| finding.code == "adapter.route.path-parameter-mismatch")
+                .collect::<Vec<_>>()
+        };
 
-        // The one member carries both forms: a path that names placeholders
-        // is a template, and `pathBindings` fills it.
-        let template = with(&format!("      path: /v1/facts/{{given_name}}\n{bindings}"));
-        let config = EvidenceConfig::parse_yaml(template.as_bytes())
-            .expect("a path that names placeholders loads with its bindings");
-        let projection = serde_json::to_value(&config).expect("the bundle projects");
-        let request = &projection["sources"]["source-a"]["request"];
-        assert_eq!(request["path"], "/v1/facts/{given_name}");
-        assert!(request.get("pathTemplate").is_none());
-        assert!(request["pathBindings"].get("given_name").is_some());
-
-        let literal = EvidenceConfig::parse_yaml(valid.as_bytes()).expect("a literal path loads");
-        let projection = serde_json::to_value(&literal).expect("the bundle projects");
-        let request = &projection["sources"]["source-a"]["request"];
-        assert_eq!(request["path"], "/v1/facts");
-        assert!(request.get("pathBindings").is_none());
-
-        // The removed member is refused by name, with the member that
-        // replaces it and without the written path.
-        let removed_form = with(&format!(
-            "      pathTemplate: /v1/facts/{{given_name}}\n{bindings}"
-        ));
-        let diagnostics = bundle_refusal(&removed_form);
-        let removed = diagnostics
-            .iter()
-            .find(|diagnostic| diagnostic.code == "config.removed-key")
-            .unwrap_or_else(|| panic!("no config.removed-key in {diagnostics:?}"));
-        assert_eq!(removed.path, "/sources/source-a/request/pathTemplate");
-        assert_eq!(
-            removed.source.as_ref().and_then(|source| source.line),
-            Some(line_of(&removed_form, "pathTemplate:"))
-        );
+        assert!(path_faults("/v1/facts", serde_json::json!({})).is_empty());
+        assert!(path_faults(
+            "/v1/facts/{{given_name}}",
+            serde_json::json!({"given_name": {"constant": "Ada"}}),
+        )
+        .is_empty());
         assert!(
-            removed.suggested_action.contains("path"),
-            "the fix names the replacement: {removed:?}"
-        );
-        assert!(
-            !format!("{diagnostics:?}").contains("/v1/facts"),
-            "a diagnostic repeated the written path"
+            serde_json::from_value::<registry_adapter_core::ToParameters>(serde_json::json!({
+                "httpMethod": "GET",
+                "pathTemplate": "/v1/facts/{{given_name}}",
+                "pathParameters": {"given_name": {"constant": "Ada"}},
+                "operation": "lookup"
+            }))
+            .is_err(),
+            "the pack reader accepted retired `pathTemplate`"
         );
 
-        // The member is required: a request without it is refused at the
-        // mapping that lacks it.
-        let diagnostics = bundle_refusal(&valid.replacen(written, "", 1));
-        let missing = diagnostics
-            .iter()
-            .find(|diagnostic| diagnostic.code == "config.missing-key")
-            .unwrap_or_else(|| panic!("no config.missing-key in {diagnostics:?}"));
-        assert_eq!(missing.path, "/sources/source-a/request");
-
-        // The bindings are required exactly when the path names placeholders.
-        for (request, reason) in [
+        for (path, parameters, reason) in [
             (
-                "      path: /v1/facts/{given_name}\n".to_owned(),
-                "a template without bindings",
+                "/v1/facts/{{given_name}}",
+                serde_json::json!({}),
+                "a template without a binding",
             ),
             (
-                format!("      path: /v1/facts\n{bindings}"),
-                "bindings beside a literal path",
+                "/v1/facts",
+                serde_json::json!({"given_name": {"constant": "Ada"}}),
+                "a binding beside a literal path",
             ),
             (
-                format!("      path: /v1/facts/{{family_name}}\n{bindings}"),
+                "/v1/facts/{{family_name}}",
+                serde_json::json!({"given_name": {"constant": "Ada"}}),
                 "a placeholder no binding fills",
             ),
             (
-                format!("      path: /v1/facts/x-{{given_name}}\n{bindings}"),
-                "a placeholder inside a segment",
+                "/v1/facts/{given_name}",
+                serde_json::json!({"given_name": {"constant": "Ada"}}),
+                "the facade single-brace spelling in a pack path",
             ),
         ] {
-            let candidate = with(&request);
-            assert_eq!(
-                EvidenceConfig::parse_yaml_reporting_rule(candidate.as_bytes())
-                    .err()
-                    .map(|error| matches!(error, ConfigError::Invalid(_))),
-                Some(true),
-                "{reason}"
-            );
+            assert!(!path_faults(path, parameters).is_empty(), "{reason}");
         }
     }
 
     #[test]
     fn a_client_assertion_key_is_its_own_authentication_type() {
-        let valid = acceptance_bundle();
-        let written =
-            "authentication: {type: static-authorization, tokenRef: secret:file/source-a-token}";
-        let with = |authentication: &str| {
-            let candidate = valid.replacen(written, authentication, 1);
-            assert_ne!(candidate, valid, "the mutation applies");
-            candidate
-        };
-        let token = "tokenEndpoint: https://source.invalid/token, clientIdRef: secret:file/oauth-client-id, maximumCacheSeconds: 60";
-
-        let assertion = with(&format!(
-            "authentication: {{type: oauth2-private-key-jwt, {token}, clientAssertionKeyRef: secret:file/oauth-client-key, clientAssertionAudience: https://issuer.invalid/}}"
-        ));
-        let config = EvidenceConfig::parse_yaml(assertion.as_bytes())
-            .expect("the assertion form loads under its own type");
-        let projection = serde_json::to_value(&config).expect("the bundle projects");
-        let authentication = &projection["sources"]["source-a"]["authentication"];
-        assert_eq!(authentication["type"], "oauth2-private-key-jwt");
+        let shared_secret = serde_json::json!({
+            "type": "oauth2-client-credentials",
+            "tokenEndpoint": "https://source.invalid/token",
+            "clientIdRef": "secret:file/oauth-client-id",
+            "clientSecretRef": "secret:file/oauth-client-secret",
+            "credentialPlacement": "basic-header",
+            "maximumCacheSeconds": 60
+        });
+        let assertion = serde_json::json!({
+            "type": "oauth2-private-key-jwt",
+            "tokenEndpoint": "https://source.invalid/token",
+            "clientIdRef": "secret:file/oauth-client-id",
+            "clientAssertionKeyRef": "secret:file/oauth-client-key",
+            "clientAssertionAudience": "https://issuer.invalid/",
+            "maximumCacheSeconds": 60
+        });
+        let parsed: registry_adapter_core::RuntimeCredential =
+            serde_json::from_value(assertion.clone()).expect("the assertion form loads");
+        let projection = serde_json::to_value(parsed).expect("the assertion form projects");
+        assert_eq!(projection["type"], "oauth2-private-key-jwt");
         assert_eq!(
-            authentication["clientAssertionKeyRef"],
+            projection["clientAssertionKeyRef"],
             "secret:file/oauth-client-key"
         );
+        serde_json::from_value::<registry_adapter_core::RuntimeCredential>(shared_secret.clone())
+            .expect("the shared-secret form loads");
 
-        let secret = with(&format!(
-            "authentication: {{type: oauth2-client-credentials, {token}, clientSecretRef: secret:file/oauth-client-secret, credentialPlacement: basic-header}}"
-        ));
-        EvidenceConfig::parse_yaml(secret.as_bytes()).expect("the shared-secret form loads");
-
-        // The form a bundle wrote before the split: the assertion members
-        // under the shared-secret type. Each is refused at its key, and the
-        // fix names the type that carries it.
-        for (members, member) in [
+        let mut key_under_secret = shared_secret.clone();
+        key_under_secret["clientAssertionKeyRef"] = "secret:file/oauth-client-key".into();
+        let mut secret_under_key = assertion.clone();
+        secret_under_key["clientSecretRef"] = "secret:file/oauth-client-secret".into();
+        secret_under_key["credentialPlacement"] = "basic-header".into();
+        for (candidate, reason) in [
             (
-                "clientAssertionKeyRef: secret:file/oauth-client-key",
-                "clientAssertionKeyRef",
+                key_under_secret,
+                "an assertion key under the shared-secret type",
             ),
-            (
-                "clientSecretRef: secret:file/oauth-client-secret, credentialPlacement: basic-header, clientAssertionAudience: https://issuer.invalid/",
-                "clientAssertionAudience",
-            ),
+            (secret_under_key, "a shared secret under the assertion type"),
         ] {
-            let candidate = with(&format!(
-                "authentication: {{type: oauth2-client-credentials, {token}, {members}}}"
-            ));
-            let diagnostics = bundle_refusal(&candidate);
-            let pointer = format!("/sources/source-a/authentication/{member}");
-            let refused = diagnostics
-                .iter()
-                .find(|diagnostic| diagnostic.path == pointer)
-                .unwrap_or_else(|| panic!("{member}: no diagnostic at the key in {diagnostics:?}"));
-            assert_eq!(refused.code, "config.unknown-key", "{member}");
-            assert_eq!(
-                refused.source.as_ref().and_then(|source| source.line),
-                Some(line_of(&candidate, member)),
-                "{member}"
-            );
             assert!(
-                refused.suggested_action.contains("oauth2-private-key-jwt"),
-                "{member}: the fix names the type: {refused:?}"
-            );
-            for diagnostic in &diagnostics {
-                let text = format!("{} {}", diagnostic.message, diagnostic.suggested_action);
-                assert!(
-                    !text.contains("oauth-client-key") && !text.contains("issuer.invalid"),
-                    "{member}: a written value is repeated: {diagnostic:?}"
-                );
-            }
-        }
-
-        // Each type requires its own credential and refuses the other's.
-        for (authentication, code, member) in [
-            (
-                format!("authentication: {{type: oauth2-client-credentials, {token}, clientSecretRef: secret:file/oauth-client-secret}}"),
-                "config.missing-key",
-                "",
-            ),
-            (
-                format!("authentication: {{type: oauth2-private-key-jwt, {token}}}"),
-                "config.missing-key",
-                "",
-            ),
-            (
-                format!("authentication: {{type: oauth2-private-key-jwt, {token}, clientAssertionKeyRef: secret:file/oauth-client-key, credentialPlacement: basic-header}}"),
-                "config.unknown-key",
-                "/credentialPlacement",
-            ),
-        ] {
-            let diagnostics = bundle_refusal(&with(&authentication));
-            let pointer = format!("/sources/source-a/authentication{member}");
-            assert!(
-                diagnostics
-                    .iter()
-                    .any(|diagnostic| diagnostic.code == code && diagnostic.path == pointer),
-                "{code} at {pointer}: {diagnostics:?}"
+                serde_json::from_value::<registry_adapter_core::RuntimeCredential>(candidate)
+                    .is_err(),
+                "the runtime reader accepted {reason}"
             );
         }
     }
@@ -13479,10 +10913,10 @@ outboundTls:
         assert!(concept.get("id").is_none());
 
         for (new, old, pointer) in [
-            ("issuer: {uri: ", "issuer: {id: ", "/issuer/id"),
+            ("issuer:\n  uri: ", "issuer:\n  id: ", "/issuer/id"),
             (
-                "{handle: is_adult, uri: ",
-                "{handle: is_adult, id: ",
+                "      - handle: is_adult\n        uri: ",
+                "      - handle: is_adult\n        id: ",
                 "/requirements/0/concepts/0/id",
             ),
         ] {
@@ -13650,48 +11084,147 @@ outboundTls:
             removed.suggested_action.contains("type: list"),
             "the fix names the replacement: {removed:?}"
         );
+        let parent = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.path == "/sources/source-a/evidence")
+            .unwrap_or_else(|| {
+                panic!("the retired source parent was not refused: {diagnostics:?}")
+            });
+        assert_eq!(parent.code, "config.unknown-key");
+        assert_eq!(
+            parent.suggested_action,
+            "Remove `evidence`; the accepted keys are `pack`, `route`, `connection`, `inputs`, `posture`, `factSchema`."
+        );
+        assert!(!format!("{diagnostics:?}").contains("minimumItems: 1"));
 
         let diagnostics = bundle_refusal(&pinned("boolean"));
+        let parent = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.path == "/sources/source-a/evidence")
+            .unwrap_or_else(|| panic!("the retired boolean form was not refused: {diagnostics:?}"));
+        assert_eq!(parent.code, "config.unknown-key");
+        assert_eq!(
+            parent.suggested_action,
+            "Remove `evidence`; the accepted keys are `pack`, `route`, `connection`, `inputs`, `posture`, `factSchema`."
+        );
+        assert!(!format!("{diagnostics:?}").contains("form: boolean"));
+
+        let diagnostics = bundle_refusal(&pinned("{type: boolean, unique: true}"));
+        let parent = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.path == "/sources/source-a/evidence")
+            .unwrap_or_else(|| {
+                panic!("the retired constrained form was not refused: {diagnostics:?}")
+            });
+        assert_eq!(parent.code, "config.unknown-key");
+        assert_eq!(
+            parent.suggested_action,
+            "Remove `evidence`; the accepted keys are `pack`, `route`, `connection`, `inputs`, `posture`, `factSchema`."
+        );
+        assert!(!format!("{diagnostics:?}").contains("unique: true"));
+
+        let diagnostics = bundle_refusal(&pinned("{type: decimal}"));
+        let parent = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.path == "/sources/source-a/evidence")
+            .unwrap_or_else(|| panic!("the retired decimal form was not refused: {diagnostics:?}"));
+        assert_eq!(parent.code, "config.unknown-key");
+        assert_eq!(
+            parent.suggested_action,
+            "Remove `evidence`; the accepted keys are `pack`, `route`, `connection`, `inputs`, `posture`, `factSchema`."
+        );
+        assert!(!format!("{diagnostics:?}").contains("type: decimal"));
+
+        let diagnostics = bundle_refusal(&pinned("{type: boolean}"));
+        let parent = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.path == "/sources/source-a/evidence")
+            .unwrap_or_else(|| {
+                panic!("the retired tagged boolean was not refused: {diagnostics:?}")
+            });
+        assert_eq!(parent.code, "config.unknown-key");
+        assert_eq!(
+            parent.suggested_action,
+            "Remove `evidence`; the accepted keys are `pack`, `route`, `connection`, `inputs`, `posture`, `factSchema`."
+        );
+        assert!(!format!("{diagnostics:?}").contains("type: boolean"));
+
+        let diagnostics = bundle_refusal(&pinned(
+            "{type: list, items: string, minimumItems: 1, maximumItems: 2, unique: true}",
+        ));
+        let parent = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.path == "/sources/source-a/evidence")
+            .unwrap_or_else(|| panic!("the retired tagged list was not refused: {diagnostics:?}"));
+        assert_eq!(parent.code, "config.unknown-key");
+        assert_eq!(
+            parent.suggested_action,
+            "Remove `evidence`; the accepted keys are `pack`, `route`, `connection`, `inputs`, `posture`, `factSchema`."
+        );
+        assert!(!format!("{diagnostics:?}").contains("maximumItems: 2"));
+
+        let old_list = adult.replacen(
+            "        type: boolean\n",
+            "        form:\n          list: {items: string, minimumItems: 1, maximumItems: 2, unique: true}\n",
+            1,
+        );
+        assert_ne!(old_list, adult, "the current concept mutation applies");
+        let diagnostics = bundle_refusal(&old_list);
+        let removed = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "config.removed-key")
+            .unwrap_or_else(|| panic!("no current concept removal in {diagnostics:?}"));
+        assert_eq!(removed.path, "/requirements/0/concepts/0/form");
+        assert_eq!(
+            removed.suggested_action,
+            "Declare type instead; keep the value."
+        );
+
+        let wrong_type = adult.replacen("        type: boolean\n", "        type: [boolean]\n", 1);
+        assert_ne!(wrong_type, adult, "the non-string type mutation applies");
+        let diagnostics = bundle_refusal(&wrong_type);
         assert!(
             diagnostics
                 .iter()
                 .any(|diagnostic| diagnostic.code == "config.invalid-type"
-                    && diagnostic.path == form_path),
+                    && diagnostic.path == "/requirements/0/concepts/0/type"),
             "{diagnostics:?}"
         );
 
-        let diagnostics = bundle_refusal(&pinned("{type: boolean, unique: true}"));
+        let stray_constraint = adult.replacen(
+            "        type: boolean\n",
+            "        type: boolean\n        unique: true\n",
+            1,
+        );
+        assert_ne!(
+            stray_constraint, adult,
+            "the stray constraint mutation applies"
+        );
+        let diagnostics = bundle_refusal(&stray_constraint);
         assert!(
             diagnostics
                 .iter()
                 .any(|diagnostic| diagnostic.code == "config.unknown-key"
-                    && diagnostic.path == format!("{form_path}/unique")),
+                    && diagnostic.path == "/requirements/0/concepts/0/unique"),
             "{diagnostics:?}"
         );
 
-        let diagnostics = bundle_refusal(&pinned("{type: decimal}"));
+        let unknown_form = adult.replacen("        type: boolean\n", "        type: decimal\n", 1);
+        assert_ne!(unknown_form, adult, "the unknown type mutation applies");
+        let diagnostics = bundle_refusal(&unknown_form);
         assert!(
             diagnostics
                 .iter()
                 .any(|diagnostic| diagnostic.code == "config.unknown-variant"
-                    && diagnostic.path == format!("{form_path}/type")),
+                    && diagnostic.path == "/requirements/0/concepts/0/type"),
             "{diagnostics:?}"
         );
 
-        // The tagged form is read: what is refused next is the rest of the
-        // contract this fixture leaves out, never the form.
-        for form in [
-            "{type: boolean}",
-            "{type: list, items: string, minimumItems: 1, maximumItems: 2, unique: true}",
-        ] {
-            let diagnostics = bundle_refusal(&pinned(form));
-            assert!(
-                diagnostics
-                    .iter()
-                    .all(|diagnostic| !diagnostic.path.starts_with(form_path)),
-                "{form}: {diagnostics:?}"
-            );
-        }
+        EvidenceConfig::parse_yaml(adult.as_bytes()).expect("the tagged boolean form reads");
+        EvidenceConfig::parse_yaml(include_bytes!(
+            "../../../products/evidence/fixtures/conformance/supported-values/evidence.yaml"
+        ))
+        .expect("the tagged list forms read");
     }
 
     #[test]
@@ -13705,88 +11238,100 @@ outboundTls:
 
         assert_union_tag_respelled(
             &adult,
-            "concept:adult-status, type: boolean",
-            "concept:adult-status, form: boolean",
+            "        type: boolean\n",
+            "        form: boolean\n",
             "/requirements/0/concepts/0/form",
         );
     }
 
     #[test]
     fn a_bundle_union_is_tagged_by_type_and_each_old_tag_is_refused() {
-        let adult = acceptance_bundle();
-        let config = EvidenceConfig::parse_yaml(adult.as_bytes()).expect("the bundle loads");
-        let projection = serde_json::to_value(&config).expect("the bundle projects");
-        let source = &projection["sources"]["source-a"];
-        assert_eq!(source["type"], "http-json");
-        assert_eq!(source["authentication"]["type"], "static-authorization");
-        assert!(source.get("transport").is_none());
-        assert!(source["authentication"].get("kind").is_none());
-        let acquisition = &projection["requirements"][0]["acquisition"];
-        assert_eq!(acquisition["type"], "single");
-        assert!(acquisition.get("kind").is_none());
+        let authentication = serde_json::json!({"type": "static-authorization"});
+        let pack: registry_adapter_core::EndpointAuthentication =
+            serde_json::from_value(authentication.clone()).expect("pack authentication loads");
+        let governed: registry_adapter_core::EvidenceAuthenticationPolicy =
+            serde_json::from_value(authentication.clone()).expect("governed authentication loads");
+        let runtime: registry_adapter_core::RuntimeCredential =
+            serde_json::from_value(serde_json::json!({
+                "type": "static-authorization",
+                "tokenRef": "secret:file/source-token"
+            }))
+            .expect("runtime credential loads");
+        for projection in [
+            serde_json::to_value(pack).unwrap(),
+            serde_json::to_value(governed).unwrap(),
+            serde_json::to_value(runtime).unwrap(),
+        ] {
+            assert_eq!(projection["type"], "static-authorization");
+            assert!(projection.get("kind").is_none());
+        }
 
-        assert_union_tag_respelled(
-            &adult,
-            "    type: http-json",
-            "    transport: http-json",
-            "/sources/source-a/transport",
-        );
-        assert_union_tag_respelled(
-            &adult,
-            "authentication: {type: static-authorization,",
-            "authentication: {kind: static-authorization,",
-            "/sources/source-a/authentication/kind",
-        );
-        assert_union_tag_respelled(
-            &adult,
-            "      type: single",
-            "      kind: single",
-            "/requirements/0/acquisition/kind",
-        );
-
-        let chained = String::from_utf8(
-            include_bytes!(
-                "../../../products/evidence/fixtures/acceptance/surviving-spouse-status/evidence.yaml"
+        let old_authentication = serde_json::json!({"kind": "static-authorization"});
+        assert!(
+            serde_json::from_value::<registry_adapter_core::EndpointAuthentication>(
+                old_authentication.clone()
             )
-            .to_vec(),
-        )
-        .expect("fixture is UTF-8");
-        assert_union_tag_respelled(
-            &chained,
-            "pathBindings: {ref: {type: prior-fact,",
-            "pathBindings: {ref: {from: prior-fact,",
-            "/sources/union-register/request/pathBindings/ref/from",
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<registry_adapter_core::EvidenceAuthenticationPolicy>(
+                old_authentication
+            )
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<registry_adapter_core::RuntimeCredential>(serde_json::json!({
+                "kind": "static-authorization",
+                "tokenRef": "secret:file/source-token"
+            }))
+            .is_err()
         );
 
-        let statement = String::from_utf8(
-            include_bytes!(
-                "../../../products/evidence/reference/request-adapter/deployment-projects/sqlite-extract-evidence/bundle/evidence.yaml"
-            )
-            .to_vec(),
-        )
-        .expect("fixture is UTF-8");
-        assert_union_tag_respelled(
-            &statement,
-            "          type: selector",
-            "          kind: selector",
-            "/sources/licence-register/request/parameterBindings/record_reference/kind",
-        );
+        let acquisition: AcquisitionConfig =
+            serde_json::from_value(serde_json::json!({"source": "source-a"}))
+                .expect("the current acquisition shape loads");
+        let projection = serde_json::to_value(acquisition).unwrap();
+        assert_eq!(projection, serde_json::json!({"source": "source-a"}));
+        for retired_tag in ["type", "kind"] {
+            let mut retired = projection.clone();
+            retired[retired_tag] = "single".into();
+            assert!(
+                serde_json::from_value::<AcquisitionConfig>(retired).is_err(),
+                "the acquisition reader accepted retired `{retired_tag}`"
+            );
+        }
     }
 
     #[test]
     fn a_source_connection_authentication_tagged_by_kind_is_refused() {
-        let valid = acceptance_bundle();
-        let respelled = valid.replacen(
-            "sources:\n",
-            "sourceConnections:\n  shared:\n    baseUrl: https://source.invalid\n    authentication:\n      type: static-authorization\n      tokenRef: secret:file/source-a-token\nsources:\n",
-            1,
+        let current = serde_json::json!({
+            "endpoints": [{
+                "endpoint": "provider",
+                "baseUrl": "https://source.invalid",
+                "authentication": {"type": "static-authorization"},
+                "clientIdentity": "forbidden"
+            }]
+        });
+        let connection: SourceConnectionPolicies =
+            serde_json::from_value(current.clone()).expect("the governed policy loads");
+        let projection = serde_json::to_value(connection).unwrap();
+        assert_eq!(
+            projection["endpoints"][0]["authentication"]["type"],
+            "static-authorization"
         );
-        assert_ne!(respelled, valid, "the connection is staged");
-        assert_union_tag_respelled(
-            &respelled,
-            "      type: static-authorization",
-            "      kind: static-authorization",
-            "/sourceConnections/shared/authentication/kind",
+        assert!(projection["endpoints"][0]["authentication"]
+            .get("kind")
+            .is_none());
+
+        let mut retired = current;
+        let authentication = retired["endpoints"][0]["authentication"]
+            .as_object_mut()
+            .unwrap();
+        authentication.remove("type");
+        authentication.insert("kind".to_owned(), "static-authorization".into());
+        assert!(
+            serde_json::from_value::<SourceConnectionPolicies>(retired).is_err(),
+            "the governed connection reader accepted authentication tagged by `kind`"
         );
     }
 
@@ -13816,11 +11361,7 @@ outboundTls:
         // grammar of the key is the only rule the candidate breaks. A name of
         // 65 characters and a name with a dot were both accepted by the
         // grammar these maps had of their own.
-        let source = |name: &str| {
-            valid
-                .replacen("  source-a:\n", &format!("  {name}:\n"), 1)
-                .replacen("source: source-a\n", &format!("source: {name}\n"), 1)
-        };
+        let source = |name: &str| valid.replacen("  source-a:\n", &format!("  {name}:\n"), 1);
         let cases = [
             (
                 source("source.a"),
@@ -13837,21 +11378,29 @@ outboundTls:
                 "map key",
             ),
             (
-                valid.replace("person-demographics-v1", "person.demographics-v1"),
+                valid.replacen(
+                    "  person-demographics-v1:\n",
+                    "  person.demographics-v1:\n",
+                    1,
+                ),
                 "person.demographics-v1",
                 Some("/selectorProfiles/person.demographics-v1"),
                 "evidence.bundle.invalid-selector-profile",
                 "map key",
             ),
             (
-                valid.replace("statutory-caseworker-v1", "statutory.caseworker-v1"),
+                valid.replacen(
+                    "  statutory-caseworker-v1:\n",
+                    "  statutory.caseworker-v1:\n",
+                    1,
+                ),
                 "statutory.caseworker-v1",
                 Some("/authorityProfiles/statutory.caseworker-v1"),
                 "evidence.bundle.invalid-authority-profile",
                 "map key",
             ),
             (
-                valid.replace("given_name", "given.name"),
+                valid.replacen("      given_name:\n", "      given.name:\n", 1),
                 "given.name",
                 None,
                 "evidence.bundle.invalid-selector-profile",
@@ -13891,21 +11440,18 @@ outboundTls:
 
     #[test]
     fn a_path_template_placeholder_is_a_shared_local_identifier() {
-        let binding = |name: &str| -> OrderedMap<PathBindingConfig> {
-            serde_norway::from_str(&format!(
-                "{name}: {{type: prior-fact, field: record_reference}}\n"
-            ))
-            .expect("path binding parses")
-        };
-        assert!(validate_path_template("/records/{record_ref}", &binding("record_ref")).is_ok());
-        let overlong = format!("r{}", "a".repeat(64));
-        for name in ["record.ref", overlong.as_str()] {
-            let refusal = validate_path_template(&format!("/records/{{{name}}}"), &binding(name))
-                .expect_err("the placeholder is not a local identifier");
-            let fault = refusal.fault();
-            assert!(fault.cause().contains("local identifier"), "{fault}");
-            assert_eq!(fault.field(), Some("source path-template placeholder"));
+        assert!(registry_adapter_core::is_placeholder_name("record_ref"));
+        assert!(registry_adapter_core::is_placeholder_name("record-ref"));
+        for name in ["record.ref", "record ref", "1record", ""] {
+            assert!(
+                !registry_adapter_core::is_placeholder_name(name),
+                "{name:?}"
+            );
         }
+        assert_eq!(
+            registry_adapter_core::placeholders("/records/{{record_ref}}"),
+            vec![("record_ref".to_owned(), false)]
+        );
     }
 
     #[test]
@@ -14034,12 +11580,9 @@ outboundTls:
     #[test]
     fn a_bad_member_inside_a_tagged_source_reports_its_full_path_and_position() {
         let valid = acceptance_bundle();
-        let candidate = valid.replacen(
-            "    type: http-json",
-            "    type: http-json\n    unexpectedMember: 1",
-            1,
-        );
-        assert_ne!(candidate, valid, "the fixture declares an HTTP source");
+        let candidate =
+            valid.replacen("  source-a:\n", "  source-a:\n    unexpectedMember: 1\n", 1);
+        assert_ne!(candidate, valid, "the fixture declares a source");
         let diagnostics = bundle_refusal(&candidate);
         assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
         let refusal = &diagnostics[0];
@@ -14077,8 +11620,8 @@ outboundTls:
     fn a_bundle_rule_violation_is_placed_at_the_member_it_concerns() {
         let valid = acceptance_bundle();
         let candidate = valid.replacen(
-            "subjectBinding: {secretRef: secret:file/subject-binding-key,",
-            "subjectBinding: {secretRef: secret:file/audit-hash-key,",
+            "  secretRef: secret:file/subject-binding-key\n",
+            "  secretRef: secret:file/audit-hash-key\n",
             1,
         );
         assert_ne!(
@@ -14091,7 +11634,10 @@ outboundTls:
         assert_eq!(refusal.code, "evidence.bundle.invalid-subject-binding");
         assert_eq!(refusal.path, "/subjectBinding/secretRef");
         let source = refusal.source.as_ref().expect("a position");
-        assert_eq!(source.line, Some(line_of(&candidate, "subjectBinding:")));
+        assert_eq!(
+            source.line,
+            Some(line_of(&candidate, "secretRef: secret:file/audit-hash-key"))
+        );
     }
 
     #[test]
@@ -14207,534 +11753,100 @@ outboundTls:
         assert!(validate_key_identifiers(&[noncanonical], 33, "revoked keys").is_err());
     }
 
-    /// Two declared fetch members, each the ordinary fixed request every
-    /// Version 1 source already is, bound to the reference the search resolved.
-    const MEMBER_SOURCES: &str = r#"  source-e:
-    type: http-json
-    baseUrl: https://source.invalid
-    posture: field-projected
-    authentication: {type: static-authorization, tokenRef: secret:file/source-e-token}
-    request:
-      method: GET
-      path: /v1/first/{record_id}
-      pathBindings:
-        record_id: {type: prior-fact, field: record_id}
-      fixedHeaders: [{name: Accept, value: application/json}]
-      selectorInputs: []
-      prepareScript: adapters/first-member-prepare.rhai
-      adapterParameters: {profile: first}
-      adapterParametersSchema: schemas/first-member-adapter-parameters.schema.yaml
-      preparationLimits: {query: allowed, jsonBody: forbidden, maximumNormalizedBytes: 4096}
-      projection: [/total]
-      redirects: deny
-      attemptTimeoutMilliseconds: 3000
-      maximumResponseBytes: 65536
-      maximumConcurrency: 8
-    responseSchema: schemas/first-member-response.schema.yaml
-    extractScript: adapters/first-member-source.rhai
-    factSchema: schemas/first-member-facts.schema.yaml
-  source-f:
-    type: http-json
-    baseUrl: https://source.invalid
-    posture: field-projected
-    authentication: {type: static-authorization, tokenRef: secret:file/source-f-token}
-    request:
-      method: GET
-      path: /v1/second/{record_id}
-      pathBindings:
-        record_id: {type: prior-fact, field: record_id}
-      fixedHeaders: [{name: Accept, value: application/json}]
-      selectorInputs: []
-      prepareScript: adapters/second-member-prepare.rhai
-      adapterParameters: {profile: second}
-      adapterParametersSchema: schemas/second-member-adapter-parameters.schema.yaml
-      preparationLimits: {query: allowed, jsonBody: forbidden, maximumNormalizedBytes: 4096}
-      projection: [/total]
-      redirects: deny
-      attemptTimeoutMilliseconds: 3000
-      maximumResponseBytes: 65536
-      maximumConcurrency: 8
-    responseSchema: schemas/second-member-response.schema.yaml
-    extractScript: adapters/second-member-source.rhai
-    factSchema: schemas/second-member-facts.schema.yaml
-  source-b:
-"#;
-
-    const DECLARED_ACQUISITION: &str = "    acquisition:\n      type: search-then-fetch-set\n      search: source-a\n      fetch:\n        - {source: source-e, factInputs: [record_id]}\n        - {source: source-f, factInputs: [record_id]}\n      maximumAcquisitionMilliseconds: 8000\n";
-
-    const DECLARED_MEMBERS: &str = "      fetch:\n        - {source: source-e, factInputs: [record_id]}\n        - {source: source-f, factInputs: [record_id]}\n";
-
-    const FIRST_MEMBER: &str = "        - {source: source-e, factInputs: [record_id]}\n";
-
-    /// One acceptance bundle rewritten into the declared fetch-set profile: the
-    /// bundle declares the capability, and the first requirement resolves one
-    /// reference through its search and reads that reference through two
-    /// declared members.
-    fn fetch_set_bundle() -> String {
-        let yaml = include_str!(
-            "../../../products/evidence/fixtures/acceptance/all-definitions/evidence.yaml"
-        );
-        let declared = yaml.replace(
-            "\nselectorProfiles:\n",
-            "\nacquisitionCapabilities: [search-then-fetch-set]\n\nselectorProfiles:\n",
-        );
-        assert_ne!(declared, yaml, "the capability declaration applies");
-        let acquired = declared.replace(
-            "    acquisition:\n      type: single\n      source: source-a\n",
-            DECLARED_ACQUISITION,
-        );
-        assert_ne!(acquired, declared, "the fetch-set acquisition applies");
-        let members = acquired.replace("  source-b:\n", MEMBER_SOURCES);
-        assert_ne!(members, acquired, "the declared members apply");
-        members
-    }
-
     #[test]
-    fn fetch_set_acquisition_requires_two_to_four_distinct_configured_members() {
-        let yaml = fetch_set_bundle();
-        let validator = bundle_contract_validator();
-        EvidenceConfig::parse_yaml_reporting_rule(yaml.as_bytes())
-            .expect("the declared fetch set validates");
+    fn retired_acquisition_fields_are_each_refused_without_masking_the_current_source_binding() {
+        let baseline = acceptance_fixture();
+        EvidenceConfig::parse_yaml(baseline.as_bytes())
+            .expect("the current one-source acquisition parses");
+
+        let acquisition_capabilities = edited(
+            baseline,
+            "kind: EvidenceBundle\n",
+            "kind: EvidenceBundle\nacquisitionCapabilities: [search-then-fetch-set]\n",
+        );
+        assert_eq!(
+            decode_cause(&acquisition_capabilities),
+            "config.unknown-key"
+        );
+
+        let multistage = edited(
+            baseline,
+            "    acquisition:\n      source: source-a\n",
+            "    acquisition:\n      type: search-then-fetch\n      search: source-a\n      fetch: source-b\n",
+        );
         assert!(
-            validator.is_valid(&bundle_contract_instance(yaml.as_bytes())),
-            "the contract rejects the declared fetch set"
+            EvidenceConfig::parse_yaml(multistage.as_bytes()).is_err(),
+            "the retired multistage acquisition parsed"
         );
 
-        // The contract closes the shape and the width; the identity relations
-        // between the declared members and the search belong to the parser,
-        // which is the only side that can read one identifier against another.
-        for (members, expected, contract_accepts) in [
-            (
-                "      fetch:\n        - {source: source-e, factInputs: [record_id]}\n",
-                "requirement acquisition declares too few fetch members",
-                false,
-            ),
-            (
-                "      fetch:\n        - {source: source-e, factInputs: [record_id]}\n        - {source: source-f, factInputs: [record_id]}\n        - {source: source-g, factInputs: [record_id]}\n        - {source: source-h, factInputs: [record_id]}\n        - {source: source-i, factInputs: [record_id]}\n",
-                "requirement acquisition declares too many fetch members",
-                false,
-            ),
-            (
-                "      fetch:\n        - {source: source-e, factInputs: [record_id]}\n        - {source: source-e, factInputs: [record_namespace]}\n",
-                "requirement acquisition fetch members must be distinct",
-                true,
-            ),
-            (
-                "      fetch:\n        - {source: source-a, factInputs: [record_id]}\n        - {source: source-f, factInputs: [record_id]}\n",
-                "requirement acquisition fetch member repeats the search source",
-                true,
-            ),
-            (
-                "      fetch:\n        - {source: source-e, factInputs: [record_id]}\n        - {source: source-f, factInputs: [record_id]}\n        - {source: source-z, factInputs: [record_id]}\n",
-                "requirement acquisition references an unknown source",
-                true,
-            ),
-            (
-                "      fetch:\n        - {source: Source-E, factInputs: [record_id]}\n        - {source: source-f, factInputs: [record_id]}\n",
-                "search-then-fetch-set source identifiers are invalid",
-                false,
-            ),
-        ] {
-            let mutated = yaml.replace(DECLARED_MEMBERS, members);
-            assert_ne!(mutated, yaml, "{expected}");
-            assert_eq!(
-                EvidenceConfig::parse_yaml_reporting_rule(mutated.as_bytes()).err(),
-                Some(ConfigError::Invalid(expected)),
-                "{expected}"
-            );
-            assert_eq!(
-                validator.is_valid(&bundle_contract_instance(mutated.as_bytes())),
-                contract_accepts,
-                "{expected}"
-            );
-        }
+        let source_batch = edited(
+            baseline,
+            "    factSchema: schemas/facts.schema.yaml\n",
+            "    factSchema: schemas/facts.schema.yaml\n    batch: {maximumItems: 2}\n",
+        );
+        assert_eq!(decode_cause(&source_batch), "config.unknown-key");
     }
 
-    #[test]
-    fn fetch_set_acquisition_requires_a_budget_inside_the_declared_range() {
-        let yaml = fetch_set_bundle();
-        let validator = bundle_contract_validator();
-        for (budget, accepted) in [(0, false), (1, true), (30_000, true), (30_001, false)] {
-            let mutated = yaml.replace(
-                "      maximumAcquisitionMilliseconds: 8000\n",
-                &format!("      maximumAcquisitionMilliseconds: {budget}\n"),
-            );
-            assert_ne!(mutated, yaml, "{budget}");
-            if accepted {
-                EvidenceConfig::parse_yaml(mutated.as_bytes())
-                    .unwrap_or_else(|_| panic!("the budget {budget} is inside the range"));
-            } else {
-                assert_eq!(decode_cause(&mutated), "config.out-of-range", "{budget}");
-            }
-            assert_eq!(
-                validator.is_valid(&bundle_contract_instance(mutated.as_bytes())),
-                accepted,
-                "the contract disagrees with startup validation at {budget}"
-            );
-        }
-    }
-
-    #[test]
-    fn fetch_set_acquisition_requires_a_non_empty_fact_input_allowlist() {
-        let yaml = fetch_set_bundle();
-        let validator = bundle_contract_validator();
-        let excessive = (0..17)
-            .map(|index| format!("input_{index}"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        for (member, expected) in [
-            (
-                "        - {source: source-e, factInputs: []}\n".to_owned(),
-                "requirement acquisition fetch member declares no fact inputs",
-            ),
-            (
-                format!("        - {{source: source-e, factInputs: [{excessive}]}}\n"),
-                "requirement acquisition fetch member declares too many fact inputs",
-            ),
-            (
-                "        - {source: source-e, factInputs: [record_id, record_id]}\n".to_owned(),
-                "requirement acquisition fetch member fact inputs must be unique",
-            ),
-            (
-                "        - {source: source-e, factInputs: [Record_Id]}\n".to_owned(),
-                "requirement acquisition fetch member fact input is invalid",
-            ),
-        ] {
-            let mutated = yaml.replace(FIRST_MEMBER, &member);
-            assert_ne!(mutated, yaml, "{expected}");
-            assert_eq!(
-                EvidenceConfig::parse_yaml_reporting_rule(mutated.as_bytes()).err(),
-                Some(ConfigError::Invalid(expected)),
-                "{expected}"
-            );
-            assert!(
-                !validator.is_valid(&bundle_contract_instance(mutated.as_bytes())),
-                "the contract accepted an allowlist startup validation refuses: {expected}"
-            );
-        }
-    }
-
-    #[test]
-    fn fetch_set_acquisition_must_be_declared_in_bundle_acquisition_capabilities() {
-        let yaml = fetch_set_bundle();
-        let validator = bundle_contract_validator();
-        for (capabilities, expected, contract_accepts) in [
-            (
-                "",
-                Some("requirement acquisition kind is not a declared bundle capability"),
-                false,
-            ),
-            // Writing the list out and declaring nothing says what silence
-            // says, and the contract refuses both for the same reason it
-            // refuses silence. The published contract is what an author
-            // validates against before deploying, so a document it certifies
-            // has to be one startup can serve; a gated kind whose capability
-            // is undeclared is the one cross-declaration relation a schema can
-            // state, and leaving it to the loader alone would certify a bundle
-            // that cannot serve.
-            (
-                "acquisitionCapabilities: []\n",
-                Some("requirement acquisition kind is not a declared bundle capability"),
-                false,
-            ),
-            (
-                "acquisitionCapabilities: [search-then-fetch-sets]\n",
-                Some("bundle acquisition capabilities name an unknown acquisition kind"),
-                false,
-            ),
-            (
-                "acquisitionCapabilities: [search-then-fetch-set, search-then-fetch-set]\n",
-                Some("bundle acquisition capabilities must be unique"),
-                false,
-            ),
-            (
-                "acquisitionCapabilities: [single, search-then-fetch-set]\n",
-                Some("bundle acquisition capabilities name an unknown acquisition kind"),
-                false,
-            ),
-            // The same declaration in block form: valid, and textually
-            // distinct from the bundle's own flow-sequence spelling.
-            (
-                "acquisitionCapabilities:\n  - search-then-fetch-set\n",
-                None,
-                true,
-            ),
-        ] {
-            let mutated = yaml.replace(
-                "acquisitionCapabilities: [search-then-fetch-set]\n",
-                capabilities,
-            );
-            assert_ne!(mutated, yaml, "{capabilities}");
-            assert_eq!(
-                EvidenceConfig::parse_yaml_reporting_rule(mutated.as_bytes())
-                    .err()
-                    .map(|error| match error {
-                        ConfigError::Invalid(cause) => cause,
-                        other => panic!("{capabilities} failed for another reason: {other}"),
-                    }),
-                expected,
-                "{capabilities}"
-            );
-            assert_eq!(
-                validator.is_valid(&bundle_contract_instance(mutated.as_bytes())),
-                contract_accepts,
-                "{capabilities}"
-            );
-        }
-    }
-
-    #[test]
-    fn bundle_contract_closes_the_fetch_set_acquisition_form() {
-        let yaml = fetch_set_bundle();
-        let validator = bundle_contract_validator();
-        for (acquisition, reason) in [
-            (
-                "    acquisition:\n      type: search-then-fetch-set\n      search: source-a\n      fetch:\n        - {source: source-e, factInputs: [record_id]}\n        - {source: source-f, factInputs: [record_id]}\n",
-                "the budget is required",
-            ),
-            (
-                "    acquisition:\n      type: search-then-fetch-set\n      search: source-a\n      fetch:\n        - {source: source-e, factInputs: [record_id], order: 1}\n        - {source: source-f, factInputs: [record_id]}\n      maximumAcquisitionMilliseconds: 8000\n",
-                "a member declares only its source and its fact inputs",
-            ),
-            (
-                "    acquisition:\n      type: search-then-fetch-set\n      search: source-a\n      fetch:\n        - {source: source-e, factInputs: [record_id]}\n        - {source: source-f, factInputs: [record_id]}\n      maximumAcquisitionMilliseconds: 8000\n      concurrent: true\n",
-                "the acquisition form is closed",
-            ),
-            (
-                "    acquisition:\n      type: search-then-fetch-sets\n      search: source-a\n      fetch:\n        - {source: source-e, factInputs: [record_id]}\n        - {source: source-f, factInputs: [record_id]}\n      maximumAcquisitionMilliseconds: 8000\n",
-                "the kind vocabulary is closed",
-            ),
-        ] {
-            let mutated = yaml.replace(DECLARED_ACQUISITION, acquisition);
-            assert_ne!(mutated, yaml, "{reason}");
-            assert!(
-                EvidenceConfig::parse_yaml(mutated.as_bytes()).is_err(),
-                "{reason}"
-            );
-            assert!(
-                !validator.is_valid(&bundle_contract_instance(mutated.as_bytes())),
-                "{reason}"
-            );
-        }
-    }
-
-    #[test]
-    fn fetch_set_members_are_the_acquisitions_fetch_sources() {
-        let yaml = fetch_set_bundle();
-        let config = EvidenceConfig::parse_yaml_reporting_rule(yaml.as_bytes())
-            .expect("the declared fetch set validates");
-        let requirement = &config.requirements[0];
-        assert_eq!(requirement.acquisition.initial_source(), "source-a");
-        assert_eq!(
-            requirement.acquisition.source_ids(),
-            vec!["source-a", "source-e", "source-f"]
-        );
-        assert_eq!(
-            requirement.acquisition.fetch_sources(),
-            vec!["source-e", "source-f"]
-        );
-        assert!(requirement.acquisition.uses_source("source-f"));
-        assert!(!requirement.acquisition.uses_source("source-b"));
-        assert_eq!(
-            config.requirement_acquisition_posture(&requirement.id),
-            Some(AcquisitionPosture::FieldProjected)
-        );
-
-        // The members are the only sources this bundle fetches, so returning
-        // the requirement to one call leaves their prior-fact bindings on
-        // sources nothing fetches, which is the refusal that proves members
-        // carry the fetch-source rule rather than escaping it.
-        let unfetched = yaml.replace(
-            DECLARED_ACQUISITION,
-            "    acquisition:\n      type: single\n      source: source-a\n",
-        );
-        assert_ne!(unfetched, yaml, "the single-call rewrite applies");
-        assert_eq!(
-            EvidenceConfig::parse_yaml_reporting_rule(unfetched.as_bytes()).err(),
-            Some(ConfigError::Invalid(
-                "prior-fact path bindings are permitted only on fetch sources"
-            ))
-        );
-    }
-
-    #[test]
-    fn a_fetch_set_member_receives_only_its_declared_fact_inputs() {
-        let search_facts = BTreeMap::from([
-            (
-                "record_id".to_owned(),
-                serde_json::json!("urn:example:fixture:record:1"),
-            ),
-            (
-                "record_namespace".to_owned(),
-                serde_json::json!("urn:example:fixture:namespace"),
-            ),
-        ]);
-        let declared = StageInputs::Declared(vec!["record_id".to_owned()]);
-        assert_eq!(
-            declared.project(&search_facts),
-            BTreeMap::from([(
-                "record_id".to_owned(),
-                serde_json::json!("urn:example:fixture:record:1")
-            )])
-        );
-
-        // The forms that predate the allowlist keep the inputs they froze: one
-        // call reads no prior fact, and the single fetch reads all of them.
-        assert!(StageInputs::None.project(&search_facts).is_empty());
-        assert_eq!(
-            StageInputs::EveryPriorFact.project(&search_facts),
-            search_facts
-        );
-    }
-
-    /// Every acquisition form describes itself as the same ordered value, so
-    /// the runtime, the offline fixture harness, and adopter tooling read one
-    /// derivation of the call order rather than three that can drift.
-    #[test]
-    fn every_acquisition_form_plans_its_stages_in_declared_order() {
-        let single = AcquisitionConfig::Single {
-            source: "source-a".to_owned(),
-        };
-        assert_eq!(
-            single.plan(),
-            AcquisitionPlan {
-                stages: vec![PlannedStage {
-                    source: "source-a".to_owned(),
-                    role: StageRole::Search,
-                    inputs: StageInputs::None,
-                }],
-                budget_milliseconds: None,
-            }
-        );
-
-        let chained = AcquisitionConfig::SearchThenFetch {
-            on_fetch_no_match: Default::default(),
-            search: "source-a".to_owned(),
-            fetch: "source-b".to_owned(),
-        };
-        assert_eq!(
-            chained.plan(),
-            AcquisitionPlan {
-                stages: vec![
-                    PlannedStage {
-                        source: "source-a".to_owned(),
-                        role: StageRole::Search,
-                        inputs: StageInputs::None,
-                    },
-                    PlannedStage {
-                        source: "source-b".to_owned(),
-                        role: StageRole::Member,
-                        inputs: StageInputs::EveryPriorFact,
-                    },
-                ],
-                budget_milliseconds: None,
-            }
-        );
-
-        let config = EvidenceConfig::parse_yaml(fetch_set_bundle().as_bytes())
-            .expect("the fetch set parses");
-        let plan = config.requirements[0].acquisition.plan();
-        assert_eq!(
-            plan,
-            AcquisitionPlan {
-                stages: vec![
-                    PlannedStage {
-                        source: "source-a".to_owned(),
-                        role: StageRole::Search,
-                        inputs: StageInputs::None,
-                    },
-                    PlannedStage {
-                        source: "source-e".to_owned(),
-                        role: StageRole::Member,
-                        inputs: StageInputs::Declared(vec!["record_id".to_owned()]),
-                    },
-                    PlannedStage {
-                        source: "source-f".to_owned(),
-                        role: StageRole::Member,
-                        inputs: StageInputs::Declared(vec!["record_id".to_owned()]),
-                    },
-                ],
-                budget_milliseconds: Some(8000),
-            }
-        );
-
-        // The planned sources are the configured sources, in the order the
-        // requirement declared them, for every form.
-        for acquisition in [&single, &chained, &config.requirements[0].acquisition] {
-            assert_eq!(
-                acquisition
-                    .plan()
-                    .stages
-                    .iter()
-                    .map(|stage| stage.source.as_str())
-                    .collect::<Vec<_>>(),
-                acquisition.source_ids()
-            );
-        }
-    }
-
-    /// A requirement's `configurationRevision` is a digest of the projected
-    /// configuration, so a member every bundle serialized would move every
-    /// revision an existing deployment has already published.
-    #[test]
-    fn an_undeclared_acquisition_capability_stays_out_of_the_projected_configuration() {
-        let config = EvidenceConfig::parse_yaml(include_bytes!(
+    fn holder_bound_bundle() -> String {
+        let mut bundle = serde_norway::from_str::<serde_norway::Value>(include_str!(
             "../../../products/evidence/fixtures/acceptance/all-definitions/evidence.yaml"
         ))
-        .expect("the acceptance bundle validates");
-        assert!(config.acquisition_capabilities.is_empty());
-        let projected = serde_json::to_value(&config).expect("the configuration projects");
-        assert!(
-            projected.get("acquisitionCapabilities").is_none(),
-            "an undeclared capability list moves every existing configuration revision"
-        );
-
-        let declared = EvidenceConfig::parse_yaml(fetch_set_bundle().as_bytes())
-            .expect("the declared fetch set validates");
-        assert_eq!(
-            serde_json::to_value(&declared).expect("the configuration projects")
-                ["acquisitionCapabilities"],
-            serde_json::json!(["search-then-fetch-set"])
-        );
+        .expect("the audience-scoped fixture parses");
+        bundle["service"]["providerId"] = "https://provider.invalid".into();
+        bundle["responseFormats"]
+            .as_sequence_mut()
+            .expect("bundle response formats are a sequence")
+            .push("sd-jwt-vc".into());
+        let profile = bundle["authorityProfiles"]
+            .as_mapping_mut()
+            .expect("authority profiles are a mapping")
+            .get_mut("statutory-caseworker-v1")
+            .expect("the fixture declares its authority profile");
+        let grant = profile["grants"]
+            .as_sequence_mut()
+            .expect("profile grants are a sequence")
+            .first_mut()
+            .expect("the fixture declares its adult-status grant");
+        grant["responseFormats"]
+            .as_sequence_mut()
+            .expect("grant response formats are a sequence")
+            .push("sd-jwt-vc".into());
+        grant["subjectBindingModes"] = serde_norway::Value::Sequence(vec!["holder-bound".into()]);
+        bundle["requirements"]
+            .as_sequence_mut()
+            .expect("requirements are a sequence")[0]["subjectBinding"] = "holder-bound".into();
+        serde_norway::to_string(&bundle).expect("the holder-bound candidate serializes")
     }
 
-    /// One acceptance bundle rewritten so a single requirement issues under the
-    /// holder-bound mode, with both permission halves present: the bundle and
-    /// the one matched grant permit the serialization that mode allows, and the
-    /// grant names the mode itself.
-    fn holder_bound_bundle() -> String {
-        let yaml = include_str!(
-            "../../../products/evidence/fixtures/acceptance/all-definitions/evidence.yaml"
-        );
-        let mut bundle = yaml.to_owned();
-        for (name, from, to) in [
-            (
-                // Outside the local profile the SD-JWT VC issuer is an origin.
-                "provider origin",
-                "  providerId: urn:example:fixture:provider:evidence\n",
-                "  providerId: https://provider.invalid\n",
-            ),
-            (
-                "bundle formats",
-                "\nresponseFormats: [signed-jws, unsigned-json]\n",
-                "\nresponseFormats: [signed-jws, unsigned-json, sd-jwt-vc]\n",
-            ),
-            (
-                "grant permission",
-                "      - requirement: urn:example:fixture:requirement:adult-status:v1\n        purpose: fixture-eligibility\n        audienceFrom: authenticated-requester\n        responseFormats: [signed-jws, unsigned-json]\n",
-                "      - requirement: urn:example:fixture:requirement:adult-status:v1\n        purpose: fixture-eligibility\n        audienceFrom: authenticated-requester\n        responseFormats: [signed-jws, unsigned-json, sd-jwt-vc]\n        subjectBindingModes: [holder-bound]\n",
-            ),
-            (
-                "requirement mode",
-                "  - handle: adult-status\n    uri: urn:example:fixture:requirement:adult-status:v1\n    kind: criterion\n",
-                "  - handle: adult-status\n    uri: urn:example:fixture:requirement:adult-status:v1\n    kind: criterion\n    subjectBinding: holder-bound\n",
-            ),
-        ] {
-            let rewritten = bundle.replace(from, to);
-            assert_ne!(rewritten, bundle, "the {name} rewrite applies");
-            bundle = rewritten;
-        }
-        bundle
+    fn mutate_holder_bundle(edit: impl FnOnce(&mut serde_norway::Value)) -> String {
+        let baseline = holder_bound_bundle();
+        let mut bundle = serde_norway::from_str::<serde_norway::Value>(&baseline)
+            .expect("the holder-bound candidate parses");
+        edit(&mut bundle);
+        let mutated =
+            serde_norway::to_string(&bundle).expect("the holder-bound mutation serializes");
+        assert_ne!(mutated, baseline, "the holder-bound mutation applies");
+        mutated
+    }
+
+    fn first_holder_grant_mut(bundle: &mut serde_norway::Value) -> &mut serde_norway::Value {
+        bundle["authorityProfiles"]
+            .as_mapping_mut()
+            .expect("authority profiles are a mapping")
+            .get_mut("statutory-caseworker-v1")
+            .expect("the fixture declares its authority profile")["grants"]
+            .as_sequence_mut()
+            .expect("profile grants are a sequence")
+            .first_mut()
+            .expect("the fixture declares its adult-status grant")
+    }
+
+    fn first_holder_requirement_mut(bundle: &mut serde_norway::Value) -> &mut serde_norway::Value {
+        bundle["requirements"]
+            .as_sequence_mut()
+            .expect("requirements are a sequence")
+            .first_mut()
+            .expect("the fixture declares its adult-status requirement")
     }
 
     #[test]
@@ -14818,7 +11930,12 @@ outboundTls:
         // The grant keeps the serialization it needs and loses only the mode.
         // Nothing else about it changes, so a bundle that still loads would say
         // format permission had silently carried mode permission with it.
-        let format_only = bundle.replace("\n        subjectBindingModes: [holder-bound]", "");
+        let format_only = mutate_holder_bundle(|document| {
+            first_holder_grant_mut(document)
+                .as_mapping_mut()
+                .expect("the grant is a mapping")
+                .remove("subjectBindingModes");
+        });
         assert_ne!(format_only, bundle, "the mode withdrawal applies");
         assert!(
             EvidenceConfig::parse_yaml(format_only.as_bytes()).is_err(),
@@ -14826,7 +11943,14 @@ outboundTls:
         );
 
         // The same grant read directly: it may serialize, and it may not issue.
-        let audience_scoped = format_only.replace("\n    subjectBinding: holder-bound", "");
+        let mut audience_scoped = serde_norway::from_str::<serde_norway::Value>(&format_only)
+            .expect("the format-only bundle parses as YAML");
+        first_holder_requirement_mut(&mut audience_scoped)
+            .as_mapping_mut()
+            .expect("the requirement is a mapping")
+            .remove("subjectBinding");
+        let audience_scoped =
+            serde_norway::to_string(&audience_scoped).expect("the audience bundle serializes");
         assert_ne!(audience_scoped, format_only, "the mode removal applies");
         let config = EvidenceConfig::parse_yaml(audience_scoped.as_bytes())
             .expect("a grant may serialize SD-JWT VC with no binding-mode permission at all");
@@ -14845,41 +11969,53 @@ outboundTls:
         let bundle = holder_bound_bundle();
         EvidenceConfig::parse_yaml(bundle.as_bytes()).expect("the reachable bundle validates");
 
+        let bundle_format = mutate_holder_bundle(|document| {
+            document["responseFormats"]
+                .as_sequence_mut()
+                .expect("bundle response formats are a sequence")
+                .retain(|format| format.as_str() != Some("sd-jwt-vc"));
+        });
+        let grant_format = mutate_holder_bundle(|document| {
+            first_holder_grant_mut(document)["responseFormats"]
+                .as_sequence_mut()
+                .expect("grant response formats are a sequence")
+                .retain(|format| format.as_str() != Some("sd-jwt-vc"));
+        });
+        let grant_mode = mutate_holder_bundle(|document| {
+            first_holder_grant_mut(document)
+                .as_mapping_mut()
+                .expect("the grant is a mapping")
+                .remove("subjectBindingModes");
+        });
+        let audience_scoped_grant = mutate_holder_bundle(|document| {
+            first_holder_grant_mut(document)["subjectBindingModes"] =
+                serde_norway::Value::Sequence(vec!["audience-scoped".into()]);
+        });
         for (name, mutated) in [
             (
                 // The bundle half withdraws the one serialization the mode permits.
                 "bundle format",
-                bundle.replace(
-                    "\nresponseFormats: [signed-jws, unsigned-json, sd-jwt-vc]\n",
-                    "\nresponseFormats: [signed-jws, unsigned-json]\n",
-                ),
+                bundle_format,
             ),
             (
                 // The grant half withdraws it while still naming the mode.
                 "grant format",
-                bundle.replace(
-                    "        responseFormats: [signed-jws, unsigned-json, sd-jwt-vc]\n        subjectBindingModes: [holder-bound]\n",
-                    "        responseFormats: [signed-jws, unsigned-json]\n        subjectBindingModes: [holder-bound]\n",
-                ),
+                grant_format,
             ),
             (
                 // The grant half withdraws the mode while still permitting the format.
                 "grant mode",
-                bundle.replace("\n        subjectBindingModes: [holder-bound]", ""),
+                grant_mode,
             ),
             (
                 // No grant covers the requirement under the mode at all.
                 "grant audience-scoped only",
-                bundle.replace(
-                    "\n        subjectBindingModes: [holder-bound]",
-                    "\n        subjectBindingModes: [audience-scoped]",
-                ),
+                audience_scoped_grant,
             ),
         ] {
             assert_ne!(mutated, bundle, "the {name} mutation applies");
-            let error = EvidenceConfig::parse_yaml(mutated.as_bytes()).expect_err(
-                "an unreachable holder-bound requirement was accepted at bundle load",
-            );
+            let error = EvidenceConfig::parse_yaml(mutated.as_bytes())
+                .expect_err("an unreachable holder-bound requirement was accepted at bundle load");
             assert!(
                 !format!("{error}").contains("urn:example:fixture"),
                 "the {name} refusal names a configured value"
@@ -14890,12 +12026,18 @@ outboundTls:
     #[test]
     fn a_holder_bound_requirement_may_not_disclose_an_entity_reference_value_form() {
         let bundle = holder_bound_bundle();
-        let anchor = "      - {handle: is_adult, uri: urn:example:fixture:concept:adult-status, type: boolean, required: true, constraints: {}}\n";
         for form in [
-            "      - {handle: entity_reference, uri: urn:example:fixture:concept:audience-scoped-entity-reference, type: audience-scoped-entity-reference, required: false, constraints: {maximumBytes: 160}}\n",
-            "      - {handle: entity_references, uri: urn:example:fixture:concept:entity-reference-list, type: entity-reference-list, required: false, constraints: {minimumItems: 1, maximumItems: 2, unique: true}}\n",
+            "{handle: entity_reference, uri: urn:example:fixture:concept:audience-scoped-entity-reference, type: audience-scoped-entity-reference, required: false, constraints: {maximumBytes: 160}}",
+            "{handle: entity_references, uri: urn:example:fixture:concept:entity-reference-list, type: entity-reference-list, required: false, constraints: {minimumItems: 1, maximumItems: 2, unique: true}}",
         ] {
-            let mutated = bundle.replace(anchor, &format!("{anchor}{form}"));
+            let concept = serde_norway::from_str::<serde_norway::Value>(form)
+                .expect("the candidate concept parses");
+            let mutated = mutate_holder_bundle(|document| {
+                first_holder_requirement_mut(document)["concepts"]
+                    .as_sequence_mut()
+                    .expect("requirement concepts are a sequence")
+                    .push(concept);
+            });
             assert_ne!(mutated, bundle, "the {form} mutation applies");
             let refusal = EvidenceConfig::parse_yaml(mutated.as_bytes())
                 .expect_err("a holder-bound requirement disclosed an entity-reference value form");
@@ -14920,9 +12062,18 @@ outboundTls:
 
             // The refusal is about the mode, not about the value form: the same
             // concept on an audience-scoped requirement stays configurable.
-            let audience_scoped = mutated
-                .replace("\n    subjectBinding: holder-bound", "")
-                .replace("\n        subjectBindingModes: [holder-bound]", "");
+            let mut audience_scoped = serde_norway::from_str::<serde_norway::Value>(&mutated)
+                .expect("the mutated bundle parses as YAML");
+            first_holder_requirement_mut(&mut audience_scoped)
+                .as_mapping_mut()
+                .expect("the requirement is a mapping")
+                .remove("subjectBinding");
+            first_holder_grant_mut(&mut audience_scoped)
+                .as_mapping_mut()
+                .expect("the grant is a mapping")
+                .remove("subjectBindingModes");
+            let audience_scoped = serde_norway::to_string(&audience_scoped)
+                .expect("the audience-scoped candidate serializes");
             EvidenceConfig::parse_yaml(audience_scoped.as_bytes())
                 .expect("an audience-scoped requirement may disclose an entity reference");
         }
@@ -14976,10 +12127,10 @@ outboundTls:
         let bundle = holder_bound_bundle();
         let validator = bundle_contract_validator();
         for (ceiling, accepted) in [("1", true), ("16", true), ("0", false), ("17", false)] {
-            let mutated = bundle.replace(
-                "\nrequirements:\n",
-                &format!("\nmaximumHolderBoundBatchSize: {ceiling}\n\nrequirements:\n"),
-            );
+            let ceiling_value = ceiling.parse::<u64>().expect("the ceiling is an integer");
+            let mutated = mutate_holder_bundle(|document| {
+                document["maximumHolderBoundBatchSize"] = ceiling_value.into();
+            });
             assert_ne!(mutated, bundle, "the ceiling {ceiling} mutation applies");
             let config = EvidenceConfig::parse_yaml(mutated.as_bytes());
             assert_eq!(
@@ -15066,35 +12217,30 @@ outboundTls:
             "the contract rejects a declared holder-bound requirement"
         );
 
+        let unknown_requirement_mode = mutate_holder_bundle(|document| {
+            first_holder_requirement_mut(document)["subjectBinding"] = "bearer-bound".into();
+        });
+        let unknown_grant_mode = mutate_holder_bundle(|document| {
+            first_holder_grant_mut(document)["subjectBindingModes"] =
+                serde_norway::Value::Sequence(vec!["bearer-bound".into()]);
+        });
+        let repeated_grant_mode = mutate_holder_bundle(|document| {
+            first_holder_grant_mut(document)["subjectBindingModes"] =
+                serde_norway::Value::Sequence(vec!["holder-bound".into(), "holder-bound".into()]);
+        });
+        let overlong_grant_modes = mutate_holder_bundle(|document| {
+            first_holder_grant_mut(document)["subjectBindingModes"] =
+                serde_norway::Value::Sequence(vec![
+                    "holder-bound".into(),
+                    "audience-scoped".into(),
+                    "holder-bound".into(),
+                ]);
+        });
         for (name, mutated) in [
-            (
-                "unknown requirement mode",
-                bundle.replace(
-                    "\n    subjectBinding: holder-bound",
-                    "\n    subjectBinding: bearer-bound",
-                ),
-            ),
-            (
-                "unknown grant mode",
-                bundle.replace(
-                    "\n        subjectBindingModes: [holder-bound]",
-                    "\n        subjectBindingModes: [bearer-bound]",
-                ),
-            ),
-            (
-                "repeated grant mode",
-                bundle.replace(
-                    "\n        subjectBindingModes: [holder-bound]",
-                    "\n        subjectBindingModes: [holder-bound, holder-bound]",
-                ),
-            ),
-            (
-                "overlong grant mode list",
-                bundle.replace(
-                    "\n        subjectBindingModes: [holder-bound]",
-                    "\n        subjectBindingModes: [holder-bound, audience-scoped, holder-bound]",
-                ),
-            ),
+            ("unknown requirement mode", unknown_requirement_mode),
+            ("unknown grant mode", unknown_grant_mode),
+            ("repeated grant mode", repeated_grant_mode),
+            ("overlong grant mode list", overlong_grant_modes),
         ] {
             assert_ne!(mutated, bundle, "the {name} mutation applies");
             assert!(
@@ -15174,37 +12320,63 @@ outboundTls:
         let holder_bound = include_str!(
             "../../../products/evidence/fixtures/acceptance/holder-bound/evidence.yaml"
         );
-        let mut normalized = holder_bound.to_owned();
-        for (name, from, to) in [
-            (
-                "grant permission",
-                "        responseFormats: [signed-jws, sd-jwt-vc, sd-jwt-vc-batch]\n        subjectBindingModes: [holder-bound]\n",
-                "        responseFormats: [signed-jws, unsigned-json]\n",
-            ),
-            (
-                "bundle permission and batch ceiling",
-                "\nresponseFormats: [signed-jws, sd-jwt-vc, sd-jwt-vc-batch]\nmaximumHolderBoundBatchSize: 4\n",
-                "\nresponseFormats: [signed-jws, unsigned-json]\n",
-            ),
-            ("requirement mode", "\n    subjectBinding: holder-bound", ""),
-            (
-                // Forced by the serialization the mode permits, not chosen:
-                // SD-JWT VC names its issuer by origin outside the local
-                // assurance profile.
-                "provider identifier",
-                "  providerId: https://provider.invalid\n",
-                "  providerId: urn:example:fixture:provider:evidence\n",
-            ),
-            (
-                "public Evidence origin",
-                "  publicOrigin: https://provider.invalid\n",
-                "  publicOrigin: https://evidence.invalid\n",
-            ),
-        ] {
-            let rewritten = normalized.replace(from, to);
-            assert_ne!(rewritten, normalized, "the {name} withdrawal applies");
-            normalized = rewritten;
+        let mut normalized = serde_norway::from_str::<serde_norway::Value>(holder_bound)
+            .expect("the holder-bound fixture parses");
+        assert_eq!(normalized["maximumHolderBoundBatchSize"].as_u64(), Some(4));
+        normalized
+            .as_mapping_mut()
+            .expect("the bundle is a mapping")
+            .remove("maximumHolderBoundBatchSize");
+        normalized["responseFormats"] =
+            serde_norway::Value::Sequence(vec!["signed-jws".into(), "unsigned-json".into()]);
+        for profile in normalized["authorityProfiles"]
+            .as_mapping_mut()
+            .expect("authority profiles are a mapping")
+            .values_mut()
+        {
+            for grant in profile["grants"]
+                .as_sequence_mut()
+                .expect("profile grants are a sequence")
+            {
+                assert_eq!(
+                    grant["subjectBindingModes"]
+                        .as_sequence()
+                        .expect("grant modes are a sequence")
+                        .len(),
+                    1
+                );
+                grant["responseFormats"] = serde_norway::Value::Sequence(vec![
+                    "signed-jws".into(),
+                    "unsigned-json".into(),
+                ]);
+                grant
+                    .as_mapping_mut()
+                    .expect("the grant is a mapping")
+                    .remove("subjectBindingModes");
+            }
         }
+        for requirement in normalized["requirements"]
+            .as_sequence_mut()
+            .expect("requirements are a sequence")
+        {
+            assert_eq!(requirement["subjectBinding"].as_str(), Some("holder-bound"));
+            requirement
+                .as_mapping_mut()
+                .expect("the requirement is a mapping")
+                .remove("subjectBinding");
+        }
+        assert_eq!(
+            normalized["service"]["providerId"].as_str(),
+            Some("https://provider.invalid")
+        );
+        normalized["service"]["providerId"] = "urn:example:fixture:provider:evidence".into();
+        assert_eq!(
+            normalized["service"]["publicOrigin"].as_str(),
+            Some("https://provider.invalid")
+        );
+        normalized["service"]["publicOrigin"] = "https://evidence.invalid".into();
+        let normalized =
+            serde_norway::to_string(&normalized).expect("the normalized twin serializes");
 
         let withdrawn = EvidenceConfig::parse_yaml(normalized.as_bytes())
             .expect("the withdrawn bundle validates");
@@ -15227,10 +12399,16 @@ outboundTls:
         let holder_bound = include_str!(
             "../../../products/evidence/fixtures/acceptance/holder-bound/evidence.yaml"
         );
-        let batch_only = holder_bound.replace(
-            "\nresponseFormats: [signed-jws, sd-jwt-vc, sd-jwt-vc-batch]\nmaximumHolderBoundBatchSize: 4\n",
-            "\nresponseFormats: [signed-jws, sd-jwt-vc-batch]\nmaximumHolderBoundBatchSize: 4\n",
-        );
+        let mut batch_only = serde_norway::from_str::<serde_norway::Value>(holder_bound)
+            .expect("the holder-bound fixture parses");
+        let formats = batch_only["responseFormats"]
+            .as_sequence_mut()
+            .expect("bundle response formats are a sequence");
+        let before = formats.len();
+        formats.retain(|format| format.as_str() != Some("sd-jwt-vc"));
+        assert_eq!(formats.len() + 1, before, "the singular format is removed");
+        let batch_only =
+            serde_norway::to_string(&batch_only).expect("the batch-only bundle serializes");
         assert_ne!(
             batch_only, holder_bound,
             "the bundle format withdrawal applies"
@@ -15246,10 +12424,15 @@ outboundTls:
             "the published contract rejects a batch-only bundle with an HTTPS provider identifier"
         );
 
-        let urn_provider = batch_only.replace(
-            "  providerId: https://provider.invalid\n",
-            "  providerId: urn:example:fixture:provider:evidence\n",
+        let mut urn_provider = serde_norway::from_str::<serde_norway::Value>(&batch_only)
+            .expect("the batch-only bundle parses as YAML");
+        assert_eq!(
+            urn_provider["service"]["providerId"].as_str(),
+            Some("https://provider.invalid")
         );
+        urn_provider["service"]["providerId"] = "urn:example:fixture:provider:evidence".into();
+        let urn_provider =
+            serde_norway::to_string(&urn_provider).expect("the URN-provider bundle serializes");
         assert_ne!(
             urn_provider, batch_only,
             "the provider identifier rewrite applies"

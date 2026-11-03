@@ -2,11 +2,11 @@ apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1
 kind: EvidenceFixture
 syntheticOnly: true
 cases:
-  - {id: positive}
-  - {id: negative-output}
-  - {id: boundary-value}
-  - {id: missing-fact}
-  - {id: no-match}
-  - {id: ambiguous-result}
-  - {id: source-failure}
-  - {id: anti-reconstruction}
+  - id: positive
+  - id: negative-output
+  - id: boundary-value
+  - id: missing-fact
+  - id: no-match
+  - id: ambiguous-result
+  - id: source-failure
+  - id: anti-reconstruction

@@ -71,53 +71,40 @@ combinations of Outputs under the retained disclosure contract.
 
 ## Sources, acquisition and Functions
 
-Every Source has one named transport boundary: `http-json` or `sqlite-extract`.
-The Source owns its fixed request, minimized selector inputs, response
-projection and bounded shape, private fact schema, extraction Function and
-resource limits. HTTP `connection` selects a target binding without embedding
-an origin or credential in the project. SQLite selects a governed extract
-profile and a reviewed read-only statement; the target binds the local extract.
+Each Source selects one reviewed Adapter `pack` by id and version, one `route`
+and one named `connection`. Its `inputs` map route input names to explicit
+`selector` references with a role, profile and field. `acquisitionPosture`
+states whether the provider answer is source-derived, field-projected or
+record-transformed; local projection does not strengthen the acquisition claim.
+The Source contains no provider request program or acquisition Function.
 
-`request` carries the transport's reviewed request fields. `response` declares
-`projection`, `shape` and `maximumBytes`. `facts` declares the private values
-an extraction may return after a unique match. Optional `prepare`,
-`adapterParameters`, `adapterParametersSchema` and `preparationLimits` shape
-bounded request parts without granting I/O. `limits.attemptTimeoutMilliseconds`
-bounds one source attempt; `limits.maximumConcurrency` remains independent of
-the target connection's concurrency bound. `batch` declares bounded slotted
-preparation/extraction and its response shape when source batching is enabled.
-Source `behaviorRevision`, signed-Evidence protocol metadata and unresolved
-problem handling retain their compiled source-contract meaning.
+Keep the owned pack at `adapter-packs/<pack-id>/pack.yaml` with its referenced
+scripts and schemas. The compiler captures the reviewed artifact closure,
+checks its declared digests and derives the compiled Source's exact pack digest.
+The route's declared input and output schemas supply the checked lookup and
+private fact contract. Caller input cannot choose a pack, route, endpoint,
+credential or broader selector set.
 
-An acquisition is explicitly tagged with `type`:
+An AssertionDefinition's `acquisition` contains only `source`, naming one of
+these Sources. The pack owns the complete provider interaction, including any
+reviewed branches, reads, retries or pages. The shared engine enforces one
+finite operation budget and absolute deadline. The retired tagged acquisition
+kinds and Source `request`, `response`, `prepare`, `extract` and `batch` fields
+are refused rather than converted into packs.
 
-- `single` names one `source`.
-- `search-then-fetch` names `search` and `fetch`. Search facts are visible to
-  fetch preparation; only fetched facts reach assertion derivation. Optional
-  `onFetchNoMatch: unavailable` permits an absent optional fetch record to return
-  `evidence.unavailable`; omission or `dependency-failure` retains 503.
-  Ambiguity and transport failures remain dependency failures.
-- `search-then-fetch-set` names `search`, two through four distinct fetch
-  members, each member's `factInputs`, and
-  `maximumAcquisitionMilliseconds`. The package and target must opt into this
-  acquisition capability. Each member sees only its declared search-fact
-  projection; fetched fact names must not collide.
+Each `functions` entry has a stable `id`, reviewed `source` asset and the
+`assertion-derive/v1` interface. `derive.function` selects that Function and
+`derive.parameters` carries reviewed requirement parameters. A completed
+matched lookup supplies its private facts; other lookup outcomes stop before
+derivation. Derivation receives only its separately declared authorized
+selector inputs and returns the declared Outputs. It cannot authorize, choose
+a Source, read credentials, perform I/O, sign, audit or construct an assertion.
+The `source-prepare/v1` and `source-extract/v1` Function interfaces are retired;
+pack scripts use the separate Adapter exchange ABI.
 
-The optional project `acquisitionCapabilities` also governs source batching.
-`maximumHolderBoundBatchSize` defaults to one and cannot exceed 16. These are
-package ceilings; operator opt-ins and complete grants remain independently
-necessary.
-
-Each `functions` entry has a stable `id`, reviewed `source` asset and one
-`interface`: `source-prepare/v1`, `source-extract/v1` or `assertion-derive/v1`.
-Source calls reference named prepare/extract Functions; `derive.function`
-references a derive Function. `derive.parameters` contains reviewed literal
-parameters. The compiler checks each call site's inputs and Outputs rather
-than giving a reused Function every fact in the project. Preparation shapes
-bounded request parts, extraction returns `match`, `no_match` or `ambiguous`,
-and only `match` carries private facts. Derivation returns exactly the declared
-Outputs. Functions cannot authorize, choose a Source, read credentials,
-perform I/O, sign, audit or construct an assertion.
+`maximumHolderBoundBatchSize` defaults to one and cannot exceed 16. It is a
+package disclosure ceiling, independently constrained by complete grants.
+It does not create a provider-side batching interface.
 
 An authored `assertion-derive/v1` Function returns an array whose entries each
 have exactly `output` and `value`. `output` names a local Output declared by the
@@ -131,6 +118,46 @@ and the Source-to-Fact-to-Output flow without source values or secrets. `types`
 generates TypeScript or Python declarations from that same model. A scalar
 FactSet value does not become public merely because its type is visible.
 
+### Migrate a retired Source project
+
+Use a matching Evidence compiler and runtime that support pack Sources. The
+0.44.0 tools accept the earlier transport form and refuse the pack form.
+The acquisition interfaces are not derivation interfaces: renaming an old
+Function to `assertion-derive/v1` does not migrate its behavior.
+
+1. Keep a copy of your authored project and existing fixture outcomes. Choose a
+   current source export, or author a reviewed pack using the
+   [Adapter pack contract](../../../adapter/CONCEPT.md#6-artifact-model).
+   Put provider requests, paging, preparation and extraction in its routes and
+   scripts, with closed input and private-fact schemas.
+2. Replace each retired Source in `evidence.yaml` with its `pack`, `route`,
+   `connection` and explicit selector `inputs`. Replace each definition's
+   acquisition program with `acquisition: {source: <source-id>}`. Keep the
+   Requirement URI, selector authority, Outputs and derivation meaning.
+3. Remove acquisition Functions from the authored `functions` list after their
+   behavior is represented in the pack. Keep requirement derivations under
+   `assertion-derive/v1`. Update the named target connection's endpoints to
+   match the pack; credentials remain target secret references.
+4. For a reusable export, compare it with `evidencectl source diff EXPORT
+   --project PROJECT`, then apply the reviewed result with `evidencectl source
+   import EXPORT --project PROJECT`. Resolve reported keep/adopt/file conflicts
+   explicitly. The importer requires a current-form `EvidenceProject`; it does
+   not convert a retired project. Later changes use `source update`; use
+   `source detach` when you want to maintain an installed source locally.
+5. Run `evidencectl check PROJECT --target TARGET` and `evidencectl test PROJECT
+   --target TARGET` with the matching runtime. Retain the assertion outcomes and
+   refusal cases, and verify no-match, ambiguity and dependency failure
+   separately. A transport error must not become a false assertion or no-match.
+6. Rebuild the package through the normal deployment workflow. Review the new
+   definition revisions and update exact revision pins deliberately. A preserved
+   Requirement URI does not make old and new behavior revisions interchangeable.
+
+The reader reports `evidence.project.source-acquisition-retired` at the retired
+Function interface or Source transport member. Follow these steps instead of
+rewriting acquisition as a derivation. Source lifecycle commands install and
+update reviewed artifacts; they do not infer provider behavior or convert the
+retired acquisition language.
+
 ### Generate explicit OpenAPI request bindings
 
 `evidencectl source suggest <project>` reads the project's retained
@@ -141,8 +168,8 @@ that project. A mapping never creates a selector profile or caller authority.
 
 | Target | Generated artifact |
 |---|---|
-| `path:<parameter>` | A fixed complete-segment path template with Rust-owned `request.pathBindings` |
-| `query:<parameter>` | A logical string query pair in the reviewed preparation Function |
+| `path:<parameter>` | A reviewed pack endpoint path with an explicit route-input binding |
+| `query:<parameter>` | A logical string query pair in the pack preparation script |
 | `body:</json/pointer>` | A scalar property in a closed JSON object for a fixed POST request |
 
 For the FHIR example's existing `coverage-record` role and `coverage-by-id`
@@ -179,19 +206,17 @@ and `int64` are supported; `int32` requires the entire selector range to fit
 the signed 32-bit range. Date and UUID formats require the corresponding
 selector type. Generation refuses unproven enums,
 constants, patterns and conditional constraints, nonstandard parameter
-serialization, and object constraints outside this subset. Use a reviewed
-preparation Function for those contracts.
+serialization, and object constraints outside this subset. Use a reviewed pack route and script for those contracts.
 
 Source selector inputs retain the existing complete role/profile field set.
 Use a narrowly reviewed profile when an integration needs fewer fields; only
-explicitly mapped fields enter the generated request. The generated request
-must fit the existing preparation bounds, including 64 query pairs, 64-byte
-query names and 4096-byte query values. Unsupported shapes and bounds need a
-reviewed preparation Function.
+explicitly mapped fields enter the generated request. The generated request must fit the pack endpoint and shared-engine request
+bounds. Unsupported shapes and bounds need an explicitly reviewed pack route.
 
-The generated preparation and extraction files remain ordinary project
-Functions. Review the extraction's unique-match and identity checks, resolve
-the draft markers and supply the assertion semantics before packaging. A run
+The generated preparation and extraction files belong to the owned Adapter
+pack and each receives the Adapter `exchange` argument. They are not Evidence
+Functions. Review the lookup cardinality and returned-record identity rules,
+resolve draft markers and supply assertion semantics before packaging. A run
 without `--map-selector` keeps the incomplete mechanical draft workflow.
 
 ## Selector and Output fields
@@ -290,10 +315,12 @@ and an `authority` file. `service` supplies provider, issuer, public origin and
 trust-domain identity. `authentication.oidc` supplies issuer verification,
 resource audience, allowed token types/algorithms, JWKS URI, identity claim
 mapping and scope/client constraints. The target's `connections` map each
-project connection name to its origin, authentication references, TLS profile
-and operational concurrency ceiling. Write `connections: {}` explicitly when
-there are no HTTP bindings, as in an extract-only project. This grants no HTTP
-connection; every HTTP Source must still resolve its named binding.
+project connection name to explicit
+`endpoints`, keyed by the pack endpoint id. Each endpoint supplies its origin,
+matching authentication references, optional trust profile and finite attempt
+and response bounds. Every Source resolves its named connection; a local-only or
+no-send route uses a connection with an empty `endpoints` map, granting no network
+endpoint authority.
 
 `service.issuer` is an absolute Evidence issuer identifier, including a URN,
 within 512 Unicode characters and without whitespace or control characters. It
@@ -317,8 +344,11 @@ digits. Target reading checks these scalar forms before runtime delegation.
 asset; the private key is never a portable project input. Local authoring may
 use a disposable JWK signer. Production and evidence-grade targets require
 the retained pinned non-exportable Transit signer and transport guarantees.
-Optional `publication`, `responseFormats` and `acquisitionCapabilities` retain
-their compiled governance and runtime ceilings. Governed fields are revalidated during bundle and package compilation.
+Optional `publication` and `responseFormats` retain their compiled governance
+and runtime ceilings. Optional `sourceAcquisition` supplies finite operational
+limits for data operations, the absolute acquisition deadline and response
+bytes without changing reviewed route or endpoint authority. Governed fields
+are revalidated during bundle and package compilation.
 Process-local paths and secret readiness are validated by `doctor` or process start.
 
 Optional `signing.maximumAssertionValiditySeconds` is the longest validity, in
@@ -406,22 +436,11 @@ descriptions remain optional metadata.
 
 <!-- evidence-authoring-project-key-paths:start -->
 ```text
-acquisitionCapabilities
-acquisitionCapabilities[]
 apiVersion
 assertionDefinitions
 assertionDefinitions.*
 assertionDefinitions.*.acquisition
-assertionDefinitions.*.acquisition.fetch
-assertionDefinitions.*.acquisition.fetch[]
-assertionDefinitions.*.acquisition.fetch[].factInputs
-assertionDefinitions.*.acquisition.fetch[].factInputs[]
-assertionDefinitions.*.acquisition.fetch[].source
-assertionDefinitions.*.acquisition.maximumAcquisitionMilliseconds
-assertionDefinitions.*.acquisition.onFetchNoMatch
-assertionDefinitions.*.acquisition.search
 assertionDefinitions.*.acquisition.source
-assertionDefinitions.*.acquisition.type
 assertionDefinitions.*.derive
 assertionDefinitions.*.derive.function
 assertionDefinitions.*.derive.parameters
@@ -523,48 +542,19 @@ selectorProfiles.*.maximumAggregateBytes
 sources
 sources.*
 sources.*.acquisitionPosture
-sources.*.adapterParameters
-sources.*.adapterParametersSchema
-sources.*.batch
-sources.*.batch.extract
-sources.*.batch.extract.function
-sources.*.batch.maximumItems
-sources.*.batch.prepare
-sources.*.batch.prepare.function
-sources.*.batch.response
-sources.*.batch.response.projection
-sources.*.batch.response.projection[]
-sources.*.batch.response.shape
-sources.*.behaviorRevision
 sources.*.connection
 sources.*.description
-sources.*.evidence
-sources.*.extract
-sources.*.extract.function
-sources.*.extractProfile
-sources.*.facts
-sources.*.forwardAccessAttribution
+sources.*.inputs
+sources.*.inputs.*
+sources.*.inputs.*.selector
+sources.*.inputs.*.selector.field
+sources.*.inputs.*.selector.profile
+sources.*.inputs.*.selector.role
 sources.*.label
-sources.*.limits
-sources.*.limits.attemptTimeoutMilliseconds
-sources.*.limits.maximumConcurrency
-sources.*.maximumExtractAgeSeconds
-sources.*.preparationLimits
-sources.*.prepare
-sources.*.prepare.function
-sources.*.request
-sources.*.response
-sources.*.response.maximumBytes
-sources.*.response.projection
-sources.*.response.projection[]
-sources.*.response.shape
-sources.*.selectors
-sources.*.selectors[]
-sources.*.selectors[].profiles
-sources.*.selectors[].profiles[]
-sources.*.selectors[].role
-sources.*.type
-sources.*.unresolvedProblem
+sources.*.pack
+sources.*.pack.id
+sources.*.pack.version
+sources.*.route
 ```
 <!-- evidence-authoring-project-key-paths:end -->
 
@@ -673,14 +663,12 @@ kind
 
 ### `<target>.yaml`
 
-The normalized target document selects one project and declares the target's
-acquisition capabilities. Its authority reference points to a separate
-operator-owned target authority document.
+The normalized target document selects one project and binds its named
+connections and finite operational acquisition limits. Its authority reference
+points to a separate operator-owned target authority document.
 
 <!-- evidence-authoring-target-key-paths:start -->
 ```text
-acquisitionCapabilities
-acquisitionCapabilities[]
 apiVersion
 assuranceProfile
 audit
@@ -729,30 +717,36 @@ authentication.oidc.tokenTypes[]
 authority
 connections
 connections.*
-connections.*.admissionTimeoutMilliseconds
-connections.*.authentication
-connections.*.authentication.assumedLifetimeSeconds
-connections.*.authentication.audience
-connections.*.authentication.clientAssertionAudience
-connections.*.authentication.clientAssertionKeyRef
-connections.*.authentication.clientIdRef
-connections.*.authentication.clientSecretRef
-connections.*.authentication.credentialPlacement
-connections.*.authentication.headerName
-connections.*.authentication.maximumCacheSeconds
-connections.*.authentication.passwordRef
-connections.*.authentication.resource
-connections.*.authentication.scheme
-connections.*.authentication.scope
-connections.*.authentication.tokenEndpoint
-connections.*.authentication.tokenRef
-connections.*.authentication.type
-connections.*.authentication.usernameRef
-connections.*.authentication.valueRef
-connections.*.maximumConcurrency
-connections.*.origin
-connections.*.tlsTrustProfile
-connections.*.tokenTimeoutMilliseconds
+connections.*.allowedPrivateCidrs
+connections.*.allowedPrivateCidrs[]
+connections.*.endpoints
+connections.*.endpoints.*
+connections.*.endpoints.*.attemptTimeoutMilliseconds
+connections.*.endpoints.*.authentication
+connections.*.endpoints.*.authentication.assumedLifetimeSeconds
+connections.*.endpoints.*.authentication.audience
+connections.*.endpoints.*.authentication.clientAssertionAudience
+connections.*.endpoints.*.authentication.clientAssertionKeyRef
+connections.*.endpoints.*.authentication.clientIdRef
+connections.*.endpoints.*.authentication.clientSecretRef
+connections.*.endpoints.*.authentication.credentialPlacement
+connections.*.endpoints.*.authentication.headerName
+connections.*.endpoints.*.authentication.maximumCacheSeconds
+connections.*.endpoints.*.authentication.passwordRef
+connections.*.endpoints.*.authentication.resource
+connections.*.endpoints.*.authentication.scheme
+connections.*.endpoints.*.authentication.scope
+connections.*.endpoints.*.authentication.tokenEndpoint
+connections.*.endpoints.*.authentication.tokenRef
+connections.*.endpoints.*.authentication.type
+connections.*.endpoints.*.authentication.usernameRef
+connections.*.endpoints.*.authentication.valueRef
+connections.*.endpoints.*.maximumResponseBytes
+connections.*.endpoints.*.mtlsIdentity
+connections.*.endpoints.*.mtlsIdentity.certificateRef
+connections.*.endpoints.*.mtlsIdentity.keyRef
+connections.*.endpoints.*.origin
+connections.*.endpoints.*.tlsTrustProfile
 extracts
 extracts.*
 extracts.*.path
@@ -812,6 +806,10 @@ signer.type
 signer.unixSocketPath
 signing
 signing.maximumAssertionValiditySeconds
+sourceAcquisition
+sourceAcquisition.acquisitionDeadlineMilliseconds
+sourceAcquisition.maximumDataOperations
+sourceAcquisition.maximumResponseBytes
 subjectBinding
 subjectBinding.keyVersion
 subjectBinding.secretRef

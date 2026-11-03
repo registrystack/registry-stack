@@ -109,10 +109,13 @@ pub struct EvidenceTarget {
     pub service: TargetService,
     pub listener: TargetListener,
     pub authentication: TargetAuthentication,
-    /// Explicit HTTP source bindings. An empty mapping grants no HTTP bindings;
-    /// it is valid for extract-only projects. Every declared HTTP Source must
-    /// still resolve its named connection when the project is checked.
+    /// Explicit endpoint bindings and their reviewed connection policies. An
+    /// empty mapping grants no outbound endpoint authority.
     pub connections: BTreeMap<LocalId, TargetConnection>,
+    /// Optional operational acquisition budget projected only into runtime
+    /// configuration. Omission uses the Evidence engine defaults.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_acquisition: Option<TargetSourceAcquisition>,
     pub secret_providers: TargetSecretProviders,
     pub signer: TargetSigner,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -130,9 +133,6 @@ pub struct EvidenceTarget {
     pub outbound_tls: Option<TargetOutboundTls>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extracts: Option<BTreeMap<LocalId, TargetExtractBinding>>,
-    /// Operator opt-ins, intersected with the package's acquisition capabilities.
-    #[serde(default, skip_serializing_if = "crate::project::empty_capabilities")]
-    pub acquisition_capabilities: UniqueList<crate::project::AcquisitionCapability>,
 }
 
 pub fn read_target(file: &str, bytes: &[u8]) -> Result<Decoded<EvidenceTarget>, Report> {

@@ -23,7 +23,7 @@ use registry_adapter::engine::auth::{
     TOKEN_REQUEST_ACCEPT, TOKEN_REQUEST_CONTENT_TYPE,
 };
 use registry_platform_httputil::TransportKind;
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::future::Future;
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
@@ -32,6 +32,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use zeroize::Zeroizing;
+
+type LogicalEffects = Arc<Mutex<HashSet<(String, Vec<u8>)>>>;
 
 /// One request the double received, headers and body complete.
 #[derive(Debug, Clone)]
@@ -72,6 +74,30 @@ pub struct Response {
     pub body: String,
 }
 
+/// One ordered upstream reply used when a test needs a transport fault in
+/// the middle of an otherwise ordinary response transcript.
+#[derive(Debug, Clone)]
+pub enum ScriptedResponse {
+    /// Deliver the complete response.
+    Complete(Response),
+    /// Deliver the response head and this many body bytes, then reset.
+    ResetAfter {
+        /// The response whose declared length stays unchanged.
+        response: Response,
+        /// Body bytes delivered before the reset.
+        body_bytes: usize,
+    },
+    /// Apply one provider-idempotent logical effect, then deliver the reply.
+    EffectComplete(Response),
+    /// Apply one provider-idempotent logical effect, then truncate the reply.
+    EffectResetAfter {
+        /// The response whose declared length stays unchanged.
+        response: Response,
+        /// Body bytes delivered before the reset.
+        body_bytes: usize,
+    },
+}
+
 impl Response {
     /// One `application/json` response.
     pub fn json(status: u16, body: &str) -> Self {
@@ -107,7 +133,8 @@ enum ResponseDelivery {
 pub struct UpstreamDouble {
     listener: TcpListener,
     requests: Arc<Mutex<Vec<RecordedRequest>>>,
-    responses: Arc<Mutex<VecDeque<(Response, ResponseDelivery)>>>,
+    responses: Arc<Mutex<VecDeque<(Response, ResponseDelivery, bool)>>>,
+    logical_effects: LogicalEffects,
     delay_millis: Arc<AtomicU64>,
 }
 
@@ -117,6 +144,7 @@ impl UpstreamDouble {
         let listener = TcpListener::bind("127.0.0.1:0").expect("the double binds loopback");
         let requests = Arc::new(Mutex::new(Vec::new()));
         let responses = Arc::new(Mutex::new(VecDeque::new()));
+        let logical_effects = Arc::new(Mutex::new(HashSet::new()));
         let delay_millis = Arc::new(AtomicU64::new(0));
         let double = Self {
             listener: listener
@@ -124,6 +152,7 @@ impl UpstreamDouble {
                 .expect("the listener clones for the accept loop"),
             requests: Arc::clone(&requests),
             responses: Arc::clone(&responses),
+            logical_effects: Arc::clone(&logical_effects),
             delay_millis: Arc::clone(&delay_millis),
         };
         std::thread::spawn(move || {
@@ -134,7 +163,10 @@ impl UpstreamDouble {
                 let requests = Arc::clone(&requests);
                 let responses = Arc::clone(&responses);
                 let delay_millis = Arc::clone(&delay_millis);
-                std::thread::spawn(move || serve(stream, requests, responses, delay_millis));
+                let logical_effects = Arc::clone(&logical_effects);
+                std::thread::spawn(move || {
+                    serve(stream, requests, responses, logical_effects, delay_millis)
+                });
             }
         });
         double
@@ -152,7 +184,30 @@ impl UpstreamDouble {
     pub fn respond_with(&self, responses: Vec<Response>) {
         *self.responses.lock().expect("the response script") = responses
             .into_iter()
-            .map(|response| (response, ResponseDelivery::Complete))
+            .map(|response| (response, ResponseDelivery::Complete, false))
+            .collect();
+    }
+
+    /// Script complete and truncated responses in one ordered transcript.
+    pub fn respond_with_script(&self, responses: Vec<ScriptedResponse>) {
+        *self.responses.lock().expect("the response script") = responses
+            .into_iter()
+            .map(|response| match response {
+                ScriptedResponse::Complete(response) => {
+                    (response, ResponseDelivery::Complete, false)
+                }
+                ScriptedResponse::ResetAfter {
+                    response,
+                    body_bytes,
+                } => (response, ResponseDelivery::ResetAfter(body_bytes), false),
+                ScriptedResponse::EffectComplete(response) => {
+                    (response, ResponseDelivery::Complete, true)
+                }
+                ScriptedResponse::EffectResetAfter {
+                    response,
+                    body_bytes,
+                } => (response, ResponseDelivery::ResetAfter(body_bytes), true),
+            })
             .collect();
     }
 
@@ -175,22 +230,30 @@ impl UpstreamDouble {
                 "the double owns response framing headers"
             );
         }
-        *self.responses.lock().expect("the response script") =
-            [(response, ResponseDelivery::CompleteWithHeaders(headers))].into();
+        *self.responses.lock().expect("the response script") = [(
+            response,
+            ResponseDelivery::CompleteWithHeaders(headers),
+            false,
+        )]
+        .into();
     }
 
     /// Send the declared head and `body_bytes` body bytes, then close the
     /// connection before the declared body is complete.
     pub fn respond_with_reset(&self, response: Response, body_bytes: usize) {
         *self.responses.lock().expect("the response script") =
-            [(response, ResponseDelivery::ResetAfter(body_bytes))].into();
+            [(response, ResponseDelivery::ResetAfter(body_bytes), false)].into();
     }
 
     /// Send one response body in fixed chunks, pausing after each chunk.
     pub fn respond_with_trickle(&self, response: Response, chunk_bytes: usize, delay: Duration) {
         assert!(chunk_bytes > 0, "a trickle chunk must carry bytes");
-        *self.responses.lock().expect("the response script") =
-            [(response, ResponseDelivery::Trickle { chunk_bytes, delay })].into();
+        *self.responses.lock().expect("the response script") = [(
+            response,
+            ResponseDelivery::Trickle { chunk_bytes, delay },
+            false,
+        )]
+        .into();
     }
 
     /// Hold every answer back by `delay` after the request is recorded.
@@ -208,6 +271,16 @@ impl UpstreamDouble {
     pub fn request_count(&self) -> usize {
         self.requests.lock().expect("the request record").len()
     }
+
+    /// Distinct logical effects applied by an effect-aware response script.
+    /// Identical target and body bytes model the provider's reviewed
+    /// idempotency key and count once across physical retries.
+    pub fn logical_effect_count(&self) -> usize {
+        self.logical_effects
+            .lock()
+            .expect("the logical effect record")
+            .len()
+    }
 }
 
 /// Serve one connection: read one request, record it, answer from the
@@ -216,7 +289,8 @@ impl UpstreamDouble {
 fn serve(
     mut stream: TcpStream,
     requests: Arc<Mutex<Vec<RecordedRequest>>>,
-    responses: Arc<Mutex<VecDeque<(Response, ResponseDelivery)>>>,
+    responses: Arc<Mutex<VecDeque<(Response, ResponseDelivery, bool)>>>,
+    logical_effects: LogicalEffects,
     delay_millis: Arc<AtomicU64>,
 ) {
     let request = match read_request(&mut stream) {
@@ -232,9 +306,12 @@ fn serve(
             return;
         }
     };
-    requests.lock().expect("the request record").push(request);
+    requests
+        .lock()
+        .expect("the request record")
+        .push(request.clone());
     std::thread::sleep(Duration::from_millis(delay_millis.load(Ordering::SeqCst)));
-    let (response, delivery) = responses
+    let (response, delivery, applies_effect) = responses
         .lock()
         .expect("the response script")
         .pop_front()
@@ -246,8 +323,15 @@ fn serve(
                     body: "the double's response script is exhausted".to_owned(),
                 },
                 ResponseDelivery::Complete,
+                false,
             )
         });
+    if applies_effect {
+        logical_effects
+            .lock()
+            .expect("the logical effect record")
+            .insert((request.target, request.body));
+    }
     write_response(
         &mut stream,
         response.status,

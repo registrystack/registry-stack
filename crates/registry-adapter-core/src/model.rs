@@ -576,8 +576,9 @@ impl schemars::JsonSchema for ErrorClass {
 /// A component kind, the ported subset of Camel's component library
 /// (`products/adapter/CONCEPT.md` sections 8.8 and 17.2). `rest` is the
 /// facade consumer; `direct` calls routes in process; `http`, `graphql`,
-/// and `postgres` are the upstream producers; `file` and `sftp` are the
-/// job-only sources a facade route may never reach (section 17.1).
+/// `postgres` and `sqlite-extract` are read-only producers; `file`, `rabbitmq`,
+/// and `sftp` are job-only sources a facade route may never reach (section
+/// 17.1).
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Serialize, Deserialize)]
@@ -588,8 +589,11 @@ pub enum ComponentKind {
     GraphQl,
     Http,
     Postgres,
+    RabbitMq,
     Rest,
     Sftp,
+    #[serde(rename = "sqlite-extract")]
+    SqliteExtract,
 }
 
 impl ComponentKind {
@@ -600,8 +604,10 @@ impl ComponentKind {
         Self::GraphQl,
         Self::Http,
         Self::Postgres,
+        Self::RabbitMq,
         Self::Rest,
         Self::Sftp,
+        Self::SqliteExtract,
     ];
 
     #[must_use]
@@ -612,8 +618,10 @@ impl ComponentKind {
             Self::GraphQl => "graphql",
             Self::Http => "http",
             Self::Postgres => "postgres",
+            Self::RabbitMq => "rabbitmq",
             Self::Rest => "rest",
             Self::Sftp => "sftp",
+            Self::SqliteExtract => "sqlite-extract",
         }
     }
 
@@ -628,22 +636,27 @@ impl ComponentKind {
     }
 
     /// Whether a pack endpoint may declare this component as a producer
-    /// send: `http`, `graphql`, and the read-only `postgres` source. The
-    /// job-only `file` and `sftp` sources are read through the job's
+    /// send: `http`, `graphql`, and the read-only database sources. The
+    /// job-only `file`, `rabbitmq`, and `sftp` sources are read through the job's
     /// `pollEnrich` step, never through a send (section 17.1), and
     /// `direct` names routes while `rest` is the engine-owned facade
     /// consumer.
     #[must_use]
     pub const fn is_producer(self) -> bool {
-        matches!(self, Self::Http | Self::GraphQl | Self::Postgres)
+        matches!(
+            self,
+            Self::Http | Self::GraphQl | Self::Postgres | Self::SqliteExtract
+        )
     }
 
-    /// Whether this kind is a governed-ingestion job component: refused in
-    /// every facade-reachable route (`products/adapter/CONCEPT.md`
-    /// sections 17.1 and 17.2).
+    /// Whether this component needs a source host resource binding and is
+    /// refused in every facade-reachable route.
     #[must_use]
     pub const fn is_job_component(self) -> bool {
-        matches!(self, Self::File | Self::Sftp | Self::Postgres)
+        matches!(
+            self,
+            Self::File | Self::Postgres | Self::RabbitMq | Self::Sftp | Self::SqliteExtract
+        )
     }
 }
 
@@ -828,7 +841,9 @@ pub enum SendComponent {
     GraphQl,
     Postgres,
     File,
+    RabbitMq,
     Sftp,
+    SqliteExtract,
 }
 
 impl SendUri {
@@ -842,7 +857,9 @@ impl SendUri {
             "graphql" => SendComponent::GraphQl,
             "postgres" => SendComponent::Postgres,
             "file" => SendComponent::File,
+            "rabbitmq" => SendComponent::RabbitMq,
             "sftp" => SendComponent::Sftp,
+            "sqlite-extract" => SendComponent::SqliteExtract,
             _ => return None,
         };
         if id.is_empty() {
@@ -863,7 +880,9 @@ impl SendUri {
             SendComponent::GraphQl => "graphql",
             SendComponent::Postgres => "postgres",
             SendComponent::File => "file",
+            SendComponent::RabbitMq => "rabbitmq",
             SendComponent::Sftp => "sftp",
+            SendComponent::SqliteExtract => "sqlite-extract",
         };
         format!("{prefix}:{}", self.id)
     }
@@ -1237,12 +1256,11 @@ mod tests {
                 .iter()
                 .filter(|component| component.is_producer())
                 .count(),
-            3,
-            "http, graphql, and postgres are the producer components"
+            4,
+            "http, graphql, postgres and sqlite-extract are producer components"
         );
-        // The governed-ingestion job sources are read through the job-only
-        // pollEnrich step (CONCEPT 17.1): never producers, always refused
-        // in facade-reachable routes.
+        // Source hosts bind local files and database access. Facade routes
+        // cannot reach these components, including the database producers.
         for name in ["file", "sftp", "postgres"] {
             let component = ComponentKind::from_name(name).expect("a job component resolves");
             assert!(component.is_job_component(), "{name} is a job component");
@@ -1250,6 +1268,8 @@ mod tests {
         assert!(!ComponentKind::File.is_producer());
         assert!(!ComponentKind::Sftp.is_producer());
         assert!(ComponentKind::Postgres.is_producer());
+        assert!(ComponentKind::SqliteExtract.is_producer());
+        assert!(ComponentKind::SqliteExtract.is_job_component());
         assert!(!ComponentKind::Http.is_job_component());
     }
 

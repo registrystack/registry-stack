@@ -61,6 +61,7 @@ fn graphql_endpoints(
         mtls_identity: None,
         attempt_timeout_milliseconds: None,
         maximum_response_bytes: None,
+        maximum_concurrency: BoundedU64::new(8).expect("concurrency"),
     };
     let endpoint = declared_endpoint();
     let config = AdapterEndpointBindings {
@@ -91,11 +92,12 @@ fn declared_endpoint() -> Endpoint {
         authentication: EndpointAuthentication::StaticApiKey {
             header_name: "x-api-key".to_owned(),
         },
-        attempt_timeout_milliseconds: BoundedU64::new(10_000).expect("attempt timeout"),
+        attempt_timeout_milliseconds: Some(BoundedU64::new(10_000).expect("attempt timeout")),
         maximum_response_bytes: BoundedU64::new(65_536).expect("response bound"),
         response_headers: UniqueList::new(Vec::new()).expect("response headers"),
         request_headers: UniqueList::new(Vec::new()).expect("request headers"),
         operations: vec![EndpointOperation {
+            async_completion: None,
             id: LocalId::new("cases-query").expect("operation id"),
             idempotent_upstream: false,
             safe_upstream: false,
@@ -105,6 +107,10 @@ fn declared_endpoint() -> Endpoint {
         query_file: Some("queries/find-cases.graphql".to_owned()),
         operation_name: Some("FindCases".to_owned()),
         variables: None,
+        sqlite_extract: None,
+        key_column: None,
+        parameter_order: None,
+        host_protocol: None,
     }
 }
 
@@ -441,6 +447,7 @@ fn pack_pinning(directory: &std::path::Path, text: &str, path: &str) -> AdapterP
             digest: Digest::new(sha256_uri(&bytes)).expect("the digest parses"),
         }])
         .expect("unique"),
+        open_api: None,
         capabilities: registry_adapter_core::Capabilities::default(),
     }
 }

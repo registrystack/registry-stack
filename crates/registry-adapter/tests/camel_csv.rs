@@ -16,6 +16,16 @@ use serde_json::json;
 /// The file-source pack, whose pollEnrich read carries the caller's
 /// CSV decoder mapping verbatim.
 fn csv_pack(decoder_mapping: &str) -> String {
+    let key_pointer = if decoder_mapping.contains(r#""header": false"#) {
+        "/0"
+    } else {
+        "/name"
+    };
+    let key_member = if decoder_mapping.trim() == "parquet" {
+        String::new()
+    } else {
+        format!("\n          keyPointer: {key_pointer}")
+    };
     format!(
         r#"apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
 kind: AdapterPack
@@ -38,7 +48,7 @@ sourceRoutes:
       - pollEnrich:
           uri: file:dropbox
           timeoutMilliseconds: 10000
-          decoder:{decoder_mapping}
+          decoder:{decoder_mapping}{key_member}
 capabilities: {{}}
 "#
     )
@@ -57,6 +67,14 @@ source:
     version: "1"
     digest: {pack_digest}
   route: drop-page
+destination:
+  type: signed-coordinator-event
+  binding: coordinator-test
+  workflow: drop-ingestion
+  trigger: submitted
+  source: urn:registry-adapter:job:drop-daily
+  eventType: org.example.drop-submitted.v1
+  dataSchema: urn:example:schema:drop-submitted:v1
 projection:
   fields:
     - name
@@ -242,8 +260,7 @@ async fn a_comment_marker_line_is_not_a_record() {
         page.page.items[0].value,
         json!({"name": "alice", "age": "7"})
     );
-    let file_digest = sha256_uri(b"# a comment\nname,age\nalice,7\n");
-    assert_eq!(page.page.items[0].key, format!("exports:{file_digest}:1"));
+    assert_eq!(page.page.items[0].key, "file-row-v1:7:exports:alice");
 }
 
 /// Ports camel-4.23.0:components/camel-csv/src/test/java/org/apache/camel/dataformat/csv/CsvUnmarshalSkipFirstLineSpringTest.java
@@ -278,6 +295,39 @@ async fn the_bare_csv_name_reads_at_the_defaults() {
         json!({"name": "alice", "age": "007"}),
         "leading zeros survive the default reading"
     );
+}
+
+/// Row-key refusals are closed, value-free, and carry only the exact record
+/// ordinal. No partial page escapes for an invalid or duplicate key.
+#[tokio::test]
+async fn business_key_failures_are_coded_and_located() {
+    for (bytes, code, ordinal) in [
+        (
+            b"id,age\n001,7\n".as_slice(),
+            "adapter.job.decoder-key-missing",
+            0,
+        ),
+        (
+            b"name,age\n,7\n".as_slice(),
+            "adapter.job.decoder-key-invalid",
+            1,
+        ),
+        (
+            b"name,age\nalice,7\nalice,8\n".as_slice(),
+            "adapter.job.decoder-key-duplicate",
+            2,
+        ),
+    ] {
+        let fixture = write_fixture(" csv");
+        std::fs::write(fixture.files.join("people.csv"), bytes).expect("the candidate file");
+        let program = compile_job(&fixture.pack, &fixture.job, &fixture.runtime)
+            .expect("the csv job compiles");
+        let failure = run_job_page(&program, None)
+            .await
+            .expect_err("the business key refuses the whole page");
+        assert_eq!(failure.code, Some(code));
+        assert_eq!(failure.record.map(|record| record.ordinal), Some(ordinal));
+    }
 }
 
 /// An unknown decoder name refuses at compile under the authoring
@@ -354,6 +404,7 @@ sourceRoutes:
           uri: file:dropbox
           timeoutMilliseconds: 10000
           decoder: {"delimiter": "|"}
+          keyPointer: /name
           aggregationStrategy:
             type: use-original
 capabilities: {}

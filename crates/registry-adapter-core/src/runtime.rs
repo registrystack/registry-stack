@@ -11,7 +11,7 @@
 //! Authored artifacts carry no environment values; substitution and
 //! secrets live here and only here.
 
-use crate::auth::{MtlsIdentity, RuntimeCredential};
+use crate::auth::{CredentialPlacement, MtlsIdentity, RuntimeCredential};
 use registry_platform_config::{DatabaseConfig, ListenerConfig, OidcIssuerConfig, RemovedKey};
 use registry_platform_yaml::{
     BoundedU64, ExternalId, LocalId, SecretReference, UniqueIdList, UniqueList, Url,
@@ -19,6 +19,16 @@ use registry_platform_yaml::{
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::str::FromStr;
+
+/// The operational data-send concurrency retained when a binding does not
+/// override it. This preserves the Evidence source default while keeping the
+/// bound finite for every product using the shared binding.
+pub const DEFAULT_MAXIMUM_ENDPOINT_CONCURRENCY: u64 = 8;
+
+fn default_maximum_endpoint_concurrency() -> BoundedU64<1, 256> {
+    BoundedU64::new(DEFAULT_MAXIMUM_ENDPOINT_CONCURRENCY)
+        .expect("the endpoint concurrency default is inside its type bound")
+}
 
 /// One private network range the egress allowlist admits. A string form
 /// `addr/prefix`, parsed once and matched by the platform transport.
@@ -97,16 +107,22 @@ pub struct EndpointBinding {
     /// the credential-free policy closed outside numeric loopback and mTLS.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub anonymous_https: Option<AnonymousHttpsAcknowledgement>,
-    /// A lower attempt timeout than the pack declares, in milliseconds;
-    /// absent, the declared one applies. A value above the declared one is
-    /// refused when the deployment loads.
+    /// A finite attempt-timeout override in milliseconds. Evidence may raise
+    /// or lower its pack default under the acquisition's remaining deadline;
+    /// facade and job admit only a lower value within their ten-second policy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub attempt_timeout_milliseconds: Option<BoundedU64<1, 10_000>>,
+    pub attempt_timeout_milliseconds: Option<BoundedU64<1, { u64::MAX }>>,
     /// A lower response bound than the pack declares, in bytes; absent, the
     /// declared one applies. A value above the declared one is refused when
     /// the deployment loads.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub maximum_response_bytes: Option<BoundedU64<1, 1_048_576>>,
+    /// The maximum simultaneous physical data operations admitted for this
+    /// endpoint. Evidence programs selecting the same named connection share
+    /// one permit pool; token acquisition retains its own cache/single-flight
+    /// controls.
+    #[serde(default = "default_maximum_endpoint_concurrency")]
+    pub maximum_concurrency: BoundedU64<1, 256>,
     /// A trust profile under `outboundTls.trustProfiles` whose CA bundle
     /// the endpoint trusts beside the system roots; absent, the endpoint
     /// trusts the system roots alone.
@@ -116,6 +132,86 @@ pub struct EndpointBinding {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mtls_identity: Option<MtlsIdentity>,
 }
+
+/// One reviewed Evidence connection policy from the governed bundle. Runtime
+/// bindings supply material and deployment values, but may not select a
+/// different destination or trust posture from this policy.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EvidenceConnectionPolicy {
+    /// The pack endpoint whose reviewed authentication kind applies.
+    pub endpoint: LocalId,
+    /// The exact reviewed origin and base path.
+    pub base_url: Url,
+    /// The exact private trust profile selection; `None` means system roots.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tls_trust_profile: Option<LocalId>,
+    /// Whether the runtime must or must not supply an mTLS identity.
+    pub client_identity: EvidenceClientIdentityPolicy,
+    /// The reviewed non-secret authentication authority. Credential material
+    /// and cache tuning stay in the runtime binding, but an OAuth token
+    /// destination or request audience cannot be selected there alone.
+    pub authentication: EvidenceAuthenticationPolicy,
+}
+
+impl registry_platform_yaml::Identified for EvidenceConnectionPolicy {
+    fn id(&self) -> &str {
+        self.endpoint.as_str()
+    }
+}
+
+/// The reviewed client-identity posture of one Evidence connection.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum EvidenceClientIdentityPolicy {
+    Forbidden,
+    Required,
+}
+
+/// The non-secret authentication authority reviewed with an Evidence source
+/// connection. Pack endpoints still own API-intrinsic fields such as an API
+/// key header name or authorization scheme; runtime bindings own only secret
+/// references and operational cache bounds.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(
+    remote = "Self",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum EvidenceAuthenticationPolicy {
+    None {},
+    Basic {},
+    StaticAuthorization {},
+    StaticApiKey {},
+    Oauth2ClientCredentials {
+        token_endpoint: Url,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        audience: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resource: Option<String>,
+        credential_placement: CredentialPlacement,
+    },
+    Oauth2PrivateKeyJwt {
+        token_endpoint: Url,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        client_assertion_audience: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        audience: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resource: Option<String>,
+    },
+}
+
+registry_platform_yaml::tagged_union!(EvidenceAuthenticationPolicy, tag = "type");
+crate::model::serialize_tagged_union!(EvidenceAuthenticationPolicy, tag = "type");
 
 /// The one named acknowledgement that admits a credential-free HTTPS
 /// source. This is a security-sensitive operator decision, not a boolean
@@ -213,7 +309,7 @@ pub struct IdempotencyRetention {
 /// `idempotency`, and the cursor custody), which
 /// [`AdapterRuntimeConfig::endpoint_bindings`] sets aside.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AdapterEndpointBindings {
     /// The deployment this binding configures.
@@ -224,10 +320,10 @@ pub struct AdapterEndpointBindings {
     /// absent, every endpoint trusts the system roots alone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outbound_tls: Option<OutboundTls>,
-    /// The private ranges egress may reach, at least one and at most the
-    /// platform bound (CFG-EMPTY-2).
-    #[serde(deserialize_with = "at_least_one_cidr")]
-    #[cfg_attr(feature = "schema", schemars(schema_with = "at_least_one_cidr_schema"))]
+    /// The private ranges egress may reach. Omission is a secure empty
+    /// allowlist for a listener-free program with no network endpoints.
+    /// The facade's `AdapterRuntimeConfig` retains its nonempty requirement.
+    #[serde(default)]
     pub allowed_private_cidrs: UniqueList<Cidr>,
 }
 
@@ -362,6 +458,35 @@ mod tests {
     use super::*;
     use registry_platform_yaml::SecretReference;
 
+    #[test]
+    fn evidence_authentication_policy_keeps_the_closed_tagged_wire_form() {
+        let static_variants = [
+            EvidenceAuthenticationPolicy::None {},
+            EvidenceAuthenticationPolicy::Basic {},
+            EvidenceAuthenticationPolicy::StaticAuthorization {},
+            EvidenceAuthenticationPolicy::StaticApiKey {},
+        ];
+        let expected_types = ["none", "basic", "static-authorization", "static-api-key"];
+
+        for (policy, expected_type) in static_variants.into_iter().zip(expected_types) {
+            let value = serde_json::to_value(&policy).expect("policy serializes");
+            assert_eq!(value, serde_json::json!({"type": expected_type}));
+            assert_eq!(
+                serde_json::from_value::<EvidenceAuthenticationPolicy>(value)
+                    .expect("the tagged form reads"),
+                policy
+            );
+        }
+
+        assert!(
+            serde_json::from_value::<EvidenceAuthenticationPolicy>(serde_json::json!({
+                "type": "none",
+                "tokenEndpoint": "https://issuer.example.invalid/token"
+            }))
+            .is_err()
+        );
+    }
+
     fn binding() -> EndpointBinding {
         EndpointBinding {
             endpoint: ExternalId::new("case-api").expect("id"),
@@ -384,6 +509,7 @@ mod tests {
             mtls_identity: None,
             attempt_timeout_milliseconds: None,
             maximum_response_bytes: None,
+            maximum_concurrency: default_maximum_endpoint_concurrency(),
         }
     }
 
@@ -410,6 +536,29 @@ mod tests {
                 serde_json::from_value::<EndpointBinding>(value).is_err(),
                 "anything except the named acknowledgement refuses"
             );
+        }
+    }
+
+    #[test]
+    fn endpoint_concurrency_defaults_to_eight_and_stays_finite() {
+        let mut omitted = serde_json::to_value(binding()).expect("binding json");
+        omitted
+            .as_object_mut()
+            .expect("binding object")
+            .remove("maximumConcurrency");
+        let omitted: EndpointBinding = serde_json::from_value(omitted).expect("defaulted binding");
+        assert_eq!(omitted.maximum_concurrency.get(), 8);
+
+        for admitted in [1_u64, 8, 256] {
+            let mut value = serde_json::to_value(binding()).expect("binding json");
+            value["maximumConcurrency"] = serde_json::json!(admitted);
+            let binding: EndpointBinding = serde_json::from_value(value).expect("finite bound");
+            assert_eq!(binding.maximum_concurrency.get(), admitted);
+        }
+        for refused in [0_u64, 257] {
+            let mut value = serde_json::to_value(binding()).expect("binding json");
+            value["maximumConcurrency"] = serde_json::json!(refused);
+            assert!(serde_json::from_value::<EndpointBinding>(value).is_err());
         }
     }
 

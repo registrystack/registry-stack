@@ -1,0 +1,181 @@
+{
+  "apiVersion": "id.registrystack.org/formats/adapter/pack/v1alpha1",
+  "kind": "AdapterPack",
+  "id": "fixture-survivorship",
+  "version": "1",
+  "endpoints": [
+    {
+      "id": "civil-records",
+      "component": "http",
+      "authentication": {"type": "static-authorization"},
+      "attemptTimeoutMilliseconds": 3000,
+      "maximumResponseBytes": 65536,
+      "requestHeaders": ["accept"],
+      "operations": [{"id": "search", "safeUpstream": true}]
+    },
+    {
+      "id": "union-register",
+      "component": "http",
+      "authentication": {"type": "static-authorization"},
+      "attemptTimeoutMilliseconds": 3000,
+      "maximumResponseBytes": 65536,
+      "requestHeaders": ["accept"],
+      "operations": []
+    },
+    {
+      "id": "death-register",
+      "component": "http",
+      "authentication": {"type": "static-authorization"},
+      "attemptTimeoutMilliseconds": 3000,
+      "maximumResponseBytes": 65536,
+      "requestHeaders": ["accept"],
+      "operations": [{"id": "search", "safeUpstream": true}]
+    }
+  ],
+  "scripts": [
+    {
+      "path": "scripts/provider.rhai",
+      "digest": "sha256:32ce4cfaebdbea2eea6440db7c98f466ad3533675cbf1248a1da62f86d1b5d19"
+    }
+  ],
+  "sourceRoutes": [
+    {
+      "id": "lookup",
+      "evidence": {
+        "inputsSchema": {
+          "path": "schemas/inputs.json",
+          "digest": "sha256:8df1387a1dbfd99bcab1399f052bb74e98ba4c6a4f1edf152e6f3b08ba499591"
+        },
+        "factsSchema": {
+          "path": "schemas/facts.json",
+          "digest": "sha256:97b5ede7cb8763281952d41cc8c4a5445527b953806d8e5a047dcf344a3e02bf"
+        },
+        "acquisitionPosture": "field-projected"
+      },
+      "steps": [
+        {
+          "setHeader": {
+            "name": "Accept",
+            "value": {"constant": "application/json"}
+          }
+        },
+        {
+          "to": {
+            "uri": "http:civil-records",
+            "parameters": {
+              "httpMethod": "POST",
+              "path": "/v1/civil-record-search",
+              "body": {"rhai": {"file": "scripts/provider.rhai", "entrypoint": "request_search"}},
+              "operation": "search"
+            }
+          }
+        },
+        {
+          "setBody": {
+            "rhai": {"file": "scripts/provider.rhai", "entrypoint": "project_search"}
+          }
+        },
+        {
+          "setBody": {
+            "rhai": {"file": "scripts/provider.rhai", "entrypoint": "search_lookup"}
+          }
+        },
+        {
+          "choice": {
+            "when": [
+              {
+                "rhai": {"file": "scripts/provider.rhai", "entrypoint": "is_match"},
+                "steps": [
+                  {
+                    "setProperty": {
+                      "name": "searchFacts",
+                      "value": {"rhai": {"file": "scripts/provider.rhai", "entrypoint": "search_facts"}}
+                    }
+                  },
+                  {
+                    "setProperty": {
+                      "name": "civilReference",
+                      "value": {"rhai": {"file": "scripts/provider.rhai", "entrypoint": "civil_reference"}}
+                    }
+                  },
+                  {
+                    "to": {
+                      "uri": "http:union-register",
+                      "parameters": {
+                        "httpMethod": "GET",
+                        "path": "/v1/persons/{{ref}}/unions",
+                        "pathParameters": {"ref": {"exchangeProperty": "civilReference"}}
+                      }
+                    }
+                  },
+                  {
+                    "setBody": {
+                      "rhai": {"file": "scripts/provider.rhai", "entrypoint": "project_union"}
+                    }
+                  },
+                  {
+                    "setBody": {
+                      "rhai": {"file": "scripts/provider.rhai", "entrypoint": "union_facts"}
+                    }
+                  },
+                  {
+                    "choice": {
+                      "when": [
+                        {
+                          "rhai": {"file": "scripts/provider.rhai", "entrypoint": "union_facts_resolved"},
+                          "steps": [
+                            {
+                              "validateSchema": {
+                                "path": "schemas/union-facts.json",
+                                "digest": "sha256:b66310d981077361780892da0125e96c28ffe746169ae923ef213f9d2ab3302f"
+                              }
+                            },
+                            {
+                              "setProperty": {
+                                "name": "unionFacts",
+                                "value": {"jsonpath": "$"}
+                              }
+                            },
+                            {
+                              "to": {
+                                "uri": "http:death-register",
+                                "parameters": {
+                                  "httpMethod": "POST",
+                                  "path": "/v1/death-record-search",
+                                  "body": {"rhai": {"file": "scripts/provider.rhai", "entrypoint": "request_death"}},
+                                  "operation": "search"
+                                }
+                              }
+                            },
+                            {
+                              "setBody": {
+                                "rhai": {"file": "scripts/provider.rhai", "entrypoint": "project_death"}
+                              }
+                            },
+                            {
+                              "setBody": {
+                                "rhai": {"file": "scripts/provider.rhai", "entrypoint": "death_facts"}
+                              }
+                            },
+                            {
+                              "setBody": {
+                                "rhai": {"file": "scripts/provider.rhai", "entrypoint": "combined_lookup"}
+                              }
+                            }
+                          ]
+                        }
+                      ],
+                      "otherwise": {"steps": [{"stop": {}}]}
+                    }
+                  }
+                ]
+              }
+            ],
+            "otherwise": {"steps": [{"stop": {}}]}
+          }
+        }
+      ]
+    }
+  ],
+  "testedVersions": []
+}

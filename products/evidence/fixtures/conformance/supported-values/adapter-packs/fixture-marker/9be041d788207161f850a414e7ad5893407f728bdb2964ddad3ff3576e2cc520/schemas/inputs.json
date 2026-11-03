@@ -1,0 +1,14 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "opaque_id"
+  ],
+  "properties": {
+    "opaque_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32
+    }
+  }
+}

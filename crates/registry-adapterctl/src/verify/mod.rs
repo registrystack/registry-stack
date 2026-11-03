@@ -370,10 +370,16 @@ fn first_send<'a>(steps: &'a [Step], pack: &'a AdapterPack, depth: usize) -> Spi
                 }
                 SendComponent::Http => return Spine::Send(to),
                 SendComponent::GraphQl => return Spine::GraphQl,
+                SendComponent::SqliteExtract => {
+                    return Spine::Caller("the route reaches an Evidence extract send");
+                }
                 // A job component send is never a facade send: the
                 // loader leaves a binding whose route reaches one
                 // unserved, so the live probe drives nothing here.
-                SendComponent::Postgres | SendComponent::File | SendComponent::Sftp => {
+                SendComponent::Postgres
+                | SendComponent::File
+                | SendComponent::RabbitMq
+                | SendComponent::Sftp => {
                     return Spine::Caller("the route reaches a job component send");
                 }
             },
@@ -1137,6 +1143,21 @@ fn drive(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn live_facade_probe_does_not_drive_evidence_extract_sends() {
+        let pack: AdapterPack = serde_json::from_value(
+            serde_json::json!({"id":"extract","version":"1","testedVersions":[]}),
+        )
+        .unwrap();
+        let steps: Vec<Step> =
+            serde_json::from_value(serde_json::json!([{ "to": {"uri":"sqlite-extract:people"} }]))
+                .unwrap();
+        assert!(matches!(
+            first_send(&steps, &pack, 0),
+            Spine::Caller("the route reaches an Evidence extract send")
+        ));
+    }
 
     /// A lookup over a fixed parameter set.
     fn parameters(pairs: &[(&str, &str)]) -> impl FnMut(&str) -> Option<String> {

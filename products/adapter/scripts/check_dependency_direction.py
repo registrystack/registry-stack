@@ -2,26 +2,22 @@
 # SPDX-License-Identifier: Apache-2.0
 """Check Adapter dependency direction from Cargo's resolved graph.
 
-The Adapter's engine and facade stay source-neutral: `registry-adapter`,
-`registry-adapter-core`, `registry-adapter-job`, and
+The Adapter's engine and facade stay source-neutral: `registry-adapter-engine`,
+`registry-adapter`, `registry-adapter-core`, `registry-adapter-job`, and
 `registry-adapterctl` reach shared platform primitives and nothing else
 of the workspace, and no Adapter crate links a Coordinator crate. The
-one product-surface exception is the parked connector crate
+one product-surface exception is the direct BReg connector crate
 (`products/adapter/CONCEPT.md` section 17.5):
 `registry-adapter-connectors` reaches exactly `registry-breg-client`
-behind its off-by-default cargo feature, is reached by no other
-workspace crate, is linked by no facade binary and no job path while
-parked, and never reaches a product runtime, adopter tooling,
+behind the job host's exact off-by-default `direct-breg` feature, is linked
+by no facade or engine crate, and never reaches a product runtime, adopter tooling,
 supporting service, binding, or database crate.
 
-Inside `registry-adapter` the engine boundary is a module
-(`crates/registry-adapter/src/engine`, `products/adapter/CONCEPT.md`
-section 17.2): the listener-free engine the ingestion job runs and the
-facade links. Until the boundary becomes its own crate, this gate
-holds the same line at import level: no file under `src/engine` names
-a facade module, and none names a dependency only the facade half
-links. When the split lands, `cargo tree` on the new crate asserts the
-same line and this section retires with the move.
+`registry-adapter-engine` is the listener-free engine the ingestion,
+facade, and Evidence hosts may link. Its resolved closure may reach only
+`registry-adapter-core`, shared platform crates, and non-workspace support.
+The source check separately refuses facade-only dependencies, including
+Axum and PostgreSQL clients. Evidence may reach Adapter core and engine only.
 
 Edges are read with every feature enabled and on every target, so an
 optional dependency no default build enables still cannot escape the
@@ -45,15 +41,31 @@ ADAPTER_PREFIX = "registry-adapter"
 # The engine crates the product contract keeps source-neutral. None may
 # reach a product crate of any kind.
 ADAPTER_ENGINE = (
+    "registry-adapter-engine",
     "registry-adapter",
     "registry-adapter-core",
     "registry-adapter-job",
     "registry-adapterctl",
 )
 
-# The engine boundary module inside registry-adapter, and the crate it
-# becomes when the split lands.
-ENGINE_MODULE_DIRECTORY = Path("crates/registry-adapter/src/engine")
+# The extracted engine crate's source boundary.
+ENGINE_MODULE_DIRECTORY = Path("crates/registry-adapter-engine/src")
+ENGINE_CRATE = "registry-adapter-engine"
+JOB_HOST = "registry-adapter-job"
+
+ADAPTER_REACH = {
+    "registry-adapter-engine": frozenset({"registry-adapter-core"}),
+    "registry-adapter": frozenset(
+        {"registry-adapter-core", "registry-adapter-engine"}
+    ),
+    "registry-adapter-core": frozenset(),
+    "registry-adapter-job": frozenset(
+        {"registry-adapter-core", "registry-adapter-engine"}
+    ),
+    "registry-adapterctl": frozenset(
+        {"registry-adapter", "registry-adapter-core", "registry-adapter-engine"}
+    ),
+}
 
 # The facade modules of registry-adapter, staying beside the listener
 # when the engine module becomes a crate.
@@ -82,13 +94,12 @@ FACADE_DEPENDENCIES = (
 
 # The one product-surface exception: `registry-adapter-connectors` reaches
 # exactly one maintained product client, `registry-breg-client`, behind its
-# off-by-default cargo feature, is reached by no other workspace crate, is
-# parked (no facade binary and no job path links it), and never reaches a
-# product runtime, adopter tooling, supporting service, binding, database
-# crate, or any Coordinator crate.
+# off-by-default Cargo feature, is reached only through the job host's exact
+# feature path, and never reaches a product runtime, adopter tooling,
+# supporting service, binding, database crate, or any Coordinator crate.
 CONNECTOR = "registry-adapter-connectors"
 
-# The maintained product client the parked connector may reach.
+# The maintained product client the connector may reach.
 CONNECTOR_CLIENTS = frozenset(
     {
         "registry-breg-client",
@@ -124,8 +135,47 @@ ALLOWED_DEPENDENTS = {
         {
             "registry-adapter",
             "registry-adapter-core",
+            "registry-adapter-engine",
+            # Transitive through the job host only, under its exact
+            # off-by-default direct-breg feature.
+            "registry-adapter-connectors",
             "registry-adapter-job",
             "registry-adapterctl",
+        }
+    ),
+    # Evidence embeds the listener-free engine and core contract, never the
+    # facade host, job host, connector, or Adapter tooling.
+    "registry-evidence": frozenset(
+        {
+            "registry-adapter-core",
+            "registry-adapter-engine",
+        }
+    ),
+    # Evidence's public runtime surface carries its listener-free Adapter
+    # engine implementation to these maintained consumers. None may reach
+    # the facade, job host, connector, or Adapter tooling.
+    "registry-casework": frozenset(
+        {
+            "registry-adapter-core",
+            "registry-adapter-engine",
+        }
+    ),
+    "registry-discovery-client": frozenset(
+        {
+            "registry-adapter-core",
+            "registry-adapter-engine",
+        }
+    ),
+    "registry-evidence-client": frozenset(
+        {
+            "registry-adapter-core",
+            "registry-adapter-engine",
+        }
+    ),
+    "registry-evidencectl": frozenset(
+        {
+            "registry-adapter-core",
+            "registry-adapter-engine",
         }
     ),
 }
@@ -167,11 +217,26 @@ def closure(start: str, every: dict[str, set[str]], linked: dict[str, set[str]])
     return seen
 
 
-def engine_may_reach(name: str) -> bool:
+def linked_closure(start: str, linked: dict[str, set[str]]) -> set[str]:
+    """Normal/build dependencies below an already-reached package."""
+    seen: set[str] = set()
+    pending = list(linked.get(start, set()))
+    while pending:
+        package = pending.pop()
+        if package in seen:
+            continue
+        seen.add(package)
+        pending.extend(linked.get(package, set()) - seen)
+    return seen
+
+
+def engine_may_reach(owner: str, name: str) -> bool:
+    if owner == ENGINE_CRATE and name.replace("-", "_") in FACADE_DEPENDENCIES:
+        return False
     if not name.startswith("registry-"):
         return True
-    if name in ADAPTER_ENGINE:
-        return True
+    if name.startswith(ADAPTER_PREFIX):
+        return name in ADAPTER_REACH[owner]
     return name.startswith("registry-platform-") or name in SHARED_SUPPORT
 
 
@@ -183,13 +248,121 @@ def connector_may_reach(name: str) -> bool:
     return name in CONNECTOR_CLIENTS or name in CLIENT_SUPPORT
 
 
+def job_refused(
+    start: str,
+    names: dict[str, str],
+    every: dict[str, set[str]],
+    linked: dict[str, set[str]],
+) -> set[str]:
+    """Check each direct job edge under the policy that owns its subtree."""
+    refused: set[str] = set()
+    for dependency in every.get(start, set()):
+        dependency_name = names[dependency]
+        permits = (
+            lambda name: name == CONNECTOR or connector_may_reach(name)
+        ) if dependency_name == CONNECTOR else (
+            lambda name: engine_may_reach(JOB_HOST, name)
+        )
+        for reached in {dependency, *linked_closure(dependency, linked)}:
+            if not permits(names[reached]):
+                refused.add(names[reached])
+    return refused
+
+
+def job_feature_violations(metadata: dict) -> list[str]:
+    """Hold the connector edge to the reviewed off-by-default features."""
+    package = next(
+        (item for item in metadata["packages"] if item["name"] == JOB_HOST),
+        None,
+    )
+    if package is None:
+        return [f"{JOB_HOST} is missing from Cargo metadata"]
+    connector = next(
+        (
+            item
+            for item in package.get("dependencies", [])
+            if item.get("name") == CONNECTOR
+        ),
+        None,
+    )
+    failures: list[str] = []
+    if connector is None or not connector.get("optional", False):
+        failures.append(
+            f"{JOB_HOST} must keep {CONNECTOR} as an optional normal dependency"
+        )
+    features = package.get("features", {})
+    direct = set(features.get("direct-breg", []))
+    expected_direct = {
+        f"dep:{CONNECTOR}",
+        "dep:registry-platform-crypto",
+        "dep:registry-platform-httputil",
+        f"{CONNECTOR}/breg",
+    }
+    if direct != expected_direct:
+        failures.append(
+            f"{JOB_HOST} feature direct-breg must contain exactly: "
+            + ", ".join(sorted(expected_direct))
+        )
+    native = set(features.get("native-test-support", []))
+    expected_native = {
+        "direct-breg",
+        f"{CONNECTOR}/native-test-support",
+    }
+    if native != expected_native:
+        failures.append(
+            f"{JOB_HOST} feature native-test-support must contain exactly: "
+            + ", ".join(sorted(expected_native))
+        )
+    signed = set(features.get("signed-coordinator-event", []))
+    expected_signed = {
+        f"dep:{CONNECTOR}",
+        "dep:registry-platform-httputil",
+        f"{CONNECTOR}/coordinator-event",
+    }
+    if signed != expected_signed:
+        failures.append(
+            f"{JOB_HOST} feature signed-coordinator-event must contain exactly: "
+            + ", ".join(sorted(expected_signed))
+        )
+
+    connector_package = next(
+        (item for item in metadata["packages"] if item["name"] == CONNECTOR),
+        None,
+    )
+    if connector_package is None:
+        failures.append(f"{CONNECTOR} is missing from Cargo metadata")
+        return failures
+    coordinator_event = set(
+        connector_package.get("features", {}).get("coordinator-event", [])
+    )
+    expected_coordinator_event = {
+        "dep:registry-platform-crypto",
+        "dep:registry-platform-hooks",
+        "dep:registry-platform-httputil",
+        "dep:time",
+        "dep:tokio",
+        "dep:zeroize",
+    }
+    if coordinator_event != expected_coordinator_event:
+        failures.append(
+            f"{CONNECTOR} feature coordinator-event must contain exactly: "
+            + ", ".join(sorted(expected_coordinator_event))
+        )
+    return failures
+
+
 def violations(metadata: dict) -> list[str]:
     names, every, linked = package_graph(metadata)
     failures: list[str] = []
     for package_id, name in sorted(names.items(), key=lambda item: item[1]):
         reached = {names[item] for item in closure(package_id, every, linked)}
         if name in ADAPTER_ENGINE:
-            refused = sorted(item for item in reached if not engine_may_reach(item))
+            if name == JOB_HOST:
+                refused = sorted(job_refused(package_id, names, every, linked))
+            else:
+                refused = sorted(
+                    item for item in reached if not engine_may_reach(name, item)
+                )
             if refused:
                 failures.append(
                     f"{name} reaches package(s) outside registry-platform-* and "
@@ -216,7 +389,11 @@ def violations(metadata: dict) -> list[str]:
         else:
             adapter = {item for item in reached if item.startswith(ADAPTER_PREFIX)}
             permitted = ALLOWED_DEPENDENTS.get(name, frozenset())
-            refused = sorted(adapter - permitted)
+            refused_set = adapter - permitted
+            direct = {names[item] for item in every.get(package_id, set())}
+            if CONNECTOR in direct:
+                refused_set.add(CONNECTOR)
+            refused = sorted(refused_set)
             if refused:
                 failures.append(
                     f"{name} depends on Adapter package(s) it is not listed for: "
@@ -226,7 +403,7 @@ def violations(metadata: dict) -> list[str]:
 
 
 def module_violations(repository_root: Path) -> list[str]:
-    """Import-level engine boundary inside registry-adapter.
+    """Import-level boundary inside registry-adapter-engine.
 
     Reads the files under the engine module and refuses a name of a
     facade module or a facade-only dependency. Comments are stripped
@@ -235,8 +412,8 @@ def module_violations(repository_root: Path) -> list[str]:
     engine_root = repository_root / ENGINE_MODULE_DIRECTORY
     if not engine_root.is_dir():
         return [
-            "crates/registry-adapter/src/engine is missing; the engine "
-            "module boundary is not assembled"
+            "crates/registry-adapter-engine/src is missing; the engine "
+            "crate boundary is not assembled"
         ]
     failures: list[str] = []
     for path in sorted(engine_root.rglob("*.rs")):
@@ -345,7 +522,9 @@ def main() -> int:
     args = parser.parse_args()
     repository_root = Path(__file__).resolve().parents[3]
     try:
-        failures = violations(load_metadata(repository_root, args.metadata))
+        metadata = load_metadata(repository_root, args.metadata)
+        failures = violations(metadata)
+        failures.extend(job_feature_violations(metadata))
         failures.extend(module_violations(repository_root))
     except (
         OSError,
@@ -364,9 +543,11 @@ def main() -> int:
             print(f"dependency-direction violation: {failure}", file=sys.stderr)
         return 1
     print("Adapter dependency direction holds: the engine is source-neutral;")
-    print("the engine module names no facade module or facade-only")
-    print("dependency; the parked connector reaches registry-breg-client")
-    print("alone, and no Adapter crate links a Coordinator crate.")
+    print("the engine crate names no facade module or facade-only dependency;")
+    print("the job's off-by-default direct-BReg path reaches the connector,")
+    print("the signed-event path reaches platform primitives only, the connector")
+    print("reaches registry-breg-client alone, and no Adapter crate links a")
+    print("Coordinator crate.")
     return 0
 
 

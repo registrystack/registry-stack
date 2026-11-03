@@ -225,16 +225,11 @@ formats:
     digests: SHA256SUMS
     removedKeys:
       - /version
-      - /sources/registered-birth-date/request/timeoutMilliseconds
-      - /sources/registered-birth-date/request/concurrencyLimit
-      - /sources/registered-birth-date/transport
-      - /sources/registered-birth-date/authentication/kind
       - /requirements/0/acquisition/kind
       - /issuer/id
       - /requirements/0/id
       - /requirements/0/concepts/0/id
       - /requirements/0/concepts/0/form
-      - /sources/registered-birth-date/request/pathTemplate
       - /holderBoundBatchMaxSize
       - /authentication/oidc/jwksSource/kind
 
@@ -388,6 +383,17 @@ formats:
       pack: {from: products/adapter/packs/dhis2-tracker}
       fixtures: {from: products/adapter/fixtures/dhis2-tracker}
     afterWrite: ["adapterctl project lock {project} --profile {profile}/profile.yaml --pack {pack}/pack.yaml"]
+  # `adapterctl job check` compiles the job's workspace, which resolves
+  # the endpoint credential references; the staged runtime points them at
+  # the variable the runner sets for every check.
+  adapter/job:
+    copies:
+      pack: {from: products/adapter/packs/kobotoolbox}
+      runtime:
+        from: products/adapter/examples/kobotoolbox-job/job-runtime.example.yaml
+        set:
+          /endpoints/0/credential/usernameRef: secret:env/REGISTRY_CONFORMANCE_VALUE
+          /endpoints/0/credential/passwordRef: secret:env/REGISTRY_CONFORMANCE_VALUE
   adapter/fixture:
     project: products/adapter/examples/dhis2-tracker
     copies:
@@ -417,3 +423,9 @@ formats:
       profile: {from: products/adapter/profiles/breg-records}
       pack: {from: products/adapter/packs/dhis2-tracker}
       fixtures: {from: products/adapter/fixtures/dhis2-tracker}
+  adapter/job-runtime:
+    copies:
+      pack: {from: products/adapter/packs/kobotoolbox}
+    set:
+      /endpoints/0/credential/usernameRef: secret:env/REGISTRY_CONFORMANCE_VALUE
+      /endpoints/0/credential/passwordRef: secret:env/REGISTRY_CONFORMANCE_VALUE

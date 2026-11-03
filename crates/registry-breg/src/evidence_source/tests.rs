@@ -46,6 +46,7 @@ fn options() -> EvidenceSourceOptions {
         fields: vec!["status".into()],
         source_id: "registry-status".into(),
         connection: "registry".into(),
+        authentication: EvidenceSourceAuthentication::StaticAuthorization,
     }
 }
 fn file<'a>(export: &'a EvidenceSourceExport, path: &str) -> &'a [u8] {
@@ -72,44 +73,119 @@ fn alternatives_keep_one_route_and_selected_identity_with_stable_inventories() {
     let registry = compiled(&project(), SQL);
     let export = export_evidence_source(&registry, &options()).unwrap();
     let source = yaml(&export, "sources/registry-status.yaml");
-    assert_eq!(source["request"]["path"], "/v1/records/records:lookup");
-    assert_eq!(source["request"]["method"], "POST");
+    assert_eq!(source["pack"]["id"], "registry-status");
+    assert_eq!(source["route"], "lookup");
     assert_eq!(source["connection"], "registry");
-    assert_eq!(source["forwardAccessAttribution"], false);
-    assert!(source.get("authentication").is_none());
-    assert!(source.get("baseUrl").is_none());
-    assert_eq!(
-        source["request"]["selectorInputs"][0]["alternatives"]
-            .as_array()
-            .unwrap()
-            .len(),
-        2
-    );
+    assert_eq!(source["acquisitionPosture"], "field-projected");
+    assert_eq!(source["inputs"].as_object().unwrap().len(), 2);
+    assert!(source.get("request").is_none());
     assert_eq!(export.identity_fields["by-code"], vec!["code"]);
     assert_eq!(
         export.identity_fields["by-registration-number"],
         vec!["registration-number"]
     );
-    let script =
-        std::str::from_utf8(file(&export, "adapters/registry-status-prepare.rhai")).unwrap();
-    assert!(script.contains("value: \"code,status\""));
-    assert!(script.contains("value: \"registrationNumber,status\""));
+    let script = std::str::from_utf8(file(
+        &export,
+        "adapter-packs/registry-status/scripts/lookup.rhai",
+    ))
+    .unwrap();
+    assert!(script.contains("return \"code,status\""));
+    assert!(script.contains("return \"registrationNumber,status\""));
     assert!(!script.contains("code,registrationNumber,status"));
-    assert!(script.contains("\"registrationNumber\": subject[\"values\"][\"registration-number\"]"));
-    let extract =
-        std::str::from_utf8(file(&export, "adapters/registry-status-extract.rhai")).unwrap();
-    assert!(extract.contains("fn extract(response, selectors, context)"));
+    assert!(script.contains("\"registrationNumber\": inputs[\"input-"));
+    assert!(script.contains("fn lookup(exchange)"));
+    assert!(script.contains("fn project_response(exchange)"));
+    assert!(script.contains("if record[\"status\"] == () { return #{lookup: \"no-match\"}; }"));
+    assert!(!script.contains("return #{lookup: \"unresolved\"};"));
+    assert!(!script.contains("is_missing("));
+    assert!(script.contains("exchange.headers[\"camelhttpresponsecode\"] == 404"));
+    assert!(!script.contains("exchange.body.type") && !script.contains("lookup.unresolved"));
     assert!(
-        extract.contains("type_of(record[\"code\"])") && extract.contains("source_protocol_error")
+        script.contains("type_of(record[\"code\"])") && script.contains("source_protocol_error")
     );
-    assert!(extract.find("source_protocol_error").unwrap() < extract.find("facts:").unwrap());
-    let facts = yaml(&export, "schemas/registry-status-facts.yaml");
+    assert!(script.find("source_protocol_error").unwrap() < script.find("facts:").unwrap());
+    let facts = yaml(&export, "adapter-packs/registry-status/schemas/facts.json");
     assert_eq!(facts["required"], json!(["status"]));
     assert!(facts["properties"].get("code").is_none());
-    let response = yaml(&export, "schemas/registry-status-response.yaml");
+    let response = yaml(
+        &export,
+        "adapter-packs/registry-status/schemas/response.json",
+    );
     assert_eq!(
         response["properties"]["data"]["properties"]["domainData"]["properties"]["status"]["type"],
         json!(["string", "null"])
+    );
+    let pack = yaml(&export, "adapter-packs/registry-status/pack.yaml");
+    let steps = pack["sourceRoutes"][0]["steps"].as_array().unwrap();
+    let send = steps
+        .iter()
+        .find_map(|step| step.get("to"))
+        .expect("the pack owns the BReg lookup request");
+    assert_eq!(send["parameters"]["httpMethod"], "POST");
+    assert_eq!(send["parameters"]["path"], "/v1/records/records:lookup");
+    assert_eq!(
+        send["parameters"]["query"]["accessProfile"]["constant"],
+        "evidence-source"
+    );
+    assert_eq!(
+        send["parameters"]["query"]["$select"]["exchangeProperty"],
+        "bregSelect"
+    );
+    assert_eq!(send["parameters"]["body"]["jsonpath"], "$");
+    assert_eq!(send["parameters"]["throwExceptionOnFailure"], false);
+    let choice = steps
+        .iter()
+        .find_map(|step| step.get("choice"))
+        .expect("the protocol's canonical unresolved sentinel stops the provider path");
+    assert_eq!(choice["when"][0]["rhai"]["entrypoint"], "is_unresolved");
+    assert_eq!(choice["when"][0]["steps"][0]["stop"], json!({}));
+    let projection = steps
+        .iter()
+        .position(|step| {
+            step.get("setBody")
+                .and_then(|set_body| set_body.get("rhai"))
+                .and_then(|rhai| rhai.get("entrypoint"))
+                .is_some_and(|entrypoint| entrypoint == "project_response")
+        })
+        .expect("the reviewed script projects the provider record");
+    let response_gate = steps
+        .iter()
+        .position(|step| step.get("validateSchema").is_some())
+        .expect("the projected provider response is schema-checked");
+    let extraction = steps
+        .iter()
+        .position(|step| {
+            step.get("setBody")
+                .and_then(|set_body| set_body.get("rhai"))
+                .and_then(|rhai| rhai.get("entrypoint"))
+                .is_some_and(|entrypoint| entrypoint == "lookup")
+        })
+        .expect("the checked projection is extracted");
+    assert!(projection < response_gate && response_gate < extraction);
+    let endpoint = &pack["endpoints"][0];
+    assert_eq!(endpoint["authentication"]["type"], "static-authorization");
+    assert_eq!(endpoint["hostProtocol"]["id"], "registry-lookup-v1");
+    assert_eq!(endpoint["operations"][0]["safeUpstream"], true);
+    assert_eq!(endpoint["requestHeaders"], json!(["accept"]));
+    assert!(!steps.iter().any(|step| {
+        step.get("setHeader")
+            .and_then(|header| header.get("name"))
+            .is_some_and(|name| name == "Content-Type")
+    }));
+    let protocol = yaml(
+        &export,
+        "adapter-packs/registry-status/protocols/registry-lookup.json",
+    );
+    assert_eq!(
+        protocol,
+        json!({
+            "unresolvedProblem":{
+                "status":404,
+                "type":crate::problem::ProblemCode::LookupUnresolved.type_uri(),
+                "code":"lookup.unresolved"
+            },
+            "forwardAccessAttribution":false
+        })
     );
     let manifest = yaml(&export, "source-export.json");
     assert_eq!(manifest["apiVersion"], EVIDENCE_SOURCE_EXPORT_API_VERSION);
@@ -128,6 +204,20 @@ fn alternatives_keep_one_route_and_selected_identity_with_stable_inventories() {
             )
         );
     }
+    assert!(manifest["artifacts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|entry| { entry["path"] == "adapter-packs/registry-status/pack.yaml" }));
+    assert!(!manifest["artifacts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|entry| {
+            entry["path"]
+                .as_str()
+                .is_some_and(|path| path.starts_with("functions/") || path.starts_with("adapters/"))
+        }));
     let mut reordered = options();
     reordered.selectors.reverse();
     assert_eq!(
@@ -142,18 +232,65 @@ fn alternatives_keep_one_route_and_selected_identity_with_stable_inventories() {
 }
 
 #[test]
+fn generated_pack_authentication_is_explicitly_selected() {
+    let registry = compiled(&project(), SQL);
+    let static_export = export_evidence_source(&registry, &options()).unwrap();
+    let mut selected = options();
+    selected.authentication = EvidenceSourceAuthentication::Oauth2PrivateKeyJwt;
+
+    let export = export_evidence_source(&registry, &selected).unwrap();
+    let pack = yaml(&export, "adapter-packs/registry-status/pack.yaml");
+    let manifest = yaml(&export, "source-export.json");
+
+    assert_eq!(
+        pack["endpoints"][0]["authentication"],
+        json!({"type":"oauth2-private-key-jwt"})
+    );
+    assert_ne!(export.behavior_revision, static_export.behavior_revision);
+    assert_eq!(pack["version"], export.behavior_revision);
+    assert_eq!(
+        manifest["provenance"]["behaviorRevision"],
+        export.behavior_revision
+    );
+}
+
+#[test]
+fn missing_fact_outcome_is_bound_into_behavior_revision() {
+    let registry = compiled(&project(), SQL);
+    let entity = &registry.entities()["record"];
+    let behavior = selected_behavior(
+        &registry,
+        entity,
+        &options(),
+        &BTreeSet::from(["status".into()]),
+        vec![],
+        Map::new(),
+    )
+    .unwrap();
+    assert_eq!(behavior["missingFactOutcome"], "no-match");
+
+    let revision = format!("sha256:{}", digest(&canonical(&behavior).unwrap()));
+    let mut unresolved = behavior;
+    unresolved["missingFactOutcome"] = json!("unresolved");
+    let unresolved_revision = format!("sha256:{}", digest(&canonical(&unresolved).unwrap()));
+    assert_ne!(revision, unresolved_revision);
+}
+
+#[test]
 fn exported_fragments_match_the_evidence_owned_header_contracts() {
     use registry_evidence_authoring::formats::{
         decode_authored, SELECTOR_FRAGMENT, SOURCE_FRAGMENT,
     };
 
     let export = export_evidence_source(&compiled(&project(), SQL), &options()).unwrap();
-    decode_authored::<Value>(
+    let decoded = decode_authored::<registry_evidence_authoring::project::Source>(
         "sources/registry-status.yaml",
         file(&export, "sources/registry-status.yaml"),
         &SOURCE_FRAGMENT,
     )
     .expect("the exported Source matches the Evidence-owned format");
+    assert_eq!(decoded.value.pack.id.as_str(), "registry-status");
+    assert_eq!(decoded.value.route.as_str(), "lookup");
 
     for artifact in export.artifacts.iter().filter(|artifact| {
         artifact.path.starts_with("selectors/") && artifact.path.ends_with(".yaml")
@@ -168,11 +305,10 @@ fn the_source_is_spelled_as_evidence_reads_it() {
     let registry = compiled(&project(), SQL);
     let export = export_evidence_source(&registry, &options()).unwrap();
     let source = yaml(&export, "sources/registry-status.yaml");
-    assert_eq!(source["type"], "http-json");
-    assert_eq!(source["request"]["attemptTimeoutMilliseconds"], 5000);
-    // Evidence refuses each of these in a source as config.removed-key.
-    assert!(source.get("transport").is_none());
-    assert!(source["request"].get("timeoutMilliseconds").is_none());
+    assert!(source.get("type").is_none());
+    assert!(source.get("request").is_none());
+    assert!(source.get("extractScript").is_none());
+    assert!(source.get("behaviorRevision").is_none());
 }
 
 #[test]
@@ -186,9 +322,16 @@ fn logged_entity_export_enables_attribution_and_binds_policy_into_behavior_revis
         "trustedIntermediaries": ["evidence-service"]
     });
     let after = export_evidence_source(&compiled(&logged, SQL), &options()).unwrap();
-    let source = yaml(&after, "sources/registry-status.yaml");
-
-    assert_eq!(source["forwardAccessAttribution"], true);
+    let pack = yaml(&after, "adapter-packs/registry-status/pack.yaml");
+    assert_eq!(
+        pack["endpoints"][0]["hostProtocol"]["id"],
+        "registry-lookup-v1"
+    );
+    let protocol = yaml(
+        &after,
+        "adapter-packs/registry-status/protocols/registry-lookup.json",
+    );
+    assert_eq!(protocol["forwardAccessAttribution"], true);
     assert_ne!(before.behavior_revision, after.behavior_revision);
 }
 
@@ -457,7 +600,10 @@ fn scalar_documents_preserve_int64_and_nullable_vocabulary_bounds() {
     let mut original = project();
     original["recordTypes"][0]["fields"][2] = json!({"id":"status","type":"vocabulary-code","vocabulary":"status","values":["active","retired"],"classification":"internal"});
     let export = export_evidence_source(&compiled(&original, SQL), &options()).unwrap();
-    let response = yaml(&export, "schemas/registry-status-response.yaml");
+    let response = yaml(
+        &export,
+        "adapter-packs/registry-status/schemas/response.json",
+    );
     let status =
         &response["properties"]["data"]["properties"]["domainData"]["properties"]["status"];
     assert_eq!(status["type"], json!(["string", "null"]));
@@ -466,7 +612,8 @@ fn scalar_documents_preserve_int64_and_nullable_vocabulary_bounds() {
         "fact enum must not prevent nullable source data reaching extraction"
     );
     assert_eq!(
-        yaml(&export, "schemas/registry-status-facts.yaml")["properties"]["status"]["enum"],
+        yaml(&export, "adapter-packs/registry-status/schemas/facts.json")["properties"]["status"]
+            ["enum"],
         json!(["active", "retired"])
     );
 }
@@ -509,23 +656,34 @@ fn refuses_alternative_union_that_exceeds_runtime_projection_bound() {
 #[test]
 fn emitted_extract_checks_the_returned_identity_by_exact_value_and_scalar_type() {
     let export = export_evidence_source(&compiled(&project(), SQL), &options()).unwrap();
-    let extract =
-        std::str::from_utf8(file(&export, "adapters/registry-status-extract.rhai")).unwrap();
+    let source = yaml(&export, "sources/registry-status.yaml");
+    let extract = std::str::from_utf8(file(
+        &export,
+        "adapter-packs/registry-status/scripts/lookup.rhai",
+    ))
+    .unwrap();
+    let input_for = |field: &str| {
+        source["inputs"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .find_map(|(input, binding)| {
+                (binding["selector"]["field"] == field).then_some(input.as_str())
+            })
+            .unwrap()
+    };
     // The Evidence adapter, not BReg, rejects a substituted record. The exporter is
     // the only place this check is written, so pin the emitted comparison verbatim.
-    assert!(extract.contains(
-        "if is_missing(record[\"code\"]) \
-         || type_of(record[\"code\"]) != type_of(subject[\"values\"][\"code\"]) \
-         || record[\"code\"] != subject[\"values\"][\"code\"] \
-         { throw \"source_protocol_error\"; }"
-    ));
-    assert!(extract.contains(
-        "if is_missing(record[\"registrationNumber\"]) \
-         || type_of(record[\"registrationNumber\"]) \
-            != type_of(subject[\"values\"][\"registration-number\"]) \
-         || record[\"registrationNumber\"] != subject[\"values\"][\"registration-number\"] \
-         { throw \"source_protocol_error\"; }"
-    ));
+    for (field, api_name) in [
+        ("code", "code"),
+        ("registration-number", "registrationNumber"),
+    ] {
+        let input = input_for(field);
+        let check = format!(
+            "if record[{api_name:?}] == () || type_of(record[{api_name:?}]) != type_of(inputs[{input:?}]) || record[{api_name:?}] != inputs[{input:?}] {{ throw \"source_protocol_error\"; }}"
+        );
+        assert!(extract.contains(&check), "missing identity check: {check}");
+    }
 }
 
 #[test]

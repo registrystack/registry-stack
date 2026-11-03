@@ -11,7 +11,6 @@ subjectBinding: {secretRef: secret:file/subject-binding-key, keyVersion: 1}
 rateLimits: {requestsPerPrincipalPerMinute: 60, burstPerPrincipal: 10, failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 10}
 signing: {format: flattened-jws-json, algorithm: ES256, activePublicJwkFile: public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json, publishedPublicJwkFiles: [], revokedKeyIds: [], jwksPath: /.well-known/evidence/jwks.json, maximumAssertionValiditySeconds: 300, verifierClockSkewSeconds: 30}
 responseFormats: [signed-jws]
-acquisitionCapabilities: [search-then-fetch-set]
 
 selectorProfiles:
   compound-demographic-v1:
@@ -21,92 +20,38 @@ selectorProfiles:
       given_name: {type: string, minimumBytes: 1, maximumBytes: 200}
       date_of_birth: {type: date}
 sources:
-  civil-record-search:
-    type: http-json
-    baseUrl: https://civil-source.invalid
+  survivorship-registers:
+    pack:
+      id: fixture-survivorship
+      version: "1"
+      digest: sha256:7a3638fd377c969b446e47af46a143f19cbf0bbff0f21862e866b6d1beb03522
+      artifactPrefix: adapter-packs/fixture-survivorship/7a3638fd377c969b446e47af46a143f19cbf0bbff0f21862e866b6d1beb03522
+    route: lookup
+    connection: registers
+    inputs:
+      family_name:
+        selector: {role: subject, profile: compound-demographic-v1, field: family_name}
+      given_name:
+        selector: {role: subject, profile: compound-demographic-v1, field: given_name}
+      date_of_birth:
+        selector: {role: subject, profile: compound-demographic-v1, field: date_of_birth}
     posture: field-projected
-    authentication: {type: static-authorization, tokenRef: secret:file/civil-record-search-token}
-    request:
-      method: POST
-      path: /v1/civil-record-search
-      fixedHeaders: [{name: Accept, value: application/json}]
-      selectorInputs:
-        - role: subject
-          alternatives: [{profile: compound-demographic-v1, fields: [family_name, given_name, date_of_birth]}]
-      prepareScript: adapters/civil-record-search-prepare.rhai
-      adapterParameters:
-        requestedFields: [civil_record_reference, reference_namespace]
-        resultLimit: 2
-        referenceNamespace: urn:example:fixture:civil-record
-      adapterParametersSchema: schemas/civil-record-search.adapter-parameters.schema.yaml
-      preparationLimits: {query: forbidden, jsonBody: required, maximumJsonDepth: 8, maximumCollectionItems: 16, maximumStringBytes: 256, maximumNormalizedBytes: 4096}
-      projection:
-        - /total
-        - /records/*/civil_record_reference
-        - /records/*/reference_namespace
-      redirects: deny
-      attemptTimeoutMilliseconds: 3000
-      maximumResponseBytes: 65536
-      maximumConcurrency: 8
-    responseSchema: schemas/civil-record-search.response.schema.yaml
-    extractScript: adapters/civil-record-search.rhai
-    factSchema: schemas/civil-record-search.facts.schema.yaml
-  union-register:
-    type: http-json
-    baseUrl: https://union-source.invalid
-    posture: field-projected
-    authentication: {type: static-authorization, tokenRef: secret:file/union-register-token}
-    request:
-      method: GET
-      path: /v1/persons/{ref}/unions
-      pathBindings: {ref: {type: prior-fact, field: civil_record_reference}}
-      fixedHeaders: [{name: Accept, value: application/json}]
-      selectorInputs: []
-      prepareScript: adapters/union-register-prepare.rhai
-      adapterParameters: {unionSetContract: urn:example:fixture:union-set:v1, maximumUnionEvents: 8}
-      adapterParametersSchema: schemas/union-register.adapter-parameters.schema.yaml
-      preparationLimits: {query: allowed, jsonBody: forbidden, maximumNormalizedBytes: 4096}
-      projection:
-        - /record_found
-        - /union_events/*/union_start_date
-        - /union_events/*/union_end_reason
-        - /union_events/*/union_recognized
-        - /union_set_contract
-        - /union_set_complete
-      redirects: deny
-      attemptTimeoutMilliseconds: 3000
-      maximumResponseBytes: 65536
-      maximumConcurrency: 8
-    responseSchema: schemas/union-register.response.schema.yaml
-    extractScript: adapters/union-register.rhai
-    factSchema: schemas/union-register.facts.schema.yaml
-  death-register:
-    type: http-json
-    baseUrl: https://death-source.invalid
-    posture: field-projected
-    authentication: {type: static-authorization, tokenRef: secret:file/death-register-token}
-    request:
-      method: POST
-      path: /v1/death-record-search
-      fixedHeaders: [{name: Accept, value: application/json}]
-      selectorInputs: []
-      prepareScript: adapters/death-register-prepare.rhai
-      adapterParameters: {deathRegisterContract: urn:example:fixture:death-register:v1}
-      adapterParametersSchema: schemas/death-register.adapter-parameters.schema.yaml
-      preparationLimits: {query: forbidden, jsonBody: required, maximumJsonDepth: 1, maximumCollectionItems: 1, maximumStringBytes: 96, maximumNormalizedBytes: 256}
-      projection:
-        - /record_found
-        - /death_subject_reference
-        - /death_recorded
-        - /death_record_contract
-        - /death_record_complete
-      redirects: deny
-      attemptTimeoutMilliseconds: 3000
-      maximumResponseBytes: 65536
-      maximumConcurrency: 8
-    responseSchema: schemas/death-register.response.schema.yaml
-    extractScript: adapters/death-register.rhai
-    factSchema: schemas/death-register.facts.schema.yaml
+    factSchema: schemas/facts.schema.yaml
+sourceConnections:
+  registers:
+    endpoints:
+      - endpoint: civil-records
+        baseUrl: https://civil-source.invalid
+        authentication: {type: static-authorization}
+        clientIdentity: forbidden
+      - endpoint: union-register
+        baseUrl: https://union-source.invalid
+        authentication: {type: static-authorization}
+        clientIdentity: forbidden
+      - endpoint: death-register
+        baseUrl: https://death-source.invalid
+        authentication: {type: static-authorization}
+        clientIdentity: forbidden
 authorityProfiles:
   statutory-caseworker-v1:
     kind: statutory
@@ -121,13 +66,7 @@ requirements:
   - handle: surviving-spouse-status
     uri: urn:example:fixture:requirement:surviving-spouse-status:v1
     kind: criterion
-    acquisition:
-      type: search-then-fetch-set
-      search: civil-record-search
-      fetch:
-        - {source: union-register, factInputs: [civil_record_reference]}
-        - {source: death-register, factInputs: [civil_record_reference]}
-      maximumAcquisitionMilliseconds: 8000
+    acquisition: {source: survivorship-registers}
     purposes: [fixture-survivor-benefit]
     subjectRoles: [{role: subject, cardinality: one, selectorProfiles: [compound-demographic-v1]}]
     referenceFrameworks: [urn:example:fixture:framework:surviving-spouse-status:v1]

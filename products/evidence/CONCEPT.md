@@ -575,167 +575,72 @@ requires.
 ## 9. Deployment bundle and source adapters
 
 Governed configuration, scripts, schemas, codelists, mappings, and fixtures form
-one atomic bundle. A separate closed runtime file owns only process-local
-listener, filesystem, audit-storage, secret-mount, signer transport and pinned
-version, and TLS-trust bindings. Both
-inputs are startup-only, read-only, independently digested, and immutable for
-the process lifetime. Runtime configuration is not an override layer and cannot
-change service identity, trust domain, authentication or authority policy,
-sources, requests, scripts, disclosure, rate limits, signing policy, or audit
-fail-closed behavior. Readiness fails if either input is incomplete,
-inconsistent, mutable, or cannot be validated.
+one atomic bundle, including the exact Adapter packs each Source selects.
+A Source binds a pack route to one named connection and explicit authorized
+selector inputs. The compiler pins the pack digest and includes its scripts,
+schemas, and reviewed request definitions in the package checksum closure.
 
-Illustrative YAML:
+The package fixes permitted destinations and authentication/trust selections.
+The closed runtime file supplies process-local listener, filesystem, audit,
+signer, secret and connection material, plus finite operational tuning within
+that authority. Effective package, connection and target authority are captured
+for the process lifetime. Runtime bindings cannot widen disclosure, grants,
+allowed destinations or acquisition capabilities. A change requires a reviewed
+package or target update and restart, rather than implicit hot reload.
+
+This authored Source excerpt comes from the standalone project:
 
 ```yaml
-apiVersion: id.registrystack.org/formats/evidence/bundle/v1
-kind: EvidenceBundle
-
-service:
-  provider_id: urn:example:data-service:evidence
-
-signing:
-  format: flattened-jws-json
-  algorithm: ES256
-  activePublicJwkFile: public-keys/<rfc7638-thumbprint>.jwk.json
-  publishedPublicJwkFiles: []
-  revokedKeyIds: []
-  jwksPath: /.well-known/evidence/jwks.json
-  maximumAssertionValiditySeconds: 300
-  verifierClockSkewSeconds: 30
-
-issuer:
-  id: urn:example:authority:population-registry
-
-selector_profiles:
-  person-demographics-v1:
-    fields:
-      given_name: { type: string, maximum_bytes: 200 }
-      family_name: { type: string, maximum_bytes: 200 }
-      birth_date: { type: date }
-
 sources:
-  civil-registry:
-    type: http-json
-    base_url: https://civil-registry.internal
-    posture: field-projected
-    tls_trust_profile: government-internal-pki
-    authentication:
-      type: static-authorization
-      token_ref: secret:file/civil-registry-token
-    request:
-      method: POST
-      path: /v1/person-facts
-      fixed_headers:
-        - { name: Accept, value: application/json }
-      selector_inputs:
-        - role: subject
-          alternatives:
-            - profile: person-demographics-v1
-              fields: [given_name, family_name, birth_date]
-      prepare_script: adapters/civil-registry-prepare.rhai
-      adapter_parameters:
-        requested_fields: [date_of_birth]
-        result_limit: 2
-      adapter_parameters_schema: schemas/civil-registry-parameters.schema.yaml
-      preparation_limits:
-        query: forbidden
-        json_body: required
-      projection:
-        - /total
-        - /results/*/date_of_birth
-      redirects: deny
-      timeout: PT3S
-      maximum_response_bytes: 65536
-    response_schema: schemas/civil-registry-response.schema.yaml
-    extract_script: adapters/civil-registry-extract.rhai
-    fact_schema: schemas/civil-registry-facts.schema.yaml
-
-requirements:
-  - id: urn:example:requirement:adult-status:v1
-    kind: criterion
-    name: Adult status
-    acquisition:
-      type: single
-      source: civil-registry
-    purposes:
-      - benefit-eligibility
-    requester_tags:
-      - benefits-agency
-    audience_from: requester
-    subject_roles:
-      - role: subject
-        cardinality: one
-        selector_profiles:
-          - person-demographics-v1
-    reference_frameworks:
-      - urn:example:law:benefits-act
-    evidence_type: urn:example:evidence-type:adult-status:v1
-    observation_timezone: America/Santo_Domingo
-    validity: PT24H
-    derivation:
-      script: derivations/adult-status.rhai
-      parameters:
-        minimum_age_years: 18
-    concepts:
-      - id: urn:example:concept:adult-status
-        type: boolean
-        disclose: value
+  person-record:
+    pack:
+      id: synthetic-register
+      version: '1'
+    route: person
+    connection: synthetic-register
+    acquisitionPosture: record-transformed
+    inputs:
+      recordId:
+        selector:
+          role: subject
+          profile: record-by-id
+          field: record-id
 ```
+
+The [standalone project](examples/standalone/README.md) supplies the complete
+project, pack, target and fixtures. The Source declares no transport or
+preparation/extraction Function: provider interaction belongs to its pack route.
 
 ### 9.1 Fixed source execution with reviewed request rendering
 
-Rust owns everything that decides which source is reached, what is asked of it,
-and how much may come back. The mechanisms differ by transport and the boundary
-does not: a caller, a response, and a script hold authority over none of it,
-and the one-request-per-stage ceiling and per-stage timeouts bind both. What
-follows names each transport's instantiation of that one ownership rule.
+Evidence owns authorization, input minimization, acquisition intent and
+assertion release. After authorization, it durably records effective execution
+bounds before credentials or source effects, then supplies only the Source's
+explicit selector bindings to the listener-free Adapter engine. The route's
+closed input schema rejects missing or undeclared inputs before execution.
 
-For an `http-json` source, Rust owns scheme, host, method, the fixed path or
-closed tagged selector or fetch prior-fact-bound path template, permitted query
-and body channels, fixed headers, credentials, TLS trust, redirect policy,
-response limits, and concurrency limits.
+The reviewed pack owns request paths, methods, query/body construction,
+normalization, response validation and the final lookup contract. Rust enforces
+captured destination policy, credential isolation, TLS, redirects, connection
+concurrency, response sizes and component limits. Pack scripts see neither
+credentials nor the complete caller request and cannot invent connection
+authority. A caller or source response cannot add an unreviewed endpoint.
 
-For a `sqlite-extract` source, Rust owns the extract file handle and the
-read-only opening that produced it, the statement text, the authorizer verdict
-on that statement, the binding of values into its declared parameters, the row
-and step bounds it runs under, and the mapping of its result set into the
-bounded JSON an extraction script receives.
+All data operations, including reviewed read retries and paging, share one
+absolute acquisition deadline and one operation and response-byte budget.
+The configurable defaults are five data operations, 30 seconds and 1 MiB.
+Credential bootstrap is separately bounded and consumes the same remaining
+acquisition time. Unsupported write or unbounded traversal behavior is refused
+by the Evidence profile rather than inherited from the engine's other hosts.
 
-After authorization and durable access-attempt audit, Rust supplies only the
-source-required authorized selectors and the exact closed adapter context of
-non-secret parameters plus empty or schema-validated prior facts to a reviewed
-preparation script. The script renders the one request channel its transport
-permits: ordered query pairs and at most one JSON body for `http-json`, or the
-values of the parameters the statement declares it prepares for
-`sqlite-extract`. It cannot choose the source, origin, path template or
-path-binding origin, method, headers, credentials, redirects, retries,
-pagination traversal, statement text, a parameter the statement fills from an
-authorized selector, or another request.
-Rust validates and encodes the complete result before any credential is
-acquired and before any row is read.
-This is deterministic request rendering, not caller-supplied templating or
-dynamic source planning.
-
-After bounded JSON parsing, Rust applies the source's non-empty extended JSON
-Pointer projection before extraction. Unselected object keys are removed,
-array order and length are preserved, and missing leaves remain missing. The
-acquisition posture still describes the pre-projection wire response. Exact
-projection grammar and conflict rules are part of the reviewed adapter ABI.
-
-An extract source needs no separate projection step, because the statement's
-select list is its projection. Rust maps the bounded result set into a JSON
-tree of the declared column names, and nothing the statement did not select
-exists to be removed from it.
-
-Rust then validates the resulting tree against the source's required response
-schema, a closed JSON Schema in the same subset as the adapter-parameter and
-fact schemas. A response outside the shape the adapter was reviewed against is
-a source-protocol failure and no script runs, so hand-written protocol checking
-is not the only thing standing between a malformed response and fact
-construction. What stays with the script is what a shape cannot state, such as
-how a reported total agrees with the records returned and which values must
-agree with the closed adapter parameters.
+The final route result is a closed unique-match, no-match, ambiguous or
+unresolved lookup. Only a unique match carries facts, which must satisfy the
+route's closed fact schema. The
+Evidence host validates that result before derivation. Missing or malformed
+facts cannot become a signed assertion. The deadline also gates admission to
+the terminal disclosure-release append. An append admitted before expiry
+completes without cancellation and may return its exact audited bytes after
+expiry; the bound is not a hard response wall-clock cutoff.
 
 A Version 1 source must provide a bounded lookup that can establish zero, one,
 or multiple results from the configured selector. If an existing system cannot
@@ -753,13 +658,13 @@ Evidence deployment through its signed Evidence protocol. The governed source
 pins the complete requester-scoped definition and independently accepted public
 keys. Rust generates a fresh request nonce, uses the ordinary source credential,
 and verifies the signed answer before exposing only its declared values to
-projection and extraction. The upstream authorizes and audits the asking service
+pack normalization. The upstream authorizes and audits the asking service
 independently. The asking service trusts that signer to resolve the supplied
 selectors, accepts opaque subject bindings on first use, and retains neither
 bindings nor assertions. A changed upstream value is acquired again on the next
 request; verification failure is a dependency failure without an unsigned
 fallback. This adds no acquisition shape or wallet-delivery service. See the
-[HTTP source configuration](reference/request-adapter/deployment-projects/CONFIG.md#http-source).
+[source connection policy](reference/request-adapter/deployment-projects/CONFIG.md#governed-source-connection-policy).
 
 The initial generic source-authentication profiles are HTTP Basic, a static
 Authorization header, a static API-key header, and OAuth 2.0 client
@@ -788,16 +693,15 @@ Hostname verification and fixed-origin verification remain mandatory; there is
 no insecure or trust-all mode. Version 1 ignores ambient HTTP proxy environment
 variables and has no application-level proxy configuration.
 
-Those profiles and protections belong to `http-json`. An extract source has no
-origin to reach and presents no credential, which the next section treats as
-the point of the transport rather than a gap in it.
+Those profiles and protections apply to HTTP endpoints in the pack. A local
+extract component has no origin to reach and presents no source credential.
 
 ### 9.2 Reviewed read statements over a mounted extract
 
-A `sqlite-extract` source executes one reviewed SQL statement against a
-read-only SQLite file mounted beside the process. It is a coequal peer of
-`http-json`, not a reduced mode of it. The same authorization decision precedes
-it, the same durable access-attempt audit precedes its first row, it yields the
+The pack's `sqlite-extract` component executes a reviewed SQL statement against
+a read-only SQLite file mounted beside the process. Evidence selects its route
+through the same Source binding used for HTTP acquisition. The same
+authorization decision precedes it, the same durable access-attempt audit precedes its first row, it yields the
 same closed lookup outcomes, and the same derivation, output validation,
 signing, and release audit follow. A requirement acquires through one transport
 or the other, and every rule outside acquisition reads the same either way.
@@ -823,33 +727,30 @@ relational database is one conversion command from an extract file, and none of
 those formats becomes Evidence's problem. The conversion is the publisher's
 step, run with the publisher's tools, on the publisher's side of the boundary.
 
-Illustrative YAML, beside the HTTP source of the same bundle:
+An authored Source selects the reviewed extract route:
 
 ```yaml
 sources:
-  subject-extract:
-    type: sqlite-extract
-    extractProfile: subject-registry-extract
-    posture: source-derived
-    maximumExtractAgeSeconds: 86400
-    request:
-      statement: queries/subject-facts.sql
-      selectorInputs:
-        - role: subject
-          alternatives:
-            - profile: person-demographics-v1
-              fields: [given_name, family_name, birth_date]
-      parameterBindings:
-        birth_date:
-          type: selector
+  licence-register:
+    pack:
+      id: professional-licence-register
+      version: '1'
+    route: professional-licence
+    connection: licence-register-extract
+    acquisitionPosture: source-derived
+    inputs:
+      recordReference:
+        selector:
           role: subject
-          profile: person-demographics-v1
-          field: birth_date
-      maximumRows: 2
-    responseSchema: schemas/subject-extract-response.schema.yaml
-    extractScript: adapters/subject-extract-extract.rhai
-    factSchema: schemas/subject-extract-facts.schema.yaml
+          profile: record-reference-v1
+          field: record_reference
 ```
+
+The [SQLite deployment example](reference/request-adapter/deployment-projects/sqlite-extract-evidence/README.md)
+includes the packaged route. Its endpoint declares the statement artifact and
+digest, publication-age tolerance, columns, parameter names and row, cell,
+step, response-byte and concurrency bounds. Runtime configuration binds the
+logical extract profile to a local file; it does not supply SQL text.
 
 The statement is a bundle artifact covered by the package sum file. The file is not:
 the bundle names a logical extract and the closed runtime file binds it to a
@@ -940,7 +841,7 @@ the `publishedAt` observation time that the status ledger stores for
 reconciliation, and the capped status token `exp`, which carries it rounded
 down to the hour; that residual is accepted there.
 
-A bundle declares `maximumExtractAgeSeconds` for each extract source. The
+The pack endpoint declares `maximumExtractAgeSeconds` for its extract. The
 runtime compares it against `publishedAt` and refuses before any row is read,
 so an extract past its declared age fails as an unavailable dependency under
 its own safe category instead of yielding a confidently signed assertion about
@@ -976,31 +877,22 @@ otherwise.
 
 ### 9.3 Rhai extraction and derivation
 
-Version one uses two small Rhai interfaces in the same process:
+Provider normalization is reviewed pack code executed by the Adapter engine.
+An Evidence project's Functions expose only the `assertion-derive/v1` interface:
 
 ```text
-prepare(source_required_selectors, adapter_context) -> RequestParts
-extract(source_response, adapter_context) -> LookupResult
 derive(facts, declared_authorized_selectors, evaluation_context)
     -> array<DerivedConceptValue>
 ```
 
-`adapter_context` has exactly `parameters` and `prior_facts`. Parameters are
-closed trusted bundle data. Prior facts are empty for single and search stages;
-for a fixed fetch they are the closed search FactSet after Rust schema
-validation. Scripts cannot select the acquisition or source sequence.
+A pack route returns a closed lookup result. A matched result contains only
+its schema-validated facts; no-match, ambiguous and unresolved results carry no
+facts.
+Rust rejects unknown outcomes, broad candidate arrays, scores, counts or
+diagnostics at that boundary. Pack scripts cannot choose Evidence grants,
+assertion meaning, signing or disclosure policy.
 
-`LookupResult` is a closed tagged union:
-
-```text
-match(FactSet) | no_match | ambiguous
-```
-
-The source adapter maps a bounded provider response into that union. Facts are
-valid only on `match`; Rust rejects facts attached to another outcome, a match
-without the required facts, unknown outcomes, broad candidate arrays, scores,
-counts, or diagnostics. Derivation runs only for `match` and converts facts
-plus only the authorized selector roles and fields declared by the derivation
+Derivation runs only for a unique match and converts facts plus only the authorized selector roles and fields declared by the derivation
 into values for the concepts declared by the selected requirement. It may
 apply a reviewed deterministic
 relationship rule, such as exact membership of a stable candidate identifier
@@ -1036,7 +928,8 @@ Rhai receives no ambient access to:
 
 Scripts compile at startup and are identified by package sum file. Each invocation receives fresh local state. Explicit limits apply to operations, call depth, strings, collections, modules, and result size.
 
-A future `plan(context) -> SourceCall` hook requires a separate design and a demonstrated source that cannot use a fixed request. It is not a hidden extension point in version one.
+Acquisition changes require review of the pack route and its pinned artifacts.
+The derivation Function has no source-planning hook.
 
 ### 9.4 Rhai primitives
 
@@ -1071,13 +964,15 @@ The source layer is accepted only when the same core passes every reference
 shape described in section 5.7, across both transports. The contract suite
 verifies:
 
-- exact Rust-owned method, URL, selector, projection, headers, body, timeout,
-  redirect, and response-size behavior for an HTTP source;
+- exact pack-owned HTTP method, path, input binding, projection, headers and
+  body construction, with Rust-enforced destination policy, credential
+  isolation, TLS, timeout, redirect and response-size controls;
 - fresh runtime nonces, independently authenticated acquisition, complete signed
   response verification, and values-only extraction for an Evidence source,
   including changed source values and downstream holder-bound issuance;
-- exact Rust-owned statement text, authorizer verdict, parameter binding, row
-  and step bounds, and result-to-JSON mapping for an extract source, including
+- exact pack-owned SQL statement artifact, declared parameters and columns,
+  with Rust-enforced authorizer checks, typed parameter binding, row and step
+  bounds and bounded result-to-JSON mapping for an extract, including
   bundle-load refusal of a denied action, startup refusal of a file without
   publication metadata, refusal of an extract past its declared maximum age
   before any row is read, and the reserved evaluation instant standing in for
@@ -1106,14 +1001,13 @@ feature flag, dependency, configuration field, route, CLI option, or branch.
 Provider request and response variants remain ordinary bounded JSON rather than
 runtime subsystems.
 
-The executor prefers count plus one minimized result when a provider supports
-it. Otherwise it may request at most two minimally projected results so the
-adapter can distinguish a unique match from ambiguity. It never follows pages
-or performs broad candidate retrieval. Rhai must return `ambiguous` when two
-results are present and cannot compare them to choose one. An extract source
-reaches the same place through its declared row bound: a statement bounded at
-two rows separates a unique match from ambiguity without a candidate set ever
-existing.
+A route prefers a count plus one minimized result when a provider supports it.
+Otherwise the reviewed route acquires only enough projected data to establish
+no match, a unique match or ambiguity. Reviewed paging shares the acquisition's
+operation, time and byte bounds; it does not permit broad candidate retrieval
+or fuzzy selection. A route returns an ambiguous outcome when two matching
+records are present and cannot score them to choose one. An extract route uses
+its declared row bound to establish the same lookup outcomes.
 
 ## 10. Policy model
 

@@ -19,7 +19,7 @@ const PACK: &str = r#"{
           "attemptTimeoutMilliseconds": 10000, "maximumResponseBytes": 16777216 },
         { "id": "ledger", "component": "postgres", "authentication": { "type": "none" },
           "attemptTimeoutMilliseconds": 10000, "maximumResponseBytes": 1048576,
-          "queryFile": "queries/ledger.sql" }
+          "queryFile": "queries/ledger.sql", "keyColumn": "id", "parameterOrder": ["since"] }
     ],
     "queryFiles": [
         { "path": "queries/ledger.sql",
@@ -39,6 +39,7 @@ const PACK: &str = r#"{
                 "uri": "file:submissions",
                 "timeoutMilliseconds": 5000,
                 "decoder": { "delimiter": ";", "header": true },
+                "keyPointer": "/id",
                 "aggregationStrategy": { "type": "json-merge", "from": "page", "into": "records" }
             } },
             { "to": { "uri": "direct:normalize" } },
@@ -109,6 +110,15 @@ fn job() -> AdapterJob {
                 "digest": "sha256:678260a56715cba21db1f0687e5a2c5e5efb2ea0b8eea687b5f3ee8723c5f6c9"
             },
             "route": "kobo-submissions"
+        },
+        "destination": {
+            "type": "signed-coordinator-event",
+            "binding": "case-coordinator",
+            "workflow": "register-household",
+            "trigger": "submission-received",
+            "source": "urn:registry-adapter:job:kobo-daily",
+            "eventType": "org.openspp.registry.household-submitted.v1",
+            "dataSchema": "urn:registry-adapter:schema:household-submitted:v1"
         },
         "projection": {
             "fields": ["answers.age"],

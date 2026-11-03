@@ -46,24 +46,21 @@ The normative source set is:
   distinct entry schemas for mutually exclusive complete authorized-material
   and minimal authenticated authorization-refusal shapes. Complete events carry
   the closed `responseProtection` mode and require `signingKeyId` exactly for
-  cryptographically protected release; the refusal shape omits both; the
+  cryptographically protected release. Current `/v3` access-attempt events also
+  require the closed positive `executionBounds` captured from effective
+  immutable runtime configuration before credentials or effects, while
+  terminal events omit it. Retained authorized-material `/v2` events remain
+  readable and omit it; the authorization-refusal `/v2` shape is unchanged and
+  omits response protection, signing identity, and execution bounds. The
   request-batch shape groups bounded item indices by authority and pseudonymized
   subject set and records one ordered terminal outcome set;
 - `bundle.schema.yaml` and `runtime.schema.yaml`: the immutable governed bundle,
-  its bundle-level and grant-level `responseFormats` permission, closed
-  process-local runtime bindings, and their non-override boundary;
+  its digest-pinned Adapter pack route bindings, reviewed non-secret connection
+  policies, bundle-level and grant-level `responseFormats` permission, closed
+  process-local endpoint and credential bindings, and their non-override boundary;
 - `supported-value-forms.yaml`: the complete closed value-form vocabulary;
-- `rhai-abi.yaml` and `primitive-library.yaml`: the closed `prepare/2`,
-  `extract/2` or optional selector-aware `extract/3`, `prepare_batch/2`, `extract_batch/2`, and selector-aware
-  `derive/3` entry points, domain-neutral
-  primitive allowlist, and resource limits;
-- `source-contract.yaml`: the fixed HTTP JSON source boundary and the closed set
-  of acquisition kinds a requirement may declare; and
-- `sqlite-extract-source-contract.yaml`: the coequal `sqlite-extract` source
-  boundary, covering one reviewed statement executed against a read-only
-  mounted extract, the authorizer and bounds it runs under, the extract's
-  publication metadata and maximum age, and the runtime file binding that
-  names it; and
+- `rhai-abi.yaml` and `primitive-library.yaml`: the selector-aware `derive/3`
+  assertion ABI, domain-neutral primitive allowlist, and resource limits;
 - `security-invariant-matrix.yaml`: threat, enforcement point, and required
   negative test for every Version 1 trust and privacy invariant; and
 - `security-test-traceability.yaml`: exact executable Rust tests satisfying
@@ -73,10 +70,20 @@ The normative source set is:
   every numbered Version 1 acceptance requirement, under the same rejection
   rule.
 
-The complete trusted-script ABI, configuration vocabulary, executable fixture
-contract, and deployment-shaped references live under
-[`../reference/request-adapter/`](../reference/request-adapter/). They are
-normative Version 1 inputs, not future-profile examples.
+The current trusted derivation ABI is defined in
+[`../reference/request-adapter/ADAPTER-API.md`](../reference/request-adapter/ADAPTER-API.md).
+Source acquisition and extraction use the [Adapter pack contract](../../adapter/CONCEPT.md);
+Evidence retains authorization, input minimization, fact validation, derivation,
+signing, and release audit. The deployment and fixture references under
+[`../reference/request-adapter/`](../reference/request-adapter/) describe the
+corresponding current Evidence workflows.
+
+`source-contract.yaml` and `sqlite-extract-source-contract.yaml` are explicitly
+retired migration records for the inline Source transports. `rhai-abi.yaml`
+defines only the current assertion derivation ABI. Current source preparation, acquisition
+and extraction are governed Adapter pack route logic; an Evidence bundle selects
+a pinned pack, route, reviewed connection and authorized selector inputs without
+reproducing that transport program.
 
 ## Pre-1.0 definitions discovery migration
 
@@ -112,12 +119,11 @@ the only safe inference for a deployment that predates batch-ceiling
 discovery; that default does not make any client able to read a response
 written for the other spelling.
 
-The fixed HTTP source contract also adds optional
-`forwardAccessAttribution`, defaulting to `false`. Enabling it requires a
-Gateway version that emits the reserved base64url requester and purpose
-headers and a source that explicitly trusts the authenticated Evidence service
-to supply them. Existing source files retain their prior wire behavior when the
-member is absent.
+Access-attribution forwarding belongs to the reviewed protected-read host
+protocol selected by a pack endpoint. It requires a provider that explicitly
+trusts the authenticated Evidence service to supply the reserved requester and
+purpose headers. The retired inline `forwardAccessAttribution` Source member
+is not a configuration alias for that protocol.
 
 All schemas use source-neutral identifiers. Names of compatibility targets may
 appear only below `../fixtures/source-shapes/`. Acceptance-case vocabulary is
@@ -131,17 +137,18 @@ Evidence vocabulary.
    authority path, and every role's selector profile and value origin.
 2. A selector profile has one exact field set. Alternative sufficient sets or
    an added disambiguator are separate named profiles.
-3. The provider owns record lookup. Optional selector-aware extraction may verify exact returned-record identity against its minimized source inputs before returning reusable facts. Extraction may return only `match`,
-   `no_match`, or `ambiguous`; only `match` carries facts. A reviewed
+3. The provider owns record lookup. A pack route receives only its named,
+   authorized selector inputs and returns the closed `Matched`, `NoMatch`,
+   `Ambiguous`, or `Unresolved` lookup result; only `Matched` carries
+   schema-validated facts. A reviewed
    deterministic derivation may compare declared authorized selectors with
    complete facts from one uniquely resolved authoritative record.
-4. Rust owns authorization, minimized script inputs, fixed path and header
-   authority, networking, credentials, TLS trust, response projection, output
-   validation, evidence construction, signing, and audit. Rhai prepares only
-   ordered query pairs and one JSON body, extracts the closed lookup result or
-   an exact opaque-slot bijection for an eligible source batch,
-   and derives declared concepts from matched facts and explicitly declared
-   authorized selectors. It cannot perform I/O.
+4. Rust owns authorization, minimized pack inputs, fixed path and header
+   authority, networking, credentials, TLS trust, response and fact-schema
+   validation, evidence construction, signing, and audit. Governed Adapter pack
+   routes own source preparation and extraction. Evidence Rhai derives declared
+   concepts from matched facts and explicitly declared authorized selectors; it
+   cannot perform I/O.
 5. Signed flattened JWS over the exact UTF-8 payload bytes is mandatory and the
    default result. The exact unsigned media type selects the separately typed
    unsigned envelope, and the exact `application/dc+sd-jwt` media type selects
@@ -149,12 +156,17 @@ Evidence vocabulary.
    bundle and the one complete matched grant both permit it. No failure on any
    format falls back to another format, and the final immutable bytes exist
    before the disclosure-release audit that gates them.
+   Admission to that durable append is the disclosure-begin boundary and final
+   acquisition-deadline gate. An
+   append admitted before expiry completes without cancellation and may return
+   the exact bytes after expiry; the deadline is not a hard response-time cutoff.
 6. The complete enabled bundle is one disclosure surface. Individually safe
    definitions may still be rejected when their combination reconstructs a
    protected value.
 7. The governed bundle and `runtime.yaml` are separate closed startup inputs.
-   Runtime binds only process-local paths, listener bounds, the audit destination,
-   file secrets, signer transport and pinned version, and logical private CAs.
+   Runtime binds only process-local paths, listener and acquisition bounds, the
+   audit destination, endpoint material, file secrets, signer transport and
+   pinned version, and logical private CAs.
    It cannot override governed semantics, source authority, or the governed
    active public key.
 8. Service signing keys are exact ES256 P-256 public JWKs whose `kid` is their

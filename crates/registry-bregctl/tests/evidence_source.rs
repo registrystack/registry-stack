@@ -42,6 +42,53 @@ fn export(output: &Path, fields: &str) -> Output {
 }
 
 #[test]
+fn explicit_pack_authentication_is_emitted() {
+    let temp = tempfile::tempdir().unwrap();
+    let destination = temp.path().canonicalize().unwrap().join("oauth-export");
+    let project = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/breg/evidence/registry")
+        .canonicalize()
+        .unwrap();
+    let result = Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .args(["--format", "json", "generate", "evidence-source"])
+        .arg(project)
+        .args([
+            "--access-profile",
+            "evidence-source",
+            "--record-type",
+            "record",
+            "--selector",
+            "by-code",
+            "--fields",
+            "status",
+            "--source-id",
+            "registry-status",
+            "--connection",
+            "registry",
+            "--authentication",
+            "oauth2-private-key-jwt",
+            "--output",
+        ])
+        .arg(&destination)
+        .output()
+        .unwrap();
+
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stdout)
+    );
+    let pack: Value = serde_norway::from_slice(
+        &fs::read(destination.join("adapter-packs/registry-status/pack.yaml")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        pack["endpoints"][0]["authentication"],
+        serde_json::json!({"type":"oauth2-private-key-jwt"})
+    );
+}
+
+#[test]
 fn native_export_is_create_only_and_reports_selected_contract() {
     let temp = tempfile::tempdir().unwrap();
     let destination = temp.path().canonicalize().unwrap().join("export");
@@ -65,14 +112,17 @@ fn native_export_is_create_only_and_reports_selected_contract() {
         &fs::read(destination.join("sources/registry-status.yaml")).unwrap(),
     )
     .unwrap();
+    let pack: Value = serde_norway::from_slice(
+        &fs::read(destination.join("adapter-packs/registry-status/pack.yaml")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(source["pack"]["id"], "registry-status");
+    assert_eq!(source["route"], "lookup");
+    assert_eq!(source["inputs"].as_object().unwrap().len(), 2);
     assert_eq!(
-        source["request"]["selectorInputs"][0]["alternatives"]
-            .as_array()
-            .unwrap()
-            .len(),
-        2
+        pack["endpoints"][0]["authentication"]["type"],
+        "static-authorization"
     );
-    assert_eq!(source["request"]["projection"].as_array().unwrap().len(), 3);
     assert!(!String::from_utf8_lossy(&manifest).contains("SYNTHETIC-PRIVATE-LABEL"));
     fs::write(destination.join("author-note"), "preserve this work").unwrap();
     assert!(!export(&destination, "status").status.success());

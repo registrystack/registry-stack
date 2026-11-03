@@ -1,5 +1,12 @@
-type: object
-additionalProperties: false
-required: [result]
-properties:
-  result: {type: boolean}
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "result"
+  ],
+  "properties": {
+    "result": {
+      "type": "boolean"
+    }
+  }
+}

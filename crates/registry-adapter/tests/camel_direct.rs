@@ -56,6 +56,7 @@ fn direct_endpoints(
         mtls_identity: None,
         attempt_timeout_milliseconds: None,
         maximum_response_bytes: None,
+        maximum_concurrency: BoundedU64::new(8).expect("concurrency"),
     };
     let endpoint = Endpoint {
         id: LocalId::new("tracker").expect("endpoint id"),
@@ -63,7 +64,7 @@ fn direct_endpoints(
         authentication: EndpointAuthentication::StaticApiKey {
             header_name: "x-api-key".to_owned(),
         },
-        attempt_timeout_milliseconds: BoundedU64::new(10_000).expect("attempt timeout"),
+        attempt_timeout_milliseconds: Some(BoundedU64::new(10_000).expect("attempt timeout")),
         maximum_response_bytes: BoundedU64::new(65_536).expect("response bound"),
         response_headers: UniqueList::new(Vec::new()).expect("response headers"),
         request_headers: UniqueList::new(Vec::new()).expect("request headers"),
@@ -72,6 +73,10 @@ fn direct_endpoints(
         query_file: None,
         operation_name: None,
         variables: None,
+        sqlite_extract: None,
+        key_column: None,
+        parameter_order: None,
+        host_protocol: None,
     };
     let config = AdapterEndpointBindings {
         id: LocalId::new("direct").expect("deployment id"),
@@ -377,6 +382,29 @@ fn an_undeclared_direct_target_is_refused_at_load() {
         )),
     );
     check_direct_targets(&routes).expect("a declared target is served");
+}
+
+#[tokio::test]
+async fn a_direct_chain_at_the_bounded_depth_completes() {
+    let bound = registry_adapter_core::MAX_DIRECT_DEPTH;
+    let mut chain = serde_json::Map::new();
+    for hop in 0..bound - 1 {
+        chain.insert(
+            format!("hop{hop}"),
+            json!([{"to": {"uri": format!("direct:hop{}", hop + 1)}}]),
+        );
+    }
+    chain.insert(
+        format!("hop{}", bound - 1),
+        json!([{"setProperty": {"name": "x", "value": {"constant": 1}}}]),
+    );
+
+    let lane = Lane::over(
+        json!([{"to": {"uri": "direct:hop0"}}]),
+        Value::Object(chain),
+    );
+    let outcome = lane.run().await;
+    assert_eq!(ok(&outcome).property("x"), Some(&json!(1)));
 }
 
 #[tokio::test]

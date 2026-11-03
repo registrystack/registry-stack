@@ -1242,14 +1242,10 @@ fn write_sealed_bundle(root: &Path, state: &Value) {
         .expect("state definitions")
         .clone();
     let mut selector_profiles = serde_json::Map::new();
-    let mut source_selectors =
-        std::collections::BTreeMap::<String, std::collections::BTreeSet<String>>::new();
+    let mut sources = serde_json::Map::new();
     let mut authored_definitions = serde_json::Map::new();
-    let mut functions = vec![
-        json!({"id":"extract-record","interface":"source-extract/v1","source":"functions/extract-record.rhai"}),
-    ];
-    let mut scripts = std::collections::BTreeMap::from([("functions/extract-record.rhai".to_owned(),
-        "fn extract(response, context) { #{outcome: \"match\", facts: #{active: response.active}} }".to_owned())]);
+    let mut functions = Vec::new();
+    let mut scripts = std::collections::BTreeMap::new();
     let mut audiences = vec!["urn:registrystack:evidence:local:caller".to_owned()];
     for client in [
         "age-checker",
@@ -1287,13 +1283,38 @@ fn write_sealed_bundle(root: &Path, state: &Value) {
                     profile.to_owned(),
                     json!({"maximumAggregateBytes":512,"fields":fields}),
                 );
-                source_selectors
-                    .entry(role.to_owned())
-                    .or_default()
-                    .insert(profile.to_owned());
                 json!({"role":role,"selectors":[profile]})
             })
             .collect::<Vec<_>>();
+        let source_id = format!("{id}-record");
+        let (route, inputs) = match id {
+            "adult-status" => (
+                "person",
+                json!({"personId":{"selector":{"role":"person","profile":"local-subject-adult-status-v1","field":"person_id"}}}),
+            ),
+            "age-bracket" => (
+                "person",
+                json!({"personId":{"selector":{"role":"person","profile":"local-subject-age-bracket-v1","field":"person_id"}}}),
+            ),
+            "relationship-check" => (
+                "relationship",
+                json!({
+                    "childId":{"selector":{"role":"child","profile":"child-reference-v1","field":"child_reference"}},
+                    "candidateId":{"selector":{"role":"candidate","profile":"person-reference-v1","field":"person_reference"}}
+                }),
+            ),
+            _ => panic!("unexpected retained definition {id}"),
+        };
+        sources.insert(
+            source_id.clone(),
+            json!({
+                "pack":{"id":"synthetic-register","version":"1"},
+                "route":route,
+                "connection":"synthetic-register",
+                "inputs":inputs,
+                "acquisitionPosture":"record-transformed"
+            }),
+        );
         let outputs = definition["concepts"]
             .as_array()
             .unwrap()
@@ -1332,35 +1353,155 @@ fn write_sealed_bundle(root: &Path, state: &Value) {
             "semantics":{"requirement":definition["requirementUri"],"kind":"criterion","evidenceType":format!("urn:registrystack:evidence:local:evidence-type:{id}"),"referenceFrameworks":["urn:example:framework:request-verification"]},
             "purpose":definition["purpose"],
             "grantCeiling":{"authorities":["organizational"],"actorKinds":["service"],"valueOrigins":["request"],"audiences":audiences},
-            "subjects":subjects,"acquisition":{"type":"single","source":"record"},
+            "subjects":subjects,"acquisition":{"source":source_id},
             "derive":{"function":function_id},"outputs":outputs,"validitySeconds":300,
             "subjectBinding":"audience-scoped","representations":["signed-jws"]
         }));
     }
+    let person_inputs = serde_json::to_vec(&json!({
+        "type":"object","additionalProperties":false,"required":["personId"],
+        "properties":{"personId":{"type":"string","minLength":1,"maxLength":128}}
+    }))
+    .unwrap();
+    let relationship_inputs = serde_json::to_vec(&json!({
+        "type":"object","additionalProperties":false,"required":["childId","candidateId"],
+        "properties":{
+            "childId":{"type":"string","minLength":1,"maxLength":128},
+            "candidateId":{"type":"string","minLength":1,"maxLength":128}
+        }
+    }))
+    .unwrap();
+    let facts = serde_json::to_vec(&json!({
+        "type":"object","additionalProperties":false,"required":["active"],
+        "properties":{"active":{"type":"boolean"}}
+    }))
+    .unwrap();
+    let lookup = br#"fn lookup(exchange) {
+    let response = exchange.body;
+    if response.type_of() != "map" || !response.contains("active") {
+        throw "source_protocol_error";
+    }
+    #{lookup: "matched", facts: #{active: response["active"]}}
+}
+"#;
+    let pinned = |path: &str, bytes: &[u8]| json!({"path":path,"digest":registry_platform_config::sha256_uri(bytes)});
+    let pack_document = json!({
+        "apiVersion":registry_adapter_core::ADAPTER_PACK_API_VERSION,
+        "kind":registry_adapter_core::ADAPTER_PACK_KIND,
+        "id":"synthetic-register","version":"1","testedVersions":[],
+        "endpoints":[{
+            "id":"register","component":"http",
+            "authentication":{"type":"static-authorization"},
+            "attemptTimeoutMilliseconds":2000,"maximumResponseBytes":4096,
+            "requestHeaders":["accept"],"responseHeaders":[],
+            "operations":[{"id":"lookup","safeUpstream":true}]
+        }],
+        "scripts":[pinned("scripts/lookup.rhai",lookup)],
+        "sourceRoutes":[
+            {
+                "id":"person",
+                "evidence":{
+                    "inputsSchema":pinned("schemas/person-inputs.json",&person_inputs),
+                    "factsSchema":pinned("schemas/facts.json",&facts),
+                    "acquisitionPosture":"record-transformed"
+                },
+                "steps":[
+                    {"setHeader":{"name":"Accept","value":{"constant":"application/json"}}},
+                    {"to":{"uri":"http:register","parameters":{
+                        "httpMethod":"GET","path":"/record","operation":"lookup",
+                        "query":{"person_id":{"jsonpath":"$.personId"}}
+                    }}},
+                    {"setBody":{"rhai":{"file":"scripts/lookup.rhai","entrypoint":"lookup"}}}
+                ]
+            },
+            {
+                "id":"relationship",
+                "evidence":{
+                    "inputsSchema":pinned("schemas/relationship-inputs.json",&relationship_inputs),
+                    "factsSchema":pinned("schemas/facts.json",&facts),
+                    "acquisitionPosture":"record-transformed"
+                },
+                "steps":[
+                    {"setHeader":{"name":"Accept","value":{"constant":"application/json"}}},
+                    {"to":{"uri":"http:register","parameters":{
+                        "httpMethod":"POST","path":"/relationship","operation":"lookup",
+                        "body":{"jsonpath":"$"}
+                    }}},
+                    {"setBody":{"rhai":{"file":"scripts/lookup.rhai","entrypoint":"lookup"}}}
+                ]
+            }
+        ],
+        "capabilities":{
+            "components":["http"],"languages":["constant","jsonpath","rhai"],
+            "eips":["setBody","setHeader","to"]
+        }
+    });
+    let pack_bytes = serde_json::to_vec(&pack_document).unwrap();
+    let pack_artifacts = std::collections::BTreeMap::from([
+        (
+            "schemas/person-inputs.json".to_owned(),
+            person_inputs.clone(),
+        ),
+        (
+            "schemas/relationship-inputs.json".to_owned(),
+            relationship_inputs.clone(),
+        ),
+        ("schemas/facts.json".to_owned(), facts.clone()),
+        ("scripts/lookup.rhai".to_owned(), lookup.to_vec()),
+    ]);
     let project_document = json!({
         "apiVersion":registry_evidence_authoring::project::PROJECT_API_VERSION,
         "kind":"EvidenceProject","id":"request-verify-fixture","selectorProfiles":selector_profiles,
         "functions":functions,
-        "sources":{"record":{
-            "type":"http-json","connection":"synthetic-register","acquisitionPosture":"record-transformed",
-            "selectors":source_selectors.iter().map(|(role,profiles)|json!({"role":role,"profiles":profiles})).collect::<Vec<_>>(),
-            "request":{"method":"GET","path":"/record","fixedHeaders":[]},
-            "response":{"projection":["/active"],"shape":{"type":"object","required":["active"],"properties":{"active":{"type":"boolean"}}},"maximumBytes":4096},
-            "extract":{"function":"extract-record"},"facts":{"active":{"type":"boolean"}},
-            "limits":{"attemptTimeoutMilliseconds":2000,"maximumConcurrency":4}
-        }},"assertionDefinitions":authored_definitions
+        "sources":sources,"assertionDefinitions":authored_definitions
     });
     let project_bytes = serde_json::to_vec(&project_document).unwrap();
     let project =
         registry_evidence_authoring::project::read_project("evidence.yaml", &project_bytes)
             .unwrap()
             .value;
-    let compiled = registry_evidence_authoring::compile::compile(&project, &scripts).unwrap();
+    let checked_route = |route: &str, inputs_schema: &Value| {
+        let source = project
+            .sources
+            .values()
+            .find(|source| source.route.as_str() == route)
+            .expect("checked route has one retained Source binding");
+        registry_evidence_authoring::compile::CheckedPackRoute {
+            pack: source.pack.clone(),
+            route: source.route.clone(),
+            digest: registry_platform_config::sha256_uri(&pack_bytes),
+            inputs_schema: inputs_schema.clone(),
+            facts_schema: serde_json::from_slice(&facts).unwrap(),
+            acquisition_posture: source.acquisition_posture,
+            pack_bytes: pack_bytes.clone(),
+            artifacts: pack_artifacts.clone(),
+        }
+    };
+    let checked_routes = [
+        checked_route("person", &serde_json::from_slice(&person_inputs).unwrap()),
+        checked_route(
+            "relationship",
+            &serde_json::from_slice(&relationship_inputs).unwrap(),
+        ),
+    ];
+    let compiled = registry_evidence_authoring::compile::compile_with_pack_routes(
+        &project,
+        &scripts,
+        &checked_routes,
+    )
+    .unwrap();
     private_file(&root.join("evidence.yaml"), &project_bytes, 0o644);
     fs::create_dir_all(root.join("functions")).unwrap();
     for (path, text) in &scripts {
         private_file(&root.join(path), text.as_bytes(), 0o644);
     }
+    let pack_root = root.join("adapter-packs/synthetic-register");
+    for (path, bytes) in &pack_artifacts {
+        let path = pack_root.join(path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        private_file(&path, bytes, 0o644);
+    }
+    private_file(&pack_root.join("pack.yaml"), &pack_bytes, 0o644);
     let mut target = registry_platform_yaml::Reader::new("local-target.yaml")
         .scan(include_bytes!(
             "../../../products/evidence/examples/standalone/local-target.yaml"
@@ -1458,8 +1599,8 @@ fn write_sealed_bundle(root: &Path, state: &Value) {
             max_files: 1024,
             max_file_bytes: 1024 * 1024,
             max_total_bytes: 16 * 1024 * 1024,
-            max_depth: 3,
-            max_path_bytes: 128,
+            max_depth: 16,
+            max_path_bytes: 512,
         },
         "evidencectl package",
     )

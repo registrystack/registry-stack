@@ -39,7 +39,9 @@ fn unknown_keys_are_reported_at_the_key() {
 }
 #[test]
 fn environment_substitution_is_refused_without_expansion() {
-    let p = Project::new(&SOURCE.replace("population", "${SOURCE_CONNECTION}"));
+    let source = SOURCE.replace("connection: population", "connection: ${SOURCE_CONNECTION}");
+    assert_ne!(source, SOURCE, "the substitution mutation stays effective");
+    let p = Project::new(&source);
     assert!(p
         .index()
         .diagnostics()

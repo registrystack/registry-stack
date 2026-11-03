@@ -32,10 +32,12 @@ authentication:
     maximumTokenLifetimeSeconds: 300
 connections:
   operator-http:
-    origin: http://127.0.0.1:8081
-    authentication:
-      type: bearer
-      tokenRef: secret:file/operator-source-token
+    endpoints:
+      operator-register:
+        origin: http://127.0.0.1:8081
+        authentication:
+          type: static-authorization
+          tokenRef: secret:file/operator-source-token
 secretProviders:
   file:
     root: .generated/secrets

@@ -10,89 +10,23 @@ selectorProfiles:
         minimumBytes: 1
         maximumBytes: 64
 functions:
-- id: extract-operator
-  interface: source-extract/v1
-  source: functions/extract-operator.rhai
 - id: derive-operator
   interface: assertion-derive/v1
   source: functions/derive-operator.rhai
 sources:
   operator-register:
-    type: http-json
+    pack:
+      id: operator-register
+      version: '1'
+    route: operator-active
     connection: operator-http
     acquisitionPosture: record-transformed
-    selectors:
-    - role: operator
-      profiles:
-      - operator-by-id
-    request:
-      method: GET
-      path: /operators/{operator-id}
-      pathBindings:
-        operator-id:
-          selector:
-            role: operator
-            profile: operator-by-id
-            field: operator-id
-      fixedHeaders:
-      - name: Accept
-        value: application/json
-    response:
-      projection:
-      - /total
-      - /record
-      shape:
-        type: object
-        required:
-        - total
-        properties:
-          total:
-            type: integer
-            minimum: 0
-            maximum: 2
-          record:
-            type: object
-            required:
-            - operator_id
-            - active
-            - status
-            - address_canary
-            properties:
-              operator_id:
-                type: string
-                minimumBytes: 1
-                maximumBytes: 64
-              active:
-                type: boolean
-              status:
-                type: string
-                values:
-                - active
-                - inactive
-                - suspended
-              address_canary:
-                type: string
-                minimumBytes: 1
-                maximumBytes: 128
-      maximumBytes: 16384
-    extract:
-      function: extract-operator
-    facts:
-      active:
-        type: boolean
-      status:
-        type: controlled-category
-        values:
-        - active
-        - inactive
-        - suspended
-      address-canary:
-        type: string
-        minimumBytes: 1
-        maximumBytes: 128
-    limits:
-      attemptTimeoutMilliseconds: 2000
-      maximumConcurrency: 8
+    inputs:
+      operatorId:
+        selector:
+          role: operator
+          profile: operator-by-id
+          field: operator-id
 assertionDefinitions:
   operator-active:
     question: Is this operator active for facility administration?
@@ -117,7 +51,6 @@ assertionDefinitions:
       selectors:
       - operator-by-id
     acquisition:
-      type: single
       source: operator-register
     derive:
       function: derive-operator

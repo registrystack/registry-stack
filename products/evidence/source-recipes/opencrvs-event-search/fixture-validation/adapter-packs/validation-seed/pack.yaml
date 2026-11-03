@@ -1,0 +1,34 @@
+apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: validation-seed
+version: '1'
+testedVersions: []
+endpoints:
+- id: validation-seed
+  component: http
+  authentication: {type: static-authorization}
+  attemptTimeoutMilliseconds: 1000
+  maximumResponseBytes: 1024
+  requestHeaders: [accept]
+  responseHeaders: []
+  operations: [{id: lookup}]
+  testedVersions: []
+sourceRoutes:
+- id: validation-seed
+  evidence:
+    inputsSchema: {path: schemas/inputs.json, digest: 'sha256:054a9ae702344180c188982ea7d281c7756e1bcb76b8c82a5aa200f0b35ad4ed'}
+    factsSchema: {path: schemas/facts.json, digest: 'sha256:e865609a0d3e9b08d69c3ab88eb64693c63f193054d871a3f319d2da9b92a09e'}
+    acquisitionPosture: record-transformed
+  steps:
+  - setHeader: {name: Accept, value: {constant: application/json}}
+  - to:
+      uri: http:validation-seed
+      parameters: {httpMethod: GET, path: /seed, operation: lookup}
+  - validateSchema: {path: schemas/provider-response.json, digest: 'sha256:e865609a0d3e9b08d69c3ab88eb64693c63f193054d871a3f319d2da9b92a09e'}
+  - setBody: {rhai: {file: scripts/lookup.rhai, entrypoint: lookup}}
+scripts:
+- {path: scripts/lookup.rhai, digest: 'sha256:16c223e9b4db58bf076a409c5bef3514fb26df7234ff2a2c55ffec9729c9af6f'}
+capabilities:
+  components: [http]
+  languages: [constant, rhai]
+  eips: [setBody, setHeader, to, validate]

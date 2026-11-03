@@ -1,0 +1,26 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "opaque_alpha": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80
+    },
+    "opaque_delta": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 999999
+    },
+    "opaque_kappa": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 16
+    }
+  },
+  "required": [
+    "opaque_alpha",
+    "opaque_delta",
+    "opaque_kappa"
+  ]
+}

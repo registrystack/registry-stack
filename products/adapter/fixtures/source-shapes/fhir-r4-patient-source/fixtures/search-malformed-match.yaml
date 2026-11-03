@@ -1,0 +1,56 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json
+#
+# Synthetic negative fixture derived from FHIR R4 Bundle search semantics. No
+# FHIR server produced these exact bytes. A Patient searchset match that is not
+# a Patient is refused by the pack's mapper as the existing script class.
+apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
+kind: AdapterFixture
+id: fhir-r4-patient-search-malformed-match
+pack: fhir-r4-patient
+upstreamVersion: "4.0.1 synthetic"
+provenance:
+  type: documented
+  reference: https://hl7.org/fhir/R4/bundle.html
+intercepts:
+  - type: token-endpoint
+    endpoint: fhir
+  - type: endpoint
+    endpoint: fhir
+entries:
+  - facadeRequest:
+      operation: records-search
+      path: /v1/records/patient
+      query: national_id=NID-MALFORMED-0001&limit=50
+    upstream:
+      - request:
+          endpoint: fhir
+          tokenRequest: true
+          method: POST
+          path: /oauth/token
+        response:
+          status: 200
+          body:
+            access_token: synthetic-replay-token
+            token_type: Bearer
+            expires_in: 300
+      - request:
+          endpoint: fhir
+          method: GET
+          path: /Patient
+          query: _count=50&_format=json&identifier=https%3A%2F%2Fid.example.invalid%2Fnational-id%7CNID-MALFORMED-0001
+        response:
+          status: 200
+          body:
+            resourceType: Bundle
+            type: searchset
+            total: 1
+            entry:
+              - resource:
+                  resourceType: Organization
+                  id: org-not-a-patient
+                search:
+                  mode: match
+    expected:
+      type: problem
+      class: script
+      code: source.script

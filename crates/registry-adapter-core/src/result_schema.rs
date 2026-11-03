@@ -20,6 +20,9 @@ use crate::project::{AdapterProject, Binding, RecordFieldType, RecordType};
 use registry_platform_yaml::Diagnostic;
 use serde_json::{json, Map, Value};
 
+/// Maximum RFC 3339 timestamp bytes admitted in an asynchronous expiry slot.
+pub const MAX_ASYNC_STATUS_EXPIRY_BYTES: usize = 35;
+
 /// The derived schema of one facade operation's response body
 /// (`products/adapter/CONCEPT.md` section 6): the operation's response
 /// envelope with every slot replaced by the closed schema of what fills
@@ -50,6 +53,7 @@ pub fn derive_operation_result_schema(
         Some(project),
         &profile.parameterized_parts,
         None,
+        EnvelopeKind::Ordinary,
     )
 }
 
@@ -118,6 +122,41 @@ pub fn derive_binding_result_schema(
         Some(project),
         &profile.parameterized_parts,
         None,
+        EnvelopeKind::Ordinary,
+    )
+}
+
+/// Derive the accepted-response schema of one asynchronous binding. This is
+/// deliberately separate from [`derive_binding_result_schema`], which stays
+/// the terminal success schema for synchronous and asynchronous operations.
+pub fn derive_binding_accepted_schema(
+    profile: &AdapterProfile,
+    project: &AdapterProject,
+    binding: &Binding,
+) -> Result<Value, String> {
+    let operation = profile
+        .operations
+        .get(binding.operation.as_str())
+        .ok_or_else(|| {
+            format!(
+                "the binding names operation {}, which the profile does not declare",
+                binding.operation.as_str()
+            )
+        })?;
+    let completion = operation.async_completion.as_ref().ok_or_else(|| {
+        format!(
+            "the operation {} declares no asynchronous completion contract",
+            binding.operation.as_str()
+        )
+    })?;
+    let template = parse_envelope_template(completion.accepted_envelope.text())?;
+    derive_value(
+        &template,
+        Some(binding),
+        Some(project),
+        &profile.parameterized_parts,
+        None,
+        EnvelopeKind::AsyncAccepted,
     )
 }
 
@@ -153,6 +192,7 @@ pub fn derive_operation_request_schema(
         Some(project),
         &profile.parameterized_parts,
         None,
+        EnvelopeKind::Ordinary,
     )
 }
 
@@ -171,7 +211,14 @@ pub fn derive_problem_envelope_schema(profile: &AdapterProfile) -> Result<Value,
         .iter()
         .all(|problem| problem.data_fields.is_none())
     {
-        return derive_value(&template, None, None, &profile.parameterized_parts, None);
+        return derive_value(
+            &template,
+            None,
+            None,
+            &profile.parameterized_parts,
+            None,
+            EnvelopeKind::Ordinary,
+        );
     }
     let branches = profile
         .problems
@@ -187,6 +234,7 @@ pub fn derive_problem_envelope_schema(profile: &AdapterProfile) -> Result<Value,
                     problem,
                     statuses: &statuses,
                 }),
+                EnvelopeKind::Ordinary,
             )
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -215,6 +263,12 @@ fn problem_response_statuses(profile: &AdapterProfile, problem: &Problem) -> Vec
 struct ProblemSchema<'a> {
     problem: &'a Problem,
     statuses: &'a [u32],
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum EnvelopeKind {
+    Ordinary,
+    AsyncAccepted,
 }
 
 /// The derivation error an envelope carrying a record slot raises when the
@@ -278,9 +332,10 @@ fn derive_value(
     project: Option<&AdapterProject>,
     parts: &[ParameterizedPart],
     problem: Option<ProblemSchema<'_>>,
+    kind: EnvelopeKind,
 ) -> Result<Value, String> {
     match template {
-        Value::String(text) => Ok(derive_member(text, binding, project, parts, problem)?.0),
+        Value::String(text) => Ok(derive_member(text, binding, project, parts, problem, kind)?.0),
         Value::Object(members) => {
             let mut properties = Map::new();
             let mut required = Vec::new();
@@ -298,11 +353,11 @@ fn derive_value(
                         continue;
                     }
                     Some((name, form)) => (
-                        form_schema(slot_schema(name, binding, project, problem)?, form),
+                        form_schema(slot_schema(name, binding, project, problem, kind)?, form),
                         form == SlotForm::Optional,
                     ),
                     None => (
-                        derive_value(value, binding, project, parts, problem)?,
+                        derive_value(value, binding, project, parts, problem, kind)?,
                         false,
                     ),
                 };
@@ -337,7 +392,7 @@ fn derive_value(
                             .to_string(),
                     );
                 }
-                let schema = derive_value(item, binding, project, parts, problem)?;
+                let schema = derive_value(item, binding, project, parts, problem, kind)?;
                 match &items_schema {
                     Some(previous) if previous != &schema => {
                         return Err(
@@ -370,10 +425,11 @@ fn derive_member(
     project: Option<&AdapterProject>,
     parts: &[ParameterizedPart],
     problem: Option<ProblemSchema<'_>>,
+    kind: EnvelopeKind,
 ) -> Result<(Value, bool), String> {
     match decode_slot(text) {
         Some((name, form)) => Ok((
-            form_schema(slot_schema(name, binding, project, problem)?, form),
+            form_schema(slot_schema(name, binding, project, problem, kind)?, form),
             form == SlotForm::Optional,
         )),
         None if text.contains(SLOT_MARK) => Err(ENVELOPE_GRAMMAR_RULE.to_string()),
@@ -400,6 +456,7 @@ fn slot_schema(
     binding: Option<&Binding>,
     project: Option<&AdapterProject>,
     problem: Option<ProblemSchema<'_>>,
+    kind: EnvelopeKind,
 ) -> Result<Value, String> {
     match name {
         "record" => record_schema(binding, project),
@@ -417,6 +474,23 @@ fn slot_schema(
         SLOT_PROBLEM_DATA => problem
             .and_then(|problem| problem_data_schema(problem.problem))
             .ok_or_else(|| "the problemData slot has no selected problem data declaration".to_string()),
+        "statusLink" if kind == EnvelopeKind::AsyncAccepted => Ok(json!({
+            "type": "string",
+            "minLength": 1,
+            "maxLength": crate::profile::MAX_ASYNC_STATUS_LINK_BYTES,
+        })),
+        "statusExpiresAt" if kind == EnvelopeKind::AsyncAccepted => Ok(json!({
+            "type": "string",
+            "format": "date-time",
+            "minLength": 20,
+            "maxLength": MAX_ASYNC_STATUS_EXPIRY_BYTES,
+        })),
+        "requestId" if kind == EnvelopeKind::AsyncAccepted => Ok(json!({
+            "type": "string",
+            "minLength": 32,
+            "maxLength": 32,
+            "pattern": "^[0-9a-f]{32}$",
+        })),
         "nextCursor" | "problemCode" | "problemDetail" | "problemTitle" | "recordId"
         | "recordType" | "requestId" => Ok(json!({"type": "string"})),
         "status" | "pageSize" => Ok(json!({"type": "integer"})),
@@ -865,6 +939,7 @@ mod tests {
 
     fn operation(envelope: &str) -> ProfileOperation {
         ProfileOperation {
+            async_completion: None,
             id: local("cases-find"),
             method: crate::model::HttpMethod::Get,
             path: "/v2/cases".to_string(),
@@ -936,6 +1011,7 @@ mod tests {
             templated_routes: UniqueIdList::<TemplatedRoute>::new(Vec::new()).expect("empty"),
             bindings: UniqueIdList::new(if bound {
                 vec![Binding {
+                    async_completion: None,
                     id: local("find-cases"),
                     operation: external("cases-find"),
                     record_type: local("case"),
@@ -1325,6 +1401,7 @@ mod tests {
         // the binding, not the envelope.
         let mut ghost_binding = project(true);
         ghost_binding.bindings = UniqueIdList::new(vec![Binding {
+            async_completion: None,
             id: local("find-cases"),
             operation: external("cases-find"),
             record_type: local("ghost"),
@@ -1428,6 +1505,7 @@ mod tests {
         .expect("unique");
         deployment.bindings = UniqueIdList::new(vec![
             Binding {
+                async_completion: None,
                 id: local("find-cases"),
                 operation: external("cases-find"),
                 record_type: local("case"),
@@ -1436,6 +1514,7 @@ mod tests {
                 maximum_upstream_calls: BoundedU64::<1, 100_000>::new(5).expect("budget"),
             },
             Binding {
+                async_completion: None,
                 id: local("find-patients"),
                 operation: external("cases-find"),
                 record_type: local("patient"),
@@ -1459,6 +1538,7 @@ mod tests {
             derive_operation_result_schema(&profile, &deployment, "cases-find").expect("derive");
         assert_eq!(first["properties"]["record"]["required"], json!(["id"]));
         let ghost = Binding {
+            async_completion: None,
             id: local("find-ghosts"),
             operation: external("cases-missing"),
             record_type: local("case"),
@@ -1569,6 +1649,59 @@ mod tests {
         assert_eq!(
             problem["properties"]["meta"]["properties"]["registryIdentifier"],
             json!({"type": "string"})
+        );
+    }
+
+    #[test]
+    fn accepted_schema_is_separate_bounded_and_profile_owned() {
+        let terminal_envelope = r#"{"cases": {{records}}, "requestId": "{{requestId}}"}"#;
+        let mut operation = operation(terminal_envelope);
+        operation.method = crate::model::HttpMethod::Post;
+        operation.success_status = registry_platform_yaml::BoundedU32::new(202).expect("status");
+        operation.async_completion = Some(crate::profile::ProfileAsyncCompletion {
+            completed_status: registry_platform_yaml::BoundedU32::new(200).expect("status"),
+            status_path: crate::profile::AsyncStatusPath::new(
+                "/v1/write-status/{statusId}".to_string(),
+            )
+            .expect("status path"),
+            accepted_envelope: EnvelopeTemplate(
+                r#"{"status":"accepted","link":"{{statusLink}}","expires":"{{statusExpiresAt}}","requestId":"{{requestId}}","registry":"registryIdentifier"}"#.to_string(),
+            ),
+        });
+        let mut async_profile = profile(terminal_envelope);
+        async_profile.operations = UniqueIdList::new(vec![operation]).expect("operation");
+        async_profile.parameterized_parts = UniqueList::new(vec![ParameterizedPart {
+            name: external("registryIdentifier"),
+            description: "the deployment registry".to_string(),
+        }])
+        .expect("part");
+        let deployment = project(true);
+        let binding = deployment.bindings.iter().next().expect("binding");
+
+        let accepted = derive_binding_accepted_schema(&async_profile, &deployment, binding)
+            .expect("accepted schema");
+        assert_eq!(
+            accepted["properties"]["link"],
+            json!({"type":"string","minLength":1,"maxLength":crate::profile::MAX_ASYNC_STATUS_LINK_BYTES})
+        );
+        assert_eq!(
+            accepted["properties"]["expires"],
+            json!({"type":"string","format":"date-time","minLength":20,"maxLength":MAX_ASYNC_STATUS_EXPIRY_BYTES})
+        );
+        assert_eq!(
+            accepted["properties"]["requestId"],
+            json!({"type":"string","minLength":32,"maxLength":32,"pattern":"^[0-9a-f]{32}$"})
+        );
+        assert_eq!(accepted["properties"]["registry"], json!({"type":"string"}));
+        assert!(accepted["properties"].get("cases").is_none());
+
+        let terminal = derive_binding_result_schema(&async_profile, &deployment, binding)
+            .expect("terminal schema");
+        assert!(terminal["properties"].get("cases").is_some());
+        assert!(terminal["properties"].get("link").is_none());
+        assert_eq!(
+            terminal["properties"]["requestId"],
+            json!({"type":"string"})
         );
     }
 }

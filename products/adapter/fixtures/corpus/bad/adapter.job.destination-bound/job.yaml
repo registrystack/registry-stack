@@ -1,0 +1,40 @@
+# Bad-corpus member adapter.job.destination-bound: the direct destination's
+# receipt horizon is zero, below the governed one-day minimum.
+apiVersion: id.registrystack.org/formats/adapter/job/v1alpha1
+kind: AdapterJob
+job:
+  id: destination-bound
+  version: "1"
+source:
+  pack:
+    id: destination-corpus
+    version: "1"
+    digest: sha256:62694db0e609ac51191426cafe1e1f3a8e984c1d0d4bfc8833478393580d9420
+  route: source
+destination:
+  type: direct-breg
+  binding: breg-test
+  accessProfile: writer
+  action: register-household
+  mode: proposal
+  mapping:
+    file: mappings/register.rhai
+    entrypoint: map_item
+    digest: sha256:1111111111111111111111111111111111111111111111111111111111111111
+  receiptRetentionDays: 0
+projection:
+  fields: [id]
+triggers:
+  - kind: interval
+    delayMilliseconds: 60000
+profile:
+  pageDeadlineMilliseconds: 30000
+  maximumResponseBytes: 1048576
+  maximumPageItems: 100
+  maximumPageBytes: 1048576
+  maximumUpstreamCalls: 1
+  read:
+    maximumFileBytes: 1048576
+    maximumRowBytes: 65536
+    maximumFieldBytes: 8192
+    maximumRowsPerPage: 100

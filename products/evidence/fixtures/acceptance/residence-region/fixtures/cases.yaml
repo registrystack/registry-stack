@@ -4,28 +4,247 @@ coequalAcceptanceDefinition: true
 syntheticOnly: true
 common:
   observedAt: '2026-08-02T00:00:00Z'
-  selector: {record_reference: synthetic-residence-record-001}
+  selector:
+    record_reference: synthetic-residence-record-001
   selectors:
-    subject: {profile: residence-record-v1, values: {record_reference: synthetic-residence-record-001}}
-  expectedRequestParts:
-    query: []
-    body: {lookup: {record_reference: synthetic-residence-record-001}, fields: [official_residence_code], limit: 2}
-  expectedTransport:
-    path: /v1/facts
-    fixedHeaders: [{name: Accept, value: application/json}]
+    subject:
+      profile: residence-record-v1
+      values:
+        record_reference: synthetic-residence-record-001
 cases:
-  - {id: positive, source: {total: 1, official_residence_code: R-101}, expectedValue: REGION-NORTH, expectedLookup: match, derivationRuns: true, signedSuccess: true}
-  - {id: negative-unknown-code, source: {total: 1, official_residence_code: R-999}, expectedPublicProblem: evidence.unavailable, derivationRuns: false, signedSuccess: false}
-  - {id: boundary-second-source-code-same-coarse-region, source: {total: 1, official_residence_code: R-102}, expectedValue: REGION-NORTH, expectedLookup: match, derivationRuns: true, signedSuccess: true}
-  - {id: boundary-other-coarse-region, source: {total: 1, official_residence_code: R-201}, expectedValue: REGION-SOUTH, expectedLookup: match, derivationRuns: true, signedSuccess: true}
-  - {id: negative-overly-precise-output, injectedDerivation: [{concept_id: urn:example:fixture:concept:residence-region, value: R-101}], expected: output-gate-rejection}
-  - {id: missing-fact, source: {total: 1}, expectedPublicProblem: evidence.unavailable, derivationRuns: false, signedSuccess: false}
-  - {id: missing-record, source: {total: 0}, expectedLookup: no_match, expectedPublicProblem: evidence.unavailable, derivationRuns: false, signedSuccess: false}
-  - {id: no-match, source: {total: 0}, expectedLookup: no_match, expectedPublicProblem: evidence.unavailable, derivationRuns: false, signedSuccess: false}
-  - {id: ambiguous, source: {total: 2}, expectedLookup: ambiguous, expectedPublicProblem: evidence.unavailable, derivationRuns: false, signedSuccess: false}
-  - {id: source-failure, sourceFailure: http-503, expectedPublicProblem: source.unavailable, signedSuccess: false}
-  - {id: anti-reconstruction, companionBundle: geographic-overlap, expected: bundle-rejection}
+  - id: positive
+    source:
+      intercepts:
+        - type: endpoint
+          endpoint: provider
+      exchanges:
+        - request:
+            endpoint: provider
+            method: POST
+            path: "/v1/facts"
+            headers:
+              accept: application/json
+            body:
+              lookup:
+                record_reference: synthetic-residence-record-001
+              fields:
+                - official_residence_code
+              limit: 2
+          response:
+            status: 200
+            body:
+              total: 1
+              official_residence_code: R-101
+    expectedValue: REGION-NORTH
+    expectedLookup: match
+    derivationRuns: true
+    signedSuccess: true
+  - id: negative-unknown-code
+    source:
+      intercepts:
+        - type: endpoint
+          endpoint: provider
+      exchanges:
+        - request:
+            endpoint: provider
+            method: POST
+            path: "/v1/facts"
+            headers:
+              accept: application/json
+            body:
+              lookup:
+                record_reference: synthetic-residence-record-001
+              fields:
+                - official_residence_code
+              limit: 2
+          response:
+            status: 200
+            body:
+              total: 1
+              official_residence_code: R-999
+    expectedPublicProblem: evidence.unavailable
+    derivationRuns: false
+    signedSuccess: false
+  - id: boundary-second-source-code-same-coarse-region
+    source:
+      intercepts:
+        - type: endpoint
+          endpoint: provider
+      exchanges:
+        - request:
+            endpoint: provider
+            method: POST
+            path: "/v1/facts"
+            headers:
+              accept: application/json
+            body:
+              lookup:
+                record_reference: synthetic-residence-record-001
+              fields:
+                - official_residence_code
+              limit: 2
+          response:
+            status: 200
+            body:
+              total: 1
+              official_residence_code: R-102
+    expectedValue: REGION-NORTH
+    expectedLookup: match
+    derivationRuns: true
+    signedSuccess: true
+  - id: boundary-other-coarse-region
+    source:
+      intercepts:
+        - type: endpoint
+          endpoint: provider
+      exchanges:
+        - request:
+            endpoint: provider
+            method: POST
+            path: "/v1/facts"
+            headers:
+              accept: application/json
+            body:
+              lookup:
+                record_reference: synthetic-residence-record-001
+              fields:
+                - official_residence_code
+              limit: 2
+          response:
+            status: 200
+            body:
+              total: 1
+              official_residence_code: R-201
+    expectedValue: REGION-SOUTH
+    expectedLookup: match
+    derivationRuns: true
+    signedSuccess: true
+  - id: negative-overly-precise-output
+    injectedDerivation:
+      - concept_id: urn:example:fixture:concept:residence-region
+        value: R-101
+    expected: output-gate-rejection
+  - id: missing-fact
+    source:
+      intercepts:
+        - type: endpoint
+          endpoint: provider
+      exchanges:
+        - request:
+            endpoint: provider
+            method: POST
+            path: "/v1/facts"
+            headers:
+              accept: application/json
+            body:
+              lookup:
+                record_reference: synthetic-residence-record-001
+              fields:
+                - official_residence_code
+              limit: 2
+          response:
+            status: 200
+            body:
+              total: 1
+    expectedPublicProblem: evidence.unavailable
+    derivationRuns: false
+    signedSuccess: false
+  - id: missing-record
+    source:
+      intercepts:
+        - type: endpoint
+          endpoint: provider
+      exchanges:
+        - request:
+            endpoint: provider
+            method: POST
+            path: "/v1/facts"
+            headers:
+              accept: application/json
+            body:
+              lookup:
+                record_reference: synthetic-residence-record-001
+              fields:
+                - official_residence_code
+              limit: 2
+          response:
+            status: 200
+            body:
+              total: 0
+    expectedLookup: no_match
+    expectedPublicProblem: evidence.unavailable
+    derivationRuns: false
+    signedSuccess: false
+  - id: no-match
+    source:
+      intercepts:
+        - type: endpoint
+          endpoint: provider
+      exchanges:
+        - request:
+            endpoint: provider
+            method: POST
+            path: "/v1/facts"
+            headers:
+              accept: application/json
+            body:
+              lookup:
+                record_reference: synthetic-residence-record-001
+              fields:
+                - official_residence_code
+              limit: 2
+          response:
+            status: 200
+            body:
+              total: 0
+    expectedLookup: no_match
+    expectedPublicProblem: evidence.unavailable
+    derivationRuns: false
+    signedSuccess: false
+  - id: ambiguous
+    source:
+      intercepts:
+        - type: endpoint
+          endpoint: provider
+      exchanges:
+        - request:
+            endpoint: provider
+            method: POST
+            path: "/v1/facts"
+            headers:
+              accept: application/json
+            body:
+              lookup:
+                record_reference: synthetic-residence-record-001
+              fields:
+                - official_residence_code
+              limit: 2
+          response:
+            status: 200
+            body:
+              total: 2
+    expectedLookup: ambiguous
+    expectedPublicProblem: evidence.unavailable
+    derivationRuns: false
+    signedSuccess: false
+  - id: source-failure
+    sourceFailure: http-503
+    expectedPublicProblem: source.unavailable
+    signedSuccess: false
+  - id: anti-reconstruction
+    companionBundle: geographic-overlap
+    expected: bundle-rejection
 privacyExpectation:
-  evidenceContains: [urn:example:fixture:concept:residence-region, REGION-NORTH]
-  evidenceExcludes: [official_residence_code, record_reference, R-101, R-102]
-  diagnosticsExclude: [synthetic-residence-record-001, R-101, R-102, REGION-NORTH]
+  evidenceContains:
+    - urn:example:fixture:concept:residence-region
+    - REGION-NORTH
+  evidenceExcludes:
+    - official_residence_code
+    - record_reference
+    - R-101
+    - R-102
+  diagnosticsExclude:
+    - synthetic-residence-record-001
+    - R-101
+    - R-102
+    - REGION-NORTH

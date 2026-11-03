@@ -1,0 +1,164 @@
+{
+  "apiVersion": "id.registrystack.org/formats/adapter/pack/v1alpha1",
+  "kind": "AdapterPack",
+  "id": "synthetic-register",
+  "version": "1",
+  "testedVersions": [],
+  "endpoints": [
+    {
+      "id": "register",
+      "component": "http",
+      "authentication": {
+        "type": "static-authorization"
+      },
+      "attemptTimeoutMilliseconds": 2000,
+      "maximumResponseBytes": 16384
+    }
+  ],
+  "scripts": [
+    {
+      "path": "scripts/lookup.rhai",
+      "digest": "sha256:bada3b382e1273fb391cded1406868ee7a5428a19ac0334870695f6a78c8928d"
+    }
+  ],
+  "sourceRoutes": [
+    {
+      "id": "person",
+      "evidence": {
+        "inputsSchema": {
+          "path": "schemas/inputs.json",
+          "digest": "sha256:20ee232ee61942c8cd65e73dd0f35faf42e72a39d15215e44f1bafd7a72fe049"
+        },
+        "factsSchema": {
+          "path": "schemas/person.json",
+          "digest": "sha256:28dd8d17d59a5b2d03b05d980e805ebbdf157d874e6665f8eccd2e0f01b4ef0f"
+        },
+        "acquisitionPosture": "record-transformed"
+      },
+      "steps": [
+        {
+          "setProperty": {
+            "name": "record-id",
+            "value": {
+              "jsonpath": "$.recordId"
+            }
+          }
+        },
+        {
+          "to": {
+            "uri": "http:register",
+            "parameters": {
+              "httpMethod": "GET",
+              "path": "/people/{{record-id}}",
+              "pathParameters": {
+                "record-id": {
+                  "exchangeProperty": "record-id"
+                }
+              }
+            }
+          }
+        },
+        {
+          "setBody": {
+            "rhai": {
+              "file": "scripts/lookup.rhai",
+              "entrypoint": "person"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "licence",
+      "evidence": {
+        "inputsSchema": {
+          "path": "schemas/inputs.json",
+          "digest": "sha256:20ee232ee61942c8cd65e73dd0f35faf42e72a39d15215e44f1bafd7a72fe049"
+        },
+        "factsSchema": {
+          "path": "schemas/licence.json",
+          "digest": "sha256:a5221198a3c6db8861018ef2dd8be750435b9039f320128404b1997ff0ff3e9f"
+        },
+        "acquisitionPosture": "record-transformed"
+      },
+      "steps": [
+        {
+          "setProperty": {
+            "name": "record-id",
+            "value": {
+              "jsonpath": "$.recordId"
+            }
+          }
+        },
+        {
+          "to": {
+            "uri": "http:register",
+            "parameters": {
+              "httpMethod": "GET",
+              "path": "/licences/{{record-id}}",
+              "pathParameters": {
+                "record-id": {
+                  "exchangeProperty": "record-id"
+                }
+              }
+            }
+          }
+        },
+        {
+          "setBody": {
+            "rhai": {
+              "file": "scripts/lookup.rhai",
+              "entrypoint": "licence"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "parents",
+      "evidence": {
+        "inputsSchema": {
+          "path": "schemas/inputs.json",
+          "digest": "sha256:20ee232ee61942c8cd65e73dd0f35faf42e72a39d15215e44f1bafd7a72fe049"
+        },
+        "factsSchema": {
+          "path": "schemas/parents.json",
+          "digest": "sha256:c5e0c67c1ca2f0aa402552f0a038c7f4a521f6fa3d34f95e153d1ec49e81b9ac"
+        },
+        "acquisitionPosture": "record-transformed"
+      },
+      "steps": [
+        {
+          "setProperty": {
+            "name": "record-id",
+            "value": {
+              "jsonpath": "$.recordId"
+            }
+          }
+        },
+        {
+          "to": {
+            "uri": "http:register",
+            "parameters": {
+              "httpMethod": "GET",
+              "path": "/parents/{{record-id}}",
+              "pathParameters": {
+                "record-id": {
+                  "exchangeProperty": "record-id"
+                }
+              }
+            }
+          }
+        },
+        {
+          "setBody": {
+            "rhai": {
+              "file": "scripts/lookup.rhai",
+              "entrypoint": "parents"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

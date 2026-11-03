@@ -55,52 +55,25 @@ selectorProfiles:
         type: string
         minimumBytes: 1
         maximumBytes: 64
+sourceConnections:
+  licence-register-extract:
+    endpoints: []
 sources:
   licence-register:
-    type: sqlite-extract
-    # The statement returns only the aggregate needed for derivation, so only
-    # that narrow fact crosses the source boundary.
-    posture: source-derived
-    # A logical name. runtime.yaml binds it to a file, so this reviewed bundle
-    # names no filesystem location and the same bytes promote unchanged from
-    # staging to production.
-    extractProfile: licence-register-extract
-    # A licence can be revoked on any day, so a week-old snapshot is the oldest
-    # this concept can be answered from. The judgement belongs to the concept
-    # rather than to the host, which is why it is reviewed here.
-    maximumExtractAgeSeconds: 604800
-    request:
-      statement: queries/professional-licence-lookup.sql
-      columns:
-        - {name: active_licence_count, type: integer}
-      selectorInputs:
-        - role: subject
-          alternatives:
-            - {profile: record-reference-v1, fields: [record_reference]}
-      # No preparation script and no preparation limits. The binding already
-      # states where the parameter comes from, so Rust resolves the authorized
-      # selector field and binds it with nothing standing in between.
-      parameterBindings:
-        record_reference:
-          type: selector
+    pack:
+      id: professional-licence-register
+      version: "1"
+      digest: sha256:a7237e50672d8c719875068dcae799bd2f20b4eb758c504c64ed5daf75c37aab
+      artifactPrefix: adapter-packs/professional-licence-register/a7237e50672d8c719875068dcae799bd2f20b4eb758c504c64ed5daf75c37aab
+    route: professional-licence
+    connection: licence-register-extract
+    inputs:
+      recordReference:
+        selector:
           role: subject
           profile: record-reference-v1
           field: record_reference
-      projection:
-        - /rows/*/active_licence_count
-      # Two rows is the ambiguity signal: one registrant is a unique match, two
-      # registrants filed under one reference is ambiguity the extraction script
-      # reads, and a third row is a register this statement does not understand
-      # rather than a lookup with three answers.
-      maximumRows: 2
-      maximumCellBytes: 64
-      maximumStatementSteps: 100000
-      attemptTimeoutMilliseconds: 2000
-      maximumResponseBytes: 8192
-      maximumConcurrency: 8
-    # Shape contract for the projected result, checked before extraction runs.
-    responseSchema: schemas/professional-licence-response.schema.yaml
-    extractScript: adapters/professional-licence-extract.rhai
+    posture: source-derived
     factSchema: schemas/professional-licence-facts.schema.yaml
 authorityProfiles:
   licence-verifier-v1:
@@ -120,7 +93,6 @@ requirements:
     uri: urn:gov:example:requirement:licence-register-status:v1
     kind: criterion
     acquisition:
-      type: single
       source: licence-register
     purposes: [professional-licence-verification]
     subjectRoles:

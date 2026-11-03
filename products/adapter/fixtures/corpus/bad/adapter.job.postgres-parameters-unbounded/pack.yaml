@@ -1,7 +1,7 @@
 # yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/pack/pack.v1alpha1.schema.json
 #
 # Bad-corpus member adapter.job.postgres-parameters-unbounded: this artifact set must be refused with
-# exactly adapter.job.postgres-parameters-unbounded. The source route's postgres send carries seventeen named parameters, one past the bound of sixteen.
+# exactly adapter.job.postgres-parameters-unbounded. The postgres endpoint declares seventeen ordered parameter names, one past the bound of sixteen.
 #
 # Refuse with:
 #   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.job.postgres-parameters-unbounded/project.yaml
@@ -25,6 +25,8 @@ endpoints:
     attemptTimeoutMilliseconds: 10000
     maximumResponseBytes: 1048576
     queryFile: queries/ledger.sql
+    keyColumn: id
+    parameterOrder: [p00, p01, p02, p03, p04, p05, p06, p07, p08, p09, p10, p11, p12, p13, p14, p15, p16]
 queryFiles:
   - path: queries/ledger.sql
     digest: sha256:1111111111111111111111111111111111111111111111111111111111111111

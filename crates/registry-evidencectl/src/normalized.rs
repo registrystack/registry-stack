@@ -2,16 +2,16 @@
 use crate::{authored, check::Checked};
 use anyhow::{bail, Context as _, Result};
 use registry_evidence_authoring::{
-    compile::{self, CompiledProject},
+    compile::{self, CheckedPackRoute, CompiledProject},
     formats::finding_diagnostic,
     project::{self, EvidenceProject},
-    target::{TargetAssuranceProfile, TargetSigner},
+    target::{EvidenceTarget, TargetAssuranceProfile, TargetOutboundTls, TargetSigner},
 };
 use registry_platform_crypto::{canonicalize_json, domain_separated_sha256};
 use registry_platform_yaml::Decoded;
 use serde_json::{json, Value};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
 };
 
@@ -54,21 +54,14 @@ fn read_decoded(root: &Path) -> Result<(Decoded<EvidenceProject>, BTreeMap<Strin
     }
     let assets = decoded
         .value
-        .sources
+        .assertion_definitions
         .values()
-        .filter_map(|source| source.request.get("statement").and_then(Value::as_str))
-        .chain(
-            decoded
-                .value
-                .assertion_definitions
+        .flat_map(|definition| {
+            definition
+                .outputs
                 .values()
-                .flat_map(|definition| {
-                    definition
-                        .outputs
-                        .values()
-                        .filter_map(|output| output.schema.as_deref())
-                }),
-        );
+                .filter_map(|output| output.schema.as_deref())
+        });
     let codelists = decoded
         .value
         .assertion_definitions
@@ -106,6 +99,242 @@ pub(crate) fn read(root: &Path) -> Result<(EvidenceProject, BTreeMap<String, Str
     let (decoded, scripts) = read_decoded(root)?;
     Ok((decoded.value, scripts))
 }
+
+pub(crate) fn read_pack_routes(
+    root: &Path,
+    project: &EvidenceProject,
+) -> Result<Vec<CheckedPackRoute>> {
+    let root = if root.is_file() {
+        root.parent()
+            .context("project file requires a parent directory")?
+    } else {
+        root
+    };
+    let mut routes = BTreeMap::new();
+    for source in project.sources.values() {
+        let key = format!(
+            "{}\0{}\0{}",
+            source.pack.id, source.pack.version, source.route
+        );
+        if routes.contains_key(&key) {
+            continue;
+        }
+        let pack_relative = format!("adapter-packs/{}/pack.yaml", source.pack.id);
+        let pack_path = safe_asset(root, &pack_relative)?;
+        let pack_bytes = authored::read_authored_file(&pack_path, "reviewed Adapter pack")?;
+        let format = registry_platform_yaml::FormatSpec {
+            kind: registry_adapter_core::ADAPTER_PACK_KIND,
+            envelope: registry_platform_yaml::EnvelopeRule::ApiVersionKind {
+                api_versions: &[registry_platform_yaml::ApiVersion::current(
+                    registry_adapter_core::ADAPTER_PACK_API_VERSION,
+                )],
+                retired_api_versions: &[],
+            },
+            removed_keys: &[],
+        };
+        let pack = registry_platform_yaml::Reader::new(pack_relative.as_str())
+            .decode::<registry_adapter_core::AdapterPack>(
+                &pack_bytes,
+                &registry_platform_yaml::Expect::one(&format),
+            )
+            .map_err(|_| {
+                anyhow::anyhow!("Adapter pack must satisfy the current AdapterPack contract")
+            })?
+            .value;
+        let document = serde_json::to_value(&pack).context("Adapter pack cannot be represented")?;
+        let pack_root = pack_path
+            .parent()
+            .context("Adapter pack requires a parent directory")?;
+        let mut references = BTreeMap::new();
+        for reference in pack.pinned_files() {
+            add_pack_reference(&mut references, &serde_json::to_value(reference)?)?;
+        }
+        let source_routes = document
+            .get("sourceRoutes")
+            .and_then(Value::as_array)
+            .context("Adapter pack must declare sourceRoutes")?;
+        let selected = source_routes
+            .iter()
+            .filter(|route| route.get("id").and_then(Value::as_str) == Some(source.route.as_str()))
+            .collect::<Vec<_>>();
+        if selected.len() != 1 {
+            bail!("Adapter pack must declare the selected source route exactly once");
+        }
+        let evidence = selected[0]
+            .get("evidence")
+            .context("selected source route requires an Evidence contract")?;
+        let input_path = evidence["inputsSchema"]["path"]
+            .as_str()
+            .context("Evidence inputsSchema path must be text")?;
+        let facts_path = evidence["factsSchema"]["path"]
+            .as_str()
+            .context("Evidence factsSchema path must be text")?;
+        let mut artifacts = BTreeMap::new();
+        for path in references.keys() {
+            artifacts.insert(
+                path.clone(),
+                authored::read_authored_file(
+                    &safe_asset(pack_root, path)?,
+                    "digest-pinned Adapter pack artifact",
+                )?,
+            );
+        }
+        let inputs_schema = serde_json::from_slice(
+            artifacts
+                .get(input_path)
+                .context("selected Evidence inputs schema is missing")?,
+        )
+        .context("selected Evidence inputs schema must be JSON")?;
+        let facts_schema = serde_json::from_slice(
+            artifacts
+                .get(facts_path)
+                .context("selected Evidence facts schema is missing")?,
+        )
+        .context("selected Evidence facts schema must be JSON")?;
+        routes.insert(
+            key,
+            CheckedPackRoute {
+                pack: source.pack.clone(),
+                route: source.route.clone(),
+                digest: registry_platform_config::sha256_uri(&pack_bytes),
+                inputs_schema,
+                facts_schema,
+                acquisition_posture: source.acquisition_posture,
+                pack_bytes,
+                artifacts,
+            },
+        );
+    }
+    Ok(routes.into_values().collect())
+}
+
+fn add_pack_reference(references: &mut BTreeMap<String, String>, reference: &Value) -> Result<()> {
+    let path = reference
+        .get("path")
+        .and_then(Value::as_str)
+        .context("Adapter pack reference path must be text")?;
+    let digest = reference
+        .get("digest")
+        .and_then(Value::as_str)
+        .context("Adapter pack reference digest must be text")?;
+    if let Some(existing) = references.insert(path.to_owned(), digest.to_owned()) {
+        if existing != digest {
+            bail!("one Adapter pack artifact path has conflicting digest pins");
+        }
+    }
+    Ok(())
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PackRouteOperation {
+    pub(crate) component: String,
+    pub(crate) endpoint: String,
+    pub(crate) http_method: Option<String>,
+    pub(crate) path: Option<String>,
+}
+
+pub(crate) fn source_route_operations(
+    root: &Path,
+    source: &project::Source,
+) -> Result<Vec<PackRouteOperation>> {
+    let root = if root.is_file() {
+        root.parent()
+            .context("project file requires a parent directory")?
+    } else {
+        root
+    };
+    let relative = format!("adapter-packs/{}/pack.yaml", source.pack.id);
+    let bytes =
+        authored::read_authored_file(&safe_asset(root, &relative)?, "reviewed Adapter pack")?;
+    let document = registry_platform_yaml::Reader::new(relative)
+        .scan(&bytes)
+        .map_err(|_| anyhow::anyhow!("Adapter pack must be one bounded YAML or JSON document"))?
+        .context("Adapter pack must not be empty")?
+        .to_json_value();
+    let route = document
+        .get("sourceRoutes")
+        .and_then(Value::as_array)
+        .and_then(|routes| {
+            routes.iter().find(|route| {
+                route.get("id").and_then(Value::as_str) == Some(source.route.as_str())
+            })
+        })
+        .context("Adapter pack does not declare the selected source route")?;
+    let mut direct_routes = BTreeMap::new();
+    if let Some(routes) = document.get("routes").and_then(Value::as_array) {
+        for route in routes {
+            if let Some(id) = route.get("id").and_then(Value::as_str) {
+                direct_routes.insert(id, route);
+            }
+        }
+    }
+    let mut operations = Vec::new();
+    collect_route_operations(
+        route.get("steps").unwrap_or(&Value::Null),
+        &direct_routes,
+        &mut BTreeSet::new(),
+        &mut operations,
+    )?;
+    Ok(operations)
+}
+
+fn collect_route_operations<'a>(
+    value: &'a Value,
+    direct_routes: &BTreeMap<&'a str, &'a Value>,
+    active: &mut BTreeSet<String>,
+    operations: &mut Vec<PackRouteOperation>,
+) -> Result<()> {
+    match value {
+        Value::Array(values) => {
+            for value in values {
+                collect_route_operations(value, direct_routes, active, operations)?;
+            }
+        }
+        Value::Object(object) => {
+            if let Some(uri) = object.get("uri").and_then(Value::as_str) {
+                let (component, endpoint) = uri
+                    .split_once(':')
+                    .context("Adapter pack send URI must name a component and endpoint")?;
+                if component == "direct" {
+                    if !active.insert(endpoint.to_owned()) {
+                        bail!("Adapter pack direct route cycle cannot be inspected");
+                    }
+                    let route = direct_routes
+                        .get(endpoint)
+                        .context("Adapter pack direct route is missing")?;
+                    collect_route_operations(
+                        route.get("steps").unwrap_or(&Value::Null),
+                        direct_routes,
+                        active,
+                        operations,
+                    )?;
+                    active.remove(endpoint);
+                } else {
+                    let parameters = object.get("parameters");
+                    operations.push(PackRouteOperation {
+                        component: component.to_owned(),
+                        endpoint: endpoint.to_owned(),
+                        http_method: parameters
+                            .and_then(|parameters| parameters.get("httpMethod"))
+                            .and_then(Value::as_str)
+                            .map(str::to_owned),
+                        path: parameters
+                            .and_then(|parameters| parameters.get("path"))
+                            .and_then(Value::as_str)
+                            .map(str::to_owned),
+                    });
+                }
+                return Ok(());
+            }
+            for value in object.values() {
+                collect_route_operations(value, direct_routes, active, operations)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 pub(crate) fn safe_asset(root: &Path, relative: &str) -> Result<PathBuf> {
     if relative.starts_with('/')
         || relative.contains('\\')
@@ -118,7 +347,8 @@ pub(crate) fn safe_asset(root: &Path, relative: &str) -> Result<PathBuf> {
     let mut path = root.to_path_buf();
     for component in Path::new(relative).components() {
         path.push(component);
-        let metadata = std::fs::symlink_metadata(&path).context("inspecting project asset")?;
+        let metadata = std::fs::symlink_metadata(&path)
+            .with_context(|| format!("inspecting project asset {}", path.display()))?;
         if metadata.file_type().is_symlink() {
             bail!("project assets cannot traverse symbolic links");
         }
@@ -131,21 +361,30 @@ pub(crate) fn compile(root: &Path) -> Result<(EvidenceProject, CompiledProject)>
 }
 
 fn compile_decoded(root: &Path) -> Result<(Decoded<EvidenceProject>, CompiledProject)> {
+    compile_decoded_with_pack_root(root, root)
+}
+
+fn compile_decoded_with_pack_root(
+    root: &Path,
+    pack_root: &Path,
+) -> Result<(Decoded<EvidenceProject>, CompiledProject)> {
     let (decoded, scripts) = read_decoded(root)?;
-    let compiled = compile::compile(&decoded.value, &scripts).map_err(|findings| {
-        decoded.document.report_with(
-            findings
-                .iter()
-                .map(|finding| finding_diagnostic(&decoded.document, "project", finding)),
-        )
-    })?;
+    let pack_routes = read_pack_routes(pack_root, &decoded.value)?;
+    let compiled = compile::compile_with_pack_routes(&decoded.value, &scripts, &pack_routes)
+        .map_err(|findings| {
+            decoded.document.report_with(
+                findings
+                    .iter()
+                    .map(|finding| finding_diagnostic(&decoded.document, "project", finding)),
+            )
+        })?;
     Ok((decoded, compiled))
 }
 
 pub(crate) fn inspect(root: &Path, target: Option<&Path>, command: &str) -> Result<Checked> {
     let target = target.map(crate::target::target_path);
     let snapshot = crate::project_snapshot::capture_project(root)?;
-    let (decoded, mut compiled) = compile_decoded(snapshot.root())
+    let (decoded, mut compiled) = compile_decoded_with_pack_root(snapshot.root(), root)
         .map_err(|error| authored::project_refusal(error, snapshot.root(), root))?;
     let diagnostics = authored::rebase(decoded.document.warnings(), root);
     let project = decoded.value;
@@ -208,7 +447,7 @@ pub(crate) fn inspect(root: &Path, target: Option<&Path>, command: &str) -> Resu
         report: crate::report::success(
             command,
             "complete",
-            json!({"project":root,"target":target.as_deref(),"proof":"authoring","diagnostics":diagnostics.to_json_value(),"projectPresentation":{"id":project.id,"label":project.label,"description":project.description},"selectorProfiles":project.selector_profiles,"capabilityCeilings":{"acquisitionCapabilities":project.acquisition_capabilities,"maximumHolderBoundBatchSize":project.maximum_holder_bound_batch_size},"assertionDefinitions":definitions,"sources":project.sources.iter().map(|(id,source)| json!({"id":id,"label":source.label,"description":source.description,"type":source.source_type,"connection":source.connection,"operation":{"method":source.request.get("method"),"path":source.request.get("path")},"facts":source.facts,"response":source.response,"prepare":source.prepare,"resolvedPreparation":{"generated":source.prepare.is_none(),"script":compiled.model["sources"][id.as_str()]["request"]["prepareScript"],"limits":compiled.model["sources"][id.as_str()]["request"]["preparationLimits"]},"extract":source.extract,"limits":source.limits})).collect::<Vec<_>>(),"functions":compiled.functions,"authority":authority,"offline":true,"networkAccess":false,"secretResolution":false,"fixtureExecution":false}),
+            json!({"project":root,"target":target.as_deref(),"proof":"authoring","diagnostics":diagnostics.to_json_value(),"projectPresentation":{"id":project.id,"label":project.label,"description":project.description},"selectorProfiles":project.selector_profiles,"capabilityCeilings":{"maximumHolderBoundBatchSize":project.maximum_holder_bound_batch_size},"assertionDefinitions":definitions,"sources":project.sources.iter().map(|(id,source)| json!({"id":id,"label":source.label,"description":source.description,"pack":source.pack,"route":source.route,"connection":source.connection,"inputs":source.inputs,"acquisitionPosture":source.acquisition_posture,"facts":compiled.source_facts.get(id.as_str())})).collect::<Vec<_>>(),"functions":compiled.functions,"authority":authority,"offline":true,"networkAccess":false,"secretResolution":false,"fixtureExecution":false}),
         ),
         diagnostics,
     })
@@ -260,6 +499,99 @@ pub(crate) fn generate_types(
         println!("Generated {}", args.output.display());
     }
     Ok(std::process::ExitCode::SUCCESS)
+}
+
+pub(crate) fn runtime_source_connections(
+    source_root: &Path,
+    target: &EvidenceTarget,
+) -> Result<Value> {
+    let connections = target
+        .connections
+        .iter()
+        .map(|(id, connection)| {
+            let outbound_tls = scoped_outbound_tls(
+                target.outbound_tls.as_ref(),
+                connection
+                    .endpoints
+                    .values()
+                    .filter_map(|endpoint| endpoint.tls_trust_profile.as_deref()),
+            );
+            Ok((
+                id.to_string(),
+                connection.runtime_value(id, outbound_tls.as_ref())?,
+            ))
+        })
+        .collect::<Result<serde_json::Map<_, _>>>()?;
+    let mut connections = Value::Object(connections);
+    for connection in connections
+        .as_object_mut()
+        .expect("source connections project as a mapping")
+        .values_mut()
+    {
+        if let Some(outbound_tls) = connection.get_mut("outboundTls") {
+            crate::build::rebase_outbound_tls(source_root, outbound_tls)?;
+        }
+    }
+    Ok(connections)
+}
+
+/// Project the target's reviewed trust inventory into one runtime trust scope.
+///
+/// A reference that is absent from the inventory deliberately remains absent
+/// from the projection. The endpoint or root authentication still names it,
+/// so the runtime reports the existing unbound-profile refusal instead of the
+/// tooling silently manufacturing trust.
+fn scoped_outbound_tls<'a>(
+    outbound_tls: Option<&TargetOutboundTls>,
+    referenced_profiles: impl IntoIterator<Item = &'a str>,
+) -> Option<TargetOutboundTls> {
+    let outbound_tls = outbound_tls?;
+    let referenced_profiles = referenced_profiles.into_iter().collect::<BTreeSet<_>>();
+    let trust_profiles = outbound_tls
+        .trust_profiles
+        .iter()
+        .filter(|(id, _)| referenced_profiles.contains(id.as_str()))
+        .map(|(id, profile)| (id.clone(), profile.clone()))
+        .collect();
+    Some(TargetOutboundTls {
+        system_roots: outbound_tls.system_roots,
+        trust_profiles,
+    })
+}
+
+/// Root owns issuer-key TLS. Profiles referenced only by source connections
+/// belong to those connections. A profile referenced nowhere remains at root
+/// so the runtime's existing unused-profile check still refuses the target.
+pub(crate) fn root_runtime_outbound_tls(target: &EvidenceTarget) -> Option<TargetOutboundTls> {
+    let outbound_tls = target.outbound_tls.as_ref()?;
+    let referenced_profiles = target
+        .authentication
+        .oidc
+        .tls_trust_profile
+        .as_deref()
+        .into_iter()
+        .chain(
+            target
+                .connections
+                .values()
+                .flat_map(|connection| connection.endpoints.values())
+                .filter_map(|endpoint| endpoint.tls_trust_profile.as_deref()),
+        )
+        .collect::<BTreeSet<_>>();
+    let root_profiles = target
+        .authentication
+        .oidc
+        .tls_trust_profile
+        .as_deref()
+        .into_iter()
+        .chain(
+            outbound_tls
+                .trust_profiles
+                .keys()
+                .map(|id| id.as_str())
+                .filter(|id| !referenced_profiles.contains(id)),
+        );
+    scoped_outbound_tls(Some(outbound_tls), root_profiles)
 }
 
 pub(crate) fn read_target_documents(path: &Path) -> Result<crate::build::TargetDocuments> {
@@ -362,10 +694,11 @@ pub(crate) fn read_target_documents(path: &Path) -> Result<crate::build::TargetD
             }
         }
     }
-    runtime["acquisitionCapabilities"] = json!(target.acquisition_capabilities);
-    runtime["outboundTls"] = target
-        .outbound_tls
-        .as_ref()
+    runtime["sourceConnections"] = runtime_source_connections(&source_root, &target)?;
+    if let Some(source_acquisition) = &target.source_acquisition {
+        runtime["sourceAcquisition"] = source_acquisition.runtime_value()?;
+    }
+    runtime["outboundTls"] = root_runtime_outbound_tls(&target)
         .map(serde_json::to_value)
         .transpose()?
         .unwrap_or_else(|| json!({"systemRoots":true,"trustProfiles":{}}));
@@ -457,4 +790,189 @@ fn relative_target_filename_uses_the_current_directory() {
         target_directory(Path::new("targets/local.yaml")),
         Path::new("targets")
     );
+}
+
+#[cfg(test)]
+fn projected_runtime_with_tls(
+    oidc_profile: Option<&str>,
+    connections: &[(&str, &str)],
+    inventory: &[&str],
+) -> Value {
+    let example =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/evidence/examples/standalone");
+    let root = tempfile::tempdir().expect("target root");
+    let mut target =
+        std::fs::read_to_string(example.join("local-target.yaml")).expect("standalone target");
+    target = target.replace(
+        "connections:\n  synthetic-register:\n    endpoints:\n      register:\n        origin: http://127.0.0.1:8081\n        authentication:\n          type: static-authorization\n          tokenRef: secret:file/synthetic-source-token\n",
+        "connections:\n",
+    );
+    if let Some(profile) = oidc_profile {
+        target = target.replace(
+            "    issuer: http://127.0.0.1:8082\n",
+            &format!("    issuer: https://issuer.invalid\n    tlsTrustProfile: {profile}\n"),
+        );
+        target = target.replace(
+            "      uri: http://127.0.0.1:8082/oauth2/jwks\n",
+            "      uri: https://issuer.invalid/oauth2/jwks\n",
+        );
+    }
+    let mut authored_connections = String::new();
+    for (connection, profile) in connections {
+        authored_connections.push_str(&format!(
+            "  {connection}:\n    endpoints:\n      register:\n        origin: https://{connection}.invalid\n        authentication:\n          type: static-authorization\n          tokenRef: secret:file/{connection}-token\n        tlsTrustProfile: {profile}\n"
+        ));
+    }
+    target = target.replace(
+        "connections:\nsecretProviders:\n",
+        &format!("connections:\n{authored_connections}secretProviders:\n"),
+    );
+    let mut trust_profiles = String::new();
+    for profile in inventory {
+        let file = format!("{profile}.pem");
+        std::fs::write(root.path().join(&file), "synthetic fixture CA").expect("fixture CA file");
+        trust_profiles.push_str(&format!("    {profile}:\n      caBundleFile: {file}\n"));
+    }
+    target.push_str(&format!(
+        "outboundTls:\n  systemRoots: true\n  trustProfiles:\n{trust_profiles}"
+    ));
+    std::fs::write(root.path().join("local-target.yaml"), target).expect("target");
+    std::fs::copy(
+        example.join("dev-authority.yaml"),
+        root.path().join("dev-authority.yaml"),
+    )
+    .expect("authority");
+    let documents =
+        read_target_documents(&root.path().join("local-target.yaml")).expect("target documents");
+    crate::build::runtime_value(&documents.runtime).expect("runtime YAML")
+}
+
+#[cfg(test)]
+fn profile_names(value: &Value) -> Vec<&str> {
+    value
+        .get("trustProfiles")
+        .and_then(Value::as_object)
+        .expect("trust profile map")
+        .keys()
+        .map(String::as_str)
+        .collect()
+}
+
+#[cfg(test)]
+#[test]
+fn source_only_private_ca_is_scoped_to_its_connection() {
+    let runtime =
+        projected_runtime_with_tls(None, &[("synthetic-register", "source-ca")], &["source-ca"]);
+    assert!(profile_names(&runtime["outboundTls"]).is_empty());
+    assert_eq!(
+        profile_names(&runtime["sourceConnections"]["synthetic-register"]["outboundTls"]),
+        vec!["source-ca"]
+    );
+}
+
+#[cfg(test)]
+#[test]
+fn oidc_and_disjoint_source_connections_receive_only_their_own_cas() {
+    let runtime = projected_runtime_with_tls(
+        Some("oidc-ca"),
+        &[
+            ("synthetic-register", "source-a-ca"),
+            ("second-register", "source-b-ca"),
+        ],
+        &["oidc-ca", "source-a-ca", "source-b-ca"],
+    );
+    assert_eq!(profile_names(&runtime["outboundTls"]), vec!["oidc-ca"]);
+    assert_eq!(
+        profile_names(&runtime["sourceConnections"]["synthetic-register"]["outboundTls"]),
+        vec!["source-a-ca"]
+    );
+    assert_eq!(
+        profile_names(&runtime["sourceConnections"]["second-register"]["outboundTls"]),
+        vec!["source-b-ca"]
+    );
+}
+
+#[cfg(test)]
+#[test]
+fn unused_ca_inventory_remains_visible_to_the_runtime_refusal() {
+    let runtime = projected_runtime_with_tls(
+        None,
+        &[("synthetic-register", "source-ca")],
+        &["source-ca", "unused-ca"],
+    );
+    assert_eq!(profile_names(&runtime["outboundTls"]), vec!["unused-ca"]);
+    assert_eq!(
+        profile_names(&runtime["sourceConnections"]["synthetic-register"]["outboundTls"]),
+        vec!["source-ca"]
+    );
+}
+
+#[cfg(test)]
+#[test]
+fn missing_source_ca_reference_remains_unbound_for_runtime_refusal() {
+    let runtime = projected_runtime_with_tls(
+        Some("oidc-ca"),
+        &[("synthetic-register", "missing-ca")],
+        &["oidc-ca"],
+    );
+    assert_eq!(
+        runtime["sourceConnections"]["synthetic-register"]["endpoints"][0]["tlsTrustProfile"],
+        "missing-ca"
+    );
+    assert!(
+        profile_names(&runtime["sourceConnections"]["synthetic-register"]["outboundTls"])
+            .is_empty()
+    );
+}
+
+#[cfg(test)]
+#[test]
+fn filesystem_pack_closure_reaches_the_checked_compiler_without_conversion() {
+    let root = tempfile::tempdir().unwrap();
+    let pack_root = root.path().join("adapter-packs/synthetic-register");
+    std::fs::create_dir_all(pack_root.join("schemas")).unwrap();
+    let inputs = serde_json::to_vec(&json!({
+        "type":"object","additionalProperties":false,"required":["recordId"],
+        "properties":{"recordId":{"type":"string"}}
+    }))
+    .unwrap();
+    let facts = serde_json::to_vec(&json!({
+        "type":"object","additionalProperties":false,"required":["matched"],
+        "properties":{"matched":{"type":"boolean"}}
+    }))
+    .unwrap();
+    let pack = serde_json::to_vec(&json!({
+        "apiVersion":registry_adapter_core::ADAPTER_PACK_API_VERSION,
+        "kind":registry_adapter_core::ADAPTER_PACK_KIND,
+        "id":"synthetic-register","version":"0.1.0",
+        "testedVersions":[],
+        "sourceRoutes":[{"id":"evidence-record","evidence":{
+            "inputsSchema":{"path":"schemas/inputs.json","digest":registry_platform_config::sha256_uri(&inputs)},
+            "factsSchema":{"path":"schemas/facts.json","digest":registry_platform_config::sha256_uri(&facts)}
+        }}]
+    }))
+    .unwrap();
+    std::fs::write(pack_root.join("pack.yaml"), pack).unwrap();
+    std::fs::write(pack_root.join("schemas/inputs.json"), &inputs).unwrap();
+    std::fs::write(pack_root.join("schemas/facts.json"), &facts).unwrap();
+    let project: EvidenceProject = serde_json::from_value(json!({
+        "id":"pack-bridge",
+        "selectorProfiles":{"record-by-id":{"maximumAggregateBytes":64,"fields":{"record-id":{"type":"string","minimumBytes":1,"maximumBytes":64}}}},
+        "functions":[{"id":"derive-record","interface":"assertion-derive/v1","source":"functions/derive.rhai"}],
+        "sources":{"record":{"pack":{"id":"synthetic-register","version":"0.1.0"},"route":"evidence-record","connection":"register","inputs":{"recordId":{"selector":{"role":"subject","profile":"record-by-id","field":"record-id"}}},"acquisitionPosture":"record-transformed"}},
+        "assertionDefinitions":{"record-match":{"question":"Does the record match?","semantics":{"requirement":"urn:example:requirement:record","kind":"criterion","evidenceType":"urn:example:evidence:record","referenceFrameworks":["urn:example:framework:record"]},"purpose":"record-check","grantCeiling":{"authorities":["organizational"],"actorKinds":["service"],"valueOrigins":["request"],"audiences":["urn:example:audience:consumer"]},"subjects":[{"role":"subject","selectors":["record-by-id"]}],"acquisition":{"source":"record"},"derive":{"function":"derive-record"},"outputs":{"matched":{"concept":"urn:example:concept:matched","type":"boolean"}},"validitySeconds":300,"subjectBinding":"audience-scoped","representations":["signed-jws"]}}
+    }))
+    .unwrap();
+    let scripts = BTreeMap::from([(
+        "functions/derive.rhai".to_owned(),
+        "fn derive(facts, selectors, context) { [#{output: \"matched\", value: facts.matched}] }"
+            .to_owned(),
+    )]);
+    let routes = read_pack_routes(root.path(), &project).unwrap();
+    compile::compile_with_pack_routes(&project, &scripts, &routes)
+        .expect("exact captured pack route compiles");
+
+    std::fs::write(pack_root.join("schemas/facts.json"), b"{}").unwrap();
+    let changed = read_pack_routes(root.path(), &project).unwrap();
+    assert!(compile::compile_with_pack_routes(&project, &scripts, &changed).is_err());
 }

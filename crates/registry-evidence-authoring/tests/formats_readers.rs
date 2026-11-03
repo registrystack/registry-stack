@@ -123,7 +123,11 @@ fn unknown_normalized_project_members_are_reported_at_their_keys() {
 
 #[test]
 fn a_source_tagged_by_the_retired_transport_member_is_refused() {
-    let text = PROJECT_TEXT.replacen("    type: http-json", "    transport: http-json", 1);
+    let text = PROJECT_TEXT.replacen(
+        "  person-record:\n    pack:",
+        "  person-record:\n    transport: http-json\n    pack:",
+        1,
+    );
     let report = project::read_project("evidence.yaml", text.as_bytes())
         .expect_err("the retired source tag is refused");
     assert!(report.diagnostics().iter().any(|diagnostic| {
@@ -286,4 +290,20 @@ fn selector_bounds_stop_at_the_first_typed_error() {
             .collect::<Vec<_>>(),
         ["/selectorProfiles/record-by-id/fields/record-id/minimumBytes"]
     );
+}
+
+#[test]
+fn target_refuses_retired_acquisition_capabilities_before_compilation() {
+    registry_evidence_authoring::target::read_target("target.yaml", TARGET_TEXT.as_bytes())
+        .expect("the maintained pack target is valid");
+    for capabilities in ["[]", "[source-batch]", "[search-then-fetch-set]"] {
+        let text = format!("{TARGET_TEXT}\nacquisitionCapabilities: {capabilities}\n");
+        let Err(report) =
+            registry_evidence_authoring::target::read_target("target.yaml", text.as_bytes())
+        else {
+            panic!("retired acquisition switches are refused before target compilation");
+        };
+        assert_eq!(codes(&report), ["config.unknown-key"]);
+        assert_eq!(report.diagnostics()[0].path, "/acquisitionCapabilities");
+    }
 }

@@ -1,9 +1,148 @@
 {
   "$defs": {
+    "DestinationMapping": {
+      "additionalProperties": false,
+      "description": "One job-owned direct-destination mapping. Its file is resolved relative to\nthe job document, not the provider pack, so an institution can reuse the\nsame source integration without forking it for programme semantics.",
+      "properties": {
+        "digest": {
+          "$ref": "#/$defs/Digest",
+          "description": "The exact sha256 digest of the mapping source bytes."
+        },
+        "entrypoint": {
+          "description": "The precompiled one-argument entrypoint the job host calls.",
+          "type": "string"
+        },
+        "file": {
+          "description": "The clean relative path of the Rhai source beside the job document.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "file",
+        "entrypoint",
+        "digest"
+      ],
+      "type": "object"
+    },
     "Digest": {
       "description": "A SHA-256 digest: `sha256:` followed by 64 lowercase hex digits.",
       "pattern": "^sha256:[0-9a-f]{64}$",
       "type": "string"
+    },
+    "DirectBregMode": {
+      "description": "The fixed operation form the direct destination expects metadata to\ndisclose. It never changes mode after an item refusal.",
+      "oneOf": [
+        {
+          "const": "immediate",
+          "description": "Invoke the Action and receive its terminal receipt.",
+          "type": "string"
+        },
+        {
+          "const": "proposal",
+          "description": "Start and submit one Proposal.",
+          "type": "string"
+        }
+      ]
+    },
+    "JobDestination": {
+      "description": "The two governed-ingestion destinations. The authored job selects one;\na refusal never selects or falls back to the other.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Map the projection in-process and invoke one BReg Action, either\nimmediately or through Proposal start and submit.",
+          "properties": {
+            "accessProfile": {
+              "description": "The caller-filtered BReg access profile selected in metadata.",
+              "type": "string"
+            },
+            "action": {
+              "description": "The BReg Action identifier selected in metadata.",
+              "type": "string"
+            },
+            "binding": {
+              "$ref": "#/$defs/LocalId",
+              "description": "The runtime destination binding id."
+            },
+            "mapping": {
+              "$ref": "#/$defs/DestinationMapping",
+              "description": "The job-owned, digest-pinned Rhai mapping from the declared\nprojection to the operation input."
+            },
+            "mode": {
+              "$ref": "#/$defs/DirectBregMode",
+              "description": "Whether the selected Action is expected to be immediate or a\nProposal. A metadata mismatch refuses rather than changing mode."
+            },
+            "receiptRetentionDays": {
+              "description": "The deployment's expected BReg receipt retention horizon.",
+              "format": "uint16",
+              "maximum": 3650,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "type": {
+              "const": "direct-breg",
+              "type": "string"
+            }
+          },
+          "required": [
+            "accessProfile",
+            "action",
+            "binding",
+            "mapping",
+            "mode",
+            "receiptRetentionDays",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Sign the declared projection as an event for one Coordinator workflow\ntrigger. Coordinator owns any lookup, choice, wait, or review flow.",
+          "properties": {
+            "binding": {
+              "$ref": "#/$defs/LocalId",
+              "description": "The runtime destination binding id."
+            },
+            "dataSchema": {
+              "description": "The schema identifier for the projected event data.",
+              "type": "string"
+            },
+            "eventType": {
+              "description": "The event type identifier.",
+              "type": "string"
+            },
+            "revisedReceiver": {
+              "$ref": "#/$defs/RevisedEventReceiver",
+              "description": "Optional receiver for a changed item, inside the same workflow and\nruntime binding. Absent, revised items remain held."
+            },
+            "source": {
+              "description": "The event source identifier.",
+              "type": "string"
+            },
+            "trigger": {
+              "$ref": "#/$defs/LocalId",
+              "description": "The reviewed event trigger id inside the workflow."
+            },
+            "type": {
+              "const": "signed-coordinator-event",
+              "type": "string"
+            },
+            "workflow": {
+              "$ref": "#/$defs/LocalId",
+              "description": "The reviewed Coordinator workflow id."
+            }
+          },
+          "required": [
+            "binding",
+            "dataSchema",
+            "eventType",
+            "source",
+            "trigger",
+            "type",
+            "workflow"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "JobIdentity": {
       "additionalProperties": false,
@@ -114,6 +253,10 @@
           "minimum": 1,
           "type": "integer"
         },
+        "binding": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The operator binding supplying this hook's credentials and rate limit."
+        },
         "delayMilliseconds": {
           "description": "The milliseconds between two interval passes, from\n[`MINIMUM_TRIGGER_DELAY_MILLISECONDS`] to\n[`MAXIMUM_TRIGGER_DELAY_MILLISECONDS`]. Ports `delay`\n(camel-4.23.0:core/camel-support/src/main/java/org/apache/camel/support/ScheduledPollEndpoint.java#delay,\n\"Milliseconds before the next poll\"; Camel's default is that\nfile's 500-millisecond `DEFAULT_DELAY`). The job default is\n[`DEFAULT_TRIGGER_DELAY_MILLISECONDS`], one minute.",
           "format": "uint64",
@@ -131,11 +274,11 @@
           "type": "integer"
         },
         "kind": {
-          "description": "The trigger kind, one of [`TRIGGER_KIND_VALUES`]: `interval`, the\nserved kind, or `hook`, the declared seam. Mandatory in effect:\nthe checks refuse a trigger that names no kind, or a kind outside\nthe closed set, under `adapter.job.trigger-kind`.",
+          "description": "The trigger kind, one of [`TRIGGER_KIND_VALUES`]: `interval` or\n`hook`. Mandatory in effect:\nthe checks refuse a trigger that names no kind, or a kind outside\nthe closed set, under `adapter.job.trigger-kind`.",
           "type": "string"
         },
         "path": {
-          "description": "The listener path a `hook` trigger waits on. Contract-only: the\nchecks refuse every hook trigger under\n`adapter.job.trigger-hook-unserved` until the hook seam is built,\nso no pack or job can silently rely on one; the hook body is\nnever trusted or stored, and no listener is built here.",
+          "description": "The clean listener path that wakes a pass. The pass re-reads the\nauthoritative source; hook bodies never become source items.",
           "type": "string"
         }
       },
@@ -239,6 +382,30 @@
         "maximumRowsPerPage"
       ],
       "type": "object"
+    },
+    "RevisedEventReceiver": {
+      "additionalProperties": false,
+      "description": "The explicitly reviewed event receiver for revised source items.",
+      "properties": {
+        "dataSchema": {
+          "description": "The revised event data schema identifier.",
+          "type": "string"
+        },
+        "eventType": {
+          "description": "The revised event type identifier.",
+          "type": "string"
+        },
+        "trigger": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The revised-item trigger inside the destination workflow."
+        }
+      },
+      "required": [
+        "trigger",
+        "eventType",
+        "dataSchema"
+      ],
+      "type": "object"
     }
   },
   "$id": "https://id.registrystack.org/schemas/adapter/job/job.v1alpha1.schema.json",
@@ -250,6 +417,10 @@
       "const": "id.registrystack.org/formats/adapter/job/v1alpha1",
       "description": "The format envelope version.",
       "type": "string"
+    },
+    "destination": {
+      "$ref": "#/$defs/JobDestination",
+      "description": "The one reviewed destination this job hands every item to. Runtime\nconnection material is bound separately by `binding`."
     },
     "job": {
       "$ref": "#/$defs/JobIdentity",
@@ -286,6 +457,7 @@
     "kind",
     "job",
     "source",
+    "destination",
     "profile"
   ],
   "title": "Registry Adapter ingestion job",

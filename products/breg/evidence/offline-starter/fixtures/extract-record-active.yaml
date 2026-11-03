@@ -43,19 +43,12 @@ common:
       ('ROW-0005', 'SYNTHETIC-POPULAR', 'active', 'PRIVATE-SYNTHETIC-LABEL'),
       ('ROW-0006', 'SYNTHETIC-POPULAR', 'active', 'PRIVATE-SYNTHETIC-LABEL'),
       ('ROW-0007', 'SYNTHETIC-POPULAR', 'retired', 'PRIVATE-SYNTHETIC-LABEL');
-  # The request the source is expected to make. A change that would send more
-  # than this, or send it somewhere else, fails here rather than in a
-  # deployment.
-  expectedRequestParts:
-    parameters: {}
-  expectedTransport:
-    statement: queries/record-status.sql
-
 # One case per behaviour the question has to keep. Each names the input it
 # varies and the outcome it expects, so a case that starts passing for a new
 # reason is as visible as one that starts failing.
 cases:
   - id: positive
+    acquisition: {intercepts: [], exchanges: []}
     selectors:
       subject:
         profile: record-by-code-v1
@@ -68,6 +61,7 @@ cases:
       value: true
 
   - id: negative-retired
+    acquisition: {intercepts: [], exchanges: []}
     selectors:
       subject:
         profile: record-by-code-v1
@@ -82,6 +76,7 @@ cases:
   # No match and ambiguity are reported to a caller identically, so neither
   # answers whether a record exists.
   - id: no-match
+    acquisition: {intercepts: [], exchanges: []}
     selectors:
       subject:
         profile: record-by-code-v1
@@ -93,6 +88,7 @@ cases:
       signed: false
 
   - id: ambiguous
+    acquisition: {intercepts: [], exchanges: []}
     selectors:
       subject:
         profile: record-by-code-v1
@@ -106,16 +102,19 @@ cases:
   # The bounds hold: a result past `maximumRows` and an extract past its age
   # limit both fail the request instead of returning a partial or stale answer.
   - id: result-past-row-bound
+    acquisition: {intercepts: [], exchanges: []}
     selectors:
       subject:
         profile: record-by-code-v1
         values: {code: SYNTHETIC-POPULAR}
     expected:
       publicProblem: source.unavailable
+      derivationRuns: false
       signed: false
       sourceRequestCount: 1
 
   - id: boundary-extract-at-age-bound
+    acquisition: {intercepts: [], exchanges: []}
     observedAt: "2026-09-07T00:00:00Z"
     selectors:
       subject:
@@ -128,6 +127,7 @@ cases:
       value: true
 
   - id: stale-extract
+    acquisition: {intercepts: [], exchanges: []}
     observedAt: "2026-09-07T00:00:01Z"
     selectors:
       subject:
@@ -135,6 +135,7 @@ cases:
         values: {code: SYNTHETIC-ACTIVE}
     expected:
       publicProblem: source.unavailable
+      derivationRuns: false
       signed: false
       sourceRequestCount: 1
 
@@ -160,15 +161,16 @@ cases:
     expected: {bundle: rejected}
 
   - id: hostile-code-remains-data
+    acquisition: {intercepts: [], exchanges: []}
     selectorOverrides:
       subject:
         values: {code: "X' OR '1'='1"}
     expected:
+      lookup: no_match
+      publicProblem: evidence.unavailable
+      derivationRuns: false
+      signed: false
       sourceRequestCount: 1
-      expectedTransport:
-        statement: queries/record-status.sql
-        parameters:
-          code: "X' OR '1'='1"
 
   - id: output-gate-rejects-a-raw-reference
     derivationMutation: return-raw-reference

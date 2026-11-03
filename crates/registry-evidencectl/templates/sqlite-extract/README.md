@@ -6,9 +6,8 @@
 
 | File | What it holds |
 | --- | --- |
-| `evidence.yaml` | The single `EvidenceProject`: stable selector profile, Function, Source, AssertionDefinition, output, and grant-ceiling IDs. |
-| `queries/record-status.sql` | The fixed SQLite statement. Caller values bind as parameters and never become statement text. |
-| `functions/extract-record-status.rhai` | The `source-extract/v1` Function that turns a bounded response into private facts. |
+| `evidence.yaml` | The single `EvidenceProject`: stable selector profile, derive Function, Source binding, AssertionDefinition, output, and grant-ceiling IDs. |
+| `adapter-packs/starter-source/` | The pinned SQLite route, fixed statement, closed schemas, and extraction program. Caller values bind as parameters and never become statement text. |
 | `functions/derive-record-status.rhai` | The `assertion-derive/v1` Function that maps facts to declared outputs. |
 | `fixtures/record-status.yaml` | Synthetic offline cases for `evidencectl test`. |
 | `local-target.yaml` | A disposable `EvidenceTarget` with local service, OIDC, source connection, signer, limits, and generated paths. |
@@ -22,7 +21,7 @@ evidencectl check . --target local-target.yaml
 evidencectl test . --target local-target.yaml --explain
 ```
 
-Review the project, Functions, query, fixtures, target, and authority together. Source acquisition produces private facts only. An AssertionDefinition grants no downstream write or review authority.
+Review the project, adapter pack, derive Function, fixtures, target, and authority together. Source acquisition produces private facts only. An AssertionDefinition grants no downstream write or review authority.
 
 ## Documentation
 

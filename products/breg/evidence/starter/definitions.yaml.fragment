@@ -7,7 +7,7 @@ functions:
   source: functions/record-status-pair.rhai
 assertionDefinitions:
   record-active:
-    question: Is the registered record active?
+    question: Does the BReg record currently have active status?
     semantics:
       requirement: urn:example:requirement:record-active:v1
       kind: criterion
@@ -30,7 +30,6 @@ assertionDefinitions:
       - breg-8-registry-6-record-7-by-code
       - breg-8-registry-6-record-22-by-registration-number
     acquisition:
-      type: single
       source: registry-status
     derive:
       function: record-active
@@ -70,7 +69,6 @@ assertionDefinitions:
       - breg-8-registry-6-record-22-by-registration-number
       - breg-8-registry-6-record-7-by-code
     acquisition:
-      type: single
       source: registry-status
     derive:
       function: record-status-pair

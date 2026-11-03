@@ -71,6 +71,18 @@ pub fn decode_script_json(
     decode_script_json_bytes(bytes)
 }
 
+/// Consume exact zeroizing bytes held by a trusted host protocol and release
+/// them under the same strict JSON and structural limits as script responses.
+///
+/// The host protocol must enforce its authored per-response and aggregate byte
+/// limits before invoking this decoder. This seam adds no protocol parsing or
+/// product policy; it only admits bytes through the existing closed decoder.
+pub fn decode_protocol_json(
+    bytes: Zeroizing<Vec<u8>>,
+) -> Result<ScriptJsonResponse, ScriptResponseDecodeError> {
+    decode_script_json_bytes(bytes)
+}
+
 fn decode_script_json_bytes(
     bytes: Zeroizing<Vec<u8>>,
 ) -> Result<ScriptJsonResponse, ScriptResponseDecodeError> {
@@ -173,5 +185,30 @@ mod tests {
             decode_script_json(body(nested)),
             Err(ScriptResponseDecodeError::StructuralLimitExceeded)
         ));
+    }
+
+    #[test]
+    fn protocol_json_uses_the_identical_strict_bounded_decoder() {
+        let decoded =
+            decode_protocol_json(Zeroizing::new(br#"{"records":[{"id":"one"}]}"#.to_vec()))
+                .expect("valid protocol JSON");
+        let (value, encoded_bytes) = decoded.into_parts();
+        assert_eq!(value, serde_json::json!({"records":[{"id":"one"}]}));
+        assert_eq!(encoded_bytes, 26);
+
+        assert_eq!(
+            decode_protocol_json(Zeroizing::new(br#"{"id":1,"id":2}"#.to_vec())).unwrap_err(),
+            ScriptResponseDecodeError::InvalidJson
+        );
+
+        let nested = format!(
+            "{}0{}",
+            "[".repeat(MAX_SCRIPT_JSON_DEPTH),
+            "]".repeat(MAX_SCRIPT_JSON_DEPTH)
+        );
+        assert_eq!(
+            decode_protocol_json(Zeroizing::new(nested.into_bytes())).unwrap_err(),
+            ScriptResponseDecodeError::StructuralLimitExceeded
+        );
     }
 }

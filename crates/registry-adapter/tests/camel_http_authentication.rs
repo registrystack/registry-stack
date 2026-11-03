@@ -69,6 +69,7 @@ fn binding(base_url: &str, credential: Option<RuntimeCredential>) -> EndpointBin
         mtls_identity: None,
         attempt_timeout_milliseconds: None,
         maximum_response_bytes: None,
+        maximum_concurrency: BoundedU64::new(8).expect("concurrency"),
     }
 }
 

@@ -173,6 +173,7 @@ pub(crate) struct PreparedSuggestion {
 /// the flattened candidate leaves a `--select` pointer may name.
 struct ResponseLeaves {
     source: types::SpecSource,
+    openapi_document: String,
     spec: Spec,
     operation: OperationKey,
     schema: ResolvedSchema,
@@ -190,7 +191,7 @@ pub(crate) fn prompts_allowed(format: OutputFormat) -> bool {
 /// `--list-pointers` run start here; only the drafting run continues.
 fn resolve_response_leaves(args: &SuggestArgs, notes: &mut Notes) -> Result<ResponseLeaves> {
     let source = suggestion_openapi(args)?;
-    let spec = load::open(&source)?;
+    let (spec, openapi_document) = load::open_retained(&source)?;
     let operations = spec.operations();
     if operations.is_empty() {
         bail!(
@@ -257,6 +258,7 @@ fn resolve_response_leaves(args: &SuggestArgs, notes: &mut Notes) -> Result<Resp
 
     Ok(ResponseLeaves {
         source,
+        openapi_document,
         spec,
         operation,
         schema,
@@ -271,6 +273,7 @@ pub(crate) fn prepare(args: &SuggestArgs, notes: &mut Notes) -> Result<PreparedS
     let flag_driven = args.operation.is_some() && !args.selection.is_empty();
     let ResponseLeaves {
         source,
+        openapi_document,
         spec,
         operation,
         schema,
@@ -360,6 +363,7 @@ pub(crate) fn prepare(args: &SuggestArgs, notes: &mut Notes) -> Result<PreparedS
         narrowed,
         needs,
         openapi: source.clone(),
+        openapi_document,
         sample_path: args.sample.clone(),
         project: args.project.clone(),
         request_mappings: plan_request_mappings(args, &spec, &decisions.operation)?,

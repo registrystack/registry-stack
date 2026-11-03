@@ -13,9 +13,112 @@
 //! threshold count again, as Camel's `doRun` resets its idle counter and
 //! rebases its error counter.
 
+use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
 
 use registry_adapter_core::{AdapterJob, JobTrigger};
+use tokio::sync::Notify;
+
+/// Whether an authenticated hook started a pass or joined the pass already
+/// pending or running. The distinction is operational only: neither outcome
+/// carries hook data into the pass.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HookAdmission {
+    /// The host was idle, so this hook made one pass pending and woke the
+    /// trigger loop.
+    Started,
+    /// A pass was already pending or running, so this hook joined it without
+    /// queueing another pass.
+    Joined,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum HookPassState {
+    #[default]
+    Idle,
+    Pending,
+    Running,
+}
+
+/// Coalesces authenticated hook requests into the job host's one pass loop.
+///
+/// A hook arriving while idle makes exactly one pass pending. Further hooks
+/// join that pending pass, and every hook arriving while it runs joins the
+/// running pass. Completing the pass returns the gate to idle; hook delivery
+/// is deliberately not a durable queue because the interval trigger remains
+/// the reconciliation authority.
+#[derive(Debug, Default)]
+pub struct HookPassGate {
+    state: Mutex<HookPassState>,
+    wake: Notify,
+}
+
+impl HookPassGate {
+    /// Admit one already-authenticated hook without accepting any hook body.
+    #[must_use]
+    pub fn handle_hook(&self) -> HookAdmission {
+        let mut state = self
+            .state
+            .lock()
+            .expect("the hook pass gate is not poisoned");
+        match *state {
+            HookPassState::Idle => {
+                *state = HookPassState::Pending;
+                drop(state);
+                self.wake.notify_one();
+                HookAdmission::Started
+            }
+            HookPassState::Pending | HookPassState::Running => HookAdmission::Joined,
+        }
+    }
+
+    /// Mark the single host pass running. An interval pass may consume a
+    /// pending hook, so both idle and pending states enter `Running`.
+    ///
+    /// Returns false only when another pass is already running in this host.
+    #[must_use]
+    pub fn begin_pass(&self) -> bool {
+        let mut state = self
+            .state
+            .lock()
+            .expect("the hook pass gate is not poisoned");
+        if *state == HookPassState::Running {
+            return false;
+        }
+        *state = HookPassState::Running;
+        true
+    }
+
+    /// Mark the host pass complete. Hooks that joined it do not become a
+    /// second pending pass.
+    pub fn end_pass(&self) {
+        let mut state = self
+            .state
+            .lock()
+            .expect("the hook pass gate is not poisoned");
+        *state = HookPassState::Idle;
+    }
+
+    /// Wait until an authenticated hook has made a pass pending.
+    ///
+    /// An interval pass can consume the pending state before this waiter sees
+    /// the notification. In that case the old notification is discarded and
+    /// this method keeps waiting, so it cannot create a spurious later pass.
+    pub async fn wait_for_hook(&self) {
+        loop {
+            {
+                let state = self
+                    .state
+                    .lock()
+                    .expect("the hook pass gate is not poisoned");
+                if *state == HookPassState::Pending {
+                    return;
+                }
+            }
+            self.wake.notified().await;
+        }
+    }
+}
 
 /// The schedule-relevant state of one job, read from the item store's
 /// job state row. The streak counters are the pass outcomes the backoff
@@ -274,6 +377,73 @@ fn remaining(now: SystemTime, due_at: SystemTime) -> Duration {
 mod tests {
     use super::*;
     use registry_adapter_core::ReadBounds;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn the_first_hook_starts_one_pending_pass_and_duplicates_join_it() {
+        let gate = HookPassGate::default();
+
+        assert_eq!(gate.handle_hook(), HookAdmission::Started);
+        assert_eq!(gate.handle_hook(), HookAdmission::Joined);
+        tokio::time::timeout(Duration::from_millis(50), gate.wait_for_hook())
+            .await
+            .expect("the first hook wakes the pass loop");
+
+        assert!(gate.begin_pass(), "the pending pass can start");
+        assert_eq!(
+            gate.handle_hook(),
+            HookAdmission::Joined,
+            "a hook during the pass never queues another pass"
+        );
+        assert!(!gate.begin_pass(), "one host pass runs at a time");
+        gate.end_pass();
+
+        assert_eq!(
+            gate.handle_hook(),
+            HookAdmission::Started,
+            "the next hook after completion can start the next pass"
+        );
+    }
+
+    #[tokio::test]
+    async fn concurrent_hooks_coalesce_to_one_started_outcome() {
+        let gate = Arc::new(HookPassGate::default());
+        let mut calls = Vec::new();
+        for _ in 0..64 {
+            let gate = Arc::clone(&gate);
+            calls.push(tokio::spawn(async move { gate.handle_hook() }));
+        }
+
+        let mut started = 0;
+        let mut joined = 0;
+        for call in calls {
+            match call.await.expect("the hook call joins") {
+                HookAdmission::Started => started += 1,
+                HookAdmission::Joined => joined += 1,
+            }
+        }
+        assert_eq!(started, 1);
+        assert_eq!(joined, 63);
+    }
+
+    #[tokio::test]
+    async fn an_interval_pass_consumes_a_pending_hook_without_a_later_spurious_wake() {
+        let gate = HookPassGate::default();
+        assert_eq!(gate.handle_hook(), HookAdmission::Started);
+
+        assert!(
+            gate.begin_pass(),
+            "the due interval pass consumes the pending hook"
+        );
+        gate.end_pass();
+
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), gate.wait_for_hook())
+                .await
+                .is_err(),
+            "the consumed notification cannot start a second pass"
+        );
+    }
 
     /// The job of these tests: one interval trigger with the options each
     /// case names, over the minimal profile the reader accepts.
@@ -286,6 +456,16 @@ mod tests {
                 version: "1".to_string(),
             },
             source: job_source(),
+            destination: serde_json::from_value(serde_json::json!({
+                "type": "signed-coordinator-event",
+                "binding": "coordinator-test",
+                "workflow": "job-test",
+                "trigger": "item-received",
+                "source": "urn:registry-adapter:job:job-test",
+                "eventType": "org.example.item-received.v1",
+                "dataSchema": "urn:example:schema:item-received:v1"
+            }))
+            .expect("a destination"),
             projection: registry_adapter_core::ProjectionDecl::default(),
             triggers: vec![trigger],
             profile: profile(),
@@ -336,6 +516,7 @@ mod tests {
             backoff_error_threshold,
             backoff_multiplier,
             path: None,
+            binding: None,
         }
     }
 
@@ -653,6 +834,7 @@ mod tests {
         let mut hook = trigger(60_000, 0, 0, 0, 1);
         hook.kind = "hook".to_string();
         hook.path = Some("/hook".to_string());
+        hook.binding = Some("hook-test".parse().expect("a local id"));
         let state = JobState::default();
         assert_eq!(next_due(&job(hook), &state, at(100), at(100)), None);
     }

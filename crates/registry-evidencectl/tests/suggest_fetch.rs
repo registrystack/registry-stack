@@ -50,6 +50,12 @@ use std::{
 
 use types::SpecSource;
 
+fn open(
+    source: &SpecSource,
+) -> anyhow::Result<registry_evidence_authoring::openapi::openapi::Spec> {
+    load::open_retained(source).map(|(spec, _)| spec)
+}
+
 // --- which URLs are fetched --------------------------------------------------
 
 #[test]
@@ -178,8 +184,8 @@ fn a_document_served_over_loopback_is_opened_exactly_as_the_file_would_be() {
     let fixture = fixture_text("records-3.0.yaml");
     let address = serve(move |_target| ok(&fixture, "application/yaml"));
 
-    let from_url = load::open(&url_source(address, "/openapi.yaml")).expect("opens");
-    let from_file = load::open(&SpecSource::File(fixture_path("records-3.0.yaml"))).expect("opens");
+    let from_url = open(&url_source(address, "/openapi.yaml")).expect("opens");
+    let from_file = open(&SpecSource::File(fixture_path("records-3.0.yaml"))).expect("opens");
 
     assert_eq!(
         from_url
@@ -204,7 +210,7 @@ fn a_non_success_status_is_reported_with_its_code() {
         b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec()
     });
 
-    let error = load::open(&url_source(address, "/openapi.yaml")).unwrap_err();
+    let error = open(&url_source(address, "/openapi.yaml")).unwrap_err();
     let failure = safe_failure(&error);
     assert_eq!(failure.code, "evidence.openapi.http-status");
     assert!(failure.operational);
@@ -254,7 +260,7 @@ fn a_redirect_is_followed_and_its_destination_is_read() {
         .into_bytes()
     });
 
-    let spec = load::open(&url_source(entry, "/latest.yaml")).expect("opens");
+    let spec = open(&url_source(entry, "/latest.yaml")).expect("opens");
     assert!(!spec.operations().is_empty());
 }
 

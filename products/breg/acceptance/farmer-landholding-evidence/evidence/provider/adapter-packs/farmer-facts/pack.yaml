@@ -1,0 +1,60 @@
+{
+  "apiVersion": "id.registrystack.org/formats/adapter/pack/v1alpha1",
+  "kind": "AdapterPack",
+  "id": "farmer-facts",
+  "version": "1",
+  "testedVersions": [],
+  "endpoints": [{
+    "id": "provider",
+    "component": "http",
+    "authentication": {"type": "static-authorization"},
+    "attemptTimeoutMilliseconds": 3000,
+    "maximumResponseBytes": 65536,
+    "requestHeaders": ["accept"],
+    "operations": [{"id": "lookup", "safeUpstream": true}]
+  }],
+  "scripts": [{
+    "path": "scripts/provider.rhai",
+    "digest": "sha256:b4b07e10cf5b98f9256507e48cd353dc2248d4632f5536fdd859ef9642efc906"
+  }],
+  "sourceRoutes": [
+    {
+      "id": "status",
+      "evidence": {
+        "inputsSchema": {"path": "schemas/inputs.json", "digest": "sha256:c5d8986e6e8d3c6409c8182226cb599b8c3aef4a558e1fe2a04ded1d7b730663"},
+        "factsSchema": {"path": "schemas/active-facts.json", "digest": "sha256:02321973db9903e6c9044940ade75fece0969e10977a5fc3be684530c0910fa6"},
+        "acquisitionPosture": "field-projected"
+      },
+      "steps": [
+        {"setProperty": {"name": "reference", "value": {"jsonpath": "$.reference"}}},
+        {"setHeader": {"name": "Accept", "value": {"constant": "application/json"}}},
+        {"to": {"uri": "http:provider", "parameters": {
+          "httpMethod": "POST", "path": "/v1/facts", "operation": "lookup",
+          "body": {"rhai": {"file": "scripts/provider.rhai", "entrypoint": "request_status"}}
+        }}},
+        {"setBody": {"rhai": {"file": "scripts/provider.rhai", "entrypoint": "project_status"}}},
+        {"validateSchema": {"path": "schemas/status-provider.json", "digest": "sha256:61366855f5ebefcf6b69df1542402302e4ecebc7fc56b077f6db080736130e91"}},
+        {"setBody": {"rhai": {"file": "scripts/provider.rhai", "entrypoint": "status"}}}
+      ]
+    },
+    {
+      "id": "category",
+      "evidence": {
+        "inputsSchema": {"path": "schemas/inputs.json", "digest": "sha256:c5d8986e6e8d3c6409c8182226cb599b8c3aef4a558e1fe2a04ded1d7b730663"},
+        "factsSchema": {"path": "schemas/category-facts.json", "digest": "sha256:6478fcac64d79fe42644715cde96a51908908b25b8817393da8acf2b72077ef6"},
+        "acquisitionPosture": "field-projected"
+      },
+      "steps": [
+        {"setProperty": {"name": "reference", "value": {"jsonpath": "$.reference"}}},
+        {"setHeader": {"name": "Accept", "value": {"constant": "application/json"}}},
+        {"to": {"uri": "http:provider", "parameters": {
+          "httpMethod": "POST", "path": "/v1/facts", "operation": "lookup",
+          "body": {"rhai": {"file": "scripts/provider.rhai", "entrypoint": "request_category"}}
+        }}},
+        {"setBody": {"rhai": {"file": "scripts/provider.rhai", "entrypoint": "project_category"}}},
+        {"validateSchema": {"path": "schemas/category-provider.json", "digest": "sha256:4c8f56646737baf591d4da9e1a089373053a07dde3d70efac0280695b17d1b70"}},
+        {"setBody": {"rhai": {"file": "scripts/provider.rhai", "entrypoint": "category"}}}
+      ]
+    }
+  ]
+}

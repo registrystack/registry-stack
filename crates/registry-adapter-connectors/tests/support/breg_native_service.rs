@@ -10,11 +10,15 @@
 use std::{
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
+    sync::Arc,
     time::{Duration, Instant},
 };
 
-use registry_breg_client::{BaseRegistryClient, BaseRegistryClientConfig, StaticToken};
-use registry_platform_testing::TestAuthorizationServer;
+use registry_breg_client::{
+    BaseRegistryClient, BaseRegistryClientConfig, StaticToken, TokenProvider,
+};
+use registry_platform_crypto::{generate_private_jwk, GeneratedKeyAlgorithm};
+use registry_platform_testing::{fixtures, TestActorKind, TestAuthorizationServer, TestClient};
 use serde_json::{json, Value};
 
 fn binary(variable: &str) -> PathBuf {
@@ -26,6 +30,38 @@ fn binary(variable: &str) -> PathBuf {
         "{variable} must name an existing executable"
     );
     path
+}
+
+/// A synthetic issuer whose service actor has the BReg fixture's writer
+/// authority. Cross-crate native tests use the same identity setup as
+/// the connector's own native suite.
+pub async fn issuer(subject: &str) -> TestAuthorizationServer {
+    let (_, public) = fixtures::ed25519_pair();
+    TestAuthorizationServer::builder()
+        .with_signing_key(generate_private_jwk(GeneratedKeyAlgorithm::Es256).unwrap())
+        .client(
+            TestClient::new("application-reader")
+                .with_public_jwk(public)
+                .with_resource("urn:example:applications")
+                .with_actor_kind(TestActorKind::Service)
+                .with_service_subject(subject),
+        )
+        .start()
+        .await
+}
+
+/// A token provider for one synthetic service actor admitted by
+/// [`issuer`]. The provider is host-owned and never enters prepared
+/// connector bytes.
+pub fn token_provider(issuer: &TestAuthorizationServer, subject: &str) -> Arc<dyn TokenProvider> {
+    let token = issuer.issue_access_token(
+        "application-reader",
+        subject,
+        "urn:example:applications",
+        "applications:read",
+        chrono::Utc::now().timestamp() + 3600,
+    );
+    Arc::new(StaticToken::new(token).expect("the synthetic token is valid"))
 }
 
 fn operator(binary: &Path, args: &[&std::ffi::OsStr], log: &Path) -> Value {
@@ -194,26 +230,53 @@ impl Breg {
                     "defaultLanguage": "en"
                 },
                 "package": {"sourceRevision": "adapter-native-connector-proof"},
-                "recordTypes": [{
-                    "id": "item",
-                    "primaryDataset": "synthetic-items",
-                    "route": "items",
-                    "mutationMode": "mutable",
-                    "classification": "internal",
-                    "batch": {"maximumItems": 100, "maximumBytes": 65536},
-                    "fields": [
-                        {"id": "owner", "type": "string", "required": true, "maximumLength": 80, "classification": "internal"},
-                        {"id": "label", "type": "string", "required": true, "minimumLength": 1, "maximumLength": 80, "classification": "internal"}
-                    ]
-                }],
+                "recordTypes": [
+                    {
+                        "id": "item",
+                        "primaryDataset": "synthetic-items",
+                        "route": "items",
+                        "mutationMode": "mutable",
+                        "classification": "internal",
+                        "batch": {"maximumItems": 100, "maximumBytes": 65536},
+                        "fields": [
+                            {"id": "owner", "type": "string", "required": true, "maximumLength": 80, "classification": "internal"},
+                            {"id": "label", "type": "string", "required": true, "minimumLength": 1, "maximumLength": 80, "classification": "internal"}
+                        ]
+                    },
+                    {
+                        "id": "household",
+                        "primaryDataset": "synthetic-items",
+                        "route": "households",
+                        "mutationMode": "mutable",
+                        "classification": "internal",
+                        "fields": [
+                            {"id": "owner", "type": "string", "required": true, "maximumLength": 80, "classification": "internal"},
+                            {"id": "source-submission-id", "apiName": "sourceSubmissionId", "type": "string", "required": true, "minimumLength": 1, "maximumLength": 128, "classification": "internal"},
+                            {"id": "respondent-name", "apiName": "respondentName", "type": "string", "required": true, "minimumLength": 1, "maximumLength": 256, "classification": "internal"},
+                            {"id": "household-size", "apiName": "householdSize", "type": "int64", "required": true, "classification": "internal"}
+                        ],
+                        "selectorProfiles": [
+                            {"id": "by-source-submission", "fields": ["source-submission-id"]}
+                        ]
+                    }
+                ],
                 "datasets": [{"id": "synthetic-items"}],
-                "functions": [{
-                    "id": "update-item-plan",
-                    "runtime": "rhai",
-                    "source": "scripts/update-item.rhai",
-                    "entrypoint": "plan",
-                    "abi": "registry.action-plan/v1"
-                }],
+                "functions": [
+                    {
+                        "id": "update-item-plan",
+                        "runtime": "rhai",
+                        "source": "scripts/update-item.rhai",
+                        "entrypoint": "plan",
+                        "abi": "registry.action-plan/v1"
+                    },
+                    {
+                        "id": "register-household-plan",
+                        "runtime": "rhai",
+                        "source": "scripts/register-household.rhai",
+                        "entrypoint": "plan",
+                        "abi": "registry.action-plan/v1"
+                    }
+                ],
                 "actions": [
                     {
                         "id": "update-item",
@@ -248,6 +311,21 @@ impl Breg {
                         ],
                         "commitGuards": {"targets": [{"input": "target", "revision": "unchanged"}]},
                         "plan": {"type": "fixed", "effects": [{"id": "item", "target": {"fromInput": "target"}, "operation": "patch", "set": {"label": {"fromInput": "label"}}}]}
+                    },
+                    {
+                        "id": "register-household",
+                        "execution": {"mode": "proposal", "proposal": {"review": {"type": "none"}, "retention": {"mode": "operator-erase"}}},
+                        "inputs": [
+                            {"id": "source-submission-id", "apiName": "sourceSubmissionId", "type": "string", "required": true, "minimumLength": 1, "maximumLength": 128, "classification": "internal"},
+                            {"id": "respondent-name", "apiName": "respondentName", "type": "string", "required": true, "minimumLength": 1, "maximumLength": 256, "classification": "internal"},
+                            {"id": "household-size", "apiName": "householdSize", "type": "int64", "required": true, "classification": "internal"}
+                        ],
+                        "plan": {
+                            "type": "function",
+                            "function": "register-household-plan",
+                            "inputs": ["source-submission-id", "respondent-name", "household-size"],
+                            "writes": [{"id": "household", "target": {"recordType": "household"}, "operation": "create", "fields": ["owner", "source-submission-id", "respondent-name", "household-size"]}]
+                        }
                     }
                 ],
                 "accessProfiles": [{
@@ -258,22 +336,35 @@ impl Breg {
                     "actorKind": "service",
                     "requesterClients": ["application-reader"],
                     "permissions": {
-                        "records": [{
-                            "recordType": "item",
-                            "operations": ["create", "get", "list", "patch", "batch", "revisions", "snapshot"],
-                            "readableFields": ["owner", "label"],
-                            "writableFields": ["owner", "label"],
-                            "revisionAccess": true,
-                            "rowBoundaries": [{"field": "owner", "claim": "sub", "operator": "equals"}]
-                        }],
+                        "records": [
+                            {
+                                "recordType": "item",
+                                "operations": ["create", "get", "list", "patch", "batch", "revisions", "snapshot"],
+                                "readableFields": ["owner", "label"],
+                                "writableFields": ["owner", "label"],
+                                "revisionAccess": true,
+                                "rowBoundaries": [{"field": "owner", "claim": "sub", "operator": "equals"}]
+                            },
+                            {
+                                "recordType": "household",
+                                "operations": ["create", "get", "list", "lookup"],
+                                "readableFields": ["owner", "source-submission-id", "respondent-name", "household-size"],
+                                "writableFields": ["owner", "source-submission-id", "respondent-name", "household-size"],
+                                "filterableFields": ["source-submission-id"],
+                                "lookups": [{"selector": "by-source-submission", "valueOrigin": "request"}],
+                                "rowBoundaries": [{"field": "owner", "claim": "sub", "operator": "equals"}]
+                            }
+                        ],
                         "actions": [
                             {"action": "update-item", "operations": ["invoke"], "targets": [{"recordType": "item", "rowBoundaries": [{"field": "owner", "claim": "sub", "operator": "equals"}]}], "results": ["item"]},
                             {"action": "propose-item", "operations": ["start"], "targets": [{"recordType": "item", "rowBoundaries": [{"field": "owner", "claim": "sub", "operator": "equals"}]}]},
-                            {"action": "manual-item", "operations": ["start"], "targets": [{"recordType": "item", "rowBoundaries": [{"field": "owner", "claim": "sub", "operator": "equals"}]}]}
+                            {"action": "manual-item", "operations": ["start"], "targets": [{"recordType": "item", "rowBoundaries": [{"field": "owner", "claim": "sub", "operator": "equals"}]}]},
+                            {"action": "register-household", "operations": ["start"], "targets": [{"recordType": "household", "rowBoundaries": [{"field": "owner", "claim": "sub", "operator": "equals"}]}]}
                         ],
                         "proposals": [
                             {"action": "propose-item", "operations": ["get", "list", "submit", "cancel"], "ownership": "caller", "targets": [{"recordType": "item", "rowBoundaries": [{"field": "owner", "claim": "sub", "operator": "equals"}]}]},
-                            {"action": "manual-item", "operations": ["get", "list", "submit", "cancel", "apply"], "ownership": "caller", "targets": [{"recordType": "item", "rowBoundaries": [{"field": "owner", "claim": "sub", "operator": "equals"}]}]}
+                            {"action": "manual-item", "operations": ["get", "list", "submit", "cancel", "apply"], "ownership": "caller", "targets": [{"recordType": "item", "rowBoundaries": [{"field": "owner", "claim": "sub", "operator": "equals"}]}]},
+                            {"action": "register-household", "operations": ["get", "list", "submit", "cancel"], "ownership": "caller", "targets": [{"recordType": "household", "rowBoundaries": [{"field": "owner", "claim": "sub", "operator": "equals"}]}]}
                         ]
                     }
                 }]
@@ -285,6 +376,33 @@ impl Breg {
     #{effects: [#{id: "item", set: #{label: ctx.inputs.label}}]}
 }
 "#,
+        );
+        private_file(
+            &project.join("scripts/register-household.rhai"),
+            br#"fn plan(ctx) {
+    #{effects: [#{
+        id: "household",
+        operation: "create",
+        set: #{
+            owner: "adapter-job-native",
+            "source-submission-id": ctx.inputs["source-submission-id"],
+            "respondent-name": ctx.inputs["respondent-name"],
+            "household-size": ctx.inputs["household-size"]
+        }
+    }]}
+}
+"#,
+        );
+        operator(
+            &ctl,
+            &[
+                "generate".as_ref(),
+                "actions".as_ref(),
+                project.as_os_str(),
+                "--output".as_ref(),
+                service.root.join("action-contracts").as_os_str(),
+            ],
+            &service.root.join("action-contracts.log"),
         );
         document(
             &project.join("tests/journeys.yaml"),
@@ -497,6 +615,21 @@ impl Breg {
     /// The deployment origin the connector's configuration names.
     pub fn origin(&self) -> String {
         self.base_url.clone()
+    }
+
+    /// The operator-produced Action contract from the exact package the
+    /// native service is running. Composition fixtures pass these bytes to
+    /// another product instead of reconstructing a contract from client
+    /// metadata.
+    pub fn action_contract(&self) -> Value {
+        serde_json::from_slice(
+            &std::fs::read(
+                self.root
+                    .join("action-contracts/generated/action-contracts.json"),
+            )
+            .expect("the packaged Action contract exists"),
+        )
+        .expect("the packaged Action contract is JSON")
     }
 
     /// The operator-built package digest the active ingestion contract names

@@ -643,6 +643,27 @@ struct GenerateArgs {
     /// Logical connection that the Evidence operator configures separately.
     #[arg(long)]
     connection: Option<String>,
+    /// Authentication contract the generated Adapter pack requires from its endpoint binding.
+    #[arg(long, value_enum)]
+    authentication: Option<EvidenceSourceAuthenticationArg>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
+enum EvidenceSourceAuthenticationArg {
+    #[default]
+    StaticAuthorization,
+    Oauth2PrivateKeyJwt,
+}
+
+impl From<EvidenceSourceAuthenticationArg>
+    for registry_breg::evidence_source::EvidenceSourceAuthentication
+{
+    fn from(value: EvidenceSourceAuthenticationArg) -> Self {
+        match value {
+            EvidenceSourceAuthenticationArg::StaticAuthorization => Self::StaticAuthorization,
+            EvidenceSourceAuthenticationArg::Oauth2PrivateKeyJwt => Self::Oauth2PrivateKeyJwt,
+        }
+    }
 }
 
 #[derive(Debug, Args)]
@@ -8325,6 +8346,7 @@ fn generate_requested(args: &GenerateArgs) -> Result<SuccessReport, FailureRepor
             || !args.fields.is_empty()
             || args.source_id.is_some()
             || args.connection.is_some()
+            || args.authentication.is_some()
         {
             return Err(fail(
                 "source selection flags apply to generate evidence-source; generate odrl accepts --access-profile only",
@@ -8349,6 +8371,7 @@ fn generate_requested(args: &GenerateArgs) -> Result<SuccessReport, FailureRepor
         fields: args.fields.clone(),
         source_id: required(&args.source_id, "--source-id")?,
         connection: required(&args.connection, "--connection")?,
+        authentication: args.authentication.unwrap_or_default().into(),
     };
     let profile = profile(args.production);
     let (compiled, source) = compile_with_source(&args.project, profile, "generate")?;

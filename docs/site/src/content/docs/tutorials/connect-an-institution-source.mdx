@@ -28,7 +28,7 @@ running, run `rstack evidence dev stop .` in its directory first, because both u
   time="About 20 minutes"
   level="Local development with a synthetic public server"
   prerequisites={[
-    'The Evidence component installed for rstack',
+    'The Evidence component for rstack built from the same Registry Stack source candidate as the example archive',
     'Running Docker',
     'Python 3, tar, and jq',
     'Internet access',
@@ -41,10 +41,11 @@ Settle three things about the operation you connect:
 
 - **A fixed request shape.** One method and one path template. Selector values fill the path
   parameters; the caller never chooses the operation, query, or headers.
-- **A credential the gateway holds.** The target's connection carries it. The caller's own token
-  never reaches your API.
-- **The fields the gateway may read.** A projection lists them as JSON pointers; nothing else in
-  the response reaches the project's Functions.
+- **Authentication configuration and, when needed, a secret reference.** The target names the
+  authentication type and any reference. A configured secret provider supplies the credential
+  bytes, and the caller's own token never reaches your API.
+- **The fields the integration may retain.** Review exactly which response fields can be retained;
+  nothing else in the response may reach the assertion logic.
 
 Without a real API at hand, you connect a FHIR R4 `Coverage` read on a synthetic public server.
 Each step applies to your own API.
@@ -60,6 +61,9 @@ lifecycle. Its contract notes identify the provider shapes you need to check aga
 Download the [Evidence example projects](../../examples/evidence-examples.tar.gz) into a fresh
 working directory as `evidence-examples.tar.gz`, then unpack the FHIR project into a directory of
 its own, because the next commands write keys and responses into it:
+
+The download uses the current source-candidate authoring format. Do not pair it with binaries from
+an older numbered release.
 
 ```sh
 mkdir connect-an-institution-api
@@ -90,6 +94,28 @@ Proof: offline synthetic fixture evaluation; no live dependency readiness was ch
 You request `fhir-coverage-status`, one of its two assertion definitions. `test` also wrote
 disposable, owner-only keys under `.generated/secrets`; keep that directory out of version control.
 
+Inspect the acquisition and derivation that the checked project will use:
+
+```sh
+rstack evidence explain . --target local-target.yaml
+```
+
+```text test-excerpt
+Definition fhir-coverage-status: urn:example:requirement:coverage-record:v1
+  Acquisition: Source coverage-record
+    Source coverage-record: pack fhir-read-through@1; route coverage-record; connection fhir-read-through
+      Posture: record-transformed
+      Inputs: coverageId <- selector coverage-record@coverage-by-id.coverage_id
+      Facts: beneficiary-reference (string), status (string)
+  Derive: Function derive-coverage-status
+  Outputs: coverage-record-reports-active
+```
+
+The Source is the project's thin acquisition binding. It selects one route from the reviewed
+`fhir-read-through@1` pack, supplies `coverageId` from the fixed selector profile, and names the
+target-owned connection. The route returns only the two private Facts shown before the derivation
+Function produces the Boolean Output.
+
 ## Read the operation from its OpenAPI description
 
 `source.openapi.yaml` describes the API. Print a source draft for one operation, selecting the
@@ -102,71 +128,120 @@ rstack evidence source suggest --openapi source.openapi.yaml \
 ```
 
 ```text test-excerpt
+evidencectl source suggest: draft for source `coverage-record` (GET /Coverage/{coverage_id})
+
+Derived automatically: none.
+
 Still needs your input (the source block below):
   - Set the source origin.
   - Review the generated Source posture and default source limits.
   - Configure target-owned authentication.
-  - Complete selector bindings, the preparation Function, and request limits.
+  - Complete selector bindings and the pack request mapping.
 ```
 
-This print-only draft needs request bindings and preparation completed. For another operation,
+This print-only draft includes a candidate pack and Source block. It is incomplete until you review
+the pack, bind every request input, and resolve its draft markers. For another operation,
 [explicit selector mappings](../../products/registry-evidence/authoring-form/#generate-explicit-openapi-request-bindings)
-generate routine request preparation from profiles already in your project. The reviewed source
-in `evidence.yaml` uses this fixed request shape:
+generate fixed pack request bindings from profiles already in your project.
 
-```yaml test-excerpt="evidence.yaml"
+The downloaded project uses the reviewed `fhir-read-through@1` pack instead of the generated
+candidate. Its Source remains a small binding in `evidence.yaml`:
+
+```yaml
 coverage-record:
-  type: http-json
+  pack:
+    id: fhir-read-through
+    version: '1'
+  route: coverage-record
   connection: fhir-read-through
   acquisitionPosture: record-transformed
-  selectors:
-  - role: coverage-record
-    profiles:
-    - coverage-by-id
-  request:
-    method: GET
-    path: /Coverage/{coverage_id}
+  inputs:
+    coverageId:
+      selector:
+        role: coverage-record
+        profile: coverage-by-id
+        field: coverage_id
 ```
 
-Its projection is the fields the gateway may read:
+The selected pack route owns the inputs and Facts schemas for acquisition:
 
-```yaml test-excerpt="evidence.yaml"
-response:
-  projection:
-  - /resourceType
-  - /id
-  - /status
-  - /beneficiary/reference
+```json test-excerpt="adapter-packs/fhir-read-through/pack.yaml"
+{
+  "id": "coverage-record",
+  "evidence": {
+    "inputsSchema": {
+      "path": "schemas/inputs-coverage.json",
+      "digest": "sha256:a70e6414a6baedd4404c53015ce035caa3e3a2528700a259727be4632296f03d"
+    },
+    "factsSchema": {
+      "path": "schemas/facts-coverage.json",
+      "digest": "sha256:7c93c17ec873a96e80a31fb096260add3abbb64e0b2a3ad9352cde10b4c9775a"
+    },
+    "acquisitionPosture": "record-transformed"
+  }
+}
 ```
 
-The extract Function keeps two of them as private facts, `status` and `beneficiary-reference`.
-The posture `record-transformed` records that the API returns a broader record than the answer
-needs, so the integration claims disclosure minimization only.
+The route fixes the request method, path, and path-parameter source:
 
-The credential lives in `local-target.yaml`, on the connection the source names:
+```json test-excerpt="adapter-packs/fhir-read-through/pack.yaml"
+{
+  "to": {
+    "uri": "http:fhir",
+    "parameters": {
+      "httpMethod": "GET",
+      "path": "/Coverage/{{coverage-id}}",
+      "pathParameters": {
+        "coverage-id": {
+          "exchangeProperty": "coverage-id"
+        }
+      },
+      "operation": "coverage-read"
+    }
+  }
+}
+```
+
+Its reviewed script projects `resourceType`, `id`, `status`, and `beneficiary.reference`. A separate
+`validateSchema` step enforces `provider-coverage.json` against that projection. The following
+lookup step checks the returned record's identity and returns only `status` and
+`beneficiary-reference` as private Facts. The posture
+`record-transformed` records that the API returns a broader record than the answer needs, so the
+integration claims disclosure minimization only.
+
+The endpoint details live in `local-target.yaml`, under the connection the Source names:
 
 ```yaml test-excerpt="local-target.yaml"
 connections:
   fhir-read-through:
-    origin: http://127.0.0.1:8000
-    authentication:
-      type: none
+    endpoints:
+      fhir:
+        origin: http://127.0.0.1:8000
+        authentication:
+          type: none
+        attemptTimeoutMilliseconds: 30000
+        maximumResponseBytes: 65536
 ```
 
-The local adapter needs none. For your API, set `type: bearer` with a `tokenRef` to the secret,
-as your first assertion's target does. For your own description,
+The local read-through helper needs no credential. For an API that expects a fixed Authorization
+value, set `type: static-authorization` with a `tokenRef` to a secret reference, as your first
+assertion's target does. The configured secret provider supplies the credential bytes. For your
+own description,
 `rstack evidence init <dir> --openapi <doc> --profile local` writes a project and
-`rstack evidence source suggest <dir>` writes the draft into it.
+`rstack evidence source suggest <dir>` writes a pack draft into it.
 
-{/* Evidence: crates/registry-evidencectl/src/suggest/emit.rs, Review the generated Source posture;
-    crates/registry-evidence/src/config.rs, AcquisitionPosture; products/evidence/OPERATOR-CONTRACT.md, record-transformed;
-    products/evidence/examples/{fhir,standalone}/local-target.yaml, connections. */}
+{/* Evidence: crates/registry-evidencectl/src/suggest/emit.rs, render_report;
+    products/evidence/examples/fhir/{evidence.yaml,local-target.yaml,adapter-packs/fhir-read-through/pack.yaml,
+    adapter-packs/fhir-read-through/scripts/fhir.rhai,functions/derive-coverage-status.rhai};
+    products/evidence/examples/standalone/local-target.yaml;
+    products/evidence/OPERATOR-CONTRACT.md, record-transformed. */}
 
 ## Serve the API locally
 
-FHIR servers answer with `application/fhir+json`; an Evidence HTTP source accepts
-`application/json`. The project's adapter, project code and not part of Evidence, re-serves each
-allowed resource from the synthetic server. In a second terminal, start it and leave it running:
+FHIR servers answer with `application/fhir+json`; the pack route accepts `application/json` from
+the local read-through helper. That helper is project code and not part of Evidence. It re-serves
+each allowed resource from the synthetic server. In a second terminal, start it and leave it
+running:
 
 ```sh test-cwd="connect-an-institution-api/fhir-record-evidence" test-background="http://127.0.0.1:8000/healthz"
 python3 serve-source.py
@@ -287,7 +362,7 @@ rstack evidence dev clean .
 Removed stopped local Evidence state
 ```
 
-Press `Ctrl+C` in the adapter's terminal, then remove the subject files:
+Press `Ctrl+C` in the read-through helper's terminal, then remove the subject files:
 
 ```sh
 cd ..

@@ -420,7 +420,7 @@ pub(crate) enum UndeclaredNotFound {
 }
 
 impl UndeclaredNotFound {
-    const fn as_str(self) -> &'static str {
+    pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::NotDeclared => "not declared",
             Self::NotMatched => "not matched",
@@ -448,7 +448,7 @@ pub(crate) enum DependencyOutcome {
     Serialization,
 }
 impl DependencyOutcome {
-    fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Success => "success",
             Self::Cancelled => "cancelled",
@@ -531,6 +531,27 @@ impl Drop for DependencyObservation<'_> {
     }
 }
 
+/// Closed lookup outcomes remain distinct to operators even when Evidence's
+/// privacy contract gives callers the same unavailable response.
+#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
+pub(crate) enum SourceLookupOutcome {
+    Match,
+    NoMatch,
+    Ambiguous,
+    Unresolved,
+}
+
+impl SourceLookupOutcome {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Match => "match",
+            Self::NoMatch => "no-match",
+            Self::Ambiguous => "ambiguous",
+            Self::Unresolved => "unresolved",
+        }
+    }
+}
+
 /// Value-free operator diagnostics for every governed source.
 ///
 /// The entry set is fixed when the runtime starts, from the bundle's own
@@ -544,6 +565,7 @@ pub(crate) struct SourceDiagnostics {
 
 #[derive(Default)]
 struct SourceSignals {
+    lookups: Mutex<BTreeMap<SourceLookupOutcome, u64>>,
     requests: DependencyMetrics,
     shape_drift_total: AtomicU64,
     shape_drift_warning: Mutex<WarningWindow>,
@@ -674,6 +696,21 @@ impl SourceDiagnostics {
             );
         }
         self.signer.render(body, "signer", "signer=\"active\"");
+        body.push_str("# HELP evidence_source_lookups_total Completed pack lookups by closed outcome.\n# TYPE evidence_source_lookups_total counter\n");
+        for (source, signals) in &self.sources {
+            let counts = signals
+                .lookups
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            for (outcome, count) in counts.iter() {
+                body.push_str(&format!(
+                    "evidence_source_lookups_total{{source=\"{}\",outcome=\"{}\"}} {}\n",
+                    escape_label_value(source),
+                    outcome.label(),
+                    count
+                ));
+            }
+        }
 
         body.push_str(
             "# HELP evidence_source_shape_drift_total Source responses whose shape departed from the declared projection.\n",
@@ -713,6 +750,15 @@ pub(crate) struct SourceObserver {
 }
 
 impl SourceObserver {
+    pub(crate) fn lookup(&self, outcome: SourceLookupOutcome) {
+        let mut counts = self.diagnostics.sources[&self.source_id]
+            .lookups
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let count = counts.entry(outcome).or_default();
+        *count = count.saturating_add(1);
+    }
+
     pub(crate) fn start(&self) -> DependencyObservation<'_> {
         self.diagnostics.sources[&self.source_id].requests.start()
     }
@@ -988,6 +1034,29 @@ mod tests {
         assert_eq!(window.admit(start + SOURCE_WARNING_INTERVAL * 3), Some(1));
     }
 
+    #[test]
+    fn lookup_counters_preserve_declared_unresolved_without_unbounded_labels() {
+        let diagnostics = Arc::new(SourceDiagnostics::new(["people"]));
+        let observer = diagnostics.observer("people").unwrap();
+        for outcome in [
+            SourceLookupOutcome::Match,
+            SourceLookupOutcome::NoMatch,
+            SourceLookupOutcome::Ambiguous,
+            SourceLookupOutcome::Unresolved,
+        ] {
+            observer.lookup(outcome);
+        }
+        assert!(diagnostics.observer("request-controlled-canary").is_none());
+        let mut rendered = String::new();
+        diagnostics.render(&mut rendered);
+        for outcome in ["match", "no-match", "ambiguous", "unresolved"] {
+            assert!(rendered.contains(&format!(
+                "evidence_source_lookups_total{{source=\"people\",outcome=\"{outcome}\"}} 1"
+            )));
+        }
+        assert!(!rendered.contains("request-controlled-canary"));
+    }
+
     /// The `source` label is drawn from the governed source set fixed at
     /// startup. A report for any other identifier creates no series, and the
     /// counter counts every drifted response even when its WARN is suppressed.
@@ -1005,7 +1074,11 @@ mod tests {
         let mut body = String::new();
         diagnostics.render(&mut body);
         assert_eq!(
-            body.lines().filter(|line| line.contains("evidence_source_shape_drift_total")).collect::<Vec<_>>().join("\n") + "\n",
+            body.lines()
+                .filter(|line| line.contains("evidence_source_shape_drift_total"))
+                .collect::<Vec<_>>()
+                .join("\n")
+                + "\n",
             "# HELP evidence_source_shape_drift_total Source responses whose shape departed from the declared projection.\n\
              # TYPE evidence_source_shape_drift_total counter\n\
              evidence_source_shape_drift_total{source=\"source-a\"} 2\n\

@@ -1127,9 +1127,12 @@ fn affected_definitions(
     let signature = |project: &registry_evidence_authoring::project::EvidenceProject,
                      snapshot: &BTreeMap<String, Contents>,
                      id: &str|
-     -> Option<Value> {
-        let dependency =
-            registry_evidence_authoring::compile::definition_dependencies(project, id)?;
+     -> Result<Option<Value>> {
+        let Some(dependency) =
+            registry_evidence_authoring::compile::definition_dependencies(project, id)
+        else {
+            return Ok(None);
+        };
         let assets = dependency["functions"]
             .as_array()
             .into_iter()
@@ -1137,12 +1140,64 @@ fn affected_definitions(
             .filter_map(|function| function["source"].as_str())
             .filter_map(|path| snapshot.get(path).map(|contents| (path, &contents.text)))
             .collect::<BTreeMap<_, _>>();
-        Some(json!({"dependency":dependency,"functionAssets":assets}))
+        let mut pack_assets = BTreeMap::new();
+        for source in dependency["sources"]
+            .as_object()
+            .into_iter()
+            .flat_map(|sources| sources.values())
+        {
+            let pack_id = source["pack"]["id"]
+                .as_str()
+                .context("definition dependency Source requires a pack id")?;
+            let pack_version = source["pack"]["version"]
+                .as_str()
+                .context("definition dependency Source requires a pack version")?;
+            let pack_root = format!("adapter-packs/{pack_id}");
+            let pack_path = format!("{pack_root}/pack.yaml");
+            let pack_text = snapshot
+                .get(&pack_path)
+                .with_context(|| format!("definition dependency is missing {pack_path}"))?;
+            let pack = export::decode_adapter_pack(&pack_path, &pack_text.text)?;
+            if pack.id.as_str() != pack_id || pack.version != pack_version {
+                bail!("definition dependency Source and Adapter pack identity must agree");
+            }
+            pack_assets.insert(pack_path, &pack_text.text);
+            let mut pins = BTreeMap::new();
+            for reference in pack.pinned_files() {
+                if let Some(existing) =
+                    pins.insert(reference.path.as_str(), reference.digest.as_str())
+                {
+                    if existing != reference.digest.as_str() {
+                        bail!("definition dependency Adapter pack has conflicting artifact pins");
+                    }
+                }
+                let path = format!("{pack_root}/{}", reference.path);
+                let contents = snapshot
+                    .get(&path)
+                    .with_context(|| format!("definition dependency is missing {path}"))?;
+                if digest(contents.text.as_bytes()) != reference.digest.hex() {
+                    bail!(
+                        "definition dependency pack artifact does not match its digest pin: {path}"
+                    );
+                }
+                pack_assets.insert(path, &contents.text);
+            }
+        }
+        Ok(Some(
+            json!({"dependency":dependency,"functionAssets":assets,"packAssets":pack_assets}),
+        ))
     };
-    Ok(ids
-        .into_iter()
-        .filter(|id| signature(&before_project, before, id) != signature(&after_project, after, id))
-        .collect())
+    ids.into_iter()
+        .filter_map(|id| {
+            match (
+                signature(&before_project, before, &id),
+                signature(&after_project, after, &id),
+            ) {
+                (Ok(before), Ok(after)) => (before != after).then_some(Ok(id)),
+                (Err(error), _) | (_, Err(error)) => Some(Err(error)),
+            }
+        })
+        .collect()
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

@@ -2,15 +2,11 @@
 #
 # The kobotoolbox pack: KoboToolbox submission acquisition for the
 # governed-ingestion job mode, one source route, one page per run
-# (CONCEPT 17.1 and 17.2). Unproved state, stated plainly: no KoboToolbox
-# server has been reached. Every upstream shape here is synthesized from
-# the published documentation, and every fixture beside this pack is
-# synthetic and `documented`, never `captured`. `testedVersions` is
-# empty on purpose: it lists versions a pack was exercised against, and
-# none was. The hosted KoboToolbox documentation carries no server
-# version, so there is no honest version list to write; the acceptance
-# row of CONCEPT 17.7 lists every behavior resting on documentation as
-# unproved, and the pack README carries the probe questions.
+# (CONCEPT 17.1 and 17.2). Controlled synthetic deployment validation
+# exercised KoboToolbox 2.026.37c: paged reads, authenticated source edits,
+# and a direct BReg Proposal with human Casework review and application.
+# The committed fixtures remain synthetic `documented` examples, not
+# captured service responses. The README records probe results and limits.
 #
 # What the pack covers: the v2 submissions listing, `GET
 # /api/v2/assets/{uid}/data/` (the v1 `/submissions/` name was renamed
@@ -76,7 +72,7 @@ apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
 kind: AdapterPack
 id: kobotoolbox
 version: "1"
-testedVersions: []
+testedVersions: ["2.026.37c"]
 endpoints:
   - id: kobo-api
     component: http
@@ -86,7 +82,7 @@ endpoints:
     maximumResponseBytes: 1048576
     operations:
       - id: submissions-page
-    testedVersions: []
+    testedVersions: ["2.026.37c"]
 sourceRoutes:
   - id: kobo-submissions
     scan: ongoing

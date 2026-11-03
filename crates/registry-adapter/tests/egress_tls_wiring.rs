@@ -279,8 +279,9 @@ fn pack_endpoint(id: &str, authentication: EndpointAuthentication) -> Endpoint {
         id: LocalId::new(id).expect("endpoint id"),
         component: ComponentKind::Http,
         authentication,
-        attempt_timeout_milliseconds: registry_platform_yaml::BoundedU64::new(10_000)
-            .expect("attempt timeout"),
+        attempt_timeout_milliseconds: Some(
+            registry_platform_yaml::BoundedU64::new(10_000).expect("attempt timeout"),
+        ),
         maximum_response_bytes: registry_platform_yaml::BoundedU64::new(1_048_576)
             .expect("response bound"),
         response_headers: UniqueList::new(Vec::new()).expect("response headers"),
@@ -290,6 +291,10 @@ fn pack_endpoint(id: &str, authentication: EndpointAuthentication) -> Endpoint {
         query_file: None,
         operation_name: None,
         variables: None,
+        sqlite_extract: None,
+        key_column: None,
+        parameter_order: None,
+        host_protocol: None,
     }
 }
 
@@ -311,6 +316,7 @@ fn basic_binding(
         mtls_identity: None,
         attempt_timeout_milliseconds: None,
         maximum_response_bytes: None,
+        maximum_concurrency: BoundedU64::new(8).expect("concurrency"),
     }
 }
 
@@ -340,6 +346,7 @@ fn oauth_binding(
         mtls_identity: None,
         attempt_timeout_milliseconds: None,
         maximum_response_bytes: None,
+        maximum_concurrency: BoundedU64::new(8).expect("concurrency"),
     }
 }
 
@@ -353,6 +360,7 @@ fn anonymous_binding(endpoint: &str, base_url: &str) -> EndpointBinding {
         mtls_identity: None,
         attempt_timeout_milliseconds: None,
         maximum_response_bytes: None,
+        maximum_concurrency: BoundedU64::new(8).expect("concurrency"),
     }
 }
 

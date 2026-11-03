@@ -16,6 +16,7 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
+registry-adapter-core.workspace = true
 registry-cli-report.workspace = true
 anyhow.workspace = true
 axum.workspace = true
@@ -71,6 +72,7 @@ name = "authoring-schema"
 required-features = ["schema"]
 
 [dev-dependencies]
+registry-adapter-engine.workspace = true
 registry-evidence.workspace = true
 registry-evidence-authoring.workspace = true
 tower.workspace = true

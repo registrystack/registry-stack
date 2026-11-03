@@ -6,9 +6,10 @@
 
 | File | What it holds |
 | --- | --- |
-| `evidence.yaml` | The single `EvidenceProject` with stable IDs for selector profiles, Functions, Sources, AssertionDefinitions, and outputs. |
+| `evidence.yaml` | The single `EvidenceProject` with stable IDs for selector profiles, derive Functions, Source bindings, AssertionDefinitions, and outputs. |
 | `source.openapi.yaml` | The retained API description used by `evidencectl source suggest`. |
-| `functions/` | Named Function assets referenced by `evidence.yaml`. |
+| `adapter-packs/` | Pinned source routes, schemas and source preparation or extraction programs. |
+| `functions/` | Assertion derive Function assets referenced by `evidence.yaml`. |
 | `fixtures/` | Synthetic offline cases for `evidencectl test`. |
 | `local-target.yaml` | The disposable normalized local target. |
 | `dev-authority.yaml` | Complete local AccessProfiles and grants. |
@@ -21,7 +22,7 @@ evidencectl source suggest . --source-id <id> --operation '<METHOD /path>'
 evidencectl check . --target local-target.yaml
 ```
 
-`source suggest` adds one named Source and its preparation and extraction Functions to `evidence.yaml`. Review selector bindings, transport bounds, private facts, and any AssertionDefinition that acquires the Source.
+`source suggest` adds one named Source binding and its pinned adapter-pack closure. Review selector bindings, transport bounds, private facts, and any AssertionDefinition that acquires the Source.
 
 ## Documentation
 

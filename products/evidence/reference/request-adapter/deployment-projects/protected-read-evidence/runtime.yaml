@@ -1,7 +1,7 @@
 apiVersion: id.registrystack.org/formats/evidence/runtime/v1alpha1
 kind: EvidenceRuntimeConfig
 package:
-  root: /etc/registry-evidence/bundle
+  root: "/etc/registry-evidence/bundle"
 listener:
   bind: 127.0.0.1:8080
   tlsTermination: operator-controlled-upstream
@@ -12,20 +12,34 @@ listener:
   shutdownGraceMilliseconds: 30000
 secretProviders:
   file:
-    root: /run/secrets/registry-evidence
+    root: "/run/secrets/registry-evidence"
 signer:
   type: transit
-  unixSocketPath: /run/registry-evidence/transit-proxy.sock
+  unixSocketPath: "/run/registry-evidence/transit-proxy.sock"
   mount: transit
   keyName: evidence-signing
   keyVersion: 7
   attemptTimeoutMilliseconds: 2000
 audit:
-  path: /var/lib/registry-evidence/audit/evidence.jsonl
-# The registry API this project reads is presented over ordinary public TLS,
-# so no private trust profile is declared and the source names none. A
-# deployment whose registry API sits behind an internal CA adds a profile here
-# and names it on the source, the way the other reference projects do.
+  path: "/var/lib/registry-evidence/audit/evidence.jsonl"
 outboundTls:
   systemRoots: true
   trustProfiles: {}
+sourceConnections:
+  residence-register:
+    id: residence-register
+    endpoints:
+    - endpoint: records
+      baseUrl: https://registry-api.gov.example
+      credential:
+        type: oauth2-client-credentials
+        tokenEndpoint: https://tokens.gov.example/oauth2/token
+        clientIdRef: secret:file/registry-api-client-id
+        clientSecretRef: secret:file/registry-api-client-secret
+        scope: registry.read
+        credentialPlacement: form-body
+        maximumCacheSeconds: 60
+      attemptTimeoutMilliseconds: 3000
+      maximumResponseBytes: 65536
+      maximumConcurrency: 8
+    allowedPrivateCidrs: []

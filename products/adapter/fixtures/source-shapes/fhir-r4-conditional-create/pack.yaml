@@ -11,17 +11,16 @@
 # (https://hl7.org/fhir/R4/http.html#ccreate): no match creates the
 # Patient, one match returns it without creating a second, several
 # matches fail with 412. Repeating the same transaction after a timeout
-# therefore lands on the same Patient. The claim holds only because the
-# condition travels in the body; the direct form
-# (`POST /Patient` with the `If-None-Exist` header) cannot be authored,
-# since the `to` step declares no request headers. The claim is also only
-# as good as the server's conditional-create support: a server without
-# it creates a duplicate.
+# therefore lands on the same Patient. The claim holds here because the
+# condition travels in the body. The current endpoint `requestHeaders`
+# allowlist also permits the direct form (`POST /Patient` with the
+# `If-None-Exist` header), but this older shape does not exercise it. The
+# claim is also only as good as the server's conditional-create support: a
+# server without it creates a duplicate.
 #
 # `fhir-read` is the follow-up read of the created Patient, since a
-# transaction-response entry carries `response.location` and, without the
-# `Prefer: return=representation` request header (also not authorable),
-# no resource.
+# transaction-response entry carries `response.location` and this shape does
+# not set the now-supported `Prefer: return=representation` request header.
 apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
 kind: AdapterPack
 id: fhir-r4-conditional-create
@@ -60,17 +59,9 @@ routeTemplates:
           exception:
             - upstream.timeout
             - upstream.connection
-          handled: true
           redeliveryPolicy:
             maximumRedeliveries: 1
             retryDelaySeconds: 2
-          steps:
-            - setBody:
-                constant:
-                  title: The source did not answer in time.
-                  status: 503
-                  code: source.unavailable
-            - stop: {}
       - onException:
           exception:
             - upstream.http
@@ -78,39 +69,10 @@ routeTemplates:
             rhai:
               file: scripts/is-multiple-match.rhai
               entrypoint: is_multiple_match
-          handled: true
           steps:
-            - setBody:
-                constant:
-                  title: More than one source record matches the identifier.
-                  status: 409
-                  code: source.write-rejected
-            - stop: {}
-      - onException:
-          exception:
-            - upstream.http
-          handled: true
-          steps:
-            - setBody:
-                constant:
-                  title: The source refused the write.
-                  status: 409
-                  code: source.write-rejected
-            - stop: {}
-      - onException:
-          exception:
-            - upstream.malformed
-            - upstream.too-large
-            - script
-            - validation
-          handled: true
-          steps:
-            - setBody:
-                constant:
-                  title: The source answered something unusable.
-                  status: 502
-                  code: source.upstream-error
-            - stop: {}
+            - throwException:
+                exceptionType: outcome.rejected
+                message: More than one source record matches the identifier.
       - idempotentConsumer:
           expression:
             header: Idempotency-Key
@@ -156,11 +118,11 @@ routeTemplates:
                   entrypoint: to_record
 scripts:
   - path: scripts/to-transaction.rhai
-    digest: sha256:850ef5e8907640da4481edfbc82a3f0b3ddbafa98d48873f8bbc5b19b58aa7d6
+    digest: sha256:afcac3ffadad499af69c8af2ac252e68a9942d2db2accd23144fb5f372232738
   - path: scripts/created-id.rhai
     digest: sha256:792f0a6362f8b5d0c34338b6572c3bb6577a5945bfc5d5be5852b9e92c856d76
   - path: scripts/is-multiple-match.rhai
-    digest: sha256:eb6e0c34291a0ba6a566321471bf9b80325c5d16925361996267f28866b15619
+    digest: sha256:c103539912bd898b200c644afd97ff37e5d053c83280682084f8cdbce72f0a24
   - path: scripts/to-record.rhai
     digest: sha256:757a85a5978eb7c2a1696cf1d3fdebfa585e09cdb4ea8afb52c875311b6c72a1
 capabilities:
@@ -177,5 +139,5 @@ capabilities:
     - setBody
     - setHeader
     - setProperty
-    - stop
+    - throwException
     - to

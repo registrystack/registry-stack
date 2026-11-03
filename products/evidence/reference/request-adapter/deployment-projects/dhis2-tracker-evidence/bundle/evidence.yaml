@@ -52,121 +52,48 @@ selectorProfiles:
         type: string
         minimumBytes: 11
         maximumBytes: 64
+sourceConnections:
+  population-tracker:
+    endpoints:
+      - endpoint: tracker
+        baseUrl: https://dhis2.gov.example
+        tlsTrustProfile: government-internal-pki
+        clientIdentity: forbidden
+        authentication:
+          type: basic
 sources:
   population-tracker:
-    type: http-json
-    baseUrl: https://dhis2.gov.example
+    pack:
+      id: dhis2-tracker
+      version: "1"
+      digest: sha256:2f75186175f38b6e099f987f758b90a9375b17b607592a3dc41d3df7e6a286cd
+      artifactPrefix: adapter-packs/dhis2-tracker/2f75186175f38b6e099f987f758b90a9375b17b607592a3dc41d3df7e6a286cd
+    route: evidence-adult-status
+    connection: population-tracker
+    inputs:
+      recordReference:
+        selector:
+          role: subject
+          profile: tracked-entity-reference-v1
+          field: record_reference
     posture: record-transformed
-    tlsTrustProfile: government-internal-pki
-    authentication:
-      type: basic
-      usernameRef: secret:file/dhis2-username
-      passwordRef: secret:file/dhis2-password
-    request:
-      method: GET
-      path: /api/tracker/trackedEntities
-      fixedHeaders:
-        - name: Accept
-          value: application/json
-      selectorInputs:
-        - role: subject
-          alternatives:
-            - profile: tracked-entity-reference-v1
-              fields: [record_reference]
-      prepareScript: adapters/prepare.rhai
-      adapterParameters:
-        program: Prg00000001
-        organisationUnit: Org00000001
-        providerFields: trackedEntity,attributes[attribute,value]
-        pageSize: "2"
-        page: "1"
-        totalPages: "true"
-        dateOfBirthAttribute: Dob00000001
-      adapterParametersSchema: schemas/adult-status-adapter-parameters.schema.yaml
-      preparationLimits:
-        query: required
-        jsonBody: forbidden
-        maximumQueryPairs: 8
-        maximumQueryNameBytes: 64
-        maximumQueryValueBytes: 1024
-        maximumNormalizedBytes: 4096
-      projection:
-        - /pager/page
-        - /pager/pageSize
-        - /pager/total
-        - /pager/pageCount
-        - /trackedEntities/*/trackedEntity
-        - /trackedEntities/*/attributes/*/attribute
-        - /trackedEntities/*/attributes/*/value
-      redirects: deny
-      attemptTimeoutMilliseconds: 3000
-      maximumResponseBytes: 65536
-      maximumConcurrency: 8
-    # Shape contract for the projected response, checked before extraction runs.
-    responseSchema: schemas/adult-status-response.schema.yaml
-    extractScript: adapters/adult-status-extract.rhai
-    factSchema: schemas/adult-status-facts.schema.yaml
+    factSchema: schemas/source-facts/adult-status.schema.json
   professional-licence-register:
-    type: http-json
-    baseUrl: https://dhis2.gov.example
+    pack:
+      id: dhis2-tracker
+      version: "1"
+      digest: sha256:2f75186175f38b6e099f987f758b90a9375b17b607592a3dc41d3df7e6a286cd
+      artifactPrefix: adapter-packs/dhis2-tracker/2f75186175f38b6e099f987f758b90a9375b17b607592a3dc41d3df7e6a286cd
+    route: evidence-professional-licence
+    connection: population-tracker
+    inputs:
+      recordReference:
+        selector:
+          role: subject
+          profile: tracked-entity-reference-v1
+          field: record_reference
     posture: record-transformed
-    tlsTrustProfile: government-internal-pki
-    authentication:
-      type: basic
-      usernameRef: secret:file/dhis2-username
-      passwordRef: secret:file/dhis2-password
-    request:
-      method: GET
-      path: /api/tracker/trackedEntities
-      fixedHeaders:
-        - name: Accept
-          value: application/json
-      selectorInputs:
-        - role: subject
-          alternatives:
-            - profile: tracked-entity-reference-v1
-              fields: [record_reference]
-      prepareScript: adapters/prepare.rhai
-      adapterParameters:
-        program: Prg00000002
-        organisationUnit: Org00000001
-        providerFields: trackedEntity,attributes[attribute,value],enrollments[program,status,events[programStage,status]]
-        pageSize: "2"
-        page: "1"
-        totalPages: "true"
-        validFromAttribute: Vfr00000001
-        validUntilAttribute: Vun00000001
-        restrictionStage: Rst00000001
-        completedEventStatus: COMPLETED
-        absentRestrictionEventMeansUnrestricted: true
-      adapterParametersSchema: schemas/professional-licence-adapter-parameters.schema.yaml
-      preparationLimits:
-        query: required
-        jsonBody: forbidden
-        maximumQueryPairs: 8
-        maximumQueryNameBytes: 64
-        maximumQueryValueBytes: 1024
-        maximumNormalizedBytes: 4096
-      projection:
-        - /pager/page
-        - /pager/pageSize
-        - /pager/total
-        - /pager/pageCount
-        - /trackedEntities/*/trackedEntity
-        - /trackedEntities/*/attributes/*/attribute
-        - /trackedEntities/*/attributes/*/value
-        - /trackedEntities/*/enrollments/*/program
-        - /trackedEntities/*/enrollments/*/status
-        - /trackedEntities/*/enrollments/*/events/*/programStage
-        - /trackedEntities/*/enrollments/*/events/*/status
-      redirects: deny
-      attemptTimeoutMilliseconds: 3000
-      maximumResponseBytes: 65536
-      maximumConcurrency: 8
-    # Shape contract for the projected response, checked before extraction runs.
-    responseSchema: schemas/professional-licence-response.schema.yaml
-    extractScript: adapters/professional-licence-extract.rhai
-    factSchema: schemas/professional-licence-facts.schema.yaml
+    factSchema: schemas/source-facts/professional-licence.schema.json
 authorityProfiles:
   eligibility-caseworker-v1:
     kind: statutory
@@ -197,7 +124,6 @@ requirements:
     uri: urn:gov:example:requirement:adult-status:v1
     kind: criterion
     acquisition:
-      type: single
       source: population-tracker
     purposes: [benefit-eligibility]
     subjectRoles:
@@ -230,7 +156,6 @@ requirements:
     uri: urn:gov:example:requirement:professional-licence-status:v1
     kind: criterion
     acquisition:
-      type: single
       source: professional-licence-register
     purposes: [professional-registration-verification]
     subjectRoles:

@@ -444,7 +444,7 @@ def audit_paths(directory: Path, name: str) -> list[Path]:
                   and (path.name == name or re.fullmatch(re.escape(name) + r"\.[0-9]+", path.name)))
 
 
-def audit_record_count(directory: Path, name: str, *, schema: str | None = None) -> int:
+def audit_record_count(directory: Path, name: str, *, schemas: set[str] | None = None) -> int:
     count = 0
     for path in audit_paths(directory, name):
         for line in path.read_text(encoding="utf-8").splitlines():
@@ -454,8 +454,8 @@ def audit_record_count(directory: Path, name: str, *, schema: str | None = None)
                 raise RehearsalError("audit stream contains an invalid JSON line") from error
             if not isinstance(entry, dict):
                 raise RehearsalError("audit stream contains a non-object entry")
-            if schema is not None and (
-                entry.get("schema") != schema
+            if schemas is not None and (
+                entry.get("schema") not in schemas
                 or entry.get("phase") not in ("request", "response")
                 or not all(isinstance(entry.get(key), str) and entry[key]
                            for key in ("eventId", "time", "correlation"))
@@ -1509,8 +1509,11 @@ def rehearse_evidence(work: Path, keys: Keys, tls: Path, old: Side, new: Side,
                 "GET", f"http://127.0.0.1:{evidence.port}/.well-known/evidence/jwks.json")
         finally:
             service.stop()
-        records_after = audit_record_count(evidence.audit, "evidence.jsonl",
-                                           schema="registry.evidence.audit/v2")
+        records_after = audit_record_count(
+            evidence.audit,
+            "evidence.jsonl",
+            schemas={"registry.evidence.audit/v2", "registry.evidence.audit/v3"},
+        )
     finally:
         evidence.stop()
 

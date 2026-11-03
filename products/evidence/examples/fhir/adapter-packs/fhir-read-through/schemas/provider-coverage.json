@@ -1,0 +1,44 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "resourceType",
+    "id",
+    "status",
+    "beneficiary"
+  ],
+  "properties": {
+    "resourceType": {
+      "type": "string",
+      "const": "Coverage"
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "active",
+        "cancelled",
+        "draft",
+        "entered-in-error"
+      ]
+    },
+    "beneficiary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reference"
+      ],
+      "properties": {
+        "reference": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      }
+    }
+  }
+}

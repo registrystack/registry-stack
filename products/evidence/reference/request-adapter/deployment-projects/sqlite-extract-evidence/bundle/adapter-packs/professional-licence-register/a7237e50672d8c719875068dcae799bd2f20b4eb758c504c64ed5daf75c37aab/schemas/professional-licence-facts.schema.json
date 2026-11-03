@@ -1,0 +1,12 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["active_licence_count"],
+  "properties": {
+    "active_licence_count": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1000000
+    }
+  }
+}

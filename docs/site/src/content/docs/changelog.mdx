@@ -1614,7 +1614,7 @@ relevant product pages on this site rather than duplicating release notes.
   [an issuer behind a private CA](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/docs/site/src/content/docs/configure/evidence.mdx#an-issuer-behind-a-private-ca).
 
 {/* Evidence: crates/registry-evidence/src/runtime.rs, issuer_trust_roots();
-    crates/registry-evidence/src/bundle.rs, the_issuer_trust_profile_is_bound_exactly_like_a_source_profile;
+    crates/registry-evidence/src/bundle.rs, the_issuer_trust_profile_is_bound_in_the_global_trust_namespace;
     crates/registry-evidence/src/config.rs, an_issuer_trust_profile_is_a_local_id_for_an_https_key_set_only;
     crates/registry-evidence/tests/cli.rs, dependency_check_trusts_a_private_ca_issuer_only_through_its_named_profile;
     crates/registry-platform-httputil/src/lib.rs, a_pinned_get_trusts_a_private_ca_only_when_it_is_named. */}

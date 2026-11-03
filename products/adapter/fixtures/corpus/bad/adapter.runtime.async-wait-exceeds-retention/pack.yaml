@@ -1,0 +1,50 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/pack/pack.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.runtime.async-wait-exceeds-retention: the checker must emit this exact code. All data is synthetic.
+apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: case-api-pack
+version: '1'
+testedVersions:
+- '1.0'
+endpoints:
+- id: cases
+  component: http
+  authentication:
+    type: basic
+  attemptTimeoutMilliseconds: 10000
+  maximumResponseBytes: 1048576
+  operations:
+  - id: cases-create
+    idempotentUpstream: true
+    asyncCompletion:
+      acceptedId:
+        jsonpath: $.operationId
+      statusRoute: case-status
+  - id: cases-status
+capabilities: {}
+routes:
+- id: create-case
+  from:
+    uri: direct:create-case
+  steps:
+  - idempotentConsumer:
+      expression:
+        header: Idempotency-Key
+      steps:
+      - to:
+          uri: http:cases
+          parameters:
+            httpMethod: POST
+            path: /cases
+            operation: cases-create
+- id: case-status
+  from:
+    uri: direct:case-status
+  steps:
+  - to:
+      uri: http:cases
+      parameters:
+        httpMethod: GET
+        path: /status
+        operation: cases-status

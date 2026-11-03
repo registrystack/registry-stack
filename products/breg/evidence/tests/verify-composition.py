@@ -19,6 +19,8 @@ import yaml
 
 INPUTS = Path(__file__).resolve().parents[1]
 BREG_DEFINITIONS = {"record-active", "record-status-pair"}
+OFFLINE_REQUESTER_HEADER = "b2ZmbGluZS1maXh0dXJlLXByaW5jaXBhbA"
+OFFLINE_PURPOSE_HEADER = "cmVjb3JkLXZlcmlmaWNhdGlvbg"
 
 
 def run(binary: Path, *args: object, environment: dict[str, str], refused: bool = False) -> str:
@@ -65,6 +67,24 @@ def check_fixtures(project: Path, binaries: dict[str, Path], environment: dict[s
     assert actual == expected, report
     assert all(item["passed"] for item in report["fixtures"]), report
     return report
+
+
+def bind_logged_fixture_headers(project: Path) -> None:
+    """Record the fixed host-owned attribution used by offline fixture replay."""
+    for name in ["record-active.yaml", "record-status-pair.yaml"]:
+        path = project / "fixtures" / name
+        fixture = read(path)
+        for case in fixture["cases"]:
+            acquisition = case.get("acquisition")
+            if acquisition is None:
+                continue
+            for exchange in acquisition["exchanges"]:
+                headers = exchange["request"].setdefault("headers", {})
+                assert "registry-access-requester" not in headers
+                assert "registry-access-purpose" not in headers
+                headers["registry-access-requester"] = OFFLINE_REQUESTER_HEADER
+                headers["registry-access-purpose"] = OFFLINE_PURPOSE_HEADER
+        write(path, fixture)
 
 
 def verify(workspace: Path, binaries: dict[str, Path]) -> dict:
@@ -133,6 +153,12 @@ def verify(workspace: Path, binaries: dict[str, Path]) -> dict:
         "source import must create no assertion meaning or caller grant"
     )
     assert not (project / "sources").exists(), "Sources belong to EvidenceProject"
+    imported_functions = {item["id"]: item for item in imported["functions"]}
+    assert not any(name.startswith("registry-status-") for name in imported_functions), (
+        "source preparation and extraction remain in the pinned pack closure"
+    )
+    assert (project / "adapter-packs/registry-status/pack.yaml").is_file()
+    assert (project / "adapter-packs/registry-status/scripts/lookup.rhai").is_file()
 
     # Ordinary authoring follows import. This fragment is never passed as a project.
     fragment = read(INPUTS / "starter/definitions.yaml.fragment")
@@ -144,15 +170,20 @@ def verify(workspace: Path, binaries: dict[str, Path]) -> dict:
     run(binaries["evidencectl"], "target", "new", target, "--local", "--project", project,
         environment=environment)
     settings = read(target / "target.yaml")
+    settings["connections"]["record-status-extract"] = {"endpoints": {}}
     settings["connections"]["registry"] = {
-        "origin": "http://127.0.0.1:8090",
-        "authentication": {
-            "type": "oauth2-private-key-jwt",
-            "tokenEndpoint": "http://127.0.0.1:8091/oauth2/token",
-            "clientIdRef": "secret:file/registry-client-id",
-            "clientAssertionKeyRef": "secret:file/registry-client-key",
-            "clientAssertionAudience": "http://127.0.0.1:8091",
-            "scope": "registry:evidence:lookup", "maximumCacheSeconds": 60,
+        "endpoints": {
+            "registry": {
+                "origin": "http://127.0.0.1:8090",
+                "authentication": {
+                    "type": "oauth2-private-key-jwt",
+                    "tokenEndpoint": "http://127.0.0.1:8091/oauth2/token",
+                    "clientIdRef": "secret:file/registry-client-id",
+                    "clientAssertionKeyRef": "secret:file/registry-client-key",
+                    "clientAssertionAudience": "http://127.0.0.1:8091",
+                    "scope": "registry:evidence:lookup", "maximumCacheSeconds": 60,
+                },
+            },
         },
     }
     # A target binds every extract profile its Sources use; `target new` leaves
@@ -162,32 +193,88 @@ def verify(workspace: Path, binaries: dict[str, Path]) -> dict:
     run(binaries["evidencectl"], "check", project, "--target", target,
         environment=environment)
     fixtures = check_fixtures(project, binaries, environment, target=target, expected={
-        **offline_cases, "fixtures/record-active.yaml": 11,
-        "fixtures/record-status-pair.yaml": 11,
+        **offline_cases, "fixtures/record-active.yaml": 12,
+        "fixtures/record-status-pair.yaml": 12,
     })
     run(binaries["evidencectl"], "package", project, "--target", target,
         "--output", candidate, environment=environment)
     bundle_path = candidate / "bundle"
     bundle = read(bundle_path / "evidence.yaml")
     assert set(bundle["sources"]) == {"record-status", "registry-status"}
-    assert list(bundle["sourceConnections"]) == ["registry"]
+    assert list(bundle["sourceConnections"]) == ["record-status-extract", "registry"]
+    assert bundle["sourceConnections"]["record-status-extract"]["endpoints"] == []
     source = bundle["sources"]["registry-status"]
     owner = bundle["sourceConnections"]["registry"]
     assert source["connection"] == "registry"
-    assert source["baseUrl"] == owner["baseUrl"]
-    assert source["authentication"] == owner["authentication"]
+    assert "baseUrl" not in source and "authentication" not in source
+    assert len(owner["endpoints"]) == 1
+    reviewed_endpoint = owner["endpoints"][0]
+    assert reviewed_endpoint["endpoint"] == "registry"
+    assert reviewed_endpoint["authentication"]["type"] == "oauth2-private-key-jwt"
     requirements = {item["handle"]: item for item in bundle["requirements"]}
     assert len(requirements) == 3
     assert all(requirements[name]["acquisition"]["source"] == "registry-status"
                for name in BREG_DEFINITIONS)
-    assert source["behaviorRevision"] == manifest["provenance"]["behaviorRevision"]
-    facts = read(bundle_path / source["factSchema"])
+    assert source["pack"]["version"] == manifest["provenance"]["behaviorRevision"]
+    assert source["pack"]["digest"].startswith("sha256:")
+    pack_root = bundle_path / source["pack"]["artifactPrefix"]
+    pack = read(pack_root / "pack.yaml")
+    assert pack["id"] == "registry-status"
+    assert pack["version"] == source["pack"]["version"]
+    assert pack["sourceRoutes"][0]["id"] == source["route"] == "lookup"
+    assert pack["sourceRoutes"][0]["evidence"]["acquisitionPosture"] == "field-projected"
+    assert pack["endpoints"][0]["hostProtocol"]["id"] == "registry-lookup-v1"
+    facts = read(
+        pack_root
+        / pack["sourceRoutes"][0]["evidence"]["factsSchema"]["path"]
+    )
     assert list(facts["properties"]) == ["status"], "identity must not become a fact"
-    selector_inputs = source["request"]["selectorInputs"]
-    assert len(selector_inputs) == 1 and len(selector_inputs[0]["alternatives"]) == 2
+    assert source["posture"] == "field-projected"
+    assert len(source["inputs"]) == 2
+    assert {item["selector"]["profile"] for item in source["inputs"].values()} == {
+        "breg-8-registry-6-record-7-by-code",
+        "breg-8-registry-6-record-22-by-registration-number",
+    }
     report = json.loads(run(binaries["evidence"], "bundle-check", "--bundle", bundle_path,
                             "--json", environment=environment))
     assert len(report["requirements"]) == 3
+
+    # The same generated pack must execute when the Registry model requires
+    # host-owned access attribution. A copied project keeps this proof isolated
+    # from the unlogged source and records only the fixed synthetic host values.
+    logged_registry = workspace / "logged-registry"
+    shutil.copytree(registry, logged_registry)
+    logged_model_path = logged_registry / "registry.yaml"
+    logged_model = read(logged_model_path)
+    logged_model["recordTypes"][0]["accessLog"] = {
+        "subjectField": "code",
+        "retentionDays": 90,
+        "trustedIntermediaries": ["evidence-service"],
+    }
+    write(logged_model_path, logged_model)
+    logged_export = workspace / "logged-export"
+    logged_arguments = list(export_arguments)
+    logged_arguments[2] = logged_registry
+    run(binaries["bregctl"], *logged_arguments, "--output", logged_export,
+        environment=environment)
+    logged_protocol = json.loads(
+        (logged_export / "adapter-packs/registry-status/protocols/registry-lookup.json")
+        .read_text()
+    )
+    assert logged_protocol["forwardAccessAttribution"] is True
+    logged_project, logged_target = workspace / "logged-evidence", workspace / "logged-target"
+    shutil.copytree(project, logged_project)
+    shutil.copytree(target, logged_target)
+    bind_logged_fixture_headers(logged_project)
+    run(binaries["evidencectl"], "source", "update", logged_export,
+        "--project", logged_project, "--target", logged_target, environment=environment)
+    logged_fixtures = check_fixtures(
+        logged_project, binaries, environment, target=logged_target,
+        expected={
+            **offline_cases, "fixtures/record-active.yaml": 12,
+            "fixtures/record-status-pair.yaml": 12,
+        },
+    )
 
     # An unrelated Registry field changes provenance only, never assertion meaning.
     model_path = registry / "registry.yaml"
@@ -201,7 +288,7 @@ def verify(workspace: Path, binaries: dict[str, Path]) -> dict:
         environment=environment)
     unrelated_manifest = json.loads((unrelated_export / "source-export.json").read_text())
     assert unrelated_manifest["provenance"]["registryRevision"] != manifest["provenance"]["registryRevision"]
-    assert unrelated_manifest["provenance"]["behaviorRevision"] == source["behaviorRevision"]
+    assert unrelated_manifest["provenance"]["behaviorRevision"] == source["pack"]["version"]
     unrelated = json.loads(run(binaries["evidencectl"], "--format", "json", "source", "diff",
         unrelated_export, "--project", project, "--target", target, environment=environment))
     assert unrelated["provenanceChanged"] == ["registry-status"]
@@ -251,11 +338,12 @@ def verify(workspace: Path, binaries: dict[str, Path]) -> dict:
         "proofBoundary": "offline export/import, fixtures and package; no live services",
         "exportArtifacts": len(manifest["artifacts"]),
         "fixtureCases": sum(item["evaluatedCases"] for item in fixtures["fixtures"]),
-        "definitions": 3, "sources": 2, "behaviorRevision": source["behaviorRevision"],
+        "definitions": 3, "sources": 2, "behaviorRevision": source["pack"]["version"],
         "packageDigest": report["packageDigest"], "tamperedImport": "refused without authored changes",
         "unreadableFactExport": "refused", "provenanceOnlyRevisions": "unchanged",
         "consumedChangeRevisions": "both BReg definitions changed; offline definition unchanged",
         "nativeSourceUpdate": "passed", "renamedFactUpdate": "refused without authored changes",
+        "loggedFixtureCases": sum(item["evaluatedCases"] for item in logged_fixtures["fixtures"]),
         "sourceAddReview": guided,
     }
 

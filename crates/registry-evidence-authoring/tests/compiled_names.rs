@@ -1,27 +1,69 @@
 //! Stable normalized identifiers and their reference sites use one LocalId
 //! grammar. Presentation labels never enter this contract.
 
-#![allow(
-    clippy::disallowed_macros,
-    reason = "this test target embeds the public canonical fixture; the library performs no I/O"
-)]
-
 use registry_evidence_authoring::project;
 use registry_platform_yaml::Diagnostic;
 use serde_json::{json, Value};
 
-const NORMALIZED_PROJECT: &str =
-    include_str!("../../../products/evidence/examples/standalone/evidence.yaml");
-
 fn normalized_document() -> Value {
-    let project = project::read_project("evidence.yaml", NORMALIZED_PROJECT.as_bytes())
-        .expect("the canonical project reads")
-        .value;
-    let mut value = serde_json::to_value(project).expect("the canonical project serializes");
-    let object = value.as_object_mut().expect("the project is an object");
-    object.insert("apiVersion".to_owned(), json!(project::PROJECT_API_VERSION));
-    object.insert("kind".to_owned(), json!(project::PROJECT_KIND));
-    value
+    json!({
+        "apiVersion": project::PROJECT_API_VERSION,
+        "kind": project::PROJECT_KIND,
+        "id": "standalone-evidence",
+        "selectorProfiles": {
+            "record-by-id": {
+                "maximumAggregateBytes": 64,
+                "fields": {
+                    "record-id": {"type": "string", "minimumBytes": 1, "maximumBytes": 64}
+                }
+            }
+        },
+        "functions": [{
+            "id": "derive-adult-status",
+            "interface": "assertion-derive/v1",
+            "source": "functions/derive.rhai"
+        }],
+        "sources": {
+            "person-record": {
+                "pack": {"id": "synthetic-register", "version": "0.1.0"},
+                "route": "person-evidence",
+                "connection": "population",
+                "inputs": {
+                    "recordId": {
+                        "selector": {"role": "person", "profile": "record-by-id", "field": "record-id"}
+                    }
+                },
+                "acquisitionPosture": "record-transformed"
+            }
+        },
+        "assertionDefinitions": {
+            "adult-status": {
+                "question": "Is the person an adult?",
+                "semantics": {
+                    "requirement": "urn:example:requirement:adult-status",
+                    "kind": "criterion",
+                    "evidenceType": "urn:example:evidence:adult-status",
+                    "referenceFrameworks": ["urn:example:framework"]
+                },
+                "purpose": "age-check",
+                "grantCeiling": {
+                    "authorities": ["organizational"],
+                    "actorKinds": ["service"],
+                    "valueOrigins": ["request"],
+                    "audiences": ["urn:example:audience"]
+                },
+                "subjects": [{"role": "person", "selectors": ["record-by-id"]}],
+                "acquisition": {"source": "person-record"},
+                "derive": {"function": "derive-adult-status"},
+                "outputs": {
+                    "adult": {"concept": "urn:example:concept:adult", "type": "boolean"}
+                },
+                "validitySeconds": 300,
+                "subjectBinding": "audience-scoped",
+                "representations": ["signed-jws"]
+            }
+        }
+    })
 }
 
 fn read_normalized(
@@ -55,8 +97,8 @@ fn function_id_and_presentation_label_are_separate() {
     document["functions"].as_array_mut().unwrap().push(json!({
         "id": "a".repeat(64),
         "label": "Friendly label with spaces and punctuation.",
-        "interface": "source-prepare/v1",
-        "source": "functions/unused-prepare.rhai"
+        "interface": "assertion-derive/v1",
+        "source": "functions/unused-derive.rhai"
     }));
     assert!(read_normalized(&document).is_ok());
 
@@ -66,7 +108,7 @@ fn function_id_and_presentation_label_are_separate() {
         .last_mut()
         .unwrap()["id"] = json!("a".repeat(65));
     let diagnostic = normalized_refusal(&document);
-    assert_eq!(diagnostic.path, "/functions/7/id");
+    assert_eq!(diagnostic.path, "/functions/1/id");
 }
 
 #[test]

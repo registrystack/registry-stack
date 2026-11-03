@@ -10,70 +10,21 @@ selectorProfiles:
         minimumBytes: 4
         maximumBytes: 64
 functions:
-- id: record-status-extract
-  interface: source-extract/v1
-  source: functions/record-status-extract.rhai
 - id: extract-record-active
   interface: assertion-derive/v1
   source: functions/extract-record-active.rhai
 sources:
   record-status:
-    type: sqlite-extract
+    pack: {id: record-status-extract, version: '1'}
+    route: lookup
+    connection: record-status-extract
     acquisitionPosture: source-derived
-    selectors:
-    - role: subject
-      profiles:
-      - record-by-code-v1
-    request:
-      statement: queries/record-status.sql
-      columns:
-      - name: status
-        type: string
-      parameterBindings:
-        code:
-          selector:
-            role: subject
-            profile: record-by-code-v1
-            field: code
-      maximumRows: 2
-      maximumCellBytes: 64
-      maximumStatementSteps: 100000
-    response:
-      projection:
-      - /rows/*/status
-      shape:
-        type: object
-        additionalProperties: false
-        required:
-        - rows
-        properties:
-          rows:
-            type: array
-            minItems: 0
-            maxItems: 2
-            items:
-              type: object
-              additionalProperties: false
-              required:
-              - status
-              properties:
-                status:
-                  type: string
-                  minLength: 4
-                  maxLength: 32
-      maximumBytes: 8192
-    extract:
-      function: record-status-extract
-    facts:
-      status:
-        type: string
-        minimumBytes: 4
-        maximumBytes: 32
-    limits:
-      attemptTimeoutMilliseconds: 2000
-      maximumConcurrency: 8
-    extractProfile: record-status-extract
-    maximumExtractAgeSeconds: 604800
+    inputs:
+      code:
+        selector:
+          role: subject
+          profile: record-by-code-v1
+          field: code
 assertionDefinitions:
   extract-record-active:
     question: Is the registered record active?
@@ -98,7 +49,6 @@ assertionDefinitions:
       selectors:
       - record-by-code-v1
     acquisition:
-      type: single
       source: record-status
     derive:
       function: extract-record-active

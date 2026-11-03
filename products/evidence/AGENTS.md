@@ -62,6 +62,29 @@ may use its closed generic synthetic-data vocabulary and the authoring-only
 `x-evidencectl-mock` extension. That exception grants no runtime capability and
 permits no source-product-specific behavior. Do not add future-profile stubs.
 
+## Pack acquisition refactor
+
+The acquisition switch replaces authored and compiled source formats with
+reviewed pack/route bindings before the source format is promised for 1.0.
+Use Adapter core and the listener-free engine, never an Adapter facade
+deployment or ingestion job. Preserve Evidence-owned complete grants, subject
+binding, signing, exact-byte disclosure audit and the public verifier contract.
+The legacy fixed-source descriptions below identify the implementation being
+replaced; do not add new integrations to a second source execution language.
+
+A binding governs permitted destinations and auth/trust selections; runtime
+configuration supplies their material and finite operational tuning. Capture
+effective authority for the process lifetime. Reviewed read retries and paging
+share one acquisition budget/deadline; five data operations and 30 seconds are
+configurable defaults. Durable access intent precedes credentials and source
+effects, and terminal audit gates release. Per-send audit is optional.
+
+Migrate maintained consumers manually and remove the legacy executor/contracts
+once retained outcomes pass. Do not build a converter or compatibility runtime.
+Preserve meaningful negative tests and update security traceability when a
+mechanism changes. Keep signed upstream verification and trusted expiry in the
+Evidence host; pack scripts cannot manufacture either.
+
 ## Sources and verification
 
 All commands below run from the monorepo root. Select focused crate tests and

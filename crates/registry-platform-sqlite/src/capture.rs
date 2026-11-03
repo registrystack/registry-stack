@@ -1,6 +1,11 @@
 use std::fs::{self, File, Metadata};
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
+#[cfg(feature = "fixture")]
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
 use std::time::Instant;
 
 use sha2::{Digest as _, Sha256};
@@ -21,12 +26,22 @@ impl PartialEq for FileIdentity {
 impl Eq for FileIdentity {}
 
 /// A read-only immutable snapshot captured and digested at startup.
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct CapturedSnapshot {
     path: PathBuf,
     digest: String,
     identity: FileIdentity,
+    #[cfg(feature = "fixture")]
+    digest_verifications: Arc<AtomicUsize>,
 }
+
+impl PartialEq for CapturedSnapshot {
+    fn eq(&self, other: &Self) -> bool {
+        self.path == other.path && self.digest == other.digest && self.identity == other.identity
+    }
+}
+
+impl Eq for CapturedSnapshot {}
 
 impl CapturedSnapshot {
     pub fn capture(path: impl AsRef<Path>) -> Result<Self, SqliteError> {
@@ -50,6 +65,8 @@ impl CapturedSnapshot {
             path: path.to_path_buf(),
             digest,
             identity,
+            #[cfg(feature = "fixture")]
+            digest_verifications: Arc::new(AtomicUsize::new(0)),
         })
     }
 
@@ -61,6 +78,14 @@ impl CapturedSnapshot {
     #[must_use]
     pub fn digest(&self) -> &str {
         &self.digest
+    }
+
+    /// Number of post-capture full digest verifications for fixture proofs.
+    #[cfg(feature = "fixture")]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn digest_verification_count_for_test(&self) -> usize {
+        self.digest_verifications.load(Ordering::SeqCst)
     }
 
     pub fn confirm_still_bound(&self) -> Result<(), SqliteError> {
@@ -92,6 +117,8 @@ impl CapturedSnapshot {
     // captured file to be immutable outside this process, preferably through a
     // read-only mount.
     fn verify_unchanged_until(&self, deadline: Option<Instant>) -> Result<(), SqliteError> {
+        #[cfg(feature = "fixture")]
+        self.digest_verifications.fetch_add(1, Ordering::SeqCst);
         ensure_before_deadline(deadline)?;
         refuse_sidecars(&self.path)?;
         let scanned = fs::symlink_metadata(&self.path)

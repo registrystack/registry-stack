@@ -24,19 +24,23 @@ authentication:
     maximumTokenLifetimeSeconds: 300
 connections:
   validation-seed:
-    origin: http://127.0.0.1:8090
-    authentication: {type: bearer, tokenRef: 'secret:file/validation-seed-token'}
+    endpoints:
+      validation-seed:
+        origin: http://127.0.0.1:8090
+        authentication: {type: static-authorization, tokenRef: 'secret:file/validation-seed-token'}
   opencrvs-event-search:
-    origin: http://127.0.0.1:8081
-    authentication:
-      type: oauth2-client-credentials
-      tokenEndpoint: http://127.0.0.1:8083/token
-      clientIdRef: secret:file/opencrvs-client-id
-      clientSecretRef: secret:file/opencrvs-client-secret
-      scope: recordsearch
-      credentialPlacement: form-body
-      maximumCacheSeconds: 300
-      assumedLifetimeSeconds: 600
+    endpoints:
+      events:
+        origin: http://127.0.0.1:8081
+        authentication:
+          type: oauth2-client-credentials
+          tokenEndpoint: http://127.0.0.1:8083/token
+          clientIdRef: secret:file/opencrvs-client-id
+          clientSecretRef: secret:file/opencrvs-client-secret
+          scope: recordsearch
+          credentialPlacement: form-body
+          maximumCacheSeconds: 300
+          assumedLifetimeSeconds: 600
 secretProviders: {file: {root: .generated/secrets}}
 signer:
   type: local-jwk

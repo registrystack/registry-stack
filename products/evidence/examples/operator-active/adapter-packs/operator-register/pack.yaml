@@ -1,0 +1,104 @@
+{
+  "apiVersion": "id.registrystack.org/formats/adapter/pack/v1alpha1",
+  "kind": "AdapterPack",
+  "id": "operator-register",
+  "version": "1",
+  "testedVersions": [],
+  "endpoints": [
+    {
+      "id": "operator-register",
+      "component": "http",
+      "authentication": {
+        "type": "static-authorization"
+      },
+      "attemptTimeoutMilliseconds": 2000,
+      "maximumResponseBytes": 16384,
+      "requestHeaders": [
+        "accept"
+      ],
+      "operations": [
+        {
+          "id": "operator-lookup",
+          "safeUpstream": true
+        }
+      ]
+    }
+  ],
+  "scripts": [
+    {
+      "path": "scripts/operator.rhai",
+      "digest": "sha256:dbce765f51053be000df05bffbb67b6f97eef7df71b24b4e6b7d5859001a7cee"
+    }
+  ],
+  "sourceRoutes": [
+    {
+      "id": "operator-active",
+      "evidence": {
+        "inputsSchema": {
+          "path": "schemas/inputs.json",
+          "digest": "sha256:bee0d6a74e19345076cf0491bd0f61cb4ba3f20198714b7e4930ef9d72e8a13c"
+        },
+        "factsSchema": {
+          "path": "schemas/facts.json",
+          "digest": "sha256:05840b9a7f920fc5cc2c09f62a57602848e197425631e6a54eab8551cae6f671"
+        },
+        "acquisitionPosture": "record-transformed"
+      },
+      "steps": [
+        {
+          "setProperty": {
+            "name": "operator-id",
+            "value": {
+              "jsonpath": "$.operatorId"
+            }
+          }
+        },
+        {
+          "setHeader": {
+            "name": "Accept",
+            "value": {
+              "constant": "application/json"
+            }
+          }
+        },
+        {
+          "to": {
+            "uri": "http:operator-register",
+            "parameters": {
+              "httpMethod": "GET",
+              "path": "/operators/{{operator-id}}",
+              "pathParameters": {
+                "operator-id": {
+                  "exchangeProperty": "operator-id"
+                }
+              },
+              "operation": "operator-lookup"
+            }
+          }
+        },
+        {
+          "setBody": {
+            "rhai": {
+              "file": "scripts/operator.rhai",
+              "entrypoint": "project"
+            }
+          }
+        },
+        {
+          "validateSchema": {
+            "path": "schemas/response.json",
+            "digest": "sha256:a60b2c3c02d1f2977c18a4a8a811ae08a81d43b36c4b7277fdf8adc48070d098"
+          }
+        },
+        {
+          "setBody": {
+            "rhai": {
+              "file": "scripts/operator.rhai",
+              "entrypoint": "lookup"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

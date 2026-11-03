@@ -368,16 +368,49 @@ impl Serialize for TargetAdmissionGate {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TargetConnection {
+    pub endpoints: BTreeMap<LocalId, TargetEndpointBinding>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_private_cidrs: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TargetSourceAcquisition {
+    pub maximum_data_operations: BoundedU64<1, { u64::MAX }>,
+    #[serde(rename = "acquisitionDeadlineMilliseconds")]
+    pub deadline_milliseconds: BoundedU64<1, { u64::MAX }>,
+    pub maximum_response_bytes: BoundedU64<1, { u64::MAX }>,
+}
+
+impl TargetSourceAcquisition {
+    pub fn runtime_value(&self) -> Result<serde_json::Value, serde_json::Error> {
+        serde_json::to_value(self)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TargetEndpointBinding {
     pub origin: Url,
     pub authentication: TargetConnectionAuthentication,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tls_trust_profile: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub maximum_concurrency: Option<BoundedU32<1, 256>>,
+    pub mtls_identity: Option<TargetMtlsIdentity>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub admission_timeout_milliseconds: Option<BoundedU64<1, 30_000>>,
+    pub attempt_timeout_milliseconds: Option<BoundedU64<1, { u64::MAX }>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub token_timeout_milliseconds: Option<BoundedU64<1, 30_000>>,
+    pub maximum_response_bytes: Option<BoundedU64<1, 1_048_576>>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TargetMtlsIdentity {
+    pub certificate_ref: SecretReference,
+    pub key_ref: SecretReference,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -694,20 +727,111 @@ impl TargetListener {
 
 impl TargetConnection {
     pub fn governed_value(&self) -> Result<serde_json::Value, serde_json::Error> {
+        let endpoints = self
+            .endpoints
+            .iter()
+            .map(|(id, binding)| binding.governed_value(id))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(serde_json::json!({"endpoints":endpoints}))
+    }
+
+    pub fn runtime_value(
+        &self,
+        connection: &LocalId,
+        outbound_tls: Option<&TargetOutboundTls>,
+    ) -> Result<serde_json::Value, serde_json::Error> {
+        let endpoints = self
+            .endpoints
+            .iter()
+            .map(|(id, binding)| binding.runtime_value(id))
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut value = serde_json::json!({
+            "id":connection,
+            "endpoints":endpoints,
+            "allowedPrivateCidrs":self.allowed_private_cidrs
+        });
+        if let Some(outbound_tls) = outbound_tls {
+            value["outboundTls"] = serde_json::json!({
+                "trustProfiles":outbound_tls.trust_profiles
+            });
+        }
+        Ok(value)
+    }
+}
+
+impl TargetEndpointBinding {
+    fn governed_value(&self, endpoint: &LocalId) -> Result<serde_json::Value, serde_json::Error> {
+        let mut value = serde_json::json!({
+            "endpoint": endpoint,
+            "baseUrl": self.origin,
+            "authentication": self.authentication.governed_value()?,
+            "clientIdentity": if self.mtls_identity.is_some() { "required" } else { "forbidden" }
+        });
+        if let Some(profile) = &self.tls_trust_profile {
+            value["tlsTrustProfile"] = serde_json::json!(profile);
+        }
+        Ok(value)
+    }
+
+    fn runtime_value(&self, endpoint: &LocalId) -> Result<serde_json::Value, serde_json::Error> {
+        let mut value = serde_json::json!({
+            "endpoint": endpoint,
+            "baseUrl": self.origin,
+            "credential": self.authentication.runtime_value()?
+        });
+        if let Some(profile) = &self.tls_trust_profile {
+            value["tlsTrustProfile"] = serde_json::json!(profile);
+        }
+        if let Some(identity) = &self.mtls_identity {
+            value["mtlsIdentity"] = serde_json::to_value(identity)?;
+        }
+        if let Some(timeout) = self.attempt_timeout_milliseconds {
+            value["attemptTimeoutMilliseconds"] = serde_json::json!(timeout);
+        }
+        if let Some(maximum) = self.maximum_response_bytes {
+            value["maximumResponseBytes"] = serde_json::json!(maximum);
+        }
+        Ok(value)
+    }
+}
+
+impl TargetConnectionAuthentication {
+    fn governed_value(&self) -> Result<serde_json::Value, serde_json::Error> {
         let mut value = serde_json::to_value(self)?;
         let object = value
             .as_object_mut()
-            .expect("a typed target connection serializes as an object");
-        let origin = object
-            .remove("origin")
-            .expect("a typed target connection always has an origin");
-        object.insert("baseUrl".to_owned(), origin);
-        if object["authentication"]["type"].as_str() == Some("bearer") {
-            object["authentication"]["type"] = serde_json::json!("static-authorization");
+            .expect("a target connection authentication serializes as an object");
+        if object.get("type").and_then(serde_json::Value::as_str) == Some("bearer") {
+            object.insert("type".to_owned(), serde_json::json!("static-authorization"));
         }
-        object
-            .entry("maximumConcurrency")
-            .or_insert(serde_json::json!(256));
+        for field in [
+            "usernameRef",
+            "passwordRef",
+            "tokenRef",
+            "scheme",
+            "headerName",
+            "valueRef",
+            "clientIdRef",
+            "clientSecretRef",
+            "clientAssertionKeyRef",
+            "maximumCacheSeconds",
+            "assumedLifetimeSeconds",
+        ] {
+            object.remove(field);
+        }
+        Ok(value)
+    }
+
+    fn runtime_value(&self) -> Result<serde_json::Value, serde_json::Error> {
+        let mut value = serde_json::to_value(self)?;
+        let object = value
+            .as_object_mut()
+            .expect("a target connection authentication serializes as an object");
+        if object.get("type").and_then(serde_json::Value::as_str) == Some("bearer") {
+            object.insert("type".to_owned(), serde_json::json!("static-authorization"));
+        }
+        object.remove("scheme");
+        object.remove("headerName");
         Ok(value)
     }
 }
@@ -776,19 +900,97 @@ mod tests {
     }
 
     #[test]
-    fn authored_bearer_is_lowered_only_in_the_governed_projection() {
+    fn connection_projection_separates_reviewed_policy_from_runtime_material() {
         let connection: TargetConnection = serde_json::from_str(
-            r#"{"origin":"https://source.invalid","authentication":{"type":"bearer","tokenRef":"secret:file/token"}}"#,
+            r#"{"endpoints":{"records":{"origin":"https://source.invalid/api","authentication":{"type":"bearer","tokenRef":"secret:file/token"},"attemptTimeoutMilliseconds":45000,"maximumResponseBytes":1048576}}}"#,
         )
         .expect("authored bearer connection");
         let authored = serde_json::to_value(&connection).expect("connection serializes");
-        assert_eq!(authored["authentication"]["type"], "bearer");
+        assert_eq!(
+            authored["endpoints"]["records"]["authentication"]["type"],
+            "bearer"
+        );
 
         let governed = connection.governed_value().expect("connection projects");
-        assert_eq!(governed["baseUrl"], "https://source.invalid");
-        assert_eq!(governed["authentication"]["type"], "static-authorization");
-        assert_eq!(governed["maximumConcurrency"], 256);
-        assert!(governed.get("origin").is_none());
+        assert_eq!(governed["endpoints"][0]["endpoint"], "records");
+        assert_eq!(
+            governed["endpoints"][0]["baseUrl"],
+            "https://source.invalid/api"
+        );
+        assert_eq!(
+            governed["endpoints"][0]["authentication"]["type"],
+            "static-authorization"
+        );
+        assert!(governed["endpoints"][0]["authentication"]
+            .get("tokenRef")
+            .is_none());
+
+        let runtime = connection
+            .runtime_value(&LocalId::new("register").unwrap(), None)
+            .expect("runtime material projects");
+        assert_eq!(runtime["id"], "register");
+        assert_eq!(runtime["allowedPrivateCidrs"], serde_json::json!([]));
+        assert_eq!(
+            runtime["endpoints"][0]["credential"]["tokenRef"],
+            "secret:file/token"
+        );
+        assert_eq!(
+            runtime["endpoints"][0]["attemptTimeoutMilliseconds"],
+            45_000
+        );
+        assert_eq!(runtime["endpoints"][0]["maximumResponseBytes"], 1_048_576);
+        assert!(runtime["endpoints"][0].get("authentication").is_none());
+    }
+
+    #[test]
+    fn sqlite_only_connection_projects_no_network_authority() {
+        let connection: TargetConnection =
+            serde_json::from_str(r#"{"endpoints":{}}"#).expect("empty endpoint owner");
+        assert_eq!(
+            connection.governed_value().expect("governed policy"),
+            serde_json::json!({"endpoints":[]})
+        );
+        let runtime = connection
+            .runtime_value(&LocalId::new("extracts").unwrap(), None)
+            .expect("runtime binding");
+        assert_eq!(runtime["id"], "extracts");
+        assert_eq!(runtime["endpoints"], serde_json::json!([]));
+        assert_eq!(runtime["allowedPrivateCidrs"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn source_acquisition_projection_forwards_only_finite_operational_limits() {
+        let limits: TargetSourceAcquisition = serde_json::from_value(serde_json::json!({
+            "maximumDataOperations": 9,
+            "acquisitionDeadlineMilliseconds": 45_000,
+            "maximumResponseBytes": 2_097_152
+        }))
+        .expect("positive source acquisition limits");
+        assert_eq!(
+            limits.runtime_value().expect("runtime projection"),
+            serde_json::json!({
+                "maximumDataOperations": 9,
+                "acquisitionDeadlineMilliseconds": 45_000,
+                "maximumResponseBytes": 2_097_152
+            })
+        );
+        assert!(
+            serde_json::from_value::<TargetSourceAcquisition>(serde_json::json!({
+                "maximumDataOperations": 0,
+                "acquisitionDeadlineMilliseconds": 45_000,
+                "maximumResponseBytes": 2_097_152
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<TargetSourceAcquisition>(serde_json::json!({
+                "maximumDataOperations": 9,
+                "deadlineMilliseconds": 45_000,
+                "maximumResponseBytes": 2_097_152
+            }))
+            .is_err(),
+            "the ambiguous generic deadline spelling is not an authored alias"
+        );
     }
 
     #[test]

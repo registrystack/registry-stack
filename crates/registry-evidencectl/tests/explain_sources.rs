@@ -34,11 +34,13 @@ fn explain_connects_a_real_definition_to_its_source_operation_facts_and_output()
     assert!(stdout
         .contains("Definition fhir-coverage-status: urn:example:requirement:coverage-record:v1"));
     assert!(stdout.contains(
-        "Source coverage-record: http-json GET /Coverage/{coverage_id}; connection fhir-read-through"
+        "Source coverage-record: pack fhir-read-through@1; route coverage-record; connection fhir-read-through"
     ));
-    assert!(stdout.contains("Prepare: generated; extract: Function extract-coverage"));
-    assert!(stdout.contains("Facts: beneficiary-reference, status"));
-    assert!(stdout.contains("Limits: 30000 ms attempt, 8 concurrent, 65536 bytes response"));
+    assert!(stdout.contains("Acquisition: Source coverage-record"));
+    assert!(stdout.contains("Posture: record-transformed"));
+    assert!(stdout
+        .contains("Inputs: coverageId <- selector coverage-record@coverage-by-id.coverage_id"));
+    assert!(stdout.contains("Facts: beneficiary-reference (string), status (string)"));
     assert!(stdout.contains("Derive: Function derive-coverage-status"));
     assert!(stdout.contains("Outputs: coverage-record-reports-active"));
 }

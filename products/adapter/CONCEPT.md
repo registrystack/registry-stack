@@ -107,14 +107,12 @@ deployment writes only a project file.
 
 - The GovStack Registry Building Block profile (later artifact, plus a
   conformance mode; section 7).
-- Message brokers, streaming, and every asynchronous exchange (InOnly).
-  `[ingestion]` Source-driven ingestion jobs are admitted with the stated
-  limits of section 17: one bounded page per read, one pass at a time per
-  job, and no broker as an engine pattern. A queue enters later as a job
-  source, acknowledged only after the destination accepts, and hooks enter
-  later as a pass trigger on a separate ingress whose body is never trusted
-  or stored; neither is built, and checks refuse the hook trigger until it
-  is.
+- General message-broker routing and streaming engine patterns.
+  `[ingestion]` Source-driven ingestion jobs have the limits of section 17:
+  one bounded page per read and one pass at a time per job. RabbitMQ is an
+  explicit job source with durable destination settlement before source
+  acknowledgement. A hook only wakes a pass on a separate authenticated
+  ingress; its body never enters the source route or item store.
 - SOAP, XML, and other envelopes beyond HTTP/JSON REST and HTTP/JSON
   GraphQL (they arrive as compiled-in components, section 8.9, only when a
   real adopter needs one). `[ingestion]` Local files and read-only SQL are
@@ -201,7 +199,7 @@ scoped exceptions, both still open for confirmation in section 17.6:
    no other product's types. The one exception is
    `registry-adapter-connectors`: it alone links a product client, and
    only `registry-breg-client`, behind an off-by-default cargo feature,
-   and holds the parked BReg connector for the direct destination
+   and holds the feature-gated BReg connector for the direct destination
    (section 17.3). It is a client, not an engine capability: it lives
    outside the facade binary, never adds route vocabulary, and the rung 4
    rule ("new protocol envelopes only") keeps governing engine
@@ -785,7 +783,10 @@ is in the profile's shape.
   `onWhen` that raises fails the exchange with that error, with the original
   journaled separately as suppressed rather than attached as a cause. A
   `to: direct:` inside the block calls a route that
-  keeps its own error handling, as in Camel.
+  keeps its own error handling, as in Camel. Divergence: an uncatchable
+  authority, audit, budget, or cryptographic failure bypasses `doFinally` so
+  cleanup steps cannot issue later source effects after a terminal boundary;
+  ordinary pending failures still execute `doFinally` as Camel does.
 - `circuitBreaker`: resilience4j semantics and defaults, per EIP node,
   process-local state (as in Camel; replicas have independent breakers):
   `failureRateThreshold` 50, `slidingWindowType` count-based,
@@ -949,6 +950,8 @@ delivers the row.
 | Content-Based Router | `components/next/eips/choice-eip.html` | `choice`, `when`, `otherwise` | Predicates must be boolean | 1 |
 | Message Filter | `components/next/eips/filter-eip.html` | `filter`, with `statusPropertyName` | Predicates must be boolean | 1 |
 | `validate` | `components/next/eips/validate-eip.html` | `validate` | None | 1 |
+| Provider schema validation | None; an addition under section 5.4 | `validateSchema` with a reviewed, digest-pinned JSON Schema before extraction | Bounded schema grammar and format validation; external resolution disabled; mismatch is an uncatchable source-protocol refusal | 1 |
+| SQLite extract producer | None; an addition under section 5.4 | `sqlite-extract:<endpointId>` with pinned SQL, typed columns and named parameters over a host-captured extract | Feature-gated, read-only and listener-free; no HTTP authority; host-owned clock and publication age; bounded rows, cells, steps, response bytes and concurrency | 1 |
 | `stop` | `components/next/eips/stop-eip.html` | `stop` | None | 1 |
 | Splitter | `components/next/eips/split-eip.html` | `split` | Mandatory `maximumItems`; no parallel or streaming; a piece whose failure the accounting counted is left out of the merged result where Camel folds it with its exception cleared; `CamelSplitResult` carries the three counts only, the per-item failures map dropped for the value-free contract | 1 |
 | Loop | `components/next/eips/loop-eip.html` | `loop`; `doWhile` tested before each iteration (`LoopProcessor`) | Mandatory `maximumIterations`; under `copy` an error restores the exchange as it stood before the failed iteration, where Camel copies the failed iteration's own results back | 1 |
@@ -957,18 +960,20 @@ delivers the row.
 | Default error handler | `manual/defaulterrorhandler.html`, `manual/error-handler.html` | `errorHandler: defaultErrorHandler`, `noErrorHandler` | Dead letter is always the journal | 1 |
 | Redelivery policy | `manual/error-handler.html` (redelivery) | Options in 8.7 | CFG-NAME spelling; write-safety refusal; top-level `http` and `graphql` sends only, nested sends run once | 1 |
 | Exception clause | `manual/exception-clause.html` (hub) with `exception-redelivery.html`, `exception-handling-patterns.html`, `exception-advanced.html` | `onException` | One raised class, no cause-chain walk; uncatchable boundary errors; a handled clause answers with a success body, problems come from the profile; `handled` and `continued` are booleans where Camel takes predicates | 1 |
-| Try, catch, finally | `manual/try-catch-finally.html` | `doTry`, `doCatch`, `doFinally` | Uncatchable boundary errors | 1 |
+| Try, catch, finally | `manual/try-catch-finally.html` | `doTry`, `doCatch`, `doFinally` | Uncatchable boundary errors bypass `doFinally`; ordinary pending failures execute it | 1 |
 | Circuit Breaker | `components/next/eips/circuitBreaker-eip.html`, `resilience4j-eip.html`, `resilience4jConfiguration-eip.html` | `circuitBreaker`, `onFallback`, `recordException`, `ignoreException` | Rejection always raises; fallback on recorded failure and rejection; ignored and non-recorded failures continue and are journaled as consumed; guarded steps and fallback run bare; options flattened, `slidingWindowCalls` for `slidingWindowSize` (CFG-NAME-4) | 1 |
 | Throttler | `components/next/eips/throttle-eip.html` | `throttle` | Waits bounded by the deadline; its nested body runs bare from route redelivery | 1 |
 | Idempotent Consumer | `components/next/eips/idempotentConsumer-eip.html` | `idempotentConsumer` over the PostgreSQL store | Duplicates replay the recorded response | 2 |
 | Type Converter | `manual/type-converter.html`, `components/next/eips/convertBodyTo-eip.html`, `convertHeaderTo-eip.html` | `convertBodyTo`, `convertHeaderTo`, `convertPropertyTo` (addition) with `type: codeMap:<id>`; Rhai `code_map`; `conversion.unmapped` on a miss | Explicit tables of scalar values, no converter chains, no `charset` | 1 |
 | Event Notifier | `manual/event-notifier.html` | The audit journal's event kinds (section 11) | Synchronous, value-free, before the response | 1 |
-| `file` (job source) `[ingestion]` | `components/next/file-component.html` | `file:<endpointId>` read through the job-only `pollEnrich` step (section 17.2); `noop` strategy forced; `include`, `sortBy`, `doneFileName`, `readLock` restricted to none or changed, `maxMessagesPerPoll` where they apply | Read-only always: `delete`, `move`, `rename`, `markerFile`, and the `fileLock` strategy are not ported (each writes or locks the source); base directory fixed in runtime configuration, traversal and symlink escape refused; a delivered file is identified by namespace plus content digest, never by name or modification time alone | 4 |
+| `file` (job source) `[ingestion]` | `components/next/file-component.html` | `file:<endpointId>` read through the job-only `pollEnrich` step (section 17.2); `noop` strategy forced; `include`, fixed ascending filename order (no authored `sortBy` expression), `doneFileName`, `readLock` restricted to none or changed, `maxMessagesPerPoll` where they apply | Read-only always: `delete`, `move`, `rename`, `markerFile`, and the `fileLock` strategy are not ported (each writes or locks the source); base directory fixed in runtime configuration, traversal and symlink escape refused; a delivered file is identified by namespace plus content digest, never by name or modification time alone | 4 |
 | `sftp` (job source) `[ingestion]` | `components/next/sftp-component.html` | `sftp:<endpointId>` through the same read step, sharing the `file` decoders | Host key pinned, secret references only; complete files detected through a ready manifest or completed-name handover; interrupted transfers and replaced same-name files handled by digest identity; no source writes; lands only after the SSH dependency review (section 17.6) | 4 |
-| SQL (read-only job source) `[ingestion]` | `components/next/sql-component.html` | `postgres:<endpointId>` send with a digest-pinned `queryFile`, as `graphql` pins its query; named parameters only | Fixed named parameterized read-only queries only, each with a root `ORDER BY` so offset pages neither skip nor repeat rows; read-only transaction enforced with statement timeout, bounded fetch, and cancellation; declared snapshot or incremental semantics; no user-supplied SQL; Camel's `onConsume` progress updates not ported (they write the source), so progress tracking is original work | 4 |
+| `rabbitmq` (job source) `[ingestion]` | `components/next/spring-rabbitmq-component.html` | `rabbitmq:<endpointId>` through the job-only read step, one manually settled message per page | AMQPS only in production; fixed durable queue and verified DLX/DLQ topology; source acknowledgement follows the durable destination outcome, held items remain unsettled, and explicit refusals reject without requeue; local outstanding-delivery bounds because `basic.get` is not governed by consumer prefetch; broker `max_message_size` is an operator prerequisite because Lapin assembles the body before the retained-byte check | 4 |
+| SQL (read-only job source) `[ingestion]` | `components/next/sql-component.html` | `postgres:<endpointId>` send with a digest-pinned `queryFile`, required stable `keyColumn`, and reviewed `parameterOrder` mapping names to native `$1`-onward positions; omit `parameterOrder` for a zero-argument query | One fixed, read-only `SELECT` with root `ORDER BY`; exact named parameters only, bound as text, checked integers, double-precision numbers, or booleans; read-only transaction with statement timeout, bounded fetch, and cancellation; each page uses its own read-committed statement snapshot, so ordering alone does not prevent offset drift across concurrent source edits; no user-supplied SQL; Camel's `onConsume` progress updates not ported because they write the source | 4 |
 | CSV data format `[ingestion]` | `components/next/dataformats/csv-dataformat.html` | A decoder selected on a `file` or `sftp` endpoint, not an `unmarshal` step; option names and defaults from `CsvDataFormat` | No type inference: leading zeros, quoted multiline fields, empty versus null, oversized rows, and malformed rows are deterministic; a bad row is reported per item; one read returns a bounded page whose `next` holds the file digest and position | 4 |
 | JSONL decoder `[ingestion]` | None; an addition under section 5.4 | One bounded JSON value per line, selected on a `file` or `sftp` endpoint; the same paging contract as CSV | An addition, not a port: Camel has no JSONL data format; a malformed line is reported per item and the remaining lines continue | 4 |
-| `pollEnrich` (job only) `[ingestion]` | `components/next/eips/pollEnrich-eip.html` | A job-only read step over a static URI (`file:<endpointId>`, `sftp:<endpointId>`) with a mandatory timeout | Refused by `check` in every facade route; no dynamic endpoint expression, no `consumerSendTo`; one bounded page per read under the job profile | 4 |
+| RabbitMQ JSON decoder `[ingestion]` | None; an addition under section 5.4 | Exactly one bounded JSON value from one `rabbitmq` delivery, selected only by the explicit `rabbitmq-json` profile | No guessed payload syntax; malformed or over-field-bound JSON is rejected to the configured broker dead-letter path, and the payload never enters the item store | 4 |
+| `pollEnrich` (job only) `[ingestion]` | `components/next/eips/pollEnrich-eip.html` | A job-only read step over a static URI (`file:<endpointId>`, `rabbitmq:<endpointId>`, `sftp:<endpointId>`) with a mandatory timeout | Refused by `check` in every facade route; no dynamic endpoint expression, no `consumerSendTo`; one bounded page per read under the job profile | 4 |
 | Testing: mock, intercept | `components/next/mock-component.html`, `manual/advice-with.html`, `components/next/eips/intercept.html` | Fixture replay intercepts `http` and `graphql` sends | Test harness only | 0 |
 
 Each reference is a path under `https://camel.apache.org/`; the change that
@@ -1255,7 +1260,11 @@ process (draft, declare), several `to` steps in sequence.
   project/profile/pack revision and request bytes (same key, different body
   or artifact revision, is a 422); a duplicate replays
   the recorded facade response instead of being dropped (`skipDuplicate` is
-  not ported); a duplicate arriving while the first is in flight answers 409.
+  not ported). The facade atomically reserves the key before guarded work in
+  every mode, including `eager: false`; `eager` still selects Camel's EIP
+  repository-membership timing, but it never opens Camel's non-eager
+  check-then-add race across facade requests. A duplicate arriving while the
+  first is in flight answers 409.
 - The idempotency store is PostgreSQL, separate from the audit journal. It is
   the only place the adapter retains a response body: the exact facade
   response, for a retention window the deployment configures, then erased
@@ -1274,14 +1283,54 @@ process (draft, declare), several `to` steps in sequence.
 - `removeOnFailure` before any upstream effect removes the key, as in Camel.
   A failure after a non-safe `to` has been sent keeps the key in a failed
   state and replays the recorded problem; it never re-executes a sent effect.
-- Write resume (an addition with no Camel equivalent; Increment 3, where
-  OpenCRVS needs it): a multi-step write declares, on each non-safe `to`,
-  `resumeBindings`, the source-native identifiers (by `jsonpath`, typed as
-  identifiers, bounded length) a later step needs. A same-key retry after a
-  failure at step k skips steps 1 to k-1, restores their resume bindings,
-  and continues at k. Only declared identifiers are stored, never other
-  values. Until Increment 3 lands, a pack with more than one non-safe `to` in
-  a write route is refused. `[ingestion]` D14 is unchanged for routes: an
+- Write resume is a host-owned addition with no Camel equivalent. Its served
+  subset is deliberately closed: one outer `idempotentConsumer` contains a
+  flat sequence of two or more non-safe HTTP `to` steps and nothing else.
+  Every step names a source operation with the reviewed
+  `idempotentUpstream` assumption. This means the provider gives repeated
+  identical requests the same logical effect for its documented window; it
+  is not a claim of general exactly-once delivery or indefinite cached
+  idempotency.
+- Each successful non-final `to` may declare `resumeBindings`: route-wide
+  unique names and singular RFC 9535 selectors for the bounded source-native
+  identifiers later steps actually reference as read-only
+  `AdapterResume.<name>` exchange properties. A step may declare none. The
+  final step declares none because terminal response custody closes it.
+  Only those identifier strings are retained, never a source response,
+  prepared request body, caller body, headers, or credentials. The first
+  step may derive its body from the admitted caller record; every later body,
+  path parameter, and query value is reconstructible from governed constants
+  and earlier resume bindings. Branches, loops, scripts, exception bodies,
+  redelivery, `direct`, and nested EIPs are refused in this subset because a
+  skipped step's unstored response body cannot reconstruct their checkpoint
+  state unambiguously. The same admitted caller record is digest-bound and is
+  resupplied on an authorised retry, so it could in principle be read again
+  without storage. This first closed subset intentionally does not admit that
+  later-step dependency: constants and checkpointed identifiers keep the
+  reconstruction proof local and explicit until a concrete journey requires
+  a broader rule.
+- The outer consumer reads the facade's `Idempotency-Key`. Every source send
+  keeps the default non-2xx failure classification and targets an endpoint
+  with no `requestHeaders`, so neither a permissive status range nor an
+  unstored response header can change an unfinished request after retry. The
+  configured response-retention window must not exceed the provider's
+  documented idempotency window; the Adapter cannot extend that source-owned
+  guarantee.
+- Before each physical send, the host durably marks that exact ordinal under
+  a finite lease and the active artifact fence. After a non-final success it
+  atomically stores the declared identifiers and advances the ordinal. A
+  same-body, same-key retry by the same caller, logical deployment, concrete
+  operation, and current artifact skips committed ordinals and resumes the
+  first unfinished one. A cleanly returned failed attempt releases its exact
+  lease for immediate repair and retry; cancellation or process loss retains
+  the lease until its finite expiry. Authentication, credential, TLS,
+  transport, HTTP, protocol, validation, and checkpoint failures all keep
+  resumable progress and answer the facade's bounded 409. A generic source
+  4xx is not silently classified as a terminal business rejection, and a
+  source 202 does not checkpoint or advance the ordinal because this closed
+  form declares no source status operation. Expiry erases identifiers and
+  authority but leaves the key spent, so it can never reopen an effect.
+  `[ingestion]` D14 is unchanged for routes: an
   ingestion hand-off is never a route with non-safe sends. A source route
   only reads. The direct destination sends one BReg operation per item
   through the BReg client outside the route engine (a Proposal's start and
@@ -1303,12 +1352,40 @@ process (draft, declare), several `to` steps in sequence.
   problem for their class, at worst the one for the `upstream` root, with
   no upstream content; `check` proves every class maps (section 8.11.6)
   and mapping totality is tested (section 13).
-- A write the source accepts but has not finished (an OpenCRVS declaration
-  entering its validation queue, a DHIS2 asynchronous import job) answers in
-  one of two ways, chosen by configuration (D16): a 202 with a status link
-  the profile defines, or a bounded wait for completion. The exact keys, and
-  what a wait answers when its bound expires, are settled in Increment 2.
-  Until that lands such a route is refused.
+- A source-native asynchronous write is declared together in all three
+  artifacts. The profile operation has `successStatus: 202` and
+  `asyncCompletion` with `completedStatus`, a profile-owned `statusPath` whose
+  whole `{statusId}` segment is opaque, and an `acceptedEnvelope` using exactly
+  `statusLink`, `statusExpiresAt`, and `requestId`. The project binding selects
+  `asyncCompletion.type: status-link` or `bounded-wait`; bounded wait also
+  declares `waitTimeoutMilliseconds`, `pollIntervalMilliseconds`, and
+  `maximumPolls`. The bound source operation declares `asyncCompletion` with a
+  singular `acceptedId.jsonpath` and a safe `statusRoute`. It may additionally
+  declare `uncertaintyRecovery.requestHeader` and its safe `statusRoute`.
+- Both modes first commit the exact profile-rendered 202, its expiry, source
+  identifier, original caller and artifact authority, and the value-free
+  `exchangeAccepted` journal event in one PostgreSQL transaction. Status-link
+  returns that response immediately. Bounded-wait performs no more than its
+  three authored time, interval, and poll bounds, then returns a proven
+  terminal response or the same committed 202 byte for byte. Its timeout must
+  be strictly below `idempotency.responseRetentionSeconds` converted to
+  milliseconds, so the returned link retains its original acceptance-anchored
+  expiry. It never receives a fresh retention window because the caller waited.
+- A status GET reauthenticates the original caller against the initiating
+  operation and record type under the current access profile. The opaque handle
+  grants no independent authority. One non-blocking, deployment-bounded safe
+  poll runs over a fresh value-free exchange; pending or uncertain checks return
+  the exact stored 202, and terminal proof is disclosure-checked and committed
+  atomically with its journal. Terminal lookup remains available until the
+  original accepted expiry even though source identifiers are erased at the
+  terminal transition. No raw source `Location` or authority is followed.
+- Before the non-safe send, an optional source-native uncertainty correlation
+  is generated by the host, committed with the finite effect deadline, and
+  installed only under the source operation's reviewed request header after
+  authored header filtering. A safe uncertainty route may prove a terminal
+  outcome on the initial call or a same-key retry. Pending or unproved outcomes
+  remain spent and answer 409; when no such proof path is declared they remain
+  spent permanently. Recovery never grants authority to repeat the mutation.
 
 ## 10. Authorization and secrets
 
@@ -1368,8 +1445,8 @@ never travel upstream remain unchanged. The private CA takes Evidence's shape:
 `outboundTls.trustProfiles.<id>.caBundleFile` in the runtime config, named by
 the endpoint binding's `tlsTrustProfile` (a CA bundle is not a secret).
 Field bounds follow Evidence: `scheme` 1 to 32 HTTP token bytes,
-`headerName` at most 64 bytes, `tokenEndpoint` without query or fragment,
-`clientAssertionAudience` 1 to 512 non-blank bytes, and Evidence's bounds
+`headerName` at most 64 bytes, `tokenEndpoint` in ASCII URI bytes with complete
+percent escapes and without query or fragment, `clientAssertionAudience` 1 to 512 non-blank bytes, and Evidence's bounds
 and validators on `scope`, `audience`, and `resource`.
 
 Rules:
@@ -1431,6 +1508,13 @@ response size and digest), `exchangeRedelivery`, `exchangeFailureHandled`,
 `breakerRefused` (closed breaker state), `breakerFallback` (closed error
 class and fixed authentication-event metadata), `exchangeCompleted`, and
 `exchangeFailed` (error class, problem code). A
+linear resumed write also records `resumeStepStarted` (the zero-based
+ordinal after its durable pre-send mark) and `resumeStepCheckpointed` (the
+completed and next ordinals plus binding count). It never records binding
+names or values. These buffered lifecycle events are flushed before a normal
+response and can be absent after cancellation or a process crash; the durable
+`exchangeCreated` intent and idempotency premark remain the recovery authority.
+A
 verified caller's refused call is one `callRefused` row (the 403 of an
 access profile and the 404 of a wrong record type, D34), so probing is
 auditable; a 401 is logged and not journaled, because no verified caller
@@ -1579,8 +1663,10 @@ rate; exhausted exchanges land in the journal with the terminal problem code.
 - Split accounting: with `stopOnException: false` and failure thresholds,
   every item is accounted in `CamelSplitResult`; with `stopOnException:
   true`, the response names the failing item's class without values.
-- Write resume (Increment 3): failure at step k journals steps 1 to k-1;
-  same-key replay resumes at k with exactly one upstream effect per step.
+- Write resume: a failure at step k keeps the committed ordinal and declared
+  identifiers; same-body, same-key replay resumes at k without sending an
+  earlier step. Native-provider tests prove one logical effect per step under
+  each source operation's reviewed idempotency behavior.
 
 ### 13.6 Contract tests
 
@@ -1658,8 +1744,9 @@ The Adapter lands in increments, each with runnable acceptance commands.
   with replay and retention; write-safety checks live; DHIS2 create and
   update routes with import-summary and conflict mapping; write fixtures;
   write property tests.
-- Increment 3, the second system: the `graphql` component; write resume; the
-  `opencrvs` pack, reads first, then writes (draft, declare). Before this
+- Increment 3, the second system: the `graphql` component; the `opencrvs`
+  pack, reads first, then writes (draft, declare), using the already-served
+  closed linear write-resume contract where it fits. Before this
   increment starts, the current OpenCRVS release's API is confirmed; if it
   is not GraphQL, the `graphql` component waits for a system that needs it
   (two-system rule) and the pack uses `http`.
@@ -1668,7 +1755,7 @@ The Adapter lands in increments, each with runnable acceptance commands.
   read step, the `file` source and the CSV and JSONL decoders, the
   read-only `postgres` source, the `kobotoolbox` and `odk-central` packs,
   the job host with its item table, pass, triggers, and operator surface
-  (sections 17.2 to 17.4), the parked BReg connector for the direct
+  (sections 17.2 to 17.4), the feature-gated BReg connector for the direct
   destination (section 17.3), and the dependency gate (section 17.5). The
   direct and Coordinator destinations, and the mapping they run, follow in
   the steps section 17.7 orders. Every component lands feature-gated and
@@ -1770,9 +1857,9 @@ one that decides a row.
 | D11 | Camel semantics, platform spelling: CFG-NAME wins on key spelling, Camel names are kept where they conform, exchange property names stay verbatim | 2026-10-30, accepted (P1) |
 | D12 | The idempotency store retains the exact facade response for a deployment-configured retention window, separate from the value-free audit journal (BReg precedent); security review note required | 2026-10-30, accepted |
 | D13 | The generic mechanisms under redelivery, circuit breaker, and throttle are built in platform crates from the start: the rolling-window limiter in `registry-platform-ratelimit`, the breaker state machine and redelivery delay computation in `registry-platform-resilience`. The processors and the redelivery loop stay in the adapter | 2026-10-30, accepted (P5) |
-| D14 | Write resume is an addition, deferred to Increment 3 where OpenCRVS needs it; until then a write route with more than one non-safe send is refused | 2026-10-30, accepted (P5) |
+| D14 | Write resume is a host-owned addition for one closed flat sequence under `idempotentConsumer`; it stores only declared bounded identifiers, resumes the first unfinished source-idempotent step, and refuses control flow whose unstored state cannot be reconstructed | 2026-10-30, accepted (P5); closed subset completed 2026-11-03 |
 | D15 | Fixture provenance distinguishes `captured` from `documented`; fixtures are `documented` unless a real instance was run | 2026-10-30, accepted (P6) |
-| D16 | A write the source accepted but has not completed answers a 202 with a status link or a bounded wait, chosen by configuration; the keys and the bound's expiry are settled in Increment 2 | 2026-10-30, accepted |
+| D16 | A write the source accepted but has not completed answers a profile-owned 202 status link or a bounded wait, selected by the project binding; section 9 fixes the exact artifact keys, acceptance-anchored expiry, caller and artifact binding, safe polling, and uncertain-effect recovery | 2026-10-30, accepted; contract completed 2026-11-03 |
 | D17 | The exposed API, envelope included, is wholly a profile artifact (envelope templates over a closed slot vocabulary); `breg-records` v1 is the first target, not a built-in; `registry-record` is a dev-dependency for goldens only | 2026-10-30, accepted |
 | D18 | Upstream authentication is a closed list of six kinds with Evidence's `SourceAuthentication` shape and spelling (section 10.2), plus orthogonal mTLS; adapter-local in this program, lifted to the platform later | 2026-10-30, accepted (P2) |
 | D19 | The facade caller's token is never forwarded or exchanged upstream; upstream calls use the deployment's per-source credential, and per-user upstream authority waits for a source that requires it | 2026-10-30, accepted (P2) |
@@ -1843,7 +1930,8 @@ Six rules govern the mode:
    published signed-event contract, tested against a fixture receiver.
    Bulk loads end in a file.
 4. **Identity and progress, not payloads.** The source is the buffer, and
-   the position moves only after the destination accepts.
+   the position moves only after the page settles under the declared acceptance
+   and refusal policy; a stopped pass leaves it unchanged.
 5. **The pass is the only unit of work.** Triggers decide only when a pass
    starts; hook bodies are untrusted; a queue is a source.
 6. **Direct only for one operation.** An item goes direct only when it maps
@@ -1861,14 +1949,44 @@ components in every facade route, so the facade gains no file or SQL path.
 
 Sources arrive in order. The KoboToolbox JSON API comes first, as the thin
 slice, through a reviewed pack over HTTP; its stable key, edit order, and
-record cap are unprobed hypotheses until a controlled deployment confirms
-them. ODK Central reuses the Kobo pattern. Read-only SQL (PostgreSQL
+record cap require deployment-specific verification. Controlled validation on
+KoboToolbox 2.026.37c established stable `_id` across edits, changing `_uuid`,
+and 101-item keyset paging; the provider pack README records the remaining
+upgrade, bulk-cap, and historical-form limits. ODK Central reuses the Kobo pattern. Read-only SQL (PostgreSQL
 first), local CSV and JSONL, and SFTP come second: read-only identity,
 reviewed parameterized queries, statement timeouts, and bounded fetches
-for SQL, where a timestamp watermark alone is no change feed; declared
+for SQL, where `keyColumn` supplies stable item identity and the whole
+row supplies its revision. A PostgreSQL endpoint's `parameterOrder` maps
+reviewed names exactly to the query's contiguous native `$1`-onward
+positions; it is omitted only for a query with no positions. Text binds
+to PostgreSQL text-like types, integers bind to `int2`, `int4`, or `int8`
+with checked narrowing, numbers bind to `float8`, and booleans bind to
+`bool`; a missing, extra, or incompatible value refuses the read. Each
+page runs one statement in its own read-only, read-committed transaction.
+Root `ORDER BY` makes that statement deterministic but cannot make
+separate offset pages a snapshot: concurrent insert, delete, or changes to
+the ordering key can still skip or repeat rows. A source that can change during
+a scan therefore needs a source-defined immutable snapshot, monotonic
+cursor, or bounded rescan and stable-key reconciliation; a timestamp
+watermark alone is no change feed. Declared
 encoding, quoting, and null rules for files, with leading zeros kept,
 files identified by content digest and rows by a declared business key,
-never by position; host-key verification and a completed-file convention
+never by position. CSV and JSONL `pollEnrich` steps require `keyPointer`, an
+RFC 6901 JSON Pointer of at most 512 bytes selecting a non-empty opaque
+string. CSV selectors name one flat field; without headers they are canonical
+array indices. JSONL selectors may select the root or a nested field. Numeric values are not coerced. A file-wide duplicate key refuses
+the read before any page is returned. A cursor still binds the file digest
+and position; neither contributes to row identity. The job store fences the file/SFTP source identity contract before a source
+read, requiring operator reconciliation rather than silently registering
+existing effects again. Nonempty legacy file/SFTP state, including raw-file
+state, cannot attest its previous contract and also requires reconciliation;
+HTTP and PostgreSQL jobs are unaffected by this file identity fence.
+The conservative fence includes source-route name, endpoint identifier,
+component kind, namespace, decoder options, and key selector. Renaming or
+rebinding those source identities can require reconciliation even when the
+current file bytes would yield identical keys; changing only poll timeout or
+page size does not. There is no automatic reset or rewrite of prior effects.
+Host-key verification and a completed-file convention
 for SFTP. Hooks and a queue come third. A hook is a trigger: it starts a
 pass early or joins one already running, the pass re-reads the source,
 and the hook body is never trusted or stored; hooks arrive on a separate
@@ -1891,10 +2009,10 @@ listener, no database requirement, no OIDC issuer, and no inbound Record
 shape. The interpreter is not rewritten, no fake request is invented, and
 the exchange starts with a null body and the job cursor under a closed
 property name, bounded by the job profile's page deadline. The engine
-boundary is the `crates/registry-adapter/src/engine` module, the
-listener-free engine the job runs and the facade links; until it becomes
-its own crate, the dependency gate of section 17.5 holds that line at
-import level.
+boundary is the listener-free `registry-adapter-engine` crate, shared by
+the job host, facade and Evidence host. Serving, inbound admission,
+persistence and product destination clients remain in their owning hosts;
+the resolved dependency gate of section 17.5 enforces that separation.
 
 The job profile is explicit and bounded, separate from the facade
 ceilings of section 8.8, which are unchanged. Under the platform caps of
@@ -1959,13 +2077,26 @@ encryption.
 
 A trigger decides only when a pass starts and carries no data into it.
 The interval trigger ports Camel's scheduled-poll options (delay, initial
-delay, greedy, and idle and error backoff) with their defaults. The hook
-trigger is contract-only: checks refuse it
-(`adapter.job.trigger-hook-unserved`) until the hook ingress of section
-17.1 is built.
+delay, greedy, and idle and error backoff) with their declared defaults.
+A hook trigger names a unique absolute `path` and runtime `binding`, and
+requires an interval trigger for reconciliation. Hook paths are bounded to
+256 bytes without query, fragment, percent escapes, or empty segments.
+Scheduling options belong to the interval trigger.
+
+Hook ingress is a default-off job-host feature, separate from the facade.
+Each source binding has its own Basic credentials through secret references
+and finite request-rate and burst bounds. An operator-managed HTTPS proxy
+forwards to the loopback listener; the host does not expose non-loopback
+plaintext ingress. Authenticated bodies are streamed to a bounded discard
+sink, never parsed, retained, logged, or forwarded. A notification starts
+one pass or joins the pending/running pass; it does not queue another pass
+behind that work. The PostgreSQL lease remains the cross-process authority.
+Only `pass --loop` opens ingress; checks, previews and one-shot passes do not.
+Absent the feature, a hook declaration refuses rather than silently polling.
 
 The read step is a bounded port of Camel's `pollEnrich`: a job-only step
-over a static URI (`file:<endpointId>`, `sftp:<endpointId>`) with a
+over a static URI (`file:<endpointId>`, `sftp:<endpointId>`, or
+`rabbitmq:<endpointId>`) with a
 mandatory timeout, one bounded page per read. This keeps every source one
 route shape: a job route whose steps poll or send and whose final body is
 the item page. It is refused by `check` in every facade route. The
@@ -2046,11 +2177,11 @@ lookup answers `lookup.unresolved` alike for no match, two matches, and a
 hidden record, so "no match, so create" is unsafe: a form that corrects
 existing households needs a lookup, and therefore Coordinator.
 
-`registry-adapter-connectors` holds a parked BReg connector for the direct
-destination. It is the only crate that links a product client, and the
-only client it links is `registry-breg-client`, behind an off-by-default
-feature. While parked it is linked by no facade binary and no job path,
-and its operation set is not part of this contract.
+`registry-adapter-connectors` holds the direct BReg connector. It is the
+only Adapter crate that links a product client, `registry-breg-client`,
+behind an off-by-default job-host feature. Engine and facade binaries cannot
+reach it. Its bounded operation set follows the reviewed Action mode and
+caller-filtered metadata; it never acquires approval or Apply authority.
 
 **Signed event to Coordinator.** One signed event per item, in the
 platform's `HookEnvelope` format signed with `sign_v1`, admits one Run of a
@@ -2059,8 +2190,24 @@ commit together, and a repeat of the same event recovers the same Run. The
 workflow maps, resolves the target, calls one typed operation such as
 `breg.submit-proposal/v1`, and follows the outcome with `wait-for`.
 Coordinator recovers its own commands; the job tracks only the admission.
-No Adapter crate links a Coordinator crate, and the destination's tests
-run against a fixture receiver.
+No Adapter crate links a Coordinator crate. Acceptance exercises both
+fixture receivers and separately built real Coordinator binaries over HTTP.
+
+The event data has one fixed wrapper: `job: {id, version}`, `key`,
+`sequence`, `digest`, `item` (the declared projection), and `priorRunId`
+only when known. Event identity and event time are stable for one item
+sequence; transport time, signature and monotonically increasing delivery
+attempt are renewed for retry. The selected public receiver identity is
+frozen durably before sending. A possibly accepted pending sequence cannot
+be retargeted by configuration changes: the pass stops without advancing
+position, and restoring the original receiver permits recovery.
+
+`destination.revisedReceiver` optionally selects a revised-item `trigger`,
+`eventType`, and `dataSchema` inside the same workflow and runtime binding.
+Its trigger must be distinct from the registration trigger.
+Without it, revised items remain held. A revised event may have no prior
+Run ID after an uncertain admission; the workflow must handle that case
+without creating a second registration or acquiring a person's authority.
 
 **Never a fallback.** A refusal from one destination never falls back to
 the other, and a denied Proposal never falls back to a direct write: the
@@ -2111,15 +2258,42 @@ to run. Its controls, each against a stated threat:
 | Signed events, Coordinator destination only | A forged event starts a Run | One rotatable signing key; a clock within 30 seconds |
 | Value-free logs and status | Personal data reaches log aggregation | None |
 
-The operator surface is the companion executable's commands: `check`
-compiles a job the way a pass would; `pass` runs one bounded pass, the
-shape a CronJob drives, or loops on the job's interval trigger; `status`
+The operator surface is the companion executable's commands: `init-store`
+applies the embedded job-store schema without compiling or running a job;
+`check` compiles a job the way a pass would; `pass` runs one bounded pass,
+the shape a CronJob drives, or loops on the job's interval trigger; `status`
 counts the item table's statuses and refusal codes, says whether a pass is
 overdue, and says why the last pass stopped; `inspect` goes from an item
 to its destination reference; and `rescan` runs one pass from the first
 page, in which unchanged items skip by digest and refused items retry. A
-preview pass delivers nothing, writes nothing, and records what a
-destination would have received. Every output is value-free.
+preview pass reads the actual source, delivers nothing, writes nothing, and
+records what a destination would have received. Every output is value-free by
+default; only an explicit preview `--show-values` prints projected values.
+
+`init-store` parses the runtime document but resolves only the store connection
+and optional store trust reference. It applies compatible migrations under the
+store's advisory lock, is idempotent, and creates no job-state or item row.
+`status`, `inspect`, and preview passes check the schema without migrating it.
+The store's one runtime connection also applies migrations, so this mode makes
+no split migration-role claim. A schema newer than the binary refuses.
+
+A held row has no Adapter-side release, acceptance, acknowledgement, or
+`mark-accepted` operation. An unchanged held item skips in ordinary passes
+and rescans. Aggregate `status` can name only its count and code, so it points
+the operator to `inspect` rather than claiming a destination reference;
+`inspect` names the stored reference when one exists and otherwise says that
+none is established. The operator resolves any destination outcome under that
+destination's own authority, while the Adapter row stays held. A changed
+RabbitMQ delivery also stays unsettled and can block later messages at the
+queue head. First establish any possible destination outcome under that
+destination's authority, then the broker operator resolves the old delivery
+by dead-lettering or removing it under approved broker policy. Only after
+those steps does the publisher/source operator correct its immutable-identity
+and version-handling logic before publishing legitimate future work under a
+new immutable message ID. The publisher never rekeys uncertain or already
+accepted work to force a fresh registration. Publishing a new message ID
+alone does not clear the old delivery, and the Adapter does not implicitly
+acknowledge or release it.
 
 The mode packages as one native companion executable on PostgreSQL. For a
 small IT team, a direct job adds one binary, one database, one source
@@ -2127,9 +2301,10 @@ credential, and one BReg credential. A Coordinator job swaps the BReg
 credential for a signing key and a clock within 30 seconds of
 Coordinator's.
 
-Four properties are never cut: the position moves only after acceptance,
-the same item sends the same identity, no payload is at rest, and
-diagnostics are value-free. Out of scope by name: attachments, automated
+Four properties are never cut: the position moves only after the page settles
+under the declared acceptance and refusal policy, while a stopped pass leaves
+it unchanged; the same item sends the same identity; no payload is at rest;
+and diagnostics are value-free. Out of scope by name: attachments, automated
 Revise and Rebase, write-back to the source, automatic deletions, fuzzy
 matching, multi-source merges, and a graphical operations application. If
 a chosen form needs attachments or matching, the pilot scope changes
@@ -2138,62 +2313,91 @@ rather than gaining a stub.
 ### 17.5 Dependency gate
 
 `products/adapter/scripts/check_dependency_direction.py` reads Cargo's
-resolved graph with every feature enabled. It proves that the engine
-crates (`registry-adapter`, `registry-adapter-core`,
-`registry-adapter-job`, and `registry-adapterctl`) reach shared platform
-primitives and nothing else of the workspace, that no Adapter crate links
-a Coordinator crate, and that `registry-adapter-connectors` reaches
-exactly `registry-breg-client`, behind its off-by-default feature, is
-reached by no other workspace crate, and never reaches a product runtime,
-adopter tooling, supporting service, binding, or database crate. Inside
-`registry-adapter`, it holds the engine boundary at import level: no file
-under `src/engine` names a facade module or a dependency only the facade
-links. It follows Coordinator's gate in shape and is named beside it in
-the root `AGENTS.md` gate table.
+resolved graph with every feature enabled. It proves that Adapter core
+and the listener-free engine reach only their permitted shared platform
+primitives, that the facade and Evidence consume that engine without
+linking each other's runtime, and that no Adapter crate links a
+Coordinator crate. The job host's off-by-default `direct-breg` feature
+reaches `registry-adapter-connectors`, whose permitted product edge is
+`registry-breg-client`; the engine and facade cannot reach that connector.
+The connector never reaches a product runtime, adopter tooling,
+supporting service, binding or database crate. The gate follows
+Coordinator's gate in shape and is named beside it in the root
+`AGENTS.md` gate table.
 
 ### 17.6 Open decisions
 
-1. **The two-system exception (D38).** `file`, `sftp`, and `postgres`
-   enter as job-only mechanisms before a second real system demands them.
-   If refused, the components wait and the mode narrows to `http` sources
-   and reviewed packs.
-2. **The BReg client exception.** Admitting `registry-breg-client`,
-   behind a feature, as the one exception to the rule that the adapter
-   never links another product's types, is a contract amendment still to
-   be confirmed.
-3. **The SSH dependency (for `sftp`).** No SSH library is in `Cargo.lock`,
-   and the always-on `aws-lc-rs` FIPS posture makes a new cryptographic
-   dependency a reviewed decision. The `sftp` component lands only after a
-   dependency review against `deny.toml` and the FIPS posture note; until
-   then the job compiler refuses an `sftp` source.
-4. **The queue.** Kafka is preferred if a Rust client exists that passes
-   the FIPS posture, since `rdkafka` links `librdkafka` and OpenSSL;
-   otherwise RabbitMQ through `lapin` over `rustls`. The dependency review
-   comes before any queue code.
-5. **The direct connector's operation set.** Which BReg operations the
-   parked connector exposes is pending; until then this contract names
-   none.
+1. **The job-source exception is approved (D38).** `file`, `sftp`, and
+   `postgres` are job-only mechanisms. Their inclusion does not give the
+   facade file, SSH, or database reachability; each source still needs its
+   own bounded-read, recovery and feature-isolation acceptance.
+2. **The BReg client exception is approved.** The job host may reach
+   `registry-breg-client` through its explicit off-by-default
+   `direct-breg` connector feature. This exception grants no engine or
+   facade dependency and no direct database access to BReg.
+3. **The SSH dependency is selected.** The default-off `job-sftp` host
+   uses in-process `russh` and `russh-sftp`, with versions pinned in the
+   workspace manifest and lockfile. The host key is pinned before any
+   credential is resolved or sent. AWS-LC backs the selected cipher paths;
+   key exchange and signatures also use RustCrypto, so this is not a
+   whole-session FIPS validation claim. Read-only completion conventions,
+   finite transport bounds and recovery remain part of source acceptance.
+4. **The queue is RabbitMQ.** The default-off `job-rabbitmq` host uses
+   `lapin` over verified TLS. The process installs its reviewed FIPS TLS
+   provider before clients are constructed and refuses a conflicting
+   provider. The source owns manual settlement after the durable item
+   outcome; a held item is not an acceptance. Broker redelivery and the
+   dead-letter path require actual broker acceptance tests, separately
+   from client dependency verification.
+5. **The direct job selects one Action.** It invokes the selected BReg
+   Action immediately or starts and submits its Proposal, according to
+   caller-filtered metadata and the declared mode. A metadata mismatch or
+   operation refusal never selects another operation or destination.
 
-Unproved and recorded as such: Kobo's stable key, edit order, and record
-cap come from documentation, not a probe, so the cost of `rescan` is
-unknown; BReg's item-scoped refusal codes for the direct destination, and
-whether its Proposal client's recovery works without a stored prepared
-attempt, are unchecked.
+Controlled Kobo validation established the maintained key, revision, edit
+rescan, unchanged-repeat and direct Proposal/review/application behavior
+for version 2.026.37c. Server upgrades, historical forms, large bulk limits,
+and deployment-specific rescan cost remain unproved. Direct-destination
+native tests separately exercise item refusal and same-Proposal recovery
+without storing prepared commands in the job database.
 
 ### 17.7 Build status, sequence, and claims
 
-Built, each part feature-gated or off the default path and claimed
-nowhere: the engine boundary and job compiler; the job profile; the item
-contract and source declarations; the read step; the `file` source with
-the CSV and JSONL decoders (feature `job-file`) and the read-only
-`postgres` source (feature `job-postgres`); the `kobotoolbox` and
-`odk-central` packs with documented fixtures; the job host
-(`registry-adapter-job`) with its item table, pass, stop rule, interval
-trigger, rescan, preview pass, value-free status and inspect, and a
-loopback-only fixture destination for tests; the parked BReg connector;
-and the dependency gate. Not built: the direct destination, the
-Coordinator destination, the mapping run in the job, the `held` status,
-the bulk file, the `sftp` source, the hook ingress, and the queue source.
+The [Camel ingestion port records](CAMEL-INGESTION-PORTS.md) map selected
+upstream classes and methods to the maintained Rust cases and name the
+bounded divergences. A named test is not a claim that its whole increment
+or controlled deployment drill has passed.
+
+Implemented behind their declared features: the shared engine and job compiler;
+the job profile and item contract; HTTP, CSV/JSONL files, read-only PostgreSQL
+and read-only SFTP sources; the `kobotoolbox` and `odk-central` packs; and the
+job host with its durable item table, pass, interval trigger, rescan, preview,
+value-free status and inspection. Destination mappings run in the job host,
+which records acknowledged, refused and held outcomes. The default-off direct
+BReg and signed Coordinator event destinations have native product acceptance
+for submission, repeat recovery and changed-item holds. The PostgreSQL source
+also has combined native acceptance through both destinations.
+
+SFTP acceptance includes the actual job CLI, a loopback SSH/SFTP server,
+PostgreSQL item store, destination receiver, restart and same-name replacement.
+Supported deployments require a dedicated read-only account confined to the
+source tree by the server. SFTP v3 client pathname checks do not provide an
+atomic filesystem jail. This acceptance does not establish a controlled Kobo
+review/application drill or a whole-session SSH FIPS validation.
+
+The RabbitMQ job compiler and durable pass integrate manual source settlement
+with the PostgreSQL item store. Broker acceptance covers AMQPS, least-privilege
+permissions, durable destination acknowledgement before broker acknowledgement,
+refusal to the dead-letter path, redelivery and changed-message holds. Pending
+settlement is bounded and remains uncertain without advancing the position.
+Hook ingress is implemented behind the default-off `job-hook` feature.
+Synthetic HTTP and actual CLI/PostgreSQL acceptance prove authenticated wake-up,
+source re-read, body exclusion and a durable pass without weakening facade OIDC.
+They do not establish delivery through a production TLS proxy or a live Kobo
+webhook. The bulk-file hand-off remains unimplemented.
+The controlled source and review-provider drill below remains required before
+deployment claims; direct Kobo registration/review/application proof is separate
+from Coordinator revised-item and hook-delivery acceptance.
 
 | Step | Deliverable | Gate |
 |---|---|---|
@@ -2219,7 +2423,7 @@ and its row below passes.
 |---|---|
 | `http` under the job profile | A paged acquisition over a real HTTP source completes under the job profile with no facade-suite regression |
 | `file` and the CSV, JSONL decoders | Quoted multiline fields, leading-zero identifiers, empty and null rules, oversized rows, and malformed items have deterministic outcomes; traversal and symlink escape are refused |
-| `postgres` | Read-only authority, bounded queries, a defined snapshot or change order, and restart without duplicates, with a write proven refused |
+| `postgres` | Read-only authority, bounded queries, stable key and revision handling, exact typed parameters, and restart without duplicate identity, with a write proven refused; any source that changes during offset paging declares the snapshot, monotonic cursor, or rescan discipline that contains read-committed page drift |
 | `sftp` | Incomplete uploads are not admitted; interrupted transfers and replaced same-name files do not corrupt or duplicate work |
 | `kobotoolbox`, `odk-central` packs | Synthetic fixtures replay; every behavior that rests on documentation rather than a probe is listed as unproved |
 

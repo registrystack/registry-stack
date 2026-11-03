@@ -36,7 +36,7 @@ fn endpoint(authentication: EndpointAuthentication) -> Endpoint {
         id: LocalId::new("source").expect("id"),
         component: ComponentKind::Http,
         authentication,
-        attempt_timeout_milliseconds: BoundedU64::new(10_000).expect("attempt"),
+        attempt_timeout_milliseconds: Some(BoundedU64::new(10_000).expect("attempt")),
         maximum_response_bytes: BoundedU64::new(65_536).expect("response"),
         response_headers: UniqueList::new(Vec::new()).expect("headers"),
         request_headers: UniqueList::new(Vec::new()).expect("headers"),
@@ -45,6 +45,10 @@ fn endpoint(authentication: EndpointAuthentication) -> Endpoint {
         query_file: None,
         operation_name: None,
         variables: None,
+        sqlite_extract: None,
+        key_column: None,
+        parameter_order: None,
+        host_protocol: None,
     }
 }
 
@@ -58,6 +62,7 @@ fn binding(double: &UpstreamDouble, credential: Option<RuntimeCredential>) -> En
         mtls_identity: None,
         attempt_timeout_milliseconds: None,
         maximum_response_bytes: None,
+        maximum_concurrency: registry_platform_yaml::BoundedU64::new(8).expect("concurrency"),
     }
 }
 

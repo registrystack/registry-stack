@@ -20,15 +20,23 @@ changing evidence semantics.
 Before deployment, the operator changes only:
 
 - the `.example` token-issuer host;
-- the table and column names in the statement, to match the published extract;
+- the table and column names in the pack-owned statement, together with the
+  statement digest, pack digest, and source pack pin, to match the published
+  extract;
 - issuer, provider, trust-domain, framework, evidence-type, and concept URIs;
 - the staleness bound, if this concept tolerates a different one;
 - authority tags and purposes;
 - the active public verification JWK and its thumbprint-derived file name and
   references;
 - the referenced secret files; and
-- the pinned Transit key name and version; and
+- the pinned Transit key name and version;
 - the runtime paths, listener binding, and bound extract file.
+
+The complete source program is the digest-named directory beneath
+`bundle/adapter-packs/professional-licence-register/`. It owns the reviewed SQL,
+input and response schemas, route, and extraction script as one closure. The
+Evidence bundle selects that exact pack digest and cannot silently substitute a
+different statement or script.
 
 ## Lookup shape
 
@@ -73,6 +81,12 @@ gate ever sees it.
 That makes this source `source-derived`: only the narrow aggregate crosses the
 source boundary. The later derivation maps that fact to the asserted boolean
 without changing what the statement returned.
+
+The offline cases exercise that same pack and statement against an actual
+bounded SQLite snapshot materialized from `common.extract`. They do not replace
+the query with an HTTP response or infer a source operation from fixture text.
+The observed source-operation count comes from the host hook invoked by the
+real SQLite send path.
 
 ## One clock
 

@@ -1,0 +1,29 @@
+apiVersion: id.registrystack.org/formats/evidence/target-authority/v1alpha1
+kind: EvidenceTargetAuthority
+target: provider
+project: farmer-provider
+accessProfiles:
+  registered-breg-procedure:
+    authority: statutory
+    actorKind: service
+    requesterTags:
+    - breg-farmer-procedure
+    grants:
+    - definition: farmer-status
+      purpose: land-registration
+      audienceFrom: authenticated-requester
+      representations: [signed-jws]
+      subjectBinding: audience-scoped
+      subjects:
+      - role: farmer
+        selectorProfile: farmer-number-v1
+        valueOrigin: request
+    - definition: farmer-category
+      purpose: land-registration
+      audienceFrom: authenticated-requester
+      representations: [signed-jws]
+      subjectBinding: audience-scoped
+      subjects:
+      - role: farmer
+        selectorProfile: farmer-number-v1
+        valueOrigin: request

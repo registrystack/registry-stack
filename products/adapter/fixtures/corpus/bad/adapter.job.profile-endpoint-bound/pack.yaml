@@ -58,6 +58,7 @@ sourceRoutes:
           uri: file:submissions
           timeoutMilliseconds: 5000
           decoder: csv
+          keyPointer: /id
       - to:
           uri: http:cases
           parameters:

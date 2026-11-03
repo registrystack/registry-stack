@@ -29,11 +29,12 @@ pub struct Endpoint {
     pub component: ComponentKind,
     /// The upstream authentication kind, with its non-secret parameters.
     pub authentication: EndpointAuthentication,
-    /// The longest one attempt to this endpoint may take, in
-    /// milliseconds. Required, no default; a value above the platform
-    /// ceiling is refused, never shortened. The runtime binding may lower
-    /// it, never raise it.
-    pub attempt_timeout_milliseconds: BoundedU64<1, 10_000>,
+    /// The longest one attempt to this endpoint may take, in milliseconds.
+    /// Evidence defaults an omission to 30 seconds; facade and job require an
+    /// explicit value within their ten-second policy. The profile compiler
+    /// owns that policy rather than the shared wire shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt_timeout_milliseconds: Option<BoundedU64<1, { u64::MAX }>>,
     /// The largest response body one send to this endpoint may take in, in
     /// bytes. Required, no default; a value above the platform cap is
     /// refused, never shortened. The runtime binding may lower it, never
@@ -64,12 +65,91 @@ pub struct Endpoint {
     /// Required for a `graphql` endpoint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub query_file: Option<String>,
+    /// The PostgreSQL result column whose scalar is the source item's
+    /// stable identity. Required for a `postgres` endpoint and absent
+    /// from every other component.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_column: Option<ExternalId>,
+    /// The reviewed names bound to the PostgreSQL query's contiguous
+    /// `$1`-onward positions, in order. Omitted only when the query has
+    /// no parameters, and absent from every non-PostgreSQL component.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parameter_order: Option<UniqueList<ExternalId>>,
     /// The GraphQL operation name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operation_name: Option<String>,
     /// The GraphQL variables expression.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub variables: Option<crate::model::Expression>,
+    /// The reviewed statement and bounds of a SQLite extract producer.
+    /// Filesystem locations are supplied by the host's logical extract binding.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sqlite_extract: Option<SqliteExtractDeclaration>,
+    /// A host-implemented source protocol selected explicitly by this
+    /// endpoint, with its reviewed, digest-pinned public configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_protocol: Option<HostProtocol>,
+}
+
+/// One closed host protocol selection. The engine recognizes only protocols
+/// a host registry installs; an unknown id fails closed at compilation.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HostProtocol {
+    /// The protocol implementation id in the host registry.
+    pub id: LocalId,
+    /// The reviewed public protocol configuration.
+    pub config: crate::model::ScriptReference,
+}
+
+/// A read-only statement over one host-captured SQLite extract. Its SQL is
+/// pinned with the pack, while its parameters may receive only route values.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SqliteExtractDeclaration {
+    pub extract_profile: LocalId,
+    pub statement: crate::model::ScriptReference,
+    pub columns: Vec<SqliteExtractColumn>,
+    pub parameters: Vec<SqliteExtractParameter>,
+    pub maximum_extract_age_seconds: BoundedU64<1, 2_592_000>,
+    pub maximum_rows: BoundedU64<1, 10_000>,
+    pub maximum_cell_bytes: BoundedU64<1, 8_388_608>,
+    pub maximum_statement_steps: BoundedU64<1, 1_000_000_000>,
+    pub concurrency: BoundedU64<1, 1_024>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SqliteExtractColumn {
+    pub name: ExternalId,
+    #[serde(rename = "type")]
+    pub value_type: SqliteExtractColumnType,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SqliteExtractColumnType {
+    String,
+    Integer,
+    Number,
+    Boolean,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SqliteExtractParameter {
+    pub name: ExternalId,
+    #[serde(default = "sqlite_parameter_required")]
+    pub required: bool,
+}
+
+fn sqlite_parameter_required() -> bool {
+    true
 }
 
 /// An endpoint header allowlist is omitted from the wire when empty, the
@@ -110,6 +190,144 @@ pub struct EndpointOperation {
     /// a query (`products/adapter/CONCEPT.md` section 8.8).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub graphql: Option<GraphQlOperationKind>,
+    /// The source-native asynchronous acceptance and status proof contract.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub async_completion: Option<EndpointAsyncCompletion>,
+}
+
+/// One JSONPath selector extracting the bounded source operation id from a
+/// declared 202 response. The closed object deliberately admits no other
+/// expression language.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AsyncAcceptedId {
+    #[serde(rename = "jsonpath")]
+    jsonpath: String,
+}
+
+impl AsyncAcceptedId {
+    /// The RFC 9535 selector the engine compiles through its existing
+    /// JSONPath implementation.
+    #[must_use]
+    pub fn jsonpath(&self) -> &str {
+        &self.jsonpath
+    }
+}
+
+/// A source-native lookup that can prove the disposition of a host-supplied
+/// correlation id after the initial non-safe send became uncertain.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AsyncUncertaintyRecovery {
+    /// The one reviewed source-owned request header carrying the id.
+    pub request_header: ExternalId,
+    /// The safe internal route resolving that correlation id.
+    pub status_route: ExternalId,
+}
+
+impl<'de> Deserialize<'de> for AsyncUncertaintyRecovery {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct Wire {
+            request_header: ExternalId,
+            status_route: ExternalId,
+        }
+
+        let wire = Wire::deserialize(deserializer)?;
+        if async_recovery_request_header_fault(wire.request_header.as_str()).is_some() {
+            return Err(registry_platform_yaml::Invalid::expected(
+                "a source-owned recovery request header the transport may write",
+                "Choose a non-reserved header which is not a credential, forwarding, tracing, facade, or engine header.",
+            )
+            .into_error());
+        }
+        Ok(Self {
+            request_header: wire.request_header,
+            status_route: wire.status_route,
+        })
+    }
+}
+
+/// The source-native acceptance and status proof contract for one endpoint
+/// operation. Caller paths, envelopes, waiting policy, and custody remain
+/// outside the pack.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EndpointAsyncCompletion {
+    pub accepted_id: AsyncAcceptedId,
+    pub status_route: ExternalId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uncertainty_recovery: Option<AsyncUncertaintyRecovery>,
+}
+
+/// The largest source-native operation id retained for status recovery.
+pub const MAX_ASYNC_SOURCE_ID_BYTES: usize = 256;
+
+/// Return a value-free reason when a source-native operation id is not the
+/// bounded opaque identifier D16 permits. URLs and path/query delimiters are
+/// refused, so the host can never follow a source-provided authority.
+#[must_use]
+pub fn async_source_id_fault(id: &str) -> Option<&'static str> {
+    if id.is_empty() {
+        return Some("the source operation id is empty");
+    }
+    if id.len() > MAX_ASYNC_SOURCE_ID_BYTES {
+        return Some("the source operation id exceeds its byte bound");
+    }
+    if !id.is_ascii()
+        || id.bytes().any(|byte| {
+            !(0x21..=0x7e).contains(&byte)
+                || matches!(byte, b'/' | b'\\' | b'?' | b'#' | b'%' | b':')
+        })
+    {
+        return Some("the source operation id is not bounded visible identifier text");
+    }
+    None
+}
+
+/// Return a value-free reason when the uncertainty-correlation header could
+/// carry caller, credential, forwarding, tracing, or engine authority.
+#[must_use]
+pub fn async_recovery_request_header_fault(name: &str) -> Option<&'static str> {
+    if !crate::checks::is_header_token(name) {
+        return Some("the recovery header is not an RFC 9110 token");
+    }
+    if crate::checks::is_route_unwritable_header_name(name)
+        || !registry_platform_httputil::destination::is_script_writable_request_header_name(name)
+    {
+        return Some("the recovery header is reserved by the host or transport");
+    }
+    let lowered = name.to_ascii_lowercase();
+    if matches!(
+        lowered.as_str(),
+        "baggage" | "grpc-trace-bin" | "traceparent" | "tracestate" | "x-cloud-trace-context"
+    ) || lowered.starts_with("x-b3-")
+    {
+        return Some("the recovery header is reserved for tracing context");
+    }
+    None
+}
+
+/// The normalized closed result of one source-native status route. Engine
+/// validation still proves the class, result disclosure, scalar problem data,
+/// and response-size bounds before the facade receives this DTO.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "lowercase", deny_unknown_fields)]
+pub enum AsyncStatusOutcome {
+    Pending {},
+    Succeeded {
+        result: serde_json::Value,
+    },
+    Failed {
+        class: crate::model::ErrorClass,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        data: Option<std::collections::BTreeMap<LocalId, serde_json::Value>>,
+    },
 }
 
 /// The GraphQL operation kind an endpoint operation declares, as the
@@ -190,6 +408,42 @@ pub const MINIMUM_SOURCE_RESCAN_DELAY_SECONDS: u64 = 60;
 /// background sweep no one named.
 pub const MAXIMUM_SOURCE_RESCAN_DELAY_SECONDS: u64 = 86_400;
 
+/// The closed input and final-fact schemas of an Evidence source route.
+/// Both artifacts are supplied with the pack and digest-pinned, so a host
+/// can compile the route without filesystem or network access.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum EvidenceAcquisitionPosture {
+    SourceDerived,
+    FieldProjected,
+    #[default]
+    RecordTransformed,
+}
+
+impl EvidenceAcquisitionPosture {
+    fn is_record_transformed(&self) -> bool {
+        *self == Self::RecordTransformed
+    }
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EvidenceRouteContract {
+    /// The JSON Schema for the reviewed acquisition inputs.
+    pub inputs_schema: crate::model::ScriptReference,
+    /// The JSON Schema for the route's final facts value.
+    pub facts_schema: crate::model::ScriptReference,
+    /// The least-invasive acquisition posture the reviewed route satisfies.
+    /// Omission is conservative for packs authored before this declaration.
+    #[serde(
+        default,
+        skip_serializing_if = "EvidenceAcquisitionPosture::is_record_transformed"
+    )]
+    pub acquisition_posture: EvidenceAcquisitionPosture,
+}
+
 /// One source route of the governed-ingestion mode
 /// (`products/adapter/CONCEPT.md` sections 17.1 and 17.2): a route
 /// definition's steps plus the item-contract declaration. A source route
@@ -232,6 +486,10 @@ pub struct SourceRouteDecl {
     /// `adapter.job.source-rescan-delay`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rescan_delay_seconds: Option<registry_platform_yaml::BoundedU64<60, 86_400>>,
+    /// The Evidence acquisition contract when this source route is a
+    /// listener-free, read-only Evidence entry point.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<EvidenceRouteContract>,
     /// The ordered steps, as an internal route's body.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub steps: Vec<Step>,
@@ -316,18 +574,73 @@ pub struct AdapterPack {
     /// The GraphQL query-file inventory, each file digest-pinned.
     #[serde(default)]
     pub query_files: UniqueList<crate::model::ScriptReference>,
+    /// The provider OpenAPI document used by consumer tooling such as
+    /// Evidence source mocks, captured and digest-pinned with the pack.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_api: Option<crate::model::ScriptReference>,
     /// The engine capabilities the pack requires.
     #[serde(default)]
     pub capabilities: Capabilities,
 }
 
 impl AdapterPack {
-    /// The pinned script or query file for a path, or `None`.
+    /// Every file the pack pins, including route-owned schemas and Evidence
+    /// contracts. This is the one typed closure collector used by compilers,
+    /// bundlers and authoring tools.
     #[must_use]
-    pub fn pinned_file(&self, path: &str) -> Option<&Digest> {
-        self.scripts
+    pub fn pinned_files(&self) -> Vec<&crate::model::ScriptReference> {
+        let mut files: Vec<&crate::model::ScriptReference> = self
+            .scripts
             .iter()
             .chain(self.query_files.iter())
+            .chain(self.open_api.iter())
+            .chain(self.endpoints.iter().filter_map(|endpoint| {
+                endpoint
+                    .sqlite_extract
+                    .as_ref()
+                    .map(|contract| &contract.statement)
+            }))
+            .chain(
+                self.endpoints
+                    .iter()
+                    .filter_map(|endpoint| endpoint.host_protocol.as_ref().map(|p| &p.config)),
+            )
+            .collect();
+        for source in &self.source_routes {
+            if let Some(evidence) = &source.evidence {
+                files.push(&evidence.inputs_schema);
+                files.push(&evidence.facts_schema);
+            }
+        }
+        for steps in self
+            .routes
+            .iter()
+            .map(|route| route.steps.as_slice())
+            .chain(
+                self.route_templates
+                    .iter()
+                    .map(|template| template.steps.as_slice()),
+            )
+            .chain(
+                self.source_routes
+                    .iter()
+                    .map(|source| source.steps.as_slice()),
+            )
+        {
+            crate::checks::walk_steps(steps, &mut |step, _| {
+                if let Step::ValidateSchema(reference) = step {
+                    files.push(reference);
+                }
+            });
+        }
+        files
+    }
+
+    /// The pinned file for a path, or `None`.
+    #[must_use]
+    pub fn pinned_file(&self, path: &str) -> Option<&Digest> {
+        self.pinned_files()
+            .into_iter()
             .find(|script| script.path == path)
             .map(|script| &script.digest)
     }
@@ -343,8 +656,9 @@ mod tests {
             id: LocalId::new("case-api").expect("id"),
             component: ComponentKind::Http,
             authentication: EndpointAuthentication::Oauth2ClientCredentials {},
-            attempt_timeout_milliseconds: registry_platform_yaml::BoundedU64::new(10_000)
-                .expect("attempt timeout"),
+            attempt_timeout_milliseconds: Some(
+                registry_platform_yaml::BoundedU64::new(10_000).expect("attempt timeout"),
+            ),
             maximum_response_bytes: registry_platform_yaml::BoundedU64::new(1_048_576)
                 .expect("response bound"),
             response_headers: UniqueList::new(vec![ExternalId::new("etag").expect("header")])
@@ -355,16 +669,22 @@ mod tests {
                 idempotent_upstream: true,
                 safe_upstream: false,
                 graphql: None,
+                async_completion: None,
             }],
             tested_versions: vec!["2.7".to_string()],
             query_file: None,
+            key_column: None,
+            parameter_order: None,
             operation_name: None,
             variables: None,
+            sqlite_extract: None,
+            host_protocol: None,
         }
     }
 
-    /// An endpoint declares both limits; neither has a default, and a value
-    /// outside its range is refused, never shortened. The response bound's
+    /// An endpoint declares its response bound and may declare an attempt
+    /// timeout; Evidence owns the omitted timeout default. A zero value is
+    /// refused. The response bound's
     /// reader ceiling is the platform cap a source-route-only endpoint may
     /// declare (D39); a facade-reachable endpoint stays at the facade
     /// ceiling, which the checks refuse past.
@@ -380,12 +700,10 @@ mod tests {
         let bytes = r#","maximumResponseBytes":1048576"#;
         read(attempt, bytes).expect("both limits at their ceilings parse");
         read(attempt, r#","maximumResponseBytes":16777216"#).expect("the platform cap parses");
-        assert!(read("", bytes).is_err(), "the attempt timeout is required");
+        read("", bytes).expect("Evidence may apply its omitted attempt default");
+        read(r#","attemptTimeoutMilliseconds":45000"#, bytes)
+            .expect("a finite Evidence attempt above the facade policy parses");
         assert!(read(attempt, "").is_err(), "the response bound is required");
-        assert!(
-            read(r#","attemptTimeoutMilliseconds":10001"#, bytes).is_err(),
-            "an attempt timeout above the ceiling is refused"
-        );
         assert!(
             read(r#","attemptTimeoutMilliseconds":0"#, bytes).is_err(),
             "a zero attempt timeout is refused"
@@ -518,12 +836,20 @@ mod tests {
                 .expect("digest"),
             }])
             .expect("unique"),
+            open_api: Some(crate::model::ScriptReference {
+                path: "openapi/provider.json".to_string(),
+                digest: Digest::new(
+                    "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+                )
+                .expect("digest"),
+            }),
             source_routes: UniqueIdList::new(vec![SourceRouteDecl {
                 id: LocalId::new("kobo-submissions").expect("id"),
                 scan: Some(SourceScan::Ongoing),
                 next_recovery: Some(SourceRecovery::KeyDeduplicated),
                 edits: Some("ordered".to_string()),
                 rescan_delay_seconds: None,
+                evidence: None,
                 steps: Vec::new(),
             }])
             .expect("unique"),
@@ -609,6 +935,7 @@ mod tests {
                     next_recovery: None,
                     edits: None,
                     rescan_delay_seconds: None,
+                    evidence: None,
                     steps: Vec::new(),
                 },
                 SourceRouteDecl {
@@ -617,11 +944,86 @@ mod tests {
                     next_recovery: None,
                     edits: None,
                     rescan_delay_seconds: None,
+                    evidence: None,
                     steps: Vec::new(),
                 },
             ])
             .is_err(),
             "a repeated source route id is refused"
+        );
+    }
+
+    #[test]
+    fn evidence_source_route_pins_input_and_fact_schemas() {
+        let pack: AdapterPack = serde_json::from_str(
+            r#"{
+                "id": "civil-register",
+                "version": "1",
+                "testedVersions": [],
+                "sourceRoutes": [{
+                    "id": "person-evidence",
+                    "evidence": {
+                        "inputsSchema": {
+                            "path": "schemas/person-inputs.schema.json",
+                            "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+                        },
+                        "factsSchema": {
+                            "path": "schemas/person-facts.schema.json",
+                            "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+                        }
+                    }
+                }]
+            }"#,
+        )
+        .expect("evidence route parses");
+
+        let evidence = pack
+            .source_routes
+            .get("person-evidence")
+            .and_then(|route| route.evidence.as_ref())
+            .expect("evidence contract");
+        assert_eq!(
+            evidence.inputs_schema.path,
+            "schemas/person-inputs.schema.json"
+        );
+        assert_eq!(
+            evidence.facts_schema.path,
+            "schemas/person-facts.schema.json"
+        );
+        assert_eq!(
+            evidence.acquisition_posture,
+            EvidenceAcquisitionPosture::RecordTransformed
+        );
+        assert!(!serde_json::to_string(evidence)
+            .expect("evidence contract serializes")
+            .contains("acquisitionPosture"));
+    }
+
+    #[test]
+    fn evidence_source_route_retains_an_explicit_acquisition_posture() {
+        let evidence: EvidenceRouteContract = serde_json::from_str(
+            r#"{
+                "inputsSchema": {
+                    "path": "schemas/person-inputs.schema.json",
+                    "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+                },
+                "factsSchema": {
+                    "path": "schemas/person-facts.schema.json",
+                    "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+                },
+                "acquisitionPosture": "field-projected"
+            }"#,
+        )
+        .expect("explicit Evidence acquisition posture parses");
+
+        assert_eq!(
+            evidence.acquisition_posture,
+            EvidenceAcquisitionPosture::FieldProjected
+        );
+        assert_eq!(
+            serde_json::to_value(evidence).expect("evidence contract serializes")
+                ["acquisitionPosture"],
+            "field-projected"
         );
     }
 
@@ -729,10 +1131,180 @@ mod tests {
             }])
             .expect("unique"),
             query_files: UniqueList::new(Vec::new()).expect("empty"),
+            open_api: Some(crate::model::ScriptReference {
+                path: "openapi/provider.json".to_owned(),
+                digest: Digest::new(
+                    "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                )
+                .expect("digest"),
+            }),
             source_routes: UniqueIdList::new(Vec::new()).expect("empty"),
             capabilities: Capabilities::default(),
         };
         assert!(pack.pinned_file("scripts/map.rhai").is_some());
+        assert!(pack.pinned_file("openapi/provider.json").is_some());
         assert!(pack.pinned_file("scripts/other.rhai").is_none());
+    }
+
+    #[test]
+    fn pinned_file_closure_includes_evidence_and_route_schemas() {
+        let pack: AdapterPack = serde_json::from_value(serde_json::json!({
+            "id": "evidence-pack",
+            "version": "1",
+            "testedVersions": [],
+            "sourceRoutes": [{
+                "id": "lookup",
+                "evidence": {
+                    "inputsSchema": {"path": "schemas/inputs.json", "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"},
+                    "factsSchema": {"path": "schemas/facts.json", "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"}
+                },
+                "steps": [{"validateSchema": {"path": "schemas/provider.json", "digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333"}}]
+            }]
+        }))
+        .expect("pack");
+
+        let paths: Vec<&str> = pack
+            .pinned_files()
+            .into_iter()
+            .map(|reference| reference.path.as_str())
+            .collect();
+        assert_eq!(
+            paths,
+            [
+                "schemas/inputs.json",
+                "schemas/facts.json",
+                "schemas/provider.json"
+            ]
+        );
+    }
+
+    #[test]
+    fn host_protocol_config_round_trips_and_joins_the_pinned_closure() {
+        let digest = "sha256:2222222222222222222222222222222222222222222222222222222222222222";
+        let pack: AdapterPack = serde_json::from_value(serde_json::json!({
+            "id": "signed-source-pack",
+            "version": "1.0.0",
+            "testedVersions": [],
+            "endpoints": [{
+                "id": "signed-source",
+                "component": "http",
+                "authentication": {"type": "oauth2-client-credentials"},
+                "attemptTimeoutMilliseconds": 10000,
+                "maximumResponseBytes": 1048576,
+                "hostProtocol": {
+                    "id": "signed-evidence",
+                    "config": {"path": "protocols/signed-evidence.json", "digest": digest}
+                }
+            }]
+        }))
+        .expect("closed host protocol declaration parses");
+
+        assert_eq!(
+            pack.pinned_file("protocols/signed-evidence.json")
+                .map(Digest::as_str),
+            Some(digest)
+        );
+        let encoded = serde_json::to_value(pack).expect("pack serializes");
+        assert_eq!(
+            encoded["endpoints"][0]["hostProtocol"]["id"],
+            "signed-evidence"
+        );
+    }
+
+    #[test]
+    fn endpoint_async_completion_is_jsonpath_only_and_closed() {
+        let operation = |completion: &str| format!(r#"{{"id":"submit-import"{completion}}}"#);
+        let sync = serde_json::from_str::<EndpointOperation>(&operation(""))
+            .expect("synchronous operation");
+        assert!(sync.async_completion.is_none());
+
+        let declared = r#", "asyncCompletion":{"acceptedId":{"jsonpath":"$.response.id"},"statusRoute":"import-status","uncertaintyRecovery":{"requestHeader":"X-Adapter-Recovery-Id","statusRoute":"import-status-by-recovery-id"}}"#;
+        let parsed = serde_json::from_str::<EndpointOperation>(&operation(declared))
+            .expect("asynchronous operation");
+        let completion = parsed.async_completion.expect("async completion");
+        assert_eq!(completion.accepted_id.jsonpath(), "$.response.id");
+        assert_eq!(completion.status_route.as_str(), "import-status");
+        assert_eq!(
+            completion
+                .uncertainty_recovery
+                .expect("uncertainty recovery")
+                .request_header
+                .as_str(),
+            "X-Adapter-Recovery-Id"
+        );
+
+        for refused in [
+            r#", "asyncCompletion":{"acceptedId":{"constant":"id"},"statusRoute":"import-status"}"#,
+            r#", "asyncCompletion":{"acceptedId":{"header":"Location"},"statusRoute":"import-status"}"#,
+            r#", "asyncCompletion":{"acceptedId":{"jsonpath":"$.id","constant":"id"},"statusRoute":"import-status"}"#,
+            r#", "asyncCompletion":{"acceptedId":{"jsonpath":"$.id"},"statusRoute":"import-status","bogus":true}"#,
+        ] {
+            assert!(serde_json::from_str::<EndpointOperation>(&operation(refused)).is_err());
+        }
+    }
+
+    #[test]
+    fn recovery_header_and_source_id_rules_are_closed() {
+        assert!(async_recovery_request_header_fault("X-Adapter-Recovery-Id").is_none());
+        for refused in [
+            "not a header",
+            "Authorization",
+            "Proxy-Session",
+            "Forwarded",
+            "X-Forwarded-For",
+            "X-Real-Ip",
+            "traceparent",
+            "tracestate",
+            "baggage",
+            "X-B3-TraceId",
+            "CamelHttpResponseCode",
+            "AdapterRecovery",
+            "Idempotency-Key",
+        ] {
+            assert!(
+                async_recovery_request_header_fault(refused).is_some(),
+                "{refused} is not a source-owned recovery header"
+            );
+        }
+
+        assert!(async_source_id_fault("a").is_none());
+        assert!(async_source_id_fault(&"a".repeat(MAX_ASYNC_SOURCE_ID_BYTES)).is_none());
+        for refused in [
+            String::new(),
+            "a".repeat(MAX_ASYNC_SOURCE_ID_BYTES + 1),
+            "contains space".to_string(),
+            "contains\nnewline".to_string(),
+            "non-ascii-λ".to_string(),
+            "https://source.example/operation/1".to_string(),
+        ] {
+            assert!(async_source_id_fault(&refused).is_some());
+        }
+        for delimiter in ['/', '\\', '?', '#', '%', ':'] {
+            assert!(async_source_id_fault(&format!("a{delimiter}b")).is_some());
+        }
+    }
+
+    #[test]
+    fn async_status_outcome_is_a_closed_state_dto() {
+        for json in [
+            r#"{"state":"pending"}"#,
+            r#"{"state":"succeeded","result":{"id":"one"}}"#,
+            r#"{"state":"failed","class":"outcome.rejected","data":{"reason":"closed"}}"#,
+        ] {
+            let outcome = serde_json::from_str::<AsyncStatusOutcome>(json).expect("outcome");
+            let encoded = serde_json::to_string(&outcome).expect("serialize");
+            assert_eq!(
+                serde_json::from_str::<AsyncStatusOutcome>(&encoded).ok(),
+                Some(outcome)
+            );
+        }
+        for refused in [
+            r#"{"state":"pending","result":{}}"#,
+            r#"{"state":"succeeded"}"#,
+            r#"{"state":"failed","class":"outcome.rejected","result":{}}"#,
+            r#"{"state":"unknown"}"#,
+        ] {
+            assert!(serde_json::from_str::<AsyncStatusOutcome>(refused).is_err());
+        }
     }
 }

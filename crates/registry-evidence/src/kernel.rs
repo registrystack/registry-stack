@@ -18,35 +18,22 @@ use thiserror::Error;
 
 use crate::binding::entity_reference;
 use crate::bundle::{ArtifactFault, Bundle, Codelist};
-use crate::config::{
-    ConceptConfig, ConceptForm, PreparationChannelPolicy, PreparationLimits, RequirementConfig,
-    SchemaFault, SourceConfig, SourceSelectorSet, SqlitePreparationLimits,
-};
+use crate::config::{ConceptConfig, ConceptForm, RequirementConfig, SchemaFault};
 use crate::model::{
     BucketForm, BucketValue, EntityReferenceForm, EntityReferenceValue, Evidence,
     EvidenceObjectType, LookupResult, PublicValue, ScalarOrEntityReference, StructuredValue,
     StructuredValueForm, SubjectBinding, SubjectBindingMode, SupportedValue,
 };
 use crate::rhai_runtime::{
-    CalendarDate, CodelistHandle, CompiledBatchExtraction, CompiledBatchPreparation,
-    CompiledDerivation, CompiledExtraction, CompiledPreparation, DerivedConceptValue, DerivedValue,
-    EvaluationContext, LegalLocalTime, RequestPartRequirement, RequestPartsBounds,
-    RequestPartsLimits, RhaiRuntime, RhaiRuntimeError, StatementParameters,
-    StatementParametersLimits, UtcInstant, MAXIMUM_RESULT_BYTES,
+    CalendarDate, CodelistHandle, CompiledDerivation, DerivedConceptValue, DerivedValue,
+    EvaluationContext, LegalLocalTime, RhaiRuntime, RhaiRuntimeError, UtcInstant,
+    MAXIMUM_RESULT_BYTES,
 };
-use crate::source::{PreparedSourceBatchRequest, PreparedSourceRequest};
 use crate::values::Decimal;
 
 const MAXIMUM_PUBLIC_STRING_BYTES: usize = 1_024;
 const MAXIMUM_BUCKET_CODE_BYTES: usize = 128;
 const MAXIMUM_EVIDENCE_IDENTIFIER_BYTES: usize = 512;
-const DEFAULT_MAXIMUM_QUERY_PAIRS: usize = 64;
-const DEFAULT_MAXIMUM_QUERY_NAME_BYTES: usize = 64;
-const DEFAULT_MAXIMUM_QUERY_VALUE_BYTES: usize = 4_096;
-const DEFAULT_MAXIMUM_JSON_DEPTH: usize = 32;
-const DEFAULT_MAXIMUM_COLLECTION_ITEMS: usize = 256;
-const DEFAULT_MAXIMUM_STRING_BYTES: usize = 16_384;
-const DEFAULT_MAXIMUM_NORMALIZED_BYTES: usize = 65_536;
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum KernelError {
@@ -79,6 +66,8 @@ pub enum KernelError {
     Preparation,
     #[error("the source response violates its fixed protocol contract")]
     SourceProtocol,
+    #[error("the acquired facts exceed the derivation input bound")]
+    FactsBound,
     #[error("the Evidence script failed")]
     Script,
     #[error("the derived Evidence values violate the requirement contract")]
@@ -132,47 +121,12 @@ fn script_compile_cause(error: RhaiRuntimeError) -> &'static str {
     }
 }
 
-/// Every failure after a physical batch response exists is global. Keeping the
-/// mapping in one function prevents a malformed member or FactSet from taking
-/// the ordinary per-item unavailable lane used by sequential extraction.
-fn batch_extraction_failure(_: RhaiRuntimeError) -> KernelError {
-    KernelError::SourceProtocol
-}
-
-#[derive(Clone, Copy)]
-enum ExtractionFailurePolicy {
-    /// Preserve the frozen singular and holder-bound public collapse.
-    Ordinary,
-    /// A malformed member aborts the atomic outer request batch.
-    RequestBatch,
-}
-
-fn extraction_failure(error: RhaiRuntimeError, policy: ExtractionFailurePolicy) -> KernelError {
-    match error {
-        RhaiRuntimeError::Unavailable => KernelError::Extraction,
-        RhaiRuntimeError::ExtractionResult | RhaiRuntimeError::FactSchema => match policy {
-            ExtractionFailurePolicy::Ordinary => KernelError::Extraction,
-            ExtractionFailurePolicy::RequestBatch => KernelError::SourceProtocol,
-        },
-        RhaiRuntimeError::SourceProtocol => KernelError::SourceProtocol,
-        RhaiRuntimeError::Compilation
-        | RhaiRuntimeError::EntryPoint
-        | RhaiRuntimeError::Invocation
-        | RhaiRuntimeError::InputBound
-        | RhaiRuntimeError::AdapterInput
-        | RhaiRuntimeError::PreparationResult
-        | RhaiRuntimeError::DerivationResult
-        | RhaiRuntimeError::DerivationInput
-        | RhaiRuntimeError::EvaluationContext
-        | RhaiRuntimeError::Codelist => KernelError::Script,
-    }
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum KernelOutcome {
     Match(ValidatedValues),
     NoMatch,
     Ambiguous,
+    Unresolved,
 }
 
 /// Values that have passed the complete requirement output gate.
@@ -264,135 +218,6 @@ pub struct EvidenceConstruction<'a> {
     pub subjects: Vec<SubjectBinding>,
 }
 
-fn compile_request_parts_limits(
-    configured: &PreparationLimits,
-) -> Result<RequestPartsLimits, KernelError> {
-    fn requirement(policy: PreparationChannelPolicy) -> RequestPartRequirement {
-        match policy {
-            PreparationChannelPolicy::Required => RequestPartRequirement::Required,
-            PreparationChannelPolicy::Allowed => RequestPartRequirement::Optional,
-            PreparationChannelPolicy::Forbidden => RequestPartRequirement::Forbidden,
-        }
-    }
-
-    fn bounded(value: Option<u64>, default: usize) -> Result<usize, KernelError> {
-        value
-            .map(usize::try_from)
-            .transpose()
-            .map_err(|_| KernelError::Bundle)
-            .map(|value| value.unwrap_or(default))
-    }
-
-    RequestPartsLimits::new(
-        requirement(configured.query),
-        requirement(configured.json_body),
-        RequestPartsBounds {
-            maximum_query_pairs: bounded(
-                configured.maximum_query_pairs.map(|value| value.get()),
-                DEFAULT_MAXIMUM_QUERY_PAIRS,
-            )?,
-            maximum_query_name_bytes: bounded(
-                configured.maximum_query_name_bytes.map(|value| value.get()),
-                DEFAULT_MAXIMUM_QUERY_NAME_BYTES,
-            )?,
-            maximum_query_value_bytes: bounded(
-                configured
-                    .maximum_query_value_bytes
-                    .map(|value| value.get()),
-                DEFAULT_MAXIMUM_QUERY_VALUE_BYTES,
-            )?,
-            maximum_json_depth: bounded(
-                configured.maximum_json_depth.map(|value| value.get()),
-                DEFAULT_MAXIMUM_JSON_DEPTH,
-            )?,
-            maximum_collection_items: bounded(
-                configured.maximum_collection_items.map(|value| value.get()),
-                DEFAULT_MAXIMUM_COLLECTION_ITEMS,
-            )?,
-            maximum_string_bytes: bounded(
-                configured.maximum_string_bytes.map(|value| value.get()),
-                DEFAULT_MAXIMUM_STRING_BYTES,
-            )?,
-            maximum_normalized_bytes: bounded(
-                configured.maximum_normalized_bytes.map(|value| value.get()),
-                DEFAULT_MAXIMUM_NORMALIZED_BYTES,
-            )?,
-        },
-    )
-    .map_err(|_| KernelError::Bundle)
-}
-
-fn compile_statement_parameters_limits(
-    configured: &SqlitePreparationLimits,
-) -> Result<StatementParametersLimits, KernelError> {
-    fn bounded(value: u64) -> Result<usize, KernelError> {
-        usize::try_from(value).map_err(|_| KernelError::Bundle)
-    }
-
-    StatementParametersLimits::new(
-        bounded(configured.maximum_parameters.get())?,
-        bounded(configured.maximum_parameter_value_bytes.get())?,
-    )
-    .map_err(|_| KernelError::Bundle)
-}
-
-/// Hold the caller-visible JSON representation to the exact minimized source
-/// selector grammar before it is copied into a batch script input.
-fn batch_selector_items_are_exact(
-    source: &SourceConfig,
-    allowed_sets: &[SourceSelectorSet],
-    items: &[Value],
-) -> bool {
-    items.iter().all(|item| {
-        let Some(roles) = item.as_object() else {
-            return false;
-        };
-        let mut active = Vec::with_capacity(roles.len());
-        for (role, selector) in roles {
-            let Some(input) = source
-                .selector_inputs()
-                .iter()
-                .find(|input| input.role == *role)
-            else {
-                return false;
-            };
-            let Some(selector) = selector.as_object() else {
-                return false;
-            };
-            if selector.len() != 2
-                || !selector.contains_key("profile")
-                || !selector.contains_key("values")
-            {
-                return false;
-            }
-            let Some(profile) = selector.get("profile").and_then(Value::as_str) else {
-                return false;
-            };
-            let Some(alternative) = input
-                .alternatives
-                .iter()
-                .find(|alternative| alternative.profile == profile)
-            else {
-                return false;
-            };
-            let Some(values) = selector.get("values").and_then(Value::as_object) else {
-                return false;
-            };
-            let expected = alternative.fields.iter().collect::<BTreeSet<_>>();
-            if values.keys().collect::<BTreeSet<_>>() != expected
-                || values.values().any(|value| {
-                    !matches!(value, Value::String(_) | Value::Bool(_)) && value.as_i64().is_none()
-                })
-            {
-                return false;
-            }
-            active.push((role.clone(), profile.to_owned()));
-        }
-        active.sort();
-        allowed_sets.contains(&active)
-    })
-}
-
 /// One reviewed answer schema as the kernel holds it: the compiled validator
 /// plus the property names its top level declares, when it declares any.
 ///
@@ -424,60 +249,10 @@ impl ReviewedSchema {
 pub struct OfflineKernel {
     bundle: Arc<Bundle>,
     runtime: RhaiRuntime,
-    preparations: BTreeMap<String, CompiledPreparation>,
-    extractions: BTreeMap<String, CompiledExtraction>,
-    request_parts_limits: BTreeMap<String, RequestPartsLimits>,
-    statement_parameters_limits: BTreeMap<String, StatementParametersLimits>,
-    batch_preparations: BTreeMap<String, CompiledBatchPreparation>,
-    batch_extractions: BTreeMap<String, CompiledBatchExtraction>,
-    batch_response_schemas: BTreeMap<String, JSONSchema>,
     derivations: BTreeMap<String, CompiledDerivation>,
-    response_schemas: BTreeMap<String, JSONSchema>,
     fact_schemas: BTreeMap<String, JSONSchema>,
     reviewed_schemas: BTreeMap<String, ReviewedSchema>,
     codelist_handles: BTreeMap<String, BTreeMap<String, CodelistHandle>>,
-}
-
-/// One internally slotted, reviewed optimized source request.
-///
-/// The slot sequence, source identity, and adapter identity are retained with
-/// the preparation so extraction cannot be invoked against another source or
-/// with a caller-supplied correlation set. Its diagnostic form contains no
-/// selectors or request parts.
-pub struct PreparedSourceBatch {
-    source_id: String,
-    adapter_id: String,
-    slots: Vec<i64>,
-    request: PreparedSourceBatchRequest,
-}
-
-impl PreparedSourceBatch {
-    pub fn request(&self) -> &PreparedSourceBatchRequest {
-        &self.request
-    }
-
-    pub fn item_count(&self) -> usize {
-        self.slots.len()
-    }
-
-    pub fn source_id(&self) -> &str {
-        &self.source_id
-    }
-
-    pub fn adapter_id(&self) -> &str {
-        &self.adapter_id
-    }
-}
-
-impl std::fmt::Debug for PreparedSourceBatch {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("PreparedSourceBatch")
-            .field("source_id", &self.source_id)
-            .field("adapter_id", &self.adapter_id)
-            .field("item_count", &self.slots.len())
-            .finish_non_exhaustive()
-    }
 }
 
 impl std::fmt::Debug for OfflineKernel {
@@ -485,7 +260,7 @@ impl std::fmt::Debug for OfflineKernel {
         formatter
             .debug_struct("OfflineKernel")
             .field("package_digest", &self.bundle.package_digest())
-            .field("source_count", &self.extractions.len())
+            .field("source_count", &self.fact_schemas.len())
             .field("requirement_count", &self.derivations.len())
             .finish()
     }
@@ -494,132 +269,15 @@ impl std::fmt::Debug for OfflineKernel {
 impl OfflineKernel {
     pub fn compile(bundle: Arc<Bundle>) -> Result<Self, KernelError> {
         let runtime = RhaiRuntime::new();
-        let mut preparations = BTreeMap::new();
-        let mut extractions = BTreeMap::new();
-        let mut request_parts_limits = BTreeMap::new();
-        let mut statement_parameters_limits = BTreeMap::new();
-        let mut batch_preparations = BTreeMap::new();
-        let mut batch_extractions = BTreeMap::new();
-        let mut batch_response_schemas = BTreeMap::new();
-        let mut response_schemas = BTreeMap::new();
         let mut fact_schemas = BTreeMap::new();
         for (source_id, source) in bundle.config.sources.iter() {
-            // Request preparation is compiled in the shape the source's own
-            // transport consumes, and only where there is something to prepare.
-            // A statement source without a preparation script binds every
-            // parameter declaratively and gets no preparation channel at all,
-            // so asking for one later fails rather than running an absent
-            // script.
-            match source {
-                SourceConfig::HttpJson { request, .. } => {
-                    let preparation = bundle
-                        .script(&request.prepare_script)
-                        .ok_or(KernelError::Bundle)?;
-                    let compiled_preparation = runtime
-                        .compile_preparation(&preparation.source)
-                        .map_err(|error| {
-                            refuse_artifact(
-                                request.prepare_script.as_str(),
-                                script_compile_cause(error),
-                            )
-                        })?;
-                    preparations.insert(source_id.to_owned(), compiled_preparation);
-                    request_parts_limits.insert(
-                        source_id.to_owned(),
-                        compile_request_parts_limits(&request.preparation_limits)?,
-                    );
-                    if let Some(batch) = source.batch() {
-                        let preparation = bundle
-                            .script(&batch.prepare_script)
-                            .ok_or(KernelError::Bundle)?;
-                        let compiled = runtime
-                            .compile_batch_preparation(&preparation.source)
-                            .map_err(|error| {
-                                refuse_artifact(
-                                    batch.prepare_script.as_str(),
-                                    script_compile_cause(error),
-                                )
-                            })?;
-                        batch_preparations.insert(source_id.to_owned(), compiled);
-
-                        let extraction = bundle
-                            .script(&batch.extract_script)
-                            .ok_or(KernelError::Bundle)?;
-                        let compiled = runtime
-                            .compile_batch_extraction(&extraction.source)
-                            .map_err(|error| {
-                                refuse_artifact(
-                                    batch.extract_script.as_str(),
-                                    script_compile_cause(error),
-                                )
-                            })?;
-                        batch_extractions.insert(source_id.to_owned(), compiled);
-
-                        let schema = bundle
-                            .fact_schema(&batch.response_schema)
-                            .ok_or(KernelError::Bundle)?;
-                        batch_response_schemas.insert(
-                            source_id.to_owned(),
-                            compile_schema(batch.response_schema.as_str(), schema)?,
-                        );
-                    }
-                }
-                SourceConfig::SqliteExtract { request, .. } => {
-                    if let (Some(prepare_script), Some(limits)) =
-                        (&request.prepare_script, &request.preparation_limits)
-                    {
-                        let preparation =
-                            bundle.script(prepare_script).ok_or(KernelError::Bundle)?;
-                        let compiled_preparation = runtime
-                            .compile_preparation(&preparation.source)
-                            .map_err(|error| {
-                                refuse_artifact(
-                                    prepare_script.as_str(),
-                                    script_compile_cause(error),
-                                )
-                            })?;
-                        preparations.insert(source_id.to_owned(), compiled_preparation);
-                        statement_parameters_limits.insert(
-                            source_id.to_owned(),
-                            compile_statement_parameters_limits(limits)?,
-                        );
-                    }
-                }
-            }
-
-            let extraction = bundle
-                .script(source.extract_script())
-                .ok_or(KernelError::Bundle)?;
-            let compiled_extraction =
-                runtime
-                    .compile_extraction(&extraction.source)
-                    .map_err(|error| {
-                        refuse_artifact(
-                            source.extract_script().as_str(),
-                            script_compile_cause(error),
-                        )
-                    })?;
-            if compiled_extraction.selector_aware() && source.batch().is_some() {
-                return Err(refuse_artifact(
-                    source.extract_script().as_str(),
-                    "selector-aware extraction requires sequential execution; omit source batch",
-                ));
-            }
-            extractions.insert(source_id.to_owned(), compiled_extraction);
-
-            let response_schema = bundle
-                .fact_schema(source.response_schema())
-                .ok_or(KernelError::Bundle)?;
-            response_schemas.insert(
-                source_id.to_owned(),
-                compile_schema(source.response_schema().as_str(), response_schema)?,
-            );
-
             let schema = bundle
                 .fact_schema(source.fact_schema())
                 .ok_or(KernelError::Bundle)?;
-            let compiled_schema = compile_schema(source.fact_schema().as_str(), schema)?;
-            fact_schemas.insert(source_id.to_owned(), compiled_schema);
+            fact_schemas.insert(
+                source_id.to_owned(),
+                compile_schema(source.fact_schema().as_str(), schema)?,
+            );
         }
 
         let mut derivations = BTreeMap::new();
@@ -665,219 +323,11 @@ impl OfflineKernel {
         Ok(Self {
             bundle,
             runtime,
-            preparations,
-            extractions,
-            request_parts_limits,
-            statement_parameters_limits,
-            batch_preparations,
-            batch_extractions,
-            batch_response_schemas,
             derivations,
-            response_schemas,
             fact_schemas,
             reviewed_schemas,
             codelist_handles,
         })
-    }
-
-    /// Run the reviewed preparation script after authorization and access audit.
-    pub fn prepare(
-        &self,
-        requirement_id: &str,
-        selectors: &Value,
-    ) -> Result<PreparedSourceRequest, KernelError> {
-        let requirement = self
-            .requirement(requirement_id)
-            .ok_or(KernelError::Requirement)?;
-        let source_id = requirement.acquisition.initial_source();
-        self.prepare_source(source_id, selectors, &BTreeMap::new())
-    }
-
-    /// Run one source's reviewed preparation script with the closed adapter
-    /// context. Prior facts are empty for single and search calls and contain
-    /// only the schema-validated search `FactSet` for a fetch call.
-    pub fn prepare_source(
-        &self,
-        source_id: &str,
-        selectors: &Value,
-        prior_facts: &BTreeMap<String, Value>,
-    ) -> Result<PreparedSourceRequest, KernelError> {
-        let source = self
-            .bundle
-            .config
-            .sources
-            .get(source_id)
-            .ok_or(KernelError::Bundle)?;
-        let parameters =
-            serde_json::to_value(source.adapter_parameters()).map_err(|_| KernelError::Bundle)?;
-        match source {
-            SourceConfig::HttpJson { evidence, .. } => {
-                let script = self
-                    .preparations
-                    .get(source_id)
-                    .ok_or(KernelError::Bundle)?;
-                let limits = self
-                    .request_parts_limits
-                    .get(source_id)
-                    .ok_or(KernelError::Bundle)?;
-                let parts = self
-                    .runtime
-                    .prepare_with_prior_facts(script, selectors, &parameters, prior_facts, limits)
-                    .map_err(|_| KernelError::Preparation)?;
-                if let Some(evidence) = evidence {
-                    evidence
-                        .validate_parts(&parts)
-                        .map_err(|_| KernelError::Preparation)?;
-                }
-                Ok(PreparedSourceRequest::Http(parts))
-            }
-            // A statement source without a preparation script prepares nothing:
-            // every parameter it binds comes from its declared bindings, and an
-            // empty preparation result says exactly that.
-            SourceConfig::SqliteExtract { .. } => {
-                let Some(script) = self.preparations.get(source_id) else {
-                    return Ok(PreparedSourceRequest::Statement(StatementParameters {
-                        parameters: BTreeMap::new(),
-                    }));
-                };
-                let limits = self
-                    .statement_parameters_limits
-                    .get(source_id)
-                    .ok_or(KernelError::Bundle)?;
-                self.runtime
-                    .prepare_statement_with_prior_facts(
-                        script,
-                        selectors,
-                        &parameters,
-                        prior_facts,
-                        limits,
-                    )
-                    .map(PreparedSourceRequest::Statement)
-                    .map_err(|_| KernelError::Preparation)
-            }
-        }
-    }
-
-    /// Prepare one optimized HTTP source call for several logical lookups.
-    ///
-    /// Every selector object is revalidated against the source's compiled
-    /// role/profile/field declarations before Rust assigns its opaque integer
-    /// slot. The script therefore receives no caller key, no extra selector
-    /// field, and no transport authority.
-    pub fn prepare_source_batch(
-        &self,
-        source_id: &str,
-        selector_items: &[Value],
-    ) -> Result<PreparedSourceBatch, KernelError> {
-        let source = self
-            .bundle
-            .config
-            .sources
-            .get(source_id)
-            .ok_or(KernelError::Bundle)?;
-        let batch = source.batch().ok_or(KernelError::Bundle)?;
-        if selector_items.is_empty()
-            || u32::try_from(selector_items.len())
-                .map_or(true, |count| count > batch.maximum_items.get())
-            || !batch_selector_items_are_exact(
-                source,
-                &self.bundle.config.source_selector_sets(source_id),
-                selector_items,
-            )
-        {
-            return Err(KernelError::Preparation);
-        }
-        let slots = (0..selector_items.len())
-            .map(|slot| i64::try_from(slot).map_err(|_| KernelError::Preparation))
-            .collect::<Result<Vec<_>, _>>()?;
-        let items = Value::Array(
-            slots
-                .iter()
-                .zip(selector_items)
-                .map(|(slot, selectors)| {
-                    Value::Object(JsonMap::from_iter([
-                        ("slot".to_owned(), Value::from(*slot)),
-                        ("selectors".to_owned(), selectors.clone()),
-                    ]))
-                })
-                .collect(),
-        );
-        let parameters =
-            serde_json::to_value(source.adapter_parameters()).map_err(|_| KernelError::Bundle)?;
-        let script = self
-            .batch_preparations
-            .get(source_id)
-            .ok_or(KernelError::Bundle)?;
-        let limits = self
-            .request_parts_limits
-            .get(source_id)
-            .ok_or(KernelError::Bundle)?;
-        let request = self
-            .runtime
-            .prepare_batch(script, &items, &parameters, limits)
-            .map(PreparedSourceBatchRequest::new)
-            .map_err(|_| KernelError::Preparation)?;
-        let adapter_id = Path::new(batch.extract_script.as_str())
-            .file_stem()
-            .and_then(|value| value.to_str())
-            .ok_or(KernelError::Bundle)?
-            .to_owned();
-        Ok(PreparedSourceBatch {
-            source_id: source_id.to_owned(),
-            adapter_id,
-            slots,
-            request,
-        })
-    }
-
-    /// Validate one projected batch response, run its reviewed extraction,
-    /// require an exact slot bijection, and return logical request order.
-    pub fn extract_source_batch(
-        &self,
-        prepared: &PreparedSourceBatch,
-        source_response: &Value,
-    ) -> Result<Vec<LookupResult>, KernelError> {
-        let source = self
-            .bundle
-            .config
-            .sources
-            .get(&prepared.source_id)
-            .ok_or(KernelError::Bundle)?;
-        let batch = source.batch().ok_or(KernelError::Bundle)?;
-        let response_schema = self
-            .batch_response_schemas
-            .get(&prepared.source_id)
-            .ok_or(KernelError::Bundle)?;
-        validate_source_response(
-            response_schema,
-            source_response,
-            &prepared.source_id,
-            batch.response_schema.as_str(),
-        )?;
-        let script = self
-            .batch_extractions
-            .get(&prepared.source_id)
-            .ok_or(KernelError::Bundle)?;
-        let fact_schema = self
-            .fact_schemas
-            .get(&prepared.source_id)
-            .ok_or(KernelError::Bundle)?;
-        let parameters =
-            serde_json::to_value(source.adapter_parameters()).map_err(|_| KernelError::Bundle)?;
-        self.runtime
-            .extract_batch(
-                script,
-                source_response,
-                &parameters,
-                &prepared.slots,
-                fact_schema,
-            )
-            // A batch extraction has one global protocol boundary. A malformed
-            // outer result, malformed member, invalid FactSet, invocation
-            // failure, or slot failure cannot be collapsed into one logical
-            // item's unavailable outcome. Only a successfully decoded
-            // `LookupResult::NoMatch` or `Ambiguous` can take that lane.
-            .map_err(batch_extraction_failure)
     }
 
     pub fn bundle(&self) -> &Bundle {
@@ -892,133 +342,39 @@ impl OfflineKernel {
             .find(|requirement| requirement.id == requirement_id)
     }
 
-    /// Run only the closed extraction ABI over one already-bounded JSON response.
-    pub fn extract(
-        &self,
-        requirement_id: &str,
-        source_response: &Value,
-    ) -> Result<LookupResult, KernelError> {
-        let requirement = self
-            .requirement(requirement_id)
-            .ok_or(KernelError::Requirement)?;
-        let source_id = requirement.acquisition.initial_source();
-        self.extract_source(source_id, source_response, &BTreeMap::new())
-    }
-
-    /// Run one source's closed extraction ABI over one bounded projected JSON
-    /// response and the exact prior search facts supplied to that call.
-    pub fn extract_source(
+    /// Validate a completed pack-route lookup before offline derivation. Raw
+    /// provider responses never enter this API; acquisition runs in the engine.
+    pub fn validate_lookup(
         &self,
         source_id: &str,
-        source_response: &Value,
-        prior_facts: &BTreeMap<String, Value>,
+        outcome: &Value,
     ) -> Result<LookupResult, KernelError> {
-        self.extract_source_with_selectors(
-            source_id,
-            source_response,
-            &Value::Object(JsonMap::new()),
-            prior_facts,
-        )
-    }
-
-    /// Run extraction with the same authorized source selector subset used by
-    /// preparation. Only an explicitly selector-aware extract/3 receives it.
-    pub fn extract_source_with_selectors(
-        &self,
-        source_id: &str,
-        source_response: &Value,
-        selectors: &Value,
-        prior_facts: &BTreeMap<String, Value>,
-    ) -> Result<LookupResult, KernelError> {
-        self.extract_source_with_policy(
-            source_id,
-            source_response,
-            selectors,
-            prior_facts,
-            ExtractionFailurePolicy::Ordinary,
-        )
-    }
-
-    /// Extract one sequential request-batch stage without allowing malformed
-    /// script output or an invalid FactSet to become one item's unavailable
-    /// result. Genuine `required(...)` unavailability retains that per-item
-    /// collapse; protocol violations abort the atomic outer batch.
-    #[cfg(test)]
-    pub(crate) fn extract_source_for_request_batch(
-        &self,
-        source_id: &str,
-        source_response: &Value,
-        prior_facts: &BTreeMap<String, Value>,
-    ) -> Result<LookupResult, KernelError> {
-        self.extract_source_for_request_batch_with_selectors(
-            source_id,
-            source_response,
-            &Value::Object(JsonMap::new()),
-            prior_facts,
-        )
-    }
-
-    pub(crate) fn extract_source_for_request_batch_with_selectors(
-        &self,
-        source_id: &str,
-        source_response: &Value,
-        selectors: &Value,
-        prior_facts: &BTreeMap<String, Value>,
-    ) -> Result<LookupResult, KernelError> {
-        self.extract_source_with_policy(
-            source_id,
-            source_response,
-            selectors,
-            prior_facts,
-            ExtractionFailurePolicy::RequestBatch,
-        )
-    }
-
-    fn extract_source_with_policy(
-        &self,
-        source_id: &str,
-        source_response: &Value,
-        selectors: &Value,
-        prior_facts: &BTreeMap<String, Value>,
-        failure_policy: ExtractionFailurePolicy,
-    ) -> Result<LookupResult, KernelError> {
-        let script = self.extractions.get(source_id).ok_or(KernelError::Bundle)?;
         let schema = self
             .fact_schemas
             .get(source_id)
             .ok_or(KernelError::Bundle)?;
-        let source = self
-            .bundle
-            .config
-            .sources
-            .get(source_id)
-            .ok_or(KernelError::Bundle)?;
-        // The declared response shape is checked in Rust before any script sees
-        // the response, so extraction maps a response it can rely on and a
-        // provider that breaks its protocol fails closed the same way whether
-        // or not the script happens to test for it.
-        let response_schema = self
-            .response_schemas
-            .get(source_id)
-            .ok_or(KernelError::Bundle)?;
-        validate_source_response(
-            response_schema,
-            source_response,
-            source_id,
-            source.response_schema().as_str(),
-        )?;
-        let parameters =
-            serde_json::to_value(source.adapter_parameters()).map_err(|_| KernelError::Bundle)?;
-        self.runtime
-            .extract_with_selectors(
-                script,
-                source_response,
-                selectors,
-                &parameters,
-                prior_facts,
-                schema,
-            )
-            .map_err(|error| extraction_failure(error, failure_policy))
+        let lookup: registry_adapter_engine::evidence::EvidenceLookup =
+            serde_json::from_value(outcome.clone()).map_err(|_| KernelError::SourceProtocol)?;
+        match lookup {
+            registry_adapter_engine::evidence::EvidenceLookup::Matched {
+                facts: Value::Object(facts),
+            } => {
+                if !schema.is_valid(&Value::Object(facts.clone())) {
+                    return Err(KernelError::SourceProtocol);
+                }
+                Ok(LookupResult::Match(facts.into_iter().collect()))
+            }
+            registry_adapter_engine::evidence::EvidenceLookup::Matched { .. } => {
+                Err(KernelError::SourceProtocol)
+            }
+            registry_adapter_engine::evidence::EvidenceLookup::NoMatch => Ok(LookupResult::NoMatch),
+            registry_adapter_engine::evidence::EvidenceLookup::Unresolved => {
+                Ok(LookupResult::Unresolved)
+            }
+            registry_adapter_engine::evidence::EvidenceLookup::Ambiguous => {
+                Ok(LookupResult::Ambiguous)
+            }
+        }
     }
 
     /// Derive and gate the exact Supported Value set for one unique match.
@@ -1061,7 +417,7 @@ impl OfflineKernel {
             .map_err(|error| match error {
                 RhaiRuntimeError::Unavailable => KernelError::Extraction,
                 RhaiRuntimeError::DerivationInput => KernelError::DerivationInput,
-                RhaiRuntimeError::SourceProtocol => KernelError::Script,
+                RhaiRuntimeError::FactsBound => KernelError::FactsBound,
                 _ => KernelError::Script,
             })?;
         self.validate_values(requirement_id, derived, projection)
@@ -1093,7 +449,12 @@ impl OfflineKernel {
         observed_at: DateTime<Utc>,
         projection: ValueProjection<'_>,
     ) -> Result<KernelOutcome, KernelError> {
-        match self.extract(requirement_id, source_response)? {
+        let source_id = &self
+            .requirement(requirement_id)
+            .ok_or(KernelError::Requirement)?
+            .acquisition
+            .source;
+        match self.validate_lookup(source_id, source_response)? {
             LookupResult::Match(facts) => self
                 .derive_and_validate_with_selectors(
                     requirement_id,
@@ -1105,6 +466,7 @@ impl OfflineKernel {
                 .map(KernelOutcome::Match),
             LookupResult::NoMatch => Ok(KernelOutcome::NoMatch),
             LookupResult::Ambiguous => Ok(KernelOutcome::Ambiguous),
+            LookupResult::Unresolved => Ok(KernelOutcome::Unresolved),
         }
     }
 
@@ -1219,85 +581,6 @@ impl OfflineKernel {
 
 fn map_context_error(_: RhaiRuntimeError) -> KernelError {
     KernelError::Bundle
-}
-
-/// How many response shape violations one rejection reports.
-///
-/// A rejected response is one event, and the first few violations already say
-/// which member disagrees with which rule. An unbounded list would let a source
-/// decide how much an operator log holds.
-const REPORTED_SHAPE_VIOLATIONS: usize = 5;
-
-fn validate_source_response(
-    schema: &JSONSchema,
-    response: &Value,
-    source_id: &str,
-    schema_artifact: &str,
-) -> Result<(), KernelError> {
-    if let Err(errors) = schema.validate(response) {
-        report_response_shape_rejection(source_id, schema_artifact, errors);
-        return Err(KernelError::SourceProtocol);
-    }
-    Ok(())
-}
-
-/// Record which member of a projected response failed which schema rule.
-///
-/// The two pointers are the whole diagnosis and neither is a value. Without
-/// them a stale response schema and a source that changed its protocol are the
-/// same `source.unavailable`, which sends an operator to the provider for a
-/// defect that lives in the bundle.
-///
-/// Nothing from the response body is recorded: the paths are members the
-/// bundle's own projection selected, and the schema path is bundle text. The
-/// library's own error message embeds the offending value, so it is deliberately
-/// not used here.
-fn report_response_shape_rejection<'a>(
-    source_id: &str,
-    schema_artifact: &str,
-    errors: impl Iterator<Item = jsonschema::ValidationError<'a>>,
-) {
-    let (violations, total) = describe_response_shape_rejection(errors);
-    tracing::warn!(
-        target: "registry_evidence::source",
-        source = source_id,
-        schema = schema_artifact,
-        violations = violations.join("; "),
-        total_violations = total,
-        "the projected source response does not match its declared response shape"
-    );
-}
-
-/// Reduce validation errors to bounded, value-free violation descriptions.
-///
-/// Separated from the logging call so the property that matters can be asserted
-/// directly: what is produced here is the only thing that reaches the log.
-fn describe_response_shape_rejection<'a>(
-    errors: impl Iterator<Item = jsonschema::ValidationError<'a>>,
-) -> (Vec<String>, usize) {
-    let mut violations = Vec::new();
-    let mut total = 0usize;
-    for error in errors {
-        total += 1;
-        if violations.len() < REPORTED_SHAPE_VIOLATIONS {
-            violations.push(format!(
-                "{} violates {}",
-                display_pointer(&error.instance_path),
-                display_pointer(&error.schema_path)
-            ));
-        }
-    }
-    (violations, total)
-}
-
-/// Render a JSON Pointer, naming the document root rather than printing nothing.
-fn display_pointer(pointer: &jsonschema::paths::JSONPointer) -> String {
-    let rendered = pointer.to_string();
-    if rendered.is_empty() {
-        "the response root".to_owned()
-    } else {
-        rendered
-    }
 }
 
 /// Compile one reviewed schema artifact under the full Draft 2020-12 gate.
@@ -1915,9 +1198,9 @@ mod tests {
     use serde_json::json;
     use tempfile::TempDir;
 
-    use crate::rhai_runtime::RequestParts;
+    use crate::fixture_source::{compile_sources, fixture_acquisition};
+    use crate::selector::resolve_offline_fixture_authorization;
     use crate::signing::{jwks_document, EvidenceSigner};
-    use crate::source::project_fixture_response;
     use crate::verifier::{verify_flattened_jws, EvidenceVerificationPolicy};
 
     const KEY: &[u8] = b"0123456789abcdef0123456789abcdef";
@@ -1929,11 +1212,11 @@ mod tests {
 
     /// Opt-in CPU measurement with startup and source I/O outside the clock.
     /// Run with `cargo test --locked --release -p registry-evidence --lib
-    /// source_response_validation_performance -- --ignored --nocapture`.
+    /// completed_lookup_validation_performance -- --ignored --nocapture`.
     /// Reports batch-average samples without a host-dependent assertion.
     #[test]
-    #[ignore = "opt-in source response validation CPU benchmark"]
-    fn source_response_validation_performance() {
+    #[ignore = "opt-in completed lookup validation CPU benchmark"]
+    fn completed_lookup_validation_performance() {
         use std::hint::black_box;
         use std::time::Instant;
 
@@ -1956,77 +1239,26 @@ mod tests {
         let bundle = Arc::new(Bundle::load(copied.path()).expect("bundle loads"));
         let kernel = OfflineKernel::compile(Arc::clone(&bundle)).expect("kernel compiles");
         let requirement = &bundle.config.requirements[0];
-        let source_id = requirement.acquisition.initial_source();
-        let schema = &kernel.response_schemas[source_id];
-        let response = json!({"total": 1, "date_of_birth": "1970-01-01"});
-        measure("narrow-schema", 50_000, || {
-            assert!(black_box(validate_source_response(
-                black_box(schema),
-                black_box(&response),
-                "source",
-                "schemas/response.yaml",
-            ))
-            .is_ok());
+        let lookup = json!({
+            "lookup": "matched",
+            "facts": {"date_of_birth": "1970-01-01"}
         });
-        measure("narrow-extraction", 20_000, || {
+        measure("completed-lookup-validation", 20_000, || {
             assert!(matches!(
-                black_box(kernel.extract(black_box(&requirement.id), black_box(&response))),
+                black_box(kernel.validate_lookup(
+                    black_box(requirement.acquisition.initial_source()),
+                    black_box(&lookup)
+                )),
                 Ok(LookupResult::Match(_))
             ));
         });
-
-        // A bounded projected batch shape, with a late invalid value to expose
-        // the cost of checking a mostly valid document before its refusal.
-        let schema = compile_schema(
-            "schemas/response.yaml",
-            &json!({
-                "type": "object", "additionalProperties": false, "required": ["results"],
-                "properties": {"results": {
-                    "type": "array", "minItems": 1, "maxItems": 16,
-                    "items": {
-                        "type": "object", "additionalProperties": false,
-                        "required": ["slot", "active", "code", "observed"],
-                        "properties": {
-                            "slot": {"type": "integer", "minimum": 0, "maximum": 15},
-                            "active": {"type": "boolean"},
-                            "code": {"type": ["string", "null"], "maxLength": 32},
-                            "observed": {"type": "string", "format": "date"}
-                        }
-                    }
-                }}
-            }),
-        )
-        .expect("bounded response schema compiles");
-        let response = json!({"results": (0..16).map(|slot| json!({
-            "slot": slot, "active": true, "code": "synthetic", "observed": "2026-08-02"
-        })).collect::<Vec<_>>()});
-        let mut early_invalid = response.clone();
-        early_invalid["results"][0]["slot"] = json!(-1);
-        let mut late_invalid = response.clone();
-        late_invalid["results"][15]["slot"] = json!(-1);
-        for (label, input, valid) in [
-            ("batch-schema-valid", &response, true),
-            ("batch-schema-invalid-first", &early_invalid, false),
-            ("batch-schema-invalid-last", &late_invalid, false),
-        ] {
-            measure(label, 20_000, || {
-                assert_eq!(
-                    black_box(validate_source_response(
-                        black_box(&schema),
-                        black_box(input),
-                        "source",
-                        "schemas/response.yaml",
-                    ))
-                    .is_ok(),
-                    valid
-                );
-            });
-        }
     }
     /// A function the loader's permissive engine accepts and the hardened
     /// kernel grammar refuses, so the kernel is the pass that has to report it.
     fn refused_by_the_hardened_grammar() -> String {
-        format!("\nfn unreviewed() {{\n    let value = \"{SCRIPT_CANARY}\";\n    while false {{ }}\n    value\n}}\n")
+        format!(
+            "\nfn unreviewed() {{\n    let value = \"{SCRIPT_CANARY}\";\n    while false {{ }}\n    value\n}}\n"
+        )
     }
 
     fn projection() -> ValueProjection<'static> {
@@ -2041,291 +1273,103 @@ mod tests {
     }
 
     #[test]
-    fn source_batch_items_are_revalidated_as_exact_minimized_selectors() {
-        let source: SourceConfig = serde_json::from_value(json!({
-            "type": "http-json",
-            "baseUrl": "https://source.invalid",
-            "posture": "field-projected",
-            "authentication": {"type": "static-authorization", "tokenRef": "secret:file/source"},
-            "request": {
-                "method": "POST",
-                "path": "/facts",
-                "fixedHeaders": [],
-                "selectorInputs": [{
-                    "role": "subject",
-                    "alternatives": [{"profile": "opaque-v1", "fields": ["id"]}]
-                }],
-                "prepareScript": "adapters/prepare.rhai",
-                "adapterParameters": {},
-                "adapterParametersSchema": "schemas/parameters.schema.yaml",
-                "preparationLimits": {"query": "forbidden", "jsonBody": "required"},
-                "projection": ["/result"],
-                "redirects": "deny",
-                "attemptTimeoutMilliseconds": 1000,
-                "maximumResponseBytes": 4096,
-                "maximumConcurrency": 1
-            },
-            "responseSchema": "schemas/response.schema.yaml",
-            "extractScript": "adapters/extract.rhai",
-            "factSchema": "schemas/facts.schema.yaml",
-            "batch": {
-                "maximumItems": 2,
-                "prepareScript": "adapters/prepare-batch.rhai",
-                "extractScript": "adapters/extract-batch.rhai",
-                "responseSchema": "schemas/batch-response.schema.yaml",
-                "projection": ["/results/*"]
-            }
-        }))
-        .expect("source deserializes");
-        let allowed = vec![vec![("subject".to_owned(), "opaque-v1".to_owned())]];
-        let minimized = json!({
-            "subject": {"profile": "opaque-v1", "values": {"id": "synthetic"}}
-        });
-        assert!(batch_selector_items_are_exact(
-            &source,
-            &allowed,
-            std::slice::from_ref(&minimized)
-        ));
-        for expanded in [
-            json!({
-                "subject": {"profile": "opaque-v1", "values": {"id": "synthetic", "extra": "leak"}}
-            }),
-            json!({
-                "subject": {"profile": "opaque-v1", "values": {"id": "synthetic"}, "headers": {"x": "authority"}}
-            }),
-            json!({
-                "subject": {"profile": "other-v1", "values": {"id": "synthetic"}}
-            }),
-            json!({
-                "subject": {"profile": "opaque-v1", "values": {"id": "synthetic"}},
-                "other": {"profile": "opaque-v1", "values": {"id": "cross-slot"}}
-            }),
-        ] {
-            assert!(
-                !batch_selector_items_are_exact(&source, &allowed, &[expanded]),
-                "expanded selector material reached batch preparation"
-            );
-        }
-    }
+    fn completed_lookup_is_closed_and_fact_schema_validated() {
+        let copied = immutable_fixture("adult-status");
+        let bundle = Arc::new(Bundle::load(copied.path()).expect("bundle loads"));
+        let kernel = OfflineKernel::compile(Arc::clone(&bundle)).expect("kernel compiles");
+        let source = bundle.config.requirements[0].acquisition.initial_source();
 
-    #[test]
-    fn every_malformed_batch_extraction_is_a_global_protocol_failure() {
-        let kernel = batch_extraction_kernel();
-        let prepared = PreparedSourceBatch {
-            source_id: "source-a".to_owned(),
-            adapter_id: "extract-batch".to_owned(),
-            slots: vec![0, 1],
-            request: PreparedSourceBatchRequest::new(RequestParts {
-                query: Vec::new(),
-                body: None,
-            }),
-        };
-        for (label, kind) in [
-            ("wrong outer shape", "wrong-outer"),
-            ("wrong member shape", "wrong-member"),
-            ("member keys are not exact", "extra-key"),
-            ("FactSet violates the source fact schema", "invalid-facts"),
-            ("missing slot", "missing"),
-            ("duplicate slot", "duplicate"),
-            ("extra slot", "extra"),
-            ("out-of-range slot", "out-of-range"),
-            ("negative slot", "negative"),
-        ] {
-            assert_eq!(
-                kernel.extract_source_batch(&prepared, &json!({"kind": kind})),
-                Err(KernelError::SourceProtocol),
-                "{label} could collapse into a per-item unavailable outcome"
-            );
-        }
-    }
-
-    #[test]
-    fn batch_response_shape_validation_precedes_an_accepting_extraction_script() {
-        let mut kernel = batch_extraction_kernel();
-        let extraction = kernel
-            .runtime
-            .compile_batch_extraction(
-                r#"fn extract_batch(response, context) {
-                    [
-                        #{slot: 0, result: #{outcome: "no_match"}},
-                        #{slot: 1, result: #{outcome: "no_match"}}
-                    ]
-                }"#,
-            )
-            .expect("accepting batch extraction compiles");
-        kernel
-            .batch_extractions
-            .insert("source-a".to_owned(), extraction);
-        let prepared = PreparedSourceBatch {
-            source_id: "source-a".to_owned(),
-            adapter_id: "extract-batch".to_owned(),
-            slots: vec![0, 1],
-            request: PreparedSourceBatchRequest::new(RequestParts {
-                query: Vec::new(),
-                body: None,
-            }),
-        };
-        for response in [
+        assert_eq!(
+            kernel.validate_lookup(
+                source,
+                &json!({"lookup": "matched", "facts": {"date_of_birth": "1970-01-01"}}),
+            ),
+            Ok(LookupResult::Match(BTreeMap::from([(
+                "date_of_birth".to_owned(),
+                json!("1970-01-01"),
+            )])))
+        );
+        for malformed in [
             json!({}),
-            json!({"kind": 1}),
-            json!({"kind": "undeclared"}),
-            json!({"kind": "missing", "unexpected": true}),
+            json!({"lookup": "matched"}),
+            json!({"lookup": "matched", "facts": null}),
+            json!({"lookup": "matched", "facts": {"unexpected": true}}),
+            json!({"lookup": "no-match", "facts": {}}),
+            json!({"lookup": "unresolved", "facts": {}}),
+            json!({"lookup": "other"}),
         ] {
             assert_eq!(
-                kernel.extract_source_batch(&prepared, &response),
+                kernel.validate_lookup(source, &malformed),
                 Err(KernelError::SourceProtocol),
-                "invalid batch response reached an accepting script"
+                "malformed completed lookup was accepted: {malformed}"
             );
         }
-        assert_eq!(
-            kernel.extract_source_batch(&prepared, &json!({"kind": "missing"})),
-            Ok(vec![LookupResult::NoMatch, LookupResult::NoMatch])
-        );
     }
 
-    fn batch_extraction_kernel() -> OfflineKernel {
-        let source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../products/evidence/fixtures/acceptance/adult-status");
-        let temporary = tempfile::tempdir().expect("temporary directory");
-        copy_tree(&source, temporary.path());
-        let config_path = temporary.path().join("evidence.yaml");
-        let config = fs::read_to_string(&config_path).expect("configuration reads");
-        assert_eq!(config.matches("kind: EvidenceBundle\n").count(), 1);
-        assert_eq!(
-            config
-                .matches("    factSchema: schemas/facts.schema.yaml\n")
-                .count(),
-            1
-        );
-        let config = config
-            .replacen(
-                "kind: EvidenceBundle\n",
-                "kind: EvidenceBundle\nacquisitionCapabilities: [source-batch]\n",
-                1,
+    #[tokio::test(flavor = "multi_thread")]
+    async fn current_pack_replay_uses_minimized_inputs_and_refuses_malformed_provider_data() {
+        let copied = immutable_fixture("adult-status");
+        let bundle = Arc::new(Bundle::load(copied.path()).expect("bundle loads"));
+        let requirement = &bundle.config.requirements[0];
+        let fixture = bundle
+            .fixtures
+            .get(
+                requirement
+                    .fixtures
+                    .as_ref()
+                    .expect("fixture is declared")
+                    .as_str(),
             )
-            .replacen(
-                "    factSchema: schemas/facts.schema.yaml\n",
-                "    factSchema: schemas/facts.schema.yaml\n    batch:\n      maximumItems: 2\n      prepareScript: adapters/prepare-batch.rhai\n      extractScript: adapters/extract-batch.rhai\n      responseSchema: schemas/batch-response.schema.yaml\n      projection: [/output]\n",
-                1,
-            );
-        fs::write(config_path, config).expect("configuration writes");
-        fs::write(
-            temporary.path().join("adapters/prepare-batch.rhai"),
-            "fn prepare_batch(items, context) { #{query: [], body: #{items: items}} }\n",
-        )
-        .expect("batch preparation writes");
-        fs::write(
-            temporary.path().join("adapters/extract-batch.rhai"),
-            r#"
-fn extract_batch(response, context) {
-    if response.kind == "wrong-outer" {
-        return #{};
-    }
-    if response.kind == "wrong-member" {
-        return [0, #{slot: 1, result: #{outcome: "no_match"}}];
-    }
-    if response.kind == "extra-key" {
-        return [
-            #{slot: 0, result: #{outcome: "no_match"}, extra: true},
-            #{slot: 1, result: #{outcome: "no_match"}}
-        ];
-    }
-    if response.kind == "invalid-facts" {
-        return [
-            #{slot: 0, result: #{outcome: "match", facts: #{unexpected: true}}},
-            #{slot: 1, result: #{outcome: "no_match"}}
-        ];
-    }
-    if response.kind == "missing" {
-        return [#{slot: 0, result: #{outcome: "no_match"}}];
-    }
-    if response.kind == "duplicate" {
-        return [
-            #{slot: 0, result: #{outcome: "no_match"}},
-            #{slot: 0, result: #{outcome: "no_match"}}
-        ];
-    }
-    if response.kind == "extra" {
-        return [
-            #{slot: 0, result: #{outcome: "no_match"}},
-            #{slot: 1, result: #{outcome: "no_match"}},
-            #{slot: 2, result: #{outcome: "no_match"}}
-        ];
-    }
-    if response.kind == "out-of-range" {
-        return [
-            #{slot: 0, result: #{outcome: "no_match"}},
-            #{slot: 2, result: #{outcome: "no_match"}}
-        ];
-    }
-    [
-        #{slot: 0, result: #{outcome: "no_match"}},
-        #{slot: -1, result: #{outcome: "no_match"}}
-    ]
-}
-"#,
-        )
-        .expect("batch extraction writes");
-        fs::write(
-            temporary
-                .path()
-                .join("schemas/batch-response.schema.yaml"),
-            "$schema: https://json-schema.org/draft/2020-12/schema\ntype: object\nadditionalProperties: false\nrequired: [kind]\nproperties:\n  kind:\n    type: string\n    enum: [wrong-outer, wrong-member, extra-key, invalid-facts, missing, duplicate, extra, out-of-range, negative]\n",
-        )
-        .expect("batch response schema writes");
-        refresh_package_envelope(temporary.path());
-        make_read_only(temporary.path());
-        let bundle = Arc::new(Bundle::load(temporary.path()).expect("batch bundle loads"));
-        OfflineKernel::compile(bundle).expect("batch kernel compiles")
-    }
+            .expect("fixture is captured");
+        let common = fixture.get("common").and_then(Value::as_object);
+        let case = fixture["cases"][0].as_object().expect("case is an object");
+        let resolved =
+            resolve_offline_fixture_authorization(&bundle, requirement, common, case, AUDIENCE)
+                .expect("fixture authorization resolves");
+        let programs = compile_sources(&bundle).expect("source packs compile");
+        let program = programs
+            .get(requirement.acquisition.initial_source())
+            .expect("source program exists");
+        let observed = observed_for_case(fixture, &Value::Object(case.clone()));
 
-    #[test]
-    fn selector_aware_extraction_cannot_be_bypassed_by_source_batching() {
-        let ordinary = batch_extraction_kernel();
-        let mut bundle = (*ordinary.bundle).clone();
-        let path = bundle
-            .config
-            .sources
-            .get("source-a")
-            .unwrap()
-            .extract_script()
-            .as_str()
-            .to_owned();
-        let script = bundle
-            .scripts
-            .get_mut(&path)
-            .expect("ordinary extractor exists");
-        script.source = "fn extract(response, selectors, context) { no_match() }".to_owned();
-        let error = OfflineKernel::compile(Arc::new(bundle))
-            .expect_err("batch may not bypass identity extraction");
-        assert_eq!(
-            error.artifact_fault().unwrap().fault().cause(),
-            "selector-aware extraction requires sequential execution; omit source batch"
+        let acquisition = fixture_acquisition(case.get("source").expect("source is recorded"))
+            .expect("transcript parses");
+        assert!(matches!(
+            program.execute(&resolved, acquisition, observed).await,
+            Ok(LookupResult::Match(_))
+        ));
+
+        let mut malformed = case.get("source").expect("source is recorded").clone();
+        malformed["exchanges"][0]["response"]["body"]["date_of_birth"] = json!(SCRIPT_CANARY);
+        let acquisition = fixture_acquisition(&malformed).expect("transcript parses");
+        let error = program
+            .execute(&resolved, acquisition, observed)
+            .await
+            .expect_err("an invalid provider response reached the completed lookup boundary");
+        assert_eq!(error, KernelError::SourceProtocol);
+        assert!(
+            !format!("{error:?}").contains(SCRIPT_CANARY),
+            "provider values must not enter the protocol failure"
         );
     }
 
     #[test]
-    fn kernel_compilation_names_every_script_artifact_it_refuses() {
-        for artifact in [
-            "adapters/source-a-prepare.rhai",
-            "adapters/source-a.rhai",
-            "derivations/adult-status.rhai",
-        ] {
-            let copied = fixture_with_appended_artifact(
-                "adult-status",
-                artifact,
-                &refused_by_the_hardened_grammar(),
-            );
-            let bundle = Arc::new(Bundle::load(copied.path()).expect("the loader accepts it"));
+    fn kernel_compilation_names_the_derivation_artifact_it_refuses() {
+        let artifact = "derivations/adult-status.rhai";
+        let copied = fixture_with_appended_artifact(
+            "adult-status",
+            artifact,
+            &refused_by_the_hardened_grammar(),
+        );
+        let bundle = Arc::new(Bundle::load(copied.path()).expect("the loader accepts it"));
 
-            let error = OfflineKernel::compile(bundle).expect_err("the kernel refuses it");
+        let error = OfflineKernel::compile(bundle).expect_err("the kernel refuses it");
 
-            let fault = error
-                .artifact_fault()
-                .unwrap_or_else(|| panic!("{artifact}: the failure names no artifact"));
-            assert_eq!(fault.artifact(), artifact);
-            assert_eq!(fault.fault().cause(), "script does not compile");
-        }
+        let fault = error
+            .artifact_fault()
+            .expect("the failure names the derivation artifact");
+        assert_eq!(fault.artifact(), artifact);
+        assert_eq!(fault.fault().cause(), "script does not compile");
     }
 
     /// The engine reports a compilation failure by quoting the source it
@@ -2368,50 +1412,55 @@ fn extract_batch(response, context) {
         );
     }
 
-    #[test]
-    fn all_four_acceptance_bundles_use_the_same_kernel() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn all_four_acceptance_bundles_use_current_pack_replay_and_the_same_kernel() {
         let cases = [
-            "adult-status",
-            "residence-region",
-            "professional-licence",
-            "legal-parent-relationship",
+            ("adult-status", 10),
+            ("residence-region", 8),
+            ("professional-licence", 9),
+            ("legal-parent-relationship", 19),
         ];
-        for case in cases {
+        for (case, expected_source_cases) in cases {
             let copied = immutable_fixture(case);
             let bundle = Arc::new(Bundle::load(copied.path()).expect("acceptance bundle loads"));
             let kernel = OfflineKernel::compile(Arc::clone(&bundle)).expect("kernel compiles");
             let requirement = &bundle.config.requirements[0];
-            let fixture: Value = serde_norway::from_slice(
-                bundle
-                    .artifact(
-                        requirement
-                            .fixtures
-                            .as_ref()
-                            .expect("acceptance fixture is declared")
-                            .as_str(),
-                    )
-                    .expect("fixture is captured"),
-            )
-            .expect("fixture parses");
-            let source_config = bundle
-                .config
-                .sources
+            let fixture = bundle
+                .fixtures
+                .get(
+                    requirement
+                        .fixtures
+                        .as_ref()
+                        .expect("acceptance fixture is declared")
+                        .as_str(),
+                )
+                .expect("fixture is captured");
+            let common = fixture.get("common").and_then(Value::as_object);
+            let programs = compile_sources(&bundle).expect("source packs compile");
+            let program = programs
                 .get(requirement.acquisition.initial_source())
                 .expect("requirement source exists");
+            let mut executed_source_cases = 0;
             for test_case in fixture["cases"].as_array().expect("cases is an array") {
-                if test_case.get("sourceFailure").is_some()
-                    || test_case.get("injectedDerivation").is_some()
-                    || test_case.get("companionBundle").is_some()
-                    || test_case.get("subjects").is_some()
-                {
-                    continue;
-                }
                 let Some(source) = test_case.get("source") else {
                     continue;
                 };
-                let source = project_fixture_response(source_config, source)
-                    .map_err(|_| KernelError::SourceProtocol);
-                let observed = observed_for_case(&fixture, test_case);
+                executed_source_cases += 1;
+                let case_object = test_case.as_object().expect("case is an object");
+                let resolved = resolve_offline_fixture_authorization(
+                    &bundle,
+                    requirement,
+                    common,
+                    case_object,
+                    AUDIENCE,
+                )
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "{case}: {} authorization failed: {error:?}",
+                        test_case["id"]
+                    )
+                });
+                let observed = observed_for_case(fixture, test_case);
                 let selectors = test_case
                     .get("derivationSelectorInputs")
                     .or_else(|| {
@@ -2421,26 +1470,30 @@ fn extract_batch(response, context) {
                     })
                     .cloned()
                     .unwrap_or_else(|| Value::Object(JsonMap::new()));
-                let result = source.and_then(|source| {
-                    kernel.evaluate_with_selectors(
-                        &requirement.id,
-                        &source,
-                        &selectors,
-                        observed,
-                        projection(),
-                    )
+                let acquisition = fixture_acquisition(source).unwrap_or_else(|error| {
+                    panic!("{case}: {} transcript failed: {error:?}", test_case["id"])
+                });
+                let lookup = program.execute(&resolved, acquisition, observed).await;
+                let result = lookup.and_then(|lookup| match lookup {
+                    LookupResult::Match(facts) => kernel
+                        .derive_and_validate_with_selectors(
+                            &requirement.id,
+                            &facts,
+                            &selectors,
+                            observed,
+                            projection(),
+                        )
+                        .map(KernelOutcome::Match),
+                    LookupResult::NoMatch => Ok(KernelOutcome::NoMatch),
+                    LookupResult::Ambiguous => Ok(KernelOutcome::Ambiguous),
+                    LookupResult::Unresolved => Ok(KernelOutcome::Unresolved),
                 });
                 match test_case.get("expectedLookup").and_then(Value::as_str) {
-                    Some("no_match") => assert!(matches!(result, Ok(KernelOutcome::NoMatch))),
-                    Some("ambiguous") => assert!(matches!(result, Ok(KernelOutcome::Ambiguous))),
-                    _ if test_case.get("expectedPublicProblem").is_some() => {
-                        assert!(result.is_err(), "{case}: {}", test_case["id"])
-                    }
-                    _ => {
+                    Some("match") => {
                         let KernelOutcome::Match(values) = result.unwrap_or_else(|error| {
                             panic!("{case}: {} failed: {error:?}", test_case["id"])
                         }) else {
-                            panic!("{case}: expected match");
+                            panic!("{case}: {} expected match", test_case["id"]);
                         };
                         assert!(!values.as_slice().is_empty());
                         if let Some(expected) = test_case.get("expectedValue") {
@@ -2451,47 +1504,56 @@ fn extract_batch(response, context) {
                             );
                         }
                     }
+                    Some("no_match") => assert!(matches!(result, Ok(KernelOutcome::NoMatch))),
+                    Some("ambiguous") => assert!(matches!(result, Ok(KernelOutcome::Ambiguous))),
+                    _ if test_case.get("expectedPublicProblem").is_some() => {
+                        assert!(
+                            result.is_err() || matches!(&result, Ok(KernelOutcome::Unresolved)),
+                            "{case}: {} unexpectedly succeeded: {result:?}",
+                            test_case["id"]
+                        )
+                    }
+                    other => panic!(
+                        "{case}: {} has unsupported expectation {other:?}",
+                        test_case["id"]
+                    ),
                 }
             }
+            assert_eq!(
+                executed_source_cases, expected_source_cases,
+                "{case}: a maintained source transcript was skipped"
+            );
         }
     }
 
     #[test]
-    fn a_projected_response_outside_its_declared_shape_fails_before_extraction() {
+    fn completed_lookup_facts_are_validated_before_derivation() {
         let copied = immutable_fixture("adult-status");
         let bundle = Arc::new(Bundle::load(copied.path()).expect("bundle loads"));
         let kernel = OfflineKernel::compile(Arc::clone(&bundle)).expect("kernel compiles");
-        let requirement = &bundle.config.requirements[0];
+        let source = bundle.config.requirements[0].acquisition.initial_source();
 
-        // The declared response shape is the extraction contract. Rust refuses
-        // a response the script would otherwise have to re-check by hand, and
-        // the refusal is the same closed source-protocol class the script
-        // would have raised.
-        for response in [
+        for facts in [
             json!({}),
-            json!({"total": "1"}),
-            json!({"total": -1}),
-            json!({"total": 1, "unexpected": true}),
-            json!({"total": 1, "date_of_birth": 19700101}),
-            json!({"total": 1, "date_of_birth": "1970-13-01"}),
+            json!({"unexpected": true}),
+            json!({"date_of_birth": 19700101}),
+            json!({"date_of_birth": "1970-13-01"}),
         ] {
             assert_eq!(
-                kernel.extract(&requirement.id, &response),
+                kernel.validate_lookup(source, &json!({"lookup": "matched", "facts": facts})),
                 Err(KernelError::SourceProtocol),
-                "{response}"
+                "invalid completed facts reached derivation"
             );
         }
 
-        // An absent optional leaf is legitimate after projection, so it stays a
-        // script decision rather than a shape violation.
         assert_eq!(
-            kernel.extract(&requirement.id, &json!({"total": 1})),
-            Err(KernelError::Extraction)
+            kernel.validate_lookup(source, &json!({"lookup": "no-match"})),
+            Ok(LookupResult::NoMatch)
         );
         assert_eq!(
-            kernel.extract(
-                &requirement.id,
-                &json!({"total": 1, "date_of_birth": "1970-01-01"})
+            kernel.validate_lookup(
+                source,
+                &json!({"lookup": "matched", "facts": {"date_of_birth": "1970-01-01"}}),
             ),
             Ok(LookupResult::Match(BTreeMap::from([(
                 "date_of_birth".to_owned(),
@@ -2501,107 +1563,23 @@ fn extract_batch(response, context) {
     }
 
     #[test]
-    fn response_shape_validation_precedes_an_accepting_extraction_script() {
-        // A reviewed script may rely entirely on its response schema. Even
-        // one that returns valid facts unconditionally must never turn an
-        // invalid provider response into a match.
-        let kernel = kernel_with_adult_extraction(
-            "fn extract(response, context) { #{outcome: \"match\", facts: #{date_of_birth: \"1970-01-01\"}} }",
-        );
-        let requirement = &kernel.bundle.config.requirements[0];
-        for response in [
-            json!({}),
-            json!({"total": "1"}),
-            json!({"total": 1, "date_of_birth": "1970-13-01"}),
-            json!({"total": 1, "unexpected": true}),
-        ] {
-            assert_eq!(
-                kernel.extract(&requirement.id, &response),
-                Err(KernelError::SourceProtocol),
-                "invalid response reached an accepting script"
-            );
-        }
-        assert!(matches!(
-            kernel.extract(&requirement.id, &json!({"total": 1})),
-            Ok(LookupResult::Match(_))
-        ));
-    }
-
-    /// A shape rejection reaches the requester as `source.unavailable`,
-    /// which names the provider. When the real defect is a bundle schema that
-    /// no longer describes the source, the operator log is the only place that
-    /// can say so, and it can only say it by naming the member and the rule.
-    /// It must do that without recording any part of the response.
-    #[test]
-    fn a_response_shape_rejection_names_the_member_and_the_rule_but_no_value() {
-        let copied = immutable_fixture("adult-status");
-        let bundle = Arc::new(Bundle::load(copied.path()).expect("bundle loads"));
-        let requirement = &bundle.config.requirements[0];
-        let source = bundle
-            .config
-            .sources
-            .get(requirement.acquisition.initial_source())
-            .expect("the requirement names a configured source");
-        let schema = bundle
-            .fact_schema(source.response_schema())
-            .expect("the response schema is a bundle artifact");
-        let compiled = compile_schema(source.response_schema().as_str(), schema)
-            .expect("the response schema compiles");
-
-        let canary = "0451-mrs-hunt-was-born-in-caracas";
-        let response = json!({"total": 1, "date_of_birth": canary});
-        let errors = compiled
-            .validate(&response)
-            .expect_err("a malformed date violates the shape");
-        let (violations, total) = describe_response_shape_rejection(errors);
-        assert_eq!(total, 1);
-        assert_eq!(
-            violations,
-            vec!["/date_of_birth violates /properties/date_of_birth/format".to_owned()]
-        );
-
-        // The library's own message would carry the value here, which is the
-        // reason the description is built from the two pointers instead.
-        assert!(
-            !violations
-                .iter()
-                .any(|violation| violation.contains(canary)),
-            "no response value reaches the log: {violations:?}"
-        );
-
-        // A violation at the document root still names somewhere.
-        let not_an_object = json!([]);
-        let errors = compiled
-            .validate(&not_an_object)
-            .expect_err("an array is not the declared object");
-        let (violations, _) = describe_response_shape_rejection(errors);
-        assert_eq!(
-            violations,
-            vec!["the response root violates /type".to_owned()]
-        );
-
-        // A source cannot decide how much the log holds.
-        let many = json!({"total": -1, "date_of_birth": "not-a-date", "extra": 1});
-        let errors = compiled
-            .validate(&many)
-            .expect_err("several rules are violated at once");
-        let (violations, total) = describe_response_shape_rejection(errors);
-        assert!(total >= 3, "the count is the whole number of violations");
-        assert!(violations.len() <= REPORTED_SHAPE_VIOLATIONS);
-    }
-
-    #[test]
-    fn extraction_failures_and_invalid_outputs_fail_closed() {
+    fn completed_lookup_outcomes_and_invalid_outputs_fail_closed() {
         let copied = immutable_fixture("adult-status");
         let bundle = Arc::new(Bundle::load(copied.path()).expect("bundle loads"));
         let kernel = OfflineKernel::compile(Arc::clone(&bundle)).expect("kernel compiles");
         let requirement = &bundle.config.requirements[0];
         assert_eq!(
-            kernel.extract(&requirement.id, &json!({"total": 0})),
+            kernel.validate_lookup(
+                requirement.acquisition.initial_source(),
+                &json!({"lookup": "no-match"})
+            ),
             Ok(LookupResult::NoMatch)
         );
         assert_eq!(
-            kernel.extract(&requirement.id, &json!({"total": 2})),
+            kernel.validate_lookup(
+                requirement.acquisition.initial_source(),
+                &json!({"lookup": "ambiguous"})
+            ),
             Ok(LookupResult::Ambiguous)
         );
         assert!(kernel
@@ -2654,72 +1632,42 @@ fn extract_batch(response, context) {
             .is_err());
     }
 
-    #[test]
-    fn sequential_request_batch_extraction_distinguishes_unavailability_from_protocol_faults() {
-        let copied = immutable_fixture("adult-status");
-        let bundle = Arc::new(Bundle::load(copied.path()).expect("bundle loads"));
-        let kernel = OfflineKernel::compile(bundle).expect("kernel compiles");
-        let prior_facts = BTreeMap::new();
-
-        // The frozen singular lane continues to collapse an invalid extracted
-        // FactSet, while the atomic outer batch treats it as a global source
-        // protocol failure.
-        let response = json!({"total": 1});
-        assert_eq!(
-            kernel.extract_source("source-a", &response, &prior_facts),
-            Err(KernelError::Extraction)
-        );
-        assert_eq!(
-            kernel.extract_source_for_request_batch("source-a", &response, &prior_facts),
-            Err(KernelError::SourceProtocol)
-        );
-
-        let malformed = kernel_with_adult_extraction(
-            r#"fn extract(source_response, context) {
-    #{outcome: "no_match", extra: true}
-}
-"#,
-        );
-        let response = json!({"total": 0});
-        assert_eq!(
-            malformed.extract_source("source-a", &response, &prior_facts),
-            Err(KernelError::Extraction),
-            "singular behavior remains frozen"
-        );
-        assert_eq!(
-            malformed.extract_source_for_request_batch("source-a", &response, &prior_facts),
-            Err(KernelError::SourceProtocol),
-            "malformed ordinary extraction output aborts the outer batch"
-        );
-
-        let unavailable = kernel_with_adult_extraction(
-            r#"fn extract(source_response, context) {
-    required(get_path(source_response, "/date_of_birth"), "required_fact_missing");
-    #{outcome: "no_match"}
-}
-"#,
-        );
-        let response = json!({"total": 1});
-        assert_eq!(
-            unavailable.extract_source_for_request_batch("source-a", &response, &prior_facts),
-            Err(KernelError::Extraction),
-            "genuine required-value unavailability remains a per-item outcome"
-        );
-    }
-
-    #[test]
-    fn required_unmapped_source_fact_is_unavailable_not_a_script_failure() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn required_unmapped_source_fact_is_unavailable_not_a_script_failure() {
         let copied = immutable_fixture("residence-region");
         let bundle = Arc::new(Bundle::load(copied.path()).expect("bundle loads"));
         let kernel = OfflineKernel::compile(Arc::clone(&bundle)).expect("kernel compiles");
         let requirement = &bundle.config.requirements[0];
-        let observed = "2026-08-02T00:00:00Z".parse().expect("time");
-        let LookupResult::Match(facts) = kernel
-            .extract(
-                &requirement.id,
-                &json!({"total": 1, "official_residence_code": "R-999"}),
+        let fixture = bundle
+            .fixtures
+            .get(
+                requirement
+                    .fixtures
+                    .as_ref()
+                    .expect("fixture is declared")
+                    .as_str(),
             )
-            .expect("source extracts")
+            .expect("fixture is captured");
+        let common = fixture.get("common").and_then(Value::as_object);
+        let case = fixture["cases"][1].as_object().expect("case is an object");
+        assert_eq!(
+            case.get("id").and_then(Value::as_str),
+            Some("negative-unknown-code")
+        );
+        let resolved =
+            resolve_offline_fixture_authorization(&bundle, requirement, common, case, AUDIENCE)
+                .expect("fixture authorization resolves");
+        let programs = compile_sources(&bundle).expect("source packs compile");
+        let program = programs
+            .get(requirement.acquisition.initial_source())
+            .expect("source program exists");
+        let observed = observed_for_case(fixture, &Value::Object(case.clone()));
+        let acquisition = fixture_acquisition(case.get("source").expect("source is recorded"))
+            .expect("transcript parses");
+        let LookupResult::Match(facts) = program
+            .execute(&resolved, acquisition, observed)
+            .await
+            .expect("source pack completes the lookup")
         else {
             panic!("source must uniquely match");
         };
@@ -2740,12 +1688,7 @@ fn extract_batch(response, context) {
             raw.err()
         );
         assert_eq!(
-            kernel.evaluate(
-                &requirement.id,
-                &json!({"total": 1, "official_residence_code": "R-999"}),
-                observed,
-                projection(),
-            ),
+            kernel.derive_and_validate(&requirement.id, &facts, observed, projection(),),
             Err(KernelError::Extraction)
         );
     }
@@ -2784,7 +1727,9 @@ fn extract_batch(response, context) {
         );
         assert_eq!(
             validate_value(
-                &concept("type: controlled-code\nrequired: true\nconstraints: {codelist: 'urn:example:codes', codelistVersion: '1', maximumBytes: 8}"),
+                &concept(
+                    "type: controlled-code\nrequired: true\nconstraints: {codelist: 'urn:example:codes', codelistVersion: '1', maximumBytes: 8}"
+                ),
                 &DerivedValue::Json(json!("A")),
                 &projection(),
                 &codelists,
@@ -2794,7 +1739,9 @@ fn extract_batch(response, context) {
         );
         assert_eq!(
             validate_value(
-                &concept("type: bounded-decimal\nrequired: true\nconstraints: {minimum: '-1.5', maximum: '1.5', maximumScale: 2}"),
+                &concept(
+                    "type: bounded-decimal\nrequired: true\nconstraints: {minimum: '-1.5', maximum: '1.5', maximumScale: 2}"
+                ),
                 &DerivedValue::Decimal(Decimal::parse("0.25").expect("decimal")),
                 &projection(),
                 &codelists,
@@ -2840,7 +1787,9 @@ fn extract_batch(response, context) {
             BTreeMap::from([("codelists/categories.yaml".to_owned(), category_list)]);
         assert_eq!(
             validate_value(
-                &concept("type: controlled-category\nrequired: true\nconstraints: {categoryScheme: 'urn:example:category-scheme', schemeVersion: '7', maximumBytes: 32, codelist: 'codelists/categories.yaml'}"),
+                &concept(
+                    "type: controlled-category\nrequired: true\nconstraints: {categoryScheme: 'urn:example:category-scheme', schemeVersion: '7', maximumBytes: 32, codelist: 'codelists/categories.yaml'}"
+                ),
                 &DerivedValue::Json(json!("category-a")),
                 &projection(),
                 &category_lists,
@@ -3418,7 +2367,9 @@ fn extract_batch(response, context) {
         };
         assert_eq!(
             validate_value(
-                &concept("type: controlled-code\nrequired: true\nconstraints: {codelist: oversized, codelistVersion: '1', maximumBytes: 8192}"),
+                &concept(
+                    "type: controlled-code\nrequired: true\nconstraints: {codelist: oversized, codelistVersion: '1', maximumBytes: 8192}"
+                ),
                 &DerivedValue::Json(Value::String(oversized)),
                 &projection(),
                 &BTreeMap::from([("oversized".to_owned(), oversized_codelist)]),
@@ -3784,7 +2735,9 @@ fn extract_batch(response, context) {
 
     #[test]
     fn bounded_identifier_requires_exact_prefix_ascii_suffix_and_byte_bounds() {
-        let identifier = concept("type: bounded-identifier\nrequired: true\nconstraints: {prefix: 'urn:example:report:', minimumBytes: 20, maximumBytes: 32}");
+        let identifier = concept(
+            "type: bounded-identifier\nrequired: true\nconstraints: {prefix: 'urn:example:report:', minimumBytes: 20, maximumBytes: 32}",
+        );
         let accepted = DerivedValue::Json(json!("urn:example:report:A-01"));
         assert_eq!(
             validate_value(
@@ -3851,19 +2804,6 @@ fn extract_batch(response, context) {
         refresh_package_envelope(temporary.path());
         make_read_only(temporary.path());
         temporary
-    }
-
-    fn kernel_with_adult_extraction(extraction: &str) -> OfflineKernel {
-        let source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../products/evidence/fixtures/acceptance/adult-status");
-        let temporary = tempfile::tempdir().expect("temporary directory");
-        copy_tree(&source, temporary.path());
-        fs::write(temporary.path().join("adapters/source-a.rhai"), extraction)
-            .expect("replacement extraction writes");
-        refresh_package_envelope(temporary.path());
-        make_read_only(temporary.path());
-        let bundle = Arc::new(Bundle::load(temporary.path()).expect("bundle loads"));
-        OfflineKernel::compile(bundle).expect("kernel compiles")
     }
 
     fn immutable_fixture(name: &str) -> TempDir {

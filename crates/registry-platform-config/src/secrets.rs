@@ -135,6 +135,18 @@ pub struct SecretResolver {
 }
 
 impl SecretResolver {
+    /// Build a resolver with no enabled providers. Offline replay uses this
+    /// capability so a route context cannot resolve environment or file
+    /// secrets even if a future replay path reaches live authorization by
+    /// mistake.
+    #[must_use]
+    pub fn disabled() -> Self {
+        Self {
+            providers: BTreeSet::new(),
+            file_root: PathBuf::new(),
+        }
+    }
+
     /// Build a resolver from the only providers a runtime enables.
     pub fn new(
         providers: impl IntoIterator<Item = SecretProvider>,
@@ -380,6 +392,17 @@ mod tests {
         );
         SecretResolver::new([SecretProvider::Environment], "")
             .expect("environment-only resolver needs no file root");
+    }
+
+    #[test]
+    fn disabled_resolver_has_no_secret_authority() {
+        let resolver = SecretResolver::disabled();
+        for reference in ["secret:env/NOT_READ", "secret:file/not-read"] {
+            assert!(matches!(
+                resolver.resolve(reference),
+                Err(SecretError::ProviderDisabled)
+            ));
+        }
     }
 
     #[test]

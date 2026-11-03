@@ -30,11 +30,7 @@ use std::{
 use anyhow::{anyhow, bail, Context as _, Result};
 use chrono::NaiveDate;
 use clap::{Args, Subcommand};
-use registry_evidence_authoring::{
-    openapi::types::OperationKey,
-    project::{self, SourceType},
-    target,
-};
+use registry_evidence_authoring::{openapi::types::OperationKey, project, target};
 use registry_platform_crypto::parse_json_strict;
 use registry_platform_yaml::{Diagnostic, Report, Severity};
 use serde_json::{json, Value};
@@ -50,7 +46,6 @@ use self::{
 
 const DEFAULT_HTTP_ADDR: &str = "127.0.0.1:4010";
 const DEFAULT_CONFIG: &str = "mocks/source.yaml";
-const PROJECT_OPENAPI: &str = "source.openapi.yaml";
 
 #[derive(Debug, Subcommand)]
 pub enum MockCommand {
@@ -234,15 +229,7 @@ fn serve(args: ServeArgs) -> Result<ExitCode> {
         }
         (None, None) => {
             let root = project_root(args.project.as_deref())?;
-            let bytes = files::read_confined(
-                &root,
-                Path::new(PROJECT_OPENAPI),
-                registry_evidence_authoring::layout::MAX_OPENAPI_BYTES,
-                "project OpenAPI document",
-            )
-            .context(
-                "bare source mock serve needs this project's source.openapi.yaml; use --openapi FILE outside a project",
-            )?;
+            let (openapi_relative, bytes) = project_openapi(&root)?;
             let selected = args
                 .operation
                 .as_deref()
@@ -250,7 +237,7 @@ fn serve(args: ServeArgs) -> Result<ExitCode> {
                 .transpose()?;
             let prepared = prepare_with_datasets(
                 &root,
-                Path::new(PROJECT_OPENAPI),
+                &openapi_relative,
                 &bytes,
                 "project OpenAPI document",
                 selected.as_ref(),
@@ -404,9 +391,18 @@ fn generate_initial(args: GenerateArgs) -> Result<ExitCode> {
         .as_deref()
         .map(openapi::parse_operation)
         .transpose()?;
+    let project_openapi = if args.openapi.is_none() {
+        Some(project_openapi(&root)?)
+    } else {
+        None
+    };
     let openapi_relative = match args.openapi.as_deref() {
         Some(path) => normal_relative(path, "--openapi")?,
-        None => PathBuf::from(PROJECT_OPENAPI),
+        None => project_openapi
+            .as_ref()
+            .expect("project OpenAPI was loaded")
+            .0
+            .clone(),
     };
     let output = args
         .output
@@ -414,12 +410,15 @@ fn generate_initial(args: GenerateArgs) -> Result<ExitCode> {
         .map(|path| normal_relative(path, "--output"))
         .transpose()?
         .unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG));
-    let bytes = files::read_confined(
-        &root,
-        &openapi_relative,
-        registry_evidence_authoring::layout::MAX_OPENAPI_BYTES,
-        "OpenAPI document",
-    )?;
+    let bytes = match project_openapi {
+        Some((_, bytes)) => bytes,
+        None => files::read_confined(
+            &root,
+            &openapi_relative,
+            registry_evidence_authoring::layout::MAX_OPENAPI_BYTES,
+            "OpenAPI document",
+        )?,
+    };
     let prepared = prepare_with_datasets(
         &root,
         &openapi_relative,
@@ -1192,6 +1191,60 @@ struct ProjectSourceBinding {
     routes: BTreeMap<(String, String), String>,
 }
 
+fn project_openapi(root: &Path) -> Result<(PathBuf, Vec<u8>)> {
+    let project_bytes = files::read_confined(
+        root,
+        Path::new(project::PROJECT_FILE),
+        registry_evidence_authoring::layout::MAX_SOURCE_ARTIFACT_BYTES,
+        "Evidence project",
+    )?;
+    let project = project::read_project(project::PROJECT_FILE, &project_bytes)?.value;
+    let mut documents = BTreeMap::new();
+    for source in project.sources.values() {
+        let pack_relative = PathBuf::from(format!("adapter-packs/{}/pack.yaml", source.pack.id));
+        let pack_bytes = files::read_confined(
+            root,
+            &pack_relative,
+            registry_evidence_authoring::layout::MAX_SOURCE_ARTIFACT_BYTES,
+            "reviewed Adapter pack",
+        )?;
+        let document = registry_platform_yaml::Reader::new(pack_relative.to_string_lossy())
+            .scan(&pack_bytes)
+            .map_err(|_| anyhow!("Adapter pack must be one bounded YAML or JSON document"))?
+            .context("Adapter pack must not be empty")?
+            .to_json_value();
+        let reference = document
+            .get("openApi")
+            .context("project source pack must pin its OpenAPI document")?;
+        let path = reference
+            .get("path")
+            .and_then(Value::as_str)
+            .context("pack openApi path must be text")?;
+        let digest = reference
+            .get("digest")
+            .and_then(Value::as_str)
+            .context("pack openApi digest must be text")?;
+        let relative = pack_relative
+            .parent()
+            .expect("pack path has a parent")
+            .join(normal_relative(Path::new(path), "pack openApi")?);
+        let bytes = files::read_confined(
+            root,
+            &relative,
+            registry_evidence_authoring::layout::MAX_OPENAPI_BYTES,
+            "pack OpenAPI document",
+        )?;
+        if registry_platform_config::sha256_uri(&bytes) != digest {
+            bail!("pack OpenAPI document does not match its pinned digest");
+        }
+        documents.insert(relative, bytes);
+    }
+    if documents.len() != 1 {
+        bail!("project source mock requires exactly one pack-owned OpenAPI document");
+    }
+    Ok(documents.into_iter().next().expect("one document"))
+}
+
 fn project_source_binding(
     root: &Path,
     prepared: &openapi::PreparedOpenApi,
@@ -1226,34 +1279,50 @@ fn project_source_binding(
     let mut addresses = BTreeSet::new();
     let mut routes = BTreeMap::new();
     for source in project.sources.values() {
-        if source.source_type != SourceType::HttpJson {
-            continue;
-        }
-        let method = source.request.get("method").and_then(Value::as_str);
-        let path = source.request.get("path").and_then(Value::as_str);
-        let Some((method, source_path)) = method.zip(path) else {
-            continue;
-        };
-        let Some(operation) = select_project_operation(&operation_keys, method, source_path) else {
-            continue;
-        };
-        let connection_id = source
-            .connection
-            .as_ref()
-            .context("applicable HTTP Source needs a named target connection")?;
-        let connection = target.connections.get(connection_id).with_context(|| {
-            format!(
-                "local-target.yaml needs connection `{connection_id}` for an applicable HTTP Source"
-            )
-        })?;
-        let origin = connection.origin.as_str();
-        addresses.insert(loopback_origin_address(origin)?);
-        let key = (operation.0.to_owned(), operation.1.to_owned());
-        if routes
-            .insert(key, source_path.to_owned())
-            .is_some_and(|existing| existing != source_path)
-        {
-            bail!("applicable project Sources disagree on the served request path");
+        let connection = target
+            .connections
+            .get(&source.connection)
+            .with_context(|| {
+                format!(
+                    "local-target.yaml needs connection `{}` for an applicable HTTP Source",
+                    source.connection
+                )
+            })?;
+        for send in crate::normalized::source_route_operations(root, source)? {
+            if send.component != "http" {
+                continue;
+            }
+            let method = send
+                .http_method
+                .as_deref()
+                .context("applicable HTTP pack send requires httpMethod")?;
+            let source_path = send
+                .path
+                .as_deref()
+                .context("applicable HTTP pack send requires a static path")?;
+            let Some(operation) = select_project_operation(&operation_keys, method, source_path)
+            else {
+                continue;
+            };
+            let endpoint = connection
+                .endpoints
+                .iter()
+                .find(|(id, _)| id.as_str() == send.endpoint)
+                .map(|(_, binding)| binding)
+                .with_context(|| {
+                    format!(
+                        "connection `{}` needs endpoint `{}` for its selected pack route",
+                        source.connection, send.endpoint
+                    )
+                })?;
+            addresses.insert(loopback_origin_address(endpoint.origin.as_str())?);
+            let key = (operation.0.to_owned(), operation.1.to_owned());
+            if routes
+                .insert(key, source_path.to_owned())
+                .is_some_and(|existing| existing != source_path)
+            {
+                bail!("applicable project Sources disagree on the served request path");
+            }
         }
     }
     if addresses.len() != 1 {

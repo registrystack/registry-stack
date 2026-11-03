@@ -6,12 +6,12 @@ lookup by tracked-entity identifier, asks for page 1 with a page size of 2,
 checks pager consistency, distinguishes no match from ambiguity, and extracts a
 configured status attribute plus the returned record identity.
 
-Extraction receives the same minimized authorized selector used for request
-preparation. A unique response becomes a match only when its `trackedEntity` is
-the same scalar type and exact value as the requested `record_reference`.
-Missing, wrongly typed, or different returned identity is a source protocol
-error before facts, assertion derivation, or signing. Business derivations do
-not need to repeat this reusable source-identity check.
+The checked pack route receives only the minimized authorized
+`record_reference`. A unique response becomes a match only when its
+`trackedEntity` has the same scalar type and exact value. Missing, wrongly typed,
+or different returned identity is a source protocol error before facts,
+assertion derivation, or signing. Business derivations do not need to repeat
+this reusable source-identity check.
 
 It assumes the selected DHIS2 deployment supports:
 
@@ -28,10 +28,11 @@ against the exact deployment and version. The recipe contains no server origin
 or Basic-auth credential. Bind both in the target-owned `connections` entry.
 
 The `fixture-validation/` project is the seed used by the maintained integration
-gate. The gate imports the recipe first, then adds the separately reviewed
-synthetic assertion definitions, because a source export must never supply
-assertion meaning. Its cases cover success, no match, ambiguity, an inconsistent
-pager, and returned tracked-entity value and scalar-type mismatches. Run it from
+gate. The gate imports the exact pack closure, then adds the separately reviewed
+synthetic assertion definition and checks the assembled project, because a source
+export must never supply assertion meaning. Its sealed replay cases cover success, no match,
+ambiguity, an inconsistent pager, and returned tracked-entity value and
+scalar-type mismatches. Run it from
 the Registry Stack source tree or the downloaded catalog with matching installed
 binaries:
 

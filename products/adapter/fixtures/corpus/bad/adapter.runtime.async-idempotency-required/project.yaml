@@ -1,0 +1,38 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.runtime.async-idempotency-required: the checker must emit this exact code. All data is synthetic.
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-api-example
+  version: '1'
+profile:
+  id: case-api
+  version: '1'
+  digest: sha256:e2b4cdd7f41f9fb98f2e22be1ff3aa4383bb703080293f55d1a91c27a17db9cb
+pack:
+  id: case-api-pack
+  version: '1'
+  digest: sha256:c4abd399bc62332e3318334429f1aa67936dafdf737d47463ba1fb6202178087
+recordTypes:
+- name: case
+  fields:
+  - name: case_type
+    type: string
+    required: true
+bindings:
+- id: case-create
+  operation: cases-create
+  recordType: case
+  route: create-case
+  maximumUpstreamCalls: 4
+  asyncCompletion:
+    type: status-link
+accessProfiles:
+- id: case-reader
+  scopes:
+  - cases.read
+  operations:
+  - cases-create
+  recordTypes:
+  - case

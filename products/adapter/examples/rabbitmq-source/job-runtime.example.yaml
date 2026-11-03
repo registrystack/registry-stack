@@ -1,0 +1,24 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/job-runtime/job-runtime.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/adapter/job-runtime/v1alpha1
+kind: AdapterJobRuntimeConfig
+id: rabbitmq-source-example
+endpoints: []
+sources:
+  rabbitmq:
+    institution-events:
+      host: broker.example.org
+      port: 5671
+      vhost: /registry-adapter
+      user: registry-adapter-reader
+      passwordRef: secret:env/RABBITMQ_SOURCE_PASSWORD
+      queue: registry.events
+      deadLetterExchange: registry.events.refused
+      deadLetterQueue: registry.events.refused.dlq
+      deadLetterRoutingKey: refused
+      namespace: institution-events
+      maximumOutstandingDeliveries: 1
+      connectionTimeoutMilliseconds: 5000
+      heartbeatSeconds: 30
+      tls:
+        type: ca-bundle
+        caBundleFile: /run/secrets/institution-broker-ca.pem

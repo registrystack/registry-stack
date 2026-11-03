@@ -23,7 +23,7 @@ async fn unsaved_project_changes_refresh_navigation_and_shared_diagnostics() {
         .published_diagnostics(&p.path(PROJECT))
         .unwrap()
         .is_empty());
-    assert!(session.request("textDocument/definition",json!({"textDocument":{"uri":uri(&p.path(PROJECT))},"position":after(&edited,"acquisition: {type: single, source: ")})).await.as_array().is_none_or(Vec::is_empty));
+    assert!(session.request("textDocument/definition",json!({"textDocument":{"uri":uri(&p.path(PROJECT))},"position":after(&edited,"acquisition: {source: ")})).await.as_array().is_none_or(Vec::is_empty));
     change(&mut session, &p, SOURCE, 3).await;
     assert_eq!(
         session.published_diagnostics(&p.path(PROJECT)),

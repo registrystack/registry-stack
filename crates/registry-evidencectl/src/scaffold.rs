@@ -29,7 +29,13 @@ const STARTER_TOP_LEVEL_FILES: &[&str] = &[
     "dev-authority.yaml",
     "serve-source.py",
 ];
-const STARTER_DIRECTORIES: &[&str] = &["functions", "fixtures", "codelists", "queries"];
+const STARTER_DIRECTORIES: &[&str] = &[
+    "adapter-packs",
+    "functions",
+    "fixtures",
+    "codelists",
+    "queries",
+];
 
 #[derive(Clone, Debug, ValueEnum)]
 pub enum AuthoringProfile {
@@ -179,10 +185,6 @@ fn create(
         fs::create_dir(staged_root.join(directory))
             .with_context(|| format!("creating the empty {directory} directory"))?;
     }
-    if matches!(source, AuthoringSource::SqliteExtract) {
-        fs::create_dir(staged_root.join("queries"))
-            .context("creating the empty queries directory")?;
-    }
     for file in starter_files {
         write_new_file(&staged_root.join(file.relative), &file.contents, 0o644)?;
     }
@@ -244,9 +246,10 @@ fn create(
         "  functions: {}",
         args.directory.join("functions").display()
     );
-    if matches!(source, AuthoringSource::SqliteExtract) || args.directory.join("queries").exists() {
-        println!("  queries: {}", args.directory.join("queries").display());
-    }
+    println!(
+        "  adapter packs: {}",
+        args.directory.join("adapter-packs").display()
+    );
     println!(
         "  target: {}",
         args.directory.join("local-target.yaml").display()
@@ -563,61 +566,19 @@ fn write_new_file(path: &Path, contents: &[u8], mode: u32) -> anyhow::Result<()>
 
 fn write_normalized_starter(root: &Path, source: AuthoringSource<'_>) -> anyhow::Result<()> {
     let sqlite = matches!(source, AuthoringSource::SqliteExtract);
-    let source_document = if sqlite {
-        json!({
-            "type": "sqlite-extract",
-            "acquisitionPosture": "record-transformed",
-            "selectors": [{"role":"subject","profiles":["record-reference"]}],
-            "request": {
-                "statement":"queries/record-status.sql",
-                "columns":[{"name":"qualifying_record_count","type":"integer"}],
-                "parameterBindings":{"record_reference":{"selector":{"role":"subject","profile":"record-reference","field":"record-reference"}}},
-                "maximumRows":2,
-                "maximumCellBytes":64,
-                "maximumStatementSteps":100000
-            },
-            "response": {
-                "projection":["/rows/*/qualifying_record_count"],
-                "shape":{"type":"object","required":["rows"],"properties":{"rows":{"type":"array","minItems":0,"maxItems":2,"items":{"type":"object","required":["qualifying_record_count"],"properties":{"qualifying_record_count":{"type":"bounded-integer","minimum":0,"maximum":1000000}}}}}},
-                "maximumBytes":8192
-            },
-            "extract":{"function":"extract-record-status"},
-            "facts":{"record-count":{"type":"bounded-integer","minimum":0,"maximum":1000000}},
-            "limits":{"attemptTimeoutMilliseconds":2000,"maximumConcurrency":8},
-            "extractProfile":"record-status",
-            "maximumExtractAgeSeconds":604800
-        })
-    } else {
-        json!({
-            "type":"http-json",
-            "connection":"starter-source",
-            "acquisitionPosture":"record-transformed",
-            "selectors":[{"role":"subject","profiles":["record-reference"]}],
-            "request":{
-                "method":"GET",
-                "path":"/records/{record-reference}",
-                "pathBindings":{"record-reference":{"selector":{"role":"subject","profile":"record-reference","field":"record-reference"}}},
-                "fixedHeaders":[{"name":"Accept","value":"application/json"}]
-            },
-            "response":{
-                "projection":["/matched"],
-                "shape":{"type":"object","required":["matched"],"properties":{"matched":{"type":"boolean"}}},
-                "maximumBytes":4096
-            },
-            "extract":{"function":"extract-record-status"},
-            "facts":{"matched":{"type":"boolean"}},
-            "limits":{"attemptTimeoutMilliseconds":2000,"maximumConcurrency":8}
-        })
-    };
+    let source_document = json!({
+        "pack":{"id":"starter-source","version":"1"},
+        "route":"lookup",
+        "connection":"starter-source",
+        "inputs":{"recordReference":{"selector":{"role":"subject","profile":"record-reference","field":"record-reference"}}},
+        "acquisitionPosture":"record-transformed"
+    });
     let project = json!({
         "apiVersion": registry_evidence_authoring::project::PROJECT_API_VERSION,
         "kind": registry_evidence_authoring::project::PROJECT_KIND,
         "id":"local-evidence",
         "selectorProfiles":{"record-reference":{"maximumAggregateBytes":64,"fields":{"record-reference":{"type":"string","minimumBytes":1,"maximumBytes":64}}}},
-        "functions":[
-            {"id":"extract-record-status","interface":"source-extract/v1","source":"functions/extract-record-status.rhai"},
-            {"id":"derive-record-status","interface":"assertion-derive/v1","source":"functions/derive-record-status.rhai"}
-        ],
+        "functions":[{"id":"derive-record-status","interface":"assertion-derive/v1","source":"functions/derive-record-status.rhai"}],
         "sources":{"record-status":source_document},
         "assertionDefinitions":{"record-status":{
             "question":"Does the selected synthetic record satisfy the reviewed condition?",
@@ -625,7 +586,7 @@ fn write_normalized_starter(root: &Path, source: AuthoringSource<'_>) -> anyhow:
             "purpose":"record-status-check",
             "grantCeiling":{"authorities":["organizational"],"actorKinds":["service"],"valueOrigins":["request"],"audiences":["urn:example:audience:local-evidence"]},
             "subjects":[{"role":"subject","selectors":["record-reference"]}],
-            "acquisition":{"type":"single","source":"record-status"},
+            "acquisition":{"source":"record-status"},
             "derive":{"function":"derive-record-status"},
             "outputs":{"satisfied":{"concept":"urn:example:concept:record-status:v1","type":"boolean"}},
             "validitySeconds":300,
@@ -640,9 +601,9 @@ fn write_normalized_starter(root: &Path, source: AuthoringSource<'_>) -> anyhow:
     write_new_file(&root.join("evidence.yaml"), project_yaml.as_bytes(), 0o644)?;
 
     let extract = if sqlite {
-        include_str!("../templates/sqlite-extract/functions/extract-record-status.rhai")
+        "fn extract(exchange) {\n    let rows = exchange.body.rows;\n    if rows.len() == 0 { return #{lookup: \"no-match\"}; }\n    if rows.len() > 1 { return #{lookup: \"ambiguous\"}; }\n    #{lookup: \"matched\", facts: #{\"record-count\": rows[0].qualifying_record_count}}\n}\n"
     } else {
-        "fn extract(source_response, context) {\n    #{outcome: \"match\", facts: #{matched: source_response[\"matched\"]}}\n}\n"
+        "fn extract(exchange) {\n    #{lookup: \"matched\", facts: #{matched: exchange.body.matched}}\n}\n"
     };
     let derive = if sqlite {
         include_str!("../templates/sqlite-extract/functions/derive-record-status.rhai")
@@ -650,7 +611,7 @@ fn write_normalized_starter(root: &Path, source: AuthoringSource<'_>) -> anyhow:
         "fn derive(facts, selectors, context) {\n    [#{output: \"satisfied\", value: facts[\"matched\"]}]\n}\n"
     };
     write_new_file(
-        &root.join("functions/extract-record-status.rhai"),
+        &root.join("adapter-packs/starter-source/scripts/extract.rhai"),
         extract.as_bytes(),
         0o644,
     )?;
@@ -674,17 +635,19 @@ common:
       values: {record-reference: REC-0001}
 cases:
 - id: positive
-  source: {matched: true}
-  expectedValue: true
-  expectedLookup: match
-  derivationRuns: true
-  signedSuccess: true
+  acquisition:
+    intercepts: [{type: endpoint, endpoint: starter-source}]
+    exchanges:
+    - request: {endpoint: starter-source, method: GET, path: /records/REC-0001}
+      response: {status: 200, body: {matched: true}}
+  expected: {value: true, lookup: match, derivationRuns: true, signed: true}
 - id: negative
-  source: {matched: false}
-  expectedValue: false
-  expectedLookup: match
-  derivationRuns: true
-  signedSuccess: true
+  acquisition:
+    intercepts: [{type: endpoint, endpoint: starter-source}]
+    exchanges:
+    - request: {endpoint: starter-source, method: GET, path: /records/REC-0001}
+      response: {status: 200, body: {matched: false}}
+  expected: {value: false, lookup: match, derivationRuns: true, signed: true}
 privacyExpectation:
   evidenceContains: [urn:example:concept:record-status:v1]
   evidenceExcludes: [record-reference, REC-0001]
@@ -695,13 +658,90 @@ privacyExpectation:
     if !fixture_path.exists() {
         write_new_file(&fixture_path, fixture.as_bytes(), 0o644)?;
     }
-    if sqlite {
+    let inputs = serde_json::to_vec_pretty(&json!({
+        "type":"object","additionalProperties":false,"required":["recordReference"],
+        "properties":{"recordReference":{"type":"string","minLength":1,"maxLength":64}}
+    }))?;
+    let facts = serde_json::to_vec_pretty(&if sqlite {
+        json!({"type":"object","additionalProperties":false,"required":["record-count"],"properties":{"record-count":{"type":"integer","minimum":0,"maximum":1_000_000}}})
+    } else {
+        json!({"type":"object","additionalProperties":false,"required":["matched"],"properties":{"matched":{"type":"boolean"}}})
+    })?;
+    let response = serde_json::to_vec_pretty(&if sqlite {
+        json!({"type":"object","additionalProperties":false,"required":["rows","extract"],"properties":{
+            "rows":{"type":"array","minItems":0,"maxItems":2,"items":{"type":"object","additionalProperties":false,"required":["qualifying_record_count"],"properties":{"qualifying_record_count":{"type":"integer","minimum":0,"maximum":1_000_000}}}},
+            "extract":{"type":"object","additionalProperties":false,"required":["publishedAt","publisher","extractId"],"properties":{
+                "publishedAt":{"type":"string","format":"date-time"},"publisher":{"type":"string","minLength":1,"maxLength":512},"extractId":{"type":"string","minLength":1,"maxLength":512}
+            }}
+        }})
+    } else {
+        json!({"type":"object","additionalProperties":false,"required":["matched"],"properties":{"matched":{"type":"boolean"}}})
+    })?;
+    for (path, bytes) in [
+        ("schemas/inputs.json", inputs.as_slice()),
+        ("schemas/facts.json", facts.as_slice()),
+        ("schemas/response.json", response.as_slice()),
+    ] {
         write_new_file(
-            &root.join("queries/record-status.sql"),
-            include_bytes!("../templates/sqlite-extract/queries/record-status.sql"),
+            &root.join("adapter-packs/starter-source").join(path),
+            bytes,
             0o644,
         )?;
     }
+    let query = sqlite.then(|| {
+        include_bytes!("../templates/sqlite-extract/queries/record-status.sql").as_slice()
+    });
+    if let Some(query) = query {
+        write_new_file(
+            &root.join("adapter-packs/starter-source/queries/record-status.sql"),
+            query,
+            0o644,
+        )?;
+    }
+    let reference = |path: &str, bytes: &[u8]| json!({"path":path,"digest":registry_platform_config::sha256_uri(bytes)});
+    let endpoint = if let Some(query) = query {
+        json!({
+            "id":"starter-source","component":"sqlite-extract","authentication":{"type":"none"},
+            "attemptTimeoutMilliseconds":2000,"maximumResponseBytes":8192,
+            "sqliteExtract":{"extractProfile":"record-status","statement":reference("queries/record-status.sql",query),
+                "columns":[{"name":"qualifying_record_count","type":"integer"}],"parameters":[{"name":"record_reference","required":true}],
+                "maximumExtractAgeSeconds":604800,"maximumRows":2,"maximumCellBytes":64,"maximumStatementSteps":100000,"concurrency":8}
+        })
+    } else {
+        json!({"id":"starter-source","component":"http","authentication":{"type":"none"},"attemptTimeoutMilliseconds":2000,"maximumResponseBytes":4096})
+    };
+    let mut steps = vec![
+        json!({"setProperty":{"name":"record-reference","value":{"jsonpath":"$.recordReference"}}}),
+    ];
+    if sqlite {
+        steps.push(json!({"to":{"uri":"sqlite-extract:starter-source","parameters":{"queryParameters":{"record_reference":{"exchangeProperty":"record-reference"}}}}}));
+    } else {
+        steps.push(json!({"setHeader":{"name":"Accept","value":{"constant":"application/json"}}}));
+        steps.push(json!({"to":{"uri":"http:starter-source","parameters":{"httpMethod":"GET","path":"/records/{{record-reference}}","pathParameters":{"record-reference":{"exchangeProperty":"record-reference"}}}}}));
+    }
+    steps.push(json!({"validateSchema":reference("schemas/response.json",&response)}));
+    steps.push(json!({"setBody":{"rhai":{"file":"scripts/extract.rhai","entrypoint":"extract"}}}));
+    let languages = if sqlite {
+        json!(["exchangeProperty", "jsonpath", "rhai"])
+    } else {
+        json!(["constant", "exchangeProperty", "jsonpath", "rhai"])
+    };
+    let eips = if sqlite {
+        json!(["setBody", "setProperty", "to"])
+    } else {
+        json!(["setBody", "setHeader", "setProperty", "to"])
+    };
+    let pack = json!({
+        "apiVersion":"id.registrystack.org/formats/adapter/pack/v1alpha1","kind":"AdapterPack","id":"starter-source","version":"1","testedVersions":[],
+        "endpoints":[endpoint],"scripts":[reference("scripts/extract.rhai",extract.as_bytes())],
+        "sourceRoutes":[{"id":"lookup","evidence":{"inputsSchema":reference("schemas/inputs.json",&inputs),"factsSchema":reference("schemas/facts.json",&facts),"acquisitionPosture":"record-transformed"},"steps":steps}],
+        "capabilities":{"components":[if sqlite {"sqlite-extract"} else {"http"}],"languages":languages,"eips":eips}
+    });
+    write_new_file(
+        &root.join("adapter-packs/starter-source/pack.yaml"),
+        &serde_json::to_vec_pretty(&pack)?,
+        0o644,
+    )?;
 
     let mut target = json!({
         "apiVersion": registry_evidence_authoring::target::TARGET_API_VERSION,
@@ -711,7 +751,7 @@ privacyExpectation:
         "service":{"providerId":"urn:example:provider:local-evidence","issuer":"urn:example:issuer:local-evidence","publicOrigin":"http://127.0.0.1:8080","trustDomain":"urn:example:trust:local-evidence"},
         "listener":{"bind":"127.0.0.1:8080","trustProxyIdentityHeaders":false},
         "authentication":{"oidc":{"issuer":"http://127.0.0.1:8081","audience":"urn:example:audience:local-evidence","tokenTypes":["at+jwt"],"algorithms":["ES256"],"jwksSource":{"type":"uri","uri":"http://127.0.0.1:8081/oauth2/jwks"},"principalClaim":"sub","requesterTagsClaim":"evidence_tags","evidenceAudienceClaim":"evidence_audience","requiredScopes":["evidence:request"],"maximumTokenLifetimeSeconds":300}},
-        "connections":{"starter-source":{"origin":"http://127.0.0.1:4010","authentication":{"type":"none"}}},
+        "connections":{"starter-source":{"endpoints":if sqlite {json!({})} else {json!({"starter-source":{"origin":"http://127.0.0.1:4010","authentication":{"type":"none"}}})}}},
         "secretProviders":{"file":{"root":".generated/secrets"}},
         "signer":{"type":"local-jwk","algorithm":"ES256","privateKeyRef":"secret:file/signing-p256-private-jwk","publicJwkFile":".generated/secrets/signing-p256-public.jwk.json"},
         "subjectBinding":{"secretRef":"secret:file/subject-binding-hmac-key","keyVersion":1},
@@ -813,9 +853,48 @@ mod tests {
         assert!(target.contains("kind: EvidenceTarget"));
         assert!(authority.contains("kind: EvidenceTargetAuthority"));
         assert!(!project.contains("EvidenceQuestion"));
+        assert!(!project.contains("source-extract/v1"));
+        assert!(project.contains("pack:\n      id: starter-source"));
+        assert!(root
+            .path()
+            .join("adapter-packs/starter-source/pack.yaml")
+            .is_file());
+        assert!(root
+            .path()
+            .join("adapter-packs/starter-source/queries/record-status.sql")
+            .is_file());
+        let project_document =
+            registry_evidence_authoring::project::read_project("evidence.yaml", project.as_bytes())
+                .unwrap()
+                .value;
+        crate::normalized::read_pack_routes(root.path(), &project_document)
+            .expect("the scaffold emits a complete typed adapter pack closure");
         assert!(
             target.contains("extracts:\n  record-status:\n    path: "),
             "the target must bind the extract profile its Source uses:\n{target}"
         );
+        assert!(target.contains("starter-source:\n    endpoints: {}"));
+    }
+
+    #[test]
+    fn copied_starter_includes_its_pinned_pack_closure() {
+        let starter = tempfile::tempdir().unwrap();
+        for path in [
+            "README.md",
+            "evidence.yaml",
+            "local-target.yaml",
+            "dev-authority.yaml",
+            "adapter-packs/register/pack.yaml",
+            "adapter-packs/register/schemas/inputs.json",
+        ] {
+            write_new_file(&starter.path().join(path), b"fixture\n", 0o644).unwrap();
+        }
+        let files = collect_starter_files(starter.path()).unwrap();
+        let paths = files
+            .iter()
+            .map(|file| file.relative.as_path())
+            .collect::<Vec<_>>();
+        assert!(paths.contains(&Path::new("adapter-packs/register/pack.yaml")));
+        assert!(paths.contains(&Path::new("adapter-packs/register/schemas/inputs.json")));
     }
 }

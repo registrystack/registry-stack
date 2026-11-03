@@ -20,7 +20,7 @@ use tokio_postgres::Error as PgError;
 
 /// Every schema version, in the order it is applied. Each later migration
 /// takes the next number.
-pub(crate) const MIGRATIONS: [(i64, &str); 3] = [
+pub(crate) const MIGRATIONS: [(i64, &str); 5] = [
     (100, include_str!("journal/migrations/0100_journal.sql")),
     (
         200,
@@ -29,6 +29,14 @@ pub(crate) const MIGRATIONS: [(i64, &str); 3] = [
     (
         300,
         include_str!("journal/migrations/0300_breaker_fallback.sql"),
+    ),
+    (
+        400,
+        include_str!("journal/migrations/0400_async_completion.sql"),
+    ),
+    (
+        500,
+        include_str!("journal/migrations/0500_linear_write_resume.sql"),
     ),
 ];
 

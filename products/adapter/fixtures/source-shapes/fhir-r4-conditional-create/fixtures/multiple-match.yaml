@@ -1,0 +1,86 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json
+#
+# Minimized fixture derived from the controlled HAPI FHIR 8.12.0 R4
+# acceptance on 2026-11-03. It is not a byte-exact capture: identifiers,
+# token, and diagnostics are synthetic replacements. In the real receipt,
+# two synthetic Patients carried the same identifier and HAPI refused the
+# conditional transaction with HTTP 412. The Adapter must translate that
+# source meaning through outcome.rejected, never by constructing a profile
+# problem body in the pack.
+apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
+kind: AdapterFixture
+id: fhir-r4-conditional-create-multiple-match
+pack: fhir-r4-conditional-create
+upstreamVersion: "4.0.1 (HAPI FHIR 8.12.0)"
+provenance:
+  type: captured
+  reference: minimized fixture derived from controlled HAPI FHIR 8.12.0 acceptance, 2026-11-03; synthetic replacements, not byte-exact
+intercepts:
+  - type: token-endpoint
+    endpoint: fhir
+  - type: endpoint
+    endpoint: fhir
+entries:
+  - facadeRequest:
+      operation: records-create
+      path: /v1/records/patient
+      headers:
+        content-type: application/json
+        idempotency-key: captured-multiple-match
+      body:
+        data:
+          recordIdentifier: patient-request-duplicate
+          domainData:
+            national_id: NID-DUP-0001
+            family_name: ShouldNotCreate
+            given_names: Refused
+            birth_date: "1999-11-12"
+            gender: female
+    upstream:
+      - request:
+          endpoint: fhir
+          tokenRequest: true
+          method: POST
+          path: /oauth/token
+        response:
+          status: 200
+          body:
+            access_token: synthetic-replay-token
+            token_type: Bearer
+            expires_in: 300
+      - request:
+          endpoint: fhir
+          method: POST
+          path: /
+          query: _format=json
+          body:
+            resourceType: Bundle
+            type: transaction
+            entry:
+              - resource:
+                  resourceType: Patient
+                  identifier:
+                    - system: https://id.example.invalid/national-id
+                      value: NID-DUP-0001
+                  name:
+                    - family: ShouldNotCreate
+                      given:
+                        - Refused
+                  birthDate: "1999-11-12"
+                  gender: female
+                request:
+                  method: POST
+                  url: Patient
+                  ifNoneExist: identifier=https://id.example.invalid/national-id|NID-DUP-0001
+        response:
+          status: 412
+          body:
+            resourceType: OperationOutcome
+            issue:
+              - severity: error
+                code: processing
+                diagnostics: HAPI-0958 synthetic multiple-match refusal
+    expected:
+      type: problem
+      class: outcome.rejected
+      code: source.write-rejected

@@ -67,7 +67,7 @@ fn pack_endpoint(
         id: LocalId::new(id).expect("endpoint id"),
         component: ComponentKind::Http,
         authentication,
-        attempt_timeout_milliseconds: BoundedU64::new(10_000).expect("attempt timeout"),
+        attempt_timeout_milliseconds: Some(BoundedU64::new(10_000).expect("attempt timeout")),
         maximum_response_bytes: BoundedU64::new(1_048_576).expect("response bound"),
         response_headers: UniqueList::new(Vec::new()).expect("response headers"),
         request_headers: UniqueList::new(
@@ -82,6 +82,10 @@ fn pack_endpoint(
         query_file: None,
         operation_name: None,
         variables: None,
+        sqlite_extract: None,
+        key_column: None,
+        parameter_order: None,
+        host_protocol: None,
     }
 }
 
@@ -141,6 +145,7 @@ fn oauth_binding(
         mtls_identity: None,
         attempt_timeout_milliseconds: None,
         maximum_response_bytes: None,
+        maximum_concurrency: BoundedU64::new(8).expect("concurrency"),
     }
 }
 
@@ -162,6 +167,7 @@ fn basic_binding(
         mtls_identity: None,
         attempt_timeout_milliseconds: None,
         maximum_response_bytes: None,
+        maximum_concurrency: BoundedU64::new(8).expect("concurrency"),
     }
 }
 
@@ -177,6 +183,7 @@ fn static_api_key_binding(endpoint: &str, base_url: &str, value_env: &str) -> En
         mtls_identity: None,
         attempt_timeout_milliseconds: None,
         maximum_response_bytes: None,
+        maximum_concurrency: BoundedU64::new(8).expect("concurrency"),
     }
 }
 
@@ -1743,7 +1750,8 @@ fn limited_deployment(
         .1
         .map(|value| BoundedU64::new(value).expect("bound bytes"));
     let mut endpoint = pack_endpoint("limits-api", EndpointAuthentication::Basic {}, &[]);
-    endpoint.attempt_timeout_milliseconds = BoundedU64::new(declared.0).expect("declared attempt");
+    endpoint.attempt_timeout_milliseconds =
+        Some(BoundedU64::new(declared.0).expect("declared attempt"));
     endpoint.maximum_response_bytes = BoundedU64::new(declared.1).expect("declared bytes");
     Egress::load(&[endpoint], &runtime_config(vec![binding]), &resolver())
 }

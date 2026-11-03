@@ -25,12 +25,27 @@ common:
       value: application/json
 cases:
 - id: positive
-  response:
-    data:
-      domainData:
-        code: SYNTHETIC-ACTIVE
-        status: active
-        label: SYNTHETIC-PRIVATE-LABEL
+  acquisition:
+    intercepts:
+    - type: endpoint
+      endpoint: registry
+    exchanges:
+    - request:
+        endpoint: registry
+        method: POST
+        path: /v1/records/records:lookup
+        query: '%24select=code%2Cstatus&accessProfile=evidence-source'
+        headers:
+          accept: application/json
+        body:
+          selector: by-code
+          values:
+            code: SYNTHETIC-ACTIVE
+      response:
+        status: 200
+        headers:
+          content-type: application/json
+        rawBodyBase64: eyJkYXRhIjp7ImRvbWFpbkRhdGEiOnsiY29kZSI6IlNZTlRIRVRJQy1BQ1RJVkUiLCJzdGF0dXMiOiJhY3RpdmUiLCJsYWJlbCI6IlNZTlRIRVRJQy1QUklWQVRFLUxBQkVMIn19fQ==
   expected:
     lookup: match
     derivationRuns: true
@@ -39,11 +54,27 @@ cases:
       status: active
     value: true
 - id: negative-retired
-  response:
-    data:
-      domainData:
-        code: SYNTHETIC-ACTIVE
-        status: retired
+  acquisition:
+    intercepts:
+    - type: endpoint
+      endpoint: registry
+    exchanges:
+    - request:
+        endpoint: registry
+        method: POST
+        path: /v1/records/records:lookup
+        query: '%24select=code%2Cstatus&accessProfile=evidence-source'
+        headers:
+          accept: application/json
+        body:
+          selector: by-code
+          values:
+            code: SYNTHETIC-ACTIVE
+      response:
+        status: 200
+        headers:
+          content-type: application/json
+        rawBodyBase64: eyJkYXRhIjp7ImRvbWFpbkRhdGEiOnsiY29kZSI6IlNZTlRIRVRJQy1BQ1RJVkUiLCJzdGF0dXMiOiJyZXRpcmVkIn19fQ==
   expected:
     lookup: match
     derivationRuns: true
@@ -52,60 +83,191 @@ cases:
       status: retired
     value: false
 - id: boundary-null-status
-  response:
-    data:
-      domainData:
-        code: SYNTHETIC-ACTIVE
-        status: null
+  acquisition:
+    intercepts:
+    - type: endpoint
+      endpoint: registry
+    exchanges:
+    - request:
+        endpoint: registry
+        method: POST
+        path: /v1/records/records:lookup
+        query: '%24select=code%2Cstatus&accessProfile=evidence-source'
+        headers:
+          accept: application/json
+        body:
+          selector: by-code
+          values:
+            code: SYNTHETIC-ACTIVE
+      response:
+        status: 200
+        headers:
+          content-type: application/json
+        rawBodyBase64: eyJkYXRhIjp7ImRvbWFpbkRhdGEiOnsiY29kZSI6IlNZTlRIRVRJQy1BQ1RJVkUiLCJzdGF0dXMiOm51bGx9fX0=
   expected:
     lookup: no_match
     publicProblem: evidence.unavailable
     derivationRuns: false
     signed: false
 - id: missing-status
-  response:
-    data:
-      domainData:
-        code: SYNTHETIC-ACTIVE
+  acquisition:
+    intercepts:
+    - type: endpoint
+      endpoint: registry
+    exchanges:
+    - request:
+        endpoint: registry
+        method: POST
+        path: /v1/records/records:lookup
+        query: '%24select=code%2Cstatus&accessProfile=evidence-source'
+        headers:
+          accept: application/json
+        body:
+          selector: by-code
+          values:
+            code: SYNTHETIC-ACTIVE
+      response:
+        status: 200
+        headers:
+          content-type: application/json
+        rawBodyBase64: eyJkYXRhIjp7ImRvbWFpbkRhdGEiOnsiY29kZSI6IlNZTlRIRVRJQy1BQ1RJVkUifX19
   expected:
     lookup: no_match
     publicProblem: evidence.unavailable
     derivationRuns: false
     signed: false
 - id: no-match
-  declaredUnresolved: true
+  acquisition:
+    intercepts:
+    - type: endpoint
+      endpoint: registry
+    exchanges:
+    - request:
+        endpoint: registry
+        method: POST
+        path: /v1/records/records:lookup
+        query: '%24select=code%2Cstatus&accessProfile=evidence-source'
+        headers:
+          accept: application/json
+        body:
+          selector: by-code
+          values:
+            code: SYNTHETIC-ACTIVE
+      response:
+        status: 404
+        headers:
+          content-type: application/problem+json
+        rawBodyBase64: eyJ0eXBlIjoiaHR0cHM6Ly9pZC5yZWdpc3RyeXN0YWNrLm9yZy9wcm9ibGVtcy9yZWdpc3RyeS1icmVnL2xvb2t1cC91bnJlc29sdmVkIiwidGl0bGUiOiJOb3QgRm91bmQiLCJzdGF0dXMiOjQwNCwiZGV0YWlsIjoiVGhlIHJlcXVlc3RlZCByZWNvcmQgd2FzIG5vdCBmb3VuZC4iLCJjb2RlIjoibG9va3VwLnVucmVzb2x2ZWQiLCJ0cmFjZUlkIjoiMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEifQ==
   expected:
+    lookup: unresolved
+    publicProblem: evidence.unavailable
+    derivationRuns: false
+    signed: false
+    sourceRequestCount: 1
+- id: ambiguous-source-unresolved
+  acquisition:
+    intercepts:
+    - type: endpoint
+      endpoint: registry
+    exchanges:
+    - request:
+        endpoint: registry
+        method: POST
+        path: /v1/records/records:lookup
+        query: '%24select=code%2Cstatus&accessProfile=evidence-source'
+        headers:
+          accept: application/json
+        body:
+          selector: by-code
+          values:
+            code: SYNTHETIC-ACTIVE
+      response:
+        status: 404
+        headers:
+          content-type: application/problem+json
+        rawBodyBase64: eyJ0eXBlIjoiaHR0cHM6Ly9pZC5yZWdpc3RyeXN0YWNrLm9yZy9wcm9ibGVtcy9yZWdpc3RyeS1icmVnL2xvb2t1cC91bnJlc29sdmVkIiwidGl0bGUiOiJOb3QgRm91bmQiLCJzdGF0dXMiOjQwNCwiZGV0YWlsIjoiVGhlIGF1dGhvcml0YXRpdmUgc291cmNlIGRpZCBub3QgcmVsZWFzZSBhIHVuaXF1ZSByZWNvcmQuIiwiY29kZSI6Imxvb2t1cC51bnJlc29sdmVkIiwidHJhY2VJZCI6IjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyIn0=
+  expected:
+    lookup: unresolved
     publicProblem: evidence.unavailable
     derivationRuns: false
     signed: false
     sourceRequestCount: 1
 - id: returned-identity-mismatch
-  response:
-    data:
-      domainData:
-        code: SYNTHETIC-WRONG-IDENTITY
-        status: active
+  acquisition:
+    intercepts:
+    - type: endpoint
+      endpoint: registry
+    exchanges:
+    - request:
+        endpoint: registry
+        method: POST
+        path: /v1/records/records:lookup
+        query: '%24select=code%2Cstatus&accessProfile=evidence-source'
+        headers:
+          accept: application/json
+        body:
+          selector: by-code
+          values:
+            code: SYNTHETIC-ACTIVE
+      response:
+        status: 200
+        headers:
+          content-type: application/json
+        rawBodyBase64: eyJkYXRhIjp7ImRvbWFpbkRhdGEiOnsiY29kZSI6IlNZTlRIRVRJQy1XUk9ORy1JREVOVElUWSIsInN0YXR1cyI6ImFjdGl2ZSJ9fX0=
   expected:
     error: source_protocol_error
     publicProblem: source.unavailable
     derivationRuns: false
     signed: false
 - id: missing-identity
-  response:
-    data:
-      domainData:
-        status: active
+  acquisition:
+    intercepts:
+    - type: endpoint
+      endpoint: registry
+    exchanges:
+    - request:
+        endpoint: registry
+        method: POST
+        path: /v1/records/records:lookup
+        query: '%24select=code%2Cstatus&accessProfile=evidence-source'
+        headers:
+          accept: application/json
+        body:
+          selector: by-code
+          values:
+            code: SYNTHETIC-ACTIVE
+      response:
+        status: 200
+        headers:
+          content-type: application/json
+        rawBodyBase64: eyJkYXRhIjp7ImRvbWFpbkRhdGEiOnsic3RhdHVzIjoiYWN0aXZlIn19fQ==
   expected:
     error: source_protocol_error
     publicProblem: source.unavailable
     derivationRuns: false
     signed: false
 - id: wrong-identity-type
-  response:
-    data:
-      domainData:
-        code: 7
-        status: active
+  acquisition:
+    intercepts:
+    - type: endpoint
+      endpoint: registry
+    exchanges:
+    - request:
+        endpoint: registry
+        method: POST
+        path: /v1/records/records:lookup
+        query: '%24select=code%2Cstatus&accessProfile=evidence-source'
+        headers:
+          accept: application/json
+        body:
+          selector: by-code
+          values:
+            code: SYNTHETIC-ACTIVE
+      response:
+        status: 200
+        headers:
+          content-type: application/json
+        rawBodyBase64: eyJkYXRhIjp7ImRvbWFpbkRhdGEiOnsiY29kZSI6Nywic3RhdHVzIjoiYWN0aXZlIn19fQ==
   expected:
     error: source_protocol_error
     publicProblem: source.unavailable

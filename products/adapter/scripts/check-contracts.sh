@@ -12,15 +12,16 @@ cd "$repo_root"
 # cold compile.
 python3 -m unittest discover -s products/adapter/scripts -p 'test_dependency_direction.py'
 python3 products/adapter/scripts/check_dependency_direction.py
+python3 -m unittest discover -s products/adapter/scripts -p 'test_test_connector_native.py'
 
 # The verification floor: format over the workspace, then clippy and tests
 # over the adapter crates. Cargo runs in the caller's explicit worktree
 # target, so an omitted target cannot fill the source volume before the
 # example generator rejects it. PATH keeps cargo reachable when it is not on
 # the caller's PATH.
-PATH="$HOME/.cargo/bin:$PATH" cargo fmt --check
-PATH="$HOME/.cargo/bin:$PATH" cargo clippy --locked -p registry-adapter -p registry-adapter-core -p registry-adapter-job -p registry-adapterctl --all-targets -- -D warnings
-PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter -p registry-adapter-core -p registry-adapter-job -p registry-adapterctl --no-fail-fast
+PATH="$HOME/.cargo/bin:$PATH" cargo fmt --all --check
+PATH="$HOME/.cargo/bin:$PATH" cargo clippy --locked -p registry-adapter -p registry-adapter-core -p registry-adapter-engine -p registry-adapter-job -p registry-adapterctl --all-targets -- -D warnings
+PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter -p registry-adapter-core -p registry-adapter-engine -p registry-adapter-job -p registry-adapterctl --no-fail-fast
 # The BReg connector is default-off. Compile every connector target with its
 # feature and execute its scripted suites here; the real-runtime scenarios
 # remain isolated under test-connector-native.py because they provision BReg
@@ -34,18 +35,36 @@ PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter-connectors
 PATH="$HOME/.cargo/bin:$PATH" cargo test -p registry-adapterctl --locked --features tls-test --test verify
 # The governed-ingestion job sources (CONCEPT 17): each default-off
 # feature gate holds its own clippy and test lane, so a gate can never
-# rot behind the default build. The first lane builds registry-adapter on
-# its own: the combined run above links registry-adapterctl, which turns
-# both gates on, so only this lane runs the suites that hold a build
-# without them to its refusals.
-PATH="$HOME/.cargo/bin:$PATH" cargo clippy --locked -p registry-adapter --all-targets -- -D warnings
-PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter
-PATH="$HOME/.cargo/bin:$PATH" cargo clippy --locked -p registry-adapter --features job-file --all-targets -- -D warnings
-PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter --features job-file
-PATH="$HOME/.cargo/bin:$PATH" cargo clippy --locked -p registry-adapter --features job-postgres --all-targets -- -D warnings
-PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter --features job-postgres
-PATH="$HOME/.cargo/bin:$PATH" cargo clippy --locked -p registry-adapter --features job-file,job-postgres --all-targets -- -D warnings
-PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter --features job-file,job-postgres
+# rot behind the default build. The first lane builds registry-adapter and
+# registry-adapter-engine on their own: the combined run above links
+# registry-adapterctl, which turns both gates on, so only this lane runs the
+# suites that hold a build without them to its refusals.
+PATH="$HOME/.cargo/bin:$PATH" cargo clippy --locked -p registry-adapter -p registry-adapter-engine --all-targets -- -D warnings
+PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter -p registry-adapter-engine
+PATH="$HOME/.cargo/bin:$PATH" cargo clippy --locked -p registry-adapter -p registry-adapter-engine --features registry-adapter/job-file,registry-adapter-engine/job-file --all-targets -- -D warnings
+PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter -p registry-adapter-engine --features registry-adapter/job-file,registry-adapter-engine/job-file
+PATH="$HOME/.cargo/bin:$PATH" cargo clippy --locked -p registry-adapter -p registry-adapter-engine --features registry-adapter/job-postgres,registry-adapter-engine/job-postgres --all-targets -- -D warnings
+PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter -p registry-adapter-engine --features registry-adapter/job-postgres,registry-adapter-engine/job-postgres
+PATH="$HOME/.cargo/bin:$PATH" cargo clippy --locked -p registry-adapter -p registry-adapter-engine --features registry-adapter/job-file,registry-adapter/job-postgres,registry-adapter-engine/job-file,registry-adapter-engine/job-postgres --all-targets -- -D warnings
+PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter -p registry-adapter-engine --features registry-adapter/job-file,registry-adapter/job-postgres,registry-adapter-engine/job-file,registry-adapter-engine/job-postgres
+
+# SFTP uses an in-process loopback SSH fixture here. Its real CLI and item-store
+# acceptance runs in test-job-postgres.sh with a disposable PostgreSQL database.
+PATH="$HOME/.cargo/bin:$PATH" cargo clippy --locked -p registry-adapter-engine -p registry-adapter-job --features registry-adapter-job/job-sftp --all-targets -- -D warnings
+PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter-engine -p registry-adapter-job --features registry-adapter-job/job-sftp
+
+# The broker host remains default-off. Keep its production feature graph and
+# in-process seams here; broker transport and durable settlement run serially
+# with the service fixtures in test-job-postgres.sh.
+PATH="$HOME/.cargo/bin:$PATH" cargo clippy --locked -p registry-adapter-engine -p registry-adapter-job --features registry-adapter-job/job-rabbitmq --all-targets -- -D warnings
+PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter-engine -p registry-adapter-job --features registry-adapter-job/job-rabbitmq
+PATH="$HOME/.cargo/bin:$PATH" cargo check --locked -p registry-adapter-job --features job-sftp,job-rabbitmq
+
+# Hook ingress is separate from facade admission and default-off. Exercise its
+# real local HTTP boundary and trigger coalescing; the CLI/store acceptance is
+# mandatory in test-job-postgres.sh.
+PATH="$HOME/.cargo/bin:$PATH" cargo clippy --locked -p registry-adapter-job --features job-hook --all-targets -- -D warnings
+PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter-job --features job-hook --lib
 
 # The generated schemas are held to their generator (CFG-SCHEMA-2), and the
 # five adapter formats are held to the configuration-format convention
@@ -250,6 +269,15 @@ export ODK_EMAIL=check-contracts ODK_PASSWORD=check-contracts
 "$adapterctl_bin" job check products/adapter/packs/kobotoolbox/pack.yaml \
   products/adapter/examples/kobotoolbox-job/job.yaml \
   --runtime products/adapter/examples/kobotoolbox-job/job-runtime.example.yaml \
+  --profile products/adapter/examples/kobotoolbox-job/profile.yaml \
+  --project products/adapter/examples/kobotoolbox-job/project.yaml >/dev/null
+# The host validates exact hook binding coverage, with no listener or hook
+# secret resolution. The example file-provider root need not exist for check.
+PATH="$HOME/.cargo/bin:$PATH" cargo run --locked -p registry-adapter-job \
+  --features job-hook,direct-breg --bin adapter-job -- check \
+  products/adapter/examples/kobotoolbox-job/job.hook.yaml \
+  --pack products/adapter/packs/kobotoolbox/pack.yaml \
+  --runtime products/adapter/examples/kobotoolbox-job/job-runtime.hook.example.yaml \
   --profile products/adapter/examples/kobotoolbox-job/profile.yaml \
   --project products/adapter/examples/kobotoolbox-job/project.yaml >/dev/null
 "$adapterctl_bin" job check products/adapter/packs/odk-central/pack.yaml \

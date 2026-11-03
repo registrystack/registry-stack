@@ -1,0 +1,62 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json
+#
+# Documented controlled-provider transcript. The facade integration test also
+# executes the same two effects over TCP and PostgreSQL, including restart,
+# a pre-effect source failure, and a truncated post-effect reply.
+apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
+kind: AdapterFixture
+id: facade-recovery-linear-write
+pack: facade-recovery-reference
+upstreamVersion: controlled-reference-v1
+provenance:
+  type: documented
+  reference: products/adapter/examples/facade-recovery/README.md
+intercepts:
+  - type: endpoint
+    endpoint: reference
+entries:
+  - facadeRequest:
+      operation: records-create
+      path: /v1/records/person
+      headers:
+        idempotency-key: facade-recovery-example-1
+      body:
+        data:
+          recordIdentifier: person-17
+          domainData:
+            name: Example Person
+    upstream:
+      - request:
+          endpoint: reference
+          method: POST
+          path: /drafts
+          body:
+            name: Example Person
+        response:
+          status: 200
+          body:
+            sourceId: source-17
+      - request:
+          endpoint: reference
+          method: POST
+          path: /finalizations
+          query: source_id=source-17
+          body:
+            command: finalize
+        response:
+          status: 200
+          body:
+            name: Example Person
+    expected:
+      type: response
+      status: 201
+      headers:
+        cache-control: no-store
+        content-type: application/json
+      body:
+        data:
+          name: Example Person
+        meta:
+          registryIdentifier: facade-recovery-reference
+          datasetIdentifier: people
+          recordTypeIdentifier: person

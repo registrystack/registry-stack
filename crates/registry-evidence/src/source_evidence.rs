@@ -21,12 +21,18 @@ use registry_evidence_verifier::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use thiserror::Error;
 
-use crate::{
-    config::{ConfigError, FixedRequest, HttpMethod, PreparationChannelPolicy},
-    rhai_runtime::RequestParts,
-    source::SourceError,
-};
+use crate::config::ConfigError;
+
+/// Closed, value-free failures retained by the signed Evidence host protocol.
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+pub(crate) enum SignedSourceError {
+    #[error("the fixed source plan is invalid")]
+    InvalidPlan,
+    #[error("the source signed response failed verification")]
+    Verification,
+}
 
 /// A locally accepted, single-definition contract and its independently pinned
 /// public verification keys. This is governed source configuration, never
@@ -44,7 +50,7 @@ pub struct EvidenceSourceConfig {
 }
 
 impl EvidenceSourceConfig {
-    pub(crate) fn validate(&self, request: &FixedRequest) -> Result<(), ConfigError> {
+    pub(crate) fn validate_contract(&self) -> Result<(), ConfigError> {
         let invalid = || ConfigError::Invalid("the signed Evidence source contract is invalid");
         self.contract
             .validate_for_request()
@@ -79,40 +85,40 @@ impl EvidenceSourceConfig {
         }
         trusted_keys_are_usable(&self.trusted_jwks).map_err(|_| invalid())?;
         revoked_key_ids_are_usable(&self.revoked_key_ids).map_err(|_| invalid())?;
-        if request.method != HttpMethod::POST
-            || request.path_is_template()
-            || !request.path.ends_with("/v1/evidence")
-            || request.preparation_limits.query != PreparationChannelPolicy::Forbidden
-            || request.preparation_limits.json_body != PreparationChannelPolicy::Required
-            || request
-                .fixed_headers
-                .iter()
-                .any(|header| header.name.eq_ignore_ascii_case("accept"))
+        Ok(())
+    }
+
+    /// The physical send must retain the signed Evidence wire contract.
+    /// Its Accept header is supplied by the trusted protocol implementation.
+    pub(crate) fn validate_request_shape(
+        method: registry_adapter_core::HttpMethod,
+        path: &str,
+        has_query: bool,
+    ) -> Result<(), SignedSourceError> {
+        if method != registry_adapter_core::HttpMethod::Post
+            || !path.ends_with("/v1/evidence")
+            || path.contains("{{")
+            || has_query
         {
-            return Err(ConfigError::Invalid(
-                "an Evidence source requires a fixed POST evidence path, no query or Accept override, and a required JSON body",
-            ));
+            return Err(SignedSourceError::InvalidPlan);
         }
         Ok(())
     }
 
-    /// Validate the script's closed selector-only request before source access.
-    pub(crate) fn validate_parts(&self, parts: &RequestParts) -> Result<(), SourceError> {
-        if !parts.query.is_empty() {
-            return Err(SourceError::InvalidPlan);
-        }
-        self.subjects(parts.body.as_ref()).map(|_| ())
+    /// Validate the closed selector-only body before credentials are read.
+    pub(crate) fn validate_subjects(&self, body: Option<&Value>) -> Result<(), SignedSourceError> {
+        self.subjects(body).map(|_| ())
     }
 
-    fn subjects(&self, body: Option<&Value>) -> Result<Vec<SubjectRequest>, SourceError> {
+    fn subjects(&self, body: Option<&Value>) -> Result<Vec<SubjectRequest>, SignedSourceError> {
         let request: PreparedSubjects =
-            serde_json::from_value(body.cloned().ok_or(SourceError::InvalidPlan)?)
-                .map_err(|_| SourceError::InvalidPlan)?;
+            serde_json::from_value(body.cloned().ok_or(SignedSourceError::InvalidPlan)?)
+                .map_err(|_| SignedSourceError::InvalidPlan)?;
         let [definition] = self.contract.definitions.as_slice() else {
-            return Err(SourceError::InvalidPlan);
+            return Err(SignedSourceError::InvalidPlan);
         };
         if request.subjects.len() != definition.subjects.len() {
-            return Err(SourceError::InvalidPlan);
+            return Err(SignedSourceError::InvalidPlan);
         }
         let mut seen = BTreeSet::new();
         request
@@ -123,11 +129,11 @@ impl EvidenceSourceConfig {
                     .subjects
                     .iter()
                     .find(|declared| declared.role == subject.role)
-                    .ok_or(SourceError::InvalidPlan)?;
+                    .ok_or(SignedSourceError::InvalidPlan)?;
                 if !seen.insert(subject.role.clone())
                     || declared.selector.profile != subject.selector.profile
                 {
-                    return Err(SourceError::InvalidPlan);
+                    return Err(SignedSourceError::InvalidPlan);
                 }
                 let values: Option<BTreeMap<_, _>> = subject.selector.values.map(|fields| {
                     fields
@@ -151,7 +157,7 @@ impl EvidenceSourceConfig {
                 match (declared.selector.value_origin, &values) {
                     (SelectorValueOrigin::Request, Some(values))
                         if declared.selector.accepts_request_values(values) => {}
-                    _ => return Err(SourceError::InvalidPlan),
+                    _ => return Err(SignedSourceError::InvalidPlan),
                 }
                 Ok(SubjectRequest {
                     role: subject.role,
@@ -169,10 +175,10 @@ impl EvidenceSourceConfig {
         &self,
         body: Option<&Value>,
         maximum_bytes: usize,
-    ) -> Result<(Vec<u8>, RetainedEvidenceVerification), SourceError> {
+    ) -> Result<(Vec<u8>, RetainedEvidenceVerification), SignedSourceError> {
         let subjects = self.subjects(body)?;
         let [definition] = self.contract.definitions.as_slice() else {
-            return Err(SourceError::InvalidPlan);
+            return Err(SignedSourceError::InvalidPlan);
         };
         let expected_outputs = definition
             .concepts
@@ -181,7 +187,7 @@ impl EvidenceSourceConfig {
                 concept
                     .scalar_expected_output()
                     .or_else(|| concept.list_expected_output())
-                    .ok_or(SourceError::InvalidPlan)
+                    .ok_or(SignedSourceError::InvalidPlan)
             })
             .collect::<Result<_, _>>()?;
         let prepared = PreparedEvidenceRequest::prepare(
@@ -204,16 +210,16 @@ impl EvidenceSourceConfig {
             },
             self.revoked_key_ids.clone(),
         )
-        .map_err(|_| SourceError::InvalidPlan)?;
+        .map_err(|_| SignedSourceError::InvalidPlan)?;
         let bytes = prepared
             .claim_request_json()
-            .map_err(|_| SourceError::InvalidPlan)?;
+            .map_err(|_| SignedSourceError::InvalidPlan)?;
         if bytes.len() > maximum_bytes {
-            return Err(SourceError::InvalidPlan);
+            return Err(SignedSourceError::InvalidPlan);
         }
         let verification =
             RetainedEvidenceVerification::from_prepared(&prepared, self.trusted_jwks.clone())
-                .map_err(|_| SourceError::InvalidPlan)?;
+                .map_err(|_| SignedSourceError::InvalidPlan)?;
         Ok((bytes, verification))
     }
 
@@ -221,15 +227,15 @@ impl EvidenceSourceConfig {
         &self,
         verification: &RetainedEvidenceVerification,
         response: &[u8],
-    ) -> Result<(Value, DateTime<Utc>), SourceError> {
+    ) -> Result<(Value, DateTime<Utc>), SignedSourceError> {
         let verified = verification
             .verify(response)
-            .map_err(|_| SourceError::Verification)?;
+            .map_err(|_| SignedSourceError::Verification)?;
         let valid_until = DateTime::parse_from_rfc3339(&verified.evidence().valid_until)
-            .map_err(|_| SourceError::Verification)?
+            .map_err(|_| SignedSourceError::Verification)?
             .with_timezone(&Utc);
         let [definition] = self.contract.definitions.as_slice() else {
-            return Err(SourceError::InvalidPlan);
+            return Err(SignedSourceError::InvalidPlan);
         };
         let mut values = serde_json::Map::new();
         for concept in &definition.concepts {
@@ -242,7 +248,7 @@ impl EvidenceSourceConfig {
                 values.insert(
                     concept.handle.clone(),
                     serde_json::to_value(&supported.value)
-                        .map_err(|_| SourceError::Verification)?,
+                        .map_err(|_| SignedSourceError::Verification)?,
                 );
             }
         }

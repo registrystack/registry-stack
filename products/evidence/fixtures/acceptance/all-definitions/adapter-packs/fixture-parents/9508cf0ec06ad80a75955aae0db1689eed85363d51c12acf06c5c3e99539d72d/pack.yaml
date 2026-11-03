@@ -1,0 +1,97 @@
+{
+  "apiVersion": "id.registrystack.org/formats/adapter/pack/v1alpha1",
+  "kind": "AdapterPack",
+  "id": "fixture-parents",
+  "version": "1",
+  "endpoints": [
+    {
+      "id": "provider",
+      "component": "http",
+      "authentication": {
+        "type": "static-authorization"
+      },
+      "attemptTimeoutMilliseconds": 3000,
+      "maximumResponseBytes": 65536,
+      "requestHeaders": [
+        "accept"
+      ],
+      "operations": [
+        {
+          "id": "lookup",
+          "safeUpstream": true
+        }
+      ]
+    }
+  ],
+  "scripts": [
+    {
+      "path": "scripts/provider.rhai",
+      "digest": "sha256:80d68a5cc40216ed600fb00c8848fa1d9dd2e838c908f7dbb1a0bfe0276d62f4"
+    }
+  ],
+  "sourceRoutes": [
+    {
+      "id": "lookup",
+      "evidence": {
+        "inputsSchema": {
+          "path": "schemas/inputs.json",
+          "digest": "sha256:5de27fbc4e45093bf85a259c3c3dd53f86b8f4a62cba9d7f1bdc553ac5f5e854"
+        },
+        "factsSchema": {
+          "path": "schemas/facts.json",
+          "digest": "sha256:f7828b82e3f13c9a165d70526769d3454fdd93f92449d1f9dcc6217e63d4da77"
+        },
+        "acquisitionPosture": "field-projected"
+      },
+      "steps": [
+        {
+          "setHeader": {
+            "name": "Accept",
+            "value": {
+              "constant": "application/json"
+            }
+          }
+        },
+        {
+          "to": {
+            "uri": "http:provider",
+            "parameters": {
+              "httpMethod": "POST",
+              "path": "/v1/child-relationships",
+              "body": {
+                "rhai": {
+                  "file": "scripts/provider.rhai",
+                  "entrypoint": "request"
+                }
+              },
+              "operation": "lookup"
+            }
+          }
+        },
+        {
+          "setBody": {
+            "rhai": {
+              "file": "scripts/provider.rhai",
+              "entrypoint": "project"
+            }
+          }
+        },
+        {
+          "validateSchema": {
+            "path": "schemas/provider.json",
+            "digest": "sha256:d8efe1cd597ee96c08401f27df56ca952c5441e0201773ee3f097d02a0585e80"
+          }
+        },
+        {
+          "setBody": {
+            "rhai": {
+              "file": "scripts/provider.rhai",
+              "entrypoint": "lookup"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "testedVersions": []
+}

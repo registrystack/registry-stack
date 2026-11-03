@@ -684,6 +684,18 @@ async fn upgrading_a_version_100_journal_keeps_its_rows_and_accepts_new_event_ki
         .await
         .expect_err("version 100 does not know breakerRefused");
     expect_check_violation(error, "breakerRefused before the upgrade");
+    for kind in [
+        "exchangeAccepted",
+        "recoveryChecked",
+        "recoveryCheckFailed",
+        "resumeStepStarted",
+        "resumeStepCheckpointed",
+    ] {
+        let error = journal::append(&client, event(kind), SystemTime::now())
+            .await
+            .expect_err("version 100 does not know asynchronous recovery events");
+        expect_check_violation(error, "an asynchronous kind before the upgrade");
+    }
 
     journal::migrate(&mut client)
         .await
@@ -700,6 +712,17 @@ async fn upgrading_a_version_100_journal_keeps_its_rows_and_accepts_new_event_ki
     journal::append(&client, event("breakerFallback"), SystemTime::now())
         .await
         .expect("the current schema accepts breakerFallback");
+    for kind in [
+        "exchangeAccepted",
+        "recoveryChecked",
+        "recoveryCheckFailed",
+        "resumeStepStarted",
+        "resumeStepCheckpointed",
+    ] {
+        journal::append(&client, event(kind), SystemTime::now())
+            .await
+            .expect("the current schema accepts an asynchronous recovery event");
+    }
     let rows = client
         .query(
             "SELECT event_kind FROM adapter_journal_events ORDER BY 1",
@@ -714,7 +737,12 @@ async fn upgrading_a_version_100_journal_keeps_its_rows_and_accepts_new_event_ki
             "breakerFallback",
             "breakerRefused",
             "callRefused",
-            "exchangeCreated"
+            "exchangeAccepted",
+            "exchangeCreated",
+            "recoveryChecked",
+            "recoveryCheckFailed",
+            "resumeStepCheckpointed",
+            "resumeStepStarted"
         ]
     );
 }

@@ -339,6 +339,7 @@ pub enum LookupResult {
     Match(BTreeMap<String, Value>),
     NoMatch,
     Ambiguous,
+    Unresolved,
 }
 
 redacted_debug!(

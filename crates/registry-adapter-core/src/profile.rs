@@ -129,6 +129,8 @@ pub const ENVELOPE_SLOTS: &[&str] = &[
     "records",
     "requestId",
     "status",
+    "statusExpiresAt",
+    "statusLink",
 ];
 
 /// The slots only a read operation's request envelope fills, from the
@@ -145,6 +147,15 @@ pub const SLOT_RECORDS: &str = "records";
 pub const SLOT_PROBLEM_CODE: &str = "problemCode";
 /// The optional, closed data object declared by the selected problem.
 pub const SLOT_PROBLEM_DATA: &str = "problemData";
+/// The accepted response's facade-owned relative status link.
+pub const SLOT_STATUS_LINK: &str = "statusLink";
+/// The accepted response's committed recovery expiry.
+pub const SLOT_STATUS_EXPIRES_AT: &str = "statusExpiresAt";
+
+const ASYNC_ACCEPTED_SLOTS: &[&str] = &[SLOT_STATUS_EXPIRES_AT, SLOT_STATUS_LINK, "requestId"];
+/// Maximum caller-visible relative asynchronous status-link bytes.
+pub const MAX_ASYNC_STATUS_LINK_BYTES: usize = 2_048;
+const ASYNC_STATUS_ID_BYTES: usize = 32;
 
 /// An envelope template: a JSON template whose string members carry
 /// `{{slot}}` placeholders from the closed vocabulary
@@ -171,11 +182,125 @@ impl EnvelopeTemplate {
     }
 }
 
+/// One profile-owned caller path for asynchronous write status. The path
+/// remains inside the facade and carries exactly one opaque status handle;
+/// it never accepts a source URL or caller-selected path member.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct AsyncStatusPath(String);
+
+impl AsyncStatusPath {
+    /// Admit one origin-relative path containing exactly `{statusId}`.
+    pub fn new(path: String) -> Result<Self, registry_platform_yaml::Invalid> {
+        let handle_count = path.matches("{statusId}").count();
+        let whole_segment = path.find("{statusId}").is_some_and(|start| {
+            let before = &path[..start];
+            let after = &path[start + "{statusId}".len()..];
+            before.ends_with('/') && (after.is_empty() || after.starts_with('/'))
+        });
+        let without_handle = path.replace("{statusId}", "");
+        let rendered_bytes = without_handle.len().saturating_add(ASYNC_STATUS_ID_BYTES);
+        let valid = path.starts_with('/')
+            && !path.starts_with("//")
+            && !path.contains(['?', '#', '\\'])
+            && !path
+                .chars()
+                .any(|character| character.is_control() || character.is_whitespace())
+            && handle_count == 1
+            && whole_segment
+            && !without_handle.contains(['{', '}'])
+            && rendered_bytes <= MAX_ASYNC_STATUS_LINK_BYTES;
+        if !valid {
+            return Err(registry_platform_yaml::Invalid::expected(
+                "an origin-relative facade path with exactly one whole-segment {statusId} placeholder",
+                "Write a relative facade path such as /v1/write-status/{statusId}; keep the placeholder as a whole segment and do not include another placeholder, query, fragment, authority, or source URL.",
+            ));
+        }
+        Ok(Self(path))
+    }
+
+    /// The authored relative path.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for AsyncStatusPath {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Self::new(String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+    }
+}
+
+/// The caller-visible asynchronous completion contract of one write.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProfileAsyncCompletion {
+    /// The status returned after the source proves successful completion.
+    pub completed_status: registry_platform_yaml::BoundedU32<200, 299>,
+    /// The profile-owned facade path that receives the opaque status id.
+    pub status_path: AsyncStatusPath,
+    /// The exact accepted response shape, over the three async slots and
+    /// optional profile parameterized parts.
+    pub accepted_envelope: EnvelopeTemplate,
+}
+
+impl<'de> Deserialize<'de> for ProfileAsyncCompletion {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct Wire {
+            completed_status: registry_platform_yaml::BoundedU32<200, 299>,
+            status_path: AsyncStatusPath,
+            accepted_envelope: EnvelopeTemplate,
+        }
+
+        let wire = Wire::deserialize(deserializer)?;
+        if wire.completed_status.get() == 202 {
+            return Err(registry_platform_yaml::Invalid::expected(
+                "a terminal completedStatus other than 202",
+                "Choose a successful terminal status from 200 through 299 other than 202.",
+            )
+            .into_error());
+        }
+        if crate::envelope::parse_envelope_template(wire.accepted_envelope.text()).is_err() {
+            return Err(registry_platform_yaml::Invalid::expected(
+                "an acceptedEnvelope containing valid JSON template data",
+                "Repair the accepted response template and its placeholders.",
+            )
+            .into_error());
+        }
+        let placeholders = crate::checks::envelope_placeholders(wire.accepted_envelope.text());
+        let carries_required = ASYNC_ACCEPTED_SLOTS.iter().all(|required| {
+            placeholders.iter().any(|(name, form)| {
+                name == required && *form == crate::envelope::SlotForm::Required
+            })
+        });
+        let carries_forbidden = placeholders
+            .iter()
+            .any(|(name, _)| !ASYNC_ACCEPTED_SLOTS.contains(&name.as_str()));
+        if !carries_required || carries_forbidden {
+            return Err(registry_platform_yaml::Invalid::expected(
+                "an acceptedEnvelope with required statusLink, statusExpiresAt, and requestId slots and no other fixed facade slot",
+                "Use the three required asynchronous slots; use only declared profile parameterized parts beside them.",
+            )
+            .into_error());
+        }
+        Ok(Self {
+            completed_status: wire.completed_status,
+            status_path: wire.status_path,
+            accepted_envelope: wire.accepted_envelope,
+        })
+    }
+}
+
 /// One facade operation, declared by id
 /// (`products/adapter/CONCEPT.md` sections 6 and 7). The id is a
 /// profile-declared bounded string (CFG-ID-5), never an engine enum.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProfileOperation {
     /// The profile-declared operation id a binding names.
@@ -235,6 +360,70 @@ pub struct ProfileOperation {
     /// The pagination parameters of a search operation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pagination: Option<PaginationParameters>,
+    /// The explicit asynchronous completion contract of a 202 write.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub async_completion: Option<ProfileAsyncCompletion>,
+}
+
+impl<'de> Deserialize<'de> for ProfileOperation {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct Wire {
+            id: LocalId,
+            method: crate::model::HttpMethod,
+            path: String,
+            #[serde(default)]
+            path_parameters: UniqueList<LocalId>,
+            record_type_parameter: LocalId,
+            #[serde(default)]
+            record_id_parameter: Option<LocalId>,
+            #[serde(default = "default_success_status")]
+            success_status: registry_platform_yaml::BoundedU32<200, 299>,
+            #[serde(default)]
+            request_envelope: Option<EnvelopeTemplate>,
+            #[serde(default)]
+            read_only: bool,
+            #[serde(default)]
+            request_maximum_bytes: Option<BoundedU64<1, 1_048_576>>,
+            response_envelope: EnvelopeTemplate,
+            #[serde(default)]
+            item_envelope: Option<EnvelopeTemplate>,
+            #[serde(default)]
+            pagination: Option<PaginationParameters>,
+            #[serde(default)]
+            async_completion: Option<ProfileAsyncCompletion>,
+        }
+
+        let wire = Wire::deserialize(deserializer)?;
+        let is_async_status = wire.success_status.get() == 202;
+        let has_async_contract = wire.async_completion.is_some();
+        if is_async_status != has_async_contract
+            || (has_async_contract && (wire.method.is_safe() || wire.read_only))
+        {
+            return Err(registry_platform_yaml::Invalid::expected(
+                "successStatus 202 and asyncCompletion together on one non-read write",
+                "Declare both on an asynchronous write, or omit both for a synchronous operation.",
+            )
+            .into_error());
+        }
+        Ok(Self {
+            id: wire.id,
+            method: wire.method,
+            path: wire.path,
+            path_parameters: wire.path_parameters,
+            record_type_parameter: wire.record_type_parameter,
+            record_id_parameter: wire.record_id_parameter,
+            success_status: wire.success_status,
+            request_envelope: wire.request_envelope,
+            read_only: wire.read_only,
+            request_maximum_bytes: wire.request_maximum_bytes,
+            response_envelope: wire.response_envelope,
+            item_envelope: wire.item_envelope,
+            pagination: wire.pagination,
+            async_completion: wire.async_completion,
+        })
+    }
 }
 
 impl ProfileOperation {
@@ -431,6 +620,7 @@ mod tests {
             read_only: false,
             request_maximum_bytes: None,
             pagination: None,
+            async_completion: None,
         }
     }
 
@@ -693,6 +883,14 @@ mod tests {
             schema["$defs"]["Problem"]["properties"]["dataFields"]["minItems"],
             serde_json::json!(1)
         );
+        assert_eq!(
+            schema["$defs"]["ProfileOperation"]["additionalProperties"],
+            serde_json::json!(false)
+        );
+        assert_eq!(
+            schema["$defs"]["ProfileAsyncCompletion"]["additionalProperties"],
+            serde_json::json!(false)
+        );
     }
 
     /// Problem codes are unique at the reader (CFG-ID-5): two entries
@@ -739,6 +937,8 @@ mod tests {
             "problemDetail",
             "problemData",
             "status",
+            "statusExpiresAt",
+            "statusLink",
             "filters",
             "pageSize",
             "cursor",
@@ -748,7 +948,7 @@ mod tests {
                 "{slot} must stay in the closed vocabulary"
             );
         }
-        assert_eq!(ENVELOPE_SLOTS.len(), 14);
+        assert_eq!(ENVELOPE_SLOTS.len(), 16);
     }
 
     /// Envelope templates answer slot-mention queries in both placeholder
@@ -782,5 +982,92 @@ mod tests {
             serde_json::from_str::<PaginationParameters>(&json).ok(),
             Some(pagination)
         );
+    }
+
+    #[test]
+    fn async_completion_is_closed_and_keeps_202_explicit() {
+        let operation = |status: u32, async_completion: &str| {
+            format!(
+                r#"{{"id":"records-create","method":"POST","path":"/v1/records/{{type}}","pathParameters":["type"],"recordTypeParameter":"type","successStatus":{status},"requestEnvelope":"{{\"record\": {{{{record}}}}}}","responseEnvelope":"{{\"record\": {{{{record}}}}}}"{async_completion}}}"#
+            )
+        };
+        let declared = r#", "asyncCompletion":{"completedStatus":200,"statusPath":"/v1/write-status/{statusId}","acceptedEnvelope":"{\"status\":\"accepted\",\"statusLink\":\"{{statusLink}}\",\"expiresAt\":\"{{statusExpiresAt}}\",\"requestId\":\"{{requestId}}\"}"}"#;
+
+        let parsed = serde_json::from_str::<ProfileOperation>(&operation(202, declared))
+            .expect("a complete asynchronous write declaration reads");
+        let completion = parsed.async_completion.expect("async completion");
+        assert_eq!(completion.completed_status.get(), 200);
+        assert_eq!(
+            completion.status_path.as_str(),
+            "/v1/write-status/{statusId}"
+        );
+        assert!(completion.accepted_envelope.mentions(SLOT_STATUS_LINK));
+        assert!(completion
+            .accepted_envelope
+            .mentions(SLOT_STATUS_EXPIRES_AT));
+
+        assert!(serde_json::from_str::<ProfileOperation>(&operation(202, "")).is_err());
+        assert!(serde_json::from_str::<ProfileOperation>(&operation(200, declared)).is_err());
+        assert!(serde_json::from_str::<ProfileOperation>(&operation(
+            202,
+            &declared.replace("\"completedStatus\":200", "\"completedStatus\":202")
+        ))
+        .is_err());
+        assert!(serde_json::from_str::<ProfileOperation>(&operation(
+            202,
+            &declared.replace("\"acceptedEnvelope\":", "\"bogus\":1,\"acceptedEnvelope\":")
+        ))
+        .is_err());
+    }
+
+    #[test]
+    fn async_status_path_is_one_origin_relative_handle_path() {
+        for accepted in ["/v1/write-status/{statusId}", "/{statusId}"] {
+            assert!(
+                AsyncStatusPath::new(accepted.to_string()).is_ok(),
+                "{accepted}"
+            );
+        }
+        for refused in [
+            "v1/status/{statusId}",
+            "//source.example/status/{statusId}",
+            "https://source.example/status/{statusId}",
+            "/v1/status/{statusId}?view=full",
+            "/v1/status/{statusId}#result",
+            "/v1/write status/{statusId}",
+            "/v1/status-{statusId}",
+            "/v1/{statusId}.json",
+            "/v1\\status\\{statusId}",
+            "/v1/status/id",
+            "/v1/status/{statusId}/{statusId}",
+            "/v1/status/{other}",
+            "/v1/status/{statusId}/{other}",
+        ] {
+            assert!(
+                AsyncStatusPath::new(refused.to_string()).is_err(),
+                "{refused}"
+            );
+        }
+    }
+
+    #[test]
+    fn accepted_envelope_requires_async_slots_and_refuses_result_slots() {
+        let completion = |accepted_envelope: &str| {
+            serde_json::json!({
+                "completedStatus": 200,
+                "statusPath": "/v1/status/{statusId}",
+                "acceptedEnvelope": accepted_envelope,
+            })
+        };
+        let complete = r#"{"status":"accepted","link":"{{statusLink}}","expires":"{{statusExpiresAt}}","request":"{{requestId}}","label":"deploymentLabel"}"#;
+        assert!(serde_json::from_value::<ProfileAsyncCompletion>(completion(complete)).is_ok());
+        for refused in [
+            r#"{"expires":"{{statusExpiresAt}}","request":"{{requestId}}"}"#,
+            r#"{"link":"{{statusLink}}","request":"{{requestId}}"}"#,
+            r#"{"link":"{{statusLink}}","expires":"{{statusExpiresAt}}"}"#,
+            r#"{"link":"{{statusLink}}","expires":"{{statusExpiresAt}}","request":"{{requestId}}","record":{{record}}}"#,
+        ] {
+            assert!(serde_json::from_value::<ProfileAsyncCompletion>(completion(refused)).is_err());
+        }
     }
 }

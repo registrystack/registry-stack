@@ -1,7 +1,7 @@
 # yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/job/job.v1alpha1.schema.json
 #
-# The kobotoolbox example job: the kobotoolbox pack's kobo-submissions
-# source route, bounded by this profile. One page per run, 100
+# The direct-BReg kobotoolbox example job: the shared kobotoolbox pack's
+# kobo-submissions source route, bounded by this profile. One page per run, 100
 # submissions at most, the endpoint's 1 MiB response bound as the
 # profile's response and page bound. The read bounds carry the job
 # profile's documented members at their defaults; no pollEnrich read
@@ -27,8 +27,22 @@ source:
   pack:
     id: kobotoolbox
     version: "1"
-    digest: sha256:d0e2d93b18b732eb33b27b8e04cc9b459c9898d4a30144c831cc3c72d9d223a8
+    digest: sha256:cb1c31044611e3f23464291f6dd2697b00be427da0b9523d0b717fe776e5d667
   route: kobo-submissions
+# Programme semantics stay beside the job, not in the reusable Kobo provider
+# pack. This example maps one projected submission into a synthetic BReg
+# Proposal Action, then starts and submits that Proposal with stable keys.
+destination:
+  type: direct-breg
+  binding: household-registry
+  accessProfile: ingestion
+  action: register-household
+  mode: proposal
+  mapping:
+    file: mappings/register-household.rhai
+    entrypoint: map_submission
+    digest: sha256:d910d0f72f70ea9dbf7dbb2e9f65ec3ad0a3231cf3baca7d96a1e03b2e54423e
+  receiptRetentionDays: 7
 # The projection names members every item value carries: the
 # submission id, a top-level answer, and an answer inside a group (the
 # pack nests Kobo's slash-separated names into objects).

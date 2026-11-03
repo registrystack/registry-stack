@@ -1,0 +1,43 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.pack.attempt-timeout-above-ordinary-maximum: this artifact set must be refused with
+# exactly adapter.pack.attempt-timeout-above-ordinary-maximum. The project is the clean baseline.
+#
+# Verify with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.pack.attempt-timeout-above-ordinary-maximum/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-api-example
+  version: "1"
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:17812d384ab98d1174cfd4b6402df57e7eadb412fb03307191f418cb78b598eb
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:f1576c2e32deedd4861ed4ea02b75d15ba97bd5b72a25cf81fe193e015946acd
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplate: find-cases
+    routeId: case-find
+bindings:
+  - id: case-get
+    operation: cases-get
+    recordType: case
+    route: case-find
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases-get
+    recordTypes:
+      - case

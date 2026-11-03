@@ -14,7 +14,7 @@ use std::{
     collections::BTreeMap,
     fs::{self, File, OpenOptions},
     io::{Read as _, Write as _},
-    net::{TcpListener, TcpStream},
+    net::{Ipv4Addr, TcpListener, TcpStream},
     os::unix::{
         fs::{OpenOptionsExt as _, PermissionsExt as _},
         net::{UnixListener, UnixStream},
@@ -61,8 +61,9 @@ fn production_candidate_handoff_reaches_verified_assertion_and_audit() {
     let fixture = Fixture::new();
     let evidence = evidence_binary();
     fixture.stage_authoring_project();
-    fixture.stage_https_identity();
-    fixture.stage_target();
+    let source_proxy = fixture.start_source_proxy();
+    fixture.stage_https_identity(source_proxy.address);
+    fixture.stage_target_for_source(source_proxy.address);
     let _transit = fixture.start_transit();
 
     assert_success(
@@ -488,7 +489,8 @@ fn explicit_evidence_grade_target_applies_its_own_strict_source_rules() {
     fixture.stage_target();
     edit_json_document(&fixture.target.join("target.yaml"), |target| {
         target["assuranceProfile"] = json!("evidence-grade");
-        target["connections"]["people"]["origin"] = json!("http://registry.invalid");
+        target["connections"]["people"]["endpoints"]["provider"]["origin"] =
+            json!("http://registry.invalid");
     });
 
     let output = evidencectl()
@@ -508,9 +510,9 @@ fn explicit_evidence_grade_target_applies_its_own_strict_source_rules() {
         .iter()
         .any(|diagnostic| {
             diagnostic["severity"] == "error"
-                && diagnostic["path"]
-                    .as_str()
-                    .is_some_and(|path| path.contains("/connections/people/origin"))
+                && diagnostic["path"].as_str().is_some_and(|path| {
+                    path.contains("/connections/people/endpoints/provider/origin")
+                })
         }));
 }
 
@@ -771,6 +773,36 @@ impl Drop for TransitServer {
     }
 }
 
+struct SourceProxy {
+    docker: PathBuf,
+    container_id: String,
+    address: Ipv4Addr,
+}
+
+impl Drop for SourceProxy {
+    fn drop(&mut self) {
+        let stopped = Command::new(&self.docker)
+            .args(["stop", "--time", "1", &self.container_id])
+            .output();
+        let failure = match stopped {
+            Ok(output) if output.status.success() => None,
+            Ok(output) => Some(format!(
+                "source proxy cleanup failed with {}; stderr: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr)
+            )),
+            Err(error) => Some(format!("source proxy cleanup could not start: {error}")),
+        };
+        if let Some(failure) = failure {
+            if std::thread::panicking() {
+                eprintln!("{failure}");
+            } else {
+                panic!("{failure}");
+            }
+        }
+    }
+}
+
 struct Fixture {
     temporary: tempfile::TempDir,
     root: PathBuf,
@@ -838,6 +870,120 @@ impl Fixture {
         }
     }
 
+    fn start_source_proxy(&self) -> SourceProxy {
+        let docker = installed_binary("DOCKER_BIN", "docker");
+        assert_isolated_orbstack_context(&docker);
+        let image = immutable_socat_image(&docker);
+        let name = format!(
+            "registry-evidence-handoff-source-{}-{}",
+            std::process::id(),
+            self.https_port
+        );
+        let listen = format!("TCP-LISTEN:{},fork,reuseaddr", self.https_port);
+        let upstream = format!("TCP:host.docker.internal:{}", self.https_port);
+        let started = assert_success(
+            Command::new(&docker)
+                .args([
+                    "run",
+                    "--detach",
+                    "--rm",
+                    "--pull=never",
+                    "--name",
+                    &name,
+                    "--network",
+                    "bridge",
+                    "--read-only",
+                    "--cap-drop=ALL",
+                    "--security-opt",
+                    "no-new-privileges=true",
+                    "--user",
+                    "65534:65534",
+                    "--pids-limit",
+                    "32",
+                    "--memory",
+                    "32m",
+                    &image,
+                    "-d",
+                    "-d",
+                    &listen,
+                    &upstream,
+                ])
+                .output()
+                .expect("start isolated source proxy"),
+            "isolated source proxy start",
+        );
+        let container_id = String::from_utf8(started.stdout)
+            .expect("source proxy container id is UTF-8")
+            .trim()
+            .to_owned();
+        assert!(
+            container_id.len() == 64 && container_id.bytes().all(|byte| byte.is_ascii_hexdigit()),
+            "Docker returned an invalid source proxy container id"
+        );
+        let mut proxy = SourceProxy {
+            docker,
+            container_id,
+            address: Ipv4Addr::UNSPECIFIED,
+        };
+        let inspected = assert_success(
+            Command::new(&proxy.docker)
+                .args(["inspect", &proxy.container_id])
+                .output()
+                .expect("inspect isolated source proxy"),
+            "isolated source proxy inspection",
+        );
+        let documents: Value =
+            serde_json::from_slice(&inspected.stdout).expect("source proxy inspection JSON");
+        let document = documents
+            .as_array()
+            .and_then(|documents| documents.first())
+            .expect("source proxy inspection document");
+        assert_eq!(document["Image"], image, "source proxy image identity");
+        assert_eq!(document["State"]["Running"], true, "source proxy is live");
+        assert_eq!(
+            document["HostConfig"]["NetworkMode"], "bridge",
+            "source proxy stays on the private bridge"
+        );
+        let port_bindings = &document["HostConfig"]["PortBindings"];
+        assert!(
+            port_bindings.is_null()
+                || port_bindings
+                    .as_object()
+                    .is_some_and(serde_json::Map::is_empty),
+            "source proxy must publish no host ports"
+        );
+        assert_eq!(
+            document["HostConfig"]["ReadonlyRootfs"], true,
+            "source proxy root is read only"
+        );
+        assert_eq!(document["Config"]["User"], "65534:65534");
+        assert!(document["HostConfig"]["CapDrop"]
+            .as_array()
+            .is_some_and(|caps| caps.iter().any(|capability| capability == "ALL")));
+        assert!(document["HostConfig"]["SecurityOpt"]
+            .as_array()
+            .is_some_and(|options| options
+                .iter()
+                .any(|option| option == "no-new-privileges=true")));
+        assert!(document["Mounts"].as_array().is_some_and(Vec::is_empty));
+        let networks = document["NetworkSettings"]["Networks"]
+            .as_object()
+            .expect("source proxy networks");
+        assert_eq!(networks.len(), 1, "source proxy has one private network");
+        let bridge = networks.get("bridge").expect("source proxy bridge binding");
+        let address = bridge["IPAddress"]
+            .as_str()
+            .expect("source proxy bridge address")
+            .parse::<Ipv4Addr>()
+            .expect("source proxy IPv4 address");
+        assert!(
+            address.is_private(),
+            "source proxy must receive an RFC 1918 address"
+        );
+        proxy.address = address;
+        proxy
+    }
+
     fn start_transit(&self) -> TransitServer {
         let socket = self.root.join("transit-proxy.sock");
         let listener = UnixListener::bind(&socket).expect("bind synthetic Transit socket");
@@ -878,29 +1024,19 @@ impl Fixture {
     fn stage_authoring_project(&self) {
         fs::create_dir_all(self.project.join("functions")).expect("Function directory");
         fs::create_dir_all(self.project.join("fixtures")).expect("fixture directory");
+        write_http_source_pack(&self.project);
         let project = json!({
             "apiVersion":"id.registrystack.org/formats/evidence/project/v1alpha1",
             "kind":"EvidenceProject",
             "id":"production-handoff",
             "selectorProfiles":{"person-reference-v1":{"maximumAggregateBytes":200,"fields":{"person-id":{"type":"string","minimumBytes":1,"maximumBytes":200}}}},
             "functions":[
-                {"id":"people-prepare","interface":"source-prepare/v1","source":"functions/people-prepare.rhai"},
-                {"id":"people-extract","interface":"source-extract/v1","source":"functions/people-extract.rhai"},
                 {"id":"adult-status-derive","interface":"assertion-derive/v1","source":"functions/adult-status-derive.rhai"}
             ],
-            "sources":{"people":{
-                "type":"http-json","connection":"people","acquisitionPosture":"field-projected",
-                "selectors":[{"role":"subject","profiles":["person-reference-v1"]}],
-                "request":{"method":"POST","path":"/v1/facts","fixedHeaders":[{"name":"Accept","value":"application/json"}]},
-                "prepare":{"function":"people-prepare"},
-                "adapterParameters":{"requestedFields":["date_of_birth"],"resultLimit":2},
-                "adapterParametersSchema":{"type":"object","additionalProperties":false,"required":["requestedFields","resultLimit"],"properties":{"requestedFields":{"const":["date_of_birth"]},"resultLimit":{"const":2}}},
-                "preparationLimits":{"query":"forbidden","jsonBody":"required","maximumJsonDepth":8,"maximumCollectionItems":16,"maximumStringBytes":256,"maximumNormalizedBytes":4096},
-                "response":{"projection":["/total","/date_of_birth"],"shape":{"type":"object","additionalProperties":false,"required":["total"],"properties":{"total":{"type":"bounded-integer","minimum":0,"maximum":1000000},"date_of_birth":{"type":"date"}}},"maximumBytes":65536},
-                "extract":{"function":"people-extract"},
-                "facts":{"date-of-birth":{"type":"date"}},
-                "limits":{"attemptTimeoutMilliseconds":3000,"maximumConcurrency":8}
-            }},
+            "sources":{"people": source_binding(
+                "people",
+                vec![("personId", "subject", "person-reference-v1", "person-id")],
+            )},
             "assertionDefinitions":{"adult-status": assertion_definition(AssertionDefinitionInput {
                 question: "Is the person at least 18 years old?",
                 requirement: REQUIREMENT,
@@ -917,25 +1053,6 @@ impl Fixture {
             })}
         });
         write_json_document(&self.project.join("evidence.yaml"), &project);
-        fs::write(self.project.join("functions/people-prepare.rhai"), r#"fn prepare(selectors, context) {
-    let parameters = context["parameters"];
-    let lookup = #{"person_id": selectors["subject"]["values"]["person-id"]};
-    #{"query": [], "body": #{"lookup": lookup, "fields": parameters["requestedFields"], "limit": parameters["resultLimit"]}}
-}
-"#).expect("people prepare Function");
-        fs::write(
-            self.project.join("functions/people-extract.rhai"),
-            r#"fn extract(source_response, context) {
-    let total = source_response["total"];
-    if total == 0 { return #{outcome: "no_match"}; }
-    if total > 1 { return #{outcome: "ambiguous"}; }
-    let value = get_path(source_response, "/date_of_birth");
-    if is_missing(value) { return #{outcome: "match", facts: #{}}; }
-    #{outcome: "match", facts: #{"date-of-birth": value}}
-}
-"#,
-        )
-        .expect("people extract Function");
         fs::write(self.project.join("functions/adult-status-derive.rhai"), r#"fn derive(facts, selectors, context) {
     let born = parse_date(required(facts["date-of-birth"], "date_of_birth_missing"));
     [#{output: "adult", value: compare_dates(context.legal_local_date, add_calendar_years(born, 18)) >= 0}]
@@ -951,12 +1068,42 @@ common:
   selectors:
     subject: {{profile: person-reference-v1, values: {{person-id: {SELECTOR_CANARY}}}}}
 cases:
-  - {{id: positive, source: {{total: 1, date_of_birth: '2000-01-01'}}, expectedValue: true, expectedLookup: match, derivationRuns: true, signedSuccess: true}}
-  - {{id: negative-false-is-success, source: {{total: 1, date_of_birth: '2010-01-01'}}, expectedValue: false, expectedLookup: match, derivationRuns: true, signedSuccess: true}}
-  - {{id: boundary-on, legalLocalDate: '2026-08-02', source: {{total: 1, date_of_birth: '2008-08-02'}}, expectedValue: true, expectedLookup: match, derivationRuns: true, signedSuccess: true}}
-  - {{id: missing-fact, source: {{total: 1}}, expectedPublicProblem: evidence.unavailable, derivationRuns: false, signedSuccess: false}}
-  - {{id: no-match, source: {{total: 0}}, expectedLookup: no_match, expectedPublicProblem: evidence.unavailable, derivationRuns: false, signedSuccess: false}}
-  - {{id: ambiguous, source: {{total: 2}}, expectedLookup: ambiguous, expectedPublicProblem: evidence.unavailable, derivationRuns: false, signedSuccess: false}}
+  - id: positive
+    source: {people_source}
+    expectedValue: true
+    expectedLookup: match
+    derivationRuns: true
+    signedSuccess: true
+  - id: negative-false-is-success
+    source: {people_negative_source}
+    expectedValue: false
+    expectedLookup: match
+    derivationRuns: true
+    signedSuccess: true
+  - id: boundary-on
+    legalLocalDate: '2026-08-02'
+    source: {people_boundary_source}
+    expectedValue: true
+    expectedLookup: match
+    derivationRuns: true
+    signedSuccess: true
+  - id: missing-fact
+    source: {people_missing_source}
+    expectedPublicProblem: evidence.unavailable
+    derivationRuns: false
+    signedSuccess: false
+  - id: no-match
+    source: {people_no_match_source}
+    expectedLookup: no_match
+    expectedPublicProblem: evidence.unavailable
+    derivationRuns: false
+    signedSuccess: false
+  - id: ambiguous
+    source: {people_ambiguous_source}
+    expectedLookup: ambiguous
+    expectedPublicProblem: evidence.unavailable
+    derivationRuns: false
+    signedSuccess: false
   - {{id: source-failure, sourceFailure: timeout, expectedPublicProblem: source.unavailable, signedSuccess: false}}
   - {{id: negative-wrong-derived-type, injectedDerivation: [{{concept_id: {CONCEPT}, value: 'true'}}], expected: output-gate-rejection}}
   - {{id: anti-reconstruction, companionBundle: threshold-ladder, expected: bundle-rejection}}
@@ -964,7 +1111,38 @@ privacyExpectation:
   evidenceContains: [{CONCEPT}]
   evidenceExcludes: [date_of_birth, person-id]
   diagnosticsExclude: [{SELECTOR_CANARY}, fixture-source-canary]
-"#)).expect("adult fixture");
+"#,
+            people_source = fixture_http_source(
+                "/v1/facts",
+                json!({"lookup":{"person_id":SELECTOR_CANARY},"fields":["date_of_birth"],"limit":2}),
+                json!({"total":1,"date_of_birth":"2000-01-01"}),
+            ),
+            people_negative_source = fixture_http_source(
+                "/v1/facts",
+                json!({"lookup":{"person_id":SELECTOR_CANARY},"fields":["date_of_birth"],"limit":2}),
+                json!({"total":1,"date_of_birth":"2010-01-01"}),
+            ),
+            people_boundary_source = fixture_http_source(
+                "/v1/facts",
+                json!({"lookup":{"person_id":SELECTOR_CANARY},"fields":["date_of_birth"],"limit":2}),
+                json!({"total":1,"date_of_birth":"2008-08-02"}),
+            ),
+            people_missing_source = fixture_http_source(
+                "/v1/facts",
+                json!({"lookup":{"person_id":SELECTOR_CANARY},"fields":["date_of_birth"],"limit":2}),
+                json!({"total":1}),
+            ),
+            people_no_match_source = fixture_http_source(
+                "/v1/facts",
+                json!({"lookup":{"person_id":SELECTOR_CANARY},"fields":["date_of_birth"],"limit":2}),
+                json!({"total":0}),
+            ),
+            people_ambiguous_source = fixture_http_source(
+                "/v1/facts",
+                json!({"lookup":{"person_id":SELECTOR_CANARY},"fields":["date_of_birth"],"limit":2}),
+                json!({"total":2}),
+            ),
+        )).expect("adult fixture");
     }
 
     fn stage_local_project(&self) {
@@ -972,8 +1150,10 @@ privacyExpectation:
         edit_json_document(&self.project.join("local-target.yaml"), |target| {
             target["project"] = json!("production-handoff");
             target["connections"]["people"] = json!({
-                "origin": format!("https://127.0.0.1:{}", self.https_port),
-                "authentication": {"type":"bearer", "tokenRef":"secret:file/source-token"}
+                "endpoints": {"provider": {
+                    "origin": format!("https://127.0.0.1:{}", self.https_port),
+                    "authentication": {"type":"bearer", "tokenRef":"secret:file/source-token"}
+                }}
             });
         });
         write_json_document(
@@ -1004,33 +1184,26 @@ privacyExpectation:
             project["selectorProfiles"]["child-reference-v1"] = json!({"maximumAggregateBytes":200,"fields":{"child-id":{"type":"string","minimumBytes":1,"maximumBytes":200}}});
             project["selectorProfiles"]["candidate-reference-v1"] = json!({"maximumAggregateBytes":200,"fields":{"candidate-id":{"type":"string","minimumBytes":1,"maximumBytes":200}}});
             for function in [
-                json!({"id":"immunizations-prepare","interface":"source-prepare/v1","source":"functions/immunizations-prepare.rhai"}),
-                json!({"id":"immunizations-extract","interface":"source-extract/v1","source":"functions/immunizations-extract.rhai"}),
-                json!({"id":"relationships-prepare","interface":"source-prepare/v1","source":"functions/relationships-prepare.rhai"}),
-                json!({"id":"relationships-extract","interface":"source-extract/v1","source":"functions/relationships-extract.rhai"}),
                 json!({"id":"age-bracket-derive","interface":"assertion-derive/v1","source":"functions/age-bracket-derive.rhai"}),
                 json!({"id":"immunization-summary-derive","interface":"assertion-derive/v1","source":"functions/immunization-summary-derive.rhai"}),
                 json!({"id":"parent-relationship-derive","interface":"assertion-derive/v1","source":"functions/parent-relationship-derive.rhai"}),
             ] {
                 project["functions"].as_array_mut().unwrap().push(function);
             }
-            project["sources"]["immunizations"] = http_source(
-                "/v1/immunizations",
-                "immunizations-prepare",
-                "immunizations-extract",
-                "dose_count",
-                json!({"type":"bounded-integer","minimum":0,"maximum":20}),
-                vec![("subject", "person-reference-v1")],
+            project["sources"]["immunizations"] = source_binding(
+                "immunizations",
+                vec![("personId", "subject", "person-reference-v1", "person-id")],
             );
-            project["sources"]["relationships"] = http_source(
-                "/v1/relationships",
-                "relationships-prepare",
-                "relationships-extract",
-                "relationship_confirmed",
-                json!({"type":"boolean"}),
+            project["sources"]["relationships"] = source_binding(
+                "relationships",
                 vec![
-                    ("child", "child-reference-v1"),
-                    ("candidate-parent", "candidate-reference-v1"),
+                    ("childId", "child", "child-reference-v1", "child-id"),
+                    (
+                        "candidateId",
+                        "candidate-parent",
+                        "candidate-reference-v1",
+                        "candidate-id",
+                    ),
                 ],
             );
             project["assertionDefinitions"]["age-bracket"] = assertion_definition(
@@ -1086,28 +1259,6 @@ privacyExpectation:
         });
         for (name, script) in [
             (
-                "immunizations-prepare",
-                r#"fn prepare(selectors, context) {
-    let lookup = #{"person_id": selectors["subject"]["values"]["person-id"]};
-    #{"query": [], "body": #{"lookup": lookup, "fields": ["dose_count"], "limit": 2}}
-}"#,
-            ),
-            (
-                "immunizations-extract",
-                r#"fn extract(source_response, context) { let total = source_response["total"]; if total == 0 { return #{outcome:"no_match"}; } if total > 1 { return #{outcome:"ambiguous"}; } #{outcome:"match", facts: #{dose_count: source_response["dose_count"]}} }"#,
-            ),
-            (
-                "relationships-prepare",
-                r#"fn prepare(selectors, context) {
-    let lookup = #{"child_id": selectors["child"]["values"]["child-id"], "candidate_id": selectors["candidate-parent"]["values"]["candidate-id"]};
-    #{"query": [], "body": #{"lookup": lookup, "fields": ["relationship_confirmed"], "limit": 2}}
-}"#,
-            ),
-            (
-                "relationships-extract",
-                r#"fn extract(source_response, context) { let total = source_response["total"]; if total == 0 { return #{outcome:"no_match"}; } if total > 1 { return #{outcome:"ambiguous"}; } #{outcome:"match", facts: #{relationship_confirmed: source_response["relationship_confirmed"]}} }"#,
-            ),
-            (
                 "age-bracket-derive",
                 r#"fn derive(facts, selectors, context) {
     let born = parse_date(required(facts["date-of-birth"], "date_of_birth_missing"));
@@ -1156,12 +1307,12 @@ common:
     path: /v1/facts
     fixedHeaders: [{{name: Accept, value: application/json}}]
 cases:
-  - {{id: positive, source: {{total: 1, date_of_birth: '2000-01-01'}}, expectedValue: 25-to-64, expectedLookup: match, derivationRuns: true, signedSuccess: true}}
-  - {{id: negative-under-18-is-success, source: {{total: 1, date_of_birth: '2010-01-01'}}, expectedValue: under-18, expectedLookup: match, derivationRuns: true, signedSuccess: true}}
-  - {{id: boundary-on-18, source: {{total: 1, date_of_birth: '2008-08-02'}}, expectedValue: 18-to-24, expectedLookup: match, derivationRuns: true, signedSuccess: true}}
-  - {{id: missing-fact, source: {{total: 1}}, expectedPublicProblem: evidence.unavailable, derivationRuns: false, signedSuccess: false}}
-  - {{id: no-match, source: {{total: 0}}, expectedLookup: no_match, expectedPublicProblem: evidence.unavailable, derivationRuns: false, signedSuccess: false}}
-  - {{id: ambiguous, source: {{total: 2}}, expectedLookup: ambiguous, expectedPublicProblem: evidence.unavailable, derivationRuns: false, signedSuccess: false}}
+  - {{id: positive, source: {positive}, expectedValue: 25-to-64, expectedLookup: match, derivationRuns: true, signedSuccess: true}}
+  - {{id: negative-under-18-is-success, source: {negative}, expectedValue: under-18, expectedLookup: match, derivationRuns: true, signedSuccess: true}}
+  - {{id: boundary-on-18, source: {boundary}, expectedValue: 18-to-24, expectedLookup: match, derivationRuns: true, signedSuccess: true}}
+  - {{id: missing-fact, source: {missing}, expectedPublicProblem: evidence.unavailable, derivationRuns: false, signedSuccess: false}}
+  - {{id: no-match, source: {no_match}, expectedLookup: no_match, expectedPublicProblem: evidence.unavailable, derivationRuns: false, signedSuccess: false}}
+  - {{id: ambiguous, source: {ambiguous}, expectedLookup: ambiguous, expectedPublicProblem: evidence.unavailable, derivationRuns: false, signedSuccess: false}}
   - {{id: source-failure, sourceFailure: timeout, expectedPublicProblem: source.unavailable, signedSuccess: false}}
   - {{id: negative-wrong-derived-type, injectedDerivation: [{{concept_id: {AGE_CONCEPT}, value: true}}], expected: output-gate-rejection}}
   - {{id: anti-reconstruction, companionBundle: threshold-ladder, expected: bundle-rejection}}
@@ -1169,7 +1320,13 @@ privacyExpectation:
   evidenceContains: [{AGE_CONCEPT}]
   evidenceExcludes: [date_of_birth, person_id]
   diagnosticsExclude: [{SELECTOR_CANARY}, fixture-source-canary]
-"#
+"#,
+                positive = person_fixture_source("/v1/facts", "date_of_birth", json!({"total":1,"date_of_birth":"2000-01-01"})),
+                negative = person_fixture_source("/v1/facts", "date_of_birth", json!({"total":1,"date_of_birth":"2010-01-01"})),
+                boundary = person_fixture_source("/v1/facts", "date_of_birth", json!({"total":1,"date_of_birth":"2008-08-02"})),
+                missing = person_fixture_source("/v1/facts", "date_of_birth", json!({"total":1})),
+                no_match = person_fixture_source("/v1/facts", "date_of_birth", json!({"total":0})),
+                ambiguous = person_fixture_source("/v1/facts", "date_of_birth", json!({"total":2})),
             ),
         )
         .expect("age-bracket fixture");
@@ -1193,26 +1350,26 @@ common:
     fixedHeaders: [{{name: Accept, value: application/json}}]
 cases:
   - id: positive
-    source: {{total: 1, dose_count: 4}}
+    source: {positive}
     expectedValues: {{schedule-complete: true, dose-count: 4}}
     expectedLookup: match
     derivationRuns: true
     signedSuccess: true
   - id: negative-false-is-success
-    source: {{total: 1, dose_count: 2}}
+    source: {negative}
     expectedValues: {{schedule-complete: false, dose-count: 2}}
     expectedLookup: match
     derivationRuns: true
     signedSuccess: true
   - id: boundary-maximum
-    source: {{total: 1, dose_count: 20}}
+    source: {boundary}
     expectedValues: {{schedule-complete: true, dose-count: 20}}
     expectedLookup: match
     derivationRuns: true
     signedSuccess: true
-  - {{id: missing-fact, source: {{total: 1}}, expectedPublicProblem: evidence.unavailable, derivationRuns: false, signedSuccess: false}}
-  - {{id: no-match, source: {{total: 0}}, expectedLookup: no_match, expectedPublicProblem: evidence.unavailable, derivationRuns: false, signedSuccess: false}}
-  - {{id: ambiguous, source: {{total: 2}}, expectedLookup: ambiguous, expectedPublicProblem: evidence.unavailable, derivationRuns: false, signedSuccess: false}}
+  - {{id: missing-fact, source: {missing}, expectedPublicProblem: evidence.unavailable, derivationRuns: false, signedSuccess: false}}
+  - {{id: no-match, source: {no_match}, expectedLookup: no_match, expectedPublicProblem: evidence.unavailable, derivationRuns: false, signedSuccess: false}}
+  - {{id: ambiguous, source: {ambiguous}, expectedLookup: ambiguous, expectedPublicProblem: evidence.unavailable, derivationRuns: false, signedSuccess: false}}
   - {{id: source-failure, sourceFailure: timeout, expectedPublicProblem: source.unavailable, signedSuccess: false}}
   - id: negative-wrong-derived-type
     injectedDerivation:
@@ -1224,7 +1381,13 @@ privacyExpectation:
   evidenceContains: [{SCHEDULE_CONCEPT}, {DOSE_COUNT_CONCEPT}]
   evidenceExcludes: [dose_count, person_id]
   diagnosticsExclude: [{SELECTOR_CANARY}, fixture-source-canary]
-"#
+"#,
+                positive = person_fixture_source("/v1/immunizations", "dose_count", json!({"total":1,"dose_count":4})),
+                negative = person_fixture_source("/v1/immunizations", "dose_count", json!({"total":1,"dose_count":2})),
+                boundary = person_fixture_source("/v1/immunizations", "dose_count", json!({"total":1,"dose_count":20})),
+                missing = person_fixture_source("/v1/immunizations", "dose_count", json!({"total":1})),
+                no_match = person_fixture_source("/v1/immunizations", "dose_count", json!({"total":0})),
+                ambiguous = person_fixture_source("/v1/immunizations", "dose_count", json!({"total":2})),
             ),
         )
         .expect("immunization fixture");
@@ -1251,18 +1414,18 @@ common:
     path: /v1/relationships
     fixedHeaders: [{{name: Accept, value: application/json}}]
 cases:
-  - {{id: positive, source: {{total: 1, relationship_confirmed: true}}, expectedValue: true, expectedLookup: match, derivationRuns: true, signedSuccess: true}}
-  - {{id: negative-false-is-success, source: {{total: 1, relationship_confirmed: false}}, expectedValue: false, expectedLookup: match, derivationRuns: true, signedSuccess: true}}
+  - {{id: positive, source: {positive}, expectedValue: true, expectedLookup: match, derivationRuns: true, signedSuccess: true}}
+  - {{id: negative-false-is-success, source: {negative}, expectedValue: false, expectedLookup: match, derivationRuns: true, signedSuccess: true}}
   - id: boundary-role-order
-    source: {{total: 1, relationship_confirmed: true}}
+    source: {positive}
     expectedValue: true
     expectedLookup: match
     derivationRuns: true
     signedSuccess: true
     expectedSubjectRoles: [child, candidate-parent]
-  - {{id: missing-fact, source: {{total: 1}}, expectedPublicProblem: evidence.unavailable, derivationRuns: false, signedSuccess: false}}
-  - {{id: no-match, source: {{total: 0}}, expectedLookup: no_match, expectedPublicProblem: evidence.unavailable, derivationRuns: false, signedSuccess: false}}
-  - {{id: ambiguous, source: {{total: 2}}, expectedLookup: ambiguous, expectedPublicProblem: evidence.unavailable, derivationRuns: false, signedSuccess: false}}
+  - {{id: missing-fact, source: {missing}, expectedPublicProblem: evidence.unavailable, derivationRuns: false, signedSuccess: false}}
+  - {{id: no-match, source: {no_match}, expectedLookup: no_match, expectedPublicProblem: evidence.unavailable, derivationRuns: false, signedSuccess: false}}
+  - {{id: ambiguous, source: {ambiguous}, expectedLookup: ambiguous, expectedPublicProblem: evidence.unavailable, derivationRuns: false, signedSuccess: false}}
   - {{id: source-failure, sourceFailure: timeout, expectedPublicProblem: source.unavailable, signedSuccess: false}}
   - {{id: negative-wrong-derived-type, injectedDerivation: [{{concept_id: {RELATIONSHIP_CONCEPT}, value: 'true'}}], expected: output-gate-rejection}}
   - {{id: anti-reconstruction, companionBundle: relationship-graph, expected: bundle-rejection}}
@@ -1270,18 +1433,25 @@ privacyExpectation:
   evidenceContains: [child, candidate-parent, {RELATIONSHIP_CONCEPT}]
   evidenceExcludes: [child_id, candidate_id, relationship_confirmed]
   diagnosticsExclude: [synthetic-child-001, synthetic-parent-001, fixture-source-canary]
-"#
+"#,
+                positive = relationship_fixture_source(json!({"total":1,"relationship_confirmed":true})),
+                negative = relationship_fixture_source(json!({"total":1,"relationship_confirmed":false})),
+                missing = relationship_fixture_source(json!({"total":1})),
+                no_match = relationship_fixture_source(json!({"total":0})),
+                ambiguous = relationship_fixture_source(json!({"total":2})),
             ),
         )
         .expect("parent relationship fixture");
     }
 
-    fn stage_https_identity(&self) {
+    fn stage_https_identity(&self, source_address: Ipv4Addr) {
         let tls = self.ca.parent().expect("TLS directory");
         fs::create_dir(tls).expect("TLS directory");
         fs::write(
             tls.join("server.cnf"),
-            "[server]\nsubjectAltName = IP:127.0.0.1\nbasicConstraints = critical,CA:FALSE\nkeyUsage = critical,digitalSignature,keyEncipherment\nextendedKeyUsage = serverAuth\n",
+            format!(
+                "[server]\nsubjectAltName = IP:127.0.0.1,IP:{source_address}\nbasicConstraints = critical,CA:FALSE\nkeyUsage = critical,digitalSignature,keyEncipherment\nextendedKeyUsage = serverAuth\n"
+            ),
         )
         .expect("OpenSSL config");
         let ca_key = tls.join("ca.key");
@@ -1355,6 +1525,14 @@ privacyExpectation:
     }
 
     fn stage_target(&self) {
+        self.stage_target_with_source(None);
+    }
+
+    fn stage_target_for_source(&self, address: Ipv4Addr) {
+        self.stage_target_with_source(Some(address));
+    }
+
+    fn stage_target_with_source(&self, source_address: Option<Ipv4Addr>) {
         let target_public_keys = self.target.join("public-keys");
         fs::create_dir_all(&target_public_keys).expect("deployment target public keys");
         let generated_public = self.root.join("evidence-transit-public.jwk.json");
@@ -1382,13 +1560,27 @@ privacyExpectation:
         )
         .expect("publish governed Evidence public JWK to deployment target");
         let identity = format!("https://127.0.0.1:{}", self.https_port);
+        let source_origin = format!(
+            "https://{}:{}",
+            source_address.unwrap_or(Ipv4Addr::LOCALHOST),
+            self.https_port
+        );
+        let mut source_connection = json!({
+            "endpoints":{"provider":{
+                "origin":source_origin,
+                "authentication":{"type":"bearer","tokenRef":"secret:file/source-token"}
+            }}
+        });
+        if let Some(address) = source_address {
+            source_connection["allowedPrivateCidrs"] = json!([format!("{address}/32")]);
+        }
         let target = json!({
             "apiVersion":"id.registrystack.org/formats/evidence/target/v1alpha1", "kind":"EvidenceTarget",
             "id":"production", "project":"production-handoff", "authority":"authority.yaml", "assuranceProfile":"production",
             "package":{"root":self.root.join("activated/bundle")},
             "service":{"providerId":"urn:example:providers:evidence","issuer":"urn:example:issuers:evidence","publicOrigin":"https://evidence.example.test","trustDomain":"urn:example:trust-domains:acceptance"},
             "authentication":{"oidc":{"issuer":identity,"audience":TOKEN_AUDIENCE,"jwksSource":{"type":"uri","uri":format!("{identity}/.well-known/jwks.json")},"tokenTypes":["at+jwt"],"algorithms":["ES256"],"principalClaim":"sub","requesterTagsClaim":"evidence_tags","evidenceAudienceClaim":"evidence_audience","allowedClients":"unrestricted","requiredScopes":"unrestricted","maximumTokenLifetimeSeconds":300,"revokedKeyIds":[]}},
-            "connections":{"people":{"origin":format!("https://127.0.0.1:{}",self.https_port),"authentication":{"type":"bearer","tokenRef":"secret:file/source-token"}}},
+            "connections":{"people":source_connection},
             "secretProviders":{"file":{"root":self.secrets}},
             "signer":{"type":"transit","algorithm":"ES256","publicJwkFile":format!("public-keys/{governed_public_name}"),"unixSocketPath":self.root.join("transit-proxy.sock"),"mount":"transit","keyName":"evidence-signing","keyVersion":1,"attemptTimeoutMilliseconds":2000},
             "listener":{"bind":format!("127.0.0.1:{}",self.evidence_port),"tlsTermination":"operator-controlled-upstream","trustProxyIdentityHeaders":false,"maximumRequestBytes":65536,"maximumConcurrentRequests":64,"requestTimeoutMilliseconds":10000,"shutdownGraceMilliseconds":5000},
@@ -1533,21 +1725,31 @@ privacyExpectation:
         let compose = self.root.join("compose-adapter");
         fs::create_dir(&compose).expect("Compose adapter directory");
         let runtime = compose.join("runtime.yaml");
-        fs::write(
-            &runtime,
-            format!(
-                "apiVersion: id.registrystack.org/formats/evidence/runtime/v1alpha1\nkind: EvidenceRuntimeConfig\npackage:\n  root: {bundle}\nlistener:\n  bind: 127.0.0.1:{port}\n  tlsTermination: operator-controlled-upstream\n  trustProxyIdentityHeaders: false\n  maximumRequestBytes: 131072\n  maximumConcurrentRequests: 32\n  requestTimeoutMilliseconds: 15000\n  shutdownGraceMilliseconds: 10000\nsecretProviders:\n  file:\n    root: {secrets}\nsigner:\n  type: transit\n  unixSocketPath: {transit_socket}\n  mount: transit\n  keyName: evidence-signing\n  keyVersion: 1\n  attemptTimeoutMilliseconds: 2000\naudit:\n  path: {audit}\nauthority:\n  root: {authority_root}\n  target: production\noutboundTls:\n  systemRoots: true\n  trustProfiles: {{}}\n",
-                // This absolute host path stands for the unchanged read-only
-                // candidate package mount in the container execution context.
-                bundle = self.candidate.join("bundle").display(),
-                port = free_port(),
-                secrets = self.secrets.display(),
-                transit_socket = self.root.join("transit-proxy.sock").display(),
-                audit = compose.join("persistent-audit/evidence.jsonl").display(),
-                authority_root = self.target.join(".generated/authority").display(),
-            ),
-        )
-        .expect("Compose runtime");
+        let mut compose_runtime = read_json_document(&self.target_runtime);
+        // These absolute host paths stand for the equivalent container mounts.
+        // The governed source connections and credentials stay byte-for-byte
+        // those the real package projected into its runtime configuration.
+        compose_runtime["package"]["root"] = json!(self.candidate.join("bundle").to_string_lossy());
+        compose_runtime["listener"] = json!({
+            "bind":format!("127.0.0.1:{}", free_port()),
+            "tlsTermination":"operator-controlled-upstream",
+            "trustProxyIdentityHeaders":false,
+            "maximumRequestBytes":131072,
+            "maximumConcurrentRequests":32,
+            "requestTimeoutMilliseconds":15000,
+            "shutdownGraceMilliseconds":10000
+        });
+        compose_runtime["secretProviders"]["file"]["root"] = json!(self.secrets.to_string_lossy());
+        compose_runtime["signer"]["unixSocketPath"] =
+            json!(self.root.join("transit-proxy.sock").to_string_lossy());
+        compose_runtime["audit"]["path"] = json!(compose
+            .join("persistent-audit/evidence.jsonl")
+            .to_string_lossy());
+        compose_runtime["authority"] = json!({
+            "root":self.target.join(".generated/authority").to_string_lossy(),
+            "target":"production"
+        });
+        write_json_document(&runtime, &compose_runtime);
         fs::set_permissions(&runtime, fs::Permissions::from_mode(0o400))
             .expect("seal Compose runtime");
 
@@ -1806,7 +2008,7 @@ fn transit_signature(root: &Path, key_name: &str, body: &[u8]) -> Result<Value, 
     let private = transit_private_jwk(root, key_name)?;
     let request: Value =
         serde_json::from_slice(body).map_err(|_| "Transit signing JSON invalid")?;
-    if request["key_version"] != 1
+    if request["key_version"] != "1"
         || request["marshaling_algorithm"] != "jws"
         || request["prehashed"] != true
     {
@@ -1970,7 +2172,7 @@ fn assertion_definition(input: AssertionDefinitionInput<'_>) -> Value {
         "subjects":subjects.iter().map(|(role, profile)| {
             json!({"role":role, "selectors":[profile]})
         }).collect::<Vec<_>>(),
-        "acquisition":{"type":"single", "source":source},
+        "acquisition":{"source":source},
         "derive":{"function":derive},
         "outputs":{output:governed_output},
         "validitySeconds":300,
@@ -1983,68 +2185,274 @@ fn assertion_definition(input: AssertionDefinitionInput<'_>) -> Value {
     })
 }
 
-fn http_source(
-    path: &str,
-    prepare: &str,
-    extract: &str,
-    fact_name: &str,
-    fact_shape: Value,
-    subjects: Vec<(&str, &str)>,
-) -> Value {
-    let requested_fields = vec![fact_name];
-    let mut response_properties = serde_json::Map::new();
-    response_properties.insert(
-        "total".to_owned(),
-        json!({"type":"bounded-integer", "minimum":0, "maximum":1_000_000}),
-    );
-    response_properties.insert(fact_name.to_owned(), fact_shape.clone());
-    let mut facts = serde_json::Map::new();
-    facts.insert(fact_name.to_owned(), fact_shape);
+fn source_binding(route: &str, inputs: Vec<(&str, &str, &str, &str)>) -> Value {
+    let inputs = inputs
+        .into_iter()
+        .map(|(input, role, profile, field)| {
+            (
+                input.to_owned(),
+                json!({"selector":{"role":role,"profile":profile,"field":field}}),
+            )
+        })
+        .collect::<serde_json::Map<_, _>>();
     json!({
-        "type":"http-json",
+        "pack":{"id":"handoff-http","version":"1"},
+        "route":route,
         "connection":"people",
-        "acquisitionPosture":"field-projected",
-        "selectors":subjects.iter().map(|(role, profile)| {
-            json!({"role":role, "profiles":[profile]})
-        }).collect::<Vec<_>>(),
-        "request":{
-            "method":"POST",
-            "path":path,
-            "fixedHeaders":[{"name":"Accept", "value":"application/json"}]
-        },
-        "prepare":{"function":prepare},
-        "adapterParameters":{"requestedFields":requested_fields, "resultLimit":2},
-        "adapterParametersSchema":{
-            "type":"object",
-            "additionalProperties":false,
-            "required":["requestedFields", "resultLimit"],
-            "properties":{
-                "requestedFields":{"const":requested_fields},
-                "resultLimit":{"const":2}
-            }
-        },
-        "preparationLimits":{
-            "query":"forbidden",
-            "jsonBody":"required",
-            "maximumJsonDepth":8,
-            "maximumCollectionItems":16,
-            "maximumStringBytes":256,
-            "maximumNormalizedBytes":4096
-        },
-        "response":{
-            "projection":["/total", format!("/{fact_name}")],
-            "shape":{
-                "type":"object",
-                "additionalProperties":false,
-                "required":["total"],
-                "properties":response_properties
-            },
-            "maximumBytes":65536
-        },
-        "extract":{"function":extract},
-        "facts":facts,
-        "limits":{"attemptTimeoutMilliseconds":3000, "maximumConcurrency":8}
+        "inputs":inputs,
+        "acquisitionPosture":"field-projected"
     })
+}
+
+fn pinned_pack_artifact(path: &str, bytes: &[u8]) -> Value {
+    json!({"path":path,"digest":registry_platform_config::sha256_uri(bytes)})
+}
+
+fn write_pack_artifact(project: &Path, relative: &str, bytes: &[u8]) {
+    let path = project.join("adapter-packs/handoff-http").join(relative);
+    fs::create_dir_all(path.parent().expect("pack artifact parent"))
+        .expect("pack artifact directory");
+    fs::write(path, bytes).expect("pack artifact");
+}
+
+fn write_http_source_pack(project: &Path) {
+    let person_inputs = serde_json::to_vec_pretty(&json!({
+        "type":"object", "additionalProperties":false, "required":["personId"],
+        "properties":{"personId":{"type":"string","minLength":1,"maxLength":200}}
+    }))
+    .expect("person source inputs schema");
+    let relationship_inputs = serde_json::to_vec_pretty(&json!({
+        "type":"object", "additionalProperties":false,
+        "required":["childId","candidateId"],
+        "properties":{
+            "childId":{"type":"string","minLength":1,"maxLength":200},
+            "candidateId":{"type":"string","minLength":1,"maxLength":200}
+        }
+    }))
+    .expect("relationship source inputs schema");
+    let people_facts = serde_json::to_vec_pretty(&json!({
+        "type":"object", "additionalProperties":false, "required":["date-of-birth"],
+        "properties":{"date-of-birth":{"type":"string","format":"date"}}
+    }))
+    .expect("people facts schema");
+    let immunization_facts = serde_json::to_vec_pretty(&json!({
+        "type":"object", "additionalProperties":false, "required":["dose_count"],
+        "properties":{"dose_count":{"type":"integer","minimum":0,"maximum":20}}
+    }))
+    .expect("immunization facts schema");
+    let relationship_facts = serde_json::to_vec_pretty(&json!({
+        "type":"object", "additionalProperties":false, "required":["relationship_confirmed"],
+        "properties":{"relationship_confirmed":{"type":"boolean"}}
+    }))
+    .expect("relationship facts schema");
+    let people_response =
+        provider_response_schema("date_of_birth", json!({"type":"string","format":"date"}));
+    let immunization_response = provider_response_schema(
+        "dose_count",
+        json!({"type":"integer","minimum":0,"maximum":20}),
+    );
+    let relationship_response =
+        provider_response_schema("relationship_confirmed", json!({"type":"boolean"}));
+    let script = br#"fn people_request(exchange) {
+    #{lookup: #{person_id: exchange.body["personId"]}, fields: ["date_of_birth"], limit: 2}
+}
+
+fn immunizations_request(exchange) {
+    #{lookup: #{person_id: exchange.body["personId"]}, fields: ["dose_count"], limit: 2}
+}
+
+fn relationships_request(exchange) {
+    #{lookup: #{child_id: exchange.body["childId"], candidate_id: exchange.body["candidateId"]}, fields: ["relationship_confirmed"], limit: 2}
+}
+
+fn people_project(exchange) {
+    let raw = exchange.body;
+    if raw.type_of() != "map" { throw "invalid-envelope"; }
+    let projected = #{total: raw.total};
+    if raw.contains("date_of_birth") { projected.date_of_birth = raw.date_of_birth; }
+    projected
+}
+
+fn immunizations_project(exchange) {
+    let raw = exchange.body;
+    if raw.type_of() != "map" { throw "invalid-envelope"; }
+    let projected = #{total: raw.total};
+    if raw.contains("dose_count") { projected.dose_count = raw.dose_count; }
+    projected
+}
+
+fn relationships_project(exchange) {
+    let raw = exchange.body;
+    if raw.type_of() != "map" { throw "invalid-envelope"; }
+    let projected = #{total: raw.total};
+    if raw.contains("relationship_confirmed") { projected.relationship_confirmed = raw.relationship_confirmed; }
+    projected
+}
+
+fn people_lookup(exchange) {
+    let response = exchange.body;
+    if response.total == 0 { return #{lookup: "no-match"}; }
+    if response.total > 1 { return #{lookup: "ambiguous"}; }
+    if !response.contains("date_of_birth") { return #{lookup: "unresolved"}; }
+    #{lookup: "matched", facts: #{"date-of-birth": response.date_of_birth}}
+}
+
+fn immunizations_lookup(exchange) {
+    let response = exchange.body;
+    if response.total == 0 { return #{lookup: "no-match"}; }
+    if response.total > 1 { return #{lookup: "ambiguous"}; }
+    if !response.contains("dose_count") { return #{lookup: "unresolved"}; }
+    #{lookup: "matched", facts: #{dose_count: response.dose_count}}
+}
+
+fn relationships_lookup(exchange) {
+    let response = exchange.body;
+    if response.total == 0 { return #{lookup: "no-match"}; }
+    if response.total > 1 { return #{lookup: "ambiguous"}; }
+    if !response.contains("relationship_confirmed") { return #{lookup: "unresolved"}; }
+    #{lookup: "matched", facts: #{relationship_confirmed: response.relationship_confirmed}}
+}
+"#;
+    let route = |id: &str,
+                 path: &str,
+                 inputs: (&str, &[u8]),
+                 facts: (&str, &[u8]),
+                 response: (&str, &[u8]),
+                 request: &str,
+                 project: &str,
+                 lookup: &str| {
+        json!({
+            "id":id,
+            "evidence":{
+                "inputsSchema":pinned_pack_artifact(inputs.0, inputs.1),
+                "factsSchema":pinned_pack_artifact(facts.0, facts.1),
+                "acquisitionPosture":"field-projected"
+            },
+            "steps":[
+                {"setHeader":{"name":"Accept","value":{"constant":"application/json"}}},
+                {"to":{"uri":"http:provider","parameters":{
+                    "httpMethod":"POST", "path":path,
+                    "body":{"rhai":{"file":"scripts/provider.rhai","entrypoint":request}},
+                    "operation":"lookup"
+                }}},
+                {"setBody":{"rhai":{"file":"scripts/provider.rhai","entrypoint":project}}},
+                {"validateSchema":pinned_pack_artifact(response.0, response.1)},
+                {"setBody":{"rhai":{"file":"scripts/provider.rhai","entrypoint":lookup}}}
+            ]
+        })
+    };
+    let pack = serde_json::to_vec_pretty(&json!({
+        "apiVersion":registry_adapter_core::ADAPTER_PACK_API_VERSION,
+        "kind":registry_adapter_core::ADAPTER_PACK_KIND,
+        "id":"handoff-http", "version":"1", "testedVersions":[],
+        "endpoints":[{
+            "id":"provider", "component":"http",
+            "authentication":{"type":"static-authorization"},
+            "attemptTimeoutMilliseconds":3000, "maximumResponseBytes":65536,
+            "requestHeaders":["accept"],
+            "operations":[{"id":"lookup","safeUpstream":true}]
+        }],
+        "scripts":[pinned_pack_artifact("scripts/provider.rhai",script)],
+        "sourceRoutes":[
+            route(
+                "people", "/v1/facts",
+                ("schemas/person-inputs.json", &person_inputs),
+                ("schemas/people-facts.json", &people_facts),
+                ("schemas/people-response.json", &people_response),
+                "people_request", "people_project", "people_lookup",
+            ),
+            route(
+                "immunizations", "/v1/immunizations",
+                ("schemas/person-inputs.json", &person_inputs),
+                ("schemas/immunization-facts.json", &immunization_facts),
+                ("schemas/immunization-response.json", &immunization_response),
+                "immunizations_request", "immunizations_project", "immunizations_lookup",
+            ),
+            route(
+                "relationships", "/v1/relationships",
+                ("schemas/relationship-inputs.json", &relationship_inputs),
+                ("schemas/relationship-facts.json", &relationship_facts),
+                ("schemas/relationship-response.json", &relationship_response),
+                "relationships_request", "relationships_project", "relationships_lookup",
+            )
+        ]
+    }))
+    .expect("HTTP Adapter pack");
+    for (path, bytes) in [
+        ("schemas/person-inputs.json", person_inputs.as_slice()),
+        (
+            "schemas/relationship-inputs.json",
+            relationship_inputs.as_slice(),
+        ),
+        ("schemas/people-facts.json", people_facts.as_slice()),
+        (
+            "schemas/immunization-facts.json",
+            immunization_facts.as_slice(),
+        ),
+        (
+            "schemas/relationship-facts.json",
+            relationship_facts.as_slice(),
+        ),
+        ("schemas/people-response.json", people_response.as_slice()),
+        (
+            "schemas/immunization-response.json",
+            immunization_response.as_slice(),
+        ),
+        (
+            "schemas/relationship-response.json",
+            relationship_response.as_slice(),
+        ),
+        ("scripts/provider.rhai", script.as_slice()),
+        ("pack.yaml", pack.as_slice()),
+    ] {
+        write_pack_artifact(project, path, bytes);
+    }
+}
+
+fn provider_response_schema(fact: &str, shape: Value) -> Vec<u8> {
+    let mut properties = serde_json::Map::from_iter([(
+        "total".to_owned(),
+        json!({"type":"integer","minimum":0,"maximum":1_000_000}),
+    )]);
+    properties.insert(fact.to_owned(), shape);
+    serde_json::to_vec_pretty(&json!({
+        "type":"object", "additionalProperties":false, "required":["total"],
+        "properties":properties
+    }))
+    .expect("provider response schema")
+}
+
+fn fixture_http_source(path: &str, body: Value, response: Value) -> String {
+    serde_json::to_string(&json!({
+        "intercepts":[{"type":"endpoint","endpoint":"provider"}],
+        "exchanges":[{
+            "request":{
+                "endpoint":"provider", "method":"POST", "path":path,
+                "headers":{"accept":"application/json"}, "body":body
+            },
+            "response":{"status":200,"body":response}
+        }]
+    }))
+    .expect("fixture source transcript")
+}
+
+fn person_fixture_source(path: &str, field: &str, response: Value) -> String {
+    fixture_http_source(
+        path,
+        json!({"lookup":{"person_id":SELECTOR_CANARY},"fields":[field],"limit":2}),
+        response,
+    )
+}
+
+fn relationship_fixture_source(response: Value) -> String {
+    fixture_http_source(
+        "/v1/relationships",
+        json!({
+            "lookup":{"child_id":"synthetic-child-001","candidate_id":"synthetic-parent-001"},
+            "fields":["relationship_confirmed"], "limit":2
+        }),
+        response,
+    )
 }
 
 fn authority_grant(definition: &str, purpose: &str, subjects: Vec<(&str, &str)>) -> Value {
@@ -2358,16 +2766,25 @@ fn assert_audit_contract(audit: &str, revision: &str, signing_key_id: &str, cred
         2,
         "one request must write exactly two events"
     );
-    assert_eq!(records[0]["schema"], "registry.evidence.audit/v2");
+    assert_eq!(records[0]["schema"], "registry.evidence.audit/v3");
     assert_eq!(records[0]["phase"], "request");
-    assert_eq!(records[1]["schema"], "registry.evidence.audit/v2");
+    assert_eq!(records[1]["schema"], "registry.evidence.audit/v3");
     assert_eq!(records[1]["phase"], "response");
     assert_eq!(records[0]["correlation"], records[0]["record"]["operation"]);
     assert_eq!(records[1]["correlation"], records[1]["record"]["operation"]);
     assert_eq!(records[0]["record"]["phase"], "access-attempt");
     assert_eq!(records[0]["record"]["decision"], "authorized");
+    assert_eq!(
+        records[0]["record"]["executionBounds"],
+        serde_json::json!({
+            "maximumDataOperations": 5,
+            "acquisitionDeadlineMilliseconds": 30_000,
+            "maximumResponseBytes": 1_048_576
+        })
+    );
     assert_eq!(records[1]["record"]["phase"], "disclosure-release");
     assert_eq!(records[1]["record"]["decision"], "released");
+    assert!(records[1]["record"].get("executionBounds").is_none());
     assert_eq!(records[1]["record"]["signingKeyId"], signing_key_id);
     for record in &records {
         assert_eq!(record["record"]["bundleRevision"], revision);
@@ -2479,6 +2896,101 @@ fn installed_binary(variable: &str, name: &str) -> PathBuf {
         .map(|directory| directory.join(name))
         .find(|candidate| candidate.is_file())
         .unwrap_or_else(|| panic!("set {variable} for this exact lifecycle gate"))
+}
+
+fn assert_isolated_orbstack_context(docker: &Path) {
+    let context = assert_success(
+        Command::new(docker)
+            .args(["context", "show"])
+            .output()
+            .expect("inspect Docker context"),
+        "Docker context inspection",
+    );
+    assert_eq!(
+        String::from_utf8(context.stdout)
+            .expect("Docker context is UTF-8")
+            .trim(),
+        "orbstack",
+        "the unpublished source proxy requires OrbStack direct container access"
+    );
+    let engine = assert_success(
+        Command::new(docker)
+            .args(["info", "--format", "{{.OperatingSystem}}"])
+            .output()
+            .expect("inspect Docker engine"),
+        "Docker engine inspection",
+    );
+    assert_eq!(
+        String::from_utf8(engine.stdout)
+            .expect("Docker engine identity is UTF-8")
+            .trim(),
+        "OrbStack",
+        "the Docker context must resolve to the OrbStack engine"
+    );
+    let orb = installed_binary("ORB_BIN", "orb");
+    let direct_access = assert_success(
+        Command::new(orb)
+            .args(["config", "get", "network_bridge"])
+            .output()
+            .expect("inspect OrbStack direct container access"),
+        "OrbStack direct container access inspection",
+    );
+    assert_eq!(
+        String::from_utf8(direct_access.stdout)
+            .expect("OrbStack network setting is UTF-8")
+            .trim(),
+        "true",
+        "OrbStack direct container access must be enabled"
+    );
+    for key in ["net.inet.ip.forwarding", "net.inet6.ip6.forwarding"] {
+        let forwarding = assert_success(
+            Command::new("/usr/sbin/sysctl")
+                .args(["-n", key])
+                .output()
+                .expect("inspect host forwarding"),
+            "host forwarding inspection",
+        );
+        assert_eq!(
+            String::from_utf8(forwarding.stdout)
+                .expect("host forwarding setting is UTF-8")
+                .trim(),
+            "0",
+            "host IP forwarding must remain disabled for the isolated source proxy"
+        );
+    }
+}
+
+fn immutable_socat_image(docker: &Path) -> String {
+    let image = std::env::var("SOCAT_IMAGE")
+        .expect("set SOCAT_IMAGE to an already-local immutable sha256 image id");
+    let digest = image
+        .strip_prefix("sha256:")
+        .expect("SOCAT_IMAGE must be an immutable sha256 image id");
+    assert!(
+        digest.len() == 64
+            && digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+        "SOCAT_IMAGE must be an immutable lowercase sha256 image id"
+    );
+    let inspected = assert_success(
+        Command::new(docker)
+            .args(["image", "inspect", &image])
+            .output()
+            .expect("inspect source proxy image"),
+        "source proxy image inspection",
+    );
+    let documents: Value =
+        serde_json::from_slice(&inspected.stdout).expect("source proxy image inspection JSON");
+    assert_eq!(
+        documents
+            .as_array()
+            .and_then(|documents| documents.first())
+            .and_then(|document| document["Id"].as_str()),
+        Some(image.as_str()),
+        "SOCAT_IMAGE must identify the exact local image bytes"
+    );
+    image
 }
 
 fn workspace_root() -> PathBuf {

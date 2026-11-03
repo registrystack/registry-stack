@@ -24,14 +24,18 @@ authentication:
     maximumTokenLifetimeSeconds: 300
 connections:
   validation-seed:
-    origin: http://127.0.0.1:8090
-    authentication: {type: bearer, tokenRef: 'secret:file/validation-seed-token'}
+    endpoints:
+      validation-seed:
+        origin: http://127.0.0.1:8090
+        authentication: {type: static-authorization, tokenRef: 'secret:file/validation-seed-token'}
   dhis2-tracker:
-    origin: http://127.0.0.1:8081
-    authentication:
-      type: basic
-      usernameRef: secret:file/dhis2-username
-      passwordRef: secret:file/dhis2-password
+    endpoints:
+      tracker:
+        origin: http://127.0.0.1:8081
+        authentication:
+          type: basic
+          usernameRef: secret:file/dhis2-username
+          passwordRef: secret:file/dhis2-password
 secretProviders: {file: {root: .generated/secrets}}
 signer:
   type: local-jwk

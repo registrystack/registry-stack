@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
+import { parse as parseYaml } from 'yaml';
 
 import {
   CONTRACTS,
@@ -698,51 +699,90 @@ test('the committed schemas produce a valid reference for every configuration fi
   }
 });
 
-test('shared Evidence source keys describe every accepted branch', async () => {
+test('shared Evidence source keys describe the pack binding and omit retired branches', async () => {
   const document = await buildEvidenceConfiguration(repoRoot);
   const bundle = document.contracts.find((contract) => contract.id === 'bundle');
   const byPath = new Map(bundle.fields.map((field) => [field.key_path, field]));
-  const cases = [
-    [
-      'sources.*.type',
-      ['`http-json`', 'fixed HTTPS origin', '`sqlite-extract`', 'read-only SQLite extract'],
-    ],
-    [
-      'sources.*.request.attemptTimeoutMilliseconds',
-      ['`http-json`', 'HTTP exchange', '`sqlite-extract`', 'statement execution'],
-    ],
-    [
-      'sources.*.request.selectorInputs',
-      ['`http-json`', 'preparation script', '`sqlite-extract`', 'parameter bindings'],
-    ],
-    [
-      'sources.*.request.parameterBindings.*.type',
-      ['`selector`', 'authorized selector field', '`prepared`', 'filled by the preparation script'],
-    ],
-  ];
-  for (const [keyPath, expectedParts] of cases) {
+  for (const [keyPath, expectedParts] of [
+    ['sources.*.pack', ['Exact Adapter pack identity', 'captured closure']],
+    ['sources.*.route', ['Named Evidence source route', 'pinned pack']],
+    ['sources.*.connection', ['Named governed policy', 'runtime resource owner']],
+    ['sources.*.inputs', ['Named route inputs', 'authorized selectors']],
+    ['sources.*.posture', ['minimization posture', 'pinned route contract']],
+    ['sources.*.factSchema', ['Bundle fact schema', 'pinned route schema']],
+  ]) {
     const description = byPath.get(keyPath)?.description ?? '';
-    for (const part of expectedParts) {
-      assert.ok(description.includes(part), `${keyPath} omits ${part}`);
-    }
+    for (const part of expectedParts)
+      assert.ok(description.includes(part), keyPath + ' omits ' + part);
+  }
+  for (const keyPath of [
+    'sources.*.pack.id',
+    'sources.*.pack.version',
+    'sources.*.pack.digest',
+    'sources.*.pack.artifactPrefix',
+    'sources.*.inputs.*.selector.role',
+    'sources.*.inputs.*.selector.profile',
+    'sources.*.inputs.*.selector.field',
+  ]) {
+    assert.ok(byPath.has(keyPath), keyPath + ' is missing');
+  }
+  assert.equal(byPath.get('sourceConnections').required, 'yes');
+  assert.ok(byPath.get('sourceConnections').constraints.flat().includes('minProperties: 1'));
+  assert.deepEqual(byPath.get('sources.*.posture').values, [
+    'field-projected',
+    'record-transformed',
+    'source-derived',
+  ]);
+  for (const retired of [
+    'type',
+    'request',
+    'response',
+    'prepare',
+    'extract',
+    'facts',
+    'evidence',
+    'baseUrl',
+  ]) {
+    const prefix = 'sources.*.' + retired;
+    assert.ok(
+      !bundle.fields.some(
+        (field) => field.key_path === prefix || field.key_path.startsWith(prefix + '.'),
+      ),
+      'the retired Source member is still documented: ' + retired,
+    );
   }
 });
 
-test('a bound outside double precision is reported exactly as the contract states it', async () => {
-  // The adapter parameter bounds are the signed 64-bit integer range. Reading
-  // them through a double rounds the last three digits, publishing a bound no
-  // contract states and that the runtime would reject.
-  const document = await buildEvidenceConfiguration(repoRoot);
-  const bundle = document.contracts.find((contract) => contract.id === 'bundle');
-  const field = bundle.fields.find(
-    (entry) => entry.key_path === 'sources.*.request.adapterParameters.*',
+test('a bound outside double precision is reported exactly as the contract states it', () => {
+  // Pack parameters no longer belong to the Evidence bundle grammar. Keep the
+  // formatter's exact-integer regression independent of that retired field.
+  const schema = parseYaml(
+    'type: object\nproperties:\n  parameter:\n    type: integer\n    minimum: -9223372036854775808\n    maximum: 9223372036854775807\n',
+    { intAsBigInt: true },
   );
+  const field = collectFields(schema).find((entry) => entry.key_path === 'parameter');
   const constraints = field.constraints.flat();
   assert.ok(
     constraints.includes('maximum: 9223372036854775807'),
-    `expected the exact signed 64-bit maximum, got ${JSON.stringify(constraints)}`,
+    'expected the exact signed 64-bit maximum, got ' + JSON.stringify(constraints),
   );
   assert.ok(constraints.includes('minimum: -9223372036854775808'));
+});
+
+test('current integer selector bounds retain the interoperable exact range', async () => {
+  const bundle = (await buildEvidenceConfiguration(repoRoot)).contracts.find(
+    (entry) => entry.id === 'bundle',
+  );
+  for (const keyPath of [
+    'selectorProfiles.*.fields.*.minimum',
+    'selectorProfiles.*.fields.*.maximum',
+  ]) {
+    const constraints = bundle.fields
+      .find((entry) => entry.key_path === keyPath)
+      .constraints.flat();
+    assert.ok(constraints.includes('minimum: -9007199254740991'), keyPath);
+    assert.ok(constraints.includes('maximum: 9007199254740991'), keyPath);
+  }
 });
 
 test('the rendered key paths match the ones each CONFIG.md documents', async () => {
@@ -844,12 +884,12 @@ test('a rule written beside a `$ref` binds together with the definition it refer
 test('Evidence source origins keep the https-or-loopback rule written beside the shared URL', async () => {
   const document = await buildEvidenceConfiguration(repoRoot);
   const bundle = document.contracts.find((contract) => contract.id === 'bundle');
-  for (const keyPath of ['sources.*.baseUrl', 'sourceConnections.*.baseUrl']) {
+  for (const keyPath of ['sourceConnections.*.endpoints[].baseUrl']) {
     const field = bundle.fields.find((entry) => entry.key_path === keyPath);
     assert.ok(field, keyPath);
     assert.ok(
       field.constraints.some((group) =>
-        group.some((constraint) => constraint.startsWith('pattern: ^https://')),
+        group.some((constraint) => constraint.startsWith('pattern: ^[Hh][Tt][Tt][Pp][Ss]://')),
       ),
       keyPath,
     );

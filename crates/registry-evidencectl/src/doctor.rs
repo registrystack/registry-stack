@@ -44,17 +44,6 @@ use serde_norway::Value as YamlValue;
 /// How a bundle names a secret the file provider resolves.
 const SECRET_REFERENCE_PREFIX: &str = "secret:file/";
 
-/// The acquisition capabilities an operator must enable in `runtime.yaml`
-/// before a deployment uses them.
-///
-/// The Evidence runtime owns this vocabulary and remains the only authority on
-/// it; it is restated here because this walk reads deployment documents rather
-/// than linking the runtime. The ordinary Version 1 acquisition forms are
-/// deliberately absent: a requirement acquiring through one asks the operator
-/// for nothing. `source-batch` gates an optional source optimization rather
-/// than a requirement acquisition kind.
-const GATED_ACQUISITION_CAPABILITIES: [&str; 2] = ["search-then-fetch-set", "source-batch"];
-
 /// The most items one request batch may carry, restated from the published
 /// request-batch contract for the same reason as the vocabulary above.
 const REQUEST_BATCH_MAXIMUM_ITEMS: u64 = 16;
@@ -159,13 +148,7 @@ pub fn run(args: DoctorArgs) -> Result<ExitCode> {
     checks.extend(check_secrets(project, &runtime, &runtime_path, &bundle));
     checks.push(check_signer(project, &runtime, &runtime_path));
     checks.push(check_audit(project, &runtime, &runtime_path));
-    let (acquisition, acquisition_plans) = check_acquisition(
-        project,
-        &runtime,
-        &runtime_path,
-        &bundle,
-        &bundle_config_path,
-    );
+    let (acquisition, acquisition_plans) = check_acquisition(project, &bundle, &bundle_config_path);
     checks.push(acquisition);
     let (rate_limits, burst_warning) = check_rate_limits(project, &bundle, &bundle_config_path);
     checks.push(rate_limits);
@@ -542,34 +525,16 @@ fn audit_setting(
     }
 }
 
-/// One requirement's declared acquisition, projected far enough to say what the
-/// deployment will call and what it must be allowed to call.
+/// One requirement's declared acquisition, projected far enough to name the
+/// logical Source whose reviewed pack route the runtime executes.
 ///
-/// This reads the fields it needs and leaves the rest of the bundle to
-/// `evidence check`. It is deliberately not closed
-/// against unknown members: a bundle written for a later runtime must still
-/// render here rather than be reported as broken by adopter tooling.
+/// This closes only the acquisition object it renders. The surrounding
+/// requirement may carry fields doctor does not read; `evidence check` owns
+/// validation of those fields and of the complete bundle.
 #[derive(Debug, Deserialize)]
-#[serde(tag = "type", rename_all = "kebab-case")]
-enum AcquisitionProjection {
-    Single {
-        source: String,
-    },
-    SearchThenFetch {
-        search: String,
-        fetch: String,
-    },
-    SearchThenFetchSet {
-        search: String,
-        fetch: Vec<FetchMemberProjection>,
-    },
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct FetchMemberProjection {
+#[serde(deny_unknown_fields)]
+struct AcquisitionProjection {
     source: String,
-    fact_inputs: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -579,62 +544,24 @@ struct RequirementProjection {
 }
 
 impl AcquisitionProjection {
-    /// The kind, spelled as configuration spells it.
+    /// The report kind distinguishes one logical pack-route selection from a
+    /// physical request count inside that reviewed route.
     fn kind(&self) -> &'static str {
-        match self {
-            Self::Single { .. } => "single",
-            Self::SearchThenFetch { .. } => "search-then-fetch",
-            Self::SearchThenFetchSet { .. } => "search-then-fetch-set",
-        }
+        "pack-route"
     }
 
-    /// The capability an operator must enable before this acquisition serves.
-    /// The frozen Version 1 forms require none.
-    fn required_capability(&self) -> Option<&'static str> {
-        match self {
-            Self::Single { .. } | Self::SearchThenFetch { .. } => None,
-            Self::SearchThenFetchSet { .. } => Some("search-then-fetch-set"),
-        }
-    }
-
-    /// The ordered calls this acquisition makes, read from configuration alone.
+    /// The one logical Source selection this acquisition makes. Its reviewed
+    /// pack route may perform several bounded operations, retries, or pages.
     fn stages(&self) -> Vec<PlannedStageReport> {
-        match self {
-            Self::Single { source } => vec![PlannedStageReport {
-                source: source.clone(),
-                role: "search",
-                inputs: StageInputsReport::None,
-            }],
-            Self::SearchThenFetch { search, fetch } => vec![
-                PlannedStageReport {
-                    source: search.clone(),
-                    role: "search",
-                    inputs: StageInputsReport::None,
-                },
-                PlannedStageReport {
-                    source: fetch.clone(),
-                    role: "member",
-                    inputs: StageInputsReport::EveryPriorFact,
-                },
-            ],
-            Self::SearchThenFetchSet { search, fetch } => {
-                let mut stages = vec![PlannedStageReport {
-                    source: search.clone(),
-                    role: "search",
-                    inputs: StageInputsReport::None,
-                }];
-                stages.extend(fetch.iter().map(|member| PlannedStageReport {
-                    source: member.source.clone(),
-                    role: "member",
-                    inputs: StageInputsReport::Declared(member.fact_inputs.clone()),
-                }));
-                stages
-            }
-        }
+        vec![PlannedStageReport {
+            source: self.source.clone(),
+            role: "source",
+            inputs: StageInputsReport::None,
+        }]
     }
 }
 
-/// The ordered calls one requirement's acquisition makes.
+/// The logical Source plan for one requirement.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AcquisitionPlanReport {
@@ -643,8 +570,8 @@ struct AcquisitionPlanReport {
     stages: Vec<PlannedStageReport>,
 }
 
-/// One call in that order: the source it reaches, the role it plays, and what an
-/// earlier call contributes to its request.
+/// One logical selected Source. This is not a physical operation count for the
+/// reviewed pack route.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PlannedStageReport {
@@ -653,19 +580,13 @@ struct PlannedStageReport {
     inputs: StageInputsReport,
 }
 
-/// What one call receives from the calls before it. These are fact names, which
-/// are configuration; a fact value is acquired at request time and is never
-/// available to, or wanted by, this walk.
+/// What one logical Source receives from an earlier Source selection. Current
+/// acquisitions select exactly one Source, so there is no prior Source fact.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "kebab-case")]
 enum StageInputsReport {
-    /// The first call, which reads no prior fact.
+    /// A logical Source receives no facts from another Source.
     None,
-    /// Every fact the preceding call produced, which is what the frozen
-    /// two-call form hands on.
-    EveryPriorFact,
-    /// Only the fact names this member declared, in its declared order.
-    Declared(Vec<String>),
 }
 
 impl StageInputsReport {
@@ -673,35 +594,19 @@ impl StageInputsReport {
     fn phrase(&self) -> String {
         match self {
             Self::None => "reads no prior fact".to_owned(),
-            Self::EveryPriorFact => "reads every fact the search produced".to_owned(),
-            Self::Declared(names) => format!("reads {}", names.join(", ")),
         }
     }
 }
 
-/// Both halves of the acquisition gate, and what each requirement will call.
-///
-/// A bundle names the gated kinds its requirements use, and the deployment that
-/// will serve it enables them separately, in a file the bundle author does not
-/// write. Neither half gates anything alone, and Evidence refuses the
-/// deployment at startup when either one leaves a requirement's kind unstated.
-/// Those refusals name no file, so this names the file and the entry for each.
+/// The logical Source each requirement selects through its governed pack route.
 fn check_acquisition(
     project: &Path,
-    runtime: &YamlValue,
-    runtime_path: &Path,
     bundle: &YamlValue,
     bundle_config_path: &Path,
 ) -> (Check, Vec<AcquisitionPlanReport>) {
     let mut run = CheckRun::new("acquisition", project);
-    run.inspected += 1;
-    let enabled = gate_half(&mut run, runtime, runtime_path, "enables");
-
-    run.inspected += 1;
-    let declared = gate_half(&mut run, bundle, bundle_config_path, "declares");
+    run.read_declaration();
     let mut plans = Vec::new();
-    let mut undeclared: Vec<&'static str> = Vec::new();
-    let mut unenabled: Vec<&'static str> = Vec::new();
     for requirement in bundle
         .get("requirements")
         .and_then(YamlValue::as_sequence)
@@ -712,73 +617,18 @@ fn check_acquisition(
             .and_then(serde_json::from_value::<RequirementProjection>)
         else {
             // Not passed over in silence: an acquisition this projection does
-            // not recognize is one whose calls it cannot render and whose gate
-            // it cannot answer either.
+            // not recognize is one whose logical Source it cannot render.
             run.refuse(
                 bundle_config_path,
                 "declares a requirement acquisition this check does not recognize; `evidence check` decides".to_owned(),
             );
             continue;
         };
-        if let Some(capability) = projected.acquisition.required_capability() {
-            if !declared.iter().any(|entry| entry == capability)
-                && !undeclared.contains(&capability)
-            {
-                undeclared.push(capability);
-            }
-            if !enabled.iter().any(|entry| entry == capability) && !unenabled.contains(&capability)
-            {
-                unenabled.push(capability);
-            }
-        }
         plans.push(AcquisitionPlanReport {
             requirement: projected.uri,
             kind: projected.acquisition.kind(),
             stages: projected.acquisition.stages(),
         });
-    }
-
-    let uses_source_batch = bundle
-        .get("sources")
-        .and_then(YamlValue::as_mapping)
-        .is_some_and(|sources| sources.values().any(|source| source.get("batch").is_some()));
-    if uses_source_batch {
-        if !declared.iter().any(|entry| entry == "source-batch") {
-            undeclared.push("source-batch");
-        }
-        if !enabled.iter().any(|entry| entry == "source-batch") {
-            unenabled.push("source-batch");
-        }
-    }
-
-    // The capability names are the closed published vocabulary, not document
-    // values, so the entry an author or an operator must add can be stated
-    // exactly.
-    for capability in undeclared {
-        let use_site = if capability == "source-batch" {
-            "a source batch block in it uses"
-        } else {
-            "a requirement in it uses"
-        };
-        run.refuse(
-            bundle_config_path,
-            format!(
-                "does not declare the {capability} acquisition capability {use_site}; add acquisitionCapabilities: [{capability}]"
-            ),
-        );
-    }
-    for capability in unenabled {
-        let use_site = if capability == "source-batch" {
-            "a source batch block in this bundle needs"
-        } else {
-            "a requirement in this bundle needs"
-        };
-        run.refuse(
-            runtime_path,
-            format!(
-                "does not enable the {capability} acquisition capability {use_site}; add acquisitionCapabilities: [{capability}]"
-            ),
-        );
     }
 
     (run.finish(), plans)
@@ -865,61 +715,6 @@ fn check_rate_limits(
         ),
     });
     (run.finish(), Some(diagnostic))
-}
-
-/// One half of the gate, read under the three rules the runtime applies to
-/// both: a list, of names this release defines, each named once.
-///
-/// `states` is the verb for the half being read, because a deployment enables a
-/// capability and a bundle declares one, and a refusal carrying the other
-/// half's verb would send a reader to the wrong file.
-fn gate_half(run: &mut CheckRun, document: &YamlValue, path: &Path, states: &str) -> Vec<String> {
-    let listed = match document.get("acquisitionCapabilities") {
-        // Absent states nothing beyond the frozen Version 1 forms, which is the
-        // default posture and what most deployments and most bundles say.
-        None => return Vec::new(),
-        Some(value) => match capability_list(value) {
-            Some(listed) => listed,
-            None => {
-                run.refuse(
-                    path,
-                    "names acquisitionCapabilities that are not a list of capability names"
-                        .to_owned(),
-                );
-                return Vec::new();
-            }
-        },
-    };
-    let mut named: Vec<String> = Vec::new();
-    for capability in listed {
-        if !GATED_ACQUISITION_CAPABILITIES.contains(&capability.as_str()) {
-            run.refuse(
-                path,
-                format!("{states} an acquisition capability this release does not define; the runtime refuses the deployment at startup"),
-            );
-        }
-        // A repeat states nothing a single entry does not, which is why the
-        // runtime requires each list to be unique rather than tolerating it,
-        // and why doctor must not read the half as stated.
-        if named.contains(&capability) {
-            run.refuse(
-                path,
-                "lists the same acquisition capability twice; the runtime refuses the deployment at startup".to_owned(),
-            );
-        } else {
-            named.push(capability);
-        }
-    }
-    named
-}
-
-/// A capability list, when the value under `acquisitionCapabilities` is one.
-fn capability_list(value: &YamlValue) -> Option<Vec<String>> {
-    value
-        .as_sequence()?
-        .iter()
-        .map(|entry| entry.as_str().map(str::to_owned))
-        .collect()
 }
 
 /// One check under construction: the artifacts it looked at, and the reasons it
@@ -1230,7 +1025,7 @@ mod tests {
         clippy::disallowed_methods,
         reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
     )]
-    use super::{YamlValue, GATED_ACQUISITION_CAPABILITIES, REQUEST_BATCH_MAXIMUM_ITEMS};
+    use super::{YamlValue, REQUEST_BATCH_MAXIMUM_ITEMS};
 
     /// The rate-limit check restates the request-batch item ceiling; the
     /// published request-batch schema is the contract both answer to.
@@ -1251,14 +1046,10 @@ mod tests {
         );
     }
 
-    /// The Evidence runtime owns this vocabulary and this crate does not link
-    /// it, so the restatement above is the one place a new gated kind can be
-    /// forgotten without any compiler noticing: doctor would simply stop
-    /// reporting the gap it exists to report. The published runtime contract is
-    /// the document both halves of the gate already answer to, so it is what
-    /// the restatement is held against.
+    /// The published schema and maintained reader both refuse the retired
+    /// capability switch. Doctor must never reintroduce it as remediation.
     #[test]
-    fn the_restated_acquisition_capabilities_match_the_published_runtime_contract() {
+    fn the_runtime_contract_and_reader_refuse_retired_acquisition_capabilities() {
         let contract = concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../products/evidence/contracts/runtime.schema.yaml"
@@ -1267,19 +1058,24 @@ mod tests {
             &std::fs::read(contract).expect("the published runtime contract is readable"),
         )
         .expect("the published runtime contract parses");
-        let published = schema
-            .get("properties")
-            .and_then(|properties| properties.get("acquisitionCapabilities"))
-            .and_then(|capabilities| capabilities.get("items"))
-            .and_then(|items| items.get("enum"))
-            .and_then(YamlValue::as_sequence)
-            .expect("the runtime contract enumerates the gated acquisition kinds")
-            .iter()
-            .map(|kind| kind.as_str().expect("each gated kind is a name").to_owned())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            published, GATED_ACQUISITION_CAPABILITIES,
-            "doctor's restated vocabulary drifted from the published contract"
+        assert!(
+            schema
+                .get("properties")
+                .and_then(|properties| properties.get("acquisitionCapabilities"))
+                .is_none(),
+            "the published runtime contract still accepts acquisitionCapabilities"
+        );
+
+        let maintained = include_bytes!(
+            "../../../products/evidence/reference/request-adapter/deployment-projects/protected-read-evidence/runtime.yaml"
+        );
+        registry_evidence::config::RuntimeConfig::parse_yaml(maintained)
+            .expect("the maintained runtime fixture parses");
+        let mut retired = maintained.to_vec();
+        retired.extend_from_slice(b"\nacquisitionCapabilities: [source-batch]\n");
+        assert!(
+            registry_evidence::config::RuntimeConfig::parse_yaml(&retired).is_err(),
+            "the runtime reader accepted retired acquisitionCapabilities"
         );
     }
 }

@@ -42,5 +42,11 @@ allowedPrivateCidrs:
   # range stands in for the deployment's own; private endpoints stay
   # refused unless their range is listed here.
   - 10.0.0.0/8
+destinations:
+  submissions-workflow:
+    type: signed-coordinator-event
+    baseUrl: https://coordinator.example.invalid
+    signingKeyRef: secret:env/COORDINATOR_EVENT_KEY
+    attemptTimeoutMilliseconds: 5000
 store:
   runtimeUrlRef: secret:env/ADAPTER_JOB_DB

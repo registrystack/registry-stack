@@ -1,0 +1,74 @@
+[package]
+name = "registry-adapter-engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Listener-free bounded route engine for Registry Stack Adapter packs."
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[features]
+postgres-test = ["registry-platform-httputil/test-support"]
+job-file = ["dep:csv-core", "dep:rustix"]
+job-postgres = ["dep:pg_query"]
+job-sftp = ["job-file"]
+job-rabbitmq = []
+rabbitmq-test-plaintext = []
+sqlite-extract = ["dep:registry-platform-sqlite", "dep:chrono"]
+
+[dependencies]
+chrono = { workspace = true, optional = true }
+registry-platform-sqlite = { workspace = true, optional = true }
+base64.workspace = true
+chacha20poly1305 = { workspace = true, features = ["zeroize"] }
+getrandom.workspace = true
+hmac.workspace = true
+http.workspace = true
+jsonschema.workspace = true
+jsonpath-rust.workspace = true
+pest.workspace = true
+rhai.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+url.workspace = true
+uuid.workspace = true
+zeroize.workspace = true
+
+csv-core = { workspace = true, optional = true }
+pg_query = { workspace = true, optional = true }
+rustix = { workspace = true, optional = true }
+
+registry-adapter-core.workspace = true
+registry-platform-authcommon.workspace = true
+registry-platform-canonical-json.workspace = true
+registry-platform-config.workspace = true
+registry-platform-crypto.workspace = true
+registry-platform-httputil.workspace = true
+registry-platform-ratelimit.workspace = true
+registry-platform-resilience.workspace = true
+registry-platform-script.workspace = true
+registry-platform-yaml.workspace = true
+
+[dev-dependencies]
+registry-platform-sqlite = { workspace = true, features = ["fixture"] }
+serde_norway.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["io-util", "test-util"] }
+
+[[test]]
+name = "rabbitmq_seam"
+path = "tests/rabbitmq_seam.rs"
+required-features = ["job-rabbitmq"]
+
+[[test]]
+name = "sftp_runtime_config"
+path = "tests/sftp_runtime_config.rs"
+required-features = ["job-sftp"]

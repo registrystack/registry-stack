@@ -8,13 +8,13 @@ knowledge, no writes, no delete or patch endpoint, no
 `_validation_status` handling beyond read-only passthrough inside the
 captured value.
 
-Unproved state, stated plainly: no KoboToolbox server has been
-reached. Every upstream shape here is synthesized from the published
-documentation, every fixture under `fixtures/` is synthetic with
-`documented` provenance, and `testedVersions` is empty: the hosted
-KoboToolbox documentation carries no server version and nothing was
-exercised. The pack is unproved until a controlled deployment answers
-the probe questions below.
+Controlled synthetic validation exercised KoboToolbox `2.026.37c` using
+its real submissions and edit APIs. A separate direct job journey reached a
+submitted BReg Proposal, distinct human Casework approval, and one applied
+record. An unchanged rescan skipped the item; editing the same submission
+held it with the prior Proposal reference instead of registering it again.
+This is bounded local deployment evidence, not a production or server-upgrade
+compatibility claim. The committed replay fixtures remain synthetic.
 
 ## What the route reads
 
@@ -81,10 +81,11 @@ authentication plan raises the uncatchable `credential.rejected` on a
 
 ## Item mapping
 
-- `key`: the submission's `_id`, as text. Hypothesis, see probes.
-- `revision`: the submission's `_uuid`. Hypothesis, see probes; the
-  documented alternative key is `meta/rootUuid`, which the docs
-  describe as stable across edits while `_uuid` changes.
+- `key`: the submission's `_id`, as text, scoped to one configured asset.
+- `revision`: the submission's `_uuid`. Controlled edits kept `_id` and
+  `meta/rootUuid` stable while changing `_uuid`. A job does not switch its
+  identity selector after delivery; existing effects need reconciliation
+  before an identity migration.
 - `value`: the submission object with its slash-separated group and
   repeat names nested into objects. Kobo returns group answers as flat
   names such as `household/household_size`; the item value carries
@@ -105,69 +106,40 @@ The route shapes one submission per script call (a `split` over
 `results`), so a wide form never shares one script budget with the
 whole page.
 
-## Probe questions
+## Controlled probe results and remaining limits
 
-The pack is unproved until a controlled deployment confirms each of
-these (CONCEPT 17.7: every behavior that rests on documentation rather
-than a probe is listed as unproved):
+The controlled server used KoboToolbox `2.026.37c`. These observations apply
+to that fixture and version:
 
-The source route declares `edits: rescan` with a one-hour
-`rescanDelaySeconds`: the documentation does not say whether an edited
-submission moves in the API's read order, so the safe declaration is
-that an edit stays behind the position and a periodic rescan re-reads
-from the first page. The probe below settles it; if an edit moves the
-submission past the read position, the declaration changes to `ordered`
-and the rescan cost disappears.
+1. **Submission identity:** all 101 submission `_id` values were unique.
+   An authenticated edit kept the same `_id`. Deduplication and identity
+   continuity across server upgrades remain unproved.
+2. **Revision:** real submissions carried `_uuid`, and both controlled
+   edits changed it. The pack still refuses a submission missing it.
+3. **Root identity:** the edited submissions retained `meta/rootUuid`.
+   Legacy submissions and every historical form version were not tested.
+   The maintained asset-scoped key remains `_id`.
+4. **Edit discovery:** a source edit stayed behind the saved keyset tail.
+   A rescan found it; an ordinary tail read did not. Keep `edits: rescan`
+   and the bounded reconciliation interval. Deletion history is not a
+   poll-only change feed.
+5. **Read cap:** fixed `limit=100` returned pages of 100 and 1, followed by
+   an empty tail. A 30,000-item deployment and bulk-cap behavior were not
+   exercised. Size the response bound and rescan cost for each form.
+6. **Sorting and filtering:** `sort={"_id":1}` and the `$gt` keyset filter
+   returned exactly the expected ascending continuation. This was not a
+   concurrent-writer or server-upgrade test.
+7. **Grouped answers:** genuine group answers used slash-separated names,
+   including a numeric answer encoded as a string. Group/repeat nesting
+   and ambiguous-name refusal also have synthetic replay coverage; not
+   every repeat or legacy form shape was exercised against the server.
 
-1. `_id` as the item key. Hypothesis from community posts and the
-   docs sentence that `_id` is unchanged by edits
-   (https://community.kobotoolbox.org/t/submission-id-and-uuid/6370;
-   https://support.kobotoolbox.org/editing_and_deleting_data.html).
-   Probe: is `_id` unique and stable per submission within one asset,
-   across edits, deduplication, and server upgrades?
-2. `_uuid` as the item revision. Hypothesis from the docs sentence
-   "the `_uuid` value changes each time the submission is edited"
-   (https://support.kobotoolbox.org/editing_and_deleting_data.html).
-   Probe: does every submission carry `_uuid`, and does an edit always
-   change it on the deployment's server?
-3. `meta/rootUuid` persistence as the alternative stable key. The
-   docs describe `rootUuid` as staying the same for the original
-   submission while `_uuid` changes
-   (https://support.kobotoolbox.org/editing_and_deleting_data.html;
-   https://support.kobotoolbox.org/viewing_validating_data.html;
-   implementation discussion
-   https://github.com/kobotoolbox/kpi/issues/3940). Probe: is
-   `meta/rootUuid` present on all submissions, including legacy ones,
-   and stable across edits? If confirmed, the pack should switch its
-   key to it and keep `_id` as a secondary.
-4. Edit discovery. KoboToolbox REST Services push data to external
-   servers "only on creation. Nothing is sent when data is edited"
-   (https://support.kobotoolbox.org/rest_services.html), so edits are
-   invisible to push integration and this pack polls instead. An edit
-   keeps its `_id`, so it stays behind the keyset position and only
-   the periodic rescan sees it. Probe: does an edit ever change `_id`,
-   and do deletions ever surface to a poll-only consumer?
-5. The 30,000-record bulk-read cap. Hypothesis from community posts
-   about bulk reads refusing above 30,000 records; the number appears
-   in the KoBoCAT source as `ParsedInstance.DEFAULT_LIMIT = 30000`
-   (https://github.com/kobotoolbox/kpi,
-   kobo/apps/openrosa/apps/viewer/models/parsed_instance.py). The
-   maintained v2 page maximum is a server setting
-   (`MAX_API_PAGE_SIZE`, default 1000; `DEFAULT_API_PAGE_SIZE`, 100).
-   Probe: does the deployment's server refuse or truncate reads above
-   the bulk cap, and does the fixed `limit=100` keyset paging never
-   trip it at the deployment's form sizes?
-6. `sort` and `query` honoured. The keyset rests on the server
-   applying `sort={"_id":1}` and `query={"_id":{"$gt":N}}` as the kpi
-   source reads them (the `sort` parameter in `kpi/views/v2/data.py`;
-   `$gt` in the query key allowlist of `kpi/utils/mongo_helper.py`).
-   Probe: on the deployment's server, does a filtered, sorted read
-   return exactly the submissions past `N` in ascending `_id` order,
-   and is `_id` assigned in increasing order as submissions arrive?
-7. Slash-separated names. Probe: do group and repeat answers arrive
-   as slash-separated names in `results` on the deployment's server,
-   and can one submission carry both `x` and `x/y` (which the pack
-   refuses)?
+The direct registration drill does not establish the separate Coordinator
+workflow, automatic corrections, or approval authority for the ingestion
+service. A service-initiated Proposal also needs a review policy compatible
+with that actor: a policy requiring a human initiator refused a separate
+fixture before task creation. Do not relax a production review policy merely
+to copy the synthetic drill.
 
 ## Fixtures
 

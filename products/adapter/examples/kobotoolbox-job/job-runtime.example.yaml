@@ -1,5 +1,4 @@
 # yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/job-runtime/job-runtime.v1alpha1.schema.json
-#
 # The kobotoolbox example job deployment's runtime configuration, in
 # the example form: every secret is a reference into the operator's
 # provider, never a value. A job runtime document carries the endpoint
@@ -38,5 +37,20 @@ allowedPrivateCidrs:
   # range stands in for the deployment's own; private endpoints stay
   # refused unless their range is listed here.
   - 10.0.0.0/8
+# The direct destination resolves its private-key JWT credential only when an
+# operational pass activates it. `adapter-job check` validates this closed
+# destination binding without resolving its private key or opening the
+# destination endpoint; source endpoint preflight still resolves the synthetic
+# Kobo credentials supplied by the maintained contract check.
+destinations:
+  household-registry:
+    type: direct-breg
+    baseUrl: https://breg.example.invalid
+    tokenEndpoint: https://identity.example.invalid/oauth2/token
+    clientId: adapter-kobo-ingestion
+    privateKeyRef: secret:env/BREG_PRIVATE_KEY
+    scopes: [registry:write]
+    resource: urn:example:base-registry
+    attemptTimeoutMilliseconds: 5000
 store:
   runtimeUrlRef: secret:env/ADAPTER_JOB_DB

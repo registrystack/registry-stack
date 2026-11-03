@@ -12,12 +12,12 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     process::Command,
 };
 
 use anyhow::{bail, Context, Result};
-use registry_evidence_authoring::project::{self, Function, FunctionInterface, Source};
+use registry_evidence_authoring::project::{self, Source};
 use registry_platform_yaml::LocalId;
 use serde_json::{json, Value};
 
@@ -60,6 +60,10 @@ pub struct EmitInputs {
     /// Where the OpenAPI document was read from, echoed back in
     /// `equivalent_command`.
     pub openapi: SpecSource,
+    /// Exact UTF-8 bytes of the OpenAPI document that was interpreted. The
+    /// generated pack pins these bytes so later tooling never re-fetches or
+    /// silently substitutes a different provider contract.
+    pub openapi_document: String,
     /// The sample file path, if one was used, echoed back in
     /// `equivalent_command`.
     pub sample_path: Option<PathBuf>,
@@ -142,9 +146,8 @@ const GET_PATH_MAX_SEGMENTS: usize = 16;
 /// The two methods an Evidence fixed request admits.
 const ADMITTED_METHODS: [&str; 2] = ["GET", "POST"];
 
-/// Draft the response schema, extract-script skeleton, facts-schema stub,
-/// pasteable source block, human report, and equivalent command for one
-/// source, from already-decided inputs.
+/// Draft one complete pack closure, its thin Source binding, a human report,
+/// and the equivalent command from already-decided inputs.
 pub fn draft(inputs: &EmitInputs) -> Result<DraftArtifacts> {
     let method = request_method(&inputs.operation.method)?;
     if !inputs.request_mappings.is_empty() {
@@ -163,16 +166,7 @@ pub fn draft(inputs: &EmitInputs) -> Result<DraftArtifacts> {
         get_paths.push((pointer.clone(), derived));
     }
 
-    let files = vec![
-        DraftFile {
-            bundle_relative_path: format!("functions/{}-prepare.rhai", inputs.source_id),
-            contents: render_prepare_script(inputs)?,
-        },
-        DraftFile {
-            bundle_relative_path: format!("functions/{}-extract.rhai", inputs.source_id),
-            contents: render_extract_script(inputs, &get_paths),
-        },
-    ];
+    let files = render_pack_files(inputs, method, &get_paths)?;
 
     Ok(DraftArtifacts {
         source_id: inputs.source_id.clone(),
@@ -184,54 +178,211 @@ pub fn draft(inputs: &EmitInputs) -> Result<DraftArtifacts> {
     })
 }
 
+fn render_pack_files(
+    inputs: &EmitInputs,
+    method: &str,
+    get_paths: &[(String, String)],
+) -> Result<Vec<DraftFile>> {
+    let pack_root = format!("adapter-packs/{}", inputs.source_id);
+    let prepare_path = format!("scripts/{}-prepare.rhai", inputs.source_id);
+    let extract_path = format!("scripts/{}-extract.rhai", inputs.source_id);
+    let inputs_schema_path = format!("schemas/{}-inputs.schema.json", inputs.source_id);
+    let facts_schema_path = format!("schemas/{}-facts.schema.json", inputs.source_id);
+    let openapi_path = "openapi/source.openapi.yaml";
+
+    let prepare = render_prepare_script(inputs)?;
+    let extract = render_extract_script(inputs, get_paths);
+    let inputs_schema = render_inputs_schema(inputs)?;
+    let facts_schema = format!(
+        "{}\n",
+        serde_json::to_string_pretty(&inputs.narrowed.schema)
+            .context("rendering the generated facts schema")?
+    );
+    let pin = |path: &str, contents: &str| {
+        json!({
+            "path": path,
+            "digest": registry_platform_config::sha256_uri(contents.as_bytes())
+        })
+    };
+
+    let path_parameters = inputs
+        .request_mappings
+        .iter()
+        .enumerate()
+        .filter_map(|(index, mapping)| {
+            let RequestTarget::Path(name) = &mapping.target else {
+                return None;
+            };
+            Some((
+                name.clone(),
+                json!({"jsonpath":format!("$.{}", input_name(index))}),
+            ))
+        })
+        .collect::<serde_json::Map<_, _>>();
+    let query = inputs
+        .request_mappings
+        .iter()
+        .enumerate()
+        .filter_map(|(index, mapping)| {
+            let RequestTarget::Query(name) = &mapping.target else {
+                return None;
+            };
+            Some((
+                name.clone(),
+                json!({"jsonpath":format!("$.{}", input_name(index))}),
+            ))
+        })
+        .collect::<serde_json::Map<_, _>>();
+    let mut parameters = json!({
+        "httpMethod": method,
+        "path": pack_request_path(inputs),
+        "operation": "lookup"
+    });
+    if !path_parameters.is_empty() {
+        parameters["pathParameters"] = Value::Object(path_parameters);
+    }
+    if !query.is_empty() {
+        parameters["query"] = Value::Object(query);
+    }
+    if method == "POST" {
+        parameters["body"] = json!({
+            "rhai": {"file":prepare_path,"entrypoint":"prepare"}
+        });
+    }
+    let scripts = [pin(&prepare_path, &prepare), pin(&extract_path, &extract)];
+    let pack = json!({
+        "apiVersion": "id.registrystack.org/formats/adapter/pack/v1alpha1",
+        "kind": "AdapterPack",
+        "id": inputs.source_id,
+        "version": "0.1.0",
+        "testedVersions": [],
+        "endpoints": [{
+            "id": inputs.source_id,
+            "component": "http",
+            "authentication": {"type":"none"},
+            "attemptTimeoutMilliseconds": 3000,
+            "maximumResponseBytes": 65536,
+            "requestHeaders": ["accept"],
+            "responseHeaders": [],
+            "operations": [{
+                "id":"lookup",
+                "safeUpstream": method == "POST"
+            }],
+            "testedVersions": []
+        }],
+        "sourceRoutes": [{
+            "id": inputs.source_id,
+            "scan": "finite",
+            "nextRecovery": "exact-replay",
+            "edits": "ordered",
+            "evidence": {
+                "inputsSchema": pin(&inputs_schema_path, &inputs_schema),
+                "factsSchema": pin(&facts_schema_path, &facts_schema),
+                "acquisitionPosture": "record-transformed"
+            },
+            "steps": [
+                {"setHeader":{"name":"Accept","value":{"constant":inputs.media_type}}},
+                {"to":{"uri":format!("http:{}", inputs.source_id),"parameters":parameters}},
+                {"setBody":{"rhai":{"file":extract_path,"entrypoint":"extract"}}}
+            ]
+        }],
+        "scripts": scripts,
+        "openApi": pin(openapi_path, &inputs.openapi_document),
+        "capabilities": {
+            "components": ["http"],
+            "languages": ["constant", "rhai"],
+            "eips": ["setHeader", "to", "setBody"]
+        }
+    });
+    let pack_document = serde_norway::to_string(&pack).context("rendering Adapter pack YAML")?;
+    Ok(vec![
+        DraftFile {
+            bundle_relative_path: format!("{pack_root}/pack.yaml"),
+            contents: pack_document,
+        },
+        DraftFile {
+            bundle_relative_path: format!("{pack_root}/{prepare_path}"),
+            contents: prepare,
+        },
+        DraftFile {
+            bundle_relative_path: format!("{pack_root}/{extract_path}"),
+            contents: extract,
+        },
+        DraftFile {
+            bundle_relative_path: format!("{pack_root}/{inputs_schema_path}"),
+            contents: inputs_schema,
+        },
+        DraftFile {
+            bundle_relative_path: format!("{pack_root}/{facts_schema_path}"),
+            contents: facts_schema,
+        },
+        DraftFile {
+            bundle_relative_path: format!("{pack_root}/{openapi_path}"),
+            contents: inputs.openapi_document.clone(),
+        },
+    ])
+}
+
+fn render_inputs_schema(inputs: &EmitInputs) -> Result<String> {
+    let properties = inputs
+        .request_mappings
+        .iter()
+        .enumerate()
+        .map(|(index, mapping)| {
+            let value_type = match mapping.selector.scalar_type {
+                SelectorScalarType::String => "string",
+                SelectorScalarType::Integer => "integer",
+                SelectorScalarType::Boolean => "boolean",
+            };
+            (input_name(index), json!({"type":value_type}))
+        })
+        .collect::<serde_json::Map<_, _>>();
+    let required = properties.keys().cloned().collect::<Vec<_>>();
+    Ok(format!(
+        "{}\n",
+        serde_json::to_string_pretty(&json!({
+            "$schema":"https://json-schema.org/draft/2020-12/schema",
+            "type":"object",
+            "additionalProperties":false,
+            "properties":properties,
+            "required":required
+        }))?
+    ))
+}
+
+fn pack_request_path(inputs: &EmitInputs) -> String {
+    request_path(inputs).replace('{', "{{").replace('}', "}}")
+}
+
 fn render_prepare_script(inputs: &EmitInputs) -> Result<String> {
     if inputs.request_mappings.is_empty() {
-        return Ok(r#"fn prepare(selectors, context) {
-    let parameters = context["parameters"];
+        return Ok(r#"fn prepare(exchange) {
     // TODO(evidencectl): bind only reviewed selector fields and fixed parameters.
-    #{query: [], body: ()}
+    #{}
 }
 "#
         .to_owned());
     }
 
-    let mut out = String::new();
-    out.push_str("fn query_pair(name, value) { #{name: name, value: value} }\n\n");
-    out.push_str("fn prepare(selectors, context) {\n");
-    out.push_str("    let parameters = context[\"parameters\"];\n");
-    out.push_str("    let query = [];\n");
-    for mapping in inputs
-        .request_mappings
-        .iter()
-        .filter(|mapping| matches!(mapping.target, RequestTarget::Query(_)))
-    {
-        let RequestTarget::Query(name) = &mapping.target else {
-            continue;
-        };
-        let access = selector_access(mapping);
-        let value = match mapping.selector.scalar_type {
-            SelectorScalarType::String => access,
-            SelectorScalarType::Integer | SelectorScalarType::Boolean => {
-                format!("to_string({access})")
-            }
-        };
-        out.push_str(&format!(
-            "    query.push(query_pair({}, {value}));\n",
-            rhai_string_literal(name)
-        ));
-    }
+    let mut out = String::from("fn prepare(exchange) {\n");
+    out.push_str("    let inputs = exchange[\"body\"];\n");
     let body = render_body(inputs)?;
-    out.push_str(&format!("    #{{query: query, body: {body}}}\n"));
+    out.push_str(&format!("    {body}\n"));
     out.push_str("}\n");
     Ok(out)
 }
 
-fn selector_access(mapping: &RequestMapping) -> String {
-    format!(
-        "selectors[{}][\"values\"][{}]",
-        rhai_string_literal(&mapping.selector.role),
-        rhai_string_literal(&mapping.selector.field)
-    )
+fn input_name(index: usize) -> String {
+    format!("input{}", index + 1)
+}
+
+fn input_access(inputs: &EmitInputs, mapping: &RequestMapping) -> String {
+    let index = inputs
+        .request_mappings
+        .iter()
+        .position(|candidate| std::ptr::eq(candidate, mapping))
+        .expect("a rendered mapping belongs to the input list");
+    format!("inputs[{}]", rhai_string_literal(&input_name(index)))
 }
 
 #[derive(Default)]
@@ -258,7 +409,7 @@ fn render_body(inputs: &EmitInputs) -> Result<String> {
         for segment in decode_body_pointer(pointer)? {
             node = node.children.entry(segment).or_default();
         }
-        node.value = Some(selector_access(mapping));
+        node.value = Some(input_access(inputs, mapping));
     }
     Ok(render_body_node(&root))
 }
@@ -470,13 +621,12 @@ pub fn write_into_authoring_project(
     project: &Path,
     artifacts: &DraftArtifacts,
 ) -> Result<Vec<PathBuf>> {
-    let functions = project.join("functions");
-    let metadata = fs::symlink_metadata(&functions)
-        .with_context(|| format!("inspecting authoring directory {}", functions.display()))?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+    let project_metadata = fs::symlink_metadata(project)
+        .with_context(|| format!("inspecting authoring project {}", project.display()))?;
+    if project_metadata.file_type().is_symlink() || !project_metadata.is_dir() {
         bail!(
-            "authoring directory {} must be a plain directory created by `evidencectl init`",
-            functions.display()
+            "authoring project {} must be an existing plain directory",
+            project.display()
         );
     }
     let project_path = project.join(project::PROJECT_FILE);
@@ -492,34 +642,6 @@ pub fn write_into_authoring_project(
     }
     let source: Source = serde_json::from_str(&artifacts.authoring_source)
         .context("decoding the generated normalized Source")?;
-    let prepare_id = LocalId::new(format!("{}-prepare", artifacts.source_id))?;
-    let extract_id = LocalId::new(format!("{}-extract", artifacts.source_id))?;
-    if document
-        .functions
-        .iter()
-        .any(|function| function.id == prepare_id || function.id == extract_id)
-    {
-        bail!(
-            "EvidenceProject already defines a generated Function for Source `{}`",
-            artifacts.source_id
-        );
-    }
-    document.functions.extend([
-        Function {
-            id: prepare_id,
-            label: None,
-            description: None,
-            interface: FunctionInterface::SourcePrepare,
-            source: format!("functions/{}-prepare.rhai", artifacts.source_id),
-        },
-        Function {
-            id: extract_id,
-            label: None,
-            description: None,
-            interface: FunctionInterface::SourceExtract,
-            source: format!("functions/{}-extract.rhai", artifacts.source_id),
-        },
-    ]);
     document.sources.insert(source_id, source);
     let mut value = serde_json::to_value(&document)?;
     let object = value
@@ -533,67 +655,173 @@ pub fn write_into_authoring_project(
     let targets = artifacts
         .files
         .iter()
-        .map(|file| project.join(&file.bundle_relative_path))
-        .collect::<Vec<_>>();
+        .map(|file| {
+            let relative = Path::new(&file.bundle_relative_path);
+            if relative.as_os_str().is_empty()
+                || !relative
+                    .components()
+                    .all(|component| matches!(component, Component::Normal(_)))
+            {
+                bail!(
+                    "draft asset path `{}` must be a non-empty project-relative path",
+                    file.bundle_relative_path
+                );
+            }
+            Ok(project.join(relative))
+        })
+        .collect::<Result<Vec<_>>>()?;
 
-    let collisions = targets
-        .iter()
-        .filter(|path| path.exists())
-        .map(|path| path.display().to_string())
-        .collect::<Vec<_>>();
+    let mut collisions = Vec::new();
+    for path in &targets {
+        match fs::symlink_metadata(path) {
+            Ok(_) => collisions.push(path.display().to_string()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).with_context(|| format!("inspecting {}", path.display()));
+            }
+        }
+    }
     if !collisions.is_empty() {
         bail!(
             "refusing to overwrite existing file(s): {}",
             collisions.join(", ")
         );
     }
-    let mut written = Vec::new();
-    for (target, file) in targets.iter().zip(&artifacts.files) {
-        if let Err(error) = write_new_authoring_file(target, file.contents.as_bytes()) {
-            for path in &written {
-                let _ = fs::remove_file(path);
-            }
-            return Err(error);
+    let mut transaction = AuthoringWriteTransaction::default();
+    let result = (|| -> Result<Vec<PathBuf>> {
+        let mut written = Vec::new();
+        for (target, file) in targets.iter().zip(&artifacts.files) {
+            transaction.create_missing_parents(project, Path::new(&file.bundle_relative_path))?;
+            transaction.write_new_file(target, file.contents.as_bytes())?;
+            written.push(target.clone());
         }
-        written.push(target.clone());
-    }
-    let permissions = fs::metadata(&project_path)?.permissions();
-    let mut staged = tempfile::NamedTempFile::new_in(project)
-        .context("staging the updated normalized EvidenceProject")?;
-    use std::io::Write as _;
-    staged.as_file().set_permissions(permissions)?;
-    if let Err(error) = staged
-        .write_all(project_text.as_bytes())
-        .and_then(|_| staged.as_file().sync_all())
-    {
-        for path in &written {
-            let _ = fs::remove_file(path);
+        let permissions = fs::metadata(&project_path)?.permissions();
+        let mut staged = tempfile::NamedTempFile::new_in(project)
+            .context("staging the updated normalized EvidenceProject")?;
+        use std::io::Write as _;
+        let stage_result = staged.as_file().set_permissions(permissions).and_then(|_| {
+            staged
+                .write_all(project_text.as_bytes())
+                .and_then(|_| staged.as_file().sync_all())
+        });
+        if let Err(error) = stage_result {
+            let error = anyhow::Error::from(error)
+                .context("staging the updated normalized EvidenceProject");
+            return Err(error_with_staged_file_close(staged, error));
         }
-        return Err(error).context("staging the updated normalized EvidenceProject");
-    }
-    if let Err(error) = staged.persist(&project_path) {
-        for path in &written {
-            let _ = fs::remove_file(path);
+        if let Err(tempfile::PersistError { error, file }) = staged.persist(&project_path) {
+            let error = anyhow::Error::from(error)
+                .context("publishing the updated normalized EvidenceProject");
+            return Err(error_with_staged_file_close(file, error));
         }
-        return Err(error).context("publishing the updated normalized EvidenceProject");
+        written.push(project_path);
+        Ok(written)
+    })();
+    match result {
+        Ok(written) => Ok(written),
+        Err(error) => Err(transaction.error_with_rollback(error)),
     }
-    written.push(project_path);
-    Ok(written)
 }
 
-fn write_new_authoring_file(path: &Path, contents: &[u8]) -> Result<()> {
-    use std::{fs::OpenOptions, io::Write as _, os::unix::fs::OpenOptionsExt as _};
+fn error_with_staged_file_close(
+    staged: tempfile::NamedTempFile,
+    error: anyhow::Error,
+) -> anyhow::Error {
+    let path = staged.path().to_path_buf();
+    match staged.close() {
+        Ok(()) => error,
+        Err(cleanup) => error.context(format!(
+            "removing staged file {} also failed: {cleanup}",
+            path.display()
+        )),
+    }
+}
 
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o644)
-        .open(path)
-        .with_context(|| format!("creating {}", path.display()))?;
-    file.write_all(contents)
-        .with_context(|| format!("writing {}", path.display()))?;
-    file.sync_all()
-        .with_context(|| format!("persisting {}", path.display()))
+#[derive(Debug)]
+enum CreatedAuthoringPath {
+    File(PathBuf),
+    Directory(PathBuf),
+}
+
+#[derive(Debug, Default)]
+struct AuthoringWriteTransaction {
+    created: Vec<CreatedAuthoringPath>,
+}
+
+impl AuthoringWriteTransaction {
+    fn create_missing_parents(&mut self, project: &Path, relative: &Path) -> Result<()> {
+        let mut current = project.to_path_buf();
+        for component in relative.parent().into_iter().flat_map(Path::components) {
+            let Component::Normal(name) = component else {
+                unreachable!("authoring paths were validated before writing");
+            };
+            current.push(name);
+            match fs::symlink_metadata(&current) {
+                Ok(metadata) => {
+                    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                        bail!(
+                            "asset parent {} must be a plain directory",
+                            current.display()
+                        );
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    fs::create_dir(&current)
+                        .with_context(|| format!("creating directory {}", current.display()))?;
+                    self.created
+                        .push(CreatedAuthoringPath::Directory(current.clone()));
+                }
+                Err(error) => {
+                    return Err(error)
+                        .with_context(|| format!("inspecting asset parent {}", current.display()));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn write_new_file(&mut self, path: &Path, contents: &[u8]) -> Result<()> {
+        use std::{fs::OpenOptions, io::Write as _, os::unix::fs::OpenOptionsExt as _};
+
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o644)
+            .open(path)
+            .with_context(|| format!("creating {}", path.display()))?;
+        self.created
+            .push(CreatedAuthoringPath::File(path.to_path_buf()));
+        file.write_all(contents)
+            .with_context(|| format!("writing {}", path.display()))?;
+        file.sync_all()
+            .with_context(|| format!("persisting {}", path.display()))
+    }
+
+    fn error_with_rollback(self, error: anyhow::Error) -> anyhow::Error {
+        let mut failures = Vec::new();
+        for created in self.created.into_iter().rev() {
+            let (kind, path, result) = match created {
+                CreatedAuthoringPath::File(path) => {
+                    let result = fs::remove_file(&path);
+                    ("file", path, result)
+                }
+                CreatedAuthoringPath::Directory(path) => {
+                    let result = fs::remove_dir(&path);
+                    ("directory", path, result)
+                }
+            };
+            if let Err(cleanup) = result {
+                if cleanup.kind() != std::io::ErrorKind::NotFound {
+                    failures.push(format!("removing {kind} {}: {cleanup}", path.display()));
+                }
+            }
+        }
+        if failures.is_empty() {
+            error
+        } else {
+            error.context(format!("rollback also failed: {}", failures.join("; ")))
+        }
+    }
 }
 
 /// Run `evidence check --runtime-config <project>/runtime.yaml` and classify the
@@ -799,69 +1027,7 @@ fn rhai_string_literal(value: &str) -> String {
     format!("\"{}\"", escape_double_quoted(value))
 }
 
-/// The commented loop sketch shown beside a selection that crosses an array,
-/// as `(indentation, code)` pairs.
-///
-/// Every construct in it is one the runtime's Rhai engine actually registers:
-/// an array is reached by its own pointer with `get_path`, guarded with
-/// `is_missing`, and iterated with `for`. The engine disables ranges, exposes
-/// `len` as a property rather than a method, and defines no `string + integer`
-/// operator, so a sketch built from any of those would not run if pasted.
-///
-/// Each array the pointer crosses is named by its own pointer relative to the
-/// element that contains it, so a nested array is reached from the outer
-/// element rather than from the response root.
-fn loop_sketch(extended_pointer: &str) -> Vec<(usize, String)> {
-    let parts: Vec<&str> = extended_pointer.split("/*").collect();
-    let Some((remainder, arrays)) = parts.split_last() else {
-        return Vec::new();
-    };
-    if arrays.is_empty() {
-        return Vec::new();
-    }
-
-    let mut lines = Vec::new();
-    let mut indent = 4;
-    for (depth, array_pointer) in arrays.iter().enumerate() {
-        let level = depth + 1;
-        let container = if depth == 0 {
-            "source_response".to_owned()
-        } else {
-            format!("element_{depth}")
-        };
-        lines.push((
-            indent,
-            format!("let items_{level} = get_path({container}, \"{array_pointer}\");"),
-        ));
-        lines.push((indent, format!("if !is_missing(items_{level}) {{")));
-        indent += 4;
-        lines.push((indent, format!("for element_{level} in items_{level} {{")));
-        indent += 4;
-    }
-
-    let innermost = arrays.len();
-    if remainder.is_empty() {
-        lines.push((
-            indent,
-            format!("// element_{innermost} is the value at {extended_pointer}"),
-        ));
-    } else {
-        lines.push((
-            indent,
-            format!("let value = get_path(element_{innermost}, \"{remainder}\");"),
-        ));
-        lines.push((indent, "// ...".to_owned()));
-    }
-    for _ in arrays {
-        indent -= 4;
-        lines.push((indent, "}".to_owned()));
-        indent -= 4;
-        lines.push((indent, "}".to_owned()));
-    }
-    lines
-}
-
-fn render_extract_script(inputs: &EmitInputs, get_paths: &[(String, String)]) -> String {
+fn render_extract_script(inputs: &EmitInputs, _get_paths: &[(String, String)]) -> String {
     let mut out = String::new();
     push_line(
         &mut out,
@@ -881,12 +1047,12 @@ fn render_extract_script(inputs: &EmitInputs, get_paths: &[(String, String)]) ->
     push_line(
         &mut out,
         0,
-        "// shape, so get_path below never needs a presence or type check beyond",
+        "// shape, so the generated closed projection below can retain only the",
     );
     push_line(
         &mut out,
         0,
-        "// is_missing. What remains is deciding how the selected leaves relate, which",
+        "// selected fields. What remains is deciding how those fields relate, which",
     );
     push_line(
         &mut out,
@@ -905,52 +1071,80 @@ fn render_extract_script(inputs: &EmitInputs, get_paths: &[(String, String)]) ->
         "// multiple matches, and return the matching outcome instead of the",
     );
     push_line(&mut out, 0, "// unconditional match below.");
-    push_line(&mut out, 0, "fn extract(source_response, context) {");
-
-    for (index, (extended_pointer, get_path_pointer)) in get_paths.iter().enumerate() {
-        let variable = format!("leaf_{}", index + 1);
-        push_line(
-            &mut out,
-            1,
-            &format!(
-                "let {variable} = get_path(source_response, {});",
-                rhai_string_literal(get_path_pointer)
-            ),
-        );
-        push_line(&mut out, 1, &format!("if is_missing({variable}) {{"));
-        push_line(
-            &mut out,
-            2,
-            &format!("// TODO(evidencectl): decide what an absent {extended_pointer} means here."),
-        );
-        push_line(&mut out, 1, "}");
-        if extended_pointer.contains('*') {
-            push_line(
-                &mut out,
-                1,
-                &format!("// TODO(evidencectl): {extended_pointer} is under an array; the index 0"),
-            );
-            push_line(
-                &mut out,
-                1,
-                "// pointer above only reaches the first element. Iterate every element once",
-            );
-            push_line(
-                &mut out,
-                1,
-                "// the cardinality check above is written, for example:",
-            );
-            for (sketch_indent, code) in loop_sketch(extended_pointer) {
-                let padding = " ".repeat(sketch_indent);
-                push_line(&mut out, 1, &format!("// {padding}{code}"));
-            }
-        }
-        out.push('\n');
-    }
-
-    push_line(&mut out, 1, "#{outcome: \"match\", facts: #{}}");
+    let mut projectors = String::new();
+    let mut next_projector = 0;
+    let root_projector = render_projector(
+        &inputs.narrowed.schema,
+        &mut next_projector,
+        &mut projectors,
+    )
+    .expect("the narrowed facts schema has a closed object root");
+    out.push_str(&projectors);
+    push_line(&mut out, 0, "fn extract(exchange) {");
+    push_line(&mut out, 1, "let source_response = exchange[\"body\"];");
+    push_line(
+        &mut out,
+        1,
+        &format!("#{{lookup: \"matched\", facts: {root_projector}(source_response)}}"),
+    );
     out.push_str("}\n");
     out
+}
+
+fn render_projector(schema: &Value, next: &mut usize, definitions: &mut String) -> Option<String> {
+    let value_type = schema.get("type");
+    let is_type = |expected: &str| {
+        value_type
+            .and_then(Value::as_str)
+            .is_some_and(|value| value == expected)
+            || value_type
+                .and_then(Value::as_array)
+                .is_some_and(|values| values.iter().any(|value| value == expected))
+    };
+    if is_type("object") || schema.get("properties").is_some() {
+        let name = format!("project_{}", *next);
+        *next += 1;
+        let properties = schema
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("a narrowed object schema carries properties");
+        let children = properties
+            .iter()
+            .map(|(key, child)| (key, render_projector(child, next, definitions)))
+            .collect::<Vec<_>>();
+        definitions.push_str(&format!("fn {name}(value) {{\n    let out = #{{}};\n"));
+        for (key, child) in children {
+            let key = rhai_string_literal(key);
+            definitions.push_str(&format!("    if {key} in value {{\n"));
+            match child {
+                Some(projector) => definitions.push_str(&format!(
+                    "        out[{key}] = {projector}(value[{key}]);\n"
+                )),
+                None => definitions.push_str(&format!("        out[{key}] = value[{key}];\n")),
+            }
+            definitions.push_str("    }\n");
+        }
+        definitions.push_str("    out\n}\n\n");
+        return Some(name);
+    }
+    if is_type("array") {
+        let name = format!("project_{}", *next);
+        *next += 1;
+        let child = schema
+            .get("items")
+            .and_then(|items| render_projector(items, next, definitions));
+        definitions.push_str(&format!("fn {name}(value) {{\n    let out = [];\n"));
+        definitions.push_str("    for item in value {\n");
+        match child {
+            Some(projector) => {
+                definitions.push_str(&format!("        out.push({projector}(item));\n"));
+            }
+            None => definitions.push_str("        out.push(item);\n"),
+        }
+        definitions.push_str("    }\n    out\n}\n\n");
+        return Some(name);
+    }
+    None
 }
 
 /// Render the normalized Source draft, including generated request bindings
@@ -959,123 +1153,35 @@ fn render_source_block(inputs: &EmitInputs, _method: &str) -> String {
     let source: Value = serde_json::from_str(&render_authoring_source(inputs))
         .expect("generated Source serializes as JSON");
     serde_norway::to_string(&json!({
-        "functions":[
-            {"id":format!("{}-prepare",inputs.source_id),"interface":"source-prepare/v1","source":format!("functions/{}-prepare.rhai",inputs.source_id)},
-            {"id":format!("{}-extract",inputs.source_id),"interface":"source-extract/v1","source":format!("functions/{}-extract.rhai",inputs.source_id)}
-        ],
         "sources":{inputs.source_id.clone():source}
-    })).expect("generated Source block renders")
+    }))
+    .expect("generated Source block renders")
 }
 
-/// Render the existing V1 source object without a surrounding `sources` map.
-/// This keeps the authoring artifact identical to the runtime contract.
+/// Render the pack-backed Source binding without a surrounding `sources` map.
 fn render_authoring_source(inputs: &EmitInputs) -> String {
-    let method = request_method(&inputs.operation.method).expect("validated method");
-    let mut request = json!({"method":method,"path":request_path(inputs),"fixedHeaders":[{"name":"Accept","value":inputs.media_type}]});
-    let path_bindings = inputs.request_mappings.iter().filter_map(|mapping| {
-        let RequestTarget::Path(name) = &mapping.target else { return None };
-        Some((name.clone(), json!({"selector":{"role":&mapping.selector.role,"profile":&mapping.selector.profile,"field":&mapping.selector.field}})))
-    }).collect::<serde_json::Map<_, _>>();
-    if !path_bindings.is_empty() {
-        request["pathBindings"] = serde_json::Value::Object(path_bindings);
-    }
-    let selectors = inputs
+    let input_bindings = inputs
         .request_mappings
         .iter()
-        .fold(
-            BTreeMap::<String, BTreeSet<String>>::new(),
-            |mut groups, mapping| {
-                groups
-                    .entry(mapping.selector.role.clone())
-                    .or_default()
-                    .insert(mapping.selector.profile.clone());
-                groups
-            },
-        )
-        .into_iter()
-        .map(|(role, profiles)| json!({"role":role,"profiles":profiles}))
-        .collect::<Vec<_>>();
-    let mut source = json!({
-        "type":"http-json",
+        .enumerate()
+        .map(|(index, mapping)| {
+            (
+                input_name(index),
+                json!({"selector":{
+                    "role":mapping.selector.role,
+                    "profile":mapping.selector.profile,
+                    "field":mapping.selector.field
+                }}),
+            )
+        })
+        .collect::<serde_json::Map<_, _>>();
+    let source = json!({
+        "pack":{"id":inputs.source_id,"version":"0.1.0"},
+        "route":inputs.source_id,
         "connection":inputs.source_id,
         "acquisitionPosture":"record-transformed",
-        "selectors":selectors,
-        "request":request,
-        "response":{"projection":inputs.selection,"shape":inputs.narrowed.schema.clone(),"maximumBytes":65536},
-        "prepare":{"function":format!("{}-prepare",inputs.source_id)},
-        "extract":{"function":format!("{}-extract",inputs.source_id)},
-        "facts":{"placeholder-fact":{"type":"boolean"}},
-        "limits":{"attemptTimeoutMilliseconds":3000,"maximumConcurrency":8},
-        "adapterParameters":{},
-        "adapterParametersSchema":{"type":"object","additionalProperties":false,"properties":{}}
+        "inputs":input_bindings
     });
-    let query = inputs
-        .request_mappings
-        .iter()
-        .filter(|mapping| matches!(mapping.target, RequestTarget::Query(_)))
-        .collect::<Vec<_>>();
-    let body = inputs
-        .request_mappings
-        .iter()
-        .filter(|mapping| matches!(mapping.target, RequestTarget::Body(_)))
-        .collect::<Vec<_>>();
-    if !query.is_empty() || !body.is_empty() {
-        let selector_maximum_bytes = query
-            .iter()
-            .chain(body.iter())
-            .map(|mapping| mapping.selector.maximum_bytes)
-            .max()
-            .unwrap_or(1)
-            .max(64);
-        let body_key_maximum_bytes = body
-            .iter()
-            .filter_map(|mapping| match &mapping.target {
-                RequestTarget::Body(pointer) => Some(pointer),
-                _ => None,
-            })
-            .flat_map(|pointer| {
-                decode_body_pointer(pointer)
-                    .expect("body pointer validated while rendering the prepare Function")
-            })
-            .map(|segment| segment.len() as u64)
-            .max()
-            .unwrap_or(1);
-        let maximum_string_bytes = selector_maximum_bytes.max(body_key_maximum_bytes);
-        let mut limits = json!({
-            "query": if query.is_empty() { "forbidden" } else { "required" },
-            "jsonBody": if body.is_empty() { "forbidden" } else { "required" },
-            "maximumStringBytes": maximum_string_bytes,
-            "maximumNormalizedBytes": 65536
-        });
-        if !query.is_empty() {
-            limits["maximumQueryPairs"] = json!(query.len());
-            limits["maximumQueryNameBytes"] = json!(query
-                .iter()
-                .filter_map(|mapping| match &mapping.target {
-                    RequestTarget::Query(name) => Some(name.len()),
-                    _ => None,
-                })
-                .max()
-                .unwrap_or(1));
-            limits["maximumQueryValueBytes"] = json!(query
-                .iter()
-                .map(|mapping| mapping.selector.maximum_bytes)
-                .max()
-                .unwrap_or(1));
-        }
-        if !body.is_empty() {
-            limits["maximumJsonDepth"] = json!(body
-                .iter()
-                .filter_map(|mapping| match &mapping.target {
-                    RequestTarget::Body(pointer) => Some(pointer.matches('/').count() + 1),
-                    _ => None,
-                })
-                .max()
-                .unwrap_or(1));
-            limits["maximumCollectionItems"] = json!(body.len().min(256));
-        }
-        source["preparationLimits"] = limits;
-    }
     serde_json::to_string(&source).expect("normalized Source serializes")
 }
 
@@ -1154,18 +1260,15 @@ fn render_report(inputs: &EmitInputs) -> String {
     out.push_str("  - Review the generated Source posture and default source limits.\n");
     out.push_str("  - Configure target-owned authentication.\n");
     if inputs.request_mappings.is_empty() {
-        out.push_str(
-            "  - Complete selector bindings, the preparation Function, and request limits.\n\n",
-        );
+        out.push_str("  - Complete selector bindings and the pack request mapping.\n\n");
     } else {
-        out.push_str(
-            "  - Review the generated selector bindings and preparation Function, plus the applicable request limits.\n\n",
-        );
+        out.push_str("  - Review the generated selector bindings and pack request mapping.\n\n");
     }
 
     out.push_str("Next steps:\n");
     out.push_str(&format!(
-        "  1. Resolve every TODO(evidencectl) comment in evidence.yaml and\n     functions/{}-extract.rhai.\n",
+        "  1. Resolve every TODO(evidencectl) comment in evidence.yaml and\n     adapter-packs/{}/scripts/{}-extract.rhai.\n",
+        inputs.source_id,
         inputs.source_id
     ));
     out.push_str(

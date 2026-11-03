@@ -352,6 +352,10 @@
           "description": "The response headers.",
           "type": "object"
         },
+        "rawBodyBase64": {
+          "description": "Exact response bytes for a selected host protocol, encoded as standard\npadded base64. This is mutually exclusive with `body`; ordinary replay\nnever decodes or exposes it.",
+          "type": "string"
+        },
         "status": {
           "description": "The status the upstream answered with.",
           "format": "uint32",

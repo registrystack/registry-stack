@@ -21,9 +21,24 @@
 //! declared projection.
 
 pub mod destination;
+#[cfg(feature = "direct-breg")]
+pub mod direct_breg;
+#[cfg(feature = "job-hook")]
+pub mod hook_ingress;
 pub mod pass;
+#[cfg(feature = "job-postgres")]
+pub mod postgres_source;
 pub mod projection;
+#[cfg(feature = "job-rabbitmq")]
+pub mod rabbitmq_source;
+pub mod runtime_destination;
+#[cfg(feature = "job-sftp")]
+pub mod sftp_source;
+#[cfg(feature = "signed-coordinator-event")]
+pub mod signed_coordinator_event;
 pub mod store;
+#[cfg(feature = "job-rabbitmq")]
+pub mod tls_provider;
 pub mod trigger;
 
 pub mod cli;

@@ -129,6 +129,7 @@ endpoints:
       type: basic
     attemptTimeoutMilliseconds: 10000
     maximumResponseBytes: 1048576
+    requestHeaders: [accept]
     operations:
       - id: tracker-export
       - id: tracker-import
@@ -499,6 +500,8 @@ scripts:
     digest: sha256:37fbf1d1454e3eb3c2112991e8a80189dae40b460188a029ae47a0354e19adea
   - path: scripts/import-summary.rhai
     digest: sha256:0aceef8cf488ee900de1dccc465d8ed70cbd12bf6cfc8f4139e4e32c87669acd
+  - path: scripts/evidence.rhai
+    digest: sha256:26da9d0ff82fceb3cfd00a4598fcd93b73b08fc1b8303a54a7c2f9084b386c76
 capabilities:
   components:
     - http
@@ -513,7 +516,96 @@ capabilities:
     - idempotentConsumer
     - onException
     - setBody
+    - setHeader
     - setProperty
     - throwException
     - to
     - validate
+
+sourceRoutes:
+  - id: evidence-adult-status
+    evidence:
+      inputsSchema:
+        path: schemas/evidence-inputs.json
+        digest: sha256:0401dd9f7f1090a688c2d22a1d6c6db90d8184efb0ecf1a4cb27da5ec658da63
+      factsSchema:
+        path: schemas/evidence-adult-facts.json
+        digest: sha256:8bdf3ef18af1461efa78c5fa15ac634f2066d86f0ca9d52de19b46926239a833
+      acquisitionPosture: record-transformed
+    steps:
+      - setProperty:
+          name: dhis2EvidenceRecordReference
+          value:
+            jsonpath: "$.recordReference"
+      - setHeader:
+          name: Accept
+          value:
+            constant: application/json
+      - to:
+          uri: http:tracker
+          parameters:
+            httpMethod: GET
+            path: /api/tracker/trackedEntities
+            operation: tracker-export
+            query:
+              program: {constant: Prg00000001}
+              orgUnits: {constant: Org00000001}
+              trackedEntities: {exchangeProperty: dhis2EvidenceRecordReference}
+              fields: {constant: "trackedEntity,attributes[attribute,value]"}
+              pageSize: {constant: "2"}
+              page: {constant: "1"}
+              totalPages: {constant: "true"}
+      - setBody:
+          rhai:
+            file: scripts/evidence.rhai
+            entrypoint: project_adult
+      - validateSchema:
+          path: schemas/evidence-adult-provider.json
+          digest: sha256:6baa01c23ccc1ed7fa5dfa9de31eb2227a8c6776bdafa1d52a4b2c438b35a81e
+      - setBody:
+          rhai:
+            file: scripts/evidence.rhai
+            entrypoint: lookup_adult
+  - id: evidence-professional-licence
+    evidence:
+      inputsSchema:
+        path: schemas/evidence-inputs.json
+        digest: sha256:0401dd9f7f1090a688c2d22a1d6c6db90d8184efb0ecf1a4cb27da5ec658da63
+      factsSchema:
+        path: schemas/evidence-professional-licence-facts.json
+        digest: sha256:ff6a262a77a74b465cef1ac564f2ea4bb3f4a205d086b5cac8e7b1e21c10ac8e
+      acquisitionPosture: record-transformed
+    steps:
+      - setProperty:
+          name: dhis2EvidenceRecordReference
+          value:
+            jsonpath: "$.recordReference"
+      - setHeader:
+          name: Accept
+          value:
+            constant: application/json
+      - to:
+          uri: http:tracker
+          parameters:
+            httpMethod: GET
+            path: /api/tracker/trackedEntities
+            operation: tracker-export
+            query:
+              program: {constant: Prg00000002}
+              orgUnits: {constant: Org00000001}
+              trackedEntities: {exchangeProperty: dhis2EvidenceRecordReference}
+              fields: {constant: "trackedEntity,attributes[attribute,value],enrollments[program,status,events[programStage,status]]"}
+              pageSize: {constant: "2"}
+              page: {constant: "1"}
+              totalPages: {constant: "true"}
+      - setBody:
+          rhai:
+            file: scripts/evidence.rhai
+            entrypoint: project_professional_licence
+      - validateSchema:
+          path: schemas/evidence-professional-licence-provider.json
+          digest: sha256:6261d9596d68c07496f98c0fda1df10bbafd91f07e9fcf74b4921e141c435a06
+      - setBody:
+          rhai:
+            file: scripts/evidence.rhai
+            entrypoint: lookup_professional_licence

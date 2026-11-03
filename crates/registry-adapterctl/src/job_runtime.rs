@@ -1,29 +1,30 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The schema shape of the ingestion job's runtime configuration
+//! Schema mirror for the ingestion job runtime document
 //! (`AdapterJobRuntimeConfig`, `products/adapter/CONCEPT.md` sections
-//! 10.2 and 17.2). The reader is
-//! `registry_adapter::engine::job_sources::JobRuntimeConfig`, whose crate
-//! carries no schema derive, so the generator describes the document
-//! from these mirror types: the endpoint bindings core owns, the job-only
-//! `sources` block, and the job host's `store` block. The tests below
-//! hold every member list of the `sources` block to the reader's own, so
-//! a source member the reader gains or drops fails them. The `store`
-//! block mirrors the reader's `JobStoreConfig`; its member list is held
-//! by review.
+//! 10.2 and 17.2). The engine owns the reader,
+//! `registry_adapter_engine::job_sources::JobRuntimeConfig`, whose crate
+//! carries no schema derive, so the generator describes the document from
+//! these mirror types; this module keeps the generated schema beside the
+//! other Adapter schemas without moving host-side destination clients into
+//! the engine. The tests below hold every member list of the `sources`
+//! block to the reader's own, so a source member the reader gains or drops
+//! fails them. The `store` block mirrors the reader's `JobStoreConfig`; its
+//! member list is held by review.
 
 use std::collections::BTreeMap;
 
 use registry_adapter_core::AdapterEndpointBindings;
+use registry_platform_config::{PrivateListenerConfig, SecretProvidersConfig};
 use registry_platform_yaml::{BoundedU32, BoundedU64, LocalId, SecretReference};
 use schemars::JsonSchema;
 
 // The types below are never constructed: they exist for the schema
 // derive alone.
 
-/// The ingestion job's runtime configuration: the endpoint bindings
-/// every mode shares, the job source bindings, and the job store. It
-/// states none of the facade's members (`listener`, `database`, `oidc`,
+/// The ingestion job runtime configuration: shared endpoint bindings beside
+/// job-only sources, store, and host-owned destination bindings. It states
+/// none of the facade's members (`listener`, `database`, `oidc`,
 /// `allowedClients`, `audit`, `idempotency`, the cursor custody).
 #[allow(dead_code)]
 #[derive(JsonSchema)]
@@ -41,6 +42,70 @@ pub(crate) struct JobRuntimeDocument {
     /// store and the host refuses to run a pass.
     #[serde(default)]
     store: Option<JobStore>,
+    #[serde(default)]
+    destinations: Option<serde_json::Value>,
+    #[serde(default)]
+    secret_providers: Option<SecretProvidersConfig>,
+    #[serde(default)]
+    hook_ingress: Option<HookIngress>,
+}
+
+#[allow(dead_code)]
+#[derive(JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct HookIngress {
+    #[schemars(schema_with = "hook_listener_schema")]
+    listener: PrivateListenerConfig,
+    #[schemars(schema_with = "hook_source_map_schema")]
+    sources: BTreeMap<LocalId, HookSource>,
+}
+
+fn hook_listener_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    let _shared = generator.subschema_for::<PrivateListenerConfig>();
+    schemars::json_schema!({
+        "$ref": "#/$defs/PrivateListenerConfig",
+        "properties": {
+            "bind": {
+                "description": "Canonical loopback socket address. The schema accepts canonical IPv4 127/8 octets and [::1], with an unpadded decimal port from 0 through 65535.",
+                "pattern": "^(?:127(?:\\.(?:0|[1-9][0-9]?|1[0-9]{2}|2[0-4][0-9]|25[0-5])){3}|\\[::1\\]):(?:0|[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$"
+            }
+        },
+        "allOf": [{
+            "if": {
+                "required": ["bind"],
+                "properties": {
+                    "bind": { "pattern": ":0$" }
+                }
+            },
+            "then": {
+                "properties": {
+                    "tlsTermination": { "const": "development-loopback" }
+                }
+            }
+        }],
+        "unevaluatedProperties": false
+    })
+}
+
+fn hook_source_map_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    let names = generator.subschema_for::<LocalId>();
+    schemars::json_schema!({
+        "type": "object",
+        "minProperties": 1,
+        "maxProperties": 16,
+        "propertyNames": names,
+        "additionalProperties": generator.subschema_for::<HookSource>(),
+    })
+}
+
+#[allow(dead_code)]
+#[derive(JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct HookSource {
+    username_ref: SecretReference,
+    password_ref: SecretReference,
+    requests_per_minute: BoundedU64<1, 60_000>,
+    burst: BoundedU64<1, 1_000>,
 }
 
 /// The job source bindings, keyed by the pack endpoint each binds.
@@ -56,6 +121,12 @@ struct JobSources {
     #[serde(default)]
     #[schemars(schema_with = "local_id_map_schema::<PostgresSource>")]
     postgres: Option<BTreeMap<LocalId, PostgresSource>>,
+    #[serde(default)]
+    #[schemars(schema_with = "local_id_map_schema::<RabbitMqSource>")]
+    rabbitmq: Option<BTreeMap<LocalId, RabbitMqSource>>,
+    #[serde(default)]
+    #[schemars(schema_with = "local_id_map_schema::<SftpSource>")]
+    sftp: Option<BTreeMap<LocalId, SftpSource>>,
 }
 
 /// The schema of a source map: an object whose property names are
@@ -152,16 +223,148 @@ struct PostgresSource {
     tls: Option<SourceTls>,
 }
 
-/// The TLS posture of one postgres source connection. Plaintext is a
-/// test-build posture only and is not part of the format.
+/// One manually settled RabbitMQ source. The broker must independently enforce
+/// a hard `max_message_size`; the client byte ceiling is post-allocation.
 #[allow(dead_code)]
 #[derive(JsonSchema)]
-#[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RabbitMqSource {
+    host: String,
+    #[serde(default)]
+    port: Option<BoundedU64<1, 65_535>>,
+    #[serde(default)]
+    vhost: Option<String>,
+    user: String,
+    password_ref: SecretReference,
+    queue: String,
+    dead_letter_exchange: String,
+    dead_letter_queue: String,
+    dead_letter_routing_key: String,
+    namespace: String,
+    #[serde(default)]
+    maximum_outstanding_deliveries: Option<BoundedU64<1, 64>>,
+    #[serde(default)]
+    connection_timeout_milliseconds: Option<BoundedU64<1, 10_000>>,
+    #[serde(default)]
+    heartbeat_seconds: Option<BoundedU64<1, 65_535>>,
+    #[serde(default)]
+    tls: Option<SourceTls>,
+}
+
+/// One read-only SFTP source. The dedicated account must be confined by the
+/// server to `baseDirectory`; SFTP v3 client path checks are not an atomic
+/// filesystem jail.
+#[allow(dead_code)]
+#[derive(JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SftpSource {
+    host: String,
+    #[serde(default)]
+    port: Option<BoundedU64<1, 65_535>>,
+    user: String,
+    base_directory: String,
+    #[schemars(schema_with = "pinned_host_key_schema")]
+    pinned_host_key: String,
+    credential: SftpCredential,
+    namespace: String,
+    #[serde(default)]
+    #[schemars(schema_with = "optional_flat_glob_schema")]
+    include: Option<String>,
+    completion: SftpCompletion,
+    #[serde(default)]
+    maximum_listing_entries: Option<BoundedU32<1, 10_000>>,
+}
+
+#[allow(dead_code)]
+#[derive(JsonSchema)]
+#[serde(
+    tag = "type",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+enum SftpCredential {
+    Password {
+        password_ref: SecretReference,
+    },
+    PrivateKey {
+        private_key_ref: SecretReference,
+        #[serde(default)]
+        passphrase_ref: Option<SecretReference>,
+    },
+}
+
+/// Exactly one producer completion protocol. `DoneFile` requires the producer
+/// to remove a stale marker before replacement and publish it only after an
+/// atomic handover. `CompletedName` requires that atomic handover directly.
+#[allow(dead_code)]
+#[derive(JsonSchema)]
+#[serde(
+    tag = "type",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+enum SftpCompletion {
+    DoneFile {
+        #[schemars(schema_with = "done_file_name_schema")]
+        name: String,
+    },
+    CompletedName {
+        #[schemars(schema_with = "required_true_schema")]
+        producer_atomic_handover: bool,
+    },
+}
+
+fn pinned_host_key_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 16384,
+        "description": "One complete OpenSSH Ed25519 or P-256 public key; check parses and validates it without network or secret access."
+    })
+}
+
+fn optional_flat_glob_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": ["string", "null"],
+        "minLength": 1,
+        "maxLength": 1024,
+        "description": "A bounded flat-name glob. * spans any run and ? spans one Unicode scalar; path separators and control characters are refused."
+    })
+}
+
+fn done_file_name_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 1024,
+        "description": "A flat literal name or one $simple{file:name} placeholder. Remove a stale marker before replacement and publish the marker only after atomic handover."
+    })
+}
+
+fn required_true_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": "boolean",
+        "const": true,
+        "description": "The producer promises that only an atomic rename publishes a completed final name."
+    })
+}
+
+/// The TLS posture of one postgres or RabbitMQ source connection.
+/// Plaintext is a test-build posture only and is not part of the format.
+#[allow(dead_code)]
+#[derive(JsonSchema)]
+#[serde(
+    tag = "type",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
 enum SourceTls {
     /// The platform trust roots, TLS required, no client certificate.
     SystemRoots,
     /// One private CA bundle file beside the platform roots.
-    #[serde(rename_all = "camelCase")]
     CaBundle {
         /// The absolute path of the PEM file holding the bundle.
         ca_bundle_file: String,
@@ -254,12 +457,16 @@ mod tests {
     /// the generated schema and load through the reader the compile path
     /// and the job host share.
     #[test]
-    fn the_shipped_job_runtime_documents_pass_the_schema_and_the_reader() {
+    fn shipped_job_runtime_documents_pass_the_schema_and_reader() {
         let validator = validator();
         for relative in [
             "products/adapter/fixtures/corpus/base-job/job-runtime.yaml",
             "products/adapter/examples/kobotoolbox-job/job-runtime.example.yaml",
+            "products/adapter/examples/kobotoolbox-job/job-runtime.coordinator.example.yaml",
+            "products/adapter/examples/kobotoolbox-job/job-runtime.hook.example.yaml",
             "products/adapter/examples/odk-central-job/job-runtime.example.yaml",
+            "products/adapter/examples/rabbitmq-source/job-runtime.example.yaml",
+            "products/adapter/examples/sftp-source/job-runtime.example.yaml",
         ] {
             let path = repository_file(relative);
             let document = yaml_as_json(&std::fs::read(&path).unwrap());
@@ -276,36 +483,24 @@ mod tests {
     /// A member neither the schema nor the reader knows refuses at both,
     /// and so does the facade's envelope.
     #[test]
-    fn an_unknown_member_or_the_facade_envelope_refuses_at_both() {
+    fn unknown_member_and_facade_envelope_refuse_at_schema_and_reader() {
         let validator = validator();
         let base = std::fs::read_to_string(repository_file(
             "products/adapter/fixtures/corpus/base-job/job-runtime.yaml",
         ))
         .unwrap();
         let directory = tempfile::tempdir().unwrap();
-        for (label, text) in [
-            (
-                "an unknown member",
-                format!("{base}listener:\n  port: 8080\n"),
-            ),
-            (
-                "the facade envelope",
-                base.replace(
-                    "kind: AdapterJobRuntimeConfig",
-                    "kind: AdapterRuntimeConfig",
-                ),
+        for text in [
+            format!("{base}listener:\n  port: 8080\n"),
+            base.replace(
+                "kind: AdapterJobRuntimeConfig",
+                "kind: AdapterRuntimeConfig",
             ),
         ] {
-            assert!(
-                validator.validate(&yaml_as_json(text.as_bytes())).is_err(),
-                "the schema must refuse {label}"
-            );
-            let path = directory.path().join("runtime.yaml");
+            assert!(validator.validate(&yaml_as_json(text.as_bytes())).is_err());
+            let path = directory.path().join("job-runtime.yaml");
             std::fs::write(&path, &text).unwrap();
-            assert!(
-                JobRuntimeConfig::load(&path).is_err(),
-                "the reader must refuse {label}"
-            );
+            assert!(JobRuntimeConfig::load(&path).is_err());
         }
     }
 
@@ -351,6 +546,16 @@ mod tests {
                 serde_json::json!({"postgres": {"source": {"unknown": 1}}}),
             ),
             (
+                "RabbitMqSource",
+                definitions["RabbitMqSource"].clone(),
+                serde_json::json!({"rabbitmq": {"source": {"unknown": 1}}}),
+            ),
+            (
+                "SftpSource",
+                definitions["SftpSource"].clone(),
+                serde_json::json!({"sftp": {"source": {"unknown": 1}}}),
+            ),
+            (
                 "SourceTls ca-bundle",
                 ca_bundle,
                 postgres(serde_json::json!({"type": "ca-bundle", "unknown": 1})),
@@ -378,5 +583,64 @@ mod tests {
             reader_members(postgres(serde_json::json!({"type": "unknown"}))),
             "the TLS postures drifted from the reader"
         );
+    }
+
+    #[test]
+    fn shared_security_blocks_refuse_the_same_invalid_documents_in_schema_and_reader() {
+        let validator = validator();
+        let path = repository_file(
+            "products/adapter/examples/kobotoolbox-job/job-runtime.hook.example.yaml",
+        );
+        let valid = yaml_as_json(&std::fs::read(&path).unwrap());
+        let directory = tempfile::tempdir().unwrap();
+
+        let mut empty_providers = valid.clone();
+        empty_providers["secretProviders"] = serde_json::json!({});
+        let mut malformed_listener = valid;
+        malformed_listener["hookIngress"]["listener"]["bind"] = serde_json::json!("127.x");
+
+        let mut impossible_socket = malformed_listener.clone();
+        impossible_socket["hookIngress"]["listener"]["bind"] =
+            serde_json::json!("127.999.999.999:99999");
+        let mut oversized_port = malformed_listener.clone();
+        oversized_port["hookIngress"]["listener"]["bind"] = serde_json::json!("127.0.0.1:65536");
+        let mut operator_ephemeral = malformed_listener.clone();
+        operator_ephemeral["hookIngress"]["listener"]["bind"] = serde_json::json!("127.0.0.1:0");
+
+        for document in [
+            empty_providers,
+            malformed_listener,
+            impossible_socket,
+            oversized_port,
+            operator_ephemeral,
+        ] {
+            assert!(
+                validator.validate(&document).is_err(),
+                "the generated schema must carry the shared block's refusal"
+            );
+            let runtime_path = directory.path().join("job-runtime.yaml");
+            std::fs::write(&runtime_path, serde_json::to_vec_pretty(&document).unwrap()).unwrap();
+            assert!(
+                JobRuntimeConfig::load(&runtime_path).is_err(),
+                "the runtime reader must refuse the same document"
+            );
+        }
+
+        let mut maximum_port = yaml_as_json(&std::fs::read(path).unwrap());
+        maximum_port["hookIngress"]["listener"]["bind"] = serde_json::json!("127.250.1.2:65535");
+        let mut development_ephemeral = maximum_port.clone();
+        development_ephemeral["hookIngress"]["listener"]["bind"] = serde_json::json!("[::1]:0");
+        development_ephemeral["hookIngress"]["listener"]["tlsTermination"] =
+            serde_json::json!("development-loopback");
+        for document in [maximum_port, development_ephemeral] {
+            assert!(
+                validator.validate(&document).is_ok(),
+                "the generated schema accepts the supported listener boundary"
+            );
+            let runtime_path = directory.path().join("job-runtime.yaml");
+            std::fs::write(&runtime_path, serde_json::to_vec_pretty(&document).unwrap()).unwrap();
+            JobRuntimeConfig::load(&runtime_path)
+                .expect("the runtime reader accepts the supported listener boundary");
+        }
     }
 }

@@ -1,0 +1,51 @@
+{
+  "apiVersion": "id.registrystack.org/formats/adapter/pack/v1alpha1",
+  "kind": "AdapterPack",
+  "id": "professional-licence-register",
+  "version": "1",
+  "testedVersions": [],
+  "endpoints": [
+    {
+      "id": "licence-register",
+      "component": "sqlite-extract",
+      "authentication": {"type": "none"},
+      "attemptTimeoutMilliseconds": 2000,
+      "maximumResponseBytes": 8192,
+      "sqliteExtract": {
+        "extractProfile": "licence-register-extract",
+        "statement": {"path": "queries/professional-licence-lookup.sql", "digest": "sha256:e23bfab4ba941d8cee235ce8764337d174a2c1ce982cea360582befe2483f068"},
+        "columns": [{"name": "active_licence_count", "type": "integer"}],
+        "parameters": [{"name": "record_reference", "required": true}],
+        "maximumExtractAgeSeconds": 604800,
+        "maximumRows": 2,
+        "maximumCellBytes": 64,
+        "maximumStatementSteps": 100000,
+        "concurrency": 8
+      }
+    }
+  ],
+  "scripts": [
+    {"path": "scripts/professional-licence-extract.rhai", "digest": "sha256:b936355c0d19a657d9213d534172d0194a0b8c9a9fea6d6835b36867b22f69c0"}
+  ],
+  "sourceRoutes": [
+    {
+      "id": "professional-licence",
+      "evidence": {
+        "inputsSchema": {"path": "schemas/professional-licence-inputs.schema.json", "digest": "sha256:08dc2182aacb7c609608e4d92631b1ff56bd6d13641c7eda19a21c18410d19f7"},
+        "factsSchema": {"path": "schemas/professional-licence-facts.schema.json", "digest": "sha256:01a5cf90e1c6aa3cdafd688b807ae688258a3bc613fd2c9abbd60e4123f14a5d"},
+        "acquisitionPosture": "source-derived"
+      },
+      "steps": [
+        {"setProperty": {"name": "record-reference", "value": {"jsonpath": "$.recordReference"}}},
+        {"to": {"uri": "sqlite-extract:licence-register", "parameters": {"queryParameters": {"record_reference": {"exchangeProperty": "record-reference"}}}}},
+        {"validateSchema": {"path": "schemas/professional-licence-response.schema.json", "digest": "sha256:bb47ae94ea3ba0aaff6a71420823af2a43fcb16b5005fb04c917780ae832c646"}},
+        {"setBody": {"rhai": {"file": "scripts/professional-licence-extract.rhai", "entrypoint": "extract"}}}
+      ]
+    }
+  ],
+  "capabilities": {
+    "components": ["sqlite-extract"],
+    "languages": ["jsonpath", "rhai"],
+    "eips": ["setBody", "setProperty", "to"]
+  }
+}

@@ -1,8 +1,0 @@
-type: object
-additionalProperties: false
-required:
-  - unionSetContract
-  - maximumUnionEvents
-properties:
-  unionSetContract: {const: urn:example:fixture:union-set:v1}
-  maximumUnionEvents: {const: 8}
