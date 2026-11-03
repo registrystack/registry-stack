@@ -29,10 +29,11 @@ relevant product pages on this site rather than duplicating release notes.
 - BREAKING: New authorized-material audit entries use `registry.evidence.audit/v3` and
   `registry.evidence.audit.request-batch/v3`, which require a closed `executionBounds` object.
   Update audit readers before routing traffic to this runtime.
-- BREAKING: `bregctl generate evidence-source` exports an Adapter pack under
-  `adapter-packs/` instead of `adapters/*.rhai` and `schemas/*.yaml`, under an unchanged
-  export `apiVersion`, and gains `--authentication` (default `static-authorization`). Regenerate
-  every export, and pass `--authentication oauth2-private-key-jwt` for a private-key-JWT target.
+- BREAKING: The Base Registry Engine (BReg) command `bregctl generate evidence-source` exports
+  an Adapter pack under `adapter-packs/` instead of `adapters/*.rhai` and `schemas/*.yaml`, under
+  an unchanged export `apiVersion`, and gains `--authentication` (default `static-authorization`).
+  Regenerate every export, and pass `--authentication oauth2-private-key-jwt` for a
+  private-key-JWT target.
   See the [Evidence from BReg tutorial](../tutorials/evidence-from-breg/).
 
 {/* Evidence: products/evidence/CHANGELOG.md, Unreleased, the sources-to-packs,
