@@ -385,8 +385,11 @@ async fn private_ca_amqps_succeeds_and_wrong_trust_refuses_before_credentials() 
     .expect("the bounded private CA source is accepted");
     let request =
         RabbitMqReadRequest::new(4_096, Duration::from_secs(5)).expect("the AMQPS read is bounded");
+    // The TLS container is started without a readiness probe, so allow the
+    // broker a full boot on a loaded runner before calling it unavailable.
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
     let mut ready = false;
-    for _ in 0..20 {
+    while std::time::Instant::now() < deadline {
         match source.read(&request).await {
             Ok(None) => {
                 ready = true;
