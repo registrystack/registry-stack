@@ -254,11 +254,11 @@ print(binaries[0])
     export BREG_TEST_EVIDENCECTL_BINARY="$evidencectl_binary"
     python_environment="${CARGO_TARGET_DIR:-target}/breg-test-python"
     python_binary="$python_environment/bin/python"
-    if [[ ! -x "$python_binary" ]] || ! "$python_binary" -c 'import yaml; assert yaml.__version__ == "6.0.3"' >/dev/null 2>&1; then
-      uv venv "$python_environment"
-      uv pip install --python "$python_binary" PyYAML==6.0.3
+    if [[ ! -x "$python_binary" ]] || ! "$python_binary" -c 'import yaml; assert yaml.__version__ == "6.0.2"' >/dev/null 2>&1; then
+      uv venv --clear "$python_environment"
+      uv pip install --python "$python_binary" PyYAML==6.0.2
     fi
-    if [[ ! -x "$python_binary" ]] || ! "$python_binary" -c 'import yaml; assert yaml.__version__ == "6.0.3"' >/dev/null; then
+    if [[ ! -x "$python_binary" ]] || ! "$python_binary" -c 'import yaml; assert yaml.__version__ == "6.0.2"' >/dev/null; then
       printf '%s\n' 'Unable to provision the required PyYAML-enabled Python interpreter with uv.' >&2
       exit 2
     fi

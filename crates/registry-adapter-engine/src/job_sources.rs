@@ -29,7 +29,7 @@ use registry_platform_config::{
     SecretResolver, TlsTermination,
 };
 use registry_platform_yaml::{
-    BoundedU32, BoundedU64, LocalId, SecretReference, UniqueIdList, UniqueList,
+    BoundedU32, BoundedU64, Invalid, LocalId, SecretReference, UniqueIdList, UniqueList,
 };
 use serde::Deserialize;
 
@@ -134,11 +134,12 @@ impl FlatGlob {
 /// the state their routes run under; no facade path reads it.
 #[must_use]
 pub fn unused_read_bounds() -> registry_adapter_core::ReadBounds {
+    const IN_RANGE: &str = "the format's own ceiling lies inside its range";
     registry_adapter_core::ReadBounds {
-        maximum_file_bytes: MAXIMUM_JOB_FILE_BYTES,
-        maximum_row_bytes: MAXIMUM_JOB_ROW_BYTES,
-        maximum_field_bytes: MAXIMUM_JOB_FIELD_BYTES,
-        maximum_rows_per_page: MAXIMUM_JOB_ROWS_PER_PAGE,
+        maximum_file_bytes: BoundedU64::new(MAXIMUM_JOB_FILE_BYTES).expect(IN_RANGE),
+        maximum_row_bytes: BoundedU64::new(MAXIMUM_JOB_ROW_BYTES).expect(IN_RANGE),
+        maximum_field_bytes: BoundedU64::new(MAXIMUM_JOB_FIELD_BYTES).expect(IN_RANGE),
+        maximum_rows_per_page: BoundedU32::new(MAXIMUM_JOB_ROWS_PER_PAGE).expect(IN_RANGE),
     }
 }
 
@@ -165,6 +166,11 @@ pub struct JobPageState {
     /// it.
     #[cfg_attr(not(feature = "job-file"), allow(dead_code))]
     pub(crate) profile: Option<registry_adapter_core::JobProfile>,
+    /// Whether the source route declares `scan: ongoing`: the file and
+    /// SFTP reads then hold their place at the tail of the directory
+    /// with a cursor instead of ending the scan.
+    #[cfg_attr(not(feature = "job-file"), allow(dead_code))]
+    pub(crate) ongoing_scan: bool,
     /// The compiled file sources by pack endpoint id.
     #[cfg_attr(not(feature = "job-file"), allow(dead_code))]
     pub(crate) files: BTreeMap<String, FileSourceConfig>,
@@ -271,6 +277,130 @@ impl JobRuntimeConfig {
         .removed_keys(registry_adapter_core::ADAPTER_REMOVED_KEYS)
         .load::<Self>(&absolute)
         .map(|loaded| loaded.config)
+        .and_then(|config| {
+            config.check_secret_references(&absolute)?;
+            Ok(config)
+        })
+    }
+
+    /// Every secret reference the document carries (the hook ingress
+    /// bindings and each source credential), as the document pointer to
+    /// the member and its raw reference.
+    fn secret_references(&self) -> Vec<(String, &str)> {
+        let mut references = Vec::new();
+        if let Some(ingress) = &self.hook_ingress {
+            for (id, source) in &ingress.sources {
+                references.push((
+                    format!("/hookIngress/sources/{id}/usernameRef"),
+                    source.username_ref.as_str(),
+                ));
+                references.push((
+                    format!("/hookIngress/sources/{id}/passwordRef"),
+                    source.password_ref.as_str(),
+                ));
+            }
+        }
+        let Some(sources) = &self.sources else {
+            return references;
+        };
+        for (id, source) in &sources.postgres {
+            references.push((
+                format!("/sources/postgres/{id}/passwordRef"),
+                source.password_ref.as_str(),
+            ));
+        }
+        for (id, source) in &sources.rabbitmq {
+            references.push((
+                format!("/sources/rabbitmq/{id}/passwordRef"),
+                source.password_ref().as_str(),
+            ));
+        }
+        for (id, source) in &sources.sftp {
+            let prefix = format!("/sources/sftp/{id}/credential");
+            match &source.credential {
+                SftpCredentialConfig::Password { password_ref } => {
+                    references.push((format!("{prefix}/passwordRef"), password_ref.as_str()));
+                }
+                SftpCredentialConfig::PrivateKey {
+                    private_key_ref,
+                    passphrase_ref,
+                } => {
+                    references.push((format!("{prefix}/privateKeyRef"), private_key_ref.as_str()));
+                    if let Some(passphrase_ref) = passphrase_ref {
+                        references
+                            .push((format!("{prefix}/passphraseRef"), passphrase_ref.as_str()));
+                    }
+                }
+            }
+        }
+        references
+    }
+
+    /// Refuse a secret reference whose provider the document does not
+    /// enable, naming the member to correct. The job host would otherwise
+    /// find it only at activation or at the first read, so a runtime that
+    /// cannot start would pass the offline check. The omitted
+    /// `secretProviders` block enables the environment provider alone.
+    ///
+    /// # Errors
+    ///
+    /// The refusal for the first reference whose provider is disabled or
+    /// whose text is not an exact reference; it carries no secret value.
+    pub fn check_secret_references(
+        &self,
+        file: &std::path::Path,
+    ) -> Result<(), registry_platform_config::RuntimeConfigError> {
+        let default_providers = SecretProvidersConfig {
+            file: None,
+            environment: Some(registry_platform_config::EnvironmentSecretProviderConfig {}),
+        };
+        let providers = self.secret_providers.as_ref().unwrap_or(&default_providers);
+        for (pointer, raw) in self.secret_references() {
+            let field = pointer.trim_start_matches('/').replace('/', ".");
+            if let Err(error) = providers.check_reference(&field, raw) {
+                return Err(registry_platform_config::RuntimeConfigError::at_pointer(
+                    file,
+                    "config.secret-provider-disabled",
+                    &pointer,
+                    error.to_string(),
+                    "Declare the provider under secretProviders in the runtime config, or write a reference to a provider it already enables (secret:env/NAME needs secretProviders.environment, secret:file/name needs secretProviders.file).",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// The extra next step for a refused runtime file that is a facade
+    /// `AdapterRuntimeConfig`: the `kind` refusal alone leads through an
+    /// apiVersion refusal and one unknown-key error per facade member. `None`
+    /// for any other refusal, and for a file that cannot be read again.
+    #[must_use]
+    pub fn facade_kind_hint(
+        path: &std::path::Path,
+        refusal: &registry_platform_config::RuntimeConfigError,
+    ) -> Option<String> {
+        if !refusal
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code == "config.wrong-kind")
+        {
+            return None;
+        }
+        let text = std::fs::read_to_string(path).ok()?;
+        let facade = registry_adapter_core::ADAPTER_RUNTIME_KIND;
+        let is_facade = text.lines().any(|line| {
+            let line = line.trim_end();
+            line == format!("kind: {facade}")
+                || line.trim_start().replace(' ', "") == format!("\"kind\":\"{facade}\",")
+                || line.trim_start().replace(' ', "") == format!("\"kind\":\"{facade}\"")
+        });
+        is_facade.then(|| {
+            format!(
+                "This is a facade runtime config (kind {facade}). A job reads its own document: kind {}, apiVersion {}, with the members endpoints, sources, store, destinations, secretProviders and hookIngress. Start from products/adapter/examples/kobotoolbox-job/job-runtime.example.yaml.",
+                registry_adapter_core::ADAPTER_JOB_RUNTIME_KIND,
+                registry_adapter_core::ADAPTER_JOB_RUNTIME_API_VERSION,
+            )
+        })
     }
 
     /// Build the one resolver every source, store, destination, and hook
@@ -307,30 +437,38 @@ impl<'de> Deserialize<'de> for HookIngressConfig {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let document = HookIngressDocument::deserialize(deserializer)?;
         if document.sources.is_empty() || document.sources.len() > 16 {
-            return Err(serde::de::Error::custom(
-                "hookIngress.sources must carry 1 to 16 source bindings",
-            ));
+            return Err(Invalid::expected(
+                "hookIngress.sources to carry 1 to 16 source bindings",
+                "Declare one source per hook trigger binding under hookIngress.sources, at most 16.",
+            )
+            .into_error());
         }
         if !document.listener.is_valid() || !document.listener.bind.ip().is_loopback() {
-            return Err(serde::de::Error::custom(
-                "hookIngress.listener must bind loopback under the declared TLS termination",
-            ));
+            return Err(Invalid::expected(
+                "hookIngress.listener.bind to be a loopback address under the declared TLS termination",
+                "Bind 127.0.0.1 or [::1] and let an operator-controlled reverse proxy terminate TLS in front of it.",
+            )
+            .into_error());
         }
         if document.listener.bind.socket_addr().port() == 0
             && document.listener.tls_termination != TlsTermination::DevelopmentLoopback
         {
-            return Err(serde::de::Error::custom(
-                "hookIngress.listener port 0 is limited to development-loopback",
-            ));
+            return Err(Invalid::expected(
+                "hookIngress.listener port 0 only with tlsTermination development-loopback",
+                "Write a fixed port, or set tlsTermination to development-loopback for local development.",
+            )
+            .into_error());
         }
         if document
             .sources
             .values()
             .any(|source| source.burst.get() > source.requests_per_minute.get())
         {
-            return Err(serde::de::Error::custom(
-                "hookIngress source burst must not exceed requestsPerMinute",
-            ));
+            return Err(Invalid::expected(
+                "each hookIngress source burst to be at most its requestsPerMinute",
+                "Lower burst or raise requestsPerMinute on the source that sets burst above it.",
+            )
+            .into_error());
         }
         Ok(Self {
             listener: document.listener,
@@ -468,30 +606,6 @@ impl<'de> Deserialize<'de> for JobRuntimeConfig {
         if let Some(providers) = &document.secret_providers {
             providers.check().map_err(serde::de::Error::custom)?;
         }
-        if let Some(ingress) = &document.hook_ingress {
-            let default_providers = SecretProvidersConfig {
-                file: None,
-                environment: Some(registry_platform_config::EnvironmentSecretProviderConfig {}),
-            };
-            let providers = document
-                .secret_providers
-                .as_ref()
-                .unwrap_or(&default_providers);
-            for source in ingress.sources.values() {
-                providers
-                    .check_reference(
-                        "hookIngress.sources.*.usernameRef",
-                        source.username_ref.as_str(),
-                    )
-                    .map_err(serde::de::Error::custom)?;
-                providers
-                    .check_reference(
-                        "hookIngress.sources.*.passwordRef",
-                        source.password_ref.as_str(),
-                    )
-                    .map_err(serde::de::Error::custom)?;
-            }
-        }
         Ok(Self {
             core: AdapterEndpointBindings {
                 id: document.id,
@@ -617,18 +731,22 @@ where
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct PostgresSourceConfig {
     /// The source host.
+    #[serde(deserialize_with = "postgres_host")]
     pub(crate) host: String,
     /// The source port (1 to 65535); absent, 5432.
     #[serde(default = "default_postgres_port")]
     pub(crate) port: BoundedU64<1, 65_535>,
     /// The source database.
+    #[serde(deserialize_with = "postgres_database")]
     pub(crate) database: String,
     /// The source user.
+    #[serde(deserialize_with = "postgres_user")]
     pub(crate) user: String,
     /// The reference the source password resolves from; resolved
     /// through the platform secret providers, never logged.
     pub(crate) password_ref: SecretReference,
     /// The namespace every item key of this source carries.
+    #[serde(deserialize_with = "postgres_namespace")]
     pub(crate) namespace: String,
     /// The TLS posture of the connection; absent, the system roots and
     /// a required TLS connection.
@@ -640,12 +758,12 @@ pub(crate) struct PostgresSourceConfig {
 impl PostgresSourceConfig {
     pub(crate) fn host_binding(&self, endpoint: &str) -> PostgresSourceBinding {
         let tls = match &self.tls {
-            SourceTls::SystemRoots => PostgresSourceTls::SystemRoots,
+            SourceTls::SystemRoots {} => PostgresSourceTls::SystemRoots,
             SourceTls::CaBundle { ca_bundle_file } => PostgresSourceTls::CaBundle {
                 ca_bundle_file: ca_bundle_file.clone(),
             },
             #[cfg(feature = "postgres-test")]
-            SourceTls::Plaintext => PostgresSourceTls::Plaintext,
+            SourceTls::Plaintext {} => PostgresSourceTls::Plaintext,
         };
         PostgresSourceBinding {
             endpoint: endpoint.to_owned(),
@@ -658,6 +776,87 @@ impl PostgresSourceConfig {
             tls,
         }
     }
+}
+
+/// A PostgreSQL connection member as bounded text. The reader's refusal
+/// carries the member's pointer and these fixed sentences, never the value.
+fn postgres_text<'de, D>(
+    deserializer: D,
+    maximum: usize,
+    allow_whitespace: bool,
+    invalid: Invalid,
+) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let text = String::deserialize(deserializer)?;
+    let bad_character = |character: char| {
+        character.is_control() || (!allow_whitespace && character.is_whitespace())
+    };
+    if text.is_empty() || text.len() > maximum || text.chars().any(bad_character) {
+        return Err(invalid.into_error());
+    }
+    Ok(text)
+}
+
+fn postgres_host<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    postgres_text(
+        deserializer,
+        253,
+        false,
+        Invalid::expected(
+            "host to carry 1 to 253 bytes without whitespace or control characters",
+            "Write the DNS name or IP address of the PostgreSQL server, such as db.example.org, on one line.",
+        ),
+    )
+}
+
+fn postgres_database<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    postgres_text(
+        deserializer,
+        63,
+        true,
+        Invalid::expected(
+            "database to carry 1 to 63 bytes without control characters",
+            "Write the PostgreSQL database name; PostgreSQL names are at most 63 bytes.",
+        ),
+    )
+}
+
+fn postgres_user<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    postgres_text(
+        deserializer,
+        63,
+        true,
+        Invalid::expected(
+            "user to carry 1 to 63 bytes without control characters",
+            "Write the PostgreSQL role the read-only connection signs in as; role names are at most 63 bytes.",
+        ),
+    )
+}
+
+fn postgres_namespace<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    postgres_text(
+        deserializer,
+        128,
+        true,
+        Invalid::expected(
+            "namespace to carry 1 to 128 bytes without control characters",
+            "Write a short stable namespace for the item keys of this source, on one line.",
+        ),
+    )
 }
 
 fn default_postgres_port() -> BoundedU64<1, 65_535> {
@@ -877,19 +1076,26 @@ impl SftpSourceConfig {
 /// the secure one: system roots, TLS required. Plaintext exists for the
 /// loopback test database only and refuses in every other build.
 #[allow(dead_code)]
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
+#[derive(Debug, Clone, Deserialize)]
+#[serde(
+    tag = "type",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
 pub(crate) enum SourceTls {
-    /// The platform trust roots, TLS required, no client certificate.
-    #[default]
+    /// The platform trust roots, TLS required, no client certificate. An
+    /// empty struct variant, because serde ignores unknown members on a
+    /// unit variant of an internally tagged enum.
     #[serde(rename = "system-roots")]
-    SystemRoots,
+    SystemRoots {},
     /// One private CA bundle file beside the platform roots, the same
     /// shape a facade trust profile carries: a CA bundle is not a
     /// secret, so the member names a file.
     #[serde(rename = "ca-bundle", rename_all = "camelCase")]
     CaBundle {
         /// The absolute path of the PEM file holding the bundle.
+        #[serde(deserialize_with = "crate::rabbitmq_config::absolute_ca_bundle_path")]
         ca_bundle_file: String,
     },
     /// Plaintext, loopback test databases only; refused in any build
@@ -897,7 +1103,13 @@ pub(crate) enum SourceTls {
     /// block refuses it.
     #[cfg(feature = "postgres-test")]
     #[serde(rename = "plaintext")]
-    Plaintext,
+    Plaintext {},
+}
+
+impl Default for SourceTls {
+    fn default() -> Self {
+        Self::SystemRoots {}
+    }
 }
 
 /// The runtime binding of one `file` source endpoint
@@ -935,9 +1147,9 @@ pub struct FileSourceConfig {
     #[serde(default)]
     pub(crate) read_lock: Option<ReadLockName>,
     /// The `changed` lock's timeout, in milliseconds (1 to 10000, the
-    /// pollEnrich step's own timeout ceiling, so the lock wait can finish
-    /// inside the read); camel-4.23.0's `readLockTimeout` field default
-    /// of 10000. Refused beside any read lock but `changed`.
+    /// bound of the poll step's own deadline, which would cut a longer
+    /// wait off); camel-4.23.0's `readLockTimeout` field default of
+    /// 10000. Refused beside any read lock but `changed`.
     #[serde(default)]
     pub(crate) read_lock_timeout_milliseconds: Option<BoundedU64<1, 10_000>>,
     /// The `changed` lock's space between its two checks, in
@@ -1007,7 +1219,7 @@ impl FileSourceConfig {
             && (self.read_lock_timeout_milliseconds.is_some()
                 || self.read_lock_check_interval_milliseconds.is_some())
         {
-            return Err("the file source read lock bounds ride no changed read lock".to_owned());
+            return Err("readLockTimeoutMilliseconds and readLockCheckIntervalMilliseconds apply only with readLock: changed, and readLock here is none or absent (the allowed values are none and changed)".to_owned());
         }
         Ok(if changed {
             ReadLockKind::Changed {
@@ -1161,6 +1373,45 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn postgres_private_ca_reads_the_schema_camel_case_member() {
+        let tls: SourceTls = serde_json::from_value(serde_json::json!({
+            "type": "ca-bundle",
+            "caBundleFile": "/etc/ssl/registry-ca.pem"
+        }))
+        .expect("the documented PostgreSQL private CA posture must deserialize");
+        assert!(matches!(
+            tls,
+            SourceTls::CaBundle { ref ca_bundle_file } if ca_bundle_file == "/etc/ssl/registry-ca.pem"
+        ));
+    }
+
+    #[test]
+    fn postgres_private_ca_refuses_unreviewed_or_invalid_members() {
+        for input in [
+            serde_json::json!({"type": "ca-bundle", "ca_bundle_file": "/etc/ssl/registry-ca.pem"}),
+            serde_json::json!({"type": "ca-bundle", "caBundleFile": "relative.pem"}),
+            serde_json::json!({"type": "ca-bundle", "caBundleFile": "/etc/ssl/registry-ca.pem", "extra": true}),
+        ] {
+            assert!(
+                serde_json::from_value::<SourceTls>(input.clone()).is_err(),
+                "{input} must refuse"
+            );
+        }
+    }
+
+    #[test]
+    fn postgres_system_roots_refuses_a_misspelt_member() {
+        let tls: SourceTls = serde_json::from_value(serde_json::json!({"type": "system-roots"}))
+            .expect("the bare system-roots posture must deserialize");
+        assert!(matches!(tls, SourceTls::SystemRoots {}));
+        let error = serde_json::from_value::<SourceTls>(
+            serde_json::json!({"type": "system-roots", "caBundelFile": "/etc/ssl/ca.pem"}),
+        )
+        .expect_err("a misspelt member must not be ignored");
+        assert!(error.to_string().contains("caBundelFile"), "{error}");
+    }
 
     #[test]
     fn hook_ingress_reads_closed_basic_bindings_and_shared_secret_providers() {
@@ -1548,6 +1799,15 @@ mod tests {
             }),
             "the defaults are camel-4.23.0's own"
         );
+        // The reader holds the schema's bound: a pollEnrich read deadline
+        // is at most 10000 milliseconds, so a longer lock timeout could
+        // never be reached.
+        for (timeout, accepted) in [(10_000, true), (10_001, false), (30_000, false)] {
+            let read: Result<FileSourceConfig, _> = serde_json::from_str(&format!(
+                r#"{{ "directory": "/var/data", "namespace": "exports", "readLock": "changed", "readLockTimeoutMilliseconds": {timeout} }}"#
+            ));
+            assert_eq!(read.is_ok(), accepted, "timeout {timeout}");
+        }
         let slow: Result<FileSourceConfig, _> = serde_json::from_str(
             r#"{ "directory": "/var/data", "namespace": "exports", "readLock": "changed", "readLockCheckIntervalMilliseconds": 99 }"#,
         );
@@ -1556,10 +1816,12 @@ mod tests {
             r#"{ "directory": "/var/data", "namespace": "exports", "readLock": "none", "readLockTimeoutMilliseconds": 500 }"#,
         )
         .expect("the reader carries the members");
-        assert!(
-            stray.read_lock().is_err(),
-            "a timeout beside no changed lock refuses"
-        );
+        let refusal = stray
+            .read_lock()
+            .expect_err("a timeout beside no changed lock refuses");
+        for wanted in ["readLockTimeoutMilliseconds", "readLock: changed", "none"] {
+            assert!(refusal.contains(wanted), "{wanted}: {refusal}");
+        }
         // The closed set rides the reader itself: a lock name outside
         // the pair never reaches a read to be resolved.
         let unknown: Result<FileSourceConfig, _> = serde_json::from_str(
@@ -1682,5 +1944,247 @@ endpoints: []
                 .is_err(),
             "the facade envelope refuses a job document"
         );
+    }
+
+    /// A facade runtime config handed to a job command is told it is the
+    /// wrong document type and what a job reads instead; any other wrong
+    /// kind gets no facade-specific advice.
+    #[test]
+    fn a_facade_runtime_config_is_told_what_a_job_reads_instead() {
+        let directory = tempfile::tempdir().expect("a scratch directory");
+        let write = |name: &str, text: &str| {
+            let path = directory.path().join(name);
+            std::fs::write(&path, text).expect("the runtime document");
+            path
+        };
+        let facade = write(
+            "facade.yaml",
+            "apiVersion: id.registrystack.org/formats/adapter/runtime/v1alpha1\nkind: AdapterRuntimeConfig\nid: facade\n",
+        );
+        let other = write(
+            "other.yaml",
+            "apiVersion: id.registrystack.org/formats/adapter/runtime/v1alpha1\nkind: SomethingElse\nid: x\n",
+        );
+        let refused = JobRuntimeConfig::load(&facade).expect_err("a facade config refuses");
+        let hint = JobRuntimeConfig::facade_kind_hint(&facade, &refused)
+            .expect("the facade kind is recognised");
+        assert!(hint.contains("AdapterJobRuntimeConfig"), "{hint}");
+        assert!(hint.contains("job-runtime.example.yaml"), "{hint}");
+        let refused = JobRuntimeConfig::load(&other).expect_err("another kind refuses");
+        assert_eq!(JobRuntimeConfig::facade_kind_hint(&other, &refused), None);
+    }
+
+    /// Each hookIngress rule that refuses a document says which rule it was
+    /// and how to fix it, not only that the value is invalid.
+    #[test]
+    fn each_hook_ingress_refusal_names_its_rule_and_the_fix() {
+        let loader = registry_platform_config::RuntimeConfigLoader::new(
+            registry_platform_config::RuntimeEnvelope {
+                api_version: ADAPTER_JOB_RUNTIME_API_VERSION,
+                kind: ADAPTER_JOB_RUNTIME_KIND,
+            },
+        );
+        let hook = |bind: &str, termination: &str, burst: u32, sources: bool| {
+            let source = if sources {
+                format!(
+                    "    kobo:\n      usernameRef: secret:env/U\n      passwordRef: secret:env/P\n      requestsPerMinute: 6\n      burst: {burst}\n"
+                )
+            } else {
+                "    {}\n".to_string()
+            };
+            document(&format!(
+                "hookIngress:\n  listener:\n    bind: \"{bind}\"\n    tlsTermination: {termination}\n  sources:\n{source}"
+            ))
+        };
+        for (text, wanted) in [
+            (
+                hook("0.0.0.0:8091", "operator-controlled-upstream", 2, true),
+                "loopback",
+            ),
+            (
+                hook("10.1.2.3:8091", "operator-controlled-upstream", 2, true),
+                "loopback",
+            ),
+            (
+                hook("127.0.0.1:8091", "operator-controlled-upstream", 10, true),
+                "requestsPerMinute",
+            ),
+            (
+                hook("127.0.0.1:0", "operator-controlled-upstream", 2, true),
+                "development-loopback",
+            ),
+            (
+                hook("127.0.0.1:8091", "operator-controlled-upstream", 2, false),
+                "1 to 16",
+            ),
+        ] {
+            let refused = loader
+                .parse_str::<JobRuntimeConfig>(&text, |_| None)
+                .expect_err("the hookIngress shape refuses");
+            let diagnostic = refused
+                .diagnostics()
+                .iter()
+                .find(|diagnostic| diagnostic.path.starts_with("/hookIngress"))
+                .unwrap_or_else(|| panic!("a hookIngress diagnostic: {:?}", refused.diagnostics()));
+            let rendered = format!("{} {}", diagnostic.message, diagnostic.suggested_action);
+            assert!(rendered.contains(wanted), "{wanted}: {diagnostic:?}");
+        }
+    }
+
+    fn loader() -> registry_platform_config::RuntimeConfigLoader {
+        registry_platform_config::RuntimeConfigLoader::new(
+            registry_platform_config::RuntimeEnvelope {
+                api_version: ADAPTER_JOB_RUNTIME_API_VERSION,
+                kind: ADAPTER_JOB_RUNTIME_KIND,
+            },
+        )
+    }
+
+    /// The text of every diagnostic a refused document carries, for the
+    /// assertions that a refusal names its field, cause, and fix.
+    fn refusal_text(text: &str) -> String {
+        let refused = match loader().parse_str::<JobRuntimeConfig>(text, |_| None) {
+            Err(refused) => refused,
+            Ok(loaded) => loaded
+                .config
+                .check_secret_references(std::path::Path::new("runtime.yaml"))
+                .expect_err("the document refuses"),
+        };
+        refused
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| {
+                format!(
+                    "{} {} {} {}",
+                    diagnostic.path,
+                    diagnostic.code,
+                    diagnostic.message,
+                    diagnostic.suggested_action
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// With several hook sources the refusal names the one whose reference
+    /// is wrong.
+    #[test]
+    fn a_hook_ingress_reference_refusal_names_the_source() {
+        let text = document(
+            "hookIngress:\n  listener:\n    bind: \"127.0.0.1:8091\"\n    tlsTermination: operator-controlled-upstream\n  sources:\n    alpha:\n      usernameRef: secret:env/U\n      passwordRef: secret:env/P\n      requestsPerMinute: 6\n      burst: 2\n    kobo-second:\n      usernameRef: secret:env/U\n      passwordRef: secret:file/kobo-password\n      requestsPerMinute: 6\n      burst: 2\n",
+        );
+        let rendered = refusal_text(&text);
+        assert!(
+            rendered.contains("hookIngress.sources.kobo-second.passwordRef"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("hookIngress.sources.*"), "{rendered}");
+    }
+
+    /// Every source credential reference is checked against the enabled
+    /// secret providers when the document loads, so a runtime that cannot
+    /// start does not pass the check.
+    #[test]
+    fn every_source_secret_reference_is_checked_against_the_providers_at_load() {
+        let postgres = |reference: &str| {
+            format!(
+                "sources:\n  postgres:\n    ledger:\n      host: db.example\n      database: registry\n      user: reader\n      passwordRef: {reference}\n      namespace: ledger\n"
+            )
+        };
+        let sftp = |credential: &str| {
+            format!(
+                "sources:\n  sftp:\n    drop:\n      host: files.example\n      user: reader\n      baseDirectory: /in\n      pinnedHostKey: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAAA\n      credential:\n{credential}      namespace: drop\n      completion:\n        type: completed-name\n        producerAtomicHandover: true\n"
+            )
+        };
+        let rabbitmq = |reference: &str| {
+            format!(
+                "sources:\n  rabbitmq:\n    queue-one:\n      host: mq.example\n      user: reader\n      passwordRef: {reference}\n      queue: in\n      deadLetterExchange: dlx\n      deadLetterQueue: dlq\n      deadLetterRoutingKey: dead\n      namespace: mq\n"
+            )
+        };
+        for (text, field) in [
+            (
+                document(&postgres("secret:file/ledger-password")),
+                "sources.postgres.ledger.passwordRef",
+            ),
+            (
+                document(&sftp(
+                    "        type: password\n        passwordRef: secret:file/drop-password\n",
+                )),
+                "sources.sftp.drop.credential.passwordRef",
+            ),
+            (
+                document(&sftp(
+                    "        type: private-key\n        privateKeyRef: secret:env/KEY\n        passphraseRef: secret:file/passphrase\n",
+                )),
+                "sources.sftp.drop.credential.passphraseRef",
+            ),
+            (
+                document(&rabbitmq("secret:file/mq-password")),
+                "sources.rabbitmq.queue-one.passwordRef",
+            ),
+        ] {
+            let rendered = refusal_text(&text);
+            assert!(rendered.contains(field), "{field}: {rendered}");
+            assert!(rendered.contains("secretProviders.file"), "{field}: {rendered}");
+        }
+        let providers = "secretProviders:\n  file:\n    root: /run/secrets/adapter-job\n";
+        for (text, why) in [
+            (
+                format!(
+                    "{}{providers}",
+                    document(&postgres("secret:file/ledger-password"))
+                ),
+                "an enabled provider accepts the reference",
+            ),
+            (
+                document(&postgres("secret:env/LEDGER_PASSWORD")),
+                "the omitted block enables the environment provider",
+            ),
+        ] {
+            let loaded = loader()
+                .parse_str::<JobRuntimeConfig>(&text, |_| None)
+                .expect("the document reads");
+            loaded
+                .config
+                .check_secret_references(std::path::Path::new("runtime.yaml"))
+                .expect(why);
+        }
+    }
+
+    /// The PostgreSQL connection members are bounded text, and a refusal
+    /// names the member, the rule, and what to write.
+    #[test]
+    fn postgres_connection_members_are_bounded_and_named() {
+        let long = "d".repeat(300);
+        for (member, value, wanted) in [
+            ("host", "db.example\\ninjected".to_owned(), "host"),
+            ("host", "db example".to_owned(), "whitespace"),
+            ("host", String::new(), "host"),
+            ("database", long.clone(), "database"),
+            ("database", "reg\\tname".to_owned(), "control characters"),
+            ("user", long.clone(), "user"),
+            ("namespace", "ledger\\tone".to_owned(), "namespace"),
+            ("namespace", long, "namespace"),
+        ] {
+            let mut text = String::from(
+                "sources:\n  postgres:\n    ledger:\n      passwordRef: secret:env/P\n",
+            );
+            for (name, default) in [
+                ("host", "db.example"),
+                ("database", "registry"),
+                ("user", "reader"),
+                ("namespace", "ledger"),
+            ] {
+                let value = if name == member {
+                    value.as_str()
+                } else {
+                    default
+                };
+                text.push_str(&format!("      {name}: \"{value}\"\n"));
+            }
+            let rendered = refusal_text(&document(&text));
+            assert!(rendered.contains(wanted), "{member}: {rendered}");
+            assert!(rendered.contains(member), "{member}: {rendered}");
+        }
     }
 }

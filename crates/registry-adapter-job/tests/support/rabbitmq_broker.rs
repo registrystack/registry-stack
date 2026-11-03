@@ -218,15 +218,29 @@ impl BrokerFixture {
     }
 
     pub fn provision_least_privileged(&self, names: &TopologyNames) -> FixturePrincipal {
+        self.provision_principal(names, true)
+    }
+
+    /// The same principal without configure permission, for a source that
+    /// only checks the topology exists.
+    pub fn provision_without_configure(&self, names: &TopologyNames) -> FixturePrincipal {
+        self.provision_principal(names, false)
+    }
+
+    fn provision_principal(&self, names: &TopologyNames, may_configure: bool) -> FixturePrincipal {
         let container = self
             .container
             .as_ref()
             .expect("least-privileged acceptance requires the owned Docker fixture");
-        let configure = resource_regex([
-            names.queue.as_str(),
-            names.dead_letter_exchange.as_str(),
-            names.dead_letter_queue.as_str(),
-        ]);
+        let configure = if may_configure {
+            resource_regex([
+                names.queue.as_str(),
+                names.dead_letter_exchange.as_str(),
+                names.dead_letter_queue.as_str(),
+            ])
+        } else {
+            String::new()
+        };
         let write = resource_regex([
             names.dead_letter_exchange.as_str(),
             names.dead_letter_queue.as_str(),
@@ -371,6 +385,38 @@ pub fn source_with_tls(
     )
 }
 
+/// A source that only checks the topology already exists.
+pub fn passive_source(broker: &BrokerFixture, names: &TopologyNames) -> LapinRabbitMqSource {
+    source_with_options(
+        broker,
+        names,
+        RabbitMqTls::PlaintextTest,
+        Duration::from_secs(5),
+        FIXTURE_USER,
+        FIXTURE_PASSWORD,
+        false,
+    )
+    .expect("the numeric-loopback plaintext fixture is accepted")
+}
+
+/// A passive source that connects as a provisioned principal.
+pub fn source_with_principal_passive(
+    broker: &BrokerFixture,
+    names: &TopologyNames,
+    principal: &FixturePrincipal,
+) -> LapinRabbitMqSource {
+    source_with_options(
+        broker,
+        names,
+        RabbitMqTls::PlaintextTest,
+        Duration::from_secs(5),
+        principal.username,
+        principal.password,
+        false,
+    )
+    .expect("the numeric-loopback plaintext fixture is accepted")
+}
+
 pub fn source_with_principal(
     broker: &BrokerFixture,
     names: &TopologyNames,
@@ -378,6 +424,26 @@ pub fn source_with_principal(
     heartbeat: Duration,
     username: &str,
     fixture_password: &str,
+) -> Result<LapinRabbitMqSource, RabbitMqReadFault> {
+    source_with_options(
+        broker,
+        names,
+        tls,
+        heartbeat,
+        username,
+        fixture_password,
+        true,
+    )
+}
+
+fn source_with_options(
+    broker: &BrokerFixture,
+    names: &TopologyNames,
+    tls: RabbitMqTls,
+    heartbeat: Duration,
+    username: &str,
+    fixture_password: &str,
+    declare_topology: bool,
 ) -> Result<LapinRabbitMqSource, RabbitMqReadFault> {
     std::env::set_var(FIXTURE_PASSWORD_ENV, fixture_password);
     let resolver = SecretResolver::new([SecretProvider::Environment], "")
@@ -396,6 +462,7 @@ pub fn source_with_principal(
             dead_letter_exchange: names.dead_letter_exchange.clone(),
             dead_letter_queue: names.dead_letter_queue.clone(),
             dead_letter_routing_key: names.dead_letter_routing_key.clone(),
+            declare_topology,
             maximum_outstanding_deliveries: 1,
             connection_timeout: Duration::from_secs(5),
             heartbeat,

@@ -29,6 +29,9 @@ pub(crate) enum FixtureRecordRefusal {
     FixtureNotCoequal,
     FixturePathNotPlain,
     FixturePathOutsideProject,
+    FixtureNotReferenced,
+    ProjectIsDeployment,
+    ProjectFileMissing,
     FixtureExpectationRefused,
     ProjectValidationRefused,
     RecordRunRefused,
@@ -46,6 +49,9 @@ impl FixtureRecordRefusal {
             Self::FixturePathOutsideProject => {
                 "evidence.fixtures-record-facts.fixture-path-outside-project"
             }
+            Self::FixtureNotReferenced => "evidence.fixtures-record-facts.fixture-not-referenced",
+            Self::ProjectIsDeployment => "evidence.fixtures-record-facts.project-not-editable",
+            Self::ProjectFileMissing => "evidence.fixtures-record-facts.project-file-missing",
             Self::FixtureExpectationRefused => {
                 "evidence.fixtures-record-facts.fixture-expectation-refused"
             }
@@ -77,8 +83,17 @@ impl FixtureRecordRefusal {
             Self::FixturePathOutsideProject => {
                 "The selected fixture resolves outside the editable project."
             }
+            Self::FixtureNotReferenced => {
+                "The selected fixture is not referenced by any definition in the project."
+            }
+            Self::ProjectIsDeployment => {
+                "The selected project holds runtime.yaml: it is a deployment project, and fact recording edits only an editable project."
+            }
+            Self::ProjectFileMissing => {
+                "The selected project directory holds no evidence.yaml, so it is not an editable project."
+            }
             Self::FixtureExpectationRefused => {
-                "The selected fixture or private record does not satisfy the fact-recording expectation contract."
+                "The recorded facts would change a fixture member other than expectedFacts, or break the fact-recording expectation contract."
             }
             Self::ProjectValidationRefused => {
                 "The compiled project or target was refused before fixture fact recording."
@@ -108,6 +123,15 @@ impl FixtureRecordRefusal {
             }
             Self::FixturePathNotPlain | Self::FixturePathOutsideProject => {
                 "Select a plain project-relative fixture with no symlink path components, then rerun fixtures record-facts."
+            }
+            Self::FixtureNotReferenced => {
+                "Pass --fixture as the project-relative path a definition lists (for example fixtures/cases.yaml), not an absolute path, then rerun fixtures record-facts."
+            }
+            Self::ProjectIsDeployment => {
+                "Point fixtures record-facts at the editable project directory that holds evidence.yaml, not at the deployment package."
+            }
+            Self::ProjectFileMissing => {
+                "Pass the editable project directory that holds evidence.yaml as PROJECT (or run from inside it), then rerun fixtures record-facts."
             }
             Self::FixtureExpectationRefused => {
                 "Run the ordinary fixture test with --explain, correct the fixture expectation, and rerun fixtures record-facts."
@@ -166,7 +190,9 @@ impl PrivateFixtureOperation {
 
 #[derive(Debug, Args)]
 pub(crate) struct RecordFactsArgs {
-    /// Editable Evidence project directory; defaults to the current directory.
+    /// Evidence project directory; defaults to the current directory.
+    ///
+    /// This command needs an editable project holding evidence.yaml.
     #[arg(value_name = "PROJECT", default_value = ".")]
     pub(crate) project: PathBuf,
 
@@ -182,7 +208,8 @@ pub(crate) struct RecordFactsArgs {
     #[arg(long, action = ArgAction::SetTrue, required = true)]
     write: bool,
 
-    /// Path to the evidence binary; defaults to `evidence` on PATH.
+    /// Path to the evidence binary; defaults to the `EVIDENCE_BIN` variable, then the
+    /// `evidence` installed beside evidencectl, then `evidence` on PATH.
     #[arg(long)]
     evidence_bin: Option<PathBuf>,
 }
@@ -211,24 +238,21 @@ pub(crate) fn run(args: RecordFactsArgs, format: OutputFormat) -> Result<ExitCod
         bail!("--write is required to record fixture facts");
     }
     if args.project.join("runtime.yaml").exists() {
-        return Err(FixtureRecordRefusal::FixtureExpectationRefused.into());
+        return Err(FixtureRecordRefusal::ProjectIsDeployment.into());
     }
     if !args
         .project
         .join(registry_evidence_authoring::project::PROJECT_FILE)
         .is_file()
     {
-        return Err(FixtureRecordRefusal::FixtureExpectationRefused.into());
+        return Err(FixtureRecordRefusal::ProjectFileMissing.into());
     }
 
     let evidence_bin = evidence_binary::resolve_matching(args.evidence_bin.as_deref())?;
     let _lock = ProjectLock::acquire(&args.project)
         .with_context(|| format!("locking editable project {}", args.project.display()))?;
     let fixture_paths = fixtures::project_fixture_paths(&args.project)?;
-    let selected = fixtures::select_fixture_paths(&fixture_paths, Some(&args.fixture))?;
-    let fixture = *selected
-        .first()
-        .ok_or(FixtureRecordRefusal::FixtureExpectationRefused)?;
+    let fixture = select_referenced_fixture(&fixture_paths, &args.fixture)?;
     if Path::new(fixture)
         .components()
         .any(|component| !matches!(component, Component::Normal(_)))
@@ -352,6 +376,17 @@ pub(crate) fn run(args: RecordFactsArgs, format: OutputFormat) -> Result<ExitCod
         }
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// The selected fixture, exactly as a project definition lists it. A path
+/// the definitions do not list, such as an absolute one, is refused with the
+/// relative-path rule rather than a generic failure.
+fn select_referenced_fixture<'a>(fixture_paths: &'a [String], selected: &str) -> Result<&'a str> {
+    fixture_paths
+        .iter()
+        .find(|fixture| fixture.as_str() == selected)
+        .map(String::as_str)
+        .ok_or_else(|| FixtureRecordRefusal::FixtureNotReferenced.into())
 }
 
 fn require_plain_fixture_path(project: &Path, relative: &Path) -> Result<()> {
@@ -637,12 +672,91 @@ fn patch_fixture(original: &[u8], record: &FixtureFactRecord) -> Result<Vec<u8>>
     Ok(patched.into_bytes())
 }
 
+/// Stands in for a date-like string fact while the YAML serializer runs, so
+/// the text pass in `render_facts_yaml` can quote it. The serializer leaves
+/// such strings plain, and a YAML 1.1 reader then reads a date where the fact
+/// is a string.
+const QUOTE_MARKER: &str = "evidencectl-quote:";
+
+fn render_facts_yaml(facts: &Map<String, Value>) -> Result<String> {
+    fn mark(value: &Value) -> Value {
+        match value {
+            Value::String(text) if looks_like_yaml_timestamp(text) => {
+                Value::String(format!("{QUOTE_MARKER}{text}"))
+            }
+            Value::Array(items) => Value::Array(items.iter().map(mark).collect()),
+            Value::Object(members) => Value::Object(
+                members
+                    .iter()
+                    .map(|(name, member)| (name.clone(), mark(member)))
+                    .collect(),
+            ),
+            other => other.clone(),
+        }
+    }
+    let plain = Value::Object(facts.clone());
+    if plain.to_string().contains(QUOTE_MARKER) {
+        return crate::authored::to_indented_yaml(facts);
+    }
+    let rendered = crate::authored::to_indented_yaml(&mark(&plain))?;
+    // The serializer writes block style, so a marked scalar runs to the end of
+    // its line. A timestamp holds only digits and `-:.+ TtZz`, so single
+    // quotes need no escaping.
+    let mut quoted = String::with_capacity(rendered.len());
+    for line in rendered.lines() {
+        match line.split_once(QUOTE_MARKER) {
+            Some((before, timestamp)) => {
+                quoted.push_str(before);
+                quoted.push('\'');
+                quoted.push_str(timestamp.trim_end());
+                quoted.push('\'');
+            }
+            None => quoted.push_str(line),
+        }
+        quoted.push('\n');
+    }
+    Ok(quoted)
+}
+
+/// Whether a string reads as a YAML 1.1 timestamp (`1980-01-01`, or a date
+/// followed by a time) when written as a plain scalar.
+fn looks_like_yaml_timestamp(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let mut index = 0;
+    let number = |minimum: usize, maximum: usize, index: &mut usize| {
+        let start = *index;
+        while *index < bytes.len() && bytes[*index].is_ascii_digit() {
+            *index += 1;
+        }
+        (minimum..=maximum).contains(&(*index - start))
+    };
+    if !number(4, 4, &mut index) {
+        return false;
+    }
+    for _ in 0..2 {
+        if bytes.get(index) != Some(&b'-') {
+            return false;
+        }
+        index += 1;
+        if !number(1, 2, &mut index) {
+            return false;
+        }
+    }
+    match bytes.get(index) {
+        None => true,
+        Some(b'T' | b't' | b' ') => bytes[index..]
+            .iter()
+            .all(|byte| byte.is_ascii_digit() || b"-:.+ TtZz".contains(byte)),
+        Some(_) => false,
+    }
+}
+
 fn render_member(
     facts: &Map<String, Value>,
     indent: usize,
     include_indent: bool,
 ) -> Result<String> {
-    let facts = crate::authored::to_indented_yaml(facts)?;
+    let facts = render_facts_yaml(facts)?;
     let prefix = " ".repeat(indent);
     let child = " ".repeat(indent.saturating_add(2));
     let mut rendered = String::new();
@@ -823,9 +937,11 @@ mod tests {
 
     use super::{
         patch_fixture, publish_if_unchanged, require_only_expected_facts_changed,
-        require_plain_fixture_path, require_recordable_fixture, run_private_evidence,
-        stage_candidate_fixture, FixtureFactRecord, PrivateFixtureOperation, Sha256,
+        require_plain_fixture_path, require_recordable_fixture, run, run_private_evidence,
+        select_referenced_fixture, stage_candidate_fixture, FixtureFactRecord,
+        PrivateFixtureOperation, RecordFactsArgs, Sha256,
     };
+    use crate::OutputFormat;
 
     const FIXTURE: &str = r#"apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1
 kind: EvidenceFixture
@@ -961,6 +1077,26 @@ cases:
                 "missing {unchanged}: {patched}"
             );
         }
+    }
+
+    #[test]
+    fn patch_quotes_date_like_string_facts() {
+        let record = record_for(
+            4,
+            &[(
+                "matched",
+                json!({"birth-date": "1980-01-01", "seen-at": "2026-11-03T10:00:00Z", "plain": "adult"}),
+            )],
+        );
+        let patched =
+            String::from_utf8(patch_fixture(FIXTURE.as_bytes(), &record).expect("patch fixture"))
+                .expect("utf-8");
+        assert!(patched.contains("birth-date: '1980-01-01'"), "{patched}");
+        assert!(
+            patched.contains("seen-at: '2026-11-03T10:00:00Z'"),
+            "{patched}"
+        );
+        assert!(patched.contains("plain: adult"), "{patched}");
     }
 
     #[test]
@@ -1133,6 +1269,69 @@ cases:
         assert!(expectation_action.contains("--explain"));
         assert!(patch_action.contains("expectedFacts"));
         assert!(concurrent_action.contains("rerun fixtures record-facts"));
+    }
+
+    #[test]
+    fn a_fixture_no_definition_lists_is_refused_with_the_relative_path_rule() {
+        let listed = vec!["fixtures/cases.yaml".to_owned()];
+        assert_eq!(
+            select_referenced_fixture(&listed, "fixtures/cases.yaml").expect("listed fixture"),
+            "fixtures/cases.yaml"
+        );
+        for selected in ["/abs/project/fixtures/cases.yaml", "fixtures/other.yaml"] {
+            let (code, action, json) = safe_fixture_failure(
+                select_referenced_fixture(&listed, selected)
+                    .expect_err("an unlisted fixture is refused"),
+            );
+            assert_eq!(
+                code,
+                "evidence.fixtures-record-facts.fixture-not-referenced"
+            );
+            assert!(action.contains("--fixture"), "{action}");
+            assert!(action.contains("project-relative"), "{action}");
+            assert!(action.contains("not an absolute path"), "{action}");
+            assert!(!json.contains(selected), "{json}");
+        }
+    }
+
+    #[test]
+    fn the_project_causes_are_refused_under_their_own_codes_before_any_work() {
+        let directory = tempfile::tempdir().expect("temporary project");
+        let arguments = |project: &Path| RecordFactsArgs {
+            project: project.to_path_buf(),
+            target: std::path::PathBuf::from("target.yaml"),
+            fixture: "fixtures/cases.yaml".to_owned(),
+            write: true,
+            evidence_bin: None,
+        };
+
+        let (missing_code, missing_action, _) = safe_fixture_failure(
+            run(arguments(directory.path()), OutputFormat::Human)
+                .expect_err("a directory without evidence.yaml is refused"),
+        );
+        assert_eq!(
+            missing_code,
+            "evidence.fixtures-record-facts.project-file-missing"
+        );
+        assert!(missing_action.contains("evidence.yaml"), "{missing_action}");
+
+        fs::write(directory.path().join("runtime.yaml"), b"x: 1\n").expect("write runtime.yaml");
+        let (deployment_code, deployment_action, _) = safe_fixture_failure(
+            run(arguments(directory.path()), OutputFormat::Human)
+                .expect_err("a deployment project is refused"),
+        );
+        assert_eq!(
+            deployment_code,
+            "evidence.fixtures-record-facts.project-not-editable"
+        );
+        assert!(
+            deployment_action.contains("editable project"),
+            "{deployment_action}"
+        );
+        assert!(
+            !deployment_action.contains("--explain"),
+            "{deployment_action}"
+        );
     }
 
     #[test]

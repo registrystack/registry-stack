@@ -557,13 +557,16 @@ pub struct SourceInputSelector {
 }
 
 const RETIRED_ACQUISITION_CODE: &str = "evidence.project.source-acquisition-retired";
-const RETIRED_ACQUISITION_ACTION: &str = "Move preparation and extraction into a reviewed Adapter pack, retain assertion-derive/v1 Functions, and replace the Source with pack, route, connection and inputs. Import current exports with evidencectl source import EXPORT --project PROJECT; it does not convert retired projects.";
+const RETIRED_ACQUISITION_ACTION: &str = "Move preparation and extraction into a reviewed Adapter pack, retain assertion-derive/v1 Functions, and replace the Source with pack, route, connection and inputs. Import current exports with evidencectl source import EXPORT --project PROJECT; it does not convert retired projects. See products/evidence/reference/authoring-projects/CONFIG.md#migrate-a-retired-source-project.";
+const RETIRED_ACQUISITION_AGAIN: &str = "Migrate this site with the rest of the project, as the first evidence.project.source-acquisition-retired diagnostic describes.";
 
 /// Project-specific scalar refusals reuse the shared authored-file rules and
 /// retain the reader's exact source location. A retired acquisition interface
-/// never suggests rewriting acquisition as assertion derivation.
+/// never suggests rewriting acquisition as assertion derivation. The migration
+/// paragraph goes on the first retired site only; later sites point back to it.
 struct ProjectScalars {
     authored: AuthoredExpressions,
+    retired_reported: bool,
 }
 
 impl ScalarHook for ProjectScalars {
@@ -581,15 +584,28 @@ impl ScalarHook for ProjectScalars {
             && matches!(site.text, "http-json" | "sqlite-extract")
         {
             Some("The tagged Source transport form is retired; Sources bind a reviewed Adapter pack route.")
+        } else if matches!(
+            site.keys,
+            ["assertionDefinitions", _, "acquisition", "type"]
+        ) {
+            Some("The acquisition program form is retired; a definition names its Source with `acquisition: {source: <source-id>}`.")
         } else {
             None
         };
         match message {
-            Some(message) => Err(Refusal {
-                code: RETIRED_ACQUISITION_CODE.to_owned(),
-                message: message.to_owned(),
-                suggested_action: RETIRED_ACQUISITION_ACTION.to_owned(),
-            }),
+            Some(message) => {
+                let action = if self.retired_reported {
+                    RETIRED_ACQUISITION_AGAIN
+                } else {
+                    RETIRED_ACQUISITION_ACTION
+                };
+                self.retired_reported = true;
+                Err(Refusal {
+                    code: RETIRED_ACQUISITION_CODE.to_owned(),
+                    message: message.to_owned(),
+                    suggested_action: action.to_owned(),
+                })
+            }
             None => Ok(None),
         }
     }
@@ -599,6 +615,7 @@ impl ScalarHook for ProjectScalars {
 pub fn read_project(file: &str, bytes: &[u8]) -> Result<Decoded<EvidenceProject>, Report> {
     let mut hook = ProjectScalars {
         authored: AuthoredExpressions,
+        retired_reported: false,
     };
     let mut decoded = Reader::new(file)
         .with_hook(&mut hook)

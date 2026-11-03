@@ -1,0 +1,58 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/job/job.v1alpha1.schema.json
+#
+# Reads the households view page by page and registers each row in BReg through
+# the `register-household` Action of ../kobotoolbox-breg. One page per pass,
+# 500 rows at most.
+#
+# The pack pin is exact: id, version, and the sha256 of pack.yaml. The mapping
+# pin is the sha256 of mappings/register-household.rhai. Repin them when either
+# file changes.
+#
+# `adapterctl job check` compiles this job against the pack, the profile, the
+# project and the runtime config beside it
+# (products/adapter/scripts/check-contracts.sh runs it).
+apiVersion: id.registrystack.org/formats/adapter/job/v1alpha1
+kind: AdapterJob
+job:
+  id: households-view-example
+  version: "1"
+source:
+  pack:
+    id: households-view
+    version: "1"
+    digest: sha256:a80b1fc3c988e42d76b981491c7f3eea34607e859e0c2e95c0f45f89c3105d9e
+  route: households-page
+destination:
+  type: direct-breg
+  binding: household-registry
+  accessProfile: ingestion
+  action: register-household
+  mode: proposal
+  mapping:
+    file: mappings/register-household.rhai
+    entrypoint: map_household
+    digest: sha256:457a4ce01050e82c7c60ba6dca29d9575e1ced11573e597b484838f5e63e89f3
+  receiptRetentionDays: 7
+# The projection names the view columns the mapping reads. `registered_on`
+# is selected by the query but not projected, so it never reaches BReg.
+projection:
+  fields:
+    - id
+    - respondent_name
+    - household_size
+triggers:
+  - kind: interval
+    delayMilliseconds: 60000
+profile:
+  pageDeadlineMilliseconds: 300000
+  # The endpoint declares 1048576; the profile is never tighter than a bound
+  # of an endpoint the source route reaches.
+  maximumResponseBytes: 1048576
+  maximumPageItems: 500
+  maximumPageBytes: 1048576
+  maximumUpstreamCalls: 8
+  read:
+    maximumFileBytes: 1073741824
+    maximumRowBytes: 65536
+    maximumFieldBytes: 4096
+    maximumRowsPerPage: 500

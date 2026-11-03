@@ -240,6 +240,8 @@ struct RabbitMqSource {
     dead_letter_exchange: String,
     dead_letter_queue: String,
     dead_letter_routing_key: String,
+    #[serde(default)]
+    declare_topology: Option<bool>,
     namespace: String,
     #[serde(default)]
     maximum_outstanding_deliveries: Option<BoundedU64<1, 64>>,

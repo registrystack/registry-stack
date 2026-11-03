@@ -10,7 +10,8 @@ mod support;
 
 use axum::http::StatusCode;
 use registry_adapter_connectors::operation::{
-    CommandKey, NativeState, Observable, Operation, OutcomeCategory, PreparedAttempt,
+    CommandKey, ConnectorFault, NativeState, Observable, Operation, OutcomeCategory,
+    PreparedAttempt,
 };
 use registry_breg_client::BRegProblemCode;
 use serde_json::{json, Value};
@@ -21,6 +22,14 @@ use support::{
 
 fn key(step: &str) -> CommandKey {
     CommandKey::new(format!("adapter-unit/company/{step}")).expect("derived key")
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_connector_reports_whether_its_action_needs_target_conditions() {
+    let plain = Mock::start("immediate", false).await;
+    assert!(!plain.connector.action_requires_target_conditions());
+    let guarded = Mock::start_guarded_action().await;
+    assert!(guarded.connector.action_requires_target_conditions());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -237,6 +246,79 @@ async fn proposal_start_refusal_surfaces_the_product_word() {
         outcome.native_problem.as_deref(),
         Some("idempotency.key-reused")
     );
+}
+
+/// Send one Proposal start against a scripted answer.
+async fn start_answered(answer: support::MockResponse) -> Result<OutcomeCategory, ConnectorFault> {
+    let mock = Mock::start("proposal", false).await;
+    mock.push(answer);
+    let prepared = mock
+        .connector
+        .proposal_start()
+        .prepare(
+            &json!({"input": {"legalName": "Proposed Ltd"}}),
+            key("deployment"),
+        )
+        .expect("prepares");
+    mock.connector
+        .proposal_start()
+        .send(&prepared)
+        .map(|outcome| outcome.category)
+}
+
+/// A refused credential, an unsupported media type, a missing
+/// precondition header and a problem word newer than the client answer
+/// for the deployment, not for one item: each is a fault, so the pass
+/// stops with the position unchanged instead of refusing every item.
+#[tokio::test(flavor = "multi_thread")]
+async fn deployment_scoped_refusals_are_faults_not_item_refusals() {
+    for code in [
+        BRegProblemCode::AuthenticationRefused,
+        BRegProblemCode::UnsupportedMediaType,
+        BRegProblemCode::PreconditionRequired,
+    ] {
+        assert_eq!(
+            start_answered(problem(code)).await,
+            Err(ConnectorFault::Native {
+                code: Some(code.code().to_owned())
+            }),
+            "{}",
+            code.code()
+        );
+    }
+    // A well-formed problem whose word this client does not know.
+    let mut newer = problem(BRegProblemCode::RequestInvalid);
+    newer.status = StatusCode::UNPROCESSABLE_ENTITY;
+    newer.body = serde_json::to_vec(&json!({
+        "type": "https://id.registrystack.org/problems/registry-breg/future/word",
+        "title": "Unprocessable Entity",
+        "status": 422,
+        "detail": "A refusal this client does not know.",
+        "code": "future.word",
+        "traceId": support::TRACE_ID,
+    }))
+    .expect("fixture serializes");
+    assert_eq!(
+        start_answered(newer).await,
+        Err(ConnectorFault::Native { code: None }),
+        "an unrecognized 4xx problem"
+    );
+}
+
+/// A refusal of this item's content stays an item refusal.
+#[tokio::test(flavor = "multi_thread")]
+async fn item_scoped_refusals_stay_refused_outcomes() {
+    for code in [
+        BRegProblemCode::PreconditionFailed,
+        BRegProblemCode::RequestInvalid,
+    ] {
+        assert_eq!(
+            start_answered(problem(code)).await,
+            Ok(OutcomeCategory::Refused),
+            "{}",
+            code.code()
+        );
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]

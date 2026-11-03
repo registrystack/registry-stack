@@ -390,6 +390,8 @@ pub(crate) fn compile_target_project_with_revision(
     if production {
         reject_local_production_values(&plan.bundle)?;
         validate_production_sources(&plan.bundle, &plan.generated_artifacts)?;
+    } else {
+        validate_source_authentication(&plan.bundle, &plan.generated_artifacts)?;
     }
     let bundle_path = write_bundle(
         &project_root,
@@ -786,6 +788,86 @@ fn validate_production_sources(
                     if endpoint.component.name() == "sqlite-extract"
                         && endpoint.authentication.kind() == "none" => {}
                 _ => return Err(production_transport_diagnostic(source_id).into()),
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Hold each reachable HTTP or GraphQL pack endpoint and the target's policy
+/// for it to one authentication type, for every assurance profile. The runtime
+/// refuses a connection whose pack, credential and reviewed policy disagree,
+/// but only at serve, so the disagreement is refused here with the fix named.
+/// An endpoint with no policy in the target is left to the production check
+/// and the runtime loaders; this compares only what both sides declare.
+fn validate_source_authentication(
+    bundle: &Value,
+    generated_artifacts: &BTreeMap<String, Vec<u8>>,
+) -> Result<()> {
+    let sources = bundle
+        .get("sources")
+        .and_then(Value::as_object)
+        .ok_or_else(|| anyhow!("the deployment bundle has no sources object"))?;
+    for (source_id, source) in sources {
+        let connection = source
+            .get("connection")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("pack Source must name a target connection"))?;
+        let pack_prefix = source
+            .pointer("/pack/artifactPrefix")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("pack Source must name its captured pack"))?;
+        let route = source
+            .get("route")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("pack Source must name its reviewed route"))?;
+        let pack_artifact = format!("{pack_prefix}/pack.yaml");
+        let pack_bytes = generated_artifacts
+            .get(&pack_artifact)
+            .ok_or_else(|| anyhow!("pack Source requires its checked pack artifact"))?;
+        let pack = checked_adapter_pack(&pack_artifact, pack_bytes)?;
+        for operation in production_route_operations(&pack, route)
+            .with_context(|| format!("checking the authentication of source `{source_id}`"))?
+        {
+            if !matches!(
+                operation.component,
+                registry_adapter_core::SendComponent::Http
+                    | registry_adapter_core::SendComponent::GraphQl
+            ) {
+                continue;
+            }
+            let Some(endpoint) = pack
+                .endpoints
+                .iter()
+                .find(|endpoint| endpoint.id.as_str() == operation.endpoint)
+            else {
+                continue;
+            };
+            let selected = bundle
+                .pointer(&format!("/sourceConnections/{connection}/endpoints"))
+                .and_then(Value::as_array)
+                .and_then(|policies| {
+                    policies.iter().find(|policy| {
+                        policy.get("endpoint").and_then(Value::as_str)
+                            == Some(operation.endpoint.as_str())
+                    })
+                })
+                .and_then(|policy| policy.pointer("/authentication/type"))
+                .and_then(Value::as_str);
+            let declared = endpoint.authentication.kind();
+            if let Some(selected) = selected.filter(|selected| *selected != declared) {
+                return Err(AuthoredDiagnostic {
+                    code: "evidence.source.authentication-mismatch".to_owned(),
+                    path: format!(
+                        "target.yaml:/connections/{connection}/endpoints/{}/authentication/type",
+                        operation.endpoint
+                    ),
+                    message: format!(
+                        "source `{source_id}`: the pack endpoint `{}` declares authentication `{declared}` but the target connection `{connection}` selects `{selected}`; make them name one type, either by setting the target's authentication type to `{declared}` or by changing the pack (for a BReg export, regenerate it with `bregctl generate evidence-source --authentication {selected}`)",
+                        operation.endpoint
+                    ),
+                }
+                .into());
             }
         }
     }
@@ -2911,6 +2993,71 @@ mod tests {
 
         validate_production_sources(&bundle, &artifacts)
             .expect("a reviewed SQLite extract route opens no production channel");
+    }
+
+    fn assert_authentication_diagnostic(bundle: &Value, artifacts: &BTreeMap<String, Vec<u8>>) {
+        let error = validate_source_authentication(bundle, artifacts)
+            .expect_err("a pack and target that name different authentication must be refused");
+        let diagnostic = error
+            .downcast_ref::<AuthoredDiagnostic>()
+            .expect("the refusal is an authored source diagnostic");
+        assert_eq!(diagnostic.code, "evidence.source.authentication-mismatch");
+        assert_eq!(
+            diagnostic.path,
+            "target.yaml:/connections/register/endpoints/records/authentication/type"
+        );
+        assert!(
+            diagnostic.message.contains("`static-authorization`")
+                && diagnostic.message.contains("`oauth2-private-key-jwt`")
+                && diagnostic.message.contains("--authentication"),
+            "the message names both types and the fix: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn source_authentication_refuses_a_pack_and_target_that_disagree_for_any_profile() {
+        // A BReg export defaults to `static-authorization`; a target that
+        // reaches the registry with a private-key JWT must say so in the pack
+        // too, or the runtime refuses the connection at serve.
+        let bundle = production_source_bundle(
+            "http://registry.example.invalid",
+            json!({"type": "oauth2-private-key-jwt", "tokenEndpoint": "http://identity.example.invalid/token"}),
+        );
+        let artifacts = direct_http_pack(json!({"type": "static-authorization"}));
+
+        assert_authentication_diagnostic(&bundle, &artifacts);
+    }
+
+    #[test]
+    fn source_authentication_accepts_a_matching_local_plaintext_pack_and_target() {
+        for authentication in [
+            json!({"type": "none"}),
+            json!({"type": "static-authorization"}),
+        ] {
+            let bundle =
+                production_source_bundle("http://registry.example.invalid", authentication.clone());
+            let artifacts = direct_http_pack(authentication);
+
+            validate_source_authentication(&bundle, &artifacts)
+                .expect("a pack and target naming the same authentication agree");
+        }
+    }
+
+    #[test]
+    fn source_authentication_ignores_offline_sqlite_extract() {
+        let mut bundle =
+            production_source_bundle("https://unused.example.invalid", json!({"type": "none"}));
+        bundle["sourceConnections"]["register"]["endpoints"] = json!([]);
+        let artifacts = production_pack_artifacts(
+            "sqlite-extract",
+            json!({"type": "none"}),
+            json!([{"to": {"uri": "sqlite-extract:records"}}]),
+            json!([]),
+        );
+
+        validate_source_authentication(&bundle, &artifacts)
+            .expect("a SQLite extract route has no endpoint authentication to compare");
     }
 
     #[test]

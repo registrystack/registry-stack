@@ -48,12 +48,18 @@ use std::sync::Arc;
 
 use registry_breg_client::{
     BRegActionBinding, BRegActionMode, BRegBatchBinding, BRegCreateBinding, BRegDirectWrite,
-    BRegPatchBinding, BRegProposalCollection, BRegProposalGetBinding, BRegTombstoneBinding,
-    BaseRegistryClient, BaseRegistryClientConfig, BaseRegistryClientError, TokenProvider,
-    DEFAULT_ATTEMPT_TIMEOUT,
+    BRegPatchBinding, BRegProblemCode, BRegProposalCollection, BRegProposalGetBinding,
+    BRegTombstoneBinding, BaseRegistryClient, BaseRegistryClientConfig, BaseRegistryClientError,
+    TokenProvider, DEFAULT_ATTEMPT_TIMEOUT,
 };
 
 use crate::operation::{ConnectorFault, OperationDescriptor, OutcomeCategory, SendOutcome};
+
+/// The native word [`BregConnector::connect`] answers when the token
+/// provider could not supply a bearer credential for the metadata read,
+/// so a credential fault reads apart from an Action the profile is not
+/// granted ([`ConnectorFault::AuthorityAbsent`]).
+pub const TOKEN_UNAVAILABLE: &str = "token.unavailable";
 
 pub mod action;
 pub mod batch;
@@ -206,7 +212,8 @@ impl BregConnector {
     /// binding the configuration names. No mutation runs here; the read
     /// answers with the connector or with the fault the metadata refusal
     /// maps to. A named action the deployment does not disclose is
-    /// [`ConnectorFault::AuthorityAbsent`]; write, batch, and Proposal
+    /// [`ConnectorFault::AuthorityAbsent`]; a credential the token provider
+    /// cannot supply is [`TOKEN_UNAVAILABLE`]; write, batch, and Proposal
     /// families the deployment does not disclose simply stay absent from
     /// the catalog.
     pub async fn connect(config: BregConnectorConfig) -> Result<Self, ConnectorFault> {
@@ -229,7 +236,12 @@ impl BregConnector {
         let metadata = client
             .registry_contract(Some(&config.access_profile))
             .await
-            .map_err(|error| fault(&error))?
+            .map_err(|error| match error {
+                BaseRegistryClientError::Token(_) => ConnectorFault::Native {
+                    code: Some(TOKEN_UNAVAILABLE.to_owned()),
+                },
+                error => fault(&error),
+            })?
             .value;
         let action = metadata
             .select_action(&config.action_identifier, &config.access_profile)
@@ -305,10 +317,9 @@ impl BregConnector {
         if self.action_mode() == BRegActionMode::Immediate {
             descriptors.push(&*action::INVOKE);
         }
-        if self.action_mode() == BRegActionMode::Proposal
-            && self.proposal_get.is_some()
-            && self.proposal_collection.is_some()
-        {
+        // Start and Submit need the Proposal Get grant to read a draft
+        // back; the List grant serves only the collection read.
+        if self.action_mode() == BRegActionMode::Proposal && self.proposal_get.is_some() {
             descriptors.push(&*proposal::START);
             descriptors.push(&*proposal::SUBMIT);
         }
@@ -452,6 +463,16 @@ impl BregConnector {
         }
     }
 
+    /// Whether the Action declares target-condition keys, which makes its
+    /// invocation a guarded one: its request body depends on a conditions
+    /// read that its own application changes, so an exact repeat cannot
+    /// recover the receipt. The host refuses such an Action on the direct
+    /// path.
+    #[must_use]
+    pub fn action_requires_target_conditions(&self) -> bool {
+        !self.action.required_condition_keys().is_empty()
+    }
+
     pub(crate) fn create_binding(&self) -> Result<&BRegCreateBinding, ConnectorFault> {
         self.create.as_ref().ok_or(ConnectorFault::AuthorityAbsent)
     }
@@ -553,8 +574,20 @@ pub(crate) fn classify(error: &BaseRegistryClientError) -> Result<SendOutcome, C
         });
     }
     match error {
+        // A refused credential, an unsupported media type and a missing
+        // precondition header answer for the deployment, not this item:
+        // a fault stops the pass with the position unchanged.
+        BaseRegistryClientError::Problem { code, .. } if deployment_scoped(*code) => {
+            Err(ConnectorFault::Native {
+                code: Some(code.code().to_owned()),
+            })
+        }
         BaseRegistryClientError::Problem { code, .. } => Ok(refused(code.code())),
-        BaseRegistryClientError::UnrecognizedProblem { .. } => Ok(refused_word(None)),
+        // A problem word newer than this client cannot be read as an item
+        // refusal, so it stops the pass rather than refusing every item.
+        BaseRegistryClientError::UnrecognizedProblem { .. } => {
+            Err(ConnectorFault::Native { code: None })
+        }
         BaseRegistryClientError::InvalidRequest { .. } => Err(ConnectorFault::BindingChanged),
         BaseRegistryClientError::Token(_) => Err(ConnectorFault::AuthorityAbsent),
         BaseRegistryClientError::Transport { kind } => Err(ConnectorFault::Native {
@@ -570,6 +603,15 @@ pub(crate) fn classify(error: &BaseRegistryClientError) -> Result<SendOutcome, C
             code: native_word(error),
         }),
     }
+}
+
+fn deployment_scoped(code: BRegProblemCode) -> bool {
+    matches!(
+        code,
+        BRegProblemCode::AuthenticationRefused
+            | BRegProblemCode::UnsupportedMediaType
+            | BRegProblemCode::PreconditionRequired
+    )
 }
 
 fn native_word(error: &BaseRegistryClientError) -> Option<String> {

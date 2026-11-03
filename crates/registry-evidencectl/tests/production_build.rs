@@ -66,6 +66,42 @@ fn build_is_create_only_and_never_changes_an_existing_output() {
     fixture.assert_no_staging_residue();
 }
 
+/// An existing output directory is not a compile failure: the refusal names the
+/// directory, says it exists, and says how to proceed, in both formats.
+#[test]
+fn package_to_an_existing_output_says_the_directory_exists_and_how_to_proceed() {
+    let fixture = Fixture::new();
+    fs::create_dir(&fixture.output).expect("existing output");
+
+    for format in ["human", "json"] {
+        let output = fixture.package(format);
+        assert_failed(&output, "existing output must be refused");
+        let rendered = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            rendered.contains("evidence.package.output-exists"),
+            "{format}: {rendered}"
+        );
+        assert!(
+            rendered.contains(&fixture.output.display().to_string()),
+            "{format}: the refusal names the directory: {rendered}"
+        );
+        assert!(rendered.contains("already exists"), "{format}: {rendered}");
+        assert!(
+            rendered.contains("--output"),
+            "{format}: the refusal names the argument to change: {rendered}"
+        );
+        assert!(
+            !rendered.contains("could not compile"),
+            "{format}: the project did not fail to compile: {rendered}"
+        );
+    }
+    assert!(fixture.invocations().is_empty());
+}
+
 #[test]
 fn build_rejects_output_inside_the_editable_project_without_modifying_it() {
     let fixture = Fixture::new();
@@ -418,7 +454,8 @@ fn package_accepts_local_targets_with_the_same_complete_grant_model() {
             target["connections"]["registry-http"]["endpoints"]["registry-http"]["origin"] =
                 json!("http://127.0.0.1:8088");
             target["connections"]["registry-http"]["endpoints"]["registry-http"]
-                ["authentication"] = json!({"type":"none"});
+                ["authentication"] =
+                json!({"type":"static-authorization","tokenRef":"secret:file/source-token"});
         });
         let output = fixture.package(format);
         assert_success(&output, "local candidate with explicit grants");
@@ -1651,7 +1688,8 @@ impl Fixture {
             target["connections"]["registry-http"]["endpoints"]["registry-http"]["origin"] =
                 json!("http://127.0.0.1:8088");
             target["connections"]["registry-http"]["endpoints"]["registry-http"]
-                ["authentication"] = json!({"type":"none"});
+                ["authentication"] =
+                json!({"type":"static-authorization","tokenRef":"secret:file/source-token"});
             target["secretProviders"]["file"]["root"] = json!(".generated/secrets");
             target["signer"] = json!({"type":"local-jwk", "algorithm":"ES256", "privateKeyRef":"secret:file/signing-p256-private-jwk", "publicJwkFile":".generated/secrets/signing-p256-public.jwk.json"});
         });

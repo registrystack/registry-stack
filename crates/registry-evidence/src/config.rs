@@ -389,12 +389,20 @@ pub const EVIDENCE_BUNDLE_FORMAT: FormatSpec<'static> = FormatSpec {
     removed_keys: EVIDENCE_BUNDLE_REMOVED_KEYS,
 };
 
+/// The fix for a bundle compiled before Sources bound pack routes, reported
+/// once at the Source's `type`.
+const RETIRED_SOURCE_FORM: &str = "The tagged Source form is retired: a Source binds a reviewed Adapter pack route with `pack`, `route`, `connection` and `inputs`. Migrate the authoring project and rebuild this package with evidencectl 0.45.0 or later; see products/evidence/reference/authoring-projects/CONFIG.md#migrate-a-retired-source-project.";
+
+/// The fix for each other member of the retired tagged Source form.
+const RETIRED_SOURCE_MEMBER: &str = "Retired with the tagged Source form; the Adapter pack route declares this now. See products/evidence/reference/authoring-projects/CONFIG.md#migrate-a-retired-source-project.";
+
 /// Bundle keys an earlier grammar accepted, each refused with the key that
 /// replaced it. The envelope replaced the `version` member, the access-token
 /// rules moved under `authentication.oidc`, a request's bounds took the
 /// names the shared concept table gives them, the union tags took the name
 /// `type`, and the issuer, each requirement, and each concept name their URI
-/// as `uri`. A `*` segment matches any key.
+/// as `uri`. A Source binds a pack route, so each member of the retired tagged
+/// Source form names the migration. A `*` segment matches any key.
 pub const EVIDENCE_BUNDLE_REMOVED_KEYS: &[registry_platform_yaml::RemovedKey<'static>] = &[
     registry_platform_yaml::RemovedKey {
         pointer: "/version",
@@ -497,12 +505,64 @@ pub const EVIDENCE_BUNDLE_REMOVED_KEYS: &[registry_platform_yaml::RemovedKey<'st
         replacement: "Declare type instead; keep the value.",
     },
     registry_platform_yaml::RemovedKey {
-        pointer: "/sources/*/request/pathBindings/*/from",
-        replacement: "Declare type instead; keep the value.",
+        pointer: "/sources/*/type",
+        replacement: RETIRED_SOURCE_FORM,
     },
     registry_platform_yaml::RemovedKey {
-        pointer: "/sources/*/request/parameterBindings/*/kind",
-        replacement: "Declare type instead; keep the value.",
+        pointer: "/sources/*/baseUrl",
+        replacement: RETIRED_SOURCE_MEMBER,
+    },
+    registry_platform_yaml::RemovedKey {
+        pointer: "/sources/*/extractProfile",
+        replacement: RETIRED_SOURCE_MEMBER,
+    },
+    registry_platform_yaml::RemovedKey {
+        pointer: "/sources/*/maximumExtractAgeSeconds",
+        replacement: RETIRED_SOURCE_MEMBER,
+    },
+    registry_platform_yaml::RemovedKey {
+        pointer: "/sources/*/behaviorRevision",
+        replacement: RETIRED_SOURCE_MEMBER,
+    },
+    registry_platform_yaml::RemovedKey {
+        pointer: "/sources/*/forwardAccessAttribution",
+        replacement: RETIRED_SOURCE_MEMBER,
+    },
+    registry_platform_yaml::RemovedKey {
+        pointer: "/sources/*/unresolvedProblem",
+        replacement: RETIRED_SOURCE_MEMBER,
+    },
+    registry_platform_yaml::RemovedKey {
+        pointer: "/sources/*/tlsTrustProfile",
+        replacement: RETIRED_SOURCE_MEMBER,
+    },
+    registry_platform_yaml::RemovedKey {
+        pointer: "/sources/*/authentication",
+        replacement: RETIRED_SOURCE_MEMBER,
+    },
+    registry_platform_yaml::RemovedKey {
+        pointer: "/sources/*/request",
+        replacement: RETIRED_SOURCE_MEMBER,
+    },
+    registry_platform_yaml::RemovedKey {
+        pointer: "/sources/*/evidence",
+        replacement: RETIRED_SOURCE_MEMBER,
+    },
+    registry_platform_yaml::RemovedKey {
+        pointer: "/sources/*/batch",
+        replacement: RETIRED_SOURCE_MEMBER,
+    },
+    registry_platform_yaml::RemovedKey {
+        pointer: "/sources/*/responseSchema",
+        replacement: RETIRED_SOURCE_MEMBER,
+    },
+    registry_platform_yaml::RemovedKey {
+        pointer: "/sources/*/extractScript",
+        replacement: RETIRED_SOURCE_MEMBER,
+    },
+    registry_platform_yaml::RemovedKey {
+        pointer: "/sources/*/transport",
+        replacement: RETIRED_SOURCE_MEMBER,
     },
     registry_platform_yaml::RemovedKey {
         pointer: "/requirements/*/acquisition/kind",
@@ -527,14 +587,6 @@ pub const EVIDENCE_BUNDLE_REMOVED_KEYS: &[registry_platform_yaml::RemovedKey<'st
     registry_platform_yaml::RemovedKey {
         pointer: "/holderBoundBatchMaxSize",
         replacement: "Declare maximumHolderBoundBatchSize instead; keep the value.",
-    },
-    registry_platform_yaml::RemovedKey {
-        pointer: "/sources/*/evidence/contract/holderBoundBatchMaxSize",
-        replacement: "Declare maximumHolderBoundBatchSize instead; keep the value.",
-    },
-    registry_platform_yaml::RemovedKey {
-        pointer: "/sources/*/evidence/contract/definitions/*/concepts/*/form/list",
-        replacement: "A form is a mapping named by `type`: write `type: list` and the list's members beside it.",
     },
 ];
 
@@ -818,6 +870,30 @@ pub struct EvidenceConfig {
     pub maximum_holder_bound_batch_size:
         Option<BoundedU32<1, { MAXIMUM_HOLDER_BOUND_BATCH_SIZE as u32 }>>,
     pub requirements: Vec<RequirementConfig>,
+    /// Retired. An empty list is read and ignored for one release.
+    #[serde(default, rename = "acquisitionCapabilities", skip_serializing)]
+    pub retired_acquisition_capabilities: RetiredAcquisitionCapabilities,
+}
+
+/// The retired `acquisitionCapabilities` member of the bundle and the runtime
+/// configuration. For one release an empty list is still read, and ignored,
+/// so a file written for 0.44 loads; any capability is refused with the fix.
+/// It never serializes, so it never changes a configuration revision.
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
+pub struct RetiredAcquisitionCapabilities;
+
+impl<'de> Deserialize<'de> for RetiredAcquisitionCapabilities {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let capabilities = Vec::<de::IgnoredAny>::deserialize(deserializer)?;
+        if capabilities.is_empty() {
+            return Ok(Self);
+        }
+        Err(Invalid::expected(
+            "no acquisition capability; the member is retired",
+            "Delete `acquisitionCapabilities`; a Source binds a reviewed Adapter pack route, and the pack declares how it reads.",
+        )
+        .into_error())
+    }
 }
 
 pub use registry_evidence_verifier::model::SubjectBindingMode;
@@ -827,6 +903,10 @@ pub use registry_evidence_verifier::model::SubjectBindingMode;
 pub use registry_evidence_verifier::AssuranceProfile;
 
 pub type SourceSelectorSet = Vec<(String, String)>;
+
+const SOURCE_AUTHORITY_PATH_INCOMPLETE: &str = "an authority path that can activate a source does not supply every required route input; give one grant a subject for every input of one route input alternative";
+const SOURCE_AUTHORITY_PATH_OVERLAPPING: &str = "an authority path that can activate a source supplies inputs for more than one route input alternative; narrow the grant's subjects so they fill exactly one alternative";
+const SOURCE_AUTHORITY_PATH_UNFIT: &str = "an authority path that can activate a source does not fit the route input presence rules; give one grant subjects that fill exactly one route input alternative";
 
 /// The route-input names one complete authority path must make available.
 ///
@@ -851,22 +931,38 @@ impl SourceInputPresenceContract {
     }
 
     /// Whether one actual complete grant can fill the reviewed route shape.
+    #[cfg(test)]
     pub(crate) fn accepts_path(&self, available: &BTreeSet<&str>) -> bool {
-        if !self.requirement.accepts(available) {
-            return false;
-        }
+        self.path_refusal(available).is_none()
+    }
+
+    /// The value-free reason one actual complete grant cannot fill the
+    /// reviewed route shape, or `None` when it can. Presence-only
+    /// alternatives say whether the grant supplies too few inputs or enough
+    /// for more than one alternative; any other shape gets the general rule.
+    pub(crate) fn path_refusal(&self, available: &BTreeSet<&str>) -> Option<&'static str> {
         if let Some(alternatives) = &self.exclusive_alternatives {
-            return alternatives
+            let filled = alternatives
                 .iter()
                 .filter(|required| {
                     required
                         .iter()
                         .all(|input| available.contains(input.as_str()))
                 })
-                .count()
-                == 1;
+                .count();
+            match filled {
+                0 => return Some(SOURCE_AUTHORITY_PATH_INCOMPLETE),
+                1 => {}
+                _ => return Some(SOURCE_AUTHORITY_PATH_OVERLAPPING),
+            }
         }
-        true
+        if self.requirement.accepts(available) {
+            None
+        } else if self.exclusive_alternatives.is_none() && self.requirement.is_plain_required() {
+            Some(SOURCE_AUTHORITY_PATH_INCOMPLETE)
+        } else {
+            Some(SOURCE_AUTHORITY_PATH_UNFIT)
+        }
     }
 
     /// Whether the Source maps enough names for at least one route alternative.
@@ -900,6 +996,16 @@ pub(crate) enum SourceInputPresenceRequirement {
 }
 
 impl SourceInputPresenceRequirement {
+    /// Whether the requirement can only fail by a missing input, so a
+    /// refusal can say the grant supplies too few.
+    fn is_plain_required(&self) -> bool {
+        match self {
+            Self::Always | Self::Never | Self::Required(_) => true,
+            Self::All(requirements) => requirements.iter().all(Self::is_plain_required),
+            _ => false,
+        }
+    }
+
     fn accepts(&self, available: &BTreeSet<&str>) -> bool {
         match self {
             Self::Always => true,
@@ -1518,10 +1624,8 @@ impl EvidenceConfig {
                         })
                         .map(|(name, _)| name.as_str())
                         .collect::<BTreeSet<_>>();
-                    if !contract.accepts_path(&available) {
-                        return invalid(
-                            "an authority path that can activate a source does not supply every required route input",
-                        );
+                    if let Some(reason) = contract.path_refusal(&available) {
+                        return invalid(reason);
                     }
                 }
             }
@@ -2183,6 +2287,9 @@ pub struct RuntimeConfig {
     /// for a bundle with no extract source says.
     #[serde(default, skip_serializing_if = "OrderedMap::is_empty")]
     pub source_extracts: OrderedMap<SourceExtractBinding>,
+    /// Retired. An empty list is read and ignored for one release.
+    #[serde(default, rename = "acquisitionCapabilities", skip_serializing)]
+    pub retired_acquisition_capabilities: RetiredAcquisitionCapabilities,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Deserialize, Serialize)]
@@ -7546,7 +7653,7 @@ mod tests {
     #[test]
     fn retired_sqlite_source_request_surface_is_refused_in_a_complete_bundle() {
         let document = sqlite_source_document();
-        assert_eq!(decode_cause(&document), "config.unknown-key");
+        assert_eq!(decode_cause(&document), "config.removed-key");
         assert!(
             !bundle_contract_validator().is_valid(&bundle_contract_instance(document.as_bytes())),
             "the published bundle schema must refuse the retired transport surface"
@@ -8221,10 +8328,10 @@ mod tests {
             .iter()
             .find(|diagnostic| diagnostic.path == "/sources/source-a/responseSchema")
             .unwrap_or_else(|| panic!("the retired schema role was not refused: {diagnostics:?}"));
-        assert_eq!(refused.code, "config.unknown-key");
-        assert!(
-            refused.suggested_action.contains("factSchema"),
-            "the current Source members are named: {refused:?}"
+        assert_eq!(refused.code, "config.removed-key");
+        assert_eq!(
+            refused.suggested_action, RETIRED_SOURCE_MEMBER,
+            "the migration is named: {refused:?}"
         );
     }
 
@@ -9374,23 +9481,30 @@ outboundTls:
         assert!(!validator.is_valid(&bundle_contract_instance(unknown.as_bytes())));
     }
 
+    /// For one release the contract and reader both tolerate an empty retired
+    /// capability list; any capability stays refused by both.
     #[test]
     fn published_runtime_contract_refuses_retired_acquisition_capabilities() {
         let validator = runtime_contract_validator();
-        for declaration in [
-            "acquisitionCapabilities: []\n",
-            "acquisitionCapabilities: [source-batch]\n",
-        ] {
-            let candidate = format!("{LOADER_RUNTIME_DOCUMENT}{declaration}");
-            assert!(
-                !validator.is_valid(&bundle_contract_instance(candidate.as_bytes())),
-                "the contract accepted retired runtime acquisition capabilities: {declaration}"
-            );
-            assert!(
-                RuntimeConfig::parse_yaml(candidate.as_bytes()).is_err(),
-                "the runtime reader accepted retired acquisition capabilities: {declaration}"
-            );
-        }
+        let empty = format!("{LOADER_RUNTIME_DOCUMENT}acquisitionCapabilities: []\n");
+        assert!(
+            validator.is_valid(&bundle_contract_instance(empty.as_bytes())),
+            "the contract refused an empty retired capability list"
+        );
+        assert!(
+            RuntimeConfig::parse_yaml(empty.as_bytes()).is_ok(),
+            "the runtime reader refused an empty retired capability list"
+        );
+        let candidate =
+            format!("{LOADER_RUNTIME_DOCUMENT}acquisitionCapabilities: [source-batch]\n");
+        assert!(
+            !validator.is_valid(&bundle_contract_instance(candidate.as_bytes())),
+            "the contract accepted a retired runtime acquisition capability"
+        );
+        assert!(
+            RuntimeConfig::parse_yaml(candidate.as_bytes()).is_err(),
+            "the runtime reader accepted a retired acquisition capability"
+        );
     }
 
     #[test]
@@ -10369,6 +10483,10 @@ outboundTls:
 
     /// The adult-status acceptance bundle, which every bundle-reader test
     /// edits into the case it proves.
+    /// Where the retired tagged Source form is migrated to pack Sources.
+    const RETIRED_SOURCE_MIGRATION: &str =
+        "products/evidence/reference/authoring-projects/CONFIG.md#migrate-a-retired-source-project";
+
     fn acceptance_bundle() -> String {
         String::from_utf8(
             include_bytes!(
@@ -10380,7 +10498,7 @@ outboundTls:
     }
 
     #[test]
-    fn a_legacy_transport_member_is_an_unknown_source_key() {
+    fn a_legacy_transport_member_points_at_the_source_migration() {
         let valid = acceptance_bundle();
         let legacy = valid.replacen(
             "  source-a:\n",
@@ -10396,7 +10514,7 @@ outboundTls:
             "one closed-reader refusal: {diagnostics:?}"
         );
         let diagnostic = &diagnostics[0];
-        assert_eq!(diagnostic.code, "config.unknown-key");
+        assert_eq!(diagnostic.code, "config.removed-key");
         assert_eq!(diagnostic.path, "/sources/source-a/transport");
         assert_eq!(
             diagnostic.source.as_ref().and_then(|source| source.line),
@@ -10406,13 +10524,80 @@ outboundTls:
             diagnostic.source.as_ref().and_then(|source| source.column),
             Some(5)
         );
-        assert_eq!(
-            diagnostic.message,
-            "`transport` is not a member of this mapping"
+        assert_eq!(diagnostic.suggested_action, RETIRED_SOURCE_MEMBER);
+        assert!(RETIRED_SOURCE_MEMBER.contains(RETIRED_SOURCE_MIGRATION));
+    }
+
+    /// A bundle compiled before Sources bound pack routes is refused with one
+    /// pointer to the migration at the Source's `type`, and a short reference
+    /// at each other retired member, never with advice to delete them.
+    #[test]
+    fn a_retired_source_form_is_refused_with_the_migration_named() {
+        let valid = acceptance_bundle();
+        let start = valid
+            .find("  source-a:\n")
+            .expect("the fixture declares source-a");
+        let end = valid
+            .find("authorityProfiles:")
+            .expect("the fixture declares authority profiles");
+        let retired = format!(
+            "{}{}{}",
+            &valid[..start],
+            "  source-a:\n    \
+             type: http-json\n    \
+             baseUrl: https://source.invalid\n    \
+             connection: provider\n    \
+             posture: field-projected\n    \
+             authentication: {type: static-authorization, tokenRef: secret:file/source-a-token}\n    \
+             request: {method: POST, path: /v1/facts}\n    \
+             responseSchema: schemas/response.schema.yaml\n    \
+             extractScript: adapters/source-a.rhai\n    \
+             factSchema: schemas/facts.schema.yaml\n",
+            &valid[end..]
         );
+
+        let diagnostics = bundle_refusal(&retired);
+        assert!(
+            diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.code != "config.unknown-key"),
+            "no retired member is called unknown: {diagnostics:?}"
+        );
+        let at = |path: &str| {
+            diagnostics
+                .iter()
+                .find(|diagnostic| diagnostic.path == path)
+                .unwrap_or_else(|| panic!("{path} was not refused: {diagnostics:?}"))
+        };
+        let form = at("/sources/source-a/type");
+        assert_eq!(form.code, "config.removed-key");
+        assert_eq!(form.suggested_action, RETIRED_SOURCE_FORM);
+        for needle in [
+            "pack",
+            "route",
+            "evidencectl 0.45.0",
+            RETIRED_SOURCE_MIGRATION,
+        ] {
+            assert!(form.suggested_action.contains(needle), "{needle}: {form:?}");
+        }
+        for member in [
+            "baseUrl",
+            "authentication",
+            "request",
+            "responseSchema",
+            "extractScript",
+        ] {
+            let refusal = at(&format!("/sources/source-a/{member}"));
+            assert_eq!(refusal.code, "config.removed-key", "{member}");
+            assert_eq!(refusal.suggested_action, RETIRED_SOURCE_MEMBER, "{member}");
+        }
         assert_eq!(
-            diagnostic.suggested_action,
-            "Remove `transport`; the accepted keys are `pack`, `route`, `connection`, `inputs`, `posture`, `factSchema`."
+            diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.suggested_action == RETIRED_SOURCE_FORM)
+                .count(),
+            1,
+            "the full migration paragraph appears once"
         );
     }
 
@@ -11021,8 +11206,8 @@ outboundTls:
             "the fix names the replacement: {removed:?}"
         );
 
-        // An Evidence source pins a definitions document, which names the
-        // ceiling the same way.
+        // A Source no longer pins a definitions document; the retired member
+        // is refused once at its key, with the migration named.
         let mut pinned =
             serde_norway::from_str::<serde_norway::Value>(&adult).expect("the fixture parses");
         let source = pinned["sources"]
@@ -11038,21 +11223,19 @@ outboundTls:
             .iter()
             .find(|diagnostic| diagnostic.code == "config.removed-key")
             .unwrap_or_else(|| panic!("no config.removed-key in {diagnostics:?}"));
-        assert_eq!(
-            removed.path,
-            "/sources/source-a/evidence/contract/holderBoundBatchMaxSize"
-        );
+        assert_eq!(removed.path, "/sources/source-a/evidence");
+        assert_eq!(removed.suggested_action, RETIRED_SOURCE_MEMBER);
         assert!(
-            removed
-                .suggested_action
-                .contains("maximumHolderBoundBatchSize"),
-            "the fix names the replacement: {removed:?}"
+            diagnostics
+                .iter()
+                .all(|diagnostic| !diagnostic.path.starts_with("/sources/source-a/evidence/")),
+            "nothing inside the retired member is advised on: {diagnostics:?}"
         );
     }
 
-    /// The definitions document an Evidence source pins names each concept
-    /// form by `type`; the bare name and the `list` member it replaced are
-    /// refused where they are written.
+    /// A Source no longer pins a definitions document, so a pinned concept
+    /// form in any old shape is refused once, at the retired `evidence`
+    /// member, with the migration named and no value repeated.
     #[test]
     fn a_pinned_concept_form_is_named_by_type_and_the_old_shapes_are_refused() {
         let adult = acceptance_bundle();
@@ -11070,19 +11253,14 @@ outboundTls:
             .expect("the pinned contract parses");
             serde_norway::to_string(&pinned).expect("the candidate serializes")
         };
-        let form_path = "/sources/source-a/evidence/contract/definitions/0/concepts/0/form";
-
         let diagnostics = bundle_refusal(&pinned(
             "{list: {items: string, minimumItems: 1, maximumItems: 2, unique: true}}",
         ));
-        let removed = diagnostics
-            .iter()
-            .find(|diagnostic| diagnostic.code == "config.removed-key")
-            .unwrap_or_else(|| panic!("no config.removed-key in {diagnostics:?}"));
-        assert_eq!(removed.path, format!("{form_path}/list"));
         assert!(
-            removed.suggested_action.contains("type: list"),
-            "the fix names the replacement: {removed:?}"
+            diagnostics
+                .iter()
+                .all(|diagnostic| !diagnostic.path.starts_with("/sources/source-a/evidence/")),
+            "nothing inside the retired member is advised on: {diagnostics:?}"
         );
         let parent = diagnostics
             .iter()
@@ -11090,11 +11268,8 @@ outboundTls:
             .unwrap_or_else(|| {
                 panic!("the retired source parent was not refused: {diagnostics:?}")
             });
-        assert_eq!(parent.code, "config.unknown-key");
-        assert_eq!(
-            parent.suggested_action,
-            "Remove `evidence`; the accepted keys are `pack`, `route`, `connection`, `inputs`, `posture`, `factSchema`."
-        );
+        assert_eq!(parent.code, "config.removed-key");
+        assert_eq!(parent.suggested_action, RETIRED_SOURCE_MEMBER);
         assert!(!format!("{diagnostics:?}").contains("minimumItems: 1"));
 
         let diagnostics = bundle_refusal(&pinned("boolean"));
@@ -11102,11 +11277,8 @@ outboundTls:
             .iter()
             .find(|diagnostic| diagnostic.path == "/sources/source-a/evidence")
             .unwrap_or_else(|| panic!("the retired boolean form was not refused: {diagnostics:?}"));
-        assert_eq!(parent.code, "config.unknown-key");
-        assert_eq!(
-            parent.suggested_action,
-            "Remove `evidence`; the accepted keys are `pack`, `route`, `connection`, `inputs`, `posture`, `factSchema`."
-        );
+        assert_eq!(parent.code, "config.removed-key");
+        assert_eq!(parent.suggested_action, RETIRED_SOURCE_MEMBER);
         assert!(!format!("{diagnostics:?}").contains("form: boolean"));
 
         let diagnostics = bundle_refusal(&pinned("{type: boolean, unique: true}"));
@@ -11116,11 +11288,8 @@ outboundTls:
             .unwrap_or_else(|| {
                 panic!("the retired constrained form was not refused: {diagnostics:?}")
             });
-        assert_eq!(parent.code, "config.unknown-key");
-        assert_eq!(
-            parent.suggested_action,
-            "Remove `evidence`; the accepted keys are `pack`, `route`, `connection`, `inputs`, `posture`, `factSchema`."
-        );
+        assert_eq!(parent.code, "config.removed-key");
+        assert_eq!(parent.suggested_action, RETIRED_SOURCE_MEMBER);
         assert!(!format!("{diagnostics:?}").contains("unique: true"));
 
         let diagnostics = bundle_refusal(&pinned("{type: decimal}"));
@@ -11128,11 +11297,8 @@ outboundTls:
             .iter()
             .find(|diagnostic| diagnostic.path == "/sources/source-a/evidence")
             .unwrap_or_else(|| panic!("the retired decimal form was not refused: {diagnostics:?}"));
-        assert_eq!(parent.code, "config.unknown-key");
-        assert_eq!(
-            parent.suggested_action,
-            "Remove `evidence`; the accepted keys are `pack`, `route`, `connection`, `inputs`, `posture`, `factSchema`."
-        );
+        assert_eq!(parent.code, "config.removed-key");
+        assert_eq!(parent.suggested_action, RETIRED_SOURCE_MEMBER);
         assert!(!format!("{diagnostics:?}").contains("type: decimal"));
 
         let diagnostics = bundle_refusal(&pinned("{type: boolean}"));
@@ -11142,11 +11308,8 @@ outboundTls:
             .unwrap_or_else(|| {
                 panic!("the retired tagged boolean was not refused: {diagnostics:?}")
             });
-        assert_eq!(parent.code, "config.unknown-key");
-        assert_eq!(
-            parent.suggested_action,
-            "Remove `evidence`; the accepted keys are `pack`, `route`, `connection`, `inputs`, `posture`, `factSchema`."
-        );
+        assert_eq!(parent.code, "config.removed-key");
+        assert_eq!(parent.suggested_action, RETIRED_SOURCE_MEMBER);
         assert!(!format!("{diagnostics:?}").contains("type: boolean"));
 
         let diagnostics = bundle_refusal(&pinned(
@@ -11156,11 +11319,8 @@ outboundTls:
             .iter()
             .find(|diagnostic| diagnostic.path == "/sources/source-a/evidence")
             .unwrap_or_else(|| panic!("the retired tagged list was not refused: {diagnostics:?}"));
-        assert_eq!(parent.code, "config.unknown-key");
-        assert_eq!(
-            parent.suggested_action,
-            "Remove `evidence`; the accepted keys are `pack`, `route`, `connection`, `inputs`, `posture`, `factSchema`."
-        );
+        assert_eq!(parent.code, "config.removed-key");
+        assert_eq!(parent.suggested_action, RETIRED_SOURCE_MEMBER);
         assert!(!format!("{diagnostics:?}").contains("maximumItems: 2"));
 
         let old_list = adult.replacen(
@@ -11766,7 +11926,24 @@ outboundTls:
         );
         assert_eq!(
             decode_cause(&acquisition_capabilities),
-            "config.unknown-key"
+            "config.invalid-value"
+        );
+        // An empty list is tolerated, and ignored, for one release: it leaves
+        // the parsed bundle, and so its configuration revision, unchanged.
+        let empty_capabilities = edited(
+            baseline,
+            "kind: EvidenceBundle\n",
+            "kind: EvidenceBundle\nacquisitionCapabilities: []\n",
+        );
+        assert_eq!(
+            EvidenceConfig::parse_yaml(empty_capabilities.as_bytes())
+                .expect("an empty retired capability list parses"),
+            EvidenceConfig::parse_yaml(baseline.as_bytes()).expect("the baseline parses"),
+        );
+        assert!(
+            bundle_contract_validator()
+                .is_valid(&bundle_contract_instance(empty_capabilities.as_bytes())),
+            "the published bundle schema refused an empty retired capability list"
         );
 
         let multistage = edited(
@@ -11784,7 +11961,7 @@ outboundTls:
             "    factSchema: schemas/facts.schema.yaml\n",
             "    factSchema: schemas/facts.schema.yaml\n    batch: {maximumItems: 2}\n",
         );
-        assert_eq!(decode_cause(&source_batch), "config.unknown-key");
+        assert_eq!(decode_cause(&source_batch), "config.removed-key");
     }
 
     fn holder_bound_bundle() -> String {

@@ -272,7 +272,6 @@ rand_core = { version = "0.6", features = ["std"] }
 # The CSV grammar of the job decoders (CONCEPT.md 8.10, `CSV data format`
 # row). Already in Cargo.lock through registry-render's typst, so adopting
 # it adds no new crate to the dependency graph.
-csv = "1.4"
 csv-core = "=0.1.13"
 rcgen = { version = "0.14", default-features = false, features = ["ring", "zeroize"] }
 # Pattern evaluation for encrypted fields happens in Rust before sealing, so

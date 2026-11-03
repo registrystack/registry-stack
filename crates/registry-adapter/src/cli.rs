@@ -8,7 +8,11 @@ use std::path::PathBuf;
 use clap::{CommandFactory, Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "adapter", about = "The Registry Adapter runtime")]
+#[command(
+    name = "adapter",
+    version = registry_platform_buildinfo::DISPLAY_VERSION,
+    about = "The Registry Adapter runtime"
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
@@ -54,4 +58,15 @@ pub enum Command {
 #[must_use]
 pub fn command() -> clap::Command {
     Cli::command()
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_version_is_the_display_version_the_ctl_tools_report() {
+        assert_eq!(
+            super::command().get_version(),
+            Some(registry_platform_buildinfo::DISPLAY_VERSION)
+        );
+    }
 }

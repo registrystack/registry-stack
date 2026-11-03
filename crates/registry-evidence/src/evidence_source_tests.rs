@@ -979,9 +979,9 @@ async fn signed_evidence_verification_is_terminal_before_do_finally_effects() {
 }
 
 /// Evidence must build resilience state from the same retained step tree it
-/// serves. This route's breaker handles one ordinary authored failure after a
-/// successful finally send, then its fallback performs a second valid send and
-/// releases the verified result.
+/// serves. This route's breaker guards one ordinary authored failure raised
+/// after a successful finally send; its `doCatch` then performs a second valid
+/// send and releases the verified result.
 #[tokio::test]
 async fn signed_evidence_source_route_circuit_breaker_uses_retained_step_identity() {
     let fixture = composed_runtime_with_finally_terminal_precedence().await;
@@ -1016,15 +1016,15 @@ async fn signed_evidence_source_route_circuit_breaker_uses_retained_step_identit
     assert_eq!(
         response.status_code(),
         StatusCode::OK,
-        "the breaker fallback returns verified facts; terminal category: {terminal_category:?}"
+        "the doCatch returns verified facts; terminal category: {terminal_category:?}"
     );
     assert_eq!(released_evidence_ids(&audit).len(), 1);
 }
 
 /// When an ordinary source failure is already pending, an uncatchable signed
 /// verification refusal raised by `doFinally` must replace it. The hostile
-/// breaker fallback would otherwise perform a second valid send, manufacture
-/// matched facts, and turn the terminal refusal into successful Evidence.
+/// `doCatch` would otherwise perform a second valid send, manufacture matched
+/// facts, and turn the terminal refusal into successful Evidence.
 #[tokio::test]
 async fn signed_evidence_do_finally_terminal_failure_replaces_pending_dependency() {
     let fixture = composed_runtime_with_finally_terminal_precedence().await;
@@ -1049,7 +1049,7 @@ async fn signed_evidence_do_finally_terminal_failure_replaces_pending_dependency
     assert_eq!(
         fixture.requests.lock().await.len(),
         1,
-        "the breaker fallback must not send after doFinally raises a terminal refusal"
+        "the doCatch must not send after doFinally raises a terminal refusal"
     );
     let audit = fs::read_to_string(&fixture.downstream.audit_path).unwrap();
     assert!(released_evidence_ids(&audit).is_empty());

@@ -161,6 +161,25 @@ mod tests {
     }
 
     #[test]
+    fn a_dotted_path_reads_a_nested_member_never_a_flat_dotted_name() {
+        // The path walks objects and names the projected member as
+        // written, so a source with flat rows groups the member in its
+        // route before the projection can read it.
+        let declaration = declaration(&["household.household_size"]);
+        let nested = serde_json::json!({"household": {"household_size": 4}});
+        assert_eq!(
+            project(&declaration, &nested),
+            serde_json::json!({"household.household_size": 4})
+        );
+        let flat = serde_json::json!({"household.household_size": 4});
+        assert_eq!(
+            project(&declaration, &flat),
+            serde_json::json!({"household.household_size": null}),
+            "a flat member whose name holds a dot is not the dotted path"
+        );
+    }
+
+    #[test]
     fn the_digest_is_plain_sha256_over_the_canonical_projection() {
         let declaration = declaration(&["id", "answers.age"]);
         let value = serde_json::json!({"answers": {"age": "045"}, "id": "a"});

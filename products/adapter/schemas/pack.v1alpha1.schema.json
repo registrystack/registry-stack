@@ -1255,7 +1255,7 @@
           "type": "string"
         }
       ],
-      "description": "The decoder a `pollEnrich` step selects. A mapping form is a `csv`\ndeclaration with its options, the only decoder that carries options; a\nbare string names one of `csv`, `jsonl`, `rabbitmq-json`, or `raw`. One member carries\nboth forms, so `decoder: csv` and `decoder: {\"delimiter\": \";\"}` read\nthe same way."
+      "description": "The decoder a `pollEnrich` step selects. A mapping form is a `csv`\ndeclaration with its options, the only decoder that carries options; a\nbare string names one of `csv`, `jsonl`, `rabbitmq-json`, or `raw`. One member carries\nboth forms, so `decoder: csv` and `decoder: {\"delimiter\": \";\"}` read\nthe same way. The node kind chooses the form (CFG-SCHEMA-8), so a\nmisspelt CSV option is reported at its own key with its position."
     },
     "PollEnrichStep": {
       "additionalProperties": false,
@@ -1270,7 +1270,8 @@
           "description": "The decoder the read applies: absent, `raw`, the file bytes' digest\npage; `csv` decodes rows with the options of [`CsvDecoder`], written\neither as the bare name `csv` or as a mapping of its options;\n`jsonl` decodes one bounded JSON value per line. `rabbitmq-json`\ndecodes exactly one bounded broker message and is valid only for a\n`rabbitmq:` source. The checks refuse any other name or a mismatched\nprofile under `adapter.job.decoder-unknown`."
         },
         "keyPointer": {
-          "description": "RFC 6901 selector of the opaque business-key string in a decoded row.\nRequired for CSV and JSONL, forbidden for raw files and broker messages.",
+          "description": "RFC 6901 selector of the opaque business-key string in a decoded row.\nRequired for CSV and JSONL, forbidden for raw files and broker messages.\nAt most 512 bytes.",
+          "maxLength": 512,
           "type": "string"
         },
         "timeoutMilliseconds": {
@@ -1463,7 +1464,7 @@
     },
     "SendUri": {
       "description": "The destination of a `to` or `enrich` send: a `direct:` route, an\n`http:`, `graphql:`, or `postgres:` endpoint declared in the pack\n(`products/adapter/CONCEPT.md` sections 8.3, 8.8, and 17.2). The URI is\nstatic; no `toD` is ported. A `file:` or `sftp:` URI parses so the\nauthoring checks can refuse it under its own code\n(`adapter.job.send-component-refused`): a job source is read through the\n`pollEnrich` step, never through a send.",
-      "pattern": "^(direct|http|graphql|postgres|file|sftp|sqlite-extract):.+$",
+      "pattern": "^(direct|http|graphql|postgres|file|rabbitmq|sftp|sqlite-extract):.+$",
       "type": "string"
     },
     "SetHeaderStep": {

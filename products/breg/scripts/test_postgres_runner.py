@@ -8,6 +8,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import subprocess
 import sys
@@ -94,8 +95,9 @@ class PostgresRunnerTests(unittest.TestCase):
                 "if os.environ.get('BREG_RUNNER_TEST_FORBID_UV') == '1': raise SystemExit(23)\n"
                 "expected = Path(os.environ['BREG_RUNNER_TEST_PYTHON_BINARY'])\n"
                 "if sys.argv[1] == 'venv':\n"
-                "    assert Path(sys.argv[2]) == expected.parents[1]\n"
-                "    python = Path(sys.argv[2]) / 'bin' / 'python'\n"
+                "    assert sys.argv[2] == '--clear'\n"
+                "    assert Path(sys.argv[3]) == expected.parents[1]\n"
+                "    python = Path(sys.argv[3]) / 'bin' / 'python'\n"
                 "    python.parent.mkdir(parents=True)\n"
                 "    python.write_text(\"#!/usr/bin/env python3\\nimport json, os, sys\\nif sys.argv[1:2] != ['-c']:\\n    with open(os.environ['BREG_RUNNER_TEST_LOG'], 'a') as log:\\n        log.write(json.dumps(['python', *sys.argv[1:]]) + '\\\\n')\\n\")\n"
                 "    python.chmod(0o755)\n"
@@ -103,7 +105,7 @@ class PostgresRunnerTests(unittest.TestCase):
                 "    assert sys.argv[1:3] == ['pip', 'install']\n"
                 "    assert sys.argv[3] == '--python'\n"
                 "    assert Path(sys.argv[4]) == expected\n"
-                "    assert sys.argv[5] == 'PyYAML==6.0.3'\n"
+                "    assert sys.argv[5] == 'PyYAML==6.0.2'\n"
             )
             uv.chmod(0o755)
             environment = os.environ.copy()
@@ -339,6 +341,13 @@ class PostgresRunnerTests(unittest.TestCase):
         self.assertIn("Usage:", result.stderr)
         self.assertEqual([], calls)
 
+    def test_python_environment_probe_matches_the_installed_pin(self):
+        source = RUNNER.read_text(encoding="utf-8")
+        installed = re.findall(r"PyYAML==([0-9.]+)", source)
+        probed = re.findall(r'yaml\.__version__ == "([0-9.]+)"', source)
+        self.assertEqual(1, len(installed))
+        self.assertEqual([installed[0]] * 2, probed)
+
     def test_inventory_validator_rejects_lost_duplicate_filtered_or_wrong_feature_targets(self):
         source = RUNNER.read_text(encoding="utf-8")
         for index, changed in enumerate((
@@ -350,7 +359,7 @@ class PostgresRunnerTests(unittest.TestCase):
             source + "\n cargo test --locked -p registry-breg --features schema --test stray_target\n",
             source + "\nFOO=1 cargo test --locked -p registry-breg --features schema --test stray_target\n",
             source + "\ncommand cargo test --locked -p registry-breg --features schema --test stray_target\n",
-            source + "\nuv run --with PyYAML==6.0.3 cargo test --locked -p registry-breg"
+            source + "\nuv run --with PyYAML==6.0.2 cargo test --locked -p registry-breg"
             " --features postgres-test,tooling,schema --test stray_target\n",
             source + "\ncargo test --locked -p registry-breg --features schema --test=stray_target\n",
             source.replace("      --test postgres_action_evidence_targets \\\n", ""),

@@ -23,8 +23,8 @@ file is its manifest.
 - Each member carries `profile.yaml`, `pack.yaml`, and `project.yaml`
   (plus `scripts/`, `queries/`, or `fixtures/` where the defect needs
   them, and `runtime.yaml` where the expected code is a runtime or auth
-  code). The eleven `adapter.job` members with a `job.yaml` (the four
-  `profile-*` and `route-unknown` members and the seven
+  code). The ten `adapter.job` members with a `job.yaml` (the two
+  `profile-*` members, `route-unknown`, and the seven
   `projection-*`, `trigger-*`, and `call-budget` members) carry their
   defect in the job definition, which the job compiler's `check_job`
   refuses over the pinned pack beside it, while the workspace itself
@@ -73,7 +73,7 @@ digest pins and the GraphQL query-file checks). Route findings report
 once at the authored position: `/routeTemplates/N` when the defect sits
 in a template body,
 `/routes/{id}` otherwise, so every member refuses with exactly one
-finding per code. The corpus holds 169 members.
+finding per code. The corpus holds 168 members.
 
 `base-job/` is the clean governed-ingestion control (CONCEPT section 17):
 a pack whose source route polls a bounded `file` endpoint through
@@ -111,7 +111,6 @@ into the sweep also teaches it the `job.rs` registry.
 | `adapter.job.postgres-parameters-unbounded` | The `postgres` endpoint declares 17 ordered parameter names, one past the bound of 16 | `adapter.job.postgres-parameters-unbounded` | checks |
 | `adapter.job.endpoint-response-bound` | The bound facade template's endpoint declares `maximumResponseBytes: 2097152`, above the facade ceiling | `adapter.job.endpoint-response-bound` | checks |
 | `adapter.job.route-unknown` | The job names source route `nope`; the workspace is clean, `check_job` refuses over `job.yaml` | `adapter.job.route-unknown` | checks (job) |
-| `adapter.job.profile-bound` | The job profile's `pageDeadlineMilliseconds` is `600001`, above its bound | `adapter.job.profile-bound` | checks (job) |
 | `adapter.job.profile-inconsistent` | The job profile's `maximumPageBytes` exceeds its own `maximumResponseBytes` | `adapter.job.profile-inconsistent` | checks (job) |
 | `adapter.job.profile-endpoint-bound` | The job profile is tighter than the HTTP endpoint's declared bound, which its source route reaches | `adapter.job.profile-endpoint-bound` | checks (job) |
 | `adapter.job.projection-shape` | The job declares an empty projection block, so no projected field is named | `adapter.job.projection-shape` | checks (job) |

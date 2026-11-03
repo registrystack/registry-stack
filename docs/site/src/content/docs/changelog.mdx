@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-docs
-last_reviewed: "2026-10-20"
+last_reviewed: "2026-11-03"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -17,6 +17,53 @@ Per-product release notes live in each product repository; the entries below lin
 relevant product pages on this site rather than duplicating release notes.
 
 ## Unreleased
+
+- BREAKING: Evidence sources move into reviewed Adapter packs. A source declares `pack`,
+  `route`, `connection` and `inputs`; the `http-json` and `sqlite-extract` source forms are
+  retired. 0.45.0 is the migration boundary: a project authored by 0.44.0 is refused with
+  `evidence.project.source-acquisition-retired` and has no in-place upgrade. Migrate it with the
+  [retired Source project steps](https://github.com/registrystack/registry-stack/blob/main/products/evidence/reference/authoring-projects/CONFIG.md#migrate-a-retired-source-project).
+- BREAKING: Evidence retires `acquisitionCapabilities` from the bundle and the runtime
+  configuration, and the `source-batch` gate with it. Delete the member. An empty list is still
+  accepted and ignored for one release; a non-empty list is refused.
+- BREAKING: New authorized-material audit entries use `registry.evidence.audit/v3` and
+  `registry.evidence.audit.request-batch/v3`, which require a closed `executionBounds` object.
+  Update audit readers before routing traffic to this runtime.
+- BREAKING: `bregctl generate evidence-source` exports an Adapter pack under
+  `adapter-packs/` instead of `adapters/*.rhai` and `schemas/*.yaml`, under an unchanged
+  export `apiVersion`, and gains `--authentication` (default `static-authorization`). Regenerate
+  every export, and pass `--authentication oauth2-private-key-jwt` for a private-key-JWT target.
+  See the [Evidence from BReg tutorial](../tutorials/evidence-from-breg/).
+
+{/* Evidence: products/evidence/CHANGELOG.md, Unreleased, the sources-to-packs,
+    acquisitionCapabilities and audit /v3 entries; products/breg/CHANGELOG.md, Unreleased;
+    release/scripts/test_rehearse_upgrade.py,
+    test_evidence_is_skipped_only_when_the_rehearsal_crosses_the_source_pack_boundary. */}
+
+- BREAKING: an Evidence target connection binds each pack endpoint under
+  `connections.<id>.endpoints.<endpoint id>`. Move the flat `origin`, `authentication` and
+  `tlsTrustProfile` members into the endpoint entry; `maximumConcurrency`,
+  `admissionTimeoutMilliseconds` and `tokenTimeoutMilliseconds` are retired. A flat connection
+  is refused at each retired member, naming where it moved.
+- BREAKING: an Evidence source route can no longer turn a source failure into a lookup answer.
+  Pack compilation refuses a `doCatch` or a handling or continuing `onException` clause that
+  names an upstream, breaker, throttle, script or validation failure, and a `circuitBreaker`
+  that declares `onFallback`, `ignoreException` or `recordException`, because those shapes
+  answered `no-match` for a 503 or a refused connection. Retry-only clauses are unchanged. To
+  answer a declared 404 as `no-match`, catch `upstream.http` with an `onWhen` status test; the
+  `registry-lookup-v1` host protocol answers its declared Problem Details 404 as `unresolved`.
+- A coequal Evidence fixture run reports every failing case, each with value-free details of
+  the `expectedFacts` it missed, instead of stopping at the first. `evidencectl check` locates a
+  Source that maps no complete route input alternative at `sources.<id>.inputs`.
+- BREAKING: an Adapter project binding renames `asyncCompletion.mode` to
+  `asyncCompletion.type`, with no alias. A project that still writes `mode` is refused at that
+  key, naming `type`. Keep the value (`status-link` or `bounded-wait`).
+
+{/* Evidence: products/evidence/CHANGELOG.md, Unreleased, the target connection, source
+    failure, coequal fixture run and source-route-input-alternative entries;
+    products/adapter/CHANGELOG.md, Unreleased, the asyncCompletion entry;
+    crates/registry-adapter-engine/src/route.rs,
+    evidence_routes_refuse_handlers_that_turn_source_failures_into_answers. */}
 
 - BREAKING: Proposal lifecycle event subjects use `proposalReference` and
   `proposalRevision`. Record event subjects keep `recordReference` and `recordRevision`.

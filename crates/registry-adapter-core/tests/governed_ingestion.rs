@@ -250,7 +250,8 @@ fn a_defective_job_refuses_beside_a_clean_workspace() {
     );
 
     let mut tight = job();
-    tight.profile.maximum_response_bytes = 1_048_575;
+    tight.profile.maximum_response_bytes =
+        registry_platform_yaml::BoundedU64::new(1_048_575).expect("inside its range");
     let findings = check_job(&tight, &pack);
     assert!(
         codes(&findings).contains(&"adapter.job.profile-endpoint-bound".to_string()),

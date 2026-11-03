@@ -65,6 +65,22 @@ or reaches back before the cursor date (a server that ignored
 date: the cursor would outgrow its 2 KiB bound (CONCEPT 17.2), and a
 page of nothing but seen rows would never move on.
 
+Each of these refusals ends the pass with the `script` error class and
+leaves the position unchanged, so the next pass fails the same way
+until the cause is gone; the pack has no runtime setting that skips
+it. Recovery for the 40-id refusal, which a bulk server-side import
+can cause: the pack carries the limit, so a deployment that must read
+past such a date forks the pack (raise the `40` in
+`scripts/shape-page.rhai`, within the cursor's 2 KiB bound) and
+repins its digest in the job and project files.
+
+The `odk-repeats` offset is a position in a list that can change. A
+deleted repeat row, or a parent submission that arrives late with an
+older submission date, shifts the rows after it by one, and the shifted
+row is skipped until the next rescan (`edits: rescan`, every 3600
+seconds) re-reads it. An added row only re-reads one row, which
+`key-deduplicated` absorbs.
+
 Deployment scoping: the project, form, and entity set a job reads are
 deployment values. A source route carries no template parameters, so
 the runtime config binds the `odk-odata` endpoint's `baseUrl` to the

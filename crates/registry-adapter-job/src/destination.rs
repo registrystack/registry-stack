@@ -122,30 +122,36 @@ pub struct DeliverableItem {
     pub projected: Value,
 }
 
+/// What a signed destination commits to before an item leaves the process.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DeliveryIdentity {
+    /// The digest of the selected public governed receiver authority and
+    /// configuration.
+    pub receiver: [u8; 32],
+    /// The SHA-256 digest of the exact canonical event envelope bytes the
+    /// destination would send. `Err(())` means the current item cannot form
+    /// canonical bytes and therefore must never recover an uncertain pending
+    /// attempt by changing or discarding its frozen body.
+    pub canonical_body: Result<[u8; 32], ()>,
+}
+
 /// The destination seam. Implementations are shared across passes, so
 /// they are `Send + Sync`; the futures they return are `Send` so a pass
 /// runs under the operator's own runtime. The boxed futures keep the
 /// trait an object, which the pass takes as `&dyn JobDestination`, so a
 /// destination is a configuration choice and not a compile-time one.
 pub trait JobDestination: Send + Sync {
-    /// The digest of the selected public governed receiver authority and
-    /// configuration, when the destination sends signed Coordinator events.
-    /// The pass freezes it before calling [`Self::deliver`], so a pending
-    /// retry cannot silently move the same event identity to another target.
-    fn receiver_identity(&self, _job: &JobIdentity, _item: &DeliverableItem) -> Option<[u8; 32]> {
-        None
-    }
-
-    /// The SHA-256 digest of the exact canonical event envelope bytes a
-    /// signed destination would send. `None` means this destination does not
-    /// use the signed-event fence. `Some(Err(()))` means the current item
-    /// cannot form canonical bytes and therefore must never recover an
-    /// uncertain pending attempt by changing or discarding its frozen body.
-    fn canonical_body_identity(
+    /// The identities a signed destination freezes before it sends, or `None`
+    /// when this destination does not use the signed-event fence. The pass
+    /// freezes both before calling [`Self::deliver`], so a pending retry
+    /// cannot silently move the same event identity to another target or
+    /// change the event bytes. The two identities travel together because a
+    /// receiver identity without a body identity could never be checked.
+    fn delivery_identity(
         &self,
         _job: &JobIdentity,
         _item: &DeliverableItem,
-    ) -> Option<Result<[u8; 32], ()>> {
+    ) -> Option<DeliveryIdentity> {
         None
     }
 

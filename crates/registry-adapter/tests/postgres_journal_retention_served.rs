@@ -158,6 +158,26 @@ impl SplitRoles {
     /// Serve the read-only GovStack project, migrating as the test
     /// database's own role and serving as `runtime_url`'s role.
     fn spawn(upstream_url: &str, migration_url: &str, runtime_url: &str) -> Self {
+        Self::spawn_project(
+            upstream_url,
+            migration_url,
+            runtime_url,
+            &Served::govstack_project(),
+            &Served::govstack_profile(),
+            "tracker",
+        )
+    }
+
+    /// Serve `project` under `profile`, its one source endpoint `endpoint`
+    /// pointed at `upstream_url`, with split migration and runtime roles.
+    fn spawn_project(
+        upstream_url: &str,
+        migration_url: &str,
+        runtime_url: &str,
+        project: &Path,
+        profile: &Path,
+        endpoint: &str,
+    ) -> Self {
         let key = access_token_test_key(jsonwebtoken::Algorithm::ES256);
         let jwks = jwks_from_private_jwk(&key).to_string();
         let port = TcpListener::bind("127.0.0.1:0")
@@ -174,7 +194,7 @@ impl SplitRoles {
 kind: AdapterRuntimeConfig
 id: govstack-split-roles
 endpoints:
-  - endpoint: tracker
+  - endpoint: {endpoint}
     baseUrl: {upstream_url}
     credential:
       type: basic
@@ -206,18 +226,17 @@ cursorKeyRef: secret:env/TEST_CURSOR_KEY
             ),
         )
         .expect("write the runtime config");
-        let project = Served::govstack_project();
         let mut command = Command::new(env!("CARGO_BIN_EXE_adapter"));
         command
             .args(["serve", "--runtime-config"])
             .arg(&runtime)
             .arg("--project")
-            .arg(&project);
+            .arg(project);
         if !project.join("pack.yaml").exists() {
             command.arg("--pack").arg(Served::example_pack());
         }
         if !project.join("profile.yaml").exists() {
-            command.arg("--profile").arg(Served::govstack_profile());
+            command.arg("--profile").arg(profile);
         }
         let child = command
             .env("TEST_UPSTREAM_USERNAME", USERNAME)
@@ -332,6 +351,122 @@ async fn a_runtime_role_without_delete_is_refused_and_insert_select_delete_serve
     let mut serving = SplitRoles::spawn(&upstream.url(""), &database, &runtime_url);
     serving.wait_until_listening();
     await_retention(&database).await;
+    drop(serving);
+    execute(
+        &database,
+        &format!("DROP OWNED BY {role}; DROP ROLE {role};"),
+    )
+    .await;
+}
+
+/// A fresh migrated schema and a runtime role holding only the journal
+/// grants every deployment needs.
+async fn journal_only_runtime_role(
+    upstream: &UpstreamDouble,
+    deployment: &str,
+) -> (String, String) {
+    let database = migrated_schema(upstream, &Served::govstack_project(), deployment).await;
+    let schema: String = connect(&database)
+        .await
+        .query_one("SELECT current_schema()", &[])
+        .await
+        .expect("read the migrated schema")
+        .get(0);
+    let role = format!("{schema}_runtime");
+    execute(
+        &database,
+        &format!(
+            "CREATE ROLE {role} LOGIN PASSWORD '{RUNTIME_PASSWORD}'; \
+             GRANT USAGE ON SCHEMA {schema} TO {role}; \
+             GRANT SELECT ON adapter_schema_migrations TO {role}; \
+             GRANT INSERT, SELECT, DELETE ON adapter_journal_events TO {role};"
+        ),
+    )
+    .await;
+    (database, role)
+}
+
+const WRITE_GRANTS: &str = "GRANT SELECT, INSERT, UPDATE, DELETE \
+     ON adapter_idempotency_entries, adapter_idempotency_resumes TO {role};";
+const RECOVERY_GRANTS: &str =
+    "GRANT SELECT, INSERT, UPDATE ON adapter_idempotency_async_artifacts TO {role}; \
+     GRANT SELECT, INSERT ON adapter_idempotency_resume_bindings TO {role};";
+
+#[tokio::test]
+async fn a_write_runtime_role_without_idempotency_grants_is_refused_by_name() {
+    let upstream = UpstreamDouble::start();
+    let (database, role) = journal_only_runtime_role(&upstream, "tracker-grants").await;
+    let runtime_url = as_role(&database, &role);
+    let spawn = || {
+        SplitRoles::spawn_project(
+            &upstream.url(""),
+            &database,
+            &runtime_url,
+            &Served::example_project(),
+            &Served::example_profile(),
+            "tracker",
+        )
+    };
+
+    let stderr = spawn().refusal();
+    assert!(
+        stderr.contains(
+            "the runtime role lacks SELECT, INSERT, UPDATE, DELETE on adapter_idempotency_entries"
+        ),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("SELECT, INSERT, UPDATE, DELETE on adapter_idempotency_resumes"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("adapter_idempotency_async_artifacts"),
+        "a synchronous write needs no artifact-fence grant: {stderr}"
+    );
+
+    execute(&database, &WRITE_GRANTS.replace("{role}", &role)).await;
+    let mut serving = spawn();
+    serving.wait_until_listening();
+    drop(serving);
+    execute(
+        &database,
+        &format!("DROP OWNED BY {role}; DROP ROLE {role};"),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn a_resumable_write_runtime_role_needs_the_recovery_grants_and_serves_on_first_run() {
+    let upstream = UpstreamDouble::start();
+    let (database, role) = journal_only_runtime_role(&upstream, "resume-grants").await;
+    execute(&database, &WRITE_GRANTS.replace("{role}", &role)).await;
+    let runtime_url = as_role(&database, &role);
+    let project = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/adapter/examples/facade-recovery");
+    let spawn = || {
+        SplitRoles::spawn_project(
+            &upstream.url(""),
+            &database,
+            &runtime_url,
+            &project,
+            &Served::example_profile(),
+            "reference",
+        )
+    };
+
+    let stderr = spawn().refusal();
+    assert!(
+        stderr.contains("SELECT, INSERT, UPDATE on adapter_idempotency_async_artifacts"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("SELECT, INSERT on adapter_idempotency_resume_bindings"),
+        "{stderr}"
+    );
+
+    execute(&database, &RECOVERY_GRANTS.replace("{role}", &role)).await;
+    let mut serving = spawn();
+    serving.wait_until_listening();
     drop(serving);
     execute(
         &database,

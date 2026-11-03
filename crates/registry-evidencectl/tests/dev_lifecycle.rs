@@ -514,7 +514,7 @@ fn sqlite_extract_dev_start_refuses_local_serving_by_name_in_both_formats() {
     );
     assert!(error.contains("does not bind SQLite extracts"), "{error}");
     assert!(
-        error.contains("evidence.yaml:/sources/record-status/type"),
+        error.contains("evidence.yaml:/sources/record-status/route"),
         "{error}"
     );
     assert!(error.contains("evidencectl test"), "{error}");
@@ -536,7 +536,7 @@ fn sqlite_extract_dev_start_refuses_local_serving_by_name_in_both_formats() {
     assert_eq!(diagnostic["code"], "evidence.dev.local-transport-refused");
     assert_eq!(
         diagnostic["path"],
-        "evidence.yaml:/sources/record-status/type"
+        "evidence.yaml:/sources/record-status/route"
     );
     assert!(diagnostic["message"]
         .as_str()
@@ -576,7 +576,7 @@ fn sqlite_extract_dev_start_refuses_local_serving_without_docker_on_the_path() {
     assert_eq!(diagnostic["code"], "evidence.dev.local-transport-refused");
     assert_eq!(
         diagnostic["path"],
-        "evidence.yaml:/sources/record-status/type"
+        "evidence.yaml:/sources/record-status/route"
     );
     assert!(diagnostic["message"]
         .as_str()
@@ -613,7 +613,7 @@ fn sqlite_extract_dev_start_refuses_local_serving_before_an_occupied_port() {
         "{error}"
     );
     assert!(
-        error.contains("evidence.yaml:/sources/record-status/type"),
+        error.contains("evidence.yaml:/sources/record-status/route"),
         "{error}"
     );
     assert!(!error.contains("evidence.dev.port-unavailable"), "{error}");

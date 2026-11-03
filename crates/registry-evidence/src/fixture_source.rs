@@ -15,10 +15,11 @@ use chrono::{DateTime, Utc};
 use registry_adapter_core::{Intercept, RecordedExchange};
 use registry_adapter_engine::{
     evidence::{
-        compile_evidence_pack_with_protocols, EvidenceAcquisitionIntent, EvidenceHookFuture,
-        EvidenceHostHooks, EvidenceLimits, EvidenceSendIntent,
+        compile_evidence_pack_with_protocols, EvidenceAcquisitionIntent, EvidenceExecutionError,
+        EvidenceHookFuture, EvidenceHostHooks, EvidenceLimits, EvidenceSendIntent,
     },
     replay::ReplayTranscript,
+    route::EvidenceHttpDiagnostic,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -113,6 +114,9 @@ pub struct FixtureRun {
     /// Data-operation attempts admitted before credential resolution. OAuth
     /// token requests are not Evidence data operations.
     pub data_operations: u64,
+    /// The endpoint and closed HTTP cause the engine retained when the route
+    /// failed on a response status, as the runtime reports it to operators.
+    pub http_cause: Option<(String, EvidenceHttpDiagnostic)>,
 }
 
 #[derive(Default)]
@@ -120,6 +124,7 @@ struct FixtureIntent {
     prepared_inputs: OnceLock<Vec<String>>,
     acquisition_started: AtomicBool,
     data_operations: AtomicU64,
+    http_cause: OnceLock<(String, EvidenceHttpDiagnostic)>,
 }
 
 impl EvidenceHostHooks for FixtureIntent {
@@ -204,6 +209,7 @@ impl OfflineSourceProgram {
             prepared_inputs: hooks.prepared_inputs.get().cloned(),
             acquisition_started: hooks.acquisition_started.load(Ordering::Acquire),
             data_operations: hooks.data_operations.load(Ordering::Relaxed),
+            http_cause: hooks.http_cause.get().cloned(),
         }
     }
 
@@ -256,13 +262,27 @@ impl OfflineSourceProgram {
                 )
                 .await
         } else {
-            program.begin_acquisition_at(hooks, observed_at).await
+            program
+                .begin_acquisition_at(hooks.clone(), observed_at)
+                .await
         }
         .map_err(|_| KernelError::SourceProtocol)?;
         let outcome = program
             .execute(&acquisition, inputs)
             .await
-            .map_err(|_| KernelError::SourceProtocol);
+            .map_err(|error| {
+                if let EvidenceExecutionError::Route(route) = &error {
+                    if let Some((endpoint, cause)) = route
+                        .evidence_diagnostic
+                        .as_ref()
+                        .and_then(|diagnostic| diagnostic.http_parts())
+                    {
+                        // One execution fails once, so the cell is empty here.
+                        let _ = hooks.http_cause.set((endpoint.to_owned(), cause));
+                    }
+                }
+                KernelError::SourceProtocol
+            });
         transcript
             .finish()
             .map_err(|_| KernelError::SourceProtocol)?;

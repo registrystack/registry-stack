@@ -53,8 +53,6 @@ const REQUIREMENT_REVISION_DOMAIN: &[u8] = b"registry.evidence.requirement-revis
 /// bundle file.
 const PROJECTION_PATH: &str = "evidence.yaml#requirement";
 const PROVIDER_PUBLICATION: &str = "publication";
-const SOURCE_AUTHORITY_PATH_REFUSAL: &str =
-    "an authority path that can activate a source does not supply every required route input";
 const ADAPTER_PACK_FORMAT: FormatSpec<'static> = FormatSpec {
     kind: ADAPTER_PACK_KIND,
     envelope: EnvelopeRule::ApiVersionKind {
@@ -739,8 +737,8 @@ impl Bundle {
         document.validate_for(target, &self.config)?;
         let mut effective = self.config.clone();
         effective.authority_profiles = document.access_profiles.clone();
-        validate_source_authority_paths(&effective, &self.source_packs)
-            .map_err(|_| crate::authority::AuthorityError::SourceRouteInputs)
+        source_authority_path_refusal(&effective, &self.source_packs)
+            .map_err(crate::authority::AuthorityError::SourceRouteInputs)
     }
 
     /// Bind exactly one activated target authority before initialization.
@@ -1395,13 +1393,22 @@ fn validate_source_authority_paths(
     config: &EvidenceConfig,
     source_packs: &BTreeMap<String, SourcePack>,
 ) -> Result<(), BundleError> {
+    source_authority_path_refusal(config, source_packs)
+        .map_err(|cause| invalid_artifact(cause).in_artifact(CONFIG_FILE))
+}
+
+/// The fixed, value-free rule an authority path breaks, if any.
+fn source_authority_path_refusal(
+    config: &EvidenceConfig,
+    source_packs: &BTreeMap<String, SourcePack>,
+) -> Result<(), &'static str> {
     let contracts = source_packs
         .iter()
         .map(|(source_id, pack)| (source_id.clone(), pack.input_presence.clone()))
         .collect::<BTreeMap<_, _>>();
     config
         .validate_source_authority_paths(&contracts)
-        .map_err(|_| invalid_artifact(SOURCE_AUTHORITY_PATH_REFUSAL).in_artifact(CONFIG_FILE))
+        .map_err(|error| error.fault().cause())
 }
 
 fn load_source_pack(
@@ -1479,7 +1486,7 @@ fn load_source_pack(
     let input_schema: JsonValue = serde_json::from_slice(input_bytes)
         .map_err(|_| invalid_artifact("the selected route input schema is not JSON"))?;
     check_schema(EvidenceSchemaKind::Inputs, input_schema.clone()).map_err(|_| {
-        invalid_artifact("the selected route input schema is not a bounded closed schema")
+        invalid_artifact("the selected route input schema must be a closed JSON Schema 2020-12 object: the root and every object set `additionalProperties: false`, references stay inside the document, and the document stays within its size bounds")
     })?;
     let input_presence = source_input_presence_contract(&input_schema)?;
     validate_source_input_mapping(source, &input_schema, &input_presence)?;
@@ -1490,7 +1497,7 @@ fn load_source_pack(
     let facts_schema: JsonValue = serde_json::from_slice(facts_bytes)
         .map_err(|_| invalid_artifact("the selected route facts schema is not JSON"))?;
     check_schema(EvidenceSchemaKind::Facts, facts_schema.clone()).map_err(|_| {
-        invalid_artifact("the selected route facts schema is not a bounded closed schema")
+        invalid_artifact("the selected route facts schema must be a closed JSON Schema 2020-12 object: the root and every object set `additionalProperties: false`, references stay inside the document, and the document stays within its size bounds")
     })?;
     let projected_facts = files.get(source.fact_schema().as_str()).ok_or_else(|| {
         unknown_file(
@@ -2731,7 +2738,7 @@ fn load_fact_schemas(
             let schema: JsonValue = serde_json::from_slice(bytes)
                 .map_err(|_| invalid_artifact("facts schema is not JSON").in_artifact(&path))?;
             check_schema(EvidenceSchemaKind::Facts, schema.clone()).map_err(|_| {
-                invalid_artifact("facts schema is not a bounded closed schema").in_artifact(&path)
+                invalid_artifact("facts schema must be a closed JSON Schema 2020-12 object: the root and every object set `additionalProperties: false`, references stay inside the document, and the document stays within its size bounds").in_artifact(&path)
             })?;
             schema
         } else {
@@ -5573,7 +5580,7 @@ mod tests {
 
     /// Fact merging, request-property provenance, and route execution bounds
     /// are compiled by Adapter. The bundle still refuses an input or fact
-    /// contract that is not a bounded closed Evidence schema before that
+    /// contract that is not a closed Evidence schema before that
     /// reviewed route can execute.
     #[test]
     fn a_source_pack_route_requires_bounded_closed_evidence_schemas() {
@@ -5595,12 +5602,12 @@ mod tests {
             (
                 open.clone(),
                 closed_facts.clone(),
-                "the selected route input schema is not a bounded closed schema",
+                "the selected route input schema must be a closed JSON Schema 2020-12 object: the root and every object set `additionalProperties: false`, references stay inside the document, and the document stays within its size bounds",
             ),
             (
                 closed_inputs.clone(),
                 open.clone(),
-                "the selected route facts schema is not a bounded closed schema",
+                "the selected route facts schema must be a closed JSON Schema 2020-12 object: the root and every object set `additionalProperties: false`, references stay inside the document, and the document stays within its size bounds",
             ),
         ] {
             let (source, files) = captured_pack_source_with_schemas(inputs, facts);
@@ -6200,8 +6207,9 @@ sourceConnections:
         assert_eq!((source.line, source.column), (Some(appended_line), Some(1)));
     }
 
-    /// The retired capability member is neither read nor projected by the
-    /// closed runtime configuration.
+    /// The retired capability member is never projected by the closed runtime
+    /// configuration. For one release an empty list is still read, and
+    /// ignored, so a 0.44 runtime file loads; any capability is refused.
     #[test]
     fn retired_acquisition_capabilities_are_refused_and_project_to_nothing() {
         let config = RuntimeConfig::parse_yaml(OPERATOR_RUNTIME_DOCUMENT.as_bytes())
@@ -6212,14 +6220,30 @@ sourceConnections:
                 .contains("acquisitionCapabilities"),
             "an absent capability list must serialize to nothing at all"
         );
-        for declaration in [
-            "acquisitionCapabilities: []\n",
-            "acquisitionCapabilities: [source-batch]\n",
-        ] {
-            let candidate = format!("{OPERATOR_RUNTIME_DOCUMENT}{declaration}");
-            RuntimeConfig::parse_yaml(candidate.as_bytes())
-                .expect_err("the runtime reader refuses a retired capability declaration");
-        }
+        let empty = format!("{OPERATOR_RUNTIME_DOCUMENT}acquisitionCapabilities: []\n");
+        let tolerated = RuntimeConfig::parse_yaml(empty.as_bytes())
+            .expect("an empty retired capability list is accepted for one release");
+        assert_eq!(
+            tolerated, config,
+            "an empty capability list changes nothing"
+        );
+        let refused =
+            format!("{OPERATOR_RUNTIME_DOCUMENT}acquisitionCapabilities: [source-batch]\n");
+        let error = RuntimeConfig::parse_yaml(refused.as_bytes())
+            .expect_err("the runtime reader refuses a retired capability declaration");
+        let ConfigError::Refused(report) = error else {
+            panic!("the reader did not refuse the capability: {error}");
+        };
+        let diagnostic = &report.diagnostics()[0];
+        assert_eq!(diagnostic.code, "config.invalid-value");
+        assert_eq!(diagnostic.path, "/acquisitionCapabilities");
+        assert!(
+            diagnostic
+                .suggested_action
+                .contains("Delete `acquisitionCapabilities`"),
+            "the refusal names the fix: {}",
+            diagnostic.suggested_action
+        );
     }
 
     const STATEMENT_PATH: &str = "queries/adult-status.sql";

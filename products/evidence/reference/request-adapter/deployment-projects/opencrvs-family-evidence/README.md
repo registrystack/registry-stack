@@ -17,11 +17,12 @@ listener settings are in `runtime.yaml`. Deployments review and mount both
 inputs read-only, but staging and production may use different runtime files
 without changing evidence semantics.
 
-Both Sources select the maintained `opencrvs-events` Adapter pack, through
+Both Sources select the `opencrvs-events` example Adapter pack, through
 `evidence-birth-date` or `evidence-birth-parents`. Each binding maps only the
 already authorized subject or child tracking ID to the route's `trackingId`
 input. The digest-pinned copy under `bundle/adapter-packs/` is byte-for-byte the
-pack maintained under `products/adapter/packs/opencrvs-events/`.
+example pack under `products/adapter/packs/opencrvs-events/`. A deployment
+publishes its own pack; see [Your own pack](#your-own-pack).
 
 The Evidence routes reuse the facade's registered-event query construction.
 Their projection, pinned provider schemas and closed lookup results retain the
@@ -44,7 +45,8 @@ in local contract fixtures.
 Replace the separate `.example` OIDC, OpenCRVS authorization, and OpenCRVS
 Event Search hosts and every `urn:gov:example:*` identifier. Confirm the exact
 client capability or scope assigned by that deployment. In the family source,
-replace these illustrative declaration field identifiers:
+replace these illustrative declaration field identifiers in your own pack (see
+[Your own pack](#your-own-pack)):
 
 ```text
 mother.personReference
@@ -82,6 +84,24 @@ The portable concepts say `registered parent`. Rename them to `legal parent`
 only when the jurisdiction explicitly governs the configured record fields and
 matching rule as proof of legal parentage. Registered parent, biological
 parent, guardian, and current parental responsibility are not interchangeable.
+
+## Your own pack
+
+The field identifiers above are constants in the example pack's
+`scripts/evidence.rhai` and provider schema; the bundle has no setting that
+changes them. This is deliberate: pack constants are digest-covered, so a
+bundle author cannot widen the provider query without a pack review. The
+consequence is that each deployment publishes its own pack. To do that:
+
+1. Copy `products/adapter/packs/opencrvs-events/` into your own
+   `EvidenceProject` and give the copy a new pack `id`.
+2. Replace the declaration field identifiers in `scripts/evidence.rhai` and the
+   pinned provider schema with your country configuration's, and update the
+   matching sanitized fixtures.
+3. Run `evidencectl check`, `evidencectl test` and `evidencectl package` as in
+   [the authoring workflow](../CONFIG.md#authoring-and-production-build-workflow).
+   Packaging captures your pack and pins its new digest, so you do not edit
+   the files under `bundle/adapter-packs/` or their digests by hand.
 
 ## Negative evidence
 

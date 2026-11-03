@@ -421,7 +421,7 @@ entries:
       - {file: crates/registry-evidence/tests/lookup_problem_protocol.rs, name: exact_problem_is_data_free_for_get_and_post_with_optional_host_attribution}
       - {file: crates/registry-evidence/tests/lookup_problem_protocol.rs, name: malformed_or_mismatched_problems_cannot_become_unavailable_information}
       - {file: crates/registry-evidence/tests/lookup_problem_protocol.rs, name: ordinary_success_remains_json_and_malformed_success_cannot_run_provider_scripts}
-      - {file: crates/registry-adapter-engine/src/host_protocol/problem.rs, name: exact_problem_requires_one_canonical_content_type_header}
+      - {file: crates/registry-adapter-engine/src/host_protocol/problem.rs, name: exact_problem_requires_one_problem_content_type_header}
   - id: sec-script-operation-exhaustion
     tests: [{file: crates/registry-evidence/src/rhai_runtime.rs, name: operation_exhaustion_terminates_a_hostile_script_with_a_value_free_error}]
   - id: sec-reserved-header-aliases-closed

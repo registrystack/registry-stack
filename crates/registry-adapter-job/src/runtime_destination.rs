@@ -86,11 +86,13 @@ pub async fn activate_destination<'a>(
     runtime: &JobRuntimeConfig,
     resolver: &SecretResolver,
 ) -> Result<Box<dyn DestinationSeam + 'a>, String> {
-    require_compiled_destination(&program.job.destination).map_err(str::to_string)?;
+    require_compiled_destination(&program.job.destination).map_err(not_compiled_message)?;
     let bindings = load_runtime_bindings(runtime)?;
     match &program.job.destination {
         JobDestination::DirectBreg { binding, .. } => {
-            let configured = bindings.get(binding).ok_or_else(missing_binding)?;
+            let configured = bindings
+                .get(binding)
+                .ok_or_else(|| missing_binding(binding))?;
             #[cfg(feature = "direct-breg")]
             {
                 activate_direct(program, configured, &runtime.core, resolver).await
@@ -102,7 +104,9 @@ pub async fn activate_destination<'a>(
             }
         }
         JobDestination::SignedCoordinatorEvent { binding, .. } => {
-            let configured = bindings.get(binding).ok_or_else(missing_binding)?;
+            let configured = bindings
+                .get(binding)
+                .ok_or_else(|| missing_binding(binding))?;
             #[cfg(feature = "signed-coordinator-event")]
             {
                 activate_signed(program, configured, &runtime.core, resolver)
@@ -123,7 +127,7 @@ pub fn check_destination_runtime(
     job: &AdapterJob,
     runtime: &JobRuntimeConfig,
 ) -> Result<(), String> {
-    require_compiled_destination(&job.destination).map_err(str::to_string)?;
+    require_compiled_destination(&job.destination).map_err(not_compiled_message)?;
     let bindings = load_runtime_bindings(runtime)?;
     let (binding, expected) = match &job.destination {
         JobDestination::DirectBreg { binding, .. } => (binding, "direct-breg"),
@@ -131,7 +135,9 @@ pub fn check_destination_runtime(
             (binding, "signed-coordinator-event")
         }
     };
-    let configured = bindings.get(binding).ok_or_else(missing_binding)?;
+    let configured = bindings
+        .get(binding)
+        .ok_or_else(|| missing_binding(binding))?;
     let actual = match configured {
         RuntimeDestinationBinding::DirectBreg { .. } => "direct-breg",
         RuntimeDestinationBinding::SignedCoordinatorEvent { .. } => "signed-coordinator-event",
@@ -155,8 +161,21 @@ fn load_runtime_bindings(
     Ok(bindings)
 }
 
-fn missing_binding() -> String {
-    "the job's destination binding is absent from runtime destinations".to_string()
+fn missing_binding(binding: &LocalId) -> String {
+    format!(
+        "the job's destination binding `{binding}` is not in the runtime `destinations` block; add `destinations.{binding}` or change the job's `destination.binding`"
+    )
+}
+
+/// The refusal text for a destination whose release feature is absent: the
+/// code stays first for scripts, the sentence names the fix.
+fn not_compiled_message(code: &str) -> String {
+    let feature = if code.contains("signed-coordinator-event") {
+        "signed-coordinator-event"
+    } else {
+        "direct-breg"
+    };
+    format!("{code}: this adapter-job build lacks the `{feature}` feature; use a build that includes it or change the job's destination type")
 }
 
 #[cfg(feature = "direct-breg")]
@@ -175,6 +194,7 @@ async fn activate_direct<'a>(
     use registry_platform_httputil::FetchUrlPolicy;
 
     let JobDestination::DirectBreg {
+        binding,
         access_profile,
         action,
         mode,
@@ -239,7 +259,7 @@ async fn activate_direct<'a>(
     let connector = Arc::new(
         BregConnector::connect(connector_config)
             .await
-            .map_err(|_| "the direct BReg destination could not bind metadata".to_string())?,
+            .map_err(|fault| direct_breg_bind_refusal(binding, &fault, action, access_profile))?,
     );
     let expected_mode = match mode {
         DirectBregMode::Immediate => "immediate",
@@ -249,6 +269,16 @@ async fn activate_direct<'a>(
         return Err(
             "the direct BReg Action mode does not match the authored destination".to_string(),
         );
+    }
+    if connector.action_requires_target_conditions() {
+        return Err(direct_breg_guarded_action_refusal(action));
+    }
+    if *mode == DirectBregMode::Proposal
+        && !connector.catalog().iter().any(|descriptor| {
+            descriptor.name == registry_adapter_connectors::breg::proposal::START.name
+        })
+    {
+        return Err(direct_breg_proposal_get_refusal(action, access_profile));
     }
     let mapper = move |item: &crate::destination::DeliverableItem| {
         let exchange = serde_json::json!({
@@ -278,6 +308,54 @@ async fn activate_direct<'a>(
         }
     };
     Ok(Box::new(DirectBregDestination::new(connector, mapper)))
+}
+
+/// One direct BReg bind failure as its closed code, the field to check,
+/// and the fix. The Action and profile are authored selectors, not secrets.
+#[cfg(feature = "direct-breg")]
+fn direct_breg_bind_refusal(
+    binding: &LocalId,
+    fault: &registry_adapter_connectors::operation::ConnectorFault,
+    action: &str,
+    profile: &str,
+) -> String {
+    use registry_adapter_connectors::breg::TOKEN_UNAVAILABLE;
+    use registry_adapter_connectors::operation::ConnectorFault;
+    match fault {
+        ConnectorFault::AuthorityAbsent => format!(
+            "adapter.job.breg-action-not-granted: BReg does not disclose Action `{action}` to access profile `{profile}`; check the job's action and accessProfile, and grant the Action to that profile in BReg"
+        ),
+        ConnectorFault::Native { code: Some(code) } if code.starts_with("transport.") => {
+            format!("adapter.job.breg-unreachable: BReg did not answer the metadata read; check `destinations.{binding}` baseUrl and dataTlsTrustProfile, and that BReg is running")
+        }
+        ConnectorFault::Native { code: Some(code) }
+            if code == TOKEN_UNAVAILABLE || code == "authentication.refused" =>
+        {
+            format!("adapter.job.breg-credential-refused: no bearer credential BReg accepts was obtained; check `destinations.{binding}` tokenEndpoint, clientId, privateKeyRef, scopes and resource, and that BReg trusts the issuer")
+        }
+        _ => format!(
+            "adapter.job.breg-metadata-refused: BReg's metadata could not be read under access profile `{profile}`; check that `destinations.{binding}` baseUrl names a BReg deployment of a compatible version"
+        ),
+    }
+}
+
+/// An Action that declares target-condition keys: its request depends on a
+/// conditions read that its own application changes, so a lost response
+/// cannot be recovered by sending the same request again.
+#[cfg(feature = "direct-breg")]
+fn direct_breg_guarded_action_refusal(action: &str) -> String {
+    format!(
+        "adapter.job.breg-action-guarded: Action `{action}` declares target-condition keys, so a lost response cannot be recovered on the direct path; use the signed-coordinator-event destination, which resolves the target, or an Action without target-condition keys"
+    )
+}
+
+/// A Proposal-mode Action whose profile lacks the Proposal get grant: the
+/// job cannot read a started draft back to submit it.
+#[cfg(feature = "direct-breg")]
+fn direct_breg_proposal_get_refusal(action: &str, profile: &str) -> String {
+    format!(
+        "adapter.job.breg-proposal-get-not-granted: BReg does not grant Proposal get for Action `{action}` to access profile `{profile}`; grant Proposal get and submit to that profile in BReg"
+    )
 }
 
 #[cfg(feature = "signed-coordinator-event")]
@@ -425,6 +503,61 @@ fn tls_endpoint(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Each bind failure names its own closed code, the authored or
+    /// runtime field to check, and the fix.
+    #[cfg(feature = "direct-breg")]
+    #[test]
+    fn a_direct_breg_bind_failure_names_its_cause_and_fix() {
+        use registry_adapter_connectors::breg::TOKEN_UNAVAILABLE;
+        use registry_adapter_connectors::operation::ConnectorFault;
+        let native = |code: &str| ConnectorFault::Native {
+            code: Some(code.to_owned()),
+        };
+        let cases = [
+            (
+                ConnectorFault::AuthorityAbsent,
+                "adapter.job.breg-action-not-granted: BReg does not disclose Action `register-household` to access profile `writer`",
+            ),
+            (native("transport.connect"), "adapter.job.breg-unreachable: "),
+            (native("transport.timeout"), "adapter.job.breg-unreachable: "),
+            (
+                native(TOKEN_UNAVAILABLE),
+                "adapter.job.breg-credential-refused: ",
+            ),
+            (
+                native("authentication.refused"),
+                "adapter.job.breg-credential-refused: ",
+            ),
+            (
+                ConnectorFault::Native { code: None },
+                "adapter.job.breg-metadata-refused: ",
+            ),
+            (
+                ConnectorFault::InvalidInput,
+                "adapter.job.breg-metadata-refused: ",
+            ),
+        ];
+        for (fault, start) in cases {
+            let binding = LocalId::new("household-registry").expect("a local id");
+            let message =
+                direct_breg_bind_refusal(&binding, &fault, "register-household", "writer");
+            assert!(message.starts_with(start), "{fault:?}: {message}");
+        }
+        let guarded = direct_breg_guarded_action_refusal("update-household");
+        assert!(
+            guarded.starts_with(
+                "adapter.job.breg-action-guarded: Action `update-household` declares target-condition keys"
+            ),
+            "{guarded}"
+        );
+        assert!(guarded.contains("signed-coordinator-event"), "{guarded}");
+        assert!(
+            direct_breg_proposal_get_refusal("register-household", "writer").starts_with(
+                "adapter.job.breg-proposal-get-not-granted: BReg does not grant Proposal get for Action `register-household` to access profile `writer`"
+            )
+        );
+    }
     use std::os::unix::fs::PermissionsExt as _;
     use std::path::Path;
 
@@ -467,6 +600,70 @@ mod tests {
                 "dataSchema": "urn:example:schema:case-submitted:v1"
             }))),
             Err("adapter.job.destination-signed-coordinator-event-not-compiled")
+        );
+    }
+
+    #[test]
+    fn a_missing_binding_names_the_binding_and_both_fixes() {
+        let binding = LocalId::new("household-registry").expect("a local id");
+        let message = missing_binding(&binding);
+        assert!(message.contains("`household-registry`"), "{message}");
+        assert!(
+            message.contains("`destinations.household-registry`"),
+            "{message}"
+        );
+        assert!(message.contains("destination.binding"), "{message}");
+    }
+
+    #[test]
+    fn the_not_compiled_refusal_keeps_the_code_and_names_the_feature() {
+        let message = not_compiled_message("adapter.job.destination-direct-breg-not-compiled");
+        assert!(
+            message.starts_with("adapter.job.destination-direct-breg-not-compiled: "),
+            "{message}"
+        );
+        assert!(message.contains("`direct-breg` feature"), "{message}");
+        let message =
+            not_compiled_message("adapter.job.destination-signed-coordinator-event-not-compiled");
+        assert!(
+            message.contains("`signed-coordinator-event` feature"),
+            "{message}"
+        );
+    }
+
+    #[cfg(feature = "direct-breg")]
+    #[test]
+    fn a_failed_bind_names_the_binding_a_closed_cause_and_the_next_step() {
+        use registry_adapter_connectors::operation::ConnectorFault;
+        let binding = LocalId::new("household-registry").expect("a local id");
+        let connect = direct_breg_bind_refusal(
+            &binding,
+            &ConnectorFault::Native {
+                code: Some("transport.connect".to_string()),
+            },
+            "register-household",
+            "writer",
+        );
+        assert!(
+            connect.starts_with("adapter.job.breg-unreachable: "),
+            "{connect}"
+        );
+        assert!(
+            connect.contains("`destinations.household-registry`"),
+            "{connect}"
+        );
+        assert!(!connect.contains("bind metadata"), "{connect}");
+        let token = direct_breg_bind_refusal(
+            &binding,
+            &ConnectorFault::Native {
+                code: Some("authentication.refused".to_string()),
+            },
+            "register-household",
+            "writer",
+        );
+        assert!(
+            token.contains("`destinations.household-registry` tokenEndpoint"),
+            "{token}"
         );
     }
 

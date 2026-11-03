@@ -878,6 +878,19 @@ fn normalized_project_source_and_target_connection_drive_bare_mock_serve_create_
         String::from_utf8_lossy(&initialized.stderr)
     );
     let project = temporary.path().join("project");
+
+    // The synthetic starter pins no OpenAPI document, so a bare mock has no
+    // contract to serve until a Source is drafted from one.
+    let unpinned = run(&project, &["source", "mock", "serve", "."]);
+    assert!(!unpinned.status.success());
+    let refusal = String::from_utf8_lossy(&unpinned.stderr);
+    assert!(
+        refusal.contains("no Source pack pins an OpenAPI document")
+            && refusal.contains("evidencectl source suggest")
+            && refusal.contains("--openapi"),
+        "{refusal}"
+    );
+
     let address = reserve_loopback();
     let origin = format!("http://{address}");
     let target_path = project.join("local-target.yaml");
@@ -888,8 +901,10 @@ fn normalized_project_source_and_target_connection_drive_bare_mock_serve_create_
         .expect("normalized local target document")
         .to_json_value();
     target["connections"]["people"] = serde_json::json!({
-        "origin": origin,
-        "authentication": {"type": "none"}
+        "endpoints": {"people": {
+            "origin": origin,
+            "authentication": {"type": "none"}
+        }}
     });
     fs::write(
         &target_path,
@@ -930,7 +945,7 @@ fn normalized_project_source_and_target_connection_drive_bare_mock_serve_create_
         "people"
     );
     assert_eq!(
-        target["connections"]["people"]["origin"],
+        target["connections"]["people"]["endpoints"]["people"]["origin"],
         Value::String(origin.clone())
     );
 

@@ -51,7 +51,10 @@
 //! content changed (the new digest starts the new bytes from zero, while
 //! decoded rows retain their business-key identity), and otherwise starts at the first candidate after the
 //! resume name. A cursor past every candidate, or a last candidate
-//! finished, ends the scan: `next` is absent. `maxMessagesPerPoll` is
+//! finished, ends a finite scan: `next` is absent. An ongoing scan keeps
+//! its place at the tail instead: the last file's page and every empty
+//! read after it carry a cursor, so the next pass reads only files that
+//! sort after it. `maxMessagesPerPoll` is
 //! accepted for Camel parity and windows the candidates after the
 //! cursor, but because one read emits at most one file and a consumed
 //! resume file never spends the window, any cap of one or more reaches
@@ -118,6 +121,8 @@ pub(crate) enum FileReadFault {
     DecoderSyntax,
     /// The changed read lock did not settle inside its timeout.
     LockTimeout,
+    /// The decode was abandoned at the poll deadline.
+    DecodeTimeout,
 }
 
 /// One candidate: its directory-flat name. It is opened only relative
@@ -141,6 +146,7 @@ pub(crate) async fn read_page(
     bounds: &ReadBounds,
     cursor: Option<&Value>,
     decoder: &Decoder,
+    ongoing: bool,
 ) -> Result<SourceReadPage, FileReadFault> {
     let (resume_name, resume_digest, resume_offset) = cursor_parts(cursor);
     let scan_config = config.clone();
@@ -224,9 +230,10 @@ pub(crate) async fn read_page(
             bounds.clone(),
         )
         .await?;
-        let body = if page.complete && index + 1 == base.len() {
+        let body = if page.complete && index + 1 == base.len() && !ongoing {
             // The file is finished and no candidate stands after it: the
-            // scan of this directory is complete.
+            // scan of this directory is complete. An ongoing scan keeps
+            // its place instead, so the next pass starts after this file.
             json!({ "items": page.items })
         } else {
             json!({
@@ -243,9 +250,14 @@ pub(crate) async fn read_page(
             malformed_lines: page.malformed_lines,
         });
     }
-    // No candidate stands beyond the cursor: the scan is complete.
+    // No candidate stands beyond the cursor: a finite scan is complete.
+    // An ongoing scan has caught up and keeps the cursor it was given.
+    let body = match cursor {
+        Some(cursor) if ongoing => json!({ "items": [], "next": cursor }),
+        _ => json!({ "items": [] }),
+    };
     Ok(SourceReadPage {
-        body: json!({ "items": [] }),
+        body,
         malformed_lines: 0,
     })
 }
@@ -287,15 +299,19 @@ pub(crate) async fn decode_page(
     .await
     .map_err(|_| FileReadFault::DirectoryUnreadable)?;
     cancellation_guard.armed = false;
-    result.map_err(|fault| match fault {
+    result.map_err(file_fault)
+}
+
+fn file_fault(fault: DecoderFault) -> FileReadFault {
+    match fault {
         DecoderFault::Row(index) => FileReadFault::Row(index),
         DecoderFault::KeyMissing(index) => FileReadFault::KeyMissing(index),
         DecoderFault::KeyInvalid(index) => FileReadFault::KeyInvalid(index),
         DecoderFault::KeyDuplicate(index) => FileReadFault::KeyDuplicate(index),
         DecoderFault::Bound => FileReadFault::RowBound,
         DecoderFault::Syntax => FileReadFault::DecoderSyntax,
-        DecoderFault::Cancelled => FileReadFault::LockTimeout,
-    })
+        DecoderFault::Cancelled => FileReadFault::DecodeTimeout,
+    }
 }
 
 /// Dropping the async read, including when its poll deadline expires, asks the
@@ -357,14 +373,13 @@ fn candidates(
     let mut base: Vec<Candidate> = Vec::new();
     for entry in entries {
         let entry = entry.map_err(|_| FileReadFault::DirectoryUnreadable)?;
-        let Some(name) = entry.file_name().to_str().ok() else {
-            return Err(FileReadFault::NameUnreadable);
-        };
+        // The name filters run on a lossy rendering first, so a name the
+        // source would not select stays invisible whatever bytes it
+        // carries; only a selected name can refuse the read below.
+        let lossy_name = entry.file_name().to_string_lossy();
+        let name: &str = &lossy_name;
         if name == "." || name == ".." {
             continue;
-        }
-        if name.contains('/') || name.contains('\\') || name == "." || name == ".." {
-            return Err(FileReadFault::Traversal);
         }
         // Hidden files never enter the candidate chain: Camel's default
         // posture skips dot names before any include or done-file
@@ -372,13 +387,16 @@ fn candidates(
         if name.starts_with('.') {
             continue;
         }
-        // The name filters run before the file-type check, so only a
-        // name the source would select can refuse the read as a symlink;
-        // an unselected name stays invisible whatever it is.
         if let Some(include) = &config.include {
             if !include.matches(name) {
                 continue;
             }
+        }
+        if entry.file_name().to_str().is_err() {
+            return Err(FileReadFault::NameUnreadable);
+        }
+        if name.contains('/') || name.contains('\\') {
+            return Err(FileReadFault::Traversal);
         }
         if config
             .done_file_name
@@ -466,10 +484,10 @@ fn read_opened_file(file: std::fs::File, bounds: &ReadBounds) -> Result<ReadFile
     let mut bytes = Vec::new();
     let reader = std::io::BufReader::new(file);
     reader
-        .take(bounds.maximum_file_bytes.saturating_add(1))
+        .take(bounds.maximum_file_bytes.get().saturating_add(1))
         .read_to_end(&mut bytes)
         .map_err(|_| FileReadFault::DirectoryUnreadable)?;
-    if bytes.len() as u64 > bounds.maximum_file_bytes {
+    if bytes.len() as u64 > bounds.maximum_file_bytes.get() {
         return Err(FileReadFault::Oversize);
     }
     let digest = registry_platform_config::sha256_uri(&bytes);
@@ -527,6 +545,62 @@ mod tests {
             "namespace": "exports"
         }))
         .expect("the file source")
+    }
+
+    fn read_bounds() -> ReadBounds {
+        ReadBounds {
+            maximum_file_bytes: 1024.try_into().expect("inside its range"),
+            maximum_row_bytes: 256.try_into().expect("inside its range"),
+            maximum_field_bytes: 128.try_into().expect("inside its range"),
+            maximum_rows_per_page: 10.try_into().expect("inside its range"),
+        }
+    }
+
+    async fn read_raw(directory: &std::path::Path, cursor: Option<&Value>, ongoing: bool) -> Value {
+        read_page(
+            &source(directory),
+            &read_bounds(),
+            cursor,
+            &Decoder::Raw,
+            ongoing,
+        )
+        .await
+        .expect("the read")
+        .body
+    }
+
+    /// An ongoing scan holds its place at the tail: the last file's page
+    /// carries a cursor, so the next pass starts after it instead of at
+    /// the first retained file. A finite scan ends there.
+    #[tokio::test]
+    async fn an_ongoing_scan_keeps_a_cursor_at_the_tail_and_a_finite_scan_ends() {
+        let base = tempfile::tempdir().expect("the base directory");
+        std::fs::write(base.path().join("a.bin"), "a").expect("the candidate");
+
+        let finite = read_raw(base.path(), None, false).await;
+        assert!(finite.get("next").is_none(), "finite ends: {finite}");
+
+        let ongoing = read_raw(base.path(), None, true).await;
+        assert_eq!(ongoing["next"]["resumeAfter"], "a.bin", "{ongoing}");
+    }
+
+    /// From the tail cursor an ongoing scan reads only files that arrived
+    /// after it, and an empty read echoes the cursor so the position is
+    /// kept rather than cleared.
+    #[tokio::test]
+    async fn an_ongoing_scan_resumes_after_the_tail_and_keeps_its_place_when_caught_up() {
+        let base = tempfile::tempdir().expect("the base directory");
+        std::fs::write(base.path().join("a.bin"), "a").expect("the first file");
+        let tail = read_raw(base.path(), None, true).await["next"].clone();
+
+        let caught_up = read_raw(base.path(), Some(&tail), true).await;
+        assert_eq!(caught_up["items"], serde_json::json!([]), "{caught_up}");
+        assert_eq!(caught_up["next"], tail, "{caught_up}");
+
+        std::fs::write(base.path().join("b.bin"), "b").expect("the new file");
+        let fresh = read_raw(base.path(), Some(&tail), true).await;
+        assert_eq!(fresh["items"].as_array().map(Vec::len), Some(1), "{fresh}");
+        assert_eq!(fresh["next"]["resumeAfter"], "b.bin", "{fresh}");
     }
 
     /// The flat glob matches Camel's simple Ant patterns over plain
@@ -610,6 +684,77 @@ mod tests {
         assert!(open_candidate(selected.directory.as_ref(), "data.bin").is_ok());
     }
 
+    /// An abandoned decode is a deadline, not a read-lock problem.
+    #[test]
+    fn a_cancelled_decode_is_not_a_lock_timeout() {
+        assert!(matches!(
+            file_fault(DecoderFault::Cancelled),
+            FileReadFault::DecodeTimeout
+        ));
+    }
+
+    fn csv_source(directory: &std::path::Path) -> FileSourceConfig {
+        serde_json::from_value(serde_json::json!({
+            "directory": directory,
+            "namespace": "exports",
+            "include": "*.csv"
+        }))
+        .expect("the file source")
+    }
+
+    /// A name the include filter does not select never refuses the read,
+    /// whatever bytes it carries; a legacy-code-page name on an SMB share
+    /// must not block the `*.csv` files beside it.
+    #[cfg(unix)]
+    #[test]
+    fn a_backslash_name_the_include_filter_skips_does_not_block_the_read() {
+        let base = tempfile::tempdir().expect("the base directory");
+        std::fs::write(base.path().join("data.csv"), b"a").expect("the candidate");
+        std::fs::write(base.path().join("old\\notes.txt"), b"x").expect("the stray name");
+
+        let selected = candidates(&csv_source(base.path()), None).expect("the scan");
+        assert_eq!(selected.base.len(), 1);
+        assert_eq!(selected.base[0].name, "data.csv");
+    }
+
+    /// A selected name that leaves the directory still refuses.
+    #[cfg(unix)]
+    #[test]
+    fn a_backslash_name_the_include_filter_selects_still_refuses() {
+        let base = tempfile::tempdir().expect("the base directory");
+        std::fs::write(base.path().join("a\\b.csv"), b"x").expect("the stray name");
+
+        assert!(matches!(
+            candidates(&csv_source(base.path()), None),
+            Err(FileReadFault::Traversal)
+        ));
+    }
+
+    /// A non-UTF-8 name the include filter skips does not block the read;
+    /// one the filter selects refuses, since no item key can carry it.
+    /// Filesystems that refuse such names (APFS) cannot run this case.
+    #[cfg(unix)]
+    #[test]
+    fn a_non_utf8_name_blocks_the_read_only_when_the_include_filter_selects_it() {
+        use std::os::unix::ffi::OsStrExt as _;
+
+        let base = tempfile::tempdir().expect("the base directory");
+        std::fs::write(base.path().join("data.csv"), b"a").expect("the candidate");
+        let skipped = std::ffi::OsStr::from_bytes(b"caf\xe9.txt");
+        if std::fs::write(base.path().join(skipped), b"x").is_err() {
+            return;
+        }
+        let selected = candidates(&csv_source(base.path()), None).expect("the scan");
+        assert_eq!(selected.base.len(), 1);
+
+        let selected_name = std::ffi::OsStr::from_bytes(b"caf\xe9.csv");
+        std::fs::write(base.path().join(selected_name), b"x").expect("the selected stray name");
+        assert!(matches!(
+            candidates(&csv_source(base.path()), None),
+            Err(FileReadFault::NameUnreadable)
+        ));
+    }
+
     /// Candidate discovery retains only the resume point, its successor,
     /// and one lookahead, even when the directory is larger.
     #[test]
@@ -646,10 +791,10 @@ mod tests {
         });
         let reader = std::fs::File::from(std::os::fd::OwnedFd::from(reader));
         let bounds = ReadBounds {
-            maximum_file_bytes: 1024,
-            maximum_row_bytes: 1024,
-            maximum_field_bytes: 1024,
-            maximum_rows_per_page: 1,
+            maximum_file_bytes: 1024.try_into().expect("inside its range"),
+            maximum_row_bytes: 1024.try_into().expect("inside its range"),
+            maximum_field_bytes: 1024.try_into().expect("inside its range"),
+            maximum_rows_per_page: 1.try_into().expect("inside its range"),
         };
 
         let result =
@@ -669,10 +814,10 @@ mod tests {
             bytes.extend_from_slice(format!("person-{row},{row}\n").as_bytes());
         }
         let bounds = ReadBounds {
-            maximum_file_bytes: 1_073_741_824,
-            maximum_row_bytes: 1024,
-            maximum_field_bytes: 1024,
-            maximum_rows_per_page: 1,
+            maximum_file_bytes: 1_073_741_824.try_into().expect("inside its range"),
+            maximum_row_bytes: 1024.try_into().expect("inside its range"),
+            maximum_field_bytes: 1024.try_into().expect("inside its range"),
+            maximum_rows_per_page: 1.try_into().expect("inside its range"),
         };
 
         let result = tokio::time::timeout(

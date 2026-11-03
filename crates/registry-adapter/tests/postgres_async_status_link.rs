@@ -91,6 +91,7 @@ const UNCERTAINTY_ROUTE: &str = r#"
 struct RawResponse {
     status: u16,
     request_id: String,
+    retry_after: Option<String>,
     body: Vec<u8>,
 }
 
@@ -241,9 +242,18 @@ fn post(served: &Served, token: &str, key: &str, body: &Value) -> RawResponse {
                 .then(|| value.trim().to_owned())
         })
         .expect("facade response request id");
+    let retry_after = head
+        .lines()
+        .skip(1)
+        .filter_map(|line| line.split_once(':'))
+        .find_map(|(name, value)| {
+            name.eq_ignore_ascii_case("retry-after")
+                .then(|| value.trim().to_owned())
+        });
     RawResponse {
         status,
         request_id,
+        retry_after,
         body: response[head_end + 4..].to_vec(),
     }
 }
@@ -323,6 +333,11 @@ async fn a_linear_write_restarts_at_the_first_unfinished_native_effect() {
         409,
         "{}",
         String::from_utf8_lossy(&failed.body)
+    );
+    assert_eq!(
+        failed.retry_after.as_deref(),
+        Some("5"),
+        "resumable progress is retryable"
     );
     assert_eq!(
         upstream
@@ -445,6 +460,11 @@ async fn a_linear_write_retries_an_uncertain_step_without_repeating_prior_effect
         "{}",
         String::from_utf8_lossy(&uncertain.body)
     );
+    assert_eq!(
+        uncertain.retry_after.as_deref(),
+        Some("5"),
+        "an unfinished resumable step is retryable"
+    );
     let recovered = post(&served, &token, "linear-resume-2", &linear_request_body());
     assert_eq!(
         recovered.status,
@@ -502,6 +522,11 @@ async fn a_public_facade_recovery_starter_runs_the_live_retry_contract() {
         409,
         "{}",
         String::from_utf8_lossy(&failed.body)
+    );
+    assert_eq!(
+        failed.retry_after.as_deref(),
+        Some("5"),
+        "resumable progress is retryable"
     );
 
     let recovered = post(&served, &token, key, &request);
@@ -569,6 +594,11 @@ async fn a_linear_write_can_resume_after_a_malformed_final_source_result_is_repa
         "{}",
         String::from_utf8_lossy(&malformed.body)
     );
+    assert_eq!(
+        malformed.retry_after.as_deref(),
+        Some("5"),
+        "a repaired resumable write is retryable"
+    );
     let recovered = post(&served, &token, "linear-resume-3", &linear_request_body());
     assert_eq!(
         recovered.status,
@@ -623,6 +653,11 @@ async fn a_linear_write_keeps_a_source_202_at_the_same_unfinished_step() {
         409,
         "{}",
         String::from_utf8_lossy(&accepted_upstream.body)
+    );
+    assert_eq!(
+        accepted_upstream.retry_after.as_deref(),
+        Some("5"),
+        "a source 202 keeps the resumable step retryable"
     );
     let recovered = post(&served, &token, "linear-resume-4", &linear_request_body());
     assert_eq!(
@@ -725,6 +760,95 @@ async fn status_get_returns_exact_pending_then_commits_and_replays_terminal_proo
 }
 
 #[tokio::test]
+async fn a_status_get_that_loses_the_lease_to_a_terminal_commit_replays_the_stored_answer() {
+    let upstream = UpstreamDouble::start();
+    upstream.respond_with(vec![Response::json(
+        202,
+        &json!({"operationId": "source-race"}).to_string(),
+    )]);
+    let directory = tempfile::tempdir().expect("an asynchronous project directory");
+    async_project(directory.path());
+    let served = Arc::new(Served::start_with_project(&upstream.url(""), directory.path()).await);
+    let token = served.token("records.write");
+    let accepted = post(&served, &token, "async-create-race", &request_body());
+    assert_eq!(accepted.status, 202);
+    let accepted_json: Value = serde_json::from_slice(&accepted.body).expect("accepted JSON");
+    let status_path = accepted_json["statusLink"]
+        .as_str()
+        .expect("status link")
+        .to_owned();
+
+    // A concurrent poller holds the accepted row: the GET reads `accepted`
+    // and then waits on the row for its lease.
+    let (poller, connection) = tokio_postgres::connect(&served.database, tokio_postgres::NoTls)
+        .await
+        .expect("connect the concurrent poller");
+    tokio::spawn(connection);
+    poller
+        .batch_execute(
+            "BEGIN; SELECT 1 FROM adapter_idempotency_entries \
+             WHERE state = 'accepted' FOR UPDATE",
+        )
+        .await
+        .expect("the concurrent poller holds the accepted row");
+    let lookup = {
+        let served = Arc::clone(&served);
+        let token = token.clone();
+        tokio::task::spawn_blocking(move || served.get(&status_path, Some(&token)))
+    };
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let waiting: i64 = poller
+            .query_one(
+                "SELECT count(*) FROM pg_stat_activity \
+                 WHERE pg_backend_pid() = ANY(pg_blocking_pids(pid))",
+                &[],
+            )
+            .await
+            .expect("read the lock waiters")
+            .get(0);
+        if waiting > 0 {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the status GET never waited for the poll lease"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    // The concurrent poller proves the outcome and commits it, releasing
+    // the lease the GET was waiting for.
+    let terminal = json!({"data": {"marker": "committed-by-the-other-poller"}});
+    poller
+        .batch_execute(&format!(
+            "UPDATE adapter_idempotency_entries \
+             SET state = 'completed', terminal_at = now(), \
+                 expires_at = now() + interval '1 hour', response_status = 201, \
+                 response_content_type = 'application/json', response_body = '{terminal}'::bytea, \
+                 async_source_id = NULL, async_recovery_id = NULL, \
+                 async_poll_lease_id = NULL, async_poll_lease_until = NULL \
+             WHERE state = 'accepted'; COMMIT"
+        ))
+        .await
+        .expect("the concurrent poller commits the terminal answer");
+
+    let answer = lookup.await.expect("the status GET completes");
+    assert_eq!(
+        answer.0, 201,
+        "a valid link whose terminal answer is stored is replayed, not hidden: {}",
+        answer.2
+    );
+    assert_eq!(answer.2, terminal);
+    assert!(answer.1.contains(&accepted.request_id));
+    assert_eq!(
+        upstream.request_count(),
+        1,
+        "the losing GET polls nothing at the source"
+    );
+}
+
+#[tokio::test]
 async fn status_get_reauthenticates_the_original_caller_and_current_write_scope() {
     let upstream = UpstreamDouble::start();
     upstream.respond_with(vec![
@@ -813,7 +937,7 @@ async fn a_status_link_survives_restart_under_the_same_artifact_and_caller() {
 }
 
 #[tokio::test]
-async fn a_successor_artifact_without_async_bindings_cannot_bypass_live_recovery_custody() {
+async fn a_synchronous_successor_starts_and_answers_the_older_artifacts_status_link_as_unknown() {
     let upstream = UpstreamDouble::start();
     upstream.respond_with(vec![Response::json(
         202,
@@ -835,26 +959,87 @@ async fn a_successor_artifact_without_async_bindings_cannot_bypass_live_recovery
         &request_body(),
     );
     assert_eq!(accepted.status, 202);
+    let accepted_json: Value = serde_json::from_slice(&accepted.body).expect("accepted JSON");
+    let status_path = accepted_json["statusLink"]
+        .as_str()
+        .expect("status link")
+        .to_owned();
     let database = first.database.clone();
     drop(first);
 
-    let successor = tempfile::tempdir().expect("a synchronous successor project directory");
-    served_harness::copy_example_project(successor.path());
+    // A successor that declares no asynchronous or resumable write mints no
+    // recovery authority, so it starts over the older artifact's live row.
+    let successor_directory =
+        tempfile::tempdir().expect("a synchronous successor project directory");
+    served_harness::copy_example_project(successor_directory.path());
+    let successor = Served::start_for_deployment(
+        &upstream.url(""),
+        successor_directory.path(),
+        "async-artifact-fence",
+        Some(&database),
+    )
+    .await;
+    let unknown = successor.get(&status_path, Some(&successor.token("records.write")));
+    assert_eq!(unknown.0, 404, "{}", unknown.2);
+    assert_eq!(
+        upstream.request_count(),
+        1,
+        "the successor never polls or repeats the older artifact's effect"
+    );
+}
+
+#[tokio::test]
+async fn an_asynchronous_hotfix_is_refused_while_the_older_artifacts_write_is_unfinished() {
+    let upstream = UpstreamDouble::start();
+    upstream.respond_with(vec![Response::json(
+        202,
+        &json!({"operationId": "source-hotfix-fence"}).to_string(),
+    )]);
+    let directory = tempfile::tempdir().expect("an asynchronous project directory");
+    async_project(directory.path());
+    let first = Served::start_for_deployment(
+        &upstream.url(""),
+        directory.path(),
+        "async-hotfix-fence",
+        None,
+    )
+    .await;
+    let accepted = post(
+        &first,
+        &first.token("records.write"),
+        "async-hotfix-fence",
+        &request_body(),
+    );
+    assert_eq!(accepted.status, 202);
+    let database = first.database.clone();
+    drop(first);
+
+    // Any byte change makes a new artifact; the accepted row still carries
+    // the older artifact's recovery authority.
+    let project_path = directory.path().join("project.yaml");
+    let mut project = std::fs::read_to_string(&project_path).expect("read the project");
+    project.push_str("# hotfix\n");
+    std::fs::write(&project_path, project).expect("write the hotfix project");
     let refusal = Served::refusal_for_deployment(
         &upstream.url(""),
-        successor.path(),
-        "async-artifact-fence",
+        directory.path(),
+        "async-hotfix-fence",
         &database,
     )
     .await;
     assert!(
         refusal.contains("asynchronous artifact custody"),
-        "the successor must fail at the durable artifact fence: {refusal}"
+        "the hotfix must fail at the durable artifact fence: {refusal}"
+    );
+    assert!(
+        refusal.contains("1 unfinished asynchronous or resumable write")
+            && refusal.contains("redeploy the previous artifact bytes"),
+        "the refusal tells the operator what blocks it and what to do: {refusal}"
     );
     assert_eq!(
         upstream.request_count(),
         1,
-        "the refused successor starts no source effect"
+        "the refused hotfix starts no source effect"
     );
 }
 
@@ -883,6 +1068,7 @@ async fn an_expired_status_link_is_hidden_and_the_write_key_stays_spent() {
         "{}",
         String::from_utf8_lossy(&retry.body)
     );
+    assert_eq!(retry.retry_after, None, "an expired key is spent");
     assert_eq!(
         upstream.request_count(),
         1,
@@ -936,6 +1122,15 @@ async fn an_acceptance_journal_fault_commits_neither_202_nor_false_acceptance() 
         .execute_sql("ALTER TABLE adapter_journal_broken RENAME TO adapter_journal_events")
         .await;
 
+    // Age the effect mark past the exchange deadline: the attempt that
+    // marked it has certainly ended, so nothing can still answer the key.
+    served
+        .execute_sql(
+            "UPDATE adapter_idempotency_entries \
+             SET effect_started_at = effect_started_at - interval '61 seconds' \
+             WHERE state = 'effect_started'",
+        )
+        .await;
     let retry = post(
         &served,
         &token,
@@ -947,6 +1142,10 @@ async fn an_acceptance_journal_fault_commits_neither_202_nor_false_acceptance() 
         409,
         "{}",
         String::from_utf8_lossy(&retry.body)
+    );
+    assert_eq!(
+        retry.retry_after, None,
+        "an unproved effect without recovery is spent"
     );
     assert_eq!(
         upstream.request_count(),
@@ -1185,6 +1384,11 @@ async fn an_uncertain_effect_stays_spent_until_a_later_safe_check_proves_it_term
         String::from_utf8_lossy(&unknown.body)
     );
     assert_eq!(
+        unknown.retry_after.as_deref(),
+        Some("5"),
+        "a later safe check can still prove the uncertain effect"
+    );
+    assert_eq!(
         upstream.request_count(),
         2,
         "the mutation plus one safe check"
@@ -1239,6 +1443,19 @@ async fn an_unknown_effect_without_source_recovery_stays_spent_and_never_repeats
         "{}",
         String::from_utf8_lossy(&unknown.body)
     );
+    assert_eq!(
+        unknown.retry_after, None,
+        "no recovery is declared, so the key is spent"
+    );
+    // Age the effect mark past the exchange deadline: the attempt that
+    // marked it has certainly ended, so nothing can still answer the key.
+    served
+        .execute_sql(
+            "UPDATE adapter_idempotency_entries \
+             SET effect_started_at = effect_started_at - interval '61 seconds' \
+             WHERE state = 'effect_started'",
+        )
+        .await;
     let retry = post(&served, &token, "async-unknown-no-recovery", &request);
     assert_eq!(
         retry.status,
@@ -1246,6 +1463,7 @@ async fn an_unknown_effect_without_source_recovery_stays_spent_and_never_repeats
         "{}",
         String::from_utf8_lossy(&retry.body)
     );
+    assert_eq!(retry.retry_after, None, "the spent key stays spent");
     assert_eq!(
         upstream.request_count(),
         1,

@@ -893,6 +893,21 @@ a fresh synthetic assertion before cutover. The rehearsal refuses to start
 from an earlier release, as the floor below describes. A current-source lifecycle run proves the normalized model,
 not compatibility with an earlier release.
 
+`v0.45.0` is a migration boundary for the retired Evidence Source form. The
+`v0.44.0` `evidencectl init --transport sqlite-extract` writes a tagged
+`sqlite-extract` Source, and the `v0.45.0` reader refuses it with
+`evidence.project.source-acquisition-retired`, so no upgrade of a `v0.44.0`
+project by re-packaging exists to rehearse. A rehearsal from a release before
+`v0.45.0` to a source at or after it therefore omits the Evidence leg and says
+why in its report and output; naming `--product evidence` for it is refused
+with the same reason. Messaging still runs. Operators migrate an Evidence
+project by hand, following the
+[migration steps](../products/evidence/reference/authoring-projects/CONFIG.md#migrate-a-retired-source-project),
+and verify a fresh synthetic assertion before cutover. The release notes for
+`v0.45.0` name the boundary and link those steps. Once `FORWARD_PATH_FLOOR`
+reaches `v0.45.0`, delete `EVIDENCE_SOURCE_PACK_BOUNDARY` and its skip from
+`rehearse-upgrade.py`; a unit test fails until then.
+
 For retained Evidence and Messaging contracts before 1.0, a release reads only
 the state its immediate predecessor wrote and promises a forward state path
 from that predecessor alone. An operator on an older release upgrades one

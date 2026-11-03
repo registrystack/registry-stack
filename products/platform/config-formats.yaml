@@ -4026,7 +4026,7 @@ formats:
   - id: adapter/job
     product: adapter
     title: Registry Adapter ingestion job
-    files: [job.yaml]
+    files: [job.yaml, job.*.yaml]
     syntax: yaml
     audience: authored
     stability: experimental
@@ -4245,6 +4245,8 @@ formats:
         whenOmitted: refused
       - pointer: /sources/rabbitmq/*/deadLetterRoutingKey
         whenOmitted: refused
+      - pointer: /sources/rabbitmq/*/declareTopology
+        whenOmitted: closed
       - pointer: /sources/rabbitmq/*/namespace
         whenOmitted: refused
       - pointer: /sources/rabbitmq/*/maximumOutstandingDeliveries

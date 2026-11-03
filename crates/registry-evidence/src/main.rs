@@ -1,7 +1,7 @@
 //! Evidence Version 1 operator CLI and serving process.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fmt, fs,
     fs::File,
     io::{Read as _, Write as _},
@@ -24,7 +24,9 @@ use registry_evidence::{
         AssuranceProfile, BurstShortfall, ConceptForm, ConfigError, EvidenceConfig,
         RequirementConfig, SelectorInput,
     },
-    fixture_source::{compile_sources, fixture_acquisition, FixtureRun, OfflineSourceProgram},
+    fixture_source::{
+        compile_sources, fixture_acquisition, FixtureAcquisition, FixtureRun, OfflineSourceProgram,
+    },
     kernel::{
         EvidenceConstruction, EvidenceScope, KernelError, KernelOutcome, OfflineKernel,
         ValidatedValues, ValueProjection,
@@ -82,6 +84,13 @@ const ACTIVATION_AUDIT_REFUSED: &str =
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct CliError(&'static str);
+
+/// A fixture case `source` that holds a provider response, as the retired
+/// Source form wrote it, rather than a pack acquisition transcript.
+const FIXTURE_SOURCE_RETIRED: &str = "fixture case `source` holds a provider response, the retired Source form; record the pack's exact `intercepts` and `exchanges` instead (products/evidence/reference/authoring-projects/CONFIG.md#migrate-a-retired-source-project)";
+
+/// A fixture case `source` that is a malformed pack acquisition transcript.
+const FIXTURE_SOURCE_INVALID: &str = "fixture case `source` must contain only the pack's exact `intercepts` and `exchanges`; the transcript form is in step 5 of products/evidence/reference/authoring-projects/CONFIG.md#migrate-a-retired-source-project";
 
 impl fmt::Display for CliError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -423,10 +432,7 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
             // run, explained or not: the case, the fixed cause, and the value
             // classes each side of its comparison had reached, never a value.
             if let Err(error) = &summary {
-                trace.fail(error.0);
-                for failure in trace.case_failures() {
-                    eprintln!("{}", failure.render_line());
-                }
+                print_fixture_failures(&mut trace, error);
             }
             if explain {
                 match explain_format.unwrap_or_default() {
@@ -456,7 +462,8 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
             authority_document,
             json,
         } => {
-            let bundle = match Bundle::load(&bundle).map_err(deployment_load_error) {
+            let bundle_path = bundle;
+            let bundle = match Bundle::load(&bundle_path).map_err(deployment_load_error) {
                 Ok(bundle) => Arc::new(bundle),
                 Err(CommandError::Refused(report)) if json => {
                     let document = CheckReport {
@@ -475,6 +482,42 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
                         serde_json::to_string(&document)
                             .map_err(|_| CliError("bundle check report could not be written"))?
                     );
+                    return Ok(ExitCode::FAILURE);
+                }
+                Err(CommandError::Deployment(message, fault))
+                    if message == DEPLOYMENT_NOT_IMMUTABLE =>
+                {
+                    let path = bundle_path.display().to_string();
+                    let mut check = OfflineCheck::new(path.clone());
+                    check.push_artifact_fault(
+                        "evidence.bundle.not-immutable",
+                        &fault,
+                        &format!(
+                            "Make the bundle read-only for every user, for example `chmod -R a-w '{path}'`, or mount it read-only, then rerun bundle-check."
+                        ),
+                    );
+                    let report = check.report();
+                    if json {
+                        let document = CheckReport {
+                            ok: false,
+                            command: "bundle-check",
+                            status: "domain-refusal",
+                            api_version: CHECK_REPORT_API_VERSION,
+                            kind: CHECK_REPORT_KIND,
+                            package_digest: None,
+                            requirements: None,
+                            files_checked: report.files_checked().unwrap_or(1),
+                            diagnostics: report.to_json_value(),
+                        };
+                        println!(
+                            "{}",
+                            serde_json::to_string(&document).map_err(|_| CliError(
+                                "bundle check report could not be written"
+                            ))?
+                        );
+                    } else {
+                        eprint!("{}", report.render_human());
+                    }
                     return Ok(ExitCode::FAILURE);
                 }
                 Err(error) => return Err(error),
@@ -566,10 +609,7 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
             // evaluation prints, read by the fixture driver that owns this
             // seam: it parses the line rather than the trace.
             if let Err(error) = &summary {
-                trace.fail(error.0);
-                for failure in trace.case_failures() {
-                    eprintln!("{}", failure.render_line());
-                }
+                print_fixture_failures(&mut trace, error);
             }
             if explain {
                 match explain_format.unwrap_or_default() {
@@ -1779,6 +1819,23 @@ fn verification_error_class(error: VerificationError) -> CliError {
 /// document can never report a pass the command did not report. The failing
 /// case is the one the run's message was attributed to after the canaries were
 /// checked, so a failed document names it and a passed one carries nothing.
+/// Attribute a failed run's message and print one structured line per failing
+/// case, each followed by the indented detail lines of the stages it failed.
+///
+/// A coequal fixture run attributes each failing case as it settles it, so
+/// only a failure that no case owns still needs attributing here.
+fn print_fixture_failures(trace: &mut FixtureTrace, error: &CliError) {
+    if trace.case_failures().is_empty() {
+        trace.fail(error.0);
+    }
+    for failure in trace.case_failures() {
+        eprintln!("{}", failure.render_line());
+        for detail in &failure.details {
+            eprintln!("  {detail}");
+        }
+    }
+}
+
 fn fixture_report_json(
     trace: &FixtureTrace,
     summary: Result<&FixtureSummary, &CliError>,
@@ -1994,6 +2051,7 @@ async fn evaluate_fixture_with_fact_record(
 
     let mut summary = FixtureSummary::default();
     let mut successful_values = Vec::new();
+    let mut first_failure = None;
     for case in cases {
         let case = case
             .as_object()
@@ -2006,112 +2064,100 @@ async fn evaluate_fixture_with_fact_record(
             continue;
         }
         trace.begin_case(id);
-        if matched_facts.is_none()
-            && case.contains_key("expectedFacts")
-            && (case.contains_key("subjects") || !case.contains_key("source"))
-        {
-            return Err(CliError(
-                "fixture expected facts require an actual pack route match",
-            ));
-        }
-
-        if case.get("subjects").is_some() {
-            require_expected(case, "pre-source-selector-rejection")?;
-            match resolve_offline_fixture_subjects(
-                bundle,
-                requirement,
-                common,
-                case,
-                OFFLINE_AUDIENCE,
-            ) {
-                Ok(_) => return Err(CliError("fixture selector rejection did not occur")),
-                Err(OfflineFixtureError::Purpose) => {
-                    return Err(CliError(FIXTURE_PURPOSE_FAILURE));
-                }
-                Err(OfflineFixtureError::Audience) => {
-                    return Err(CliError(FIXTURE_AUDIENCE_FAILURE));
-                }
-                Err(OfflineFixtureError::Authorization(_)) => {}
-            }
-            trace.record(
-                Stage::Prepare,
-                StageStatus::Ok,
-                "the selector was refused before any source, as the case states",
-            );
-            trace.diagnose(
-                ResultClassification::new(ResultClass::SelectorRefused, Vec::new()),
-                ResultClassification::new(ResultClass::SelectorRefused, Vec::new()),
-                ReasonCode::SelectorRefused,
-                None,
-            );
-            summary.evaluated_cases += 1;
-            trace.pass_case();
-            continue;
-        }
-        if let Some(expected_roles) = case.get("expectedSubjectRoles") {
-            let expected_roles = expected_roles
-                .as_array()
-                .ok_or(CliError("fixture subject-role expectation is invalid"))?
-                .iter()
-                .map(|role| {
-                    role.as_str()
-                        .map(ToOwned::to_owned)
-                        .ok_or(CliError("fixture subject-role expectation is invalid"))
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            let actual_roles = resolve_offline_fixture_subjects(
-                bundle,
-                requirement,
-                common,
-                case,
-                OFFLINE_AUDIENCE,
-            )
-            .map_err(|error| fixture_failure(error, "fixture subjects did not resolve"))?;
-            if actual_roles != expected_roles {
-                return Err(CliError("fixture subject roles did not match"));
-            }
-        }
-        let observed_at =
-            fixture_observed_at(case, common, requirement.observation_timezone.as_deref())?;
-
-        if case.get("source").is_some() || case.get("sources").is_some() {
-            let resolved = resolve_offline_fixture_authorization(
-                bundle,
-                requirement,
-                common,
-                case,
-                OFFLINE_AUDIENCE,
-            )
-            .map_err(|error| fixture_failure(error, "fixture subjects did not resolve"))?;
-            let derivation_selectors =
-                fixture_selector_value(&resolved, &requirement.derivation.selector_inputs)?;
-            if let Some(expected) = case
-                .get("derivationSelectorInputs")
-                .or_else(|| common.and_then(|common| common.get("derivationSelectorInputs")))
+        // Each case settles on its own, so one failing case does not hide the
+        // next: the run reports every failing case and fails with the first.
+        let settled: Result<(), CliError> = async {
+            if matched_facts.is_none()
+                && case.contains_key("expectedFacts")
+                && (case.contains_key("subjects") || !case.contains_key("source"))
             {
-                if expected != &derivation_selectors {
-                    return Err(CliError(
-                        "fixture derivation selector projection did not match",
-                    ));
+                return Err(CliError(
+                    "fixture expected facts require an actual pack route match",
+                ));
+            }
+
+            if case.get("subjects").is_some() {
+                require_expected(case, "pre-source-selector-rejection")?;
+                match resolve_offline_fixture_subjects(
+                    bundle,
+                    requirement,
+                    common,
+                    case,
+                    OFFLINE_AUDIENCE,
+                ) {
+                    Ok(_) => return Err(CliError("fixture selector rejection did not occur")),
+                    Err(OfflineFixtureError::Purpose) => {
+                        return Err(CliError(FIXTURE_PURPOSE_FAILURE));
+                    }
+                    Err(OfflineFixtureError::Audience) => {
+                        return Err(CliError(FIXTURE_AUDIENCE_FAILURE));
+                    }
+                    Err(OfflineFixtureError::Authorization(_)) => {}
+                }
+                trace.record(
+                    Stage::Prepare,
+                    StageStatus::Ok,
+                    "the selector was refused before any source, as the case states",
+                );
+                trace.diagnose(
+                    ResultClassification::new(ResultClass::SelectorRefused, Vec::new()),
+                    ResultClassification::new(ResultClass::SelectorRefused, Vec::new()),
+                    ReasonCode::SelectorRefused,
+                    None,
+                );
+                summary.evaluated_cases += 1;
+                trace.pass_case();
+                return Ok(());
+            }
+            if let Some(expected_roles) = case.get("expectedSubjectRoles") {
+                let expected_roles = expected_roles
+                    .as_array()
+                    .ok_or(CliError("fixture subject-role expectation is invalid"))?
+                    .iter()
+                    .map(|role| {
+                        role.as_str()
+                            .map(ToOwned::to_owned)
+                            .ok_or(CliError("fixture subject-role expectation is invalid"))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let actual_roles = resolve_offline_fixture_subjects(
+                    bundle,
+                    requirement,
+                    common,
+                    case,
+                    OFFLINE_AUDIENCE,
+                )
+                .map_err(|error| fixture_failure(error, "fixture subjects did not resolve"))?;
+                if actual_roles != expected_roles {
+                    return Err(CliError("fixture subject roles did not match"));
                 }
             }
-            let (outcome, recorded_match) = if matched_facts.is_some() {
-                evaluate_fixture_acquisition_recording(
+            let observed_at =
+                fixture_observed_at(case, common, requirement.observation_timezone.as_deref())?;
+
+            if case.get("source").is_some() || case.get("sources").is_some() {
+                let resolved = resolve_offline_fixture_authorization(
                     bundle,
-                    kernel,
                     requirement,
+                    common,
                     case,
-                    FixtureSelectors {
-                        resolved: &resolved,
-                        derivation: &derivation_selectors,
-                    },
-                    observed_at,
-                    trace,
+                    OFFLINE_AUDIENCE,
                 )
-                .await?
-            } else {
-                (
-                    evaluate_fixture_acquisition(
+                .map_err(|error| fixture_failure(error, "fixture subjects did not resolve"))?;
+                let derivation_selectors =
+                    fixture_selector_value(&resolved, &requirement.derivation.selector_inputs)?;
+                if let Some(expected) = case
+                    .get("derivationSelectorInputs")
+                    .or_else(|| common.and_then(|common| common.get("derivationSelectorInputs")))
+                {
+                    if expected != &derivation_selectors {
+                        return Err(CliError(
+                            "fixture derivation selector projection did not match",
+                        ));
+                    }
+                }
+                let (outcome, recorded_match) = if matched_facts.is_some() {
+                    evaluate_fixture_acquisition_recording(
                         bundle,
                         kernel,
                         requirement,
@@ -2123,101 +2169,126 @@ async fn evaluate_fixture_with_fact_record(
                         observed_at,
                         trace,
                     )
-                    .await?,
-                    None,
-                )
-            };
-            let categories = category_diagnostic_catalog(bundle, requirement);
-            if let Some(values) = validate_case_outcome(case, outcome, trace, &categories)? {
-                successful_values.push(
-                    sign_and_verify_fixture_evidence(
-                        bundle,
-                        kernel,
-                        signer.as_ref(),
-                        requirement,
-                        &resolved,
-                        values,
-                        observed_at,
+                    .await?
+                } else {
+                    (
+                        evaluate_fixture_acquisition(
+                            bundle,
+                            kernel,
+                            requirement,
+                            case,
+                            FixtureSelectors {
+                                resolved: &resolved,
+                                derivation: &derivation_selectors,
+                            },
+                            observed_at,
+                            trace,
+                        )
+                        .await?,
+                        None,
                     )
-                    .await?,
+                };
+                let categories = category_diagnostic_catalog(bundle, requirement);
+                if let Some(values) = validate_case_outcome(case, outcome, trace, &categories)? {
+                    successful_values.push(
+                        sign_and_verify_fixture_evidence(
+                            bundle,
+                            kernel,
+                            signer.as_ref(),
+                            requirement,
+                            &resolved,
+                            values,
+                            observed_at,
+                        )
+                        .await?,
+                    );
+                    trace.record(
+                        Stage::Sign,
+                        StageStatus::Ok,
+                        if signer.is_some() {
+                            "the payload was constructed, signed, and verified offline"
+                        } else {
+                            "the payload was constructed; this seam does not sign"
+                        },
+                    );
+                }
+                if let (Some(records), Some(facts)) = (matched_facts.as_deref_mut(), recorded_match)
+                {
+                    records.insert(id.to_owned(), facts);
+                }
+                summary.evaluated_cases += 1;
+                trace.pass_case();
+                return Ok(());
+            }
+
+            if let Some(injected) = case.get("injectedDerivation") {
+                validate_injected_rejection(kernel, requirement, injected, trace)?;
+                require_expected(case, "output-gate-rejection")?;
+                trace.diagnose(
+                    ResultClassification::new(ResultClass::ServiceUnavailable, Vec::new()),
+                    ResultClassification::new(ResultClass::ServiceUnavailable, Vec::new()),
+                    ReasonCode::OutputRefused,
+                    None,
                 );
+                summary.evaluated_cases += 1;
+                trace.pass_case();
+                return Ok(());
+            }
+
+            if let Some(source_failure) = case.get("sourceFailure") {
+                validate_source_failure(case, source_failure)?;
                 trace.record(
-                    Stage::Sign,
-                    StageStatus::Ok,
-                    if signer.is_some() {
-                        "the payload was constructed, signed, and verified offline"
-                    } else {
-                        "the payload was constructed; this seam does not sign"
-                    },
+                    Stage::Acquire,
+                    StageStatus::Failed,
+                    format!(
+                        "the source failed as {}, which the case states",
+                        source_failure.as_str().unwrap_or("an unnamed category")
+                    ),
                 );
+                trace.diagnose(
+                    ResultClassification::new(ResultClass::SourceUnavailable, Vec::new()),
+                    ResultClassification::new(ResultClass::SourceUnavailable, Vec::new()),
+                    ReasonCode::SourceFailureFixture,
+                    None,
+                );
+                summary.evaluated_cases += 1;
+                trace.pass_case();
+                return Ok(());
             }
-            if let (Some(records), Some(facts)) = (matched_facts.as_deref_mut(), recorded_match) {
-                records.insert(id.to_owned(), facts);
+
+            if let Some(companion) = case.get("companionBundle") {
+                validate_companion_rejection(bundle, requirement, case, companion)?;
+                trace.record(
+                    Stage::Prepare,
+                    StageStatus::Ok,
+                    format!(
+                        "the companion bundle {:?} was refused, as the case states",
+                        companion.as_str().unwrap_or_default()
+                    ),
+                );
+                trace.diagnose(
+                    ResultClassification::new(ResultClass::BundleRefused, Vec::new()),
+                    ResultClassification::new(ResultClass::BundleRefused, Vec::new()),
+                    ReasonCode::CompanionBundleRefused,
+                    None,
+                );
+                summary.evaluated_cases += 1;
+                trace.pass_case();
+                return Ok(());
             }
-            summary.evaluated_cases += 1;
-            trace.pass_case();
-            continue;
-        }
 
-        if let Some(injected) = case.get("injectedDerivation") {
-            validate_injected_rejection(kernel, requirement, injected, trace)?;
-            require_expected(case, "output-gate-rejection")?;
-            trace.diagnose(
-                ResultClassification::new(ResultClass::ServiceUnavailable, Vec::new()),
-                ResultClassification::new(ResultClass::ServiceUnavailable, Vec::new()),
-                ReasonCode::OutputRefused,
-                None,
-            );
-            summary.evaluated_cases += 1;
-            trace.pass_case();
-            continue;
+            Err(CliError(
+                "fixture case has no closed Version 1 evaluation form",
+            ))
         }
-
-        if let Some(source_failure) = case.get("sourceFailure") {
-            validate_source_failure(case, source_failure)?;
-            trace.record(
-                Stage::Acquire,
-                StageStatus::Failed,
-                format!(
-                    "the source failed as {}, which the case states",
-                    source_failure.as_str().unwrap_or("an unnamed category")
-                ),
-            );
-            trace.diagnose(
-                ResultClassification::new(ResultClass::SourceUnavailable, Vec::new()),
-                ResultClassification::new(ResultClass::SourceUnavailable, Vec::new()),
-                ReasonCode::SourceFailureFixture,
-                None,
-            );
-            summary.evaluated_cases += 1;
-            trace.pass_case();
-            continue;
+        .await;
+        if let Err(error) = settled {
+            trace.fail(error.0);
+            first_failure.get_or_insert(error);
         }
-
-        if let Some(companion) = case.get("companionBundle") {
-            validate_companion_rejection(bundle, requirement, case, companion)?;
-            trace.record(
-                Stage::Prepare,
-                StageStatus::Ok,
-                format!(
-                    "the companion bundle {:?} was refused, as the case states",
-                    companion.as_str().unwrap_or_default()
-                ),
-            );
-            trace.diagnose(
-                ResultClassification::new(ResultClass::BundleRefused, Vec::new()),
-                ResultClassification::new(ResultClass::BundleRefused, Vec::new()),
-                ReasonCode::CompanionBundleRefused,
-                None,
-            );
-            summary.evaluated_cases += 1;
-            trace.pass_case();
-            continue;
-        }
-
-        return Err(CliError(
-            "fixture case has no closed Version 1 evaluation form",
-        ));
+    }
+    if let Some(error) = first_failure {
+        return Err(error);
     }
     validate_privacy_expectation(
         object,
@@ -2333,13 +2404,22 @@ async fn evaluate_fixture_acquisition_inner(
                 )
                 .is_err()
         {
-            return Err(CliError(
-                "fixture expected facts do not match the source schema",
-            ));
+            const MESSAGE: &str = "fixture expected facts do not match the source schema";
+            let schema = bundle
+                .config
+                .sources
+                .get(requirement.initial_source())
+                .and_then(|source| bundle.fact_schema(source.fact_schema()));
+            trace.record_with(
+                Stage::Expect,
+                StageStatus::Failed,
+                MESSAGE,
+                expected_facts_schema_details(schema, expected),
+            );
+            return Err(CliError(MESSAGE));
         }
     }
-    let acquisition = fixture_acquisition(recorded)
-        .map_err(|_| CliError("fixture source must contain exact intercepts and exchanges"))?;
+    let acquisition = fixture_case_acquisition(recorded)?;
     let run = plan
         .execute_observed(selectors.resolved, acquisition, None, observed_at)
         .await;
@@ -2347,17 +2427,33 @@ async fn evaluate_fixture_acquisition_inner(
     if let Some(expected) = expected_facts {
         match &run.outcome {
             Ok(LookupResult::Match(facts)) => {
-                if &Value::Object(facts.clone().into_iter().collect()) != expected {
-                    return Err(CliError(
-                        "fixture expected facts did not match actual pack facts",
-                    ));
+                let actual = facts.clone().into_iter().collect::<JsonMap<_, _>>();
+                if &Value::Object(actual.clone()) != expected {
+                    const MESSAGE: &str = "fixture expected facts did not match actual pack facts";
+                    trace.record_with(
+                        Stage::Expect,
+                        StageStatus::Failed,
+                        MESSAGE,
+                        expected_facts_mismatch_details(expected, &actual),
+                    );
+                    return Err(CliError(MESSAGE));
                 }
             }
-            Ok(LookupResult::NoMatch | LookupResult::Ambiguous | LookupResult::Unresolved)
-            | Err(_) => {
-                return Err(CliError(
-                    "fixture expected facts require the pack route to match",
-                ));
+            unmatched => {
+                const MESSAGE: &str = "fixture expected facts require the pack route to match";
+                // The kernel error messages are fixed and value-free, so the
+                // failure category is safe to name beside the lookup answers.
+                let answered = match unmatched {
+                    Ok(LookupResult::NoMatch) => "the pack route answered no-match".to_owned(),
+                    Ok(LookupResult::Ambiguous) => "the pack route answered ambiguous".to_owned(),
+                    Ok(LookupResult::Unresolved) => "the pack route answered unresolved".to_owned(),
+                    Ok(LookupResult::Match(_)) => "the pack route answered a match".to_owned(),
+                    Err(error) => {
+                        format!("the pack acquisition failed: {error}; see the acquire stage")
+                    }
+                };
+                trace.record_with(Stage::Expect, StageStatus::Failed, MESSAGE, vec![answered]);
+                return Err(CliError(MESSAGE));
             }
         }
     }
@@ -2402,6 +2498,137 @@ async fn evaluate_fixture_acquisition_inner(
     ))
 }
 
+/// Name, without values, why a case's `expectedFacts` failed the source schema:
+/// the keys the schema does not declare, the required keys the case omits, and
+/// the keys whose JSON type the schema does not allow.
+fn expected_facts_schema_details(schema: Option<&Value>, expected: &Value) -> Vec<String> {
+    let Some(expected) = expected.as_object() else {
+        return vec![format!(
+            "expectedFacts must be an object of facts, not a {}",
+            json_type(expected)
+        )];
+    };
+    let Some(schema) = schema.and_then(Value::as_object) else {
+        return Vec::new();
+    };
+    let properties = schema.get("properties").and_then(Value::as_object);
+    let undeclared = expected
+        .keys()
+        .filter(|key| properties.is_none_or(|properties| !properties.contains_key(*key)))
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let omitted = schema
+        .get("required")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter(|key| !expected.contains_key(*key))
+        .map(ToOwned::to_owned)
+        .collect::<BTreeSet<_>>();
+    let mistyped = expected
+        .iter()
+        .filter(|(key, value)| {
+            let declared = properties
+                .and_then(|properties| properties.get(*key))
+                .and_then(|property| property.get("type"));
+            let allowed = |name: &str| {
+                name == json_type(value)
+                    || (name == "integer" && (value.is_i64() || value.is_u64()))
+            };
+            match declared {
+                Some(Value::String(name)) => !allowed(name),
+                Some(Value::Array(names)) => !names.iter().filter_map(Value::as_str).any(allowed),
+                _ => false,
+            }
+        })
+        .map(|(key, _)| key.clone())
+        .collect::<BTreeSet<_>>();
+    let mut details = Vec::new();
+    for (label, names) in [
+        ("facts the source schema does not declare", undeclared),
+        (
+            "facts the source schema requires but the case omits",
+            omitted,
+        ),
+        (
+            "facts whose type the source schema does not allow",
+            mistyped,
+        ),
+    ] {
+        if !names.is_empty() {
+            let names = names.into_iter().collect::<Vec<_>>();
+            details.push(format!("{label}: {}", name_list(&names)));
+        }
+    }
+    if details.is_empty() {
+        details.push(
+            "every stated fact is declared and typed; check each value against its declared format, \
+             pattern, or enumeration"
+                .to_owned(),
+        );
+    }
+    details
+}
+
+/// Name, without values, how a case's `expectedFacts` differ from the facts
+/// the pack route produced.
+fn expected_facts_mismatch_details(
+    expected: &Value,
+    actual: &JsonMap<String, Value>,
+) -> Vec<String> {
+    let Some(expected) = expected.as_object() else {
+        return Vec::new();
+    };
+    let differ = expected
+        .iter()
+        .filter(|(key, value)| actual.get(*key).is_some_and(|actual| actual != *value))
+        .map(|(key, _)| key.clone())
+        .collect::<BTreeSet<_>>();
+    let missing = expected
+        .keys()
+        .filter(|key| !actual.contains_key(*key))
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let unexpected = actual
+        .keys()
+        .filter(|key| !expected.contains_key(*key))
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let mut details = Vec::new();
+    for (label, names) in [
+        ("facts that differ", differ),
+        (
+            "facts the case expects but the pack did not produce",
+            missing,
+        ),
+        (
+            "facts the pack produced but the case does not expect",
+            unexpected,
+        ),
+    ] {
+        if !names.is_empty() {
+            let names = names.into_iter().collect::<Vec<_>>();
+            details.push(format!("{label}: {}", name_list(&names)));
+        }
+    }
+    details
+}
+
+/// Read a case's `source` as an exact pack acquisition transcript.
+fn fixture_case_acquisition(recorded: &Value) -> Result<FixtureAcquisition, CliError> {
+    fixture_acquisition(recorded).map_err(|_| {
+        let transcript = recorded
+            .as_object()
+            .is_some_and(|map| map.contains_key("intercepts") || map.contains_key("exchanges"));
+        CliError(if transcript {
+            FIXTURE_SOURCE_INVALID
+        } else {
+            FIXTURE_SOURCE_RETIRED
+        })
+    })
+}
+
 /// Record the actual progress of one complete pack acquisition.
 ///
 /// Input names, Source identity and pack identity are governed configuration.
@@ -2426,8 +2653,9 @@ fn record_fixture_source_run(
             StageStatus::Ok,
             format!("authorized minimized Source inputs {}", name_list(inputs)),
             vec![format!(
-                "source {source_id:?}, pack {:?}, route {:?}",
-                source.pack.id, source.route
+                "source {source_id}, pack {}, route {}",
+                source.pack.id.as_str(),
+                source.route.as_str()
             )],
         ),
         None => trace.record(
@@ -2438,7 +2666,7 @@ fn record_fixture_source_run(
     }
     if run.acquisition_started {
         let failed = run.outcome.is_err();
-        trace.record(
+        trace.record_with(
             Stage::Acquire,
             if failed {
                 StageStatus::Failed
@@ -2456,9 +2684,40 @@ fn record_fixture_source_run(
                     run.data_operations
                 )
             },
+            run.http_cause
+                .iter()
+                .map(|(endpoint, cause)| http_cause_note(endpoint, *cause))
+                .collect(),
         );
     }
     Ok(())
+}
+
+/// Say which endpoint answered which status, in the words the runtime uses
+/// for its operator signal, and what an author changes next.
+fn http_cause_note(
+    endpoint: &str,
+    cause: registry_adapter_engine::route::EvidenceHttpDiagnostic,
+) -> String {
+    use registry_adapter_engine::route::EvidenceHttpDiagnostic;
+    let answer = match cause {
+        EvidenceHttpDiagnostic::Unauthorized => {
+            "answered 401; the source refused the credential"
+        }
+        EvidenceHttpDiagnostic::Forbidden => "answered 403; the source refused this access",
+        EvidenceHttpDiagnostic::RateLimited => "answered 429; the source limited the request rate",
+        EvidenceHttpDiagnostic::ServerError => "answered a 5xx server error",
+        EvidenceHttpDiagnostic::Verification => {
+            "answered a response its host protocol could not verify"
+        }
+        EvidenceHttpDiagnostic::UndeclaredNotFound => {
+            "answered 404 with an undeclared shape; declare the not-found answer in the pack, or correct the recorded response"
+        }
+        EvidenceHttpDiagnostic::DeclaredNotFoundMismatch => {
+            "answered 404 that is not the declared `unresolvedProblem`; record that exact Problem, or correct the declaration"
+        }
+    };
+    format!("endpoint `{endpoint}` {answer}")
 }
 
 /// Record one lookup, yielding either facts to carry on with or a settled
@@ -3804,8 +4063,11 @@ fn validate_case_outcome(
     // What the case says it expects, beside what the pipeline just did. The
     // pipeline half of it is already recorded above this line.
     let declared = format!(
-        "the case expects lookup {:?}, public problem {:?}, derivation run {}, signed success {}",
-        optional_string(case, "expectedLookup")?.unwrap_or("match"),
+        "the case expects lookup {}, public problem {:?}, derivation run {}, signed success {}",
+        optional_string(case, "expectedLookup")?.map_or_else(
+            || "\"match\" (unstated default)".to_owned(),
+            |lookup| format!("{lookup:?}")
+        ),
         optional_string(case, "expectedPublicProblem")?.unwrap_or("none"),
         stated_flag(optional_boolean(case, "derivationRuns")?),
         stated_flag(optional_boolean(case, "signedSuccess")?)
@@ -5389,6 +5651,29 @@ mod tests {
     }
 
     #[test]
+    fn the_expect_note_marks_an_unstated_lookup_as_the_default() {
+        let notes = |case: Value| {
+            let mut trace = FixtureTrace::default();
+            let _ = validate_case_outcome(
+                case.as_object().expect("object"),
+                Ok(KernelOutcome::NoMatch),
+                &mut trace,
+                &[],
+            );
+            trace.cases[0]
+                .stages
+                .last()
+                .expect("expect stage")
+                .note
+                .clone()
+        };
+        assert!(notes(serde_json::json!({}))
+            .starts_with("the case expects lookup \"match\" (unstated default),"));
+        assert!(notes(serde_json::json!({"expectedLookup": "no_match"}))
+            .starts_with("the case expects lookup \"no_match\","));
+    }
+
+    #[test]
     fn service_unavailability_requires_an_internal_kernel_failure() {
         let case = serde_json::json!({
             "expectedPublicProblem": "service.unavailable",
@@ -5777,7 +6062,7 @@ mod tests {
         let old = root.join(&prefix);
         let mut pack: Value =
             serde_norway::from_slice(&fs::read(old.join("pack.yaml")).unwrap()).unwrap();
-        let predicate = b"fn is_matched(exchange) { exchange.body.lookup == \"matched\" }\n";
+        let predicate = b"fn is_matched(exchange) { exchange.body.lookup == \"matched\" }\nfn next_inputs(exchange) { #{trackingId: exchange.body.facts.record_tracking_id} }\n";
         pack["scripts"].as_array_mut().unwrap().push(serde_json::json!({
             "path":"scripts/test-chain.rhai","digest":registry_platform_config::sha256_uri(predicate)
         }));
@@ -5788,8 +6073,13 @@ mod tests {
             .find(|route| route["id"] == "evidence-birth-parents")
             .unwrap();
         let mut fetch = route["steps"].as_array().unwrap().clone();
-        fetch[0]["setHeader"]["value"] =
-            serde_json::json!({"jsonpath":"$.facts.record_tracking_id"});
+        // The route's send reads the minimized `trackingId` input from the
+        // body, so the chained read rewrites the body from the first facts.
+        fetch.insert(
+            0,
+            serde_json::json!({"setBody":{"rhai":
+                {"file":"scripts/test-chain.rhai","entrypoint":"next_inputs"}}}),
+        );
         let matched =
             serde_json::json!({"file":"scripts/test-chain.rhai","entrypoint":"is_matched"});
         fetch.push(serde_json::json!({"choice":{
@@ -5854,6 +6144,44 @@ mod tests {
             .push(data);
         set_tree_mode(&root, 0o755, 0o644);
         (bundle, fixture)
+    }
+
+    /// A case `source` written for the retired Source form holds the provider
+    /// response itself; the refusal names that form and the migration, apart
+    /// from a transcript that is merely malformed.
+    #[test]
+    fn a_retired_fixture_source_names_the_transcript_and_the_migration() {
+        let retired = fixture_case_acquisition(&serde_json::json!({
+            "total": 1,
+            "date_of_birth": "2000-01-01"
+        }))
+        .err()
+        .expect("a provider response is not a transcript");
+        assert_eq!(retired, CliError(FIXTURE_SOURCE_RETIRED));
+        for needle in [
+            "`source`",
+            "`intercepts`",
+            "`exchanges`",
+            "retired Source form",
+            "CONFIG.md#migrate-a-retired-source-project",
+        ] {
+            assert!(retired.0.contains(needle), "{needle}: {}", retired.0);
+        }
+        assert!(!retired.0.contains("2000-01-01"));
+
+        let malformed = fixture_case_acquisition(&serde_json::json!({
+            "intercepts": [],
+            "exchanges": [{"request": {}}]
+        }))
+        .err()
+        .expect("a malformed transcript is refused");
+        assert_eq!(malformed, CliError(FIXTURE_SOURCE_INVALID));
+        assert!(malformed.0.contains("`intercepts`") && malformed.0.contains("`exchanges`"));
+
+        assert!(
+            fixture_case_acquisition(&serde_json::json!({"intercepts": [], "exchanges": []}))
+                .is_ok()
+        );
     }
 
     /// Recorded rows cannot stand in for execution against a captured extract.

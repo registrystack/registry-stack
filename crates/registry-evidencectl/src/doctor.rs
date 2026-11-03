@@ -1047,7 +1047,8 @@ mod tests {
     }
 
     /// The published schema and maintained reader both refuse the retired
-    /// capability switch. Doctor must never reintroduce it as remediation.
+    /// capability switch; for one release they tolerate only an empty list.
+    /// Doctor must never reintroduce it as remediation.
     #[test]
     fn the_runtime_contract_and_reader_refuse_retired_acquisition_capabilities() {
         let contract = concat!(
@@ -1062,8 +1063,8 @@ mod tests {
             schema
                 .get("properties")
                 .and_then(|properties| properties.get("acquisitionCapabilities"))
-                .is_none(),
-            "the published runtime contract still accepts acquisitionCapabilities"
+                .is_none_or(|member| member.get("maxItems") == Some(&YamlValue::from(0))),
+            "the published runtime contract still accepts an acquisition capability"
         );
 
         let maintained = include_bytes!(
@@ -1071,6 +1072,10 @@ mod tests {
         );
         registry_evidence::config::RuntimeConfig::parse_yaml(maintained)
             .expect("the maintained runtime fixture parses");
+        let mut empty = maintained.to_vec();
+        empty.extend_from_slice(b"\nacquisitionCapabilities: []\n");
+        registry_evidence::config::RuntimeConfig::parse_yaml(&empty)
+            .expect("an empty retired capability list is tolerated for one release");
         let mut retired = maintained.to_vec();
         retired.extend_from_slice(b"\nacquisitionCapabilities: [source-batch]\n");
         assert!(

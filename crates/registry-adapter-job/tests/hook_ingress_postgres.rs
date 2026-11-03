@@ -174,6 +174,14 @@ impl ManagedChild {
     }
 
     fn interrupt(&mut self) {
+        self.signal("-INT");
+    }
+
+    fn terminate(&mut self) {
+        self.signal("-TERM");
+    }
+
+    fn signal(&mut self, flag: &str) {
         let pid = self
             .child
             .as_ref()
@@ -181,12 +189,12 @@ impl ManagedChild {
             .id()
             .to_string();
         let output = Command::new("kill")
-            .args(["-INT", pid.as_str()])
+            .args([flag, pid.as_str()])
             .output()
-            .expect("send SIGINT to adapter-job");
+            .expect("send a signal to adapter-job");
         assert!(
             output.status.success(),
-            "SIGINT failed: {}",
+            "{flag} failed: {}",
             String::from_utf8_lossy(&output.stderr)
         );
     }
@@ -254,7 +262,49 @@ async fn connect(url: &str) -> tokio_postgres::Client {
     client
 }
 
-async fn isolated_database_url() -> String {
+/// One disposable schema on the shared test server. Dropping the guard drops
+/// the schema, so repeated runs do not accumulate `adapter_hook_*` schemas.
+struct IsolatedDatabase {
+    base: String,
+    schema: String,
+    url: String,
+}
+
+impl std::ops::Deref for IsolatedDatabase {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.url
+    }
+}
+
+impl Drop for IsolatedDatabase {
+    fn drop(&mut self) {
+        let base = self.base.clone();
+        let schema = self.schema.clone();
+        let result = std::thread::spawn(move || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("a cleanup runtime")
+                .block_on(async move {
+                    let (admin, connection) = tokio_postgres::connect(&base, NoTls).await?;
+                    let task = tokio::spawn(connection);
+                    admin
+                        .batch_execute(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+                        .await?;
+                    task.abort();
+                    Ok::<(), tokio_postgres::Error>(())
+                })
+        })
+        .join();
+        if !matches!(result, Ok(Ok(()))) {
+            eprintln!("isolated hook-test schema {} cleanup failed", self.schema);
+        }
+    }
+}
+
+async fn isolated_database_url() -> IsolatedDatabase {
     let base = std::env::var("ADAPTER_TEST_DATABASE_URL")
         .expect("ADAPTER_TEST_DATABASE_URL names a disposable PostgreSQL test server");
     let serial = NEXT_SCHEMA.fetch_add(1, Ordering::Relaxed);
@@ -269,7 +319,20 @@ async fn isolated_database_url() -> String {
         .await
         .expect("create an isolated hook-test schema");
     let separator = if base.contains('?') { '&' } else { '?' };
-    format!("{base}{separator}options=-csearch_path%3D{schema}")
+    let url = format!("{base}{separator}options=-csearch_path%3D{schema}");
+    IsolatedDatabase { base, schema, url }
+}
+
+async fn schema_exists(base: &str, schema: &str) -> bool {
+    let admin = connect(base).await;
+    let row = admin
+        .query_one(
+            "SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = $1)",
+            &[&schema],
+        )
+        .await
+        .expect("query the test server namespaces");
+    row.get(0)
 }
 
 fn configure_hook(fixture: &JobFixture, initial_delay_milliseconds: u64, burst: u64) {
@@ -372,6 +435,22 @@ async fn wait_for_pass(database_url: &str, receiver: &FixtureReceiver) {
 }
 
 #[tokio::test]
+async fn an_isolated_hook_schema_is_dropped_with_its_guard() {
+    let database = isolated_database_url().await;
+    let base = database.base.clone();
+    let schema = database.schema.clone();
+    assert!(
+        schema_exists(&base, &schema).await,
+        "the guard creates its schema"
+    );
+    drop(database);
+    assert!(
+        !schema_exists(&base, &schema).await,
+        "dropping the guard drops {schema}"
+    );
+}
+
+#[tokio::test]
 async fn actual_cli_hook_starts_one_postgres_backed_pass_without_using_its_body() {
     let fixture =
         JobFixture::start(PAGE_SCRIPT, vec![(200, reply_page_end())], Edits::Ordered).await;
@@ -440,6 +519,17 @@ async fn actual_cli_hook_starts_one_postgres_backed_pass_without_using_its_body(
 
 #[tokio::test]
 async fn partial_request_head_is_force_closed_on_real_cli_shutdown() {
+    partial_head_shutdown_case(false).await;
+}
+
+/// SIGTERM, the signal service managers send, takes the same bounded drain
+/// and reports the same closed fault as Ctrl+C.
+#[tokio::test]
+async fn partial_request_head_is_force_closed_on_real_cli_sigterm() {
+    partial_head_shutdown_case(true).await;
+}
+
+async fn partial_head_shutdown_case(terminate: bool) {
     let fixture =
         JobFixture::start(PAGE_SCRIPT, vec![(200, reply_page_end())], Edits::Ordered).await;
     configure_hook(&fixture, 60_000, 1);
@@ -464,7 +554,11 @@ async fn partial_request_head_is_force_closed_on_real_cli_shutdown() {
         .await
         .expect("the accept-loop barrier response drains");
 
-    child.interrupt();
+    if terminate {
+        child.terminate();
+    } else {
+        child.interrupt();
+    }
     child.wait_for_exit(Duration::from_secs(15)).await;
     drop(partial);
     let output = tokio::task::spawn_blocking(move || child.output())
@@ -483,7 +577,7 @@ async fn partial_request_head_is_force_closed_on_real_cli_shutdown() {
 }
 
 #[tokio::test]
-async fn duplicate_hook_joins_the_one_running_cli_pass() {
+async fn a_hook_during_a_running_cli_pass_starts_one_follow_up_pass() {
     let fixture =
         JobFixture::start(PAGE_SCRIPT, vec![(200, reply_page_end())], Edits::Ordered).await;
     configure_hook(&fixture, 60_000, 2);
@@ -539,6 +633,18 @@ async fn duplicate_hook_joins_the_one_running_cli_pass() {
     })
     .await
     .expect("the released pass persists");
+    tokio::time::timeout(Duration::from_secs(20), async {
+        while fixture.double.requests().len() < 2 {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("the hook that joined the running pass starts one follow-up pass");
+    assert_eq!(
+        receiver.request_count(),
+        1,
+        "the follow-up pass rereads the source; the delivered item is not resent"
+    );
     child.interrupt();
     let output = tokio::task::spawn_blocking(move || child.output())
         .await

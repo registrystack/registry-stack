@@ -84,6 +84,12 @@ Outbound HTTP utilities for registry services.
   behind the reviewed strict data decoder; the event and credential bodies move
   their whole zeroizing buffer out (`to_event_answer`, `into_credential_bytes`)
   for the protocol decodes their slots name, with no borrowing accessor.
+- `destination::json::decode_protocol_json`, the one other route to the strict
+  data decoder: a trusted host protocol hands it exact zeroizing bytes it owns
+  (a protocol's config or a verified response body). The strict JSON and
+  structural limits are the script decoder's, and it refuses more than
+  `MAX_CLOSED_JSON_ENCODED_BODY_BYTES` (8 MiB) itself; the protocol still
+  enforces its authored per-response and aggregate limits first.
 - A side-effecting send class for data destinations, compiled only by
   `DataDestinationRequestTemplate::new_script_send` and refused by every
   read-only constructor. It sends a POST with a JSON or form body, or a GET

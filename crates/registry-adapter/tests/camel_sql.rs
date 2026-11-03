@@ -425,8 +425,16 @@ async fn a_send_over_the_seam_pages_and_shapes_rows() {
     );
     assert_eq!(
         read.parameters,
-        [SourceScalar::Integer(1), SourceScalar::Integer(7)],
-        "the send's named parameters bound in the query's order"
+        [
+            SourceScalar::Integer(1),
+            SourceScalar::Integer(7),
+            SourceScalar::Integer(40)
+        ],
+        "the send's named parameters bound in the query's order, then the cursor's offset"
+    );
+    assert_eq!(
+        read.sql, "SELECT name, age FROM people WHERE kind = $1 AND id > $2 ORDER BY id\nOFFSET $3",
+        "the engine pages the pinned statement by its own trailing OFFSET"
     );
     assert_eq!(
         read.maximum_rows, 2,
@@ -561,7 +569,7 @@ async fn a_real_fetch_bounds_its_rows_and_statement() {
         .batch_execute("CREATE TEMP TABLE bounded_people (name text, age int)")
         .await
         .expect("the temp table");
-    for index in 0..3 {
+    for index in 0..3_i32 {
         client
             .execute(
                 "INSERT INTO bounded_people VALUES ($1, $2)",
@@ -701,13 +709,14 @@ impl PostgresSource for ClientSource {
                 .parameters
                 .iter()
                 .map(|scalar| match scalar {
-                    SourceScalar::Text(text) => NativeParam::Text(text.clone()),
-                    SourceScalar::Integer(value) => NativeParam::Integer(*value),
-                    SourceScalar::Float(value) => NativeParam::Float(*value),
-                    SourceScalar::Boolean(value) => NativeParam::Boolean(*value),
-                    SourceScalar::Numeric(text) => NativeParam::Numeric(text.clone()),
+                    SourceScalar::Text(text) => Ok(NativeParam::Text(text.clone())),
+                    SourceScalar::Integer(value) => Ok(NativeParam::Integer(*value)),
+                    SourceScalar::Float(value) => Ok(NativeParam::Float(*value)),
+                    SourceScalar::Boolean(value) => Ok(NativeParam::Boolean(*value)),
+                    SourceScalar::Numeric(text) => Ok(NativeParam::Numeric(text.clone())),
+                    SourceScalar::Null => Err(PostgresReadFault::Statement),
                 })
-                .collect();
+                .collect::<Result<_, _>>()?;
             let stream = self
                 .client
                 .query_raw(&read.sql, bound.iter())
@@ -719,7 +728,8 @@ impl PostgresSource for ClientSource {
                         PostgresReadFault::Statement
                     }
                 })?;
-            futures::pin_mut!(stream);
+            // Boxed, so the drop before ROLLBACK really ends the stream.
+            let mut stream = Box::pin(stream);
             let mut rows = Vec::new();
             let mut complete = true;
             while let Some(row) = stream.next().await {

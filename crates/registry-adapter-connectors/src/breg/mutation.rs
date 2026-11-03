@@ -76,7 +76,7 @@ fn descriptor(
         },
         recovery: RecoveryRule::ExactSameKey,
         completion,
-        observable: false,
+        observable: true,
     }
 }
 

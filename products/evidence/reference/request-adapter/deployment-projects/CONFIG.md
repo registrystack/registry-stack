@@ -658,10 +658,23 @@ statements are pinned pack artifacts; `runtime.yaml` supplies the named
 immutable extract file under `sourceExtracts` without supplying SQL.
 
 The route returns exactly one closed lookup outcome: `matched` with facts,
-`no-match`, or `ambiguous`. Dependency, transport, authentication, budget,
-schema, and script failures never collapse into `no-match`. Matched facts are
-validated against the pinned route facts schema and the semantically equal
-bundle `factSchema` before requirement derivation runs.
+`no-match`, `ambiguous`, or `unresolved`. Use `no-match` when the source
+answers that no such subject exists. Use `unresolved` only when the reviewed
+source explicitly states that the facts cannot currently be resolved, such as
+the declared source-neutral Problem Details 404 of an HTTP JSON source. Like
+`no-match` and `ambiguous`, it carries no facts. Dependency, transport,
+authentication, budget, schema, and script failures never collapse into
+`no-match`. The engine holds this at pack compilation: an Evidence route may
+not catch or handle an `upstream` class, `breaker.open`, `throttle.rejected`,
+`script` or `validation` with `doCatch` or with an `onException` clause that
+carries steps, `handled` or `continued`, and its `circuitBreaker` may not
+declare `onFallback`, `ignoreException` or `recordException`. Retry-only
+`onException` clauses stay available. To answer a declared status such as 404
+as `no-match`, catch `upstream.http` with an `onWhen` status test. The
+`registry-lookup-v1` host protocol needs no handler: it verifies its declared
+Problem Details 404 and hands the route an `unresolved` body. Matched facts are validated against the
+pinned route facts schema and the semantically equal bundle `factSchema`
+before requirement derivation runs.
 
 ### Requirement derivation selector inputs
 
@@ -683,8 +696,14 @@ revision. Scripts end in `.rhai` and live under `adapters/` or `derivations/`.
 Statements end in `.sql` and live under `queries/`; a statement is reviewed,
 bounded, executable text, so it is bounded like a script rather than like a data
 file. Parameter, fact, and reviewed-value schemas
-are closed JSON Schema 2020-12 documents; fact and reviewed-value schemas close
-every reachable object and bound every reachable string, array, and number.
+are closed JSON Schema 2020-12 documents: the root and every object set
+`additionalProperties: false`, references stay inside the document, and the
+document stays within its size bounds. Pack route fact schemas are private
+derivation input and do not bound string length or array size individually
+(one acquisition reads at most the `sourceAcquisition` response budget, 1 MiB
+by default). Reviewed-value schemas keep the
+stricter grammar: an exact required property set, with every reachable string,
+array, and number bounded, because they shape what a response may disclose.
 Fixtures use the exact contract in [`FIXTURES.md`](FIXTURES.md).
 
 Codelists under `codelists/` open with the `apiVersion` and `kind` envelope,
@@ -793,9 +812,10 @@ only profiles selected by root authentication, while each
 `sourceConnections.<name>.outboundTls` contains only profiles selected by that
 connection's endpoints. A missing selection remains missing and is refused at
 runtime; compilation never copies an unrelated profile into a scope to satisfy
-it. When an invalid target contains an inventory entry selected nowhere,
-compilation projects that entry into root `outboundTls` solely so the runtime's
-existing unused-profile check refuses the target.
+it. An inventory entry selected nowhere is refused when the target is read,
+with `evidence.target.trust-profile-unused` at
+`target.yaml:/outboundTls/trustProfiles/<id>`: name it from an endpoint
+`tlsTrustProfile` or from `authentication.oidc.tlsTrustProfile`, or delete it.
 
 | Key | Required | Meaning and Version 1 bounds |
 |---|---|---|
@@ -823,7 +843,7 @@ existing unused-profile check refuses the target.
 | `audit.rotateBytes` | no | 1,048,576 through 4,294,967,295 bytes; 104,857,600 (100 MiB) by default. Reaching it seals the active file under an ascending sequence number and opens a fresh one at `path`. A write or sync failure, not rotation itself, is what fails closed. Refused for `stdout`. |
 | `audit.retentionDays` | no | 1 through 36,500 days; 90 by default. When the writer opens or rotates, sealed files last modified longer ago than this are deleted; the active file never is. Refused for `stdout`. |
 | `outboundTls.systemRoots` | yes | Literal `true`. |
-| `outboundTls.trustProfiles` | yes | For an accepted target, root-authentication trust profiles only, as a closed map of at most 64 logical profile ids. Each id is a local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`. It is empty when root authentication names no private trust profile; source profiles live in their connection-local maps below. During validation of an invalid target, a globally unreferenced inventory profile is projected here solely so the unused-profile check refuses it. |
+| `outboundTls.trustProfiles` | yes | For an accepted target, root-authentication trust profiles only, as a closed map of at most 64 logical profile ids. Each id is a local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`. It is empty when root authentication names no private trust profile; source profiles live in their connection-local maps below. |
 | `outboundTls.trustProfiles.<id>.caBundleFile` | for each profile | Absolute path to one bounded PEM CA file. Profile names must exactly match bundle `tlsTrustProfile` references. |
 | `sourceConnections` | for every governed connection | Process-local endpoint and credential material. Every governed connection name must appear once, no extra runtime name is accepted, and each value's `id` must equal its map key. |
 | `sourceConnections.<name>.endpoints` | yes | Runtime endpoint bindings keyed by the pack endpoint id. Every reached HTTP or GraphQL endpoint must match exactly one governed endpoint policy in id, base URL, trust profile, client-identity posture, authentication kind, and non-secret OAuth authority. An empty list is valid only where the reached program needs no network endpoint. |
@@ -1126,6 +1146,11 @@ once at the point it re-enters itself. A key path only one alternative declares
 still appears once, so the `sources.*` entries cover both transports together
 and no single source writes all of them.
 
+`acquisitionCapabilities` is retired. It stays in both blocks because, for one
+release, both files accept an empty list (`acquisitionCapabilities: []`) and
+ignore it, so a 0.44.0 file still loads; any capability is refused. Delete the
+member.
+
 `products/evidence/scripts/check-config-key-paths.sh` fails when either block
 and its contract disagree in either direction, so a key added to a contract
 cannot ship without a line here, and a line here cannot outlive its key. The
@@ -1137,6 +1162,7 @@ and document the new keys in the prose above.
 
 <!-- evidence-bundle-key-paths:start -->
 ```text
+acquisitionCapabilities
 apiVersion
 assuranceProfile
 audit
@@ -1380,6 +1406,7 @@ subjectBinding.secretRef
 
 <!-- evidence-runtime-key-paths:start -->
 ```text
+acquisitionCapabilities
 apiVersion
 audit
 audit.destination

@@ -1416,8 +1416,10 @@ execution begins, no failure retries through sequential fanout.
 
 An HTTP JSON source may optionally declare one exact source-neutral unresolved
 Problem Details tuple. This does not make 404 a lookup result in general. Only
-an exact 404 `application/problem+json` response with the duplicate-free closed
-six-member shape and exact configured status, type, and code becomes a
+an exact 404 `application/problem+json` response (media-type parameters ignored)
+with a duplicate-free object carrying the required Problem members, any members
+the classifier does not know ignored, and exact configured status, type, and
+code becomes a
 data-free unresolved transport outcome. Omission, mismatch, malformed shape,
 oversize, or any other status remains a dependency failure. A singular or
 search-stage outcome collapses to Evidence unavailable and the neutral audit

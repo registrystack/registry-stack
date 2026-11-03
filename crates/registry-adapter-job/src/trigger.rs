@@ -27,8 +27,9 @@ pub enum HookAdmission {
     /// The host was idle, so this hook made one pass pending and woke the
     /// trigger loop.
     Started,
-    /// A pass was already pending or running, so this hook joined it without
-    /// queueing another pass.
+    /// A pass was already pending, so this hook joined it; or a pass was
+    /// running, so this hook joined the one follow-up pass that starts after
+    /// it.
     Joined,
 }
 
@@ -38,15 +39,20 @@ enum HookPassState {
     Idle,
     Pending,
     Running,
+    /// Running, and at least one hook arrived during the pass, so one
+    /// follow-up pass becomes pending when it ends.
+    RunningWithFollowUp,
 }
 
 /// Coalesces authenticated hook requests into the job host's one pass loop.
 ///
 /// A hook arriving while idle makes exactly one pass pending. Further hooks
-/// join that pending pass, and every hook arriving while it runs joins the
-/// running pass. Completing the pass returns the gate to idle; hook delivery
-/// is deliberately not a durable queue because the interval trigger remains
-/// the reconciliation authority.
+/// join that pending pass. Hooks arriving while a pass runs join one
+/// follow-up pass, which becomes pending when the running pass ends, so a
+/// source change the running pass read too early is picked up without
+/// waiting a full interval. At most one follow-up is ever queued; hook
+/// delivery is deliberately not a durable queue because the interval trigger
+/// remains the reconciliation authority.
 #[derive(Debug, Default)]
 pub struct HookPassGate {
     state: Mutex<HookPassState>,
@@ -68,7 +74,11 @@ impl HookPassGate {
                 self.wake.notify_one();
                 HookAdmission::Started
             }
-            HookPassState::Pending | HookPassState::Running => HookAdmission::Joined,
+            HookPassState::Running => {
+                *state = HookPassState::RunningWithFollowUp;
+                HookAdmission::Joined
+            }
+            HookPassState::Pending | HookPassState::RunningWithFollowUp => HookAdmission::Joined,
         }
     }
 
@@ -82,21 +92,31 @@ impl HookPassGate {
             .state
             .lock()
             .expect("the hook pass gate is not poisoned");
-        if *state == HookPassState::Running {
+        if matches!(
+            *state,
+            HookPassState::Running | HookPassState::RunningWithFollowUp
+        ) {
             return false;
         }
         *state = HookPassState::Running;
         true
     }
 
-    /// Mark the host pass complete. Hooks that joined it do not become a
-    /// second pending pass.
+    /// Mark the host pass complete. If any hook arrived while it ran, one
+    /// follow-up pass becomes pending and wakes the trigger loop; otherwise
+    /// the gate returns to idle.
     pub fn end_pass(&self) {
         let mut state = self
             .state
             .lock()
             .expect("the hook pass gate is not poisoned");
-        *state = HookPassState::Idle;
+        if *state == HookPassState::RunningWithFollowUp {
+            *state = HookPassState::Pending;
+            drop(state);
+            self.wake.notify_one();
+        } else {
+            *state = HookPassState::Idle;
+        }
     }
 
     /// Wait until an authenticated hook has made a pass pending.
@@ -279,6 +299,16 @@ pub enum Step {
     Wait(Duration),
 }
 
+/// Whether a pending hook may end the loop's wait and start a pass now.
+///
+/// After a stopped pass or a held lease the wait is the error backoff or the
+/// lease expiry, and a hook must not shorten it: the hook stays pending in
+/// the [`HookPassGate`] and the pass it asked for starts when the wait ends.
+#[must_use]
+pub fn hook_ends_the_wait(last: LastPass) -> bool {
+    !matches!(last, LastPass::Stopped | LastPass::LeaseHeld)
+}
+
 /// The loop's next step from the job state, freshly read, and how the
 /// previous pass ended. `None` means the job declares no interval
 /// trigger.
@@ -390,11 +420,6 @@ mod tests {
             .expect("the first hook wakes the pass loop");
 
         assert!(gate.begin_pass(), "the pending pass can start");
-        assert_eq!(
-            gate.handle_hook(),
-            HookAdmission::Joined,
-            "a hook during the pass never queues another pass"
-        );
         assert!(!gate.begin_pass(), "one host pass runs at a time");
         gate.end_pass();
 
@@ -402,6 +427,57 @@ mod tests {
             gate.handle_hook(),
             HookAdmission::Started,
             "the next hook after completion can start the next pass"
+        );
+    }
+
+    #[tokio::test]
+    async fn hooks_during_a_running_pass_queue_exactly_one_follow_up() {
+        let gate = HookPassGate::default();
+        assert_eq!(gate.handle_hook(), HookAdmission::Started);
+        assert!(gate.begin_pass(), "the pending pass starts");
+
+        for _ in 0..3 {
+            assert_eq!(
+                gate.handle_hook(),
+                HookAdmission::Joined,
+                "a hook during the pass joins the one follow-up pass"
+            );
+        }
+        gate.end_pass();
+
+        tokio::time::timeout(Duration::from_millis(50), gate.wait_for_hook())
+            .await
+            .expect("the hooks that arrived during the pass wake one follow-up");
+        assert_eq!(
+            gate.handle_hook(),
+            HookAdmission::Joined,
+            "the follow-up is already pending"
+        );
+        assert!(gate.begin_pass(), "the follow-up pass starts");
+        gate.end_pass();
+
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), gate.wait_for_hook())
+                .await
+                .is_err(),
+            "a follow-up with no hook during it queues nothing more"
+        );
+    }
+
+    #[test]
+    fn a_stopped_or_lease_held_pass_holds_hooks_until_its_wait_ends() {
+        assert!(hook_ends_the_wait(LastPass::NotYet));
+        assert!(hook_ends_the_wait(LastPass::Settled {
+            items_read: 0,
+            rescan: false,
+        }));
+        assert!(
+            !hook_ends_the_wait(LastPass::Stopped),
+            "a hook must not skip the error backoff"
+        );
+        assert!(
+            !hook_ends_the_wait(LastPass::LeaseHeld),
+            "a hook must not skip the held-lease wait"
         );
     }
 
@@ -486,16 +562,16 @@ mod tests {
 
     fn profile() -> registry_adapter_core::JobProfile {
         registry_adapter_core::JobProfile {
-            page_deadline_milliseconds: 60_000,
-            maximum_response_bytes: 65_536,
-            maximum_page_items: 100,
-            maximum_page_bytes: 65_536,
-            maximum_upstream_calls: 8,
+            page_deadline_milliseconds: 60_000.try_into().expect("inside its range"),
+            maximum_response_bytes: 65_536.try_into().expect("inside its range"),
+            maximum_page_items: 100.try_into().expect("inside its range"),
+            maximum_page_bytes: 65_536.try_into().expect("inside its range"),
+            maximum_upstream_calls: 8.try_into().expect("inside its range"),
             read: ReadBounds {
-                maximum_file_bytes: 1_048_576,
-                maximum_row_bytes: 65_536,
-                maximum_field_bytes: 65_536,
-                maximum_rows_per_page: 100,
+                maximum_file_bytes: 1_048_576.try_into().expect("inside its range"),
+                maximum_row_bytes: 65_536.try_into().expect("inside its range"),
+                maximum_field_bytes: 65_536.try_into().expect("inside its range"),
+                maximum_rows_per_page: 100.try_into().expect("inside its range"),
             },
         }
     }

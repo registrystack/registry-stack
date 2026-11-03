@@ -90,14 +90,14 @@ cursorKeyRef: secret:env/TEST_CURSOR_KEY
     path
 }
 
-fn export_paths(
+fn run_export(
     project: &std::path::Path,
     profile: &std::path::Path,
     pack: &std::path::Path,
-) -> Value {
+) -> std::process::Output {
     let scratch = tempfile::tempdir().expect("scratch directory");
     let runtime = runtime_file(scratch.path());
-    let output = Command::new(env!("CARGO_BIN_EXE_adapter"))
+    Command::new(env!("CARGO_BIN_EXE_adapter"))
         .arg("effective-contract")
         .arg("--runtime-config")
         .arg(runtime)
@@ -113,7 +113,15 @@ fn export_paths(
         .env("TEST_DB_URL", "postgresql://unused.invalid/test")
         .env("TEST_JWKS", r#"{"keys":[]}"#)
         .output()
-        .expect("run adapter effective-contract");
+        .expect("run adapter effective-contract")
+}
+
+fn export_paths(
+    project: &std::path::Path,
+    profile: &std::path::Path,
+    pack: &std::path::Path,
+) -> Value {
+    let output = run_export(project, profile, pack);
     assert!(
         output.status.success(),
         "effective-contract failed: {}",
@@ -348,8 +356,22 @@ fn native_put_is_schema_valid_unserved_gateway_metadata() {
     );
 }
 
+/// The profile loader pairs a 202 with `asyncCompletion` on a non-read write and
+/// refuses it anywhere else, so the export never sees either shape.
+fn assert_202_refused_at_load(output: &std::process::Output) {
+    assert!(
+        !output.status.success(),
+        "the export of a profile with an unpaired 202 must be refused"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("successStatus 202 and asyncCompletion together on one non-read write"),
+        "the refusal names the 202 rule: {stderr}"
+    );
+}
+
 #[test]
-fn native_write_202_exports_as_unsupported_until_async_recovery_exists() {
+fn native_write_202_without_async_completion_is_refused_at_load() {
     let scratch = tempfile::tempdir().expect("scratch directory");
     let root = repo_root();
     let source_profile = root.join("products/adapter/profiles/breg-records/profile.yaml");
@@ -375,31 +397,15 @@ fn native_write_202_exports_as_unsupported_until_async_recovery_exists() {
     )
     .expect("write async project");
 
-    let export = export_paths(
+    assert_202_refused_at_load(&run_export(
         &project_directory,
         &profile_path,
         &root.join("products/adapter/packs/dhis2-tracker/pack.yaml"),
-    );
-    let update = export["contract"]["unserved"]
-        .as_array()
-        .expect("unserved operations")
-        .iter()
-        .find(|operation| operation["operationId"] == "records-update.person")
-        .expect("the asynchronous update is unserved");
-    assert_eq!(update["method"], "PUT");
-    assert_eq!(
-        update["reasonCode"],
-        "adapter.operation.write-async-unsupported"
-    );
-    assert!(export["contract"]["operations"]
-        .as_array()
-        .expect("served operations")
-        .iter()
-        .all(|operation| operation["effect"] == "read"));
+    ));
 }
 
 #[test]
-fn read_only_post_202_remains_a_served_read() {
+fn read_only_post_202_is_refused_at_load() {
     let scratch = tempfile::tempdir().expect("scratch directory");
     let root = repo_root();
     let source_profile = root.join("products/adapter/profiles/govstack-consultation/profile.yaml");
@@ -428,20 +434,11 @@ fn read_only_post_202_remains_a_served_read() {
     )
     .expect("write read project");
 
-    let export = export_paths(
+    assert_202_refused_at_load(&run_export(
         &project_directory,
         &profile_path,
         &root.join("products/adapter/packs/dhis2-tracker/pack.yaml"),
-    );
-    let search = export["contract"]["operations"]
-        .as_array()
-        .expect("served operations")
-        .iter()
-        .find(|operation| operation["id"] == "records-search.persons")
-        .expect("the read-only POST remains served");
-    assert_eq!(search["method"], "POST");
-    assert_eq!(search["effect"], "read");
-    assert_eq!(search["successStatus"], 202);
+    ));
 }
 
 #[test]

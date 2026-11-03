@@ -24,8 +24,10 @@ use std::time::Duration;
 
 #[cfg(feature = "job-file")]
 use registry_adapter_core::PollDecoder;
+#[cfg(any(feature = "job-file", feature = "job-sftp"))]
+use registry_adapter_core::RecordLocator;
 use registry_adapter_core::{
-    AggregationStrategy, ErrorClass, PollEnrichStep, RecordLocator, SendComponent, SendUri,
+    AggregationStrategy, ErrorClass, PollEnrichStep, SendComponent, SendUri,
 };
 #[cfg(feature = "job-rabbitmq")]
 use registry_platform_config::sha256_uri;
@@ -51,12 +53,32 @@ use crate::route::{Flow, RouteFailure, Run};
 
 /// The closed code a read refusal carries, value-free.
 const READ_BOUND_CODE: &str = "adapter.job.read-bound";
+const READ_TIMEOUT_CODE: &str = "adapter.job.read-timeout";
 const DECODER_ROW_CODE: &str = "adapter.job.decoder-row";
+#[cfg(any(feature = "job-file", feature = "job-sftp"))]
 const DECODER_KEY_MISSING_CODE: &str = "adapter.job.decoder-key-missing";
+#[cfg(any(feature = "job-file", feature = "job-sftp"))]
 const DECODER_KEY_INVALID_CODE: &str = "adapter.job.decoder-key-invalid";
+#[cfg(any(feature = "job-file", feature = "job-sftp"))]
 const DECODER_KEY_DUPLICATE_CODE: &str = "adapter.job.decoder-key-duplicate";
 #[cfg(feature = "job-rabbitmq")]
 const RABBITMQ_DELIVERY_MODE_CODE: &str = "adapter.job.rabbitmq-delivery-mode";
+#[cfg(feature = "job-rabbitmq")]
+const RABBITMQ_TOPOLOGY_CODE: &str = "adapter.job.rabbitmq-topology";
+#[cfg(feature = "job-rabbitmq")]
+const RABBITMQ_UNAVAILABLE_CODE: &str = "adapter.job.rabbitmq-unavailable";
+#[cfg(feature = "job-sftp")]
+const SFTP_CONNECTION_CODE: &str = "adapter.job.sftp-connection";
+#[cfg(feature = "job-sftp")]
+const SFTP_HOST_KEY_CODE: &str = "adapter.job.sftp-host-key";
+#[cfg(feature = "job-sftp")]
+const SFTP_CREDENTIAL_CODE: &str = "adapter.job.sftp-credential";
+#[cfg(feature = "job-sftp")]
+const SFTP_AUTHENTICATION_CODE: &str = "adapter.job.sftp-authentication";
+#[cfg(feature = "job-sftp")]
+const SFTP_MALFORMED_CODE: &str = "adapter.job.sftp-malformed";
+#[cfg(feature = "job-sftp")]
+const SFTP_PATH_CODE: &str = "adapter.job.sftp-path";
 
 pub(crate) async fn run(
     run: &mut Run<'_, '_>,
@@ -152,7 +174,13 @@ pub(crate) async fn run(
                 })?;
                 match tokio::time::timeout_at(
                     operation_deadline,
-                    read_page(source, &bounds, cursor.as_ref(), &decoder),
+                    read_page(
+                        source,
+                        &bounds,
+                        cursor.as_ref(),
+                        &decoder,
+                        run.context.job.ongoing_scan,
+                    ),
                 )
                 .await
                 {
@@ -202,6 +230,7 @@ pub(crate) async fn run(
                         cursor.as_ref(),
                         &decoder,
                         operation_deadline,
+                        run.context.job.ongoing_scan,
                     ),
                 )
                 .await
@@ -249,7 +278,7 @@ pub(crate) async fn run(
                         )
                     })?;
                 let maximum_message_bytes =
-                    usize::try_from(bounds.maximum_row_bytes).map_err(|_| read_bound())?;
+                    usize::try_from(bounds.maximum_row_bytes.get()).map_err(|_| read_bound())?;
                 let request = RabbitMqReadRequest::new(maximum_message_bytes, read_deadline)
                     .map_err(rabbitmq_read_fault)?;
                 let message = match tokio::time::timeout_at(
@@ -291,7 +320,7 @@ pub(crate) async fn run(
                 };
                 if !crate::json_bounds::json_within_field_bound(
                     &value,
-                    bounds.maximum_field_bytes as usize,
+                    bounds.maximum_field_bytes.get() as usize,
                 ) {
                     tokio::time::timeout(read_deadline, settlement.refuse())
                         .await
@@ -421,8 +450,8 @@ fn rabbitmq_read_fault(fault: RabbitMqReadFault) -> RouteFailure {
     let (class, code, message) = match fault {
         RabbitMqReadFault::Timeout => (
             ErrorClass::UpstreamTimeout,
-            READ_BOUND_CODE,
-            "the RabbitMQ read deadline passed",
+            READ_TIMEOUT_CODE,
+            "the RabbitMQ read deadline passed; check the broker's load or raise the step's timeoutMilliseconds",
         ),
         RabbitMqReadFault::Oversized => (
             ErrorClass::UpstreamTooLarge,
@@ -446,13 +475,23 @@ fn rabbitmq_read_fault(fault: RabbitMqReadFault) -> RouteFailure {
         ),
         RabbitMqReadFault::Topology => (
             ErrorClass::EgressRefused,
-            READ_BOUND_CODE,
-            "the RabbitMQ source and dead-letter topology was refused",
+            RABBITMQ_TOPOLOGY_CODE,
+            "the RabbitMQ broker refused the source and dead-letter topology; check the user's permissions, and with declareTopology: true make existing queue arguments match the durable x-dead-letter-exchange and x-dead-letter-routing-key the runtime names",
+        ),
+        RabbitMqReadFault::MissingQueue => (
+            ErrorClass::EgressRefused,
+            RABBITMQ_TOPOLOGY_CODE,
+            "the RabbitMQ source queue named by `queue` does not exist; create it durable with its dead-letter exchange, or set declareTopology: true so the runtime declares it",
+        ),
+        RabbitMqReadFault::MissingDeadLetterExchange => (
+            ErrorClass::EgressRefused,
+            RABBITMQ_TOPOLOGY_CODE,
+            "the RabbitMQ dead-letter exchange named by `deadLetterExchange` does not exist; create it (direct, durable) with its queue and routing key, or set declareTopology: true so the runtime declares it",
         ),
         RabbitMqReadFault::Unavailable => (
             ErrorClass::UpstreamConnection,
-            READ_BOUND_CODE,
-            "the RabbitMQ source was unavailable",
+            RABBITMQ_UNAVAILABLE_CODE,
+            "the RabbitMQ source was unavailable; check host, port, vhost, user and passwordRef, and that the broker is running",
         ),
     };
     read_refused(class, code, message.to_owned())
@@ -462,16 +501,16 @@ fn rabbitmq_read_fault(fault: RabbitMqReadFault) -> RouteFailure {
 fn rabbitmq_settlement_fault(_fault: RabbitMqSettlementFault) -> RouteFailure {
     read_refused(
         ErrorClass::UpstreamConnection,
-        READ_BOUND_CODE,
-        "the RabbitMQ poison delivery settlement was uncertain".to_owned(),
+        RABBITMQ_UNAVAILABLE_CODE,
+        "the RabbitMQ poison delivery settlement was uncertain; rerun the job once the broker is reachable, a redelivery is safe".to_owned(),
     )
 }
 
 fn read_timeout() -> RouteFailure {
     read_refused(
         ErrorClass::UpstreamTimeout,
-        READ_BOUND_CODE,
-        "the pollEnrich read did not finish inside its timeoutMilliseconds".to_owned(),
+        READ_TIMEOUT_CODE,
+        "the pollEnrich read did not finish inside its timeoutMilliseconds; check the source's latency or raise timeoutMilliseconds".to_owned(),
     )
 }
 
@@ -489,14 +528,18 @@ fn read_refused(class: ErrorClass, code: &'static str, message: String) -> Route
     }
 }
 
+#[cfg(any(feature = "job-file", feature = "job-sftp"))]
 fn record_refused(
     class: ErrorClass,
     code: &'static str,
-    message: &'static str,
+    message: String,
     ordinal: u64,
 ) -> RouteFailure {
-    let mut failure = read_refused(class, code, message.to_owned());
-    failure.record = Some(Box::new(RecordLocator { ordinal }));
+    let mut failure = read_refused(class, code, message);
+    failure.record = Some(Box::new(RecordLocator {
+        ordinal,
+        column: None,
+    }));
     failure
 }
 
@@ -508,7 +551,7 @@ fn read_fault(fault: FileReadFault) -> RouteFailure {
             return record_refused(
                 ErrorClass::UpstreamMalformed,
                 DECODER_ROW_CODE,
-                "the decoder refused a malformed file record",
+                format!("the decoder refused record {ordinal} of the file (counted from 0, header included): a field is not valid UTF-8 (UTF-8 is required, so re-export the file as UTF-8), the record has more fields than the header, or the header repeats a column name; correct or replace the file, since the read stays blocked on it until then"),
                 ordinal,
             )
         }
@@ -516,7 +559,7 @@ fn read_fault(fault: FileReadFault) -> RouteFailure {
             return record_refused(
                 ErrorClass::UpstreamMalformed,
                 DECODER_KEY_MISSING_CODE,
-                "the decoder found no declared business key on a file record",
+                format!("the decoder found no declared business key on record {ordinal} of the file; check keyPointer against the file's columns"),
                 ordinal,
             )
         }
@@ -524,7 +567,7 @@ fn read_fault(fault: FileReadFault) -> RouteFailure {
             return record_refused(
                 ErrorClass::UpstreamMalformed,
                 DECODER_KEY_INVALID_CODE,
-                "the decoder refused a file record's declared business key",
+                format!("the decoder refused the declared business key on record {ordinal} of the file; the key must be a non-empty string within the key bound"),
                 ordinal,
             )
         }
@@ -532,7 +575,7 @@ fn read_fault(fault: FileReadFault) -> RouteFailure {
             return record_refused(
                 ErrorClass::UpstreamMalformed,
                 DECODER_KEY_DUPLICATE_CODE,
-                "the decoder found a duplicate business key in one file",
+                format!("the decoder found record {ordinal} of the file repeats an earlier business key; keys must be unique within one file"),
                 ordinal,
             )
         }
@@ -541,11 +584,11 @@ fn read_fault(fault: FileReadFault) -> RouteFailure {
     let (class, message): (ErrorClass, String) = match fault {
         FileReadFault::Traversal => (
             ErrorClass::EgressRefused,
-            "the read refused a candidate name that leaves the source directory".to_owned(),
+            "the read refused a file name that contains a path separator (a backslash); rename the file, or narrow `include` so the name is not selected".to_owned(),
         ),
         FileReadFault::NameUnreadable => (
             ErrorClass::EgressRefused,
-            "the read refused a candidate name the engine cannot carry".to_owned(),
+            "the read refused a file name that is not valid UTF-8; rename the file, or narrow `include` so the name is not selected".to_owned(),
         ),
         FileReadFault::Escape => (
             ErrorClass::EgressRefused,
@@ -573,11 +616,16 @@ fn read_fault(fault: FileReadFault) -> RouteFailure {
         ),
         FileReadFault::LockTimeout => (
             ErrorClass::UpstreamTimeout,
-            "the changed read lock did not settle inside its timeout".to_owned(),
+            "the changed read lock did not settle inside its timeout; check that the producer has finished writing the file, or raise readLockTimeoutMilliseconds".to_owned(),
+        ),
+        FileReadFault::DecodeTimeout => (
+            ErrorClass::UpstreamTimeout,
+            "the file decode did not finish inside the pollEnrich timeoutMilliseconds; raise timeoutMilliseconds or split the file".to_owned(),
         ),
     };
     let code = match class {
         ErrorClass::UpstreamMalformed => DECODER_ROW_CODE,
+        ErrorClass::UpstreamTimeout => READ_TIMEOUT_CODE,
         _ => READ_BOUND_CODE,
     };
     read_refused(class, code, message)
@@ -590,7 +638,7 @@ fn sftp_read_fault(fault: SftpReadFault) -> RouteFailure {
             return record_refused(
                 ErrorClass::UpstreamMalformed,
                 DECODER_ROW_CODE,
-                "the decoder refused a malformed SFTP record",
+                format!("the decoder refused record {ordinal} of the SFTP file (counted from 0, header included): a field is not valid UTF-8 (UTF-8 is required, so re-export the file as UTF-8), the record has more fields than the header, or the header repeats a column name; correct or replace the file, since the read stays blocked on it until then"),
                 ordinal,
             )
         }
@@ -598,7 +646,7 @@ fn sftp_read_fault(fault: SftpReadFault) -> RouteFailure {
             return record_refused(
                 ErrorClass::UpstreamMalformed,
                 DECODER_KEY_MISSING_CODE,
-                "the decoder found no declared business key on an SFTP record",
+                format!("the decoder found no declared business key on record {ordinal} of the SFTP file; check keyPointer against the file's columns"),
                 ordinal,
             )
         }
@@ -606,7 +654,7 @@ fn sftp_read_fault(fault: SftpReadFault) -> RouteFailure {
             return record_refused(
                 ErrorClass::UpstreamMalformed,
                 DECODER_KEY_INVALID_CODE,
-                "the decoder refused an SFTP record's declared business key",
+                format!("the decoder refused the declared business key on record {ordinal} of the SFTP file; the key must be a non-empty string within the key bound"),
                 ordinal,
             )
         }
@@ -614,35 +662,67 @@ fn sftp_read_fault(fault: SftpReadFault) -> RouteFailure {
             return record_refused(
                 ErrorClass::UpstreamMalformed,
                 DECODER_KEY_DUPLICATE_CODE,
-                "the decoder found a duplicate business key in one SFTP file",
+                format!("the decoder found record {ordinal} of the SFTP file repeats an earlier business key; keys must be unique within one file"),
                 ordinal,
             )
         }
         _ => {}
     }
-    let (class, message) = match fault {
+    let (class, code, message) = match fault {
         SftpReadFault::Timeout => (
             ErrorClass::UpstreamTimeout,
-            "the SFTP operation deadline passed",
+            READ_TIMEOUT_CODE,
+            "the SFTP operation deadline passed; check the server's latency or raise the step's timeoutMilliseconds",
         ),
-        SftpReadFault::Connection | SftpReadFault::Close => {
-            (ErrorClass::UpstreamConnection, "the SFTP connection failed")
-        }
-        SftpReadFault::HostKey | SftpReadFault::Credential | SftpReadFault::Authentication => (
+        SftpReadFault::Connection | SftpReadFault::Close => (
+            ErrorClass::UpstreamConnection,
+            SFTP_CONNECTION_CODE,
+            "the SFTP connection failed; check host and port, and that the server accepts connections from this host",
+        ),
+        SftpReadFault::Negotiation => (
+            ErrorClass::UpstreamConnection,
+            SFTP_CONNECTION_CODE,
+            "the SFTP server offers no key exchange, cipher or host-key algorithm this host accepts; the host accepts curve25519-sha256, ecdh-sha2-nistp256 and ecdh-sha2-nistp384 key exchange, AES-GCM and AES-CTR ciphers with hmac-sha2-256-etm or hmac-sha2-512-etm, and an Ed25519 or ECDSA P-256 host key matching pinnedHostKey; enable one of them on the server",
+        ),
+        SftpReadFault::HostKey => (
             ErrorClass::EgressRefused,
-            "the SFTP trust or credential boundary refused the connection",
+            SFTP_HOST_KEY_CODE,
+            "the SFTP server's key does not match pinnedHostKey; verify the server's key out of band before updating the pin, since a changed key can mean an interception",
+        ),
+        SftpReadFault::Credential => (
+            ErrorClass::EgressRefused,
+            SFTP_CREDENTIAL_CODE,
+            "the configured SFTP credential could not be loaded; check that its secret reference resolves to a valid password or OpenSSH private key",
+        ),
+        SftpReadFault::Authentication => (
+            ErrorClass::EgressRefused,
+            SFTP_AUTHENTICATION_CODE,
+            "the SFTP server refused the user and credential; check user, rotate the password or key, and confirm the account is enabled",
         ),
         SftpReadFault::Listing | SftpReadFault::Incomplete | SftpReadFault::Malformed => (
             ErrorClass::UpstreamMalformed,
-            "the SFTP source returned an incomplete or malformed read",
+            SFTP_MALFORMED_CODE,
+            "the SFTP source returned an incomplete or malformed read; check that the producer finished the file under its completion protocol, then rerun",
         ),
         SftpReadFault::Traversal | SftpReadFault::Escape | SftpReadFault::NotRegular => (
             ErrorClass::EgressRefused,
-            "the SFTP read refused a path outside its fixed regular-file boundary",
+            SFTP_PATH_CODE,
+            "the SFTP read refused a path outside its fixed regular-file boundary; place regular files, not links or directories, directly under baseDirectory",
         ),
-        SftpReadFault::TooLarge | SftpReadFault::RowBound => (
+        SftpReadFault::TooLarge => (
             ErrorClass::UpstreamTooLarge,
-            "the SFTP read exceeded a configured bound",
+            READ_BOUND_CODE,
+            "the SFTP file exceeded the profile's read.maximumFileBytes; raise it within the platform ceiling or split the file",
+        ),
+        SftpReadFault::ListingTooLarge => (
+            ErrorClass::UpstreamTooLarge,
+            READ_BOUND_CODE,
+            "the SFTP listing exceeded the runtime's maximumListingEntries; raise it (at most 10000) or move processed files out of baseDirectory",
+        ),
+        SftpReadFault::RowBound => (
+            ErrorClass::UpstreamTooLarge,
+            READ_BOUND_CODE,
+            "the SFTP decoder refused a record or field over the profile's read bounds",
         ),
         SftpReadFault::Row(_)
         | SftpReadFault::KeyMissing(_)
@@ -650,8 +730,164 @@ fn sftp_read_fault(fault: SftpReadFault) -> RouteFailure {
         | SftpReadFault::KeyDuplicate(_) => unreachable!("record faults returned above"),
         SftpReadFault::DecoderSyntax => (
             ErrorClass::EgressRefused,
+            READ_BOUND_CODE,
             "the decoder configuration was refused",
         ),
     };
-    read_refused(class, READ_BOUND_CODE, message.to_owned())
+    read_refused(class, code, message.to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::job::JOB_ENGINE_CODES;
+
+    fn code_of(failure: &RouteFailure) -> &'static str {
+        failure
+            .code
+            .expect("a read refusal carries its closed code")
+    }
+
+    /// Each operator-actionable read fault names its own closed code, so
+    /// a pinned-key mismatch, a refused password and a differing queue
+    /// declaration are told apart without reading a message.
+    #[cfg(feature = "job-sftp")]
+    #[test]
+    fn sftp_faults_name_the_condition_the_operator_fixes() {
+        let cases = [
+            (SftpReadFault::Timeout, "adapter.job.read-timeout"),
+            (SftpReadFault::Connection, "adapter.job.sftp-connection"),
+            (SftpReadFault::Close, "adapter.job.sftp-connection"),
+            (SftpReadFault::Negotiation, "adapter.job.sftp-connection"),
+            (SftpReadFault::HostKey, "adapter.job.sftp-host-key"),
+            (SftpReadFault::Credential, "adapter.job.sftp-credential"),
+            (
+                SftpReadFault::Authentication,
+                "adapter.job.sftp-authentication",
+            ),
+            (SftpReadFault::Listing, "adapter.job.sftp-malformed"),
+            (SftpReadFault::Incomplete, "adapter.job.sftp-malformed"),
+            (SftpReadFault::Malformed, "adapter.job.sftp-malformed"),
+            (SftpReadFault::Traversal, "adapter.job.sftp-path"),
+            (SftpReadFault::Escape, "adapter.job.sftp-path"),
+            (SftpReadFault::NotRegular, "adapter.job.sftp-path"),
+            (SftpReadFault::TooLarge, "adapter.job.read-bound"),
+            (SftpReadFault::RowBound, "adapter.job.read-bound"),
+            (SftpReadFault::Row(0), "adapter.job.decoder-row"),
+        ];
+        for (fault, code) in cases {
+            let failure = sftp_read_fault(fault);
+            assert_eq!(code_of(&failure), code, "{fault:?}");
+            assert!(JOB_ENGINE_CODES.contains(&code), "{code} is registered");
+        }
+    }
+
+    #[cfg(feature = "job-rabbitmq")]
+    #[test]
+    fn rabbitmq_faults_name_the_condition_the_operator_fixes() {
+        let cases = [
+            (RabbitMqReadFault::Timeout, "adapter.job.read-timeout"),
+            (RabbitMqReadFault::Oversized, "adapter.job.read-bound"),
+            (RabbitMqReadFault::InvalidBounds, "adapter.job.read-bound"),
+            (RabbitMqReadFault::Topology, "adapter.job.rabbitmq-topology"),
+            (
+                RabbitMqReadFault::MissingQueue,
+                "adapter.job.rabbitmq-topology",
+            ),
+            (
+                RabbitMqReadFault::MissingDeadLetterExchange,
+                "adapter.job.rabbitmq-topology",
+            ),
+            (
+                RabbitMqReadFault::Unavailable,
+                "adapter.job.rabbitmq-unavailable",
+            ),
+            (
+                RabbitMqReadFault::NonPersistent,
+                RABBITMQ_DELIVERY_MODE_CODE,
+            ),
+        ];
+        for (fault, code) in cases {
+            let failure = rabbitmq_read_fault(fault);
+            assert_eq!(code_of(&failure), code, "{fault:?}");
+            assert!(JOB_ENGINE_CODES.contains(&code), "{code} is registered");
+        }
+    }
+
+    #[cfg(feature = "job-file")]
+    #[test]
+    fn a_file_read_lock_timeout_is_a_timeout_not_a_bound() {
+        let failure = read_fault(FileReadFault::LockTimeout);
+        assert_eq!(code_of(&failure), "adapter.job.read-timeout");
+        assert_eq!(failure.class, ErrorClass::UpstreamTimeout);
+    }
+
+    /// A refused record names its number, the UTF-8 requirement and the
+    /// fix, so an operator can find the row and know the file blocks the
+    /// folder until it is replaced.
+    #[cfg(feature = "job-file")]
+    #[test]
+    fn a_malformed_file_record_names_its_number_and_the_utf8_requirement() {
+        let failure = read_fault(FileReadFault::Row(7));
+        let message = failure.message.expect("a message");
+        assert!(message.contains("record 7"), "{message}");
+        assert!(message.contains("UTF-8 is required"), "{message}");
+        assert!(message.contains("replace the file"), "{message}");
+        assert_eq!(failure.record.expect("the locator").ordinal, 7);
+    }
+
+    #[cfg(feature = "job-file")]
+    #[test]
+    fn a_refused_file_name_names_the_include_fix() {
+        for fault in [FileReadFault::Traversal, FileReadFault::NameUnreadable] {
+            let message = read_fault(fault).message.expect("a message");
+            assert!(message.contains("`include`"), "{message}");
+            assert!(message.contains("rename"), "{message}");
+        }
+    }
+
+    #[cfg(feature = "job-file")]
+    #[test]
+    fn an_abandoned_file_decode_is_a_timeout_that_names_the_poll_deadline() {
+        let failure = read_fault(FileReadFault::DecodeTimeout);
+        assert_eq!(code_of(&failure), "adapter.job.read-timeout");
+        assert_eq!(failure.class, ErrorClass::UpstreamTimeout);
+        let message = failure.message.expect("a message");
+        assert!(message.contains("timeoutMilliseconds"), "{message}");
+        assert!(!message.contains("lock"), "{message}");
+    }
+
+    #[cfg(feature = "job-sftp")]
+    #[test]
+    fn an_sftp_bound_fault_names_the_field_that_was_hit() {
+        let file = sftp_read_fault(SftpReadFault::TooLarge)
+            .message
+            .expect("a message");
+        assert!(file.contains("read.maximumFileBytes"), "{file}");
+        let listing = sftp_read_fault(SftpReadFault::ListingTooLarge)
+            .message
+            .expect("a message");
+        assert!(listing.contains("maximumListingEntries"), "{listing}");
+        assert_eq!(
+            code_of(&sftp_read_fault(SftpReadFault::ListingTooLarge)),
+            "adapter.job.read-bound"
+        );
+    }
+
+    #[test]
+    fn a_read_deadline_is_a_timeout_not_a_bound() {
+        assert_eq!(code_of(&read_timeout()), "adapter.job.read-timeout");
+        assert!(JOB_ENGINE_CODES.contains(&"adapter.job.read-timeout"));
+    }
+
+    #[cfg(feature = "job-postgres")]
+    #[test]
+    fn postgres_row_codes_are_registered() {
+        for code in [
+            crate::component::postgres::POSTGRES_COLUMN_TYPE_CODE,
+            crate::component::postgres::POSTGRES_KEY_NULL_CODE,
+        ] {
+            assert!(JOB_ENGINE_CODES.contains(&code), "{code} is registered");
+        }
+    }
 }

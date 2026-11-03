@@ -251,10 +251,9 @@ impl Operation for ProposalStart {
         if self.connector.action_mode() != BRegActionMode::Proposal {
             return Err(ConnectorFault::NotEnabled);
         }
-        // Touch the bindings so a deployment without the Proposal grants
-        // answers at prepare.
+        // Touch the binding so a deployment without the Proposal Get grant
+        // answers at prepare. The List grant is not needed here.
         self.connector.proposal_get_binding()?;
-        self.connector.proposal_collection()?;
         let invocation = action::prepare_invocation(&self.connector, input, &key)?;
         let envelope = action::seal_invocation(
             START_OPERATION,

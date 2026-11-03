@@ -61,6 +61,26 @@ impl std::fmt::Display for TargetDocumentDiagnostic {
 
 impl std::error::Error for TargetDocumentDiagnostic {}
 
+/// The `--output` directory of a package run exists already. Packaging never
+/// replaces a candidate, so this is a refusal about the argument, not about the
+/// project.
+#[derive(Debug)]
+pub(crate) struct OutputExists {
+    pub(crate) output: PathBuf,
+}
+
+impl std::fmt::Display for OutputExists {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "The --output path {} already exists; evidencectl package never replaces a candidate.",
+            self.output.display()
+        )
+    }
+}
+
+impl std::error::Error for OutputExists {}
+
 pub(crate) fn run_package_with_format(args: BuildArgs, format: OutputFormat) -> Result<ExitCode> {
     let interruption = BuildInterruption::install()?;
     run_inner(args, &interruption, format)
@@ -865,7 +885,10 @@ fn bundle_files(root: &Path) -> Result<Vec<PathBuf>> {
 
 fn reject_existing_output(path: &Path) -> Result<()> {
     match fs::symlink_metadata(path) {
-        Ok(_) => bail!("output already exists; evidencectl package never overwrites a candidate"),
+        Ok(_) => Err(OutputExists {
+            output: path.to_path_buf(),
+        }
+        .into()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error).context("inspecting the candidate output path"),
     }

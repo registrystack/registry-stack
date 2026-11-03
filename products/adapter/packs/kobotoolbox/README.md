@@ -8,13 +8,15 @@ knowledge, no writes, no delete or patch endpoint, no
 `_validation_status` handling beyond read-only passthrough inside the
 captured value.
 
-Controlled synthetic validation exercised KoboToolbox `2.026.37c` using
-its real submissions and edit APIs. A separate direct job journey reached a
-submitted BReg Proposal, distinct human Casework approval, and one applied
-record. An unchanged rescan skipped the item; editing the same submission
-held it with the prior Proposal reference instead of registering it again.
-This is bounded local deployment evidence, not a production or server-upgrade
-compatibility claim. The committed replay fixtures remain synthetic.
+The maintainers ran the pack with synthetic data on a real KoboToolbox
+`2.026.37c` server, using its submissions and edit APIs. A separate direct job
+journey reached a submitted BReg Proposal, distinct human Casework approval, and
+one applied record. An unchanged rescan skipped the item; editing the same
+submission held it with the prior Proposal reference instead of registering it
+again. No run record is committed, so `testedVersions` is unverified until your
+own pilot repeats the run. This is bounded local evidence, not a production or
+server-upgrade compatibility claim. The committed replay fixtures remain
+synthetic.
 
 ## What the route reads
 
@@ -106,10 +108,10 @@ The route shapes one submission per script call (a `split` over
 `results`), so a wide form never shares one script budget with the
 whole page.
 
-## Controlled probe results and remaining limits
+## Probe results and remaining limits
 
-The controlled server used KoboToolbox `2.026.37c`. These observations apply
-to that fixture and version:
+The probe server was a real KoboToolbox `2.026.37c` loaded with synthetic data.
+These observations apply to that server and version:
 
 1. **Submission identity:** all 101 submission `_id` values were unique.
    An authenticated edit kept the same `_id`. Deduplication and identity
@@ -125,7 +127,8 @@ to that fixture and version:
    poll-only change feed.
 5. **Read cap:** fixed `limit=100` returned pages of 100 and 1, followed by
    an empty tail. A 30,000-item deployment and bulk-cap behavior were not
-   exercised. Size the response bound and rescan cost for each form.
+   exercised. Size the response bound and rescan cost for each form; [Wide
+   forms](#wide-forms) says how to change them.
 6. **Sorting and filtering:** `sort={"_id":1}` and the `$gt` keyset filter
    returned exactly the expected ascending continuation. This was not a
    concurrent-writer or server-upgrade test.
@@ -140,6 +143,35 @@ service. A service-initiated Proposal also needs a review policy compatible
 with that actor: a policy requiring a human initiator refused a separate
 fixture before task creation. Do not relax a production review policy merely
 to copy the synthetic drill.
+
+## Wide forms
+
+The pack fixes the page at `limit=100` and the endpoint at 1 MiB
+(`maximumResponseBytes: 1048576`). A form whose submissions average more than
+about 10 KB (many questions, repeat groups, attachments, geolocation) makes a
+full page exceed that bound. The send then fails with the same page on every
+pass, and the position never moves. Neither the runtime nor the job can change
+the pack's page size, and the runtime may only lower the response bound. The fix
+is a pack of your own for that form, pinned in place of the maintained one:
+
+1. Copy `pack.yaml` and its `scripts/` to a directory you own. Give the copy a
+   new `id` (or `version`) so nobody mistakes it for the maintained pack.
+2. In the copy, lower `limit` (for example to `"25"`), or raise the endpoint's
+   `maximumResponseBytes` (the ceiling is 16 MiB, 16777216), or both. A lower
+   `limit` also lowers the rescan cost per page.
+3. If you raised `maximumResponseBytes`, raise `profile.maximumResponseBytes`
+   and `profile.maximumPageBytes` in the job to match. The profile is never
+   tighter than the endpoint. If you lowered `limit` alone, nothing else needs
+   to change.
+4. Recompute the pack digest: `shasum -a 256 pack.yaml`. Put it in
+   `source.pack.digest` of your job file and in `pack.digest` of
+   `project.yaml`. Update `id` or `version` in both places if you changed them.
+5. Run `adapterctl job check` with your pack, as in
+   `products/adapter/scripts/check-contracts.sh`. The check refuses a stale
+   digest and names the field.
+
+The maintained pack and its digest stay unchanged, so you can still compare
+your copy with it.
 
 ## Fixtures
 

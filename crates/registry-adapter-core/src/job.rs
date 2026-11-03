@@ -179,6 +179,15 @@ pub const MAXIMUM_TRIGGER_BACKOFF_MULTIPLIER: u32 = 10;
 /// `DEFAULT_DELAY`); a minute is the safer default for a governed pass.
 pub const DEFAULT_TRIGGER_DELAY_MILLISECONDS: u64 = 60_000;
 
+/// The longest hook path the trigger checks admit, in bytes.
+pub const MAXIMUM_HOOK_PATH_BYTES: usize = 256;
+
+/// The hook path grammar the trigger checks hold, stated for the schema:
+/// slash-separated segments of ASCII unreserved characters, none of them a
+/// `.` or `..` dot segment. Spelled without lookahead so every JSON Schema
+/// regex engine reads it.
+pub const HOOK_PATH_SCHEMA_PATTERN: &str = "^(/([A-Za-z0-9_~-][A-Za-z0-9._~-]*|\\.[A-Za-z0-9_~-][A-Za-z0-9._~-]*|\\.\\.[A-Za-z0-9._~-]+))+$";
+
 /// Every job-side configuration diagnostic code, in code-string order.
 /// The vocabulary follows the closed-code pattern of
 /// `crate::diagnostics`; these codes point into the pack's source-route
@@ -197,6 +206,7 @@ pub enum JobCode {
     PageItemsBound,
     PageKey,
     PageNextBound,
+    PageRevision,
     PageShape,
     PollEndpointKind,
     PollEndpointUnknown,
@@ -206,7 +216,6 @@ pub enum JobCode {
     PostgresParametersRequired,
     PostgresParametersUnbounded,
     PostgresQueryUnpinned,
-    ProfileBound,
     ProfileEndpointBound,
     ProfileInconsistent,
     ProjectionBound,
@@ -240,6 +249,7 @@ impl JobCode {
         Self::PageItemsBound,
         Self::PageKey,
         Self::PageNextBound,
+        Self::PageRevision,
         Self::PageShape,
         Self::PollEndpointKind,
         Self::PollEndpointUnknown,
@@ -249,7 +259,6 @@ impl JobCode {
         Self::PostgresParametersRequired,
         Self::PostgresParametersUnbounded,
         Self::PostgresQueryUnpinned,
-        Self::ProfileBound,
         Self::ProfileEndpointBound,
         Self::ProfileInconsistent,
         Self::ProjectionBound,
@@ -283,6 +292,7 @@ impl JobCode {
             Self::PageItemsBound => "adapter.job.page-items-bound",
             Self::PageKey => "adapter.job.page-key",
             Self::PageNextBound => "adapter.job.page-next-bound",
+            Self::PageRevision => "adapter.job.page-revision",
             Self::PageShape => "adapter.job.page-shape",
             Self::PollEndpointKind => "adapter.job.poll-endpoint-kind",
             Self::PollEndpointUnknown => "adapter.job.poll-endpoint-unknown",
@@ -292,7 +302,6 @@ impl JobCode {
             Self::PostgresParametersRequired => "adapter.job.postgres-parameters-required",
             Self::PostgresParametersUnbounded => "adapter.job.postgres-parameters-unbounded",
             Self::PostgresQueryUnpinned => "adapter.job.postgres-query-unpinned",
-            Self::ProfileBound => "adapter.job.profile-bound",
             Self::ProfileEndpointBound => "adapter.job.profile-endpoint-bound",
             Self::ProfileInconsistent => "adapter.job.profile-inconsistent",
             Self::ProjectionBound => "adapter.job.projection-bound",
@@ -347,8 +356,8 @@ impl JobCode {
             | Self::PageItemsBound
             | Self::PageKey
             | Self::PageNextBound
+            | Self::PageRevision
             | Self::PageShape
-            | Self::ProfileBound
             | Self::ProfileEndpointBound
             | Self::ProfileInconsistent
             | Self::ProjectionBound
@@ -420,23 +429,24 @@ pub struct JobSource {
 pub struct JobProfile {
     /// The longest one source-route run may take, in milliseconds
     /// (1 to 600000).
-    pub page_deadline_milliseconds: u64,
+    pub page_deadline_milliseconds:
+        registry_platform_yaml::BoundedU64<1, MAXIMUM_JOB_PAGE_DEADLINE_MILLISECONDS>,
     /// The largest response body one send of the job may take in, in
     /// bytes (1 to 16777216). Where an endpoint declares a tighter bound,
     /// the lower of the two applies; the checks refuse a profile tighter
     /// than an endpoint the source route reaches.
-    pub maximum_response_bytes: u64,
+    pub maximum_response_bytes: registry_platform_yaml::BoundedU64<1, MAXIMUM_JOB_RESPONSE_BYTES>,
     /// The most items one produced page may carry (1 to 10000).
-    pub maximum_page_items: u32,
+    pub maximum_page_items: registry_platform_yaml::BoundedU32<1, MAXIMUM_JOB_PAGE_ITEMS>,
     /// The largest serialized item page, in bytes (1 to 16777216).
-    pub maximum_page_bytes: u64,
+    pub maximum_page_bytes: registry_platform_yaml::BoundedU64<1, MAXIMUM_JOB_PAGE_BYTES>,
     /// The job's own upstream-call budget: the largest static worst-case
     /// number of upstream calls one pass may make (1 to 1000). The checks
     /// refuse a budget below the source route's worst-case call count
     /// under `adapter.job.call-budget`, reusing the same walk the facade
     /// binding's `maximumUpstreamCalls` stands on, so one budget shape
     /// covers both modes.
-    pub maximum_upstream_calls: u64,
+    pub maximum_upstream_calls: registry_platform_yaml::BoundedU64<1, MAXIMUM_JOB_UPSTREAM_CALLS>,
     /// The bounds of the reads the decoders produce.
     pub read: ReadBounds,
 }
@@ -450,15 +460,15 @@ pub struct JobProfile {
 pub struct ReadBounds {
     /// The largest file one read may take in, in bytes (1 to 1073741824).
     /// A bigger file is refused, never partially read.
-    pub maximum_file_bytes: u64,
+    pub maximum_file_bytes: registry_platform_yaml::BoundedU64<1, MAXIMUM_JOB_FILE_BYTES>,
     /// The largest one decoded row or line may take, in bytes
     /// (1 to 1048576).
-    pub maximum_row_bytes: u64,
+    pub maximum_row_bytes: registry_platform_yaml::BoundedU64<1, MAXIMUM_JOB_ROW_BYTES>,
     /// The largest one decoded field may take, in bytes (1 to 65536).
-    pub maximum_field_bytes: u64,
+    pub maximum_field_bytes: registry_platform_yaml::BoundedU64<1, MAXIMUM_JOB_FIELD_BYTES>,
     /// The most decoded rows one page may carry (1 to 10000); never more
     /// than the page's own `maximumPageItems`.
-    pub maximum_rows_per_page: u32,
+    pub maximum_rows_per_page: registry_platform_yaml::BoundedU32<1, MAXIMUM_JOB_ROWS_PER_PAGE>,
 }
 
 /// The ingestion job definition (`AdapterJob`): an identity, the pinned
@@ -731,6 +741,7 @@ fn is_default_digest_of(digest_of: &ProjectionDigestOf) -> bool {
 /// the next attempt) are the consumer's own
 /// (camel-4.23.0:core/camel-support/src/main/java/org/apache/camel/support/ScheduledPollConsumer.java#doRun).
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", schemars(extend("required" = ["kind"])))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct JobTrigger {
@@ -739,6 +750,7 @@ pub struct JobTrigger {
     /// the checks refuse a trigger that names no kind, or a kind outside
     /// the closed set, under `adapter.job.trigger-kind`.
     #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[cfg_attr(feature = "schema", schemars(extend("enum" = TRIGGER_KIND_VALUES)))]
     pub kind: String,
     /// The milliseconds between two interval passes, from
     /// [`MINIMUM_TRIGGER_DELAY_MILLISECONDS`] to
@@ -751,6 +763,13 @@ pub struct JobTrigger {
         default = "default_trigger_delay_milliseconds",
         skip_serializing_if = "is_default_trigger_delay_milliseconds"
     )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(range(
+            min = MINIMUM_TRIGGER_DELAY_MILLISECONDS,
+            max = MAXIMUM_TRIGGER_DELAY_MILLISECONDS
+        ))
+    )]
     pub delay_milliseconds: u64,
     /// The milliseconds before the first interval pass starts, from 0 to
     /// [`MAXIMUM_TRIGGER_INITIAL_DELAY_MILLISECONDS`]. Ports
@@ -760,6 +779,10 @@ pub struct JobTrigger {
     /// that file's 1000-millisecond `DEFAULT_INITIAL_DELAY`). The job
     /// default of 0 starts the first pass immediately.
     #[serde(default, skip_serializing_if = "is_zero_u64")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(range(max = MAXIMUM_TRIGGER_INITIAL_DELAY_MILLISECONDS))
+    )]
     pub initial_delay_milliseconds: u64,
     /// Whether a pass starts again immediately when the previous one
     /// read at least one item. Ports `greedy`
@@ -779,6 +802,10 @@ pub struct JobTrigger {
     /// the backoffMultipler should kick-in"). Default 0, off; the checks
     /// bound the value to [`MAXIMUM_TRIGGER_BACKOFF_THRESHOLD`].
     #[serde(default, skip_serializing_if = "is_zero_u32")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(range(max = MAXIMUM_TRIGGER_BACKOFF_THRESHOLD))
+    )]
     pub backoff_idle_threshold: u32,
     /// The consecutive failed passes that put the trigger into backoff.
     /// Ports `backoffErrorThreshold`
@@ -788,6 +815,10 @@ pub struct JobTrigger {
     /// Default 0, off; the checks bound the value to
     /// [`MAXIMUM_TRIGGER_BACKOFF_THRESHOLD`].
     #[serde(default, skip_serializing_if = "is_zero_u32")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(range(max = MAXIMUM_TRIGGER_BACKOFF_THRESHOLD))
+    )]
     pub backoff_error_threshold: u32,
     /// How many intervals the next attempt waits once an idle or error
     /// threshold is met: a multiplier of M skips M - 1 passes, so the
@@ -809,12 +840,19 @@ pub struct JobTrigger {
     )]
     #[cfg_attr(
         feature = "schema",
-        schemars(range(min = MINIMUM_TRIGGER_BACKOFF_MULTIPLIER))
+        schemars(range(
+            min = MINIMUM_TRIGGER_BACKOFF_MULTIPLIER,
+            max = MAXIMUM_TRIGGER_BACKOFF_MULTIPLIER
+        ))
     )]
     pub backoff_multiplier: u32,
     /// The clean listener path that wakes a pass. The pass re-reads the
     /// authoritative source; hook bodies never become source items.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(length(max = MAXIMUM_HOOK_PATH_BYTES), regex(pattern = HOOK_PATH_SCHEMA_PATTERN))
+    )]
     pub path: Option<String>,
     /// The operator binding supplying this hook's credentials and rate limit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -845,13 +883,19 @@ fn is_default_trigger_backoff_multiplier(value: &u32) -> bool {
     *value == 1
 }
 
-/// A value-free location in a decoded source file. Ordinals include headers
-/// and skipped physical input records according to the decoder contract.
+/// A value-free location in a decoded source file or a PostgreSQL result.
+/// Ordinals include headers and skipped physical input records according to
+/// the decoder contract; a PostgreSQL ordinal is the row's zero-based
+/// position in the query's order.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RecordLocator {
     /// The zero-based source record ordinal, including a CSV header record.
     pub ordinal: u64,
+    /// The one-based column position, when one column of the record
+    /// refused rather than the record as a whole.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub column: Option<u32>,
 }
 
 /// One source item of the item contract
@@ -902,9 +946,10 @@ pub enum ItemPageFault {
     /// a member carries the wrong JSON type, or an item carries no
     /// `value`, or the page or an item carries an undeclared member.
     Shape,
-    /// An item key is empty or longer than the bound, or a revision is
-    /// longer than the bound.
+    /// An item key is empty or longer than the bound.
     Key,
+    /// An item revision is longer than the bound.
+    Revision,
     /// The page carries more items than the profile's
     /// `maximumPageItems`.
     ItemsBound,
@@ -922,6 +967,7 @@ impl ItemPageFault {
         match self {
             Self::Shape => "adapter.job.page-shape",
             Self::Key => "adapter.job.page-key",
+            Self::Revision => "adapter.job.page-revision",
             Self::ItemsBound => "adapter.job.page-items-bound",
             Self::BytesBound => "adapter.job.page-bytes-bound",
             Self::NextBound => "adapter.job.page-next-bound",
@@ -960,6 +1006,9 @@ impl ItemPage {
             .get("items")
             .and_then(serde_json::Value::as_array)
             .ok_or(ItemPageFault::Shape)?;
+        if items.len() > profile.maximum_page_items.get() as usize {
+            return Err(ItemPageFault::ItemsBound);
+        }
         let mut parsed = Vec::with_capacity(items.len());
         for item in items {
             let members = item.as_object().ok_or(ItemPageFault::Shape)?;
@@ -981,7 +1030,7 @@ impl ItemPage {
                 Some(revision) => {
                     let revision = revision.as_str().ok_or(ItemPageFault::Shape)?;
                     if revision.len() > MAXIMUM_ITEM_REVISION_BYTES {
-                        return Err(ItemPageFault::Key);
+                        return Err(ItemPageFault::Revision);
                     }
                     Some(revision.to_string())
                 }
@@ -993,9 +1042,6 @@ impl ItemPage {
                 value,
             });
         }
-        if parsed.len() > profile.maximum_page_items as usize {
-            return Err(ItemPageFault::ItemsBound);
-        }
         if members
             .get("next")
             .is_some_and(|next| serialized_length(next) > MAXIMUM_NEXT_BYTES)
@@ -1006,7 +1052,7 @@ impl ItemPage {
             items: parsed,
             next: members.get("next").filter(|next| !next.is_null()).cloned(),
         };
-        if serialized_length(&page.to_value()) > profile.maximum_page_bytes as usize {
+        if serialized_length(&page.to_value()) > profile.maximum_page_bytes.get() as usize {
             return Err(ItemPageFault::BytesBound);
         }
         Ok(page)
@@ -1215,7 +1261,6 @@ pub fn check_job(job: &AdapterJob, pack: &AdapterPack) -> Vec<Diagnostic> {
             "Name a sourceRoutes id of the pinned pack.",
         ));
     }
-    findings.extend(profile_bound_checks(&job.profile));
     findings.extend(profile_consistency_checks(&job.profile));
     findings.extend(profile_endpoint_checks(job, pack));
     findings.extend(destination_checks(&job.destination));
@@ -1345,75 +1390,11 @@ fn visible_bounded(value: &str, maximum: usize) -> bool {
             .all(|character| !character.is_control() && !character.is_whitespace())
 }
 
-/// The profile bounds: every member inside its declared range, the field
-/// named in the message and never the value.
-fn profile_bound_checks(profile: &JobProfile) -> Vec<Diagnostic> {
-    let ranges: [(&str, u64, u64); 9] = [
-        (
-            "pageDeadlineMilliseconds",
-            profile.page_deadline_milliseconds,
-            MAXIMUM_JOB_PAGE_DEADLINE_MILLISECONDS,
-        ),
-        (
-            "maximumResponseBytes",
-            profile.maximum_response_bytes,
-            MAXIMUM_JOB_RESPONSE_BYTES,
-        ),
-        (
-            "maximumPageItems",
-            u64::from(profile.maximum_page_items),
-            u64::from(MAXIMUM_JOB_PAGE_ITEMS),
-        ),
-        (
-            "maximumPageBytes",
-            profile.maximum_page_bytes,
-            MAXIMUM_JOB_PAGE_BYTES,
-        ),
-        (
-            "maximumUpstreamCalls",
-            profile.maximum_upstream_calls,
-            MAXIMUM_JOB_UPSTREAM_CALLS,
-        ),
-        (
-            "read/maximumFileBytes",
-            profile.read.maximum_file_bytes,
-            MAXIMUM_JOB_FILE_BYTES,
-        ),
-        (
-            "read/maximumRowBytes",
-            profile.read.maximum_row_bytes,
-            MAXIMUM_JOB_ROW_BYTES,
-        ),
-        (
-            "read/maximumFieldBytes",
-            profile.read.maximum_field_bytes,
-            MAXIMUM_JOB_FIELD_BYTES,
-        ),
-        (
-            "read/maximumRowsPerPage",
-            u64::from(profile.read.maximum_rows_per_page),
-            u64::from(MAXIMUM_JOB_ROWS_PER_PAGE),
-        ),
-    ];
-    let mut findings = Vec::new();
-    for &(field, value, maximum) in &ranges {
-        if !(1..=maximum).contains(&value) {
-            findings.push(job_finding(
-                JobCode::ProfileBound,
-                &format!("/profile/{field}"),
-                "the profile bound lies outside its 1-to-maximum range",
-                &format!("Declare the bound inside its 1 to {maximum} range."),
-            ));
-        }
-    }
-    findings
-}
-
 /// The profile's own consistency: the row and page bounds never exceed
 /// the bounds they sit inside.
 fn profile_consistency_checks(profile: &JobProfile) -> Vec<Diagnostic> {
     let mut findings = Vec::new();
-    if profile.read.maximum_rows_per_page > profile.maximum_page_items {
+    if profile.read.maximum_rows_per_page.get() > profile.maximum_page_items.get() {
         findings.push(job_finding(
             JobCode::ProfileInconsistent,
             "/profile/read/maximumRowsPerPage",
@@ -1421,7 +1402,7 @@ fn profile_consistency_checks(profile: &JobProfile) -> Vec<Diagnostic> {
             "Keep the rows-per-page bound at or below the page item bound.",
         ));
     }
-    if profile.maximum_page_bytes > profile.maximum_response_bytes {
+    if profile.maximum_page_bytes.get() > profile.maximum_response_bytes.get() {
         findings.push(job_finding(
             JobCode::ProfileInconsistent,
             "/profile/maximumPageBytes",
@@ -1454,7 +1435,7 @@ fn profile_endpoint_checks(job: &AdapterJob, pack: &AdapterPack) -> Vec<Diagnost
             .get(endpoint.as_str())
             .map(|endpoint| endpoint.maximum_response_bytes.get())
         {
-            if declared > job.profile.maximum_response_bytes {
+            if declared > job.profile.maximum_response_bytes.get() {
                 findings.push(job_finding(
                     JobCode::ProfileEndpointBound,
                     "/profile/maximumResponseBytes",
@@ -1643,24 +1624,17 @@ fn trigger_checks(triggers: &[JobTrigger]) -> Vec<Diagnostic> {
                 }
             }
             "hook" => {
-                let valid_path = trigger.path.as_ref().is_some_and(|path| {
-                    path.len() <= 256
-                        && path.strip_prefix('/').is_some_and(|relative| {
-                            !relative.is_empty()
-                                && relative.split('/').all(|segment| {
-                                    !segment.is_empty()
-                                        && !matches!(segment, "." | "..")
-                                        && segment.bytes().all(|byte| {
-                                            byte.is_ascii_alphanumeric()
-                                                || matches!(byte, b'-' | b'.' | b'_' | b'~')
-                                        })
-                                })
-                        })
-                });
-                if !valid_path || !hook_paths.insert(trigger.path.as_deref()) {
+                let cause = match hook_path_fault(trigger.path.as_deref()) {
+                    Some(cause) => Some(cause),
+                    None if !hook_paths.insert(trigger.path.as_deref()) => {
+                        Some("the hook path repeats another hook's path")
+                    }
+                    None => None,
+                };
+                if let Some(cause) = cause {
                     findings.push(job_finding(JobCode::TriggerKind, &format!("{prefix}/path"),
-                        "the hook path is missing, unclean, overbound, or repeated",
-                        "Declare one unique absolute path of at most 256 bytes using slash-separated ASCII unreserved segments, without dot segments."));
+                        cause,
+                        "Declare one unique absolute path of at most 256 bytes using slash-separated ASCII unreserved segments (letters, digits, `-._~`), without dot segments."));
                 }
                 if let Some(binding) = trigger.binding.as_ref() {
                     if !hook_bindings.insert(binding) {
@@ -1705,6 +1679,38 @@ fn trigger_checks(triggers: &[JobTrigger]) -> Vec<Diagnostic> {
     findings
 }
 
+/// Why a hook path is refused, or `None` when it is clean: one cause per
+/// finding, checked in the order an author reads the path.
+fn hook_path_fault(path: Option<&str>) -> Option<&'static str> {
+    let Some(path) = path else {
+        return Some("the hook names no path");
+    };
+    if path.len() > MAXIMUM_HOOK_PATH_BYTES {
+        return Some("the hook path is longer than 256 bytes");
+    }
+    let Some(relative) = path.strip_prefix('/') else {
+        return Some("the hook path does not start with a slash");
+    };
+    let segments: Vec<&str> = relative.split('/').collect();
+    if segments.iter().any(|segment| segment.is_empty()) {
+        return Some("the hook path has an empty segment (a bare `/`, `//`, or a trailing `/`)");
+    }
+    if segments
+        .iter()
+        .any(|segment| matches!(*segment, "." | ".."))
+    {
+        return Some("the hook path has a `.` or `..` segment");
+    }
+    let unreserved =
+        |byte: u8| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~');
+    if !path.bytes().all(|byte| byte == b'/' || unreserved(byte)) {
+        return Some(
+            "the hook path has a character outside the ASCII unreserved set (percent-encoding, query, fragment, and non-ASCII are refused)",
+        );
+    }
+    None
+}
+
 /// The profile's own upstream-call budget against the source route's
 /// static worst case: the same walk the facade binding budget stands on,
 /// over the pack's route graph alone, because a job runs beside no
@@ -1725,7 +1731,7 @@ fn call_budget_checks(job: &AdapterJob, pack: &AdapterPack) -> Vec<Diagnostic> {
             "the source route nests past the reader's depth bound, so its worst-case call count cannot be counted",
             "Flatten the nesting; the reader refuses documents deeper than the bound.",
         ));
-    } else if worst > job.profile.maximum_upstream_calls {
+    } else if worst > job.profile.maximum_upstream_calls.get() {
         findings.push(job_finding(
             JobCode::CallBudget,
             "/profile/maximumUpstreamCalls",
@@ -1872,18 +1878,28 @@ mod tests {
 
     const DIGEST: &str = "sha256:678260a56715cba21db1f0687e5a2c5e5efb2ea0b8eea687b5f3ee8723c5f6c9";
 
+    /// A profile bound known to lie inside its range.
+    fn bounded64<const MAX: u64>(value: u64) -> registry_platform_yaml::BoundedU64<1, MAX> {
+        registry_platform_yaml::BoundedU64::new(value).expect("inside its range")
+    }
+
+    /// A profile count known to lie inside its range.
+    fn bounded32<const MAX: u32>(value: u32) -> registry_platform_yaml::BoundedU32<1, MAX> {
+        registry_platform_yaml::BoundedU32::new(value).expect("inside its range")
+    }
+
     fn profile() -> JobProfile {
         JobProfile {
-            page_deadline_milliseconds: 60_000,
-            maximum_response_bytes: 16_777_216,
-            maximum_page_items: 1_000,
-            maximum_page_bytes: 1_048_576,
-            maximum_upstream_calls: 16,
+            page_deadline_milliseconds: bounded64(60_000),
+            maximum_response_bytes: bounded64(16_777_216),
+            maximum_page_items: bounded32(1_000),
+            maximum_page_bytes: bounded64(1_048_576),
+            maximum_upstream_calls: bounded64(16),
             read: ReadBounds {
-                maximum_file_bytes: 1_073_741_824,
-                maximum_row_bytes: 1_048_576,
-                maximum_field_bytes: 65_536,
-                maximum_rows_per_page: 1_000,
+                maximum_file_bytes: bounded64(1_073_741_824),
+                maximum_row_bytes: bounded64(1_048_576),
+                maximum_field_bytes: bounded64(65_536),
+                maximum_rows_per_page: bounded32(1_000),
             },
         }
     }
@@ -2144,110 +2160,45 @@ mod tests {
         assert_eq!(findings[0].artifact.as_deref(), Some(ADAPTER_JOB_KIND));
     }
 
-    /// Each profile bound refuses outside its range under
-    /// `adapter.job.profile-bound`, with the field named and no value
-    /// repeated. `maximumUpstreamCalls` at its default of 0 refuses too:
-    /// the member is mandatory at check time.
+    /// Each profile bound is a typed member: a value outside its
+    /// 1-to-maximum range fails to parse, so a job that declares one never
+    /// loads. The edge of each range parses; one past it does not.
     #[test]
-    fn check_job_refuses_out_of_range_profile_bounds() {
-        let cases: [(&str, JobProfile); 10] = [
+    fn profile_bounds_parse_only_inside_their_ranges() {
+        let cases: [(&[&str], u64); 9] = [
             (
-                "/profile/pageDeadlineMilliseconds",
-                JobProfile {
-                    page_deadline_milliseconds: 600_001,
-                    ..profile()
-                },
+                &["pageDeadlineMilliseconds"],
+                MAXIMUM_JOB_PAGE_DEADLINE_MILLISECONDS,
             ),
+            (&["maximumResponseBytes"], MAXIMUM_JOB_RESPONSE_BYTES),
+            (&["maximumPageItems"], u64::from(MAXIMUM_JOB_PAGE_ITEMS)),
+            (&["maximumPageBytes"], MAXIMUM_JOB_PAGE_BYTES),
+            (&["maximumUpstreamCalls"], MAXIMUM_JOB_UPSTREAM_CALLS),
+            (&["read", "maximumFileBytes"], MAXIMUM_JOB_FILE_BYTES),
+            (&["read", "maximumRowBytes"], MAXIMUM_JOB_ROW_BYTES),
+            (&["read", "maximumFieldBytes"], MAXIMUM_JOB_FIELD_BYTES),
             (
-                "/profile/maximumResponseBytes",
-                JobProfile {
-                    maximum_response_bytes: 16_777_217,
-                    ..profile()
-                },
-            ),
-            (
-                "/profile/maximumPageItems",
-                JobProfile {
-                    maximum_page_items: 10_001,
-                    ..profile()
-                },
-            ),
-            (
-                "/profile/maximumPageBytes",
-                JobProfile {
-                    maximum_page_bytes: 0,
-                    ..profile()
-                },
-            ),
-            (
-                "/profile/maximumUpstreamCalls",
-                JobProfile {
-                    maximum_upstream_calls: 0,
-                    ..profile()
-                },
-            ),
-            (
-                "/profile/maximumUpstreamCalls",
-                JobProfile {
-                    maximum_upstream_calls: 1_001,
-                    ..profile()
-                },
-            ),
-            (
-                "/profile/read/maximumFileBytes",
-                JobProfile {
-                    read: ReadBounds {
-                        maximum_file_bytes: 1_073_741_825,
-                        ..profile().read
-                    },
-                    ..profile()
-                },
-            ),
-            (
-                "/profile/read/maximumRowBytes",
-                JobProfile {
-                    read: ReadBounds {
-                        maximum_row_bytes: 1_048_577,
-                        ..profile().read
-                    },
-                    ..profile()
-                },
-            ),
-            (
-                "/profile/read/maximumFieldBytes",
-                JobProfile {
-                    read: ReadBounds {
-                        maximum_field_bytes: 65_537,
-                        ..profile().read
-                    },
-                    ..profile()
-                },
-            ),
-            (
-                "/profile/read/maximumRowsPerPage",
-                JobProfile {
-                    read: ReadBounds {
-                        maximum_rows_per_page: 0,
-                        ..profile().read
-                    },
-                    ..profile()
-                },
+                &["read", "maximumRowsPerPage"],
+                u64::from(MAXIMUM_JOB_ROWS_PER_PAGE),
             ),
         ];
-        for (pointer, bad) in cases {
-            let findings = check_job(
-                &AdapterJob {
-                    profile: bad,
-                    ..job("kobo-submissions")
-                },
-                &pack(),
-            );
+        let parse = |path: &[&str], value: u64| {
+            let mut document = serde_json::to_value(profile()).expect("profile serialises");
+            let mut member = &mut document;
+            for key in path {
+                member = &mut member[*key];
+            }
+            *member = serde_json::json!(value);
+            serde_json::from_value::<JobProfile>(document)
+        };
+        for (path, maximum) in cases {
+            assert!(parse(path, 1).is_ok(), "{path:?} accepts 1");
+            assert!(parse(path, maximum).is_ok(), "{path:?} accepts {maximum}");
+            assert!(parse(path, 0).is_err(), "{path:?} refuses 0");
             assert!(
-                findings
-                    .iter()
-                    .any(|finding| finding.code == JobCode::ProfileBound.code()
-                        && finding.path == pointer),
-                "{pointer} refuses with its own finding: {findings:?}"
+                parse(path, maximum + 1).is_err(),
+                "{path:?} refuses {}",
+                maximum + 1
             );
         }
     }
@@ -2258,7 +2209,7 @@ mod tests {
     fn check_job_refuses_an_inconsistent_profile() {
         let rows = JobProfile {
             read: ReadBounds {
-                maximum_rows_per_page: 1_001,
+                maximum_rows_per_page: bounded32(1_001),
                 ..profile().read
             },
             ..profile()
@@ -2277,8 +2228,8 @@ mod tests {
             "rows per page over the item bound refuses: {findings:?}"
         );
         let bytes = JobProfile {
-            maximum_page_bytes: 2_097_152,
-            maximum_response_bytes: 1_048_576,
+            maximum_page_bytes: bounded64(2_097_152),
+            maximum_response_bytes: bounded64(1_048_576),
             ..profile()
         };
         let findings = check_job(
@@ -2303,7 +2254,7 @@ mod tests {
     fn check_job_refuses_a_profile_tighter_than_a_reached_endpoint() {
         let pinned = pack();
         let mut tight = job("kobo-submissions");
-        tight.profile.maximum_response_bytes = 1_048_575;
+        tight.profile.maximum_response_bytes = bounded64(1_048_575);
         let findings = check_job(&tight, &pinned);
         assert_eq!(
             findings
@@ -2315,8 +2266,8 @@ mod tests {
         );
         // An unreachable endpoint's bound never constrains the profile.
         let mut isolated = job("kobo-submissions");
-        isolated.profile.maximum_response_bytes = 2;
-        isolated.profile.maximum_page_bytes = 2;
+        isolated.profile.maximum_response_bytes = bounded64(2);
+        isolated.profile.maximum_page_bytes = bounded64(2);
         let mut endpoints = pack().endpoints.into_vec();
         let ledger = endpoints
             .iter_mut()
@@ -2724,14 +2675,14 @@ mod tests {
         )
         .expect("pack");
         let mut below = job("kobo-submissions");
-        below.profile.maximum_upstream_calls = 1;
+        below.profile.maximum_upstream_calls = bounded64(1);
         let findings = check_job(&below, &looping_pack);
         assert_eq!(findings.len(), 1, "{findings:?}");
         assert_eq!(findings[0].code, JobCode::CallBudget.code());
         assert_eq!(findings[0].path, "/profile/maximumUpstreamCalls");
 
         let mut at_budget = job("kobo-submissions");
-        at_budget.profile.maximum_upstream_calls = 2;
+        at_budget.profile.maximum_upstream_calls = bounded64(2);
         let findings = check_job(&at_budget, &looping_pack);
         assert!(
             findings.is_empty(),
@@ -2758,14 +2709,14 @@ mod tests {
         )
         .expect("source routes");
         let mut below = job("kobo-submissions");
-        below.profile.maximum_upstream_calls = 2;
+        below.profile.maximum_upstream_calls = bounded64(2);
         let findings = check_job(&below, &splitting_pack);
         assert_eq!(findings.len(), 1, "{findings:?}");
         assert_eq!(findings[0].code, JobCode::CallBudget.code());
         assert_eq!(findings[0].path, "/profile/maximumUpstreamCalls");
 
         let mut at_budget = job("kobo-submissions");
-        at_budget.profile.maximum_upstream_calls = 3;
+        at_budget.profile.maximum_upstream_calls = bounded64(3);
         let findings = check_job(&at_budget, &splitting_pack);
         assert!(
             findings.is_empty(),
@@ -2842,6 +2793,8 @@ mod tests {
             .code(),
             ItemPageFault::Key.code()
         );
+        // An overlong revision is named as a revision fault, not a key
+        // fault, so the operator looks at the right member.
         let long_revision = "r".repeat(MAXIMUM_ITEM_REVISION_BYTES + 1);
         assert_eq!(
             ItemPage::from_value(
@@ -2850,12 +2803,12 @@ mod tests {
             )
             .expect_err("fault")
             .code(),
-            ItemPageFault::Key.code()
+            "adapter.job.page-revision"
         );
 
         // The page bounds.
         let mut tight = profile();
-        tight.maximum_page_items = 1;
+        tight.maximum_page_items = bounded32(1);
         let two = serde_json::json!({"items": [{"key": "a", "value": null}, {"key": "b", "value": null}]});
         assert_eq!(
             ItemPage::from_value(&two, &tight)
@@ -2863,8 +2816,17 @@ mod tests {
                 .code(),
             ItemPageFault::ItemsBound.code()
         );
+        // The count bound applies before any item is read: an overcount
+        // page is refused as overcount even when a later item is malformed.
+        let overcount = serde_json::json!({"items": [{"key": "a", "value": null}, {"key": ""}]});
+        assert_eq!(
+            ItemPage::from_value(&overcount, &tight)
+                .expect_err("fault")
+                .code(),
+            ItemPageFault::ItemsBound.code()
+        );
         let mut tight = profile();
-        tight.maximum_page_bytes = 8;
+        tight.maximum_page_bytes = bounded64(8);
         assert_eq!(
             ItemPage::from_value(
                 &serde_json::json!({"items": [{"key": "a", "value": null}]}),
@@ -2926,6 +2888,71 @@ mod tests {
                 .expect("valid");
         assert_eq!(page.next, None);
         assert_eq!(page.to_value(), serde_json::json!({"items": []}));
+    }
+
+    /// The generated job schema states the trigger rules an editor can
+    /// check without the checks: the kind is required and closed, the
+    /// interval options carry their ranges, and the hook path carries its
+    /// length and segment grammar. The checks keep the located findings.
+    #[cfg(feature = "schema")]
+    #[test]
+    fn generated_job_schema_states_the_trigger_rules() {
+        let schema = serde_json::to_value(schemars::schema_for!(AdapterJob)).expect("schema");
+        let trigger = &schema["$defs"]["JobTrigger"];
+        assert_eq!(trigger["required"], serde_json::json!(["kind"]));
+        assert_eq!(
+            trigger["properties"]["kind"]["enum"],
+            serde_json::json!(TRIGGER_KIND_VALUES)
+        );
+        let properties = &trigger["properties"];
+        for (member, minimum, maximum) in [
+            (
+                "delayMilliseconds",
+                MINIMUM_TRIGGER_DELAY_MILLISECONDS,
+                MAXIMUM_TRIGGER_DELAY_MILLISECONDS,
+            ),
+            (
+                "initialDelayMilliseconds",
+                0,
+                MAXIMUM_TRIGGER_INITIAL_DELAY_MILLISECONDS,
+            ),
+            (
+                "backoffIdleThreshold",
+                0,
+                u64::from(MAXIMUM_TRIGGER_BACKOFF_THRESHOLD),
+            ),
+            (
+                "backoffErrorThreshold",
+                0,
+                u64::from(MAXIMUM_TRIGGER_BACKOFF_THRESHOLD),
+            ),
+            (
+                "backoffMultiplier",
+                u64::from(MINIMUM_TRIGGER_BACKOFF_MULTIPLIER),
+                u64::from(MAXIMUM_TRIGGER_BACKOFF_MULTIPLIER),
+            ),
+        ] {
+            assert_eq!(
+                properties[member]["minimum"],
+                serde_json::json!(minimum),
+                "{member}"
+            );
+            assert_eq!(
+                properties[member]["maximum"],
+                serde_json::json!(maximum),
+                "{member}"
+            );
+        }
+        assert_eq!(properties["path"]["maxLength"], serde_json::json!(256));
+        let pattern = properties["path"]["pattern"]
+            .as_str()
+            .expect("path pattern");
+        assert_eq!(pattern, HOOK_PATH_SCHEMA_PATTERN);
+        let pack = serde_json::to_value(schemars::schema_for!(crate::AdapterPack)).expect("schema");
+        assert_eq!(
+            pack["$defs"]["PollEnrichStep"]["properties"]["keyPointer"]["maxLength"],
+            serde_json::json!(512)
+        );
     }
 
     /// The job code vocabulary is closed, sorted, value-free, and
@@ -3129,6 +3156,126 @@ mod tests {
                 finding.code == JobCode::TriggerKind.code() && finding.path == "/triggers/2/binding"
             }),
             "a repeated binding is malformed, not unserved: {findings:?}"
+        );
+
+        // The interval trigger refuses the hook-only members, and a hook
+        // refuses the interval scheduling options, each at its member.
+        for (member, value, message) in [
+            (
+                "path",
+                serde_json::json!("/hooks/submissions"),
+                "hook-only path",
+            ),
+            (
+                "binding",
+                serde_json::json!("kobo-hook"),
+                "hook-only binding",
+            ),
+        ] {
+            let mut authored = base.clone();
+            authored["triggers"][0][member] = value;
+            let parsed: AdapterJob = serde_json::from_value(authored).expect("job");
+            let findings = check_job(&parsed, &pack());
+            assert!(
+                findings.iter().any(|finding| {
+                    finding.code == JobCode::TriggerKind.code()
+                        && finding.path == format!("/triggers/0/{member}")
+                        && finding.message.contains(message)
+                }),
+                "an interval trigger with {member} refuses at the member: {findings:?}"
+            );
+        }
+        let mut authored = base.clone();
+        authored["triggers"]
+            .as_array_mut()
+            .expect("triggers")
+            .push(serde_json::json!({
+                "kind": "hook", "path": "/hooks/submissions", "binding": "kobo-hook",
+                "greedy": true
+            }));
+        let parsed: AdapterJob = serde_json::from_value(authored).expect("job");
+        let findings = check_job(&parsed, &pack());
+        assert!(
+            findings.iter().any(|finding| {
+                finding.code == JobCode::TriggerKind.code()
+                    && finding.path == "/triggers/1"
+                    && finding.message.contains("interval scheduling options")
+            }),
+            "a hook with scheduling options refuses: {findings:?}"
+        );
+    }
+    /// Each hook path refusal names its one cause and the fix, so the
+    /// author does not have to guess among four.
+    #[test]
+    fn each_hook_path_refusal_names_its_cause() {
+        let base = serde_json::to_value(job("kobo-submissions")).expect("job");
+        let long = format!("/{}", "a".repeat(MAXIMUM_HOOK_PATH_BYTES));
+        for (path, cause) in [
+            (None, "the hook names no path"),
+            (
+                Some("relative"),
+                "the hook path does not start with a slash",
+            ),
+            (Some("/double//path"), "the hook path has an empty segment"),
+            (Some("/trailing/"), "the hook path has an empty segment"),
+            (
+                Some("/dot/../segment"),
+                "the hook path has a `.` or `..` segment",
+            ),
+            (
+                Some("/encoded%20path"),
+                "the hook path has a character outside",
+            ),
+            (
+                Some("/hooks/colon:segment"),
+                "the hook path has a character outside",
+            ),
+            (
+                Some(long.as_str()),
+                "the hook path is longer than 256 bytes",
+            ),
+        ] {
+            let mut trigger = serde_json::json!({"kind": "hook", "binding": "kobo-hook"});
+            if let Some(path) = path {
+                trigger["path"] = serde_json::json!(path);
+            }
+            let mut authored = base.clone();
+            authored["triggers"]
+                .as_array_mut()
+                .expect("triggers")
+                .push(trigger);
+            let parsed: AdapterJob = serde_json::from_value(authored).expect("job");
+            let findings = check_job(&parsed, &pack());
+            let finding = findings
+                .iter()
+                .find(|finding| finding.path == "/triggers/1/path")
+                .unwrap_or_else(|| panic!("{path:?} refuses: {findings:?}"));
+            assert!(
+                finding.message.starts_with(cause),
+                "{path:?} names its cause: {}",
+                finding.message
+            );
+            assert!(
+                finding.suggested_action.contains("unreserved"),
+                "{path:?} names the fix"
+            );
+        }
+        let hook =
+            serde_json::json!({"kind":"hook","path":"/hooks/submissions","binding":"kobo-hook"});
+        let mut repeated = hook.clone();
+        repeated["binding"] = serde_json::json!("other-hook");
+        let mut authored = base.clone();
+        authored["triggers"] = serde_json::json!([base["triggers"][0], hook, repeated]);
+        let parsed: AdapterJob = serde_json::from_value(authored).expect("job");
+        let findings = check_job(&parsed, &pack());
+        assert!(
+            findings
+                .iter()
+                .any(|finding| finding.path == "/triggers/2/path"
+                    && finding
+                        .message
+                        .starts_with("the hook path repeats another hook's path")),
+            "{findings:?}"
         );
     }
     #[test]

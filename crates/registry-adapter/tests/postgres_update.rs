@@ -700,34 +700,15 @@ async fn put_post_send_uncertainty_stays_spent_after_journal_recovery() {
 }
 
 #[tokio::test]
-async fn a_write_success_status_202_is_not_served_before_async_recovery_exists() {
+async fn a_write_success_status_202_without_async_completion_is_refused_at_load() {
     let upstream = UpstreamDouble::start();
     let project = tempfile::tempdir().expect("synthetic async project");
     write_artifacts(project.path(), 202);
-    let served = Served::start_with_project(&upstream.url(""), project.path()).await;
-    let token = served.token("records.write");
-
-    let contract = served.get(WELL_KNOWN_PATH, Some(&token));
-    let update = contract.2["contract"]["unserved"]
-        .as_array()
-        .expect("unserved operations")
-        .iter()
-        .find(|operation| operation["operationId"] == "records-update.person")
-        .expect("the asynchronous update is unserved");
-    assert_eq!(
-        update["reasonCode"],
-        "adapter.operation.write-async-unsupported"
+    let stderr = Served::refusal_with_project(&upstream.url(""), project.path()).await;
+    assert!(
+        stderr.contains("successStatus 202 and asyncCompletion together on one non-read write"),
+        "the refusal names the 202 rule: {stderr}"
     );
-
-    let response = put(
-        &served,
-        UPDATE_PATH,
-        Some(&token),
-        "async-update",
-        contract.2["digest"].as_str(),
-        &request_record("person-1", "Ada"),
-    );
-    assert_eq!(response.status, 404);
     assert_eq!(upstream.request_count(), 0);
 }
 

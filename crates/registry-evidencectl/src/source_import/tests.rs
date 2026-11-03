@@ -1789,7 +1789,7 @@ fn import_reads_the_committed_example_manifest() {
         })
         .expect("the example manifest decodes");
     assert_eq!(document.source_id, "registry-status");
-    assert_eq!(document.artifacts.len(), 8);
+    assert_eq!(document.artifacts.len(), 9);
 }
 
 const EXAMPLES: &str =

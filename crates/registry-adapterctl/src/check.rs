@@ -77,7 +77,7 @@ pub(crate) const PROJECT_FORMAT: FormatSpec<'static> = FormatSpec {
         api_versions: &[ApiVersion::current(ADAPTER_PROJECT_API_VERSION)],
         retired_api_versions: &[],
     },
-    removed_keys: &[],
+    removed_keys: registry_adapter_core::ADAPTER_PROJECT_REMOVED_KEYS,
 };
 
 /// The authored profile format.

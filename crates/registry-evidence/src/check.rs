@@ -68,7 +68,8 @@ pub struct OfflineCheck {
 }
 
 impl OfflineCheck {
-    fn new(file: String) -> Self {
+    /// An empty check that reports against `file`.
+    pub fn new(file: String) -> Self {
         Self {
             file,
             diagnostics: Vec::new(),

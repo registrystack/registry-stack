@@ -113,6 +113,9 @@ def verify(workspace: Path, binaries: dict[str, Path]) -> dict:
         "--access-profile", "evidence-source", "--record-type", "record",
         "--selector", "by-code", "--selector", "by-registration-number",
         "--fields", "status", "--source-id", "registry-status", "--connection", "registry",
+        # The pack declares the authentication the target below selects; the
+        # runtime refuses a pack and target that name different types.
+        "--authentication", "oauth2-private-key-jwt",
     )
     for name in ["export", "repeated-export"]:
         run(binaries["bregctl"], *export_arguments, "--output", workspace / name,

@@ -422,9 +422,20 @@ async fn pending_job_version_drift_stops_before_wire_and_restore_recovers() {
     assert_eq!(
         drifted.stopped,
         Some(StopReason::DestinationStop {
-            code: "adapter.job.coordinator-receiver-changed".to_string()
-        })
+            code: "adapter.job.coordinator-body-changed".to_string()
+        }),
+        "body drift has its own code, not the receiver's"
     );
+    let client = pool.get().await.expect("a pooled client");
+    let counts = registry_adapter_job::store::item_counts(&client, "case-daily")
+        .await
+        .expect("status counts read");
+    assert_eq!(
+        counts.pending_keys,
+        vec!["submissions/a".to_string()],
+        "status names the stuck pending key"
+    );
+    drop(client);
     assert_eq!(
         receiver.bodies.lock().expect("the body lock").len(),
         1,
@@ -524,8 +535,9 @@ async fn a_submicrosecond_event_time_keeps_identical_retry_bytes_after_store_rou
         projected: json!({"answers.age": "045"}),
     };
     let first_body_identity = destination
-        .canonical_body_identity(&job, &deliverable(&first))
-        .expect("the signed destination has a body identity")
+        .delivery_identity(&job, &deliverable(&first))
+        .expect("the signed destination has a delivery identity")
+        .canonical_body
         .expect("the first envelope is canonical");
     store::bind_delivery_identity(
         &mut client,
@@ -561,8 +573,9 @@ async fn a_submicrosecond_event_time_keeps_identical_retry_bytes_after_store_rou
     .expect("the retry stages")
     .expect("the pending sequence redelivers");
     let retry_body_identity = destination
-        .canonical_body_identity(&job, &deliverable(&retry))
-        .expect("the signed destination has a body identity")
+        .delivery_identity(&job, &deliverable(&retry))
+        .expect("the signed destination has a delivery identity")
+        .canonical_body
         .expect("the retry envelope is canonical");
     store::bind_delivery_identity(
         &mut client,

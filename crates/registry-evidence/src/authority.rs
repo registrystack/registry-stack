@@ -68,8 +68,9 @@ pub enum AuthorityError {
     InvalidDocument,
     #[error("target authority exceeds a package ceiling or names another project")]
     OutsideCeiling,
-    #[error("target authority does not supply every required source route input")]
-    SourceRouteInputs,
+    /// The cause is the fixed, value-free rule the authority path breaks.
+    #[error("target authority does not fit a source route's inputs: {0}")]
+    SourceRouteInputs(&'static str),
     #[error("target authority activation is not for this package and target; activate it again for the selected package")]
     BindingMismatch,
     #[error("target authority storage is invalid; use an owned directory with no group or world write access")]

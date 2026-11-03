@@ -84,9 +84,19 @@ pub enum RabbitMqReadFault {
     /// The broker connection or channel was unavailable.
     #[error("the RabbitMQ source is unavailable")]
     Unavailable,
-    /// The configured durable source and dead-letter topology did not match.
+    /// The broker refused the configured durable source and dead-letter
+    /// topology: a permission failure, or declared arguments that differ from
+    /// the existing queue's.
     #[error("the RabbitMQ topology was refused")]
     Topology,
+    /// The configured source queue does not exist and the host was not asked
+    /// to declare it.
+    #[error("the RabbitMQ source queue does not exist")]
+    MissingQueue,
+    /// The configured dead-letter exchange does not exist and the host was not
+    /// asked to declare it.
+    #[error("the RabbitMQ dead-letter exchange does not exist")]
+    MissingDeadLetterExchange,
     /// The broker delivery carried no nonempty stable `message-id`.
     #[error("the RabbitMQ delivery has no source identity")]
     MissingIdentity,

@@ -349,6 +349,19 @@ fn check_steps(
                         "a circuitBreaker judges from more calls than its window holds".to_owned(),
                     );
                 }
+                if evidence_route {
+                    for (member, declared) in [
+                        ("onFallback", breaker.on_fallback.is_some()),
+                        ("ignoreException", breaker.ignore_exception.is_some()),
+                        ("recordException", breaker.record_exception.is_some()),
+                    ] {
+                        if declared {
+                            return Err(format!(
+                                "an Evidence route circuitBreaker may not declare {member}: it would let a source failure continue as an answer; drop {member} so the breaker records every failure and an open breaker stays a failure"
+                            ));
+                        }
+                    }
+                }
                 if let Some(fallback) = &breaker.on_fallback {
                     if fallback.steps.is_empty() {
                         return Err("an onFallback declares no steps".to_owned());
@@ -405,6 +418,13 @@ fn check_steps(
                                 class.class()
                             ));
                         }
+                    }
+                    if evidence_route {
+                        check_evidence_catch(
+                            "a doCatch may not catch",
+                            &catch.exception,
+                            catch.on_when.is_some(),
+                        )?;
                     }
                     if let Some(expression) = &catch.on_when {
                         check_predicate_expression("doCatch onWhen", expression)?;
@@ -516,6 +536,39 @@ fn check_set_property(property: &SetPropertyStep) -> Result<(), String> {
     check_expression("setProperty", &property.value)
 }
 
+/// The failures an Evidence route must leave as failures: a source that is
+/// down, slow, malformed or refusing, and the route's own script and schema
+/// faults. Evidence maps them to `source.unavailable`; a handler that turned
+/// one into a lookup answer would record an outage as "no record".
+fn is_evidence_source_failure(class: ErrorClass) -> bool {
+    class.is_within(ErrorClass::Upstream)
+        || matches!(
+            class,
+            ErrorClass::BreakerOpen
+                | ErrorClass::ThrottleRejected
+                | ErrorClass::Script
+                | ErrorClass::Validation
+        )
+}
+
+/// An Evidence route handler may name a source failure only as an
+/// `upstream.http` answer it selects with `onWhen`, such as a 404 status
+/// test; every other source failure stays a failure.
+fn check_evidence_catch(site: &str, classes: &[ErrorClass], on_when: bool) -> Result<(), String> {
+    for class in classes {
+        if *class == ErrorClass::UpstreamHttp && on_when {
+            continue;
+        }
+        if is_evidence_source_failure(*class) {
+            return Err(format!(
+                "in an Evidence route {site} {}: a source failure must stay a failure, not become an answer; to answer a declared status such as 404, catch upstream.http with an onWhen status test, or use the registry-lookup-v1 host protocol",
+                class.class()
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn check_clause(
     clause: &OnExceptionStep,
     handler_policy: Option<&RedeliveryOptions>,
@@ -535,6 +588,17 @@ fn check_clause(
     }
     if clause.handled == Some(true) && clause.continued == Some(true) {
         return Err("an onException clause cannot set handled and continued together".into());
+    }
+    // A clause that only redelivers leaves the failure a failure; steps,
+    // handled or continued can turn it into an answer.
+    let retry_only =
+        clause.steps.is_empty() && clause.handled != Some(true) && clause.continued != Some(true);
+    if evidence_route && !retry_only {
+        check_evidence_catch(
+            "an onException clause may not handle",
+            &clause.exception,
+            clause.on_when.is_some(),
+        )?;
     }
     if let Some(expression) = &clause.on_when {
         check_predicate_expression("onWhen", expression)?;
@@ -676,7 +740,10 @@ fn check_to(to: &ToStep) -> Result<(), String> {
         }
         #[cfg(not(feature = "job-postgres"))]
         {
-            return Err("a to step is served for the http component only".into());
+            return Err(
+                "the postgres source component is not compiled into this binary; use an adapter-job build with the job-postgres feature"
+                    .into(),
+            );
         }
     }
     if to.uri.component != SendComponent::Http {
@@ -2357,10 +2424,12 @@ impl Run<'_, '_> {
             #[cfg(not(any(feature = "job-file", feature = "job-rabbitmq")))]
             Step::PollEnrich(_) => Err(RouteFailure {
                 class: ErrorClass::EgressRefused,
-                message: Some("a pollEnrich step is served in a job source route only".to_owned()),
+                message: Some(
+                    "a pollEnrich step reads a job source, and no job source component is compiled into this binary; use an adapter-job build with the job-file or job-rabbitmq feature".to_owned(),
+                ),
                 data: None,
                 auth: None,
-                code: None,
+                code: Some("adapter.job.component-unavailable"),
                 record: None,
                 evidence_diagnostic: None,
             }),
@@ -2599,7 +2668,7 @@ impl Run<'_, '_> {
                         ),
                         data: None,
                         auth: None,
-                        code: None,
+                        code: Some("adapter.job.source-unbound"),
                         record: None,
                         evidence_diagnostic: None,
                     });
@@ -2613,7 +2682,7 @@ impl Run<'_, '_> {
                         ),
                         data: None,
                         auth: None,
-                        code: None,
+                        code: Some("adapter.job.source-unbound"),
                         record: None,
                         evidence_diagnostic: None,
                     });
@@ -2631,11 +2700,11 @@ impl Run<'_, '_> {
                 return Err(RouteFailure {
                     class: ErrorClass::EgressRefused,
                     message: Some(
-                        "a postgres source send is served in a job source route only".to_owned(),
+                        "the postgres source component is not compiled into this binary; use an adapter-job build with the job-postgres feature".to_owned(),
                     ),
                     data: None,
                     auth: None,
-                    code: None,
+                    code: Some("adapter.job.component-unavailable"),
                     record: None,
                     evidence_diagnostic: None,
                 });
@@ -3031,6 +3100,10 @@ impl Run<'_, '_> {
                             authorization: credential.as_ref().map(|c| &c.header),
                             attempt: endpoint.attempt.min(remaining),
                             maximum_response_bytes: endpoint.maximum_response_bytes,
+                            readable_replay_body: host_protocol
+                                .as_ref()
+                                .expect("a prepared attempt has a selected protocol")
+                                .replays_readable_body(),
                         }),
                     )
                     .await
@@ -3429,6 +3502,12 @@ impl Run<'_, '_> {
                     // incomplete before any clause can normalize the
                     // failure, as on the success path.
                     if status == Some(202) {
+                        if matches!(resume_send, ResumeSend::Execute { .. }) {
+                            // As on the success path: acceptance on a
+                            // linear resume step is no checkpoint, so the
+                            // ordinal stays resumable.
+                            return Err(failure);
+                        }
                         if let Some((selector, _)) = &initial_async {
                             let accepted = match &error {
                                 EgressError::Upstream(upstream) => upstream
@@ -3785,6 +3864,116 @@ mod served_tests {
         }]));
         assert!(check_servable(&engine_owned).is_err());
         assert!(check_evidence_servable(&engine_owned).is_err());
+    }
+
+    #[test]
+    fn evidence_routes_refuse_handlers_that_turn_source_failures_into_answers() {
+        let send = json!({"to": {"uri": "http:source", "parameters": {"httpMethod": "GET", "path": "/records"}}});
+        let answer = json!({"setBody": {"constant": {"lookup": "no-match"}}});
+        let not_found = json!({"header": "CamelHttpResponseCode"});
+        let breaker = |extra: Value| {
+            let mut breaker = json!({
+                "failureRateThreshold": 50,
+                "slidingWindowCalls": 2,
+                "minimumNumberOfCalls": 2,
+                "steps": [send.clone()]
+            });
+            for (key, value) in extra.as_object().expect("breaker members") {
+                breaker[key] = value.clone();
+            }
+            json!([{"circuitBreaker": breaker}])
+        };
+        let cases = [
+            (
+                "doCatch without onWhen",
+                json!([{"doTry": {"steps": [send.clone()], "doCatch": [{"exception": ["upstream"], "steps": [answer.clone()]}]}}]),
+                "doCatch may not catch upstream",
+            ),
+            (
+                "doCatch of a transport failure even with onWhen",
+                json!([{"doTry": {"steps": [send.clone()], "doCatch": [{"exception": ["upstream.connection"], "onWhen": not_found.clone(), "steps": [answer.clone()]}]}}]),
+                "doCatch may not catch upstream.connection",
+            ),
+            (
+                "doCatch of upstream.http without onWhen",
+                json!([{"doTry": {"steps": [send.clone()], "doCatch": [{"exception": ["upstream.http"], "steps": [answer.clone()]}]}}]),
+                "doCatch may not catch upstream.http",
+            ),
+            (
+                "handled onException",
+                json!([{"onException": {"exception": ["upstream"], "handled": true, "steps": [answer.clone()]}}, send.clone()]),
+                "onException clause may not handle upstream",
+            ),
+            (
+                "continued onException on a script failure",
+                json!([{"onException": {"exception": ["script"], "continued": true}}, send.clone()]),
+                "onException clause may not handle script",
+            ),
+            (
+                "onException that rethrows as another class",
+                json!([{"onException": {"exception": ["validation"], "steps": [{"throwException": {"exceptionType": "outcome.not-found"}}]}}, send.clone()]),
+                "onException clause may not handle validation",
+            ),
+            (
+                "breaker fallback",
+                breaker(json!({"onFallback": {"steps": [answer.clone()]}})),
+                "circuitBreaker may not declare onFallback",
+            ),
+            (
+                "breaker ignoreException",
+                breaker(json!({"ignoreException": ["upstream.http"]})),
+                "circuitBreaker may not declare ignoreException",
+            ),
+            (
+                "breaker recordException",
+                breaker(json!({"recordException": ["upstream.timeout"]})),
+                "circuitBreaker may not declare recordException",
+            ),
+        ];
+        for (shape, value, expected) in cases {
+            let route = steps(value);
+            check_servable(&route)
+                .unwrap_or_else(|fault| panic!("{shape}: the facade still serves it: {fault}"));
+            let refusal = check_evidence_servable(&route)
+                .expect_err(&format!("{shape}: an Evidence route accepted it"));
+            assert!(refusal.contains(expected), "{shape}: {refusal}");
+            assert!(
+                refusal.contains("registry-lookup-v1") || refusal.contains("every failure"),
+                "{shape}: the refusal names no fix: {refusal}"
+            );
+        }
+    }
+
+    #[test]
+    fn evidence_routes_keep_status_tested_catches_and_retry_only_clauses() {
+        let send = json!({"to": {"uri": "http:source", "parameters": {"httpMethod": "GET", "path": "/records"}}});
+        let answer = json!({"setBody": {"constant": {"lookup": "no-match"}}});
+        let status = json!({"header": "CamelHttpResponseCode"});
+        for (shape, value) in [
+            (
+                "status-tested doCatch",
+                json!([{"doTry": {"steps": [send.clone()], "doCatch": [{"exception": ["upstream.http"], "onWhen": status.clone(), "steps": [answer.clone()]}]}}]),
+            ),
+            (
+                "status-tested handled onException",
+                json!([{"onException": {"exception": ["upstream.http"], "onWhen": status.clone(), "handled": true, "steps": [answer.clone()]}}, send.clone()]),
+            ),
+            (
+                "retry-only onException",
+                json!([{"onException": {"exception": ["upstream.timeout", "upstream.connection"], "redeliveryPolicy": {"maximumRedeliveries": 1}}}, send.clone()]),
+            ),
+            (
+                "catch of the pack's own outcome",
+                json!([{"doTry": {"steps": [{"throwException": {"exceptionType": "outcome.not-found"}}], "doCatch": [{"exception": ["outcome.not-found"], "steps": [answer.clone()]}]}}]),
+            ),
+            (
+                "plain breaker",
+                json!([{"circuitBreaker": {"failureRateThreshold": 50, "slidingWindowCalls": 2, "minimumNumberOfCalls": 2, "steps": [send.clone()]}}]),
+            ),
+        ] {
+            check_evidence_servable(&steps(value))
+                .unwrap_or_else(|fault| panic!("{shape}: refused: {fault}"));
+        }
     }
 
     #[test]
@@ -4641,6 +4830,129 @@ mod send_attempt_tests {
             assert!(
                 write.is_unsupported_incomplete().await,
                 "an upstream 202 under range {range:?} leaves the write incomplete"
+            );
+        }
+    }
+
+    /// A 202 on a linear-resume step is acceptance, not a checkpoint: the
+    /// ordinal stays resumable whether the reply read cleanly (success
+    /// path) or failed to read (error path), and the write is never marked
+    /// unsupported-incomplete.
+    #[tokio::test]
+    async fn a_202_on_a_resume_step_keeps_the_write_resumable_on_both_paths() {
+        for (key_env, accepted_body) in [
+            ("ROUTE_RESUME_ACCEPTED_JSON_KEY", r#"{"queued":true}"#),
+            ("ROUTE_RESUME_ACCEPTED_UNREADABLE_KEY", "not json"),
+        ] {
+            std::env::set_var(key_env, "resume-key");
+            let resolver =
+                SecretResolver::new([SecretProvider::Environment], "").expect("resolver");
+            let (base_url, received) =
+                canned_source(vec![(200, r#"{"id":"first"}"#), (202, accepted_body)]);
+            let endpoints = super::credential_order_tests::compiled(&base_url, key_env, &resolver);
+            let scripts = ScriptSet::default();
+            let resilience = crate::resilience::ResilienceRuntime::empty();
+            let routes = RouteTable::new();
+            let context = RouteContext {
+                endpoints: &endpoints,
+                scripts: &scripts,
+                resolver: &resolver,
+                resilience: &resilience,
+                routes: &routes,
+                code_maps: Arc::new(BTreeMap::new()),
+                maximum_upstream_calls: 4,
+                job: crate::job_sources::JobPageState::default(),
+            };
+            let send = |path: &str| {
+                json!({"to": {"uri": "http:tracker", "parameters": {
+                    "httpMethod": "POST", "path": path, "body": {"jsonpath": "$"}
+                }}})
+            };
+            let mut operation = async_served_operation(steps(json!([{"idempotentConsumer": {
+                "expression": {"header": "Idempotency-Key"},
+                "steps": [send("/first"), send("/second")]
+            }}])));
+            operation.async_completion = None;
+            operation.resume = Some(crate::resume::ServedResumeOperation::linear_for_tests(2));
+            let mut exchange = Exchange::new("resume-accepted".to_owned());
+            exchange.message.body = json!({"name": "Ada"});
+            exchange
+                .message
+                .set_header("Idempotency-Key", json!("resume-key"));
+            let write = crate::replay::ReplayWriteContext::install(&mut exchange)
+                .expect("write capability");
+            let profile = crate::load::two_record_types_inputs().0;
+
+            let failure = run_served_route(&context, &profile, &operation, exchange)
+                .await
+                .result
+                .expect_err("an accepted resume step is not a completed checkpoint");
+
+            assert_eq!(received.lock().expect("requests").len(), 2);
+            assert!(
+                !write.is_unsupported_incomplete().await,
+                "a 202 with body {accepted_body:?} on a resume step keeps the write resumable (class {:?})",
+                failure.class
+            );
+        }
+    }
+
+    /// A job source step that reaches the interpreter of a build without
+    /// its component says so under the closed job code, rather than
+    /// blaming the route kind.
+    #[cfg(not(any(
+        feature = "job-postgres",
+        feature = "job-file",
+        feature = "job-rabbitmq"
+    )))]
+    #[tokio::test]
+    async fn a_job_source_step_in_a_build_without_its_component_names_the_missing_component() {
+        let resolver = SecretResolver::new([SecretProvider::Environment], "").expect("resolver");
+        let endpoints = BTreeMap::new();
+        let scripts = ScriptSet::default();
+        let resilience = crate::resilience::ResilienceRuntime::empty();
+        let routes = RouteTable::new();
+        let context = RouteContext {
+            endpoints: &endpoints,
+            scripts: &scripts,
+            resolver: &resolver,
+            resilience: &resilience,
+            routes: &routes,
+            code_maps: Arc::new(BTreeMap::new()),
+            maximum_upstream_calls: 4,
+            job: crate::job_sources::JobPageState::default(),
+        };
+        for (route, cause, feature) in [
+            (
+                steps(
+                    json!([{"to": {"uri": "postgres:ledger", "parameters": {"queryParameters": {}}}}]),
+                ),
+                "the postgres source component",
+                "job-postgres",
+            ),
+            (
+                steps(json!([{"pollEnrich": {
+                    "uri": "file:inbox", "timeoutMilliseconds": 1000, "decoder": "raw"
+                }}])),
+                "no job source component",
+                "job-file or job-rabbitmq",
+            ),
+        ] {
+            let failure = run_route(&context, &route, Exchange::new("job".to_owned()))
+                .await
+                .result
+                .expect_err("the step is refused");
+            let message = failure.message.as_deref().unwrap_or_default();
+            assert_eq!(
+                failure.code,
+                Some("adapter.job.component-unavailable"),
+                "{message}"
+            );
+            assert!(
+                message.contains(cause)
+                    && message.contains("compiled into this binary")
+                    && message.contains(feature),
+                "{message}"
             );
         }
     }

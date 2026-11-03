@@ -36,8 +36,12 @@ pub enum GraphQlLoadError {
     Unreadable(String),
     #[error("the query file {0} is over the engine's bound")]
     TooLarge(String),
-    #[error("the query file {0} does not match its pinned digest")]
-    DigestMismatch(String),
+    #[error("the query file {path} does not match its pinned digest: the pin is {pinned} but the file has {actual}; after reviewing the change, update the pin to {actual}")]
+    DigestMismatch {
+        path: String,
+        pinned: String,
+        actual: String,
+    },
     #[error("the query file {0} is not valid UTF-8")]
     NotText(String),
     #[error("the query file {0} declares no operation named {1}")]
@@ -105,8 +109,13 @@ impl GraphQlQuery {
                 return Err(GraphQlLoadError::TooLarge(path.to_owned()))
             }
         };
-        if sha256_uri(&bytes) != pinned.as_str() {
-            return Err(GraphQlLoadError::DigestMismatch(path.to_owned()));
+        let actual = sha256_uri(&bytes);
+        if actual != pinned.as_str() {
+            return Err(GraphQlLoadError::DigestMismatch {
+                path: path.to_owned(),
+                pinned: pinned.as_str().to_owned(),
+                actual,
+            });
         }
         let text =
             String::from_utf8(bytes).map_err(|_| GraphQlLoadError::NotText(path.to_owned()))?;
@@ -357,10 +366,20 @@ mod tests {
             "queries/cases.graphql".to_owned(),
             b"query FindCases { changed { id } }\n".to_vec(),
         )]);
+        let refusal = GraphQlQuery::load_from(&pack, &changed, endpoint)
+            .expect_err("a changed query file is refused by its digest");
+        let pinned = registry_platform_config::sha256_uri(source);
+        let actual = registry_platform_config::sha256_uri(b"query FindCases { changed { id } }\n");
         assert!(matches!(
-            GraphQlQuery::load_from(&pack, &changed, endpoint),
-            Err(GraphQlLoadError::DigestMismatch(path)) if path == "queries/cases.graphql"
+            &refusal,
+            GraphQlLoadError::DigestMismatch { path, .. } if path == "queries/cases.graphql"
         ));
+        assert_eq!(
+            refusal.to_string(),
+            format!(
+                "the query file queries/cases.graphql does not match its pinned digest: the pin is {pinned} but the file has {actual}; after reviewing the change, update the pin to {actual}"
+            )
+        );
     }
 
     fn kinds(source: &str) -> Vec<(String, String)> {

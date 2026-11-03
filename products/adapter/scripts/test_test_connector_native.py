@@ -87,7 +87,7 @@ class NativeRunnerTests(unittest.TestCase):
                 "-p", "registry-breg", "-p", "registry-bregctl",
                 "-p", "registry-coordinator",
                 "-p", "registry-casework", "-p", "registry-caseworkctl",
-                "--features", "registry-breg/runtime,registry-breg/postgres-test",
+                "--features", "registry-breg/runtime,registry-breg/postgres-test,registry-casework/postgres-test,registry-caseworkctl/postgres-test",
                 "--bin", "breg", "--bin", "bregctl",
                 "--bin", "coordinator", "--bin", "coordinatorctl",
                 "--bin", "casework", "--bin", "caseworkctl",

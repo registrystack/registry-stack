@@ -161,19 +161,30 @@ pub async fn ready(client: &impl GenericClient) -> Result<bool, JournalError> {
 pub async fn missing_runtime_privileges(
     client: &impl GenericClient,
 ) -> Result<Vec<&'static str>, JournalError> {
-    let row = client
-        .query_one(
-            "SELECT has_table_privilege(current_user, to_regclass('adapter_journal_events'), 'INSERT'),
-                    has_table_privilege(current_user, to_regclass('adapter_journal_events'), 'SELECT'),
-                    has_table_privilege(current_user, to_regclass('adapter_journal_events'), 'DELETE')",
-            &[],
+    missing_table_privileges(client, "adapter_journal_events", &RUNTIME_PRIVILEGES).await
+}
+
+/// The `privileges` the active role lacks on `table`, in the given order;
+/// all of them when the table is not in the search path.
+pub async fn missing_table_privileges(
+    client: &impl GenericClient,
+    table: &str,
+    privileges: &[&'static str],
+) -> Result<Vec<&'static str>, JournalError> {
+    let names = privileges.to_vec();
+    let held = client
+        .query(
+            "SELECT coalesce(has_table_privilege(current_user, to_regclass($1), privilege), false) \
+             FROM unnest($2::text[]) WITH ORDINALITY AS wanted(privilege, position) \
+             ORDER BY position",
+            &[&table, &names],
         )
         .await?;
-    Ok(RUNTIME_PRIVILEGES
+    Ok(privileges
         .iter()
-        .enumerate()
-        .filter(|(column, _)| !row.get::<_, Option<bool>>(*column).unwrap_or(false))
-        .map(|(_, privilege)| *privilege)
+        .zip(held.iter())
+        .filter(|(_, row)| !row.get::<_, bool>(0))
+        .map(|(privilege, _)| *privilege)
         .collect())
 }
 

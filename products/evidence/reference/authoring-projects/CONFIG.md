@@ -85,6 +85,16 @@ The route's declared input and output schemas supply the checked lookup and
 private fact contract. Caller input cannot choose a pack, route, endpoint,
 credential or broader selector set.
 
+A route whose input schema has a root `oneOf` offers alternative lookup keys,
+for example a person identifier or a household identifier with a region. The
+Source `inputs` must map every input of at least one alternative; `evidencectl
+check` reports `source-route-input-alternative` at `sources.<id>.inputs` when
+none is complete. Each target grant must then supply exactly one alternative:
+its subjects' selector profiles decide which mapped inputs the grant makes
+available. A grant that supplies too few inputs, or enough inputs for two
+alternatives, is refused when the target authority is activated, because the
+lookup key would be missing or ambiguous at runtime.
+
 An AssertionDefinition's `acquisition` contains only `source`, naming one of
 these Sources. The pack owns the complete provider interaction, including any
 reviewed branches, reads, retries or pages. The shared engine enforces one
@@ -137,18 +147,55 @@ Function to `assertion-derive/v1` does not migrate its behavior.
 3. Remove acquisition Functions from the authored `functions` list after their
    behavior is represented in the pack. Keep requirement derivations under
    `assertion-derive/v1`. Update the named target connection's endpoints to
-   match the pack; credentials remain target secret references.
+   match the pack; credentials remain target secret references. A 0.44.0
+   flat connection moves its endpoint members under one entry per pack
+   endpoint:
+
+   ```yaml
+   # 0.44.0
+   connections:
+     registry:
+       origin: https://registry.example.org
+       authentication:
+         type: bearer
+         tokenRef: secret:file/registry-token
+       tlsTrustProfile: registry-ca
+   # current: `api` is the endpoint id the pack declares
+   connections:
+     registry:
+       endpoints:
+         api:
+           origin: https://registry.example.org
+           authentication:
+             type: bearer
+             tokenRef: secret:file/registry-token
+           tlsTrustProfile: registry-ca
+   ```
+
+   `maximumConcurrency`, `admissionTimeoutMilliseconds` and
+   `tokenTimeoutMilliseconds` are retired; bound each attempt with the
+   endpoint's `attemptTimeoutMilliseconds` and the whole acquisition with the
+   target's `sourceAcquisition`.
 4. For a reusable export, compare it with `evidencectl source diff EXPORT
    --project PROJECT`, then apply the reviewed result with `evidencectl source
    import EXPORT --project PROJECT`. Resolve reported keep/adopt/file conflicts
    explicitly. The importer requires a current-form `EvidenceProject`; it does
    not convert a retired project. Later changes use `source update`; use
    `source detach` when you want to maintain an installed source locally.
-5. Run `evidencectl check PROJECT --target TARGET` and `evidencectl test PROJECT
+5. Rewrite each fixture case's `source`. The retired form held the provider
+   response itself; a pack Source replays an exact transcript of the pack's
+   `intercepts` and `exchanges`, including any token exchange its endpoint
+   authentication performs, as in
+   `products/evidence/fixtures/acceptance/adult-status/fixtures/cases.yaml`.
+   `evidencectl check` does not read case transcripts, so an unmigrated case
+   first fails in `evidencectl test`, naming the retired form. Then refresh
+   recorded facts with `evidencectl fixtures record-facts PROJECT --target
+   TARGET --fixture FIXTURE --write` and review the diff.
+6. Run `evidencectl check PROJECT --target TARGET` and `evidencectl test PROJECT
    --target TARGET` with the matching runtime. Retain the assertion outcomes and
    refusal cases, and verify no-match, ambiguity and dependency failure
    separately. A transport error must not become a false assertion or no-match.
-6. Rebuild the package through the normal deployment workflow. Review the new
+7. Rebuild the package through the normal deployment workflow. Review the new
    definition revisions and update exact revision pins deliberately. A preserved
    Requirement URI does not make old and new behavior revisions interchangeable.
 
@@ -392,6 +439,15 @@ delegates to the actual Evidence fixture kernel. The SQLite starter supports
 this offline lane; `dev start` refuses SQLite serving rather than pretending
 to provide a live SQLite source. Use `evidencectl dev start` for the local HTTP
 journey and `doctor --runtime-config <absolute-file>` for live dependencies.
+
+A pack Source fixture case's `source` is the exact transcript the pack would
+send: its `intercepts` and ordered `exchanges`, each a `request` and the
+`response` (`status`, optional `headers`, and one body form). An endpoint with
+no host protocol records a JSON `body`. An endpoint whose host protocol checks
+the response records it as `rawBodyBase64`, the exact bytes in standard padded
+base64; `registry-lookup-v1` signs nothing, so it also accepts a readable JSON
+`body`. A response cannot carry both forms, and a refused replay names which
+form the endpoint needs.
 
 `evidencectl package <project> --target <target> --output <new-directory>`
 creates one immutable candidate containing `bundle/`, `runtime.yaml` and

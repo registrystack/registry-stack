@@ -22,7 +22,7 @@ use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
 use registry_adapter_core::{AdapterJob, JobIdentity};
 use registry_adapter_engine::job::compile_job;
 use registry_adapter_job::destination::{
-    DeliverableItem, HandOffOutcome, JobDestination, NullDestination,
+    DeliverableItem, DeliveryIdentity, HandOffOutcome, JobDestination, NullDestination,
 };
 use registry_adapter_job::pass::{run_pass, PassOptions, StopReason};
 use registry_adapter_job::store::{self, ItemStatus};
@@ -176,6 +176,15 @@ impl ManagedChild {
     }
 
     fn interrupt(&mut self) {
+        self.signal("-INT");
+    }
+
+    /// The signal systemd, Docker and Kubernetes send to stop a service.
+    fn terminate(&mut self) {
+        self.signal("-TERM");
+    }
+
+    fn signal(&mut self, flag: &str) {
         let pid = self
             .child
             .as_ref()
@@ -183,12 +192,12 @@ impl ManagedChild {
             .id()
             .to_string();
         let signal = Command::new("kill")
-            .args(["-INT", pid.as_str()])
+            .args([flag, pid.as_str()])
             .output()
-            .expect("send SIGINT to adapter-job interval loop");
+            .expect("send a signal to adapter-job interval loop");
         assert!(
             signal.status.success(),
-            "sending SIGINT failed: {}",
+            "sending {flag} failed: {}",
             String::from_utf8_lossy(&signal.stderr)
         );
     }
@@ -258,7 +267,7 @@ async fn wait_for_clean_exit(child: &mut ManagedChild) {
         }
     })
     .await
-    .expect("adapter-job exits promptly after SIGINT");
+    .expect("adapter-job exits promptly after the stop signal");
 }
 
 fn set_acceptance_interval(fixture: &JobFixture) {
@@ -360,8 +369,15 @@ impl IdentifiedDestination {
 }
 
 impl JobDestination for IdentifiedDestination {
-    fn receiver_identity(&self, _job: &JobIdentity, _item: &DeliverableItem) -> Option<[u8; 32]> {
-        Some(self.identity)
+    fn delivery_identity(
+        &self,
+        _job: &JobIdentity,
+        _item: &DeliverableItem,
+    ) -> Option<DeliveryIdentity> {
+        Some(DeliveryIdentity {
+            receiver: self.identity,
+            canonical_body: Ok([0x33; 32]),
+        })
     }
 
     fn deliver<'a>(
@@ -459,6 +475,8 @@ async fn the_item_table_holds_no_column_that_can_carry_a_payload() {
         .collect();
     let expected: Vec<(String, String)> = [
         ("admitted_before", "boolean"),
+        ("canonical_body_identity", "bytea"),
+        ("canonical_body_identity_known", "boolean"),
         ("code", "text"),
         ("delivery_attempt", "bigint"),
         ("event_time", "timestamp with time zone"),
@@ -485,6 +503,25 @@ async fn the_item_table_holds_no_column_that_can_carry_a_payload() {
         assert!(
             kind != "json" && kind != "jsonb",
             "column {name} is {kind}, a type that can hold an item body"
+        );
+    }
+    // The two bytea columns hold 32-octet digests only, never event bytes.
+    let rows = client
+        .query(
+            "SELECT pg_get_constraintdef(oid) FROM pg_constraint \
+             WHERE conrelid = 'adapter_job_items'::regclass AND contype = 'c' \
+             AND pg_get_constraintdef(oid) LIKE '%octet_length%'",
+            &[],
+        )
+        .await
+        .expect("the item table constraints read");
+    let digest_checks: Vec<String> = rows.into_iter().map(|row| row.get(0)).collect();
+    for column in ["receiver_identity", "canonical_body_identity"] {
+        assert!(
+            digest_checks
+                .iter()
+                .any(|definition| { definition.contains(&format!("octet_length({column}) = 32")) }),
+            "{column} is bounded to a 32-octet digest: {digest_checks:?}"
         );
     }
     // The state row keeps the cursor as engine-owned resume state, and
@@ -2275,6 +2312,19 @@ async fn migration_keeps_a_legacy_pending_receiver_identity_unknown() {
     ));
 }
 
+/// A refused query names its SQLSTATE, so an operator can tell a missing
+/// grant from a dropped connection without the driver's prose.
+#[tokio::test]
+async fn a_refused_store_query_names_its_sqlstate() {
+    let isolated = isolated().await;
+    let client = isolated.pool.get().await.expect("a pooled client");
+    let error = client
+        .batch_execute("SELECT 1 / 0")
+        .await
+        .expect_err("division by zero refuses");
+    assert_eq!(store::StoreError::from(error).cause(), "sqlstate-22012");
+}
+
 /// A migration and its version row commit together: a failure after the
 /// migration's own statements leaves neither, and the next run applies
 /// the whole migration again.
@@ -3407,19 +3457,29 @@ async fn pending_receipt_horizon_counts_are_bounded_and_value_free() {
         .await
         .expect("the state row exists");
     let now = UNIX_EPOCH + Duration::from_secs(20 * 86_400);
-    for (key, age) in [
-        ("near", 6 * 86_400 + 43_200),
-        ("expired", 8 * 86_400),
-        ("fresh", 2 * 86_400),
+    // The horizon counts from the sequence's event time, so a revision of an
+    // old key is fresh while its first sighting is long past.
+    for (key, age, first_age) in [
+        ("near", 6 * 86_400 + 43_200, 6 * 86_400 + 43_200),
+        ("expired", 8 * 86_400, 8 * 86_400),
+        ("fresh", 2 * 86_400, 2 * 86_400),
+        ("revised", 2 * 86_400, 15 * 86_400),
+        ("revised-near", 6 * 86_400 + 43_200, 15 * 86_400),
     ] {
-        let first_seen = now - Duration::from_secs(age);
+        let event_time = now - Duration::from_secs(age);
+        let first_seen = now - Duration::from_secs(first_age);
         client
             .execute(
                 "INSERT INTO adapter_job_items \
                  (job_id, item_key, last_digest, sequence, status, first_seen, last_seen, \
                   event_time, delivery_attempt, receiver_identity_known) \
-                 VALUES ('receipt-job', $1, $2, 1, 'pending', $3, $3, $3, 1, true)",
-                &[&key, &format!("sha256:{}", "0".repeat(64)), &first_seen],
+                 VALUES ('receipt-job', $1, $2, 1, 'pending', $3, $4, $4, 1, true)",
+                &[
+                    &key,
+                    &format!("sha256:{}", "0".repeat(64)),
+                    &first_seen,
+                    &event_time,
+                ],
             )
             .await
             .expect("the pending row inserts");
@@ -3427,7 +3487,7 @@ async fn pending_receipt_horizon_counts_are_bounded_and_value_free() {
     let counts = store::receipt_horizon_counts(&client, "receipt-job", now, 7)
         .await
         .expect("the horizon counts read");
-    assert_eq!(counts.nearing, 1);
+    assert_eq!(counts.nearing, 2);
     assert_eq!(counts.expired, 1);
 }
 
@@ -3560,4 +3620,158 @@ async fn actual_cli_interval_loop_runs_two_persisted_passes_and_stops_cleanly() 
     assert_eq!(inspect_report["found"], true);
     assert_eq!(inspect_report["item"]["key"], "submissions/a");
     assert_eq!(inspect_report["item"]["status"], "acknowledged");
+}
+
+/// The signal a service manager sends (SIGTERM) stops the loop as cleanly
+/// as Ctrl+C: exit 0, no further source read or hand-off.
+#[tokio::test]
+async fn actual_cli_interval_loop_stops_cleanly_on_sigterm_while_waiting() {
+    let fixture = JobFixture::start(
+        job_fixture::PAGE_SCRIPT,
+        vec![(200, reply_page()), (200, reply_page_end())],
+        job_fixture::Edits::Ordered,
+    )
+    .await;
+    set_acceptance_interval(&fixture);
+    let isolated = isolated().await;
+    let receiver = FixtureReceiver::start(vec![
+        Scripted::Acknowledge {
+            run_id: Some("term-a".to_string()),
+        },
+        Scripted::Acknowledge {
+            run_id: Some("term-b".to_string()),
+        },
+    ])
+    .await;
+    let mut args = fixture_pass_args(&fixture, &receiver);
+    args.push("--loop".into());
+    let mut child = ManagedChild::spawn(&isolated.url, args);
+    wait_for_persisted_pass(&mut child, &isolated.pool, None).await;
+    // Well inside the next three-second delay.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    child.terminate();
+    wait_for_clean_exit(&mut child).await;
+    let output = child.output();
+    assert_value_free_output("sigterm during the wait", &output);
+    assert!(
+        output.status.success(),
+        "SIGTERM during the interval wait was not a clean exit: {:?}",
+        output.status
+    );
+}
+
+/// A job store that cannot be read for a while (a restart or failover) does
+/// not end the loop: the host names the closed cause on stderr, waits one
+/// delay, and the next pass runs once the store answers again.
+#[tokio::test]
+async fn actual_cli_interval_loop_survives_a_store_that_stops_answering() {
+    let fixture = JobFixture::start(
+        job_fixture::PAGE_SCRIPT,
+        vec![(200, reply_page()), (200, reply_page_end())],
+        job_fixture::Edits::Ordered,
+    )
+    .await;
+    set_acceptance_interval(&fixture);
+    let isolated = isolated().await;
+    let receiver = FixtureReceiver::start(vec![
+        Scripted::Acknowledge {
+            run_id: Some("outage-a".to_string()),
+        },
+        Scripted::Acknowledge {
+            run_id: Some("outage-b".to_string()),
+        },
+    ])
+    .await;
+    let mut args = fixture_pass_args(&fixture, &receiver);
+    args.push("--loop".into());
+    let mut child = ManagedChild::spawn(&isolated.url, args);
+    let first = wait_for_persisted_pass(&mut child, &isolated.pool, None).await;
+
+    let admin = isolated.pool.get().await.expect("a pooled client");
+    admin
+        .batch_execute("ALTER TABLE adapter_job_state RENAME TO adapter_job_state_away")
+        .await
+        .expect("take the state table away");
+    // Past the next three-second due time, so the loop reads a refusing store.
+    tokio::time::sleep(Duration::from_millis(4500)).await;
+    assert!(
+        child.try_wait().is_none(),
+        "the loop ended on a store that stopped answering"
+    );
+    admin
+        .batch_execute("ALTER TABLE adapter_job_state_away RENAME TO adapter_job_state")
+        .await
+        .expect("bring the state table back");
+    drop(admin);
+
+    wait_for_persisted_pass(&mut child, &isolated.pool, Some(first)).await;
+    child.terminate();
+    wait_for_clean_exit(&mut child).await;
+    let output = child.output();
+    assert!(output.status.success(), "{:?}", output.status);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("adapter.job.store-unreachable cause=sqlstate-42P01"),
+        "the loop names the closed cause: {stderr}"
+    );
+    assert!(
+        stderr.contains("next:"),
+        "the loop names the operator's next step: {stderr}"
+    );
+    assert!(
+        !stderr.contains("db error") && !stderr.contains(SOURCE_SECRET_MARKER),
+        "the outage line is value-free: {stderr}"
+    );
+}
+
+/// A stop signal that arrives while a pass is running is not lost: the host
+/// finishes the pass, releases the lease, and exits 0 instead of waiting for
+/// a second signal during the next wait.
+#[tokio::test]
+async fn actual_cli_interval_loop_finishes_the_running_pass_on_sigterm() {
+    let fixture = JobFixture::start(
+        job_fixture::PAGE_SCRIPT,
+        vec![(200, reply_page()), (200, reply_page_end())],
+        job_fixture::Edits::Ordered,
+    )
+    .await;
+    set_acceptance_interval(&fixture);
+    let isolated = isolated().await;
+    // The first delivery never answers, so the pass is in flight until the
+    // fixture destination's own five-second timeout stops it.
+    let receiver = FixtureReceiver::start(vec![Scripted::Hang]).await;
+    let mut args = fixture_pass_args(&fixture, &receiver);
+    args.push("--loop".into());
+    let mut child = ManagedChild::spawn(&isolated.url, args);
+    tokio::time::timeout(Duration::from_secs(45), async {
+        while receiver.requests().is_empty() {
+            if let Some(status) = child.try_wait() {
+                panic!("adapter-job exited before the hung delivery began: {status}");
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("the pass reached the destination within 45 seconds");
+    child.terminate();
+    // The pass ends at the five-second delivery timeout; allow for that.
+    tokio::time::timeout(Duration::from_secs(20), async {
+        while child.try_wait().is_none() {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("adapter-job exits after the running pass ends");
+    let output = child.output();
+    assert!(
+        output.status.success(),
+        "SIGTERM during a pass was not a clean exit: {:?}",
+        output.status
+    );
+    let row = state(&isolated.pool, "case-daily").await;
+    assert!(
+        row.lease_expires
+            .is_none_or(|expires| expires <= SystemTime::now()),
+        "the finished pass released the lease"
+    );
 }

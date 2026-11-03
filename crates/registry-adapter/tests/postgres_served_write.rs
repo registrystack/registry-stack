@@ -44,6 +44,7 @@ fn accepted_record(updated_at: &str) -> Value {
 struct RawPostResponse {
     status: u16,
     request_id: String,
+    retry_after: Option<String>,
     body: Vec<u8>,
 }
 
@@ -91,9 +92,18 @@ fn raw_post_response(
                 .then(|| value.trim().to_owned())
         })
         .expect("facade response carries a request id");
+    let retry_after = head
+        .lines()
+        .skip(1)
+        .filter_map(|line| line.split_once(':'))
+        .find_map(|(name, value)| {
+            name.eq_ignore_ascii_case("retry-after")
+                .then(|| value.trim().to_owned())
+        });
     RawPostResponse {
         status,
         request_id,
+        retry_after,
         body: response[head_end + 4..].to_vec(),
     }
 }
@@ -469,14 +479,19 @@ async fn a_concurrent_duplicate_conflicts_while_the_first_source_send_is_in_flig
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    let duplicate = raw_post(&served, &token, "create-person-race", &request);
+    let duplicate = raw_post_response(&served, &token, "create-person-race", None, &request);
     let first = first.await.expect("first caller completes");
 
     assert_eq!(
-        duplicate.0,
+        duplicate.status,
         409,
         "{}",
-        String::from_utf8_lossy(&duplicate.1)
+        String::from_utf8_lossy(&duplicate.body)
+    );
+    assert_eq!(
+        duplicate.retry_after.as_deref(),
+        Some("5"),
+        "a duplicate of a write in flight tells the caller when to retry"
     );
     assert_eq!(first.0, 201, "{}", String::from_utf8_lossy(&first.1));
     assert_eq!(upstream.request_count(), 1);
@@ -537,8 +552,50 @@ async fn a_terminal_transaction_failure_records_no_false_completion_and_never_re
         .execute_sql("ALTER TABLE adapter_journal_broken RENAME TO adapter_journal_events")
         .await;
 
-    let retry = raw_post(&served, &token, "create-person-commit-failure", &request);
-    assert_eq!(retry.0, 409, "{}", String::from_utf8_lossy(&retry.1));
+    let early = raw_post_response(
+        &served,
+        &token,
+        "create-person-commit-failure",
+        None,
+        &request,
+    );
+    assert_eq!(
+        early.status,
+        409,
+        "{}",
+        String::from_utf8_lossy(&early.body)
+    );
+    assert_eq!(
+        early.retry_after.as_deref(),
+        Some("5"),
+        "within the exchange deadline of its effect mark the attempt may still answer"
+    );
+    // Age the effect mark past the exchange deadline: the attempt that
+    // marked it has certainly ended, so nothing can still answer the key.
+    served
+        .execute_sql(
+            "UPDATE adapter_idempotency_entries \
+             SET effect_started_at = effect_started_at - interval '61 seconds' \
+             WHERE state = 'effect_started'",
+        )
+        .await;
+    let retry = raw_post_response(
+        &served,
+        &token,
+        "create-person-commit-failure",
+        None,
+        &request,
+    );
+    assert_eq!(
+        retry.status,
+        409,
+        "{}",
+        String::from_utf8_lossy(&retry.body)
+    );
+    assert_eq!(
+        retry.retry_after, None,
+        "a spent key carries no Retry-After: retrying cannot succeed"
+    );
     assert_eq!(
         upstream.request_count(),
         1,
@@ -583,8 +640,14 @@ async fn the_supervised_timer_erases_expired_response_bytes_but_keeps_the_key_sp
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
-    let retry = raw_post(&served, &token, "create-person-expiring", &request);
-    assert_eq!(retry.0, 409, "{}", String::from_utf8_lossy(&retry.1));
+    let retry = raw_post_response(&served, &token, "create-person-expiring", None, &request);
+    assert_eq!(
+        retry.status,
+        409,
+        "{}",
+        String::from_utf8_lossy(&retry.body)
+    );
+    assert_eq!(retry.retry_after, None, "an expired key is spent");
     assert_eq!(
         upstream.request_count(),
         1,

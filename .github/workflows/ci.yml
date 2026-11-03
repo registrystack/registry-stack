@@ -1347,10 +1347,42 @@ jobs:
           CARGO_TARGET_DIR: ${{ github.workspace }}/target
         run: products/adapter/scripts/check-contracts.sh
 
+      - name: Registry Adapter facade recovery runner
+        run: products/adapter/scripts/test-facade-recovery-runner.sh
+
+  adapter-postgres:
+    name: Registry Adapter PostgreSQL and recovery suites
+    needs: [changes, rust-policy]
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.adapter_contracts == 'true' }}
+    runs-on: ubuntu-24.04
+    # The scripts start their own disposable PostgreSQL containers: the
+    # ingestion-job recovery suite and the live PostgreSQL source suite.
+    # They are a separate job from the contract script so that each keeps
+    # its own 40-minute budget and a timeout names the suite that ran long.
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Cache Cargo registry
+        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        with:
+          shared-key: workspace-registry
+          cache-targets: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
       - name: Registry Adapter ingestion-job PostgreSQL recovery
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/target
         run: products/adapter/scripts/test-job-postgres.sh
+
+      - name: Registry Adapter live PostgreSQL suites
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target
+        run: products/adapter/scripts/test-postgres.sh
 
   coordinator-postgres:
     name: Coordinator PostgreSQL runtime
@@ -1961,6 +1993,7 @@ jobs:
       - documents-contracts
       - documents-postgres
       - adapter-contracts
+      - adapter-postgres
       - coordinator-postgres
       - config-conformance
     runs-on: ubuntu-slim
@@ -3399,6 +3432,7 @@ jobs:
       - documents-contracts
       - documents-postgres
       - adapter-contracts
+      - adapter-postgres
       - coordinator-postgres
       - config-conformance
       - release-tool

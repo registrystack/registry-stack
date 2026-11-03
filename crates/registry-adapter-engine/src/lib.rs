@@ -103,14 +103,12 @@ pub fn compile(
     match kind {
         EngineProfileKind::Job => {
             let Some(job) = inputs.job else {
-                return Err(job::JobError {
-                    diagnostics: vec![registry_platform_yaml::Diagnostic::error(
-                        job::JOB_ENGINE_CODES[0],
-                        "AdapterJob",
-                        "",
-                        "the job profile names no job document to compile; pass the job document, or compile under the facade profile",
-                    )],
-                });
+                return Err(compile_refusal(
+                    job::JOB_ENGINE_CODES[0],
+                    "AdapterJob",
+                    "the job profile names no job document to compile",
+                    "Pass the job document, or compile under the facade profile.",
+                ));
             };
             Ok(CompiledProgram::Job(Box::new(
                 job::compile_job_from_supplied_artifacts(
@@ -129,17 +127,15 @@ pub fn compile(
             )))
         }
         EngineProfileKind::Facade => {
-            let resolver = SecretResolver::new([SecretProvider::Environment], "").map_err(
-                |_|
-                    job::JobError {
-                        diagnostics: vec![registry_platform_yaml::Diagnostic::error(
-                            "platform.runtime-config.refused",
-                            "AdapterRuntimeConfig",
-                            "",
-                            "the secret resolver could not start; run where the platform secret providers are configured",
-                        )],
-                    },
-            )?;
+            let resolver =
+                SecretResolver::new([SecretProvider::Environment], "").map_err(|_| {
+                    compile_refusal(
+                        "platform.runtime-config.refused",
+                        "AdapterRuntimeConfig",
+                        "the secret resolver could not start",
+                        "Run where the platform secret providers are configured.",
+                    )
+                })?;
             let authored = load::compile_authored_with_artifacts(
                 inputs.project,
                 inputs.profile,
@@ -155,7 +151,7 @@ pub fn compile(
                     let plan = crate::auth::AuthPlan::compile(&declared.authentication, binding)
                         .map_err(|fault| {
                             load::LoadError::Runtime(format!(
-                                "endpoint {id} authentication was refused: {fault:?}"
+                                "endpoint {id} authentication was refused: {fault}"
                             ))
                         })?;
                     if !is_served_auth(plan.kind()) {
@@ -178,16 +174,31 @@ pub fn compile(
                     Ok(load::EndpointCompilation::Served(Box::new(egress)))
                 },
             )
-            .map_err(|error| crate::job::JobError {
-                diagnostics: vec![registry_platform_yaml::Diagnostic::error(
+            .map_err(|error| {
+                compile_refusal(
                     "platform.runtime-config.refused",
                     "AdapterRuntimeConfig",
-                    "",
-                    format!("the facade deployment could not compile: {error}"),
-                )],
+                    &format!("the facade deployment could not compile: {error}"),
+                    "Fix the artifact or runtime binding the message names.",
+                )
             })?;
             Ok(CompiledProgram::Facade(Box::new(authored)))
         }
+    }
+}
+
+/// One compile-entry refusal: the closed code, the artifact kind it
+/// points into, the fixed text, and the next step.
+fn compile_refusal(
+    code: &str,
+    artifact: &str,
+    message: &str,
+    action: &str,
+) -> crate::job::JobError {
+    let mut diagnostic = registry_platform_yaml::Diagnostic::error(code, "", message, action);
+    diagnostic.artifact = Some(artifact.to_owned());
+    crate::job::JobError {
+        diagnostics: vec![diagnostic],
     }
 }
 
@@ -558,19 +569,31 @@ profile:
             _job_text,
             _directory,
         ) = artifacts();
+        let pinned = pack
+            .scripts
+            .iter()
+            .find(|script| script.path == "scripts/transform.rhai")
+            .expect("the pack pins the script")
+            .digest
+            .as_str()
+            .to_owned();
+        let changed = b"fn transform(exchange) { 42 }\n".to_vec();
+        let actual = registry_platform_config::sha256_uri(&changed);
         let cases = [
             (
                 "missing",
                 artifacts::PackArtifactBytes::default(),
-                "script scripts/transform.rhai could not be read",
+                vec!["script scripts/transform.rhai could not be read".to_owned()],
             ),
             (
                 "digest mismatch",
-                artifacts::PackArtifactBytes::new([(
-                    "scripts/transform.rhai".to_owned(),
-                    b"fn transform(exchange) { 42 }\n".to_vec(),
-                )]),
-                "script scripts/transform.rhai does not match its pinned digest",
+                artifacts::PackArtifactBytes::new([("scripts/transform.rhai".to_owned(), changed)]),
+                vec![
+                    "script scripts/transform.rhai does not match its pinned digest".to_owned(),
+                    format!("the pin is {pinned}"),
+                    format!("the file has {actual}"),
+                    format!("after reviewing the change, update the pin to {actual}"),
+                ],
             ),
         ];
         let job_artifacts = artifacts::PackArtifactBytes::default();
@@ -594,10 +617,9 @@ profile:
                 Ok(_) => panic!("{case} should be refused"),
             };
             assert!(
-                error
-                    .diagnostics
+                error.diagnostics.iter().any(|diagnostic| expected
                     .iter()
-                    .any(|diagnostic| diagnostic.suggested_action.contains(expected)),
+                    .all(|needle| diagnostic.message.contains(needle.as_str()))),
                 "{case} carries the artifact refusal: {:?}",
                 error.diagnostics
             );
@@ -655,13 +677,98 @@ profile:
             ..inputs
         };
         let error = compile(&inputs, EngineProfileKind::Job).expect_err("the pin holds");
+        let refusal = error
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "adapter.project.pin-digest-mismatch")
+            .unwrap_or_else(|| panic!("the pin refusal carries its code: {:?}", error.diagnostics));
+        let actual = pack_digest(&pack_text);
         assert!(
-            error
+            refusal.message.contains(pack_digest(&pinned).as_str())
+                && refusal.message.contains(actual.as_str())
+                && refusal.suggested_action.contains(actual.as_str()),
+            "the pin refusal names both digests: {refusal:?}"
+        );
+        let job_pin = error
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.path == "/source/pack/digest")
+            .expect("the job's own pack pin is refused at its member");
+        let computed = sha256_uri(pack_text.as_bytes());
+        assert!(
+            job_pin.suggested_action.contains(&computed),
+            "the refusal names the digest to pin: {}",
+            job_pin.suggested_action
+        );
+    }
+
+    /// An authentication refusal renders the fault's fixed operator text,
+    /// never its Rust variant name, on both profile kinds.
+    #[test]
+    fn an_authentication_refusal_renders_its_fixed_text_not_a_variant_name() {
+        let (
+            pack,
+            profile,
+            project,
+            job,
+            _bindings,
+            pack_text,
+            profile_text,
+            project_text,
+            _job_text,
+            _directory,
+        ) = artifacts();
+        let bindings: registry_adapter_core::AdapterEndpointBindings =
+            serde_json::from_value(serde_json::json!({
+                "id": "memory-deployment",
+                "endpoints": [{
+                    "endpoint": "source",
+                    "baseUrl": "http://127.0.0.1:9",
+                    "credential": {"type": "static-api-key", "valueRef": "secret:env/UNUSED"}
+                }],
+                "allowedPrivateCidrs": []
+            }))
+            .expect("the bindings parse");
+        let pack_artifacts = pack_artifacts();
+        let job_artifacts = artifacts::PackArtifactBytes::default();
+        let inputs = CompileInputs {
+            pack: &pack,
+            profile: &profile,
+            project: &project,
+            job: job.as_ref(),
+            bindings: &bindings,
+            sources: None,
+            pack_bytes: pack_text.as_bytes(),
+            profile_bytes: profile_text.as_bytes(),
+            project_bytes: project_text.as_bytes(),
+            pack_artifacts: &pack_artifacts,
+            job_artifacts: &job_artifacts,
+        };
+        for kind in [EngineProfileKind::Facade, EngineProfileKind::Job] {
+            let error = compile(&inputs, kind).expect_err("a mismatched credential is refused");
+            let rendered = error
                 .diagnostics
                 .iter()
-                .any(|diagnostic| diagnostic.code == "adapter.project.pin-digest-mismatch"),
-            "the pin refusal carries its code: {:?}",
-            error.diagnostics
-        );
+                .map(|diagnostic| diagnostic.message.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            // The job's own credential check refuses first with a typed
+            // code; the facade compile carries the endpoint id.
+            let expected = match kind {
+                EngineProfileKind::Facade => {
+                    "endpoint source authentication was refused: the runtime credential's kind \
+                     does not match the endpoint's declared kind"
+                }
+                EngineProfileKind::Job => {
+                    "the runtime credential's kind does not match the endpoint's declared kind"
+                }
+            };
+            assert!(
+                rendered.contains(expected),
+                "the refusal carries the fixed text under {kind:?}: {:?}",
+                error.diagnostics
+            );
+            assert!(!rendered.contains("KindMismatch"), "{rendered}");
+        }
     }
 }

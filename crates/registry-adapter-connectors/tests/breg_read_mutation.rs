@@ -91,6 +91,43 @@ async fn tombstone_stays_absent_until_the_host_opens_it() {
     assert!(closed.exchanges().is_empty());
 }
 
+/// A token provider that never supplies a credential.
+struct NoToken;
+
+#[async_trait::async_trait]
+impl registry_breg_client::TokenProvider for NoToken {
+    async fn bearer_token(
+        &self,
+    ) -> Result<registry_breg_client::BearerToken, registry_breg_client::TokenError> {
+        Err(registry_breg_client::TokenError::Unavailable)
+    }
+}
+
+/// A credential the token provider cannot supply reads apart from an
+/// Action the profile is not granted, so the operator fixes the right one.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_connect_without_a_credential_names_the_token_not_the_grant() {
+    let fault = registry_adapter_connectors::breg::BregConnector::connect(
+        registry_adapter_connectors::breg::BregConnectorConfig::new(
+            "http://127.0.0.1:9/tenant/prefix",
+            std::sync::Arc::new(NoToken),
+            support::PROFILE,
+            support::IMMEDIATE_ACTION,
+            "company",
+            "companies",
+        ),
+    )
+    .await
+    .err()
+    .expect("connect refuses without a credential");
+    assert_eq!(
+        fault,
+        ConnectorFault::Native {
+            code: Some(registry_adapter_connectors::breg::TOKEN_UNAVAILABLE.to_owned())
+        }
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn create_prepares_without_io_and_carries_no_credential() {
     let mock = Mock::start("immediate", false).await;
@@ -569,4 +606,14 @@ async fn create_first_send_under_a_spent_key_stays_refused() {
         .send(&prepared)
         .expect("send answers");
     assert_eq!(sent.category, OutcomeCategory::Refused, "{sent:?}");
+}
+
+/// Each direct mutation implements `Observable`, so its descriptor says
+/// so: a host reading the descriptor finds the same answer as the type.
+#[test]
+fn the_mutation_descriptors_declare_that_they_observe() {
+    use registry_adapter_connectors::breg::mutation::{CREATE, PATCH, TOMBSTONE};
+    for descriptor in [&*CREATE, &*PATCH, &*TOMBSTONE] {
+        assert!(descriptor.observable, "{}", descriptor.name);
+    }
 }

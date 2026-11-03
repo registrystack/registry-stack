@@ -7,7 +7,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use lapin::types::ShortString;
+use lapin::options::{ExchangeDeclareOptions, QueueDeclareOptions};
+use lapin::types::{AMQPValue, FieldTable, ShortString};
+use lapin::ExchangeKind;
 use registry_adapter_engine::component::rabbitmq::{
     RabbitMqReadFault, RabbitMqReadRequest, RabbitMqSettlementFault, RabbitMqSource,
 };
@@ -20,9 +22,9 @@ use registry_platform_config::{SecretProvider, SecretResolver};
 mod shared_broker;
 
 use shared_broker::{
-    build_source, fixture_connection, next_dead_letter, next_message, publish,
-    publish_nonpersistent, source_with_principal, source_with_tls, BrokerFixture, TopologyNames,
-    BROKER_MAXIMUM_MESSAGE_BYTES,
+    build_source, fixture_connection, next_dead_letter, next_message, passive_source, publish,
+    publish_nonpersistent, source_with_principal, source_with_principal_passive, source_with_tls,
+    BrokerFixture, TopologyNames, BROKER_MAXIMUM_MESSAGE_BYTES,
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -431,6 +433,7 @@ async fn private_ca_amqps_succeeds_and_wrong_trust_refuses_before_credentials() 
             dead_letter_exchange: names.dead_letter_exchange.clone(),
             dead_letter_queue: names.dead_letter_queue.clone(),
             dead_letter_routing_key: names.dead_letter_routing_key.clone(),
+            declare_topology: true,
             maximum_outstanding_deliveries: 1,
             connection_timeout: Duration::from_secs(3),
             heartbeat: Duration::from_secs(5),
@@ -454,4 +457,92 @@ async fn private_ca_amqps_succeeds_and_wrong_trust_refuses_before_credentials() 
     let logs = broker.logs();
     assert!(!logs.contains(canary_user));
     assert!(!logs.contains(shared_broker::FIXTURE_PASSWORD));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn passive_topology_check_names_what_is_missing_and_accepts_existing_arguments() {
+    let broker = BrokerFixture::start();
+    let setup = fixture_connection(&broker)
+        .await
+        .expect("the synthetic broker becomes ready");
+    let names = TopologyNames::new();
+    let request = RabbitMqReadRequest::new(4_096, Duration::from_secs(5))
+        .expect("the passive read is bounded");
+    let passive = passive_source(&broker, &names);
+
+    assert_eq!(
+        passive
+            .read(&request)
+            .await
+            .expect_err("a missing source queue is refused, not created"),
+        RabbitMqReadFault::MissingQueue
+    );
+
+    // An institution-owned queue with arguments the host would never declare
+    // (a message TTL; its dead-lettering would come from a broker policy).
+    let channel = setup
+        .create_channel()
+        .await
+        .expect("the setup channel opens");
+    let mut arguments = FieldTable::default();
+    arguments.insert("x-message-ttl".into(), AMQPValue::LongInt(60_000));
+    channel
+        .queue_declare(
+            names.queue.as_str().into(),
+            QueueDeclareOptions::durable(),
+            arguments,
+        )
+        .await
+        .expect("the institution queue is declared");
+    assert_eq!(
+        passive
+            .read(&request)
+            .await
+            .expect_err("a missing dead-letter exchange is refused, not created"),
+        RabbitMqReadFault::MissingDeadLetterExchange
+    );
+
+    channel
+        .exchange_declare(
+            names.dead_letter_exchange.as_str().into(),
+            ExchangeKind::Direct,
+            ExchangeDeclareOptions {
+                durable: true,
+                ..Default::default()
+            },
+            FieldTable::default(),
+        )
+        .await
+        .expect("the institution dead-letter exchange is declared");
+    assert!(passive
+        .read(&request)
+        .await
+        .expect("an existing queue with other arguments and the exchange are accepted")
+        .is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn passive_topology_check_needs_no_configure_permission() {
+    let broker = BrokerFixture::start();
+    drop(
+        fixture_connection(&broker)
+            .await
+            .expect("the synthetic broker becomes ready"),
+    );
+    let names = TopologyNames::new();
+    let request = RabbitMqReadRequest::new(4_096, Duration::from_secs(5))
+        .expect("the passive read is bounded");
+    build_source(&broker, &names)
+        .read(&request)
+        .await
+        .expect("the topology is declared once by the fixture publisher");
+
+    let principal = broker.provision_without_configure(&names);
+    assert!(principal.configure.is_empty());
+    let source = source_with_principal_passive(&broker, &names, &principal);
+    assert!(source
+        .read(&request)
+        .await
+        .expect("a principal with no configure permission passes the passive check")
+        .is_none());
 }

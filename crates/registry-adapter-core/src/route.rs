@@ -701,7 +701,9 @@ pub struct PollEnrichStep {
     pub decoder: Option<PollDecoder>,
     /// RFC 6901 selector of the opaque business-key string in a decoded row.
     /// Required for CSV and JSONL, forbidden for raw files and broker messages.
+    /// At most 512 bytes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(length(max = 512)))]
     pub key_pointer: Option<String>,
     /// The aggregation strategy, Camel's Poll Enricher aggregation;
     /// absent, the page replaces the body, like `enrich` with no strategy.
@@ -759,9 +761,10 @@ impl PollEnrichStep {
 /// declaration with its options, the only decoder that carries options; a
 /// bare string names one of `csv`, `jsonl`, `rabbitmq-json`, or `raw`. One member carries
 /// both forms, so `decoder: csv` and `decoder: {"delimiter": ";"}` read
-/// the same way.
+/// the same way. The node kind chooses the form (CFG-SCHEMA-8), so a
+/// misspelt CSV option is reported at its own key with its position.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum PollDecoder {
     /// A `csv` declaration with its options; an empty mapping selects csv
@@ -770,6 +773,7 @@ pub enum PollDecoder {
     /// A bare decoder name.
     Named(String),
 }
+registry_platform_yaml::shape_union!(PollDecoder { mapping => Csv, scalar => Named });
 
 impl PollDecoder {
     /// The decoder name the selection carries: `csv` for the options

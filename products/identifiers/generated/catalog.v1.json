@@ -4182,7 +4182,7 @@
       "description": "Registry Adapter project, profile, pack, fixture, runtime configuration, ingestion job, job runtime configuration, and effective contract JSON Schema.",
       "source": {
         "path": "crates/registry-adapterctl/src/schemas.rs",
-        "sha256": "a597a23c1068ab4c607f2241d6081cdc709522446183432fe37ef2880b53f1bf"
+        "sha256": "ee38dfe66d555d580545cec1b5d8e4148d1d108d194d5680c3dca63bbfbfd7c9"
       },
       "artifact": {
         "path": "products/adapter/schemas/effective-contract.v1alpha1.schema.json",
@@ -4200,7 +4200,7 @@
       "description": "Registry Adapter project, profile, pack, fixture, runtime configuration, ingestion job, job runtime configuration, and effective contract JSON Schema.",
       "source": {
         "path": "crates/registry-adapterctl/src/schemas.rs",
-        "sha256": "a597a23c1068ab4c607f2241d6081cdc709522446183432fe37ef2880b53f1bf"
+        "sha256": "ee38dfe66d555d580545cec1b5d8e4148d1d108d194d5680c3dca63bbfbfd7c9"
       },
       "artifact": {
         "path": "products/adapter/schemas/fixture.v1alpha1.schema.json",
@@ -4218,11 +4218,11 @@
       "description": "Registry Adapter project, profile, pack, fixture, runtime configuration, ingestion job, job runtime configuration, and effective contract JSON Schema.",
       "source": {
         "path": "crates/registry-adapterctl/src/schemas.rs",
-        "sha256": "a597a23c1068ab4c607f2241d6081cdc709522446183432fe37ef2880b53f1bf"
+        "sha256": "ee38dfe66d555d580545cec1b5d8e4148d1d108d194d5680c3dca63bbfbfd7c9"
       },
       "artifact": {
         "path": "products/adapter/schemas/job-runtime.v1alpha1.schema.json",
-        "sha256": "d04770db66dae405a907abc7f705e35fb4e511cd8337f0abd10df39573be08e7",
+        "sha256": "c1be1e7bc8efa01de429ea5a5cd7c19da49d9766d71839602a0e81cecc447d8b",
         "mediaType": "application/schema+json"
       }
     },
@@ -4236,11 +4236,11 @@
       "description": "Registry Adapter project, profile, pack, fixture, runtime configuration, ingestion job, job runtime configuration, and effective contract JSON Schema.",
       "source": {
         "path": "crates/registry-adapterctl/src/schemas.rs",
-        "sha256": "a597a23c1068ab4c607f2241d6081cdc709522446183432fe37ef2880b53f1bf"
+        "sha256": "ee38dfe66d555d580545cec1b5d8e4148d1d108d194d5680c3dca63bbfbfd7c9"
       },
       "artifact": {
         "path": "products/adapter/schemas/job.v1alpha1.schema.json",
-        "sha256": "e37722d93aa532c019b1b64760ae9b26f77054207cd7571f2a615c4ed7183690",
+        "sha256": "38818527ae8cf4435485ea3f283af51b41c4d1d1e0e26d04ab3e59c158c150a7",
         "mediaType": "application/schema+json"
       }
     },
@@ -4254,11 +4254,11 @@
       "description": "Registry Adapter project, profile, pack, fixture, runtime configuration, ingestion job, job runtime configuration, and effective contract JSON Schema.",
       "source": {
         "path": "crates/registry-adapterctl/src/schemas.rs",
-        "sha256": "a597a23c1068ab4c607f2241d6081cdc709522446183432fe37ef2880b53f1bf"
+        "sha256": "ee38dfe66d555d580545cec1b5d8e4148d1d108d194d5680c3dca63bbfbfd7c9"
       },
       "artifact": {
         "path": "products/adapter/schemas/pack.v1alpha1.schema.json",
-        "sha256": "3117135f78b59904b96bcd379ee1550dba23393c58b6e10b028fbc830fb61ebf",
+        "sha256": "6031baaabca785fe6e0adfed4336fa555839e18ae1a3136cf3e895ad5e6f6dcb",
         "mediaType": "application/schema+json"
       }
     },
@@ -4272,7 +4272,7 @@
       "description": "Registry Adapter project, profile, pack, fixture, runtime configuration, ingestion job, job runtime configuration, and effective contract JSON Schema.",
       "source": {
         "path": "crates/registry-adapterctl/src/schemas.rs",
-        "sha256": "a597a23c1068ab4c607f2241d6081cdc709522446183432fe37ef2880b53f1bf"
+        "sha256": "ee38dfe66d555d580545cec1b5d8e4148d1d108d194d5680c3dca63bbfbfd7c9"
       },
       "artifact": {
         "path": "products/adapter/schemas/profile.v1alpha1.schema.json",
@@ -4290,7 +4290,7 @@
       "description": "Registry Adapter project, profile, pack, fixture, runtime configuration, ingestion job, job runtime configuration, and effective contract JSON Schema.",
       "source": {
         "path": "crates/registry-adapterctl/src/schemas.rs",
-        "sha256": "a597a23c1068ab4c607f2241d6081cdc709522446183432fe37ef2880b53f1bf"
+        "sha256": "ee38dfe66d555d580545cec1b5d8e4148d1d108d194d5680c3dca63bbfbfd7c9"
       },
       "artifact": {
         "path": "products/adapter/schemas/project.v1alpha1.schema.json",
@@ -4308,11 +4308,11 @@
       "description": "Registry Adapter project, profile, pack, fixture, runtime configuration, ingestion job, job runtime configuration, and effective contract JSON Schema.",
       "source": {
         "path": "crates/registry-adapterctl/src/schemas.rs",
-        "sha256": "a597a23c1068ab4c607f2241d6081cdc709522446183432fe37ef2880b53f1bf"
+        "sha256": "ee38dfe66d555d580545cec1b5d8e4148d1d108d194d5680c3dca63bbfbfd7c9"
       },
       "artifact": {
         "path": "products/adapter/schemas/runtime.v1alpha1.schema.json",
-        "sha256": "2fa8bb17fea51e3e613e32b20ad8383f4a7bb6e213c817ef8b5268832698c867",
+        "sha256": "169ce8657f2ab5a3140216b6aeeeaaaf7dfcea0f508364a76de142b93c6a0a14",
         "mediaType": "application/schema+json"
       }
     },
@@ -5082,11 +5082,11 @@
       "description": "Evidence frozen Version 1 contract and configuration schemas, written as YAML.",
       "source": {
         "path": "products/evidence/contracts/bundle.schema.yaml",
-        "sha256": "6ff4617bdf7305ca45e3c6d7c8e713510a2862ae0febf9883b1fd175da4f701c"
+        "sha256": "9bb613d4cd8be94f6cf271614c711db6893613873e572e816e324ca20d275b67"
       },
       "artifact": {
         "path": "products/evidence/contracts/bundle.schema.yaml",
-        "sha256": "6ff4617bdf7305ca45e3c6d7c8e713510a2862ae0febf9883b1fd175da4f701c",
+        "sha256": "9bb613d4cd8be94f6cf271614c711db6893613873e572e816e324ca20d275b67",
         "mediaType": "application/yaml"
       }
     },
@@ -5244,11 +5244,11 @@
       "description": "Evidence frozen Version 1 contract and configuration schemas, written as YAML.",
       "source": {
         "path": "products/evidence/contracts/runtime.schema.yaml",
-        "sha256": "2c50d1c668660b15707983fc8abed77307066b641626e4c19bc79804d36b1bf8"
+        "sha256": "5cf36c491a0079fcaa8163fb85426480ea3ded71ce44f35790030e1838191411"
       },
       "artifact": {
         "path": "products/evidence/contracts/runtime.schema.yaml",
-        "sha256": "2c50d1c668660b15707983fc8abed77307066b641626e4c19bc79804d36b1bf8",
+        "sha256": "5cf36c491a0079fcaa8163fb85426480ea3ded71ce44f35790030e1838191411",
         "mediaType": "application/yaml"
       }
     },

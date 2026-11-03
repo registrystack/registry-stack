@@ -91,6 +91,7 @@ required-features = ["job-hook", "postgres-test"]
 registry-adapter-engine.workspace = true
 registry-adapter-core.workspace = true
 registry-adapter-connectors = { workspace = true, optional = true }
+registry-platform-buildinfo.workspace = true
 registry-platform-config.workspace = true
 registry-platform-crypto = { workspace = true, optional = true }
 registry-platform-httputil = { workspace = true, optional = true }

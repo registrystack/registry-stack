@@ -361,6 +361,9 @@ class CiChangesTest(unittest.TestCase):
             "adapter-contracts": (
                 "needs.changes.outputs.adapter_contracts == 'true'"
             ),
+            "adapter-postgres": (
+                "needs.changes.outputs.adapter_contracts == 'true'"
+            ),
             "evidence-postgres": (
                 "needs.changes.outputs.evidence_postgres == 'true'"
             ),
@@ -506,6 +509,7 @@ class CiChangesTest(unittest.TestCase):
             "documents-contracts",
             "documents-postgres",
             "adapter-contracts",
+            "adapter-postgres",
             "coordinator-postgres",
             "release-tool",
             "release-tool-required",
@@ -552,6 +556,7 @@ class CiChangesTest(unittest.TestCase):
                 "documents-contracts",
                 "documents-postgres",
                 "adapter-contracts",
+                "adapter-postgres",
                 "coordinator-postgres",
                 "config-conformance",
             ),
@@ -584,6 +589,7 @@ class CiChangesTest(unittest.TestCase):
                 "documents-contracts",
                 "documents-postgres",
                 "adapter-contracts",
+                "adapter-postgres",
                 "coordinator-postgres",
                 "config-conformance",
                 "release-tool",
@@ -648,7 +654,7 @@ class CiChangesTest(unittest.TestCase):
             final_needs,
             previous_final_needs.difference({"rust-result"}).union(rust_needs),
         )
-        self.assertEqual(42, len(final_needs))
+        self.assertEqual(43, len(final_needs))
         # Platform line coverage publishes from main and the nightly sweep;
         # it does not hold the merge queue.
         self.assertNotIn("platform-coverage", final_needs)
@@ -1265,8 +1271,49 @@ class CiChangesTest(unittest.TestCase):
         self.assertTrue(outputs["evidence_postgres"])
         self.assertTrue(outputs["adapter_contracts"])
 
-    def test_adapter_contract_job_runs_the_ingestion_postgres_suite(self) -> None:
+    def test_adapter_contract_job_runs_the_facade_recovery_runner(self) -> None:
         steps = self.workflow_jobs["adapter-contracts"]["steps"]
+        runner = next(
+            step
+            for step in steps
+            if step.get("name") == "Registry Adapter facade recovery runner"
+        )
+        self.assertEqual(
+            runner["run"],
+            "products/adapter/scripts/test-facade-recovery-runner.sh",
+        )
+
+    def test_adapter_postgres_job_runs_the_live_postgres_suites(self) -> None:
+        steps = self.workflow_jobs["adapter-postgres"]["steps"]
+        scripts = {
+            step["run"]: step["env"]["CARGO_TARGET_DIR"]
+            for step in steps
+            if step.get("run", "").startswith("products/adapter/scripts/")
+        }
+        self.assertEqual(
+            scripts,
+            {
+                "products/adapter/scripts/test-job-postgres.sh": (
+                    "${{ github.workspace }}/target"
+                ),
+                "products/adapter/scripts/test-postgres.sh": (
+                    "${{ github.workspace }}/target"
+                ),
+            },
+        )
+
+    def test_adapter_contract_job_leaves_the_postgres_suites_to_their_job(
+        self,
+    ) -> None:
+        runs = [
+            step.get("run", "")
+            for step in self.workflow_jobs["adapter-contracts"]["steps"]
+        ]
+        self.assertNotIn("products/adapter/scripts/test-job-postgres.sh", runs)
+        self.assertNotIn("products/adapter/scripts/test-postgres.sh", runs)
+
+    def test_adapter_postgres_job_runs_the_ingestion_postgres_suite(self) -> None:
+        steps = self.workflow_jobs["adapter-postgres"]["steps"]
         postgres = next(
             step
             for step in steps

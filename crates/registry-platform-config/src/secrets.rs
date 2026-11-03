@@ -398,10 +398,13 @@ mod tests {
     fn disabled_resolver_has_no_secret_authority() {
         let resolver = SecretResolver::disabled();
         for reference in ["secret:env/NOT_READ", "secret:file/not-read"] {
-            assert!(matches!(
-                resolver.resolve(reference),
-                Err(SecretError::ProviderDisabled)
-            ));
+            assert!(
+                matches!(
+                    resolver.resolve(reference),
+                    Err(SecretError::ProviderDisabled)
+                ),
+                "{reference} resolves through a disabled resolver"
+            );
         }
     }
 

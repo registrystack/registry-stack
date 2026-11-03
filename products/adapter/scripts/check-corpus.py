@@ -81,6 +81,7 @@ UNCORPUSABLE_CODES = {
     ),
     "adapter.job.page-shape": "runtime-only: a source page refused while a job runs",
     "adapter.job.page-key": "runtime-only: a source page refused while a job runs",
+    "adapter.job.page-revision": "runtime-only: a source page refused while a job runs",
     "adapter.job.page-items-bound": "runtime-only: a source page refused while a job runs",
     "adapter.job.page-bytes-bound": "runtime-only: a source page refused while a job runs",
     "adapter.job.page-next-bound": "runtime-only: a source page refused while a job runs",

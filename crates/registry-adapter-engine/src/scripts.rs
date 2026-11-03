@@ -90,8 +90,12 @@ pub enum ScriptLoadError {
     Unreadable(String),
     #[error("script {0} is over the engine's source bound")]
     TooLarge(String),
-    #[error("script {0} does not match its pinned digest")]
-    DigestMismatch(String),
+    #[error("script {path} does not match its pinned digest: the pin is {pinned} but the file has {actual}; after reviewing the change, update the pin to {actual}")]
+    DigestMismatch {
+        path: String,
+        pinned: String,
+        actual: String,
+    },
     #[error("script {path} entrypoint {entrypoint} does not compile as a one-parameter function named exchange")]
     Entrypoint { path: String, entrypoint: String },
     #[error("script {path} entrypoint {entrypoint} does not compile as a two-parameter function named oldExchange and newExchange")]
@@ -206,8 +210,13 @@ impl ScriptSet {
                 return Err(ScriptLoadError::TooLarge(mapping.file.clone()))
             }
         };
-        if sha256_uri(&bytes) != mapping.digest.as_str() {
-            return Err(ScriptLoadError::DigestMismatch(mapping.file.clone()));
+        let actual = sha256_uri(&bytes);
+        if actual != mapping.digest.as_str() {
+            return Err(ScriptLoadError::DigestMismatch {
+                path: mapping.file.clone(),
+                pinned: mapping.digest.as_str().to_owned(),
+                actual,
+            });
         }
         self.compile_bytes_into(
             key,
@@ -282,8 +291,13 @@ impl ScriptSet {
                 return Err(ScriptLoadError::TooLarge(file.to_owned()))
             }
         };
-        if sha256_uri(&bytes) != pinned.digest.as_str() {
-            return Err(ScriptLoadError::DigestMismatch(file.to_owned()));
+        let actual = sha256_uri(&bytes);
+        if actual != pinned.digest.as_str() {
+            return Err(ScriptLoadError::DigestMismatch {
+                path: file.to_owned(),
+                pinned: pinned.digest.as_str().to_owned(),
+                actual,
+            });
         }
         self.compile_bytes_into(file.to_owned(), file, entrypoint, &bytes, parameters, pair)
     }

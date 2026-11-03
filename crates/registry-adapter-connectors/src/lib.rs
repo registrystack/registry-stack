@@ -2,10 +2,12 @@
 //! Native Registry Stack destination connectors behind explicit,
 //! off-by-default features.
 //!
-//! A connector turns one prepared delivery attempt into exactly one typed
-//! call on `registry-breg-client`, and nothing else: never hand-authored
-//! HTTP, never a product database, never a product runtime or tooling
-//! crate. The crate is linked by no facade binary and only by the job
+//! A connector turns one prepared delivery attempt into one keyed
+//! destination exchange, and nothing else: the BReg connector calls
+//! `registry-breg-client` (a guarded Action reads its target conditions
+//! first), and the Coordinator event connector sends the platform's
+//! signed hook envelope over `registry-platform-httputil`. Never a product
+//! database, never a product runtime or tooling crate. The crate is linked by no facade binary and only by the job
 //! host's explicit destination features. The dependency-direction gate
 //! in `products/adapter/scripts/` holds that boundary mechanically.
 //!

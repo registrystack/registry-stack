@@ -280,6 +280,12 @@ impl CompiledHostProtocol for LookupProtocol {
         true
     }
 
+    /// The lookup verifier classifies a JSON Problem by its members and signs
+    /// nothing, so a fixture may record the response as a readable `body`.
+    fn replays_readable_body(&self) -> bool {
+        true
+    }
+
     fn prepare_attempt(
         &self,
         _request: HostProtocolRequestContext<'_>,

@@ -29,7 +29,20 @@ cases:
     intercepts:
     - type: endpoint
       endpoint: registry
+    - type: token-endpoint
+      endpoint: registry
     exchanges:
+    - request:
+        endpoint: registry
+        tokenRequest: true
+        method: POST
+        path: /oauth2/token
+      response:
+        status: 200
+        body:
+          access_token: synthetic-registry-replay-token
+          token_type: Bearer
+          expires_in: 60
     - request:
         endpoint: registry
         method: POST
@@ -45,7 +58,7 @@ cases:
         status: 200
         headers:
           content-type: application/json
-        rawBodyBase64: eyJkYXRhIjp7ImRvbWFpbkRhdGEiOnsiY29kZSI6IlNZTlRIRVRJQy1BQ1RJVkUiLCJzdGF0dXMiOiJhY3RpdmUiLCJsYWJlbCI6IlNZTlRIRVRJQy1QUklWQVRFLUxBQkVMIn19fQ==
+        body: {"data": {"domainData": {"code": "SYNTHETIC-ACTIVE", "status": "active", "label": "SYNTHETIC-PRIVATE-LABEL"}}}
   expected:
     lookup: match
     derivationRuns: true
@@ -58,7 +71,20 @@ cases:
     intercepts:
     - type: endpoint
       endpoint: registry
+    - type: token-endpoint
+      endpoint: registry
     exchanges:
+    - request:
+        endpoint: registry
+        tokenRequest: true
+        method: POST
+        path: /oauth2/token
+      response:
+        status: 200
+        body:
+          access_token: synthetic-registry-replay-token
+          token_type: Bearer
+          expires_in: 60
     - request:
         endpoint: registry
         method: POST
@@ -74,7 +100,7 @@ cases:
         status: 200
         headers:
           content-type: application/json
-        rawBodyBase64: eyJkYXRhIjp7ImRvbWFpbkRhdGEiOnsiY29kZSI6IlNZTlRIRVRJQy1BQ1RJVkUiLCJzdGF0dXMiOiJyZXRpcmVkIn19fQ==
+        body: {"data": {"domainData": {"code": "SYNTHETIC-ACTIVE", "status": "retired"}}}
   expected:
     lookup: match
     derivationRuns: true
@@ -87,7 +113,20 @@ cases:
     intercepts:
     - type: endpoint
       endpoint: registry
+    - type: token-endpoint
+      endpoint: registry
     exchanges:
+    - request:
+        endpoint: registry
+        tokenRequest: true
+        method: POST
+        path: /oauth2/token
+      response:
+        status: 200
+        body:
+          access_token: synthetic-registry-replay-token
+          token_type: Bearer
+          expires_in: 60
     - request:
         endpoint: registry
         method: POST
@@ -103,7 +142,7 @@ cases:
         status: 200
         headers:
           content-type: application/json
-        rawBodyBase64: eyJkYXRhIjp7ImRvbWFpbkRhdGEiOnsiY29kZSI6IlNZTlRIRVRJQy1BQ1RJVkUiLCJzdGF0dXMiOm51bGx9fX0=
+        body: {"data": {"domainData": {"code": "SYNTHETIC-ACTIVE", "status": null}}}
   expected:
     lookup: no_match
     publicProblem: evidence.unavailable
@@ -114,7 +153,20 @@ cases:
     intercepts:
     - type: endpoint
       endpoint: registry
+    - type: token-endpoint
+      endpoint: registry
     exchanges:
+    - request:
+        endpoint: registry
+        tokenRequest: true
+        method: POST
+        path: /oauth2/token
+      response:
+        status: 200
+        body:
+          access_token: synthetic-registry-replay-token
+          token_type: Bearer
+          expires_in: 60
     - request:
         endpoint: registry
         method: POST
@@ -130,7 +182,7 @@ cases:
         status: 200
         headers:
           content-type: application/json
-        rawBodyBase64: eyJkYXRhIjp7ImRvbWFpbkRhdGEiOnsiY29kZSI6IlNZTlRIRVRJQy1BQ1RJVkUifX19
+        body: {"data": {"domainData": {"code": "SYNTHETIC-ACTIVE"}}}
   expected:
     lookup: no_match
     publicProblem: evidence.unavailable
@@ -141,7 +193,20 @@ cases:
     intercepts:
     - type: endpoint
       endpoint: registry
+    - type: token-endpoint
+      endpoint: registry
     exchanges:
+    - request:
+        endpoint: registry
+        tokenRequest: true
+        method: POST
+        path: /oauth2/token
+      response:
+        status: 200
+        body:
+          access_token: synthetic-registry-replay-token
+          token_type: Bearer
+          expires_in: 60
     - request:
         endpoint: registry
         method: POST
@@ -157,7 +222,7 @@ cases:
         status: 404
         headers:
           content-type: application/problem+json
-        rawBodyBase64: eyJ0eXBlIjoiaHR0cHM6Ly9pZC5yZWdpc3RyeXN0YWNrLm9yZy9wcm9ibGVtcy9yZWdpc3RyeS1icmVnL2xvb2t1cC91bnJlc29sdmVkIiwidGl0bGUiOiJOb3QgRm91bmQiLCJzdGF0dXMiOjQwNCwiZGV0YWlsIjoiVGhlIHJlcXVlc3RlZCByZWNvcmQgd2FzIG5vdCBmb3VuZC4iLCJjb2RlIjoibG9va3VwLnVucmVzb2x2ZWQiLCJ0cmFjZUlkIjoiMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEifQ==
+        body: {"type": "https://id.registrystack.org/problems/registry-breg/lookup/unresolved", "title": "Not Found", "status": 404, "detail": "The requested record was not found.", "code": "lookup.unresolved", "traceId": "11111111111111111111111111111111"}
   expected:
     lookup: unresolved
     publicProblem: evidence.unavailable
@@ -169,7 +234,20 @@ cases:
     intercepts:
     - type: endpoint
       endpoint: registry
+    - type: token-endpoint
+      endpoint: registry
     exchanges:
+    - request:
+        endpoint: registry
+        tokenRequest: true
+        method: POST
+        path: /oauth2/token
+      response:
+        status: 200
+        body:
+          access_token: synthetic-registry-replay-token
+          token_type: Bearer
+          expires_in: 60
     - request:
         endpoint: registry
         method: POST
@@ -185,7 +263,7 @@ cases:
         status: 404
         headers:
           content-type: application/problem+json
-        rawBodyBase64: eyJ0eXBlIjoiaHR0cHM6Ly9pZC5yZWdpc3RyeXN0YWNrLm9yZy9wcm9ibGVtcy9yZWdpc3RyeS1icmVnL2xvb2t1cC91bnJlc29sdmVkIiwidGl0bGUiOiJOb3QgRm91bmQiLCJzdGF0dXMiOjQwNCwiZGV0YWlsIjoiVGhlIGF1dGhvcml0YXRpdmUgc291cmNlIGRpZCBub3QgcmVsZWFzZSBhIHVuaXF1ZSByZWNvcmQuIiwiY29kZSI6Imxvb2t1cC51bnJlc29sdmVkIiwidHJhY2VJZCI6IjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyIn0=
+        body: {"type": "https://id.registrystack.org/problems/registry-breg/lookup/unresolved", "title": "Not Found", "status": 404, "detail": "The authoritative source did not release a unique record.", "code": "lookup.unresolved", "traceId": "22222222222222222222222222222222"}
   expected:
     lookup: unresolved
     publicProblem: evidence.unavailable
@@ -197,7 +275,20 @@ cases:
     intercepts:
     - type: endpoint
       endpoint: registry
+    - type: token-endpoint
+      endpoint: registry
     exchanges:
+    - request:
+        endpoint: registry
+        tokenRequest: true
+        method: POST
+        path: /oauth2/token
+      response:
+        status: 200
+        body:
+          access_token: synthetic-registry-replay-token
+          token_type: Bearer
+          expires_in: 60
     - request:
         endpoint: registry
         method: POST
@@ -213,7 +304,7 @@ cases:
         status: 200
         headers:
           content-type: application/json
-        rawBodyBase64: eyJkYXRhIjp7ImRvbWFpbkRhdGEiOnsiY29kZSI6IlNZTlRIRVRJQy1XUk9ORy1JREVOVElUWSIsInN0YXR1cyI6ImFjdGl2ZSJ9fX0=
+        body: {"data": {"domainData": {"code": "SYNTHETIC-WRONG-IDENTITY", "status": "active"}}}
   expected:
     error: source_protocol_error
     publicProblem: source.unavailable
@@ -224,7 +315,20 @@ cases:
     intercepts:
     - type: endpoint
       endpoint: registry
+    - type: token-endpoint
+      endpoint: registry
     exchanges:
+    - request:
+        endpoint: registry
+        tokenRequest: true
+        method: POST
+        path: /oauth2/token
+      response:
+        status: 200
+        body:
+          access_token: synthetic-registry-replay-token
+          token_type: Bearer
+          expires_in: 60
     - request:
         endpoint: registry
         method: POST
@@ -240,7 +344,7 @@ cases:
         status: 200
         headers:
           content-type: application/json
-        rawBodyBase64: eyJkYXRhIjp7ImRvbWFpbkRhdGEiOnsic3RhdHVzIjoiYWN0aXZlIn19fQ==
+        body: {"data": {"domainData": {"status": "active"}}}
   expected:
     error: source_protocol_error
     publicProblem: source.unavailable
@@ -251,7 +355,20 @@ cases:
     intercepts:
     - type: endpoint
       endpoint: registry
+    - type: token-endpoint
+      endpoint: registry
     exchanges:
+    - request:
+        endpoint: registry
+        tokenRequest: true
+        method: POST
+        path: /oauth2/token
+      response:
+        status: 200
+        body:
+          access_token: synthetic-registry-replay-token
+          token_type: Bearer
+          expires_in: 60
     - request:
         endpoint: registry
         method: POST
@@ -267,7 +384,7 @@ cases:
         status: 200
         headers:
           content-type: application/json
-        rawBodyBase64: eyJkYXRhIjp7ImRvbWFpbkRhdGEiOnsiY29kZSI6Nywic3RhdHVzIjoiYWN0aXZlIn19fQ==
+        body: {"data": {"domainData": {"code": 7, "status": "active"}}}
   expected:
     error: source_protocol_error
     publicProblem: source.unavailable

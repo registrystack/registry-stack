@@ -65,6 +65,8 @@ marker, no trimming, and UTF-8.
 With headers enabled, rows are maps of strings.
 With `header: false`, rows are arrays of strings.
 The decoder performs no type inference, so `007` stays `"007"`.
+The decoder reads UTF-8 only and has no encoding member; a record that is not valid UTF-8 refuses
+the read as a malformed record, so re-export a Windows-1252 or Latin-1 file as UTF-8.
 
 Paging and row bounds are Adapter additions.
 The source cursor binds the file content digest and byte position.
@@ -126,7 +128,30 @@ The PostgreSQL source accepts one digest-pinned, plain `SELECT` with a root `ORD
 It does not accept dynamic SQL, multiple statements, utility commands, a data-changing common table
 expression, or a query with more than 16 positional parameters.
 `parameterOrder` gives each contiguous `$1`-onward position a reviewed name.
+The engine pages the statement itself: it appends `OFFSET $n+1` after the reviewed positions and
+binds the cursor's offset, zero on the first page.
+A root `LIMIT`, `OFFSET` or `FETCH` therefore refuses at compile.
 Runtime values bind as text, checked integers, double-precision numbers, or booleans.
+
+Each result column crosses as one JSON value, by its PostgreSQL type:
+
+| Column type | Item value |
+| --- | --- |
+| `text`, `varchar`, `char`, `name` | string |
+| `smallint`, `integer`, `bigint` | integer |
+| `real`, `double precision` | number; NaN and infinities refuse |
+| `boolean` | boolean |
+| `numeric` | exact decimal string at the column's scale, such as `"12345.6700"`; NaN and infinities refuse |
+| `date` | string, `YYYY-MM-DD` |
+| `timestamp` | string, ISO 8601 without an offset, such as `2026-11-03T10:15:30` |
+| `timestamptz` | string, RFC 3339 in UTC, such as `2026-11-03T08:15:30.250Z` |
+| `uuid` | string, lowercase hyphenated |
+| SQL `NULL` of any type above | `null` |
+
+Any other type stops the page with `adapter.job.postgres-column-type` and a record locator that
+names the one-based column, never its value; cast that column in the query to a type above.
+A `NULL` key column stops the page with `adapter.job.postgres-key-null` and the row's zero-based
+ordinal.
 
 Every page runs in its own read-only, read-committed transaction with a local statement timeout and
 bounded rows, row bytes, field bytes, and response bytes.
@@ -167,7 +192,13 @@ The runtime requires a normalized absolute `baseDirectory`, one pinned OpenSSH h
 password or private-key credential through secret references.
 The default port is `22`.
 An optional flat `include` glob selects candidates.
+Hidden names (a leading dot, such as `.DS_Store` or an rsync temp file) and subdirectories are never
+candidates and never fail a read.
 `maximumListingEntries` defaults to `500` and is bounded at `10000`.
+It bounds the candidates a read can open (names matching `include`, done files excluded), not every
+name in the directory.
+Consumed files stay in place, so move them away or narrow `include` before the matching count
+reaches the bound.
 The source exposes no file-source `readLock` option.
 Its operation deadline and completion rechecks bound an interrupted read instead.
 
@@ -183,7 +214,17 @@ confines it to `baseDirectory`.
 Client pathname, canonical-path, symlink, and recheck logic is defense in depth.
 SFTP v3 provides no portable atomic open-beneath operation, so the client does not establish an
 atomic SSH jail.
-The selected cipher paths use AWS-LC while key exchange and signatures also use RustCrypto.
+The client offers a short modern algorithm set and nothing weaker:
+
+- key exchange: `curve25519-sha256`, `ecdh-sha2-nistp256`, `ecdh-sha2-nistp384`;
+- ciphers: `aes256-gcm@openssh.com`, `aes128-gcm@openssh.com`, `aes256-ctr`, `aes128-ctr`;
+- MACs for the CTR ciphers: `hmac-sha2-256-etm@openssh.com`, `hmac-sha2-512-etm@openssh.com`;
+- host key: the algorithm of the pinned key (Ed25519 or ECDSA P-256).
+
+A server that offers none of a category (one limited to finite-field Diffie-Hellman, CBC ciphers or
+SHA-1 MACs, for example) stops the page with `adapter.job.sftp-connection` and a message naming
+algorithm negotiation, so it is not mistaken for a network fault.
+The GCM cipher paths use AWS-LC while the CTR, MAC, key exchange and signature paths use RustCrypto.
 This is not a whole-session Federal Information Processing Standards (FIPS) validation claim.
 
 Camel's [SFTP manual](https://camel.apache.org/components/next/sftp-component.html) is the readable
@@ -204,6 +245,21 @@ The mapped job tests also cover bounded transfer and same-name replacement.
 They do not establish a facade route, an atomic server confinement boundary, or whole-session FIPS
 validation.
 
+## Credential rotation
+
+Each source reads its credential through a secret reference, and the sources pick up a rotated
+secret differently:
+
+| Source | When the reference resolves | After a rotation |
+|---|---|---|
+| File | No credential | Nothing to rotate |
+| SFTP | On every read | The next read uses the new secret |
+| PostgreSQL | Once, when the job host activates the source, into the source's pool | Restart the job host; the pool keeps signing in with the old password until then |
+| RabbitMQ | Once, when the job host activates the source | Restart the job host; reconnects reuse the activation-time secret |
+
+Rotate by publishing the new secret, then restarting the job host for a PostgreSQL or RabbitMQ
+source. A rerun after a restart is safe: the cursor and the item store carry the progress.
+
 ## Job-only pollEnrich
 
 The Adapter's `pollEnrich` is a job-source read step over a static `file:`, `rabbitmq:`, or `sftp:`
@@ -219,6 +275,21 @@ metadata.
 Camel's header-preservation behavior in
 `PollEnrichHeaderPropagationTest.testHeadersPreservedAfterPollEnrich` is therefore inapplicable,
 not an untested facade promise.
+
+A refused read stops the page with a closed code that names what to fix:
+
+| Code | Source | Fix |
+| --- | --- | --- |
+| `adapter.job.read-timeout` | any | Check the source's latency, or raise the step's `timeoutMilliseconds`. For a file source with `readLock: changed`, the file did not settle in time; raise `readLockTimeoutMilliseconds`. |
+| `adapter.job.read-bound` | any | A file, row, listing, or delivery exceeded a configured bound; raise the bound or split the input. |
+| `adapter.job.sftp-connection` | SFTP | Check `host` and `port`, and that the server accepts connections from this host. When the message names algorithm negotiation, the server offers no key exchange, cipher, MAC or host-key algorithm from the accepted set (see the SFTP job source section); enable one on the server. |
+| `adapter.job.sftp-host-key` | SFTP | The server's key does not match `pinnedHostKey`. Verify the key out of band before updating the pin: a changed key can mean an interception. |
+| `adapter.job.sftp-credential` | SFTP | The credential's secret reference did not resolve to a valid password or OpenSSH private key. |
+| `adapter.job.sftp-authentication` | SFTP | The server refused the `user` and credential; rotate the password or key and confirm the account is enabled. |
+| `adapter.job.sftp-malformed` | SFTP | The listing or file read was incomplete; check the producer's completion protocol, then rerun. |
+| `adapter.job.sftp-path` | SFTP | Place regular files, not links or directories, directly under `baseDirectory`. |
+| `adapter.job.rabbitmq-topology` | RabbitMQ | The message names what is missing. Create the durable `queue` and the direct `deadLetterExchange` (with `deadLetterQueue` bound by `deadLetterRoutingKey`), or set `declareTopology: true` so the host declares them. A refusal that names neither is a permission failure or, with `declareTopology: true`, queue arguments that differ from the durable dead-letter arguments the host declares. |
+| `adapter.job.rabbitmq-unavailable` | RabbitMQ | Check `host`, `port`, `vhost`, `user`, and `passwordRef`, and that the broker runs. A rerun after an uncertain settlement is safe. |
 
 Camel's [Poll Enrich manual](https://camel.apache.org/components/next/eips/pollEnrich-eip.html) is
 the readable reference.

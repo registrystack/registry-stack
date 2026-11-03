@@ -74,13 +74,28 @@ pub const RABBITMQ_EVENT_CHANGED: &str = "adapter.job.rabbitmq-event-changed";
 /// The pass stops before any recipient call and leaves the position unchanged.
 pub const COORDINATOR_RECEIVER_CHANGED: &str = "adapter.job.coordinator-receiver-changed";
 
+/// A pending signed delivery was staged before the store recorded receiver
+/// and body identity (store schema 103), so the host cannot prove a retry
+/// reaches the same authority with the same body. The pass stops before any
+/// recipient call; the recovery is to settle the item with the binary that
+/// staged it.
+pub const COORDINATOR_IDENTITY_UNRECORDED: &str = "adapter.job.coordinator-identity-unrecorded";
+
+/// A pending signed delivery would now be built with a different event body
+/// (the job version or the projection changed since it was first attempted).
+/// The pass stops before any recipient call, because a new body could start a
+/// second Run for the same item; restoring the previous definition lets the
+/// pending item settle.
+pub const COORDINATOR_BODY_CHANGED: &str = "adapter.job.coordinator-body-changed";
+
 /// The positive durable delivery-attempt counter cannot advance without
 /// leaving PostgreSQL's signed bigint domain. The pass stops with its source
 /// position unchanged rather than panicking or wrapping the counter.
 pub const DELIVERY_ATTEMPT_EXHAUSTED: &str = "adapter.job.delivery-attempt-exhausted";
 
 /// The governed file/SFTP item identity cannot be adopted over non-empty
-/// legacy state or changed in place. An operator must migrate or retire it.
+/// legacy state or changed in place. The operator accepts a change with
+/// `adapter-job rebind-identity`.
 pub const ITEM_IDENTITY_MIGRATION_REQUIRED: &str = "adapter.job.identity-migration-required";
 
 /// The options one pass runs under.
@@ -149,14 +164,18 @@ impl StopReason {
         let mut text = match self {
             StopReason::LeaseHeld => "lease-held".to_string(),
             StopReason::PageFault { code, record } => match record {
+                Some(RecordLocator {
+                    ordinal,
+                    column: Some(column),
+                }) => format!("page-fault:{code}:record:{ordinal}:column:{column}"),
                 Some(record) => format!("page-fault:{code}:record:{}", record.ordinal),
                 None => format!("page-fault:{code}"),
             },
             StopReason::DestinationStop { code } => format!("destination-stop:{code}"),
             StopReason::RefusalLimit { code } => format!("refusal-limit:{code}"),
         };
-        // A store refusal carries the store's own message, whose length
-        // the host does not choose: cut it to the state row's bound on a
+        // A destination's code or a page fault's class has a length the
+        // host does not choose: cut it to the state row's bound on a
         // character boundary rather than let the stop go unrecorded.
         if text.len() > MAXIMUM_STOP_TEXT_BYTES {
             let mut end = MAXIMUM_STOP_TEXT_BYTES;
@@ -241,7 +260,10 @@ pub async fn run_pass(
     }
     let mut client = match db.get().await {
         Ok(client) => client,
-        Err(error) => return store_refused(report, &error.to_string()),
+        Err(error) => {
+            report.stopped = Some(store_refused_cause(&store::pool_cause(&error)));
+            return report;
+        }
     };
     // The dry run writes nothing: it reads the state to report what a
     // real pass would do from it, and skips the lease.
@@ -256,7 +278,15 @@ pub async fn run_pass(
     // The dry run writes nothing, so it carries no token; every fenced
     // write below runs only in a leased pass.
     let lease_token = state.token.unwrap_or(0);
-    if !options.dry_run {
+    if options.dry_run {
+        // The preview applies the fence read-only, so it never looks clean
+        // over a state the next real pass refuses.
+        let identity = program.item_identity_digest();
+        if let Err(error) = store::check_item_identity(&client, job_id, identity.as_ref()).await {
+            let reason = identity_stop_reason(&error);
+            return finish_stopped(db, job_id, &options, lease_token, report, reason).await;
+        }
+    } else {
         let identity = program.item_identity_digest();
         if let Err(error) = store::bind_item_identity(
             &mut client,
@@ -267,13 +297,7 @@ pub async fn run_pass(
         )
         .await
         {
-            let reason = match error {
-                store::StoreError::ItemIdentityMigrationRequired => StopReason::PageFault {
-                    code: ITEM_IDENTITY_MIGRATION_REQUIRED.to_owned(),
-                    record: None,
-                },
-                error => store_refused_reason(&error),
-            };
+            let reason = identity_stop_reason(&error);
             return finish_stopped(db, job_id, &options, lease_token, report, reason).await;
         }
     }
@@ -511,25 +535,24 @@ pub async fn run_pass(
             projected: projection::project(&job.projection, &item.value),
         };
         if !options.dry_run {
-            if let Some(identity) = destination.receiver_identity(&job.job, &deliverable) {
-                let body_identity =
-                    match destination.canonical_body_identity(&job.job, &deliverable) {
-                        Some(Ok(identity)) => Some(identity),
-                        Some(Err(())) | None if staged.receipt_uncertain => {
-                            return finish_stopped(
-                                db,
-                                job_id,
-                                &options,
-                                lease_token,
-                                report,
-                                StopReason::DestinationStop {
-                                    code: COORDINATOR_RECEIVER_CHANGED.to_owned(),
-                                },
-                            )
-                            .await;
-                        }
-                        Some(Err(())) | None => None,
-                    };
+            if let Some(identity) = destination.delivery_identity(&job.job, &deliverable) {
+                let body_identity = match identity.canonical_body {
+                    Ok(body_identity) => Some(body_identity),
+                    Err(()) if staged.receipt_uncertain => {
+                        return finish_stopped(
+                            db,
+                            job_id,
+                            &options,
+                            lease_token,
+                            report,
+                            StopReason::DestinationStop {
+                                code: COORDINATOR_RECEIVER_CHANGED.to_owned(),
+                            },
+                        )
+                        .await;
+                    }
+                    Err(()) => None,
+                };
                 if let Some(body_identity) = body_identity {
                     let allow_rebind = staged.classification == StagedClassification::Redelivered
                         && !staged.receipt_uncertain;
@@ -537,7 +560,7 @@ pub async fn run_pass(
                         &mut client,
                         job_id,
                         &staged.key,
-                        &identity,
+                        &identity.receiver,
                         &body_identity,
                         staged.delivery_attempt,
                         allow_rebind,
@@ -546,17 +569,7 @@ pub async fn run_pass(
                     )
                     .await
                     {
-                        let reason = match error {
-                            store::StoreError::ReceiverIdentityUnknown
-                            | store::StoreError::ReceiverIdentityChanged
-                            | store::StoreError::CanonicalBodyIdentityUnknown
-                            | store::StoreError::CanonicalBodyIdentityChanged => {
-                                StopReason::DestinationStop {
-                                    code: COORDINATOR_RECEIVER_CHANGED.to_owned(),
-                                }
-                            }
-                            error => store_refused_reason(&error),
-                        };
+                        let reason = delivery_identity_stop_reason(&error);
                         return finish_stopped(db, job_id, &options, lease_token, report, reason)
                             .await;
                     }
@@ -813,7 +826,7 @@ fn direct_receipt_expired(
         return false;
     };
     staged.receipt_uncertain
-        && now.duration_since(staged.first_seen).is_ok_and(|age| {
+        && now.duration_since(staged.event_time).is_ok_and(|age| {
             age >= Duration::from_secs(u64::from(*receipt_retention_days) * 86_400)
         })
 }
@@ -859,22 +872,55 @@ fn answer_fits(outcome: &HandOffOutcome) -> bool {
     }
 }
 
-/// The stop reason for a store refusal: the store's own account of the
-/// failure, carried under one closed code, value-free.
+/// The stop reason for a failed item-identity fence.
+/// The closed code of a pass the job store refused. The stop text adds one
+/// value-free `cause:<token>` qualifier: the store condition, or the
+/// PostgreSQL SQLSTATE of a refused query (`sqlstate-42501`).
+pub const STORE_REFUSED: &str = "adapter.job.store-refused";
+
+/// The stop for a refused delivery identity fence: a changed receiver, a
+/// changed body, or a legacy row whose identity was never recorded each stop
+/// under their own closed code; anything else is a store refusal.
+fn delivery_identity_stop_reason(error: &store::StoreError) -> StopReason {
+    let code = match error {
+        store::StoreError::ReceiverIdentityChanged => COORDINATOR_RECEIVER_CHANGED,
+        store::StoreError::ReceiverIdentityUnknown
+        | store::StoreError::CanonicalBodyIdentityUnknown => COORDINATOR_IDENTITY_UNRECORDED,
+        store::StoreError::CanonicalBodyIdentityChanged => COORDINATOR_BODY_CHANGED,
+        error => return store_refused_reason(error),
+    };
+    StopReason::DestinationStop {
+        code: code.to_owned(),
+    }
+}
+
+fn identity_stop_reason(error: &store::StoreError) -> StopReason {
+    match error {
+        store::StoreError::ItemIdentityMigrationRequired => StopReason::PageFault {
+            code: ITEM_IDENTITY_MIGRATION_REQUIRED.to_owned(),
+            record: None,
+        },
+        error => store_refused_reason(error),
+    }
+}
+
+/// The stop reason for a store refusal: [`STORE_REFUSED`] with the
+/// store's closed cause token, value-free.
 fn store_refused_reason(error: &store::StoreError) -> StopReason {
+    store_refused_cause(&error.cause())
+}
+
+fn store_refused_cause(cause: &str) -> StopReason {
     StopReason::PageFault {
-        code: format!("adapter.job.store-refused:{error}"),
+        code: format!("{STORE_REFUSED}:cause:{cause}"),
         record: None,
     }
 }
 
 /// A pass that could not reach its own state row: the report carries
 /// the failure and nothing ran.
-fn store_refused(mut report: PassReport, reason: &str) -> PassReport {
-    report.stopped = Some(StopReason::PageFault {
-        code: format!("adapter.job.store-refused:{reason}"),
-        record: None,
-    });
+fn store_refused(mut report: PassReport, error: &store::StoreError) -> PassReport {
+    report.stopped = Some(store_refused_reason(error));
     report
 }
 
@@ -890,7 +936,7 @@ async fn read_pass_state(
     let row = match store::read_state(client, job_id).await {
         Ok(row) => row,
         Err(error) => {
-            *report = store_refused(std::mem::take(report), &error.to_string());
+            *report = store_refused(std::mem::take(report), &error);
             return None;
         }
     };
@@ -915,7 +961,7 @@ async fn take_pass_state(
     report: &mut PassReport,
 ) -> Option<PassState> {
     if let Err(error) = store::ensure_state(client, job_id).await {
-        *report = store_refused(std::mem::take(report), &error.to_string());
+        *report = store_refused(std::mem::take(report), &error);
         return None;
     }
     // The overdue flag reads the state as this pass found it: on a held
@@ -923,7 +969,7 @@ async fn take_pass_state(
     let before = match store::read_state(client, job_id).await {
         Ok(row) => row.unwrap_or_default(),
         Err(error) => {
-            *report = store_refused(std::mem::take(report), &error.to_string());
+            *report = store_refused(std::mem::take(report), &error);
             return None;
         }
     };
@@ -931,7 +977,7 @@ async fn take_pass_state(
     let leased = match store::take_lease(client, job_id, lease_ttl(program)).await {
         Ok(leased) => leased,
         Err(error) => {
-            *report = store_refused(std::mem::take(report), &error.to_string());
+            *report = store_refused(std::mem::take(report), &error);
             return None;
         }
     };
@@ -946,7 +992,7 @@ async fn take_pass_state(
         if let Err(error) =
             store::sync_projection_digest(client, job_id, &program.job.projection_digest()).await
         {
-            *report = store_refused(std::mem::take(report), &error.to_string());
+            *report = store_refused(std::mem::take(report), &error);
             return None;
         }
     }
@@ -961,7 +1007,7 @@ async fn take_pass_state(
 /// margin an operator needs to see a stalled pass before the lease
 /// frees.
 fn lease_ttl(program: &JobProgram) -> Duration {
-    Duration::from_millis(program.profile().page_deadline_milliseconds)
+    Duration::from_millis(program.profile().page_deadline_milliseconds.get())
         + Duration::from_secs(store::LEASE_MARGIN_SECONDS)
 }
 
@@ -1065,10 +1111,24 @@ mod tests {
         assert_eq!(
             StopReason::PageFault {
                 code: "adapter.job.file-row".to_string(),
-                record: Some(RecordLocator { ordinal: 7 }),
+                record: Some(RecordLocator {
+                    ordinal: 7,
+                    column: None,
+                }),
             }
             .stop_text(),
             "page-fault:adapter.job.file-row:record:7"
+        );
+        assert_eq!(
+            StopReason::PageFault {
+                code: "adapter.job.postgres-column-type".to_string(),
+                record: Some(RecordLocator {
+                    ordinal: 0,
+                    column: Some(3),
+                }),
+            }
+            .stop_text(),
+            "page-fault:adapter.job.postgres-column-type:record:0:column:3"
         );
         assert_eq!(
             StopReason::DestinationStop {
@@ -1091,26 +1151,83 @@ mod tests {
         let reason = page_failure_reason(&JobPageFailure {
             class: None,
             code: Some("adapter.job.file-key-invalid"),
-            record: Some(RecordLocator { ordinal: 12 }),
+            record: Some(RecordLocator {
+                ordinal: 12,
+                column: None,
+            }),
         });
         assert_eq!(
             reason,
             StopReason::PageFault {
                 code: "adapter.job.file-key-invalid".to_string(),
-                record: Some(RecordLocator { ordinal: 12 }),
+                record: Some(RecordLocator {
+                    ordinal: 12,
+                    column: None,
+                }),
             }
         );
     }
 
     #[test]
+    fn an_unrecorded_delivery_identity_stops_under_its_own_code() {
+        let stop = |code: &str| StopReason::DestinationStop {
+            code: code.to_owned(),
+        };
+        for unrecorded in [
+            store::StoreError::ReceiverIdentityUnknown,
+            store::StoreError::CanonicalBodyIdentityUnknown,
+        ] {
+            assert_eq!(
+                delivery_identity_stop_reason(&unrecorded),
+                stop(COORDINATOR_IDENTITY_UNRECORDED),
+                "a legacy row is not a changed receiver: {unrecorded}"
+            );
+        }
+        assert_eq!(
+            delivery_identity_stop_reason(&store::StoreError::ReceiverIdentityChanged),
+            stop(COORDINATOR_RECEIVER_CHANGED)
+        );
+        assert_eq!(
+            delivery_identity_stop_reason(&store::StoreError::CanonicalBodyIdentityChanged),
+            stop(COORDINATOR_BODY_CHANGED)
+        );
+    }
+
+    #[test]
+    fn a_store_refusal_carries_the_closed_code_and_a_value_free_cause() {
+        for (error, cause) in [
+            (store::StoreError::LeaseLost, "lease-lost"),
+            (store::StoreError::MigrationLock, "migration-lock"),
+            (
+                store::StoreError::Pool("connection refused at db.internal:5432".to_string()),
+                "pool",
+            ),
+            (
+                store::StoreError::PositionBound {
+                    bytes: 9000,
+                    maximum: 4096,
+                },
+                "position-bound",
+            ),
+        ] {
+            assert_eq!(
+                store_refused_reason(&error).stop_text(),
+                format!("page-fault:{STORE_REFUSED}:cause:{cause}"),
+                "{error}"
+            );
+        }
+        assert_eq!(STORE_REFUSED, "adapter.job.store-refused");
+    }
+
+    #[test]
     fn a_stop_text_stays_within_the_state_row_bound_on_a_char_boundary() {
         let long = StopReason::PageFault {
-            code: format!("adapter.job.store-refused:{}", "\u{e9}".repeat(300)),
+            code: format!("adapter.job.page-fault:{}", "\u{e9}".repeat(300)),
             record: None,
         };
         let text = long.stop_text();
         assert!(text.len() <= MAXIMUM_STOP_TEXT_BYTES, "{}", text.len());
-        assert!(text.starts_with("page-fault:adapter.job.store-refused:"));
+        assert!(text.starts_with("page-fault:adapter.job.page-fault:"));
         assert!(
             text.len() > MAXIMUM_STOP_TEXT_BYTES - 2,
             "only a split char is dropped"
@@ -1180,11 +1297,27 @@ mod tests {
             &staged,
             first_seen + Duration::from_secs(7 * 86_400)
         ));
+        // BReg's receipt belongs to the sequence's command key, so a
+        // revision staged long after the first sighting counts from its own
+        // event time.
+        let revised = first_seen + Duration::from_secs(9 * 86_400);
+        staged.sequence = 2;
+        staged.event_time = revised;
+        assert!(!direct_receipt_expired(
+            &destination,
+            &staged,
+            revised + Duration::from_secs(7 * 86_400 - 1)
+        ));
+        assert!(direct_receipt_expired(
+            &destination,
+            &staged,
+            revised + Duration::from_secs(7 * 86_400)
+        ));
         staged.receipt_uncertain = false;
         assert!(!direct_receipt_expired(
             &destination,
             &staged,
-            first_seen + Duration::from_secs(8 * 86_400)
+            revised + Duration::from_secs(8 * 86_400)
         ));
     }
 }

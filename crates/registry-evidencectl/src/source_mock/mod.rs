@@ -1191,6 +1191,18 @@ struct ProjectSourceBinding {
     routes: BTreeMap<(String, String), String>,
 }
 
+/// Refuse a pack OpenAPI document whose bytes are not the ones the pack pins,
+/// naming both digests so the author can copy the new pin after review.
+fn check_openapi_digest(path: &str, bytes: &[u8], pinned: &str) -> Result<()> {
+    let actual = registry_platform_config::sha256_uri(bytes);
+    if actual != pinned {
+        bail!(
+            "pack OpenAPI document {path} does not match its pinned digest: the pack pins {pinned} but the file has {actual}; after reviewing the change, update the pin in the pack document to {actual}"
+        );
+    }
+    Ok(())
+}
+
 fn project_openapi(root: &Path) -> Result<(PathBuf, Vec<u8>)> {
     let project_bytes = files::read_confined(
         root,
@@ -1213,9 +1225,11 @@ fn project_openapi(root: &Path) -> Result<(PathBuf, Vec<u8>)> {
             .map_err(|_| anyhow!("Adapter pack must be one bounded YAML or JSON document"))?
             .context("Adapter pack must not be empty")?
             .to_json_value();
-        let reference = document
-            .get("openApi")
-            .context("project source pack must pin its OpenAPI document")?;
+        // A pack drafted from no OpenAPI document, such as the synthetic
+        // starter, has no contract for a mock to serve.
+        let Some(reference) = document.get("openApi") else {
+            continue;
+        };
         let path = reference
             .get("path")
             .and_then(Value::as_str)
@@ -1234,10 +1248,13 @@ fn project_openapi(root: &Path) -> Result<(PathBuf, Vec<u8>)> {
             registry_evidence_authoring::layout::MAX_OPENAPI_BYTES,
             "pack OpenAPI document",
         )?;
-        if registry_platform_config::sha256_uri(&bytes) != digest {
-            bail!("pack OpenAPI document does not match its pinned digest");
-        }
+        check_openapi_digest(path, &bytes, digest)?;
         documents.insert(relative, bytes);
+    }
+    if documents.is_empty() {
+        bail!(
+            "no Source pack pins an OpenAPI document to mock; draft one with `evidencectl source suggest`, or pass --openapi FILE"
+        );
     }
     if documents.len() != 1 {
         bail!("project source mock requires exactly one pack-owned OpenAPI document");
@@ -1296,10 +1313,15 @@ fn project_source_binding(
                 .http_method
                 .as_deref()
                 .context("applicable HTTP pack send requires httpMethod")?;
+            // A pack send writes its path parameters as `{{name}}`; the
+            // OpenAPI operation and the served route write them as `{name}`.
             let source_path = send
                 .path
                 .as_deref()
-                .context("applicable HTTP pack send requires a static path")?;
+                .context("applicable HTTP pack send requires a static path")?
+                .replace("{{", "{")
+                .replace("}}", "}");
+            let source_path = source_path.as_str();
             let Some(operation) = select_project_operation(&operation_keys, method, source_path)
             else {
                 continue;
@@ -1419,6 +1441,23 @@ fn print_explanations(explanations: &[generator::ExplainedInference]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_changed_openapi_document_names_the_digest_to_pin_after_review() {
+        let pinned = registry_platform_config::sha256_uri(b"openapi: 3.1.0\n");
+        let actual = registry_platform_config::sha256_uri(b"openapi: 3.1.1\n");
+
+        check_openapi_digest("openapi/provider.yaml", b"openapi: 3.1.0\n", &pinned)
+            .expect("the pinned bytes pass");
+        let error = check_openapi_digest("openapi/provider.yaml", b"openapi: 3.1.1\n", &pinned)
+            .expect_err("changed bytes are refused");
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "pack OpenAPI document openapi/provider.yaml does not match its pinned digest: the pack pins {pinned} but the file has {actual}; after reviewing the change, update the pin in the pack document to {actual}"
+            )
+        );
+    }
 
     #[test]
     fn path_parameter_refusals_are_diagnostics_with_a_code_and_a_fix() {
