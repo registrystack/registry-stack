@@ -220,7 +220,6 @@ fn event_id(job: &JobIdentity, item: &DeliverableItem) -> String {
     let sequence = item.sequence.to_string();
     for component in [
         job.id.as_str().as_bytes(),
-        job.version.as_bytes(),
         item.key.as_bytes(),
         sequence.as_bytes(),
         item.digest.as_bytes(),
@@ -273,6 +272,18 @@ mod tests {
         assert!(Uuid::parse_str(&first).is_ok());
         item.sequence += 1;
         assert_ne!(first, event_id(&job, &item));
+    }
+
+    /// The job store keeps no version beside a pending item, so a redeploy
+    /// under a new job version must redeliver that item under the same
+    /// event identity for the Coordinator to recognise it.
+    #[test]
+    fn event_identity_survives_a_job_version_change() {
+        let item = item();
+        let mut job = job();
+        let first = event_id(&job, &item);
+        job.version = "2".to_string();
+        assert_eq!(first, event_id(&job, &item));
     }
 
     #[test]

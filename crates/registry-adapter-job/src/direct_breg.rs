@@ -248,7 +248,6 @@ fn command_key(job: &JobIdentity, item: &DeliverableItem, step: &str) -> Command
     let sequence = item.sequence.to_string();
     for component in [
         job.id.as_str().as_bytes(),
-        job.version.as_bytes(),
         item.key.as_bytes(),
         sequence.as_bytes(),
         item.digest.as_bytes(),
@@ -293,6 +292,32 @@ mod tests {
         assert_ne!(start, command_key(&job, &item, "submit"));
         assert!(start.as_str().len() <= 256);
         assert!(!start.as_str().contains(&item.key));
+    }
+
+    /// The job store keeps no version beside a pending item, so a redeploy
+    /// under a new job version must retry that item under the same command
+    /// key: BReg then replays a committed receipt instead of executing again.
+    #[test]
+    fn command_keys_survive_a_job_version_change() {
+        let mut job = JobIdentity {
+            id: "case-daily".parse().expect("a local id"),
+            version: "1".to_string(),
+        };
+        let item = DeliverableItem {
+            key: "submissions/a".to_string(),
+            sequence: 1,
+            digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+                .to_string(),
+            prior_run_id: None,
+            admitted_before: false,
+            first_seen: std::time::SystemTime::UNIX_EPOCH,
+            event_time: std::time::SystemTime::UNIX_EPOCH,
+            delivery_attempt: 1,
+            projected: serde_json::json!({}),
+        };
+        let first = command_key(&job, &item, "invoke");
+        job.version = "2".to_string();
+        assert_eq!(first, command_key(&job, &item, "invoke"));
     }
 
     #[test]
