@@ -36,9 +36,22 @@ regexes = [
 [[allowlists]]
 description = "Allow the throwaway ECDSA client key generated for the Adapter mTLS unit tests; it exists only under #[cfg(test)] and no deployment has trusted its self-signed certificate."
 condition = "AND"
-paths = ["^crates/registry-adapter/src/engine/auth/tls\\.rs$"]
+paths = ["^crates/registry-adapter-engine/src/auth/tls\\.rs$"]
 regexTarget = "line"
 regexes = ['''const CLIENT_PRIVATE_KEY_PEM: &str = "-----BEGIN PRIVATE KEY-----\\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgcu64hV3YOzpMTbrA''']
+
+[[allowlists]]
+description = "Allow the throwaway OpenSSH host and client keys in the Adapter job SFTP tests; they exist only in the #[cfg(test)] module and the test-support server, and each is pinned by its embedded public key."
+condition = "AND"
+paths = [
+  "^crates/registry-adapter-job/src/sftp_source\\.rs$",
+  "^crates/registry-adapter-job/tests/support/sftp_source_server\\.rs$",
+]
+regexes = [
+  '''AAAAIN\+Wjn4\+4Fcvl2Jl''',
+  '''AAAAQQQ/i\+HCsmZZPy0JhtT64vW7EmeA1DeA''',
+  '''AAAAIHeLC1lWiCYrXsf/''',
+]
 
 [[allowlists]]
 description = "Allow the ODK Central repeat instance ids in the odk-central repeats fixture; they are 40-character hex row ids the source route uses as item keys, not credentials."
