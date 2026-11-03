@@ -23,7 +23,7 @@ use axum::http::StatusCode;
 use registry_messaging::activation::ApplyRequest;
 use registry_messaging::config::{DatabaseConfig, RuntimeConfig};
 use registry_messaging::package::{package_inputs, write_package_inputs};
-use registry_messaging::runtime::{apply_activation, serve_from_path};
+use registry_messaging::runtime::{apply_activation, serve_from_path, RuntimeError};
 use registry_messaging::store::{PostgresStore, StoreError};
 use registry_messaging_client::{MessagingClient, MessagingClientConfig};
 use registry_platform_config::{SecretProvider, SecretResolver};
@@ -33,6 +33,7 @@ use support::{
     email_submission, sender_token, sender_token_for, Harness, ISSUER, SENDER_PRINCIPAL,
 };
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+use tokio::task::JoinHandle;
 use uuid::Uuid;
 
 /// One isolated schema and the secret reference that reaches it.
@@ -417,11 +418,12 @@ async fn apply_migrates_a_version_100_database_forward_and_keeps_its_queue() {
         .expect("a database v0.43.0 installed, with one queued message");
     let root = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap())
         .expect("a runtime directory");
+    let (public, metrics) = free_ports();
     write_runtime(
         root.path(),
         &isolated.reference,
-        free_port(),
-        free_port(),
+        public,
+        metrics,
         file_audit(root.path()),
     );
     let config =
@@ -627,10 +629,21 @@ async fn a_store_carrying_an_unknown_version_is_not_ready() {
     ));
 }
 
-/// A free loopback port, released for the runtime to bind.
-fn free_port() -> SocketAddr {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback port");
-    listener.local_addr().expect("the bound address")
+/// How many times a served-runtime test picks fresh ports before it gives up.
+const PORT_ATTEMPTS: usize = 5;
+
+/// Two distinct free loopback ports, released for the runtime to bind. Both
+/// are held while they are chosen so the pair cannot coincide, but a parallel
+/// test can still take either one before the runtime binds it; a test that
+/// serves a runtime retries with fresh ports when the bind reports an address
+/// in use ([`serve_on_ports`], [`run_binary_on_free_ports`]).
+fn free_ports() -> (SocketAddr, SocketAddr) {
+    let public = std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+    let metrics = std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+    (
+        public.local_addr().expect("the bound address"),
+        metrics.local_addr().expect("the bound address"),
+    )
 }
 
 async fn get(address: SocketAddr, path: &str) -> Option<u16> {
@@ -731,45 +744,146 @@ fn write_runtime(
     .unwrap();
 }
 
+/// An in-process runtime serving on the ports it was configured with.
+struct ServedRuntime {
+    /// Holds the runtime directory open for the audit journal.
+    root: tempfile::TempDir,
+    public: SocketAddr,
+    metrics: SocketAddr,
+    task: JoinHandle<Result<(), RuntimeError>>,
+}
+
+/// Apply the activation and serve an in-process runtime on ports chosen by
+/// `pick_ports`, until it answers `/ready`. A bind that reports an address in
+/// use starts over in a fresh directory with fresh ports, up to
+/// [`PORT_ATTEMPTS`] times; any other stop fails the test at once.
+async fn serve_on_ports(
+    isolated: &Isolated,
+    mut pick_ports: impl FnMut() -> (SocketAddr, SocketAddr),
+) -> ServedRuntime {
+    let mut taken = None;
+    for _ in 0..PORT_ATTEMPTS {
+        let root = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap())
+            .expect("a runtime directory");
+        let (public, metrics) = pick_ports();
+        write_runtime(
+            root.path(),
+            &isolated.reference,
+            public,
+            metrics,
+            file_audit(root.path()),
+        );
+        let runtime_config = root.path().join("runtime.yaml");
+        let config = RuntimeConfig::load(&runtime_config).expect("the runtime configuration");
+        apply_activation(&config, &ApplyRequest::default())
+            .await
+            .expect("messagingctl apply");
+        let task = tokio::spawn(serve_from_path(
+            runtime_config,
+            registry_messaging::dispatch::Transports::new(),
+        ));
+
+        let mut ready = None;
+        for _ in 0..100 {
+            ready = get(public, "/ready").await;
+            if ready.is_some() || task.is_finished() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        if task.is_finished() {
+            match task.await {
+                Ok(Err(RuntimeError::Listen { source, .. }))
+                    if source.kind() == std::io::ErrorKind::AddrInUse =>
+                {
+                    taken = Some(source);
+                    continue;
+                }
+                stopped => panic!("the runtime stopped: {stopped:?}"),
+            }
+        }
+        assert_eq!(ready, Some(200));
+        return ServedRuntime {
+            root,
+            public,
+            metrics,
+            task,
+        };
+    }
+    panic!("no free ports after {PORT_ATTEMPTS} attempts; the last bind failed: {taken:?}");
+}
+
+/// What the `messaging` binary left behind after a served run.
+struct BinaryRun {
+    ready: Option<u16>,
+    output: std::process::Output,
+}
+
+/// Apply the activation, start the `messaging` binary with a `stdout` audit
+/// destination on free ports and stop it once it answers `/ready` or exits.
+/// A start whose stderr reports an address in use is repeated with fresh
+/// ports, as [`serve_on_ports`] does.
+async fn run_binary_on_free_ports(isolated: &Isolated) -> BinaryRun {
+    let mut taken = None;
+    for _ in 0..PORT_ATTEMPTS {
+        let root = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap())
+            .expect("a runtime directory");
+        let (public, metrics) = free_ports();
+        write_runtime(
+            root.path(),
+            &isolated.reference,
+            public,
+            metrics,
+            json!({"destination": "stdout"}),
+        );
+        let runtime_config = root.path().join("runtime.yaml");
+        let config = RuntimeConfig::load(&runtime_config).expect("the runtime configuration");
+        apply_activation(&config, &ApplyRequest::default())
+            .await
+            .expect("messagingctl apply");
+
+        // The secrets the configuration names are this process's environment,
+        // which the binary inherits.
+        let mut served = Command::new(env!("CARGO_BIN_EXE_messaging"))
+            .arg("--runtime-config")
+            .arg(&runtime_config)
+            .arg("serve")
+            .env("MESSAGING_LOG", "info")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("messaging serve starts");
+        let mut ready = None;
+        // A freshly linked binary can take seconds to start on its first run.
+        for _ in 0..400 {
+            ready = get(public, "/ready").await;
+            if ready.is_some() || served.try_wait().expect("the child state").is_some() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        served.kill().expect("stop messaging serve");
+        let output = served.wait_with_output().expect("the served output");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("could not bind or serve") && stderr.contains("Address already in use") {
+            taken = Some(stderr.into_owned());
+            continue;
+        }
+        return BinaryRun { ready, output };
+    }
+    panic!("no free ports after {PORT_ATTEMPTS} attempts; the last start failed: {taken:?}");
+}
+
 #[tokio::test]
 async fn a_served_runtime_is_ready_and_keeps_metrics_on_the_private_listener() {
     let isolated = isolated_schema().await;
-    let root = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap())
-        .expect("a runtime directory");
-    let public = free_port();
-    let metrics = free_port();
-    write_runtime(
-        root.path(),
-        &isolated.reference,
+    let ServedRuntime {
+        root,
         public,
         metrics,
-        file_audit(root.path()),
-    );
-    let runtime_config = root.path().join("runtime.yaml");
+        task: served,
+    } = serve_on_ports(&isolated, free_ports).await;
 
-    let config = RuntimeConfig::load(&runtime_config).expect("the runtime configuration");
-    apply_activation(&config, &ApplyRequest::default())
-        .await
-        .expect("messagingctl apply");
-    let served = tokio::spawn(serve_from_path(
-        runtime_config.clone(),
-        registry_messaging::dispatch::Transports::new(),
-    ));
-
-    let mut ready = None;
-    for _ in 0..100 {
-        ready = get(public, "/ready").await;
-        if ready.is_some() || served.is_finished() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    assert!(
-        !served.is_finished(),
-        "the runtime stopped: {:?}",
-        served.await
-    );
-    assert_eq!(ready, Some(200));
     assert_eq!(get(public, "/health").await, Some(200));
     assert_eq!(get(public, "/metrics").await, Some(404));
     assert_eq!(get(public, "/v1/messages/m-1").await, Some(401));
@@ -793,51 +907,40 @@ async fn a_served_runtime_is_ready_and_keeps_metrics_on_the_private_listener() {
     assert!(!journal.contains("an-audit-master-secret"));
 }
 
+/// A port another process takes between being chosen and being bound does not
+/// fail a served-runtime test: the start repeats with fresh ports.
+#[tokio::test]
+async fn a_served_runtime_starts_again_on_fresh_ports_when_the_first_public_port_is_taken() {
+    let isolated = isolated_schema().await;
+    let taken = std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+    let taken_address = taken.local_addr().expect("the bound address");
+    // The holder accepts and hangs up, as a port held by another process does
+    // when it is not speaking HTTP.
+    std::thread::spawn(move || for _ in taken.incoming() {});
+    let mut first = true;
+    let served = serve_on_ports(&isolated, || {
+        let (public, metrics) = free_ports();
+        if std::mem::take(&mut first) {
+            (taken_address, metrics)
+        } else {
+            (public, metrics)
+        }
+    })
+    .await;
+
+    assert!(!first, "the first pair was chosen");
+    assert_ne!(served.public, taken_address);
+    assert_eq!(get(served.public, "/ready").await, Some(200));
+    served.task.abort();
+}
+
 /// A `stdout` audit destination carries audit entries alone: the binary's
 /// operational log goes to stderr, so a strict JSON Lines collector reading
 /// stdout never meets a log record.
 #[tokio::test]
 async fn a_stdout_audit_destination_never_carries_operational_logs() {
     let isolated = isolated_schema().await;
-    let root = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap())
-        .expect("a runtime directory");
-    let public = free_port();
-    let metrics = free_port();
-    write_runtime(
-        root.path(),
-        &isolated.reference,
-        public,
-        metrics,
-        json!({"destination": "stdout"}),
-    );
-    let runtime_config = root.path().join("runtime.yaml");
-    let config = RuntimeConfig::load(&runtime_config).expect("the runtime configuration");
-    apply_activation(&config, &ApplyRequest::default())
-        .await
-        .expect("messagingctl apply");
-
-    // The secrets the configuration names are this process's environment,
-    // which the binary inherits.
-    let mut served = Command::new(env!("CARGO_BIN_EXE_messaging"))
-        .arg("--runtime-config")
-        .arg(&runtime_config)
-        .arg("serve")
-        .env("MESSAGING_LOG", "info")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("messaging serve starts");
-    let mut ready = None;
-    // A freshly linked binary can take seconds to start on its first run.
-    for _ in 0..400 {
-        ready = get(public, "/ready").await;
-        if ready.is_some() || served.try_wait().expect("the child state").is_some() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    served.kill().expect("stop messaging serve");
-    let output = served.wait_with_output().expect("the served output");
+    let BinaryRun { ready, output } = run_binary_on_free_ports(&isolated).await;
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(
         ready,
