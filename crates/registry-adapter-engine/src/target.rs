@@ -58,6 +58,34 @@ pub enum SourceNativeReplayPlan {
     ExactKeyedSinglePost,
 }
 
+/// Check an explicitly selected native recovery plan without opening source
+/// connections or retaining the compiled runtime state. Authoring and startup
+/// use the same compiler for the plan's permitted step and transport shapes.
+///
+/// # Errors
+///
+/// Returns the compiler refusal when the route cannot preserve the selected
+/// native replay shape.
+pub fn validate_source_native_replay_plan(
+    steps: &[registry_adapter_core::Step],
+    pack: &registry_adapter_core::AdapterPack,
+    plan: SourceNativeReplayPlan,
+) -> Result<(), String> {
+    compile_source_native_replay_plan(steps, pack, plan).map(|_| ())
+}
+
+fn compile_source_native_replay_plan(
+    steps: &[registry_adapter_core::Step],
+    pack: &registry_adapter_core::AdapterPack,
+    plan: SourceNativeReplayPlan,
+) -> Result<crate::resume::ServedResumeOperation, String> {
+    match plan {
+        SourceNativeReplayPlan::ExactKeyedSinglePost => {
+            crate::resume::compile_source_native_single_resume_operation(steps, pack)
+        }
+    }
+}
+
 /// Fixed-target metadata for one source-backed write. Public input validation
 /// and transformation are separate: the public schema does not describe the
 /// source route's private fields.
@@ -135,20 +163,17 @@ impl TargetAttachment {
                     operation.target_contract = Some(attached.effective_contract);
                 }
                 TargetOperation::Write(attached) => {
-                    let resume = match attached.native_replay {
-                        SourceNativeReplayPlan::ExactKeyedSinglePost => {
-                            crate::resume::compile_source_native_single_resume_operation(
-                                operation.steps.as_ref(),
-                                pack,
-                            )
-                            .map_err(|reason| {
-                                crate::load::LoadError::Runtime(format!(
-                                    "binding {} source-native replay was refused: {reason}",
-                                    operation.binding
-                                ))
-                            })?
-                        }
-                    };
+                    let resume = compile_source_native_replay_plan(
+                        operation.steps.as_ref(),
+                        pack,
+                        attached.native_replay,
+                    )
+                    .map_err(|reason| {
+                        crate::load::LoadError::Runtime(format!(
+                            "binding {} source-native replay was refused: {reason}",
+                            operation.binding
+                        ))
+                    })?;
                     operation.project_input_schema = Some(attached.project_input_schema);
                     operation.project_input_transform = Some(attached.project_input_transform);
                     operation.write_support = Some(attached.write_support);
