@@ -3041,6 +3041,33 @@ fn disclosed_parts(body: &Value, schema: &Value) -> Result<(Value, Option<String
     }
 }
 
+/// A project transformation always reaches the facade in the engine's known
+/// normalized wrapper. Its checked JSON Schema governs `domainData`; it must
+/// never be applied to the wrapper itself, and the generic profile heuristic
+/// must not decide whether the wrapper is raw caller-visible data.
+fn schema_bound_disclosed_parts(
+    body: &Value,
+    schema: &crate::engine::public_schema::CheckedPublicSchema,
+) -> Result<(Value, Option<String>), usize> {
+    let Value::Object(map) = body else {
+        return Err(1);
+    };
+    let wrapper_shaped = map.len() <= RECORD_WRAPPER_MEMBERS.len()
+        && map
+            .keys()
+            .all(|key| RECORD_WRAPPER_MEMBERS.contains(&key.as_str()))
+        && map.get("revisionIdentifier").is_none_or(Value::is_string);
+    let (Some(domain), Some(Value::String(identifier))) =
+        (map.get("domainData"), map.get("recordIdentifier"))
+    else {
+        return Err(1);
+    };
+    if !wrapper_shaped || !schema.validates(domain) {
+        return Err(1);
+    }
+    Ok((domain.clone(), Some(identifier.clone())))
+}
+
 /// One record as the response envelope receives it: the disclosed record
 /// itself, or, when the operation declares an item envelope, that template
 /// filled for the record. A template that names `recordId` over a record the
@@ -3051,7 +3078,10 @@ fn disclosed_item(
     record_type: &str,
     request_id: &str,
 ) -> Result<Value, usize> {
-    let (record, identifier) = disclosed_parts(body, &operation.record_schema)?;
+    let (record, identifier) = match &operation.project_transform {
+        Some(transform) => schema_bound_disclosed_parts(body, transform.schema())?,
+        None => disclosed_parts(body, &operation.record_schema)?,
+    };
     let Some(item) = &operation.item_envelope else {
         return Ok(record);
     };

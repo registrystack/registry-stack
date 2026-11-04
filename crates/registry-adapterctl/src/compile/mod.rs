@@ -162,6 +162,9 @@ pub(crate) fn run(args: &CompileArgs) -> Result<CompileRun, CompileFailure> {
     }) {
         report.push(finding);
     }
+    if !report.has_errors() {
+        check::verify_consultation_transforms(&project, &project_path, &mut report);
+    }
     if report.has_errors() {
         return Err(CompileFailure::Refused {
             diagnostics: report.into_diagnostics(),

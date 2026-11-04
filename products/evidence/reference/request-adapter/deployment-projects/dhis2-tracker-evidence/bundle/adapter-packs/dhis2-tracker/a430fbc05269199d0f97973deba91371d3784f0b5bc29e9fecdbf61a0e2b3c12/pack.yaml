@@ -152,6 +152,16 @@ routeTemplates:
         description: The tracked-entity identifier supplied at read time.
     steps:
       - onException:
+          exception: [upstream.http]
+          onWhen:
+            rhai:
+              file: scripts/is-not-found.rhai
+              entrypoint: is_not_found
+          steps:
+            - throwException:
+                exceptionType: outcome.not-found
+                message: No tracked entity with that identifier exists at the source.
+      - onException:
           exception: [upstream.timeout, upstream.connection]
           redeliveryPolicy:
             maximumRedeliveries: 1

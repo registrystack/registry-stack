@@ -103,7 +103,9 @@ pub enum CheckCode {
     ProjectTemplateNotInstantiated,
     ProjectTransformBindingUnknown,
     ProjectTransformEntrypoint,
+    ProjectTransformMissing,
     ProjectTransformScriptUnknown,
+    ProjectTransformUncompilable,
     ProjectUnknownFilterField,
     ProjectUnknownOperation,
     ProjectUnknownRecordType,
@@ -249,7 +251,9 @@ impl CheckCode {
         Self::ProjectTemplateNotInstantiated,
         Self::ProjectTransformBindingUnknown,
         Self::ProjectTransformEntrypoint,
+        Self::ProjectTransformMissing,
         Self::ProjectTransformScriptUnknown,
+        Self::ProjectTransformUncompilable,
         Self::ProjectUnknownFilterField,
         Self::ProjectUnknownOperation,
         Self::ProjectUnknownRecordType,
@@ -419,7 +423,9 @@ impl CheckCode {
             Self::ProjectTemplateNotInstantiated => "adapter.project.template-not-instantiated",
             Self::ProjectTransformBindingUnknown => "adapter.project.transform-binding-unknown",
             Self::ProjectTransformEntrypoint => "adapter.project.transform-entrypoint",
+            Self::ProjectTransformMissing => "adapter.project.transform-missing",
             Self::ProjectTransformScriptUnknown => "adapter.project.transform-script-unknown",
+            Self::ProjectTransformUncompilable => "adapter.project.transform-uncompilable",
             Self::ProjectUnknownFilterField => "adapter.project.unknown-filter-field",
             Self::ProjectUnknownOperation => "adapter.project.unknown-operation",
             Self::ProjectUnknownRecordType => "adapter.project.unknown-record-type",
@@ -627,7 +633,9 @@ impl CheckCode {
             | Self::ProjectTemplateNotInstantiated
             | Self::ProjectTransformBindingUnknown
             | Self::ProjectTransformEntrypoint
+            | Self::ProjectTransformMissing
             | Self::ProjectTransformScriptUnknown
+            | Self::ProjectTransformUncompilable
             | Self::ProjectUnknownFilterField
             | Self::ProjectUnknownOperation
             | Self::ProjectUnknownRecordType
