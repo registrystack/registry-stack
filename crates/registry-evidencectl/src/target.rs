@@ -67,12 +67,18 @@ pub(crate) fn run(command: TargetCommand, format: OutputFormat) -> Result<ExitCo
 }
 
 fn new(args: NewArgs) -> Result<ExitCode> {
+    let mut carried = Vec::new();
     if args.local {
         if args.settings.is_some() {
             bail!("target new accepts either --local or --settings, not both");
         }
         let project = args.project.as_deref().unwrap_or_else(|| Path::new("."));
-        create_local_target(project, &args.directory, json!({}))?;
+        let connections = project_declared_connections(project)?;
+        create_local_target(project, &args.directory, connections.clone())?;
+        carried = connections
+            .as_object()
+            .map(|names| names.keys().cloned().collect())
+            .unwrap_or_default();
     } else {
         let source = args
             .settings
@@ -81,7 +87,29 @@ fn new(args: NewArgs) -> Result<ExitCode> {
         copy_explicit_target(source, &args.directory)?;
     }
     println!("Created Evidence target {}", args.directory.display());
+    if !carried.is_empty() {
+        println!(
+            "Source connections declared from {LOCAL_TARGET_FILE}: {}",
+            carried.join(", ")
+        );
+    }
     Ok(ExitCode::SUCCESS)
+}
+
+/// The project's own local target, which `evidencectl init` writes beside its
+/// Sources.
+const LOCAL_TARGET_FILE: &str = "local-target.yaml";
+
+/// The source connections the project's local-target.yaml declares, as the
+/// authored mapping a new target carries. A project without that file has
+/// declared none; one whose file cannot be read is refused, not skipped.
+fn project_declared_connections(project: &Path) -> Result<Value> {
+    let path = project.join(LOCAL_TARGET_FILE);
+    if !path.try_exists()? {
+        return Ok(json!({}));
+    }
+    let target = read_target(&path)?;
+    serde_json::to_value(&target.connections).context("reading the project's declared connections")
 }
 
 pub(crate) fn target_path(path: &Path) -> PathBuf {
