@@ -2441,7 +2441,7 @@ diagnostics carry no values, and its row below passes.
 | Duplicate read and restart | Unchanged items send nothing; a repeat recovers the same Proposal, receipt, or Run |
 | Crash or lost response at any point | The next pass sends the same identity, and nothing is skipped or duplicated |
 | Changed item after a first hand-off | Held, or sent as `revised` to Coordinator; never a second registration |
-| Item changed before a lost response is recovered | `idempotency.key-reused`, and the item is held |
+| Item changed before a lost response is recovered | `adapter.job.breg.idempotency.key-reused`, and the item is held |
 | Pending row past BReg's receipt horizon | Held for reconciliation, and status warned before it |
 | Item-scoped refusal | Recorded with its code; the pass continues until the stop rule |
 | Deployment-scoped answer | The pass stops with the position unchanged, and status names the code |
