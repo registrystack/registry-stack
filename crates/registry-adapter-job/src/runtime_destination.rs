@@ -307,7 +307,21 @@ async fn activate_direct<'a>(
             }
         }
     };
-    Ok(Box::new(DirectBregDestination::new(connector, mapper)))
+    let receiver = crate::direct_breg::receiver_identity(
+        &crate::direct_breg::DirectBregReceiverDigestContext {
+            binding: binding.as_str(),
+            base_url: base_url.as_str(),
+            token_endpoint: token_endpoint.as_str(),
+            client_id,
+            data_tls_trust_profile: data_tls_trust_profile.as_ref().map(LocalId::as_str),
+            access_profile,
+            action,
+            mode: expected_mode,
+        },
+    );
+    Ok(Box::new(DirectBregDestination::new(
+        connector, mapper, receiver,
+    )))
 }
 
 /// One direct BReg bind failure as its closed code, the field to check,

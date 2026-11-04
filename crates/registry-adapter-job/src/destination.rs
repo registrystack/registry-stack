@@ -122,16 +122,29 @@ pub struct DeliverableItem {
     pub projected: Value,
 }
 
-/// What a signed destination commits to before an item leaves the process.
+/// Which destination a [`DeliveryIdentity`] fences, so a stopped pass names
+/// the receiver the operator configured, never another destination's.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DeliveryFamily {
+    /// The signed Coordinator event destination.
+    Coordinator,
+    /// The direct BReg destination.
+    Breg,
+}
+
+/// What a fenced destination commits to before an item leaves the process.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DeliveryIdentity {
+    /// The destination whose stop codes a refused fence reports.
+    pub family: DeliveryFamily,
     /// The digest of the selected public governed receiver authority and
     /// configuration.
     pub receiver: [u8; 32],
-    /// The SHA-256 digest of the exact canonical event envelope bytes the
-    /// destination would send. `Err(())` means the current item cannot form
-    /// canonical bytes and therefore must never recover an uncertain pending
-    /// attempt by changing or discarding its frozen body.
+    /// The SHA-256 digest of the exact canonical bytes (an event envelope, or
+    /// the mapped BReg operation) the destination would send. `Err(())` means
+    /// the current item cannot form canonical bytes and therefore must never
+    /// recover an uncertain pending attempt by changing or discarding its
+    /// frozen body.
     pub canonical_body: Result<[u8; 32], ()>,
 }
 
@@ -141,8 +154,8 @@ pub struct DeliveryIdentity {
 /// trait an object, which the pass takes as `&dyn JobDestination`, so a
 /// destination is a configuration choice and not a compile-time one.
 pub trait JobDestination: Send + Sync {
-    /// The identities a signed destination freezes before it sends, or `None`
-    /// when this destination does not use the signed-event fence. The pass
+    /// The identities a fenced destination freezes before it sends, or `None`
+    /// when this destination does not use the delivery-identity fence. The pass
     /// freezes both before calling [`Self::deliver`], so a pending retry
     /// cannot silently move the same event identity to another target or
     /// change the event bytes. The two identities travel together because a

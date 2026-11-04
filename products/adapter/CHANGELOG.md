@@ -192,3 +192,10 @@
   primitive in `registry-platform-crypto`. The wire format is unchanged (golden
   tokens pin it), so a cursor issued before the upgrade still opens, including
   under the previous key after a rotation.
+- A pending direct BReg delivery is now fenced before it is retried: the job
+  freezes the BReg deployment, caller, access profile, Action and mode, and
+  the mapped operation, and a retry that differs stops the pass before any
+  BReg call as `adapter.job.breg-receiver-changed` or
+  `adapter.job.breg-body-changed`. A direct BReg item left pending by an
+  earlier release stops as `adapter.job.breg-identity-unrecorded`; settle it
+  with the previous binary before upgrading.

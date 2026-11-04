@@ -286,7 +286,11 @@ that would now build a different body stops as
 could start a second Run). `adapter-job status` lists the pending keys. Restore
 the previous job definition, let passes settle those items, then ship the
 change. A changed receiver stops as `adapter.job.coordinator-receiver-changed`
-instead; restoring the original receiver recovers it.
+instead; restoring the original receiver recovers it. A direct BReg job fences
+the same way under `adapter.job.breg-body-changed` (the mapped operation
+differs), `adapter.job.breg-receiver-changed` (another BReg deployment, caller,
+access profile, Action or mode) and `adapter.job.breg-identity-unrecorded`
+(staged before schema 103); the recoveries are the same.
 
 A pass that stops as `adapter.job.identity-migration-required` found stored
 items that predate the job's item-identity binding (store schema 103). Confirm
