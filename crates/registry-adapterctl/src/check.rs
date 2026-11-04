@@ -331,8 +331,9 @@ pub(crate) fn run(args: &CheckArgs) -> Result<CheckRun, CheckFailure> {
         report.push(diagnostic);
     }
     if !report.has_errors() {
-        verify_consultation_transforms(&project, &project_path, &mut report);
-        verify_consultation_inputs(&project, &pack, &project_path, &mut report);
+        verify_govstack_transforms(&project, &project_path, &mut report);
+        verify_govstack_native_replay(&project, &pack, &project_path, &mut report);
+        verify_govstack_inputs(&project, &pack, &project_path, &mut report);
     }
     check_fixture_bodies(&profile, &project, &fixtures, &mut report);
     check_consultation_fixture_bodies(&project, &directory, &fixtures, &mut report);
@@ -448,36 +449,87 @@ pub(crate) fn verify_project_artifacts(
     Ok(())
 }
 
-/// Compile every selected Consultation transformation from the exact pinned
-/// project closure. `check` and `compile` call this same boundary, so neither
-/// can publish a contract that the runtime would later refuse at startup.
-pub(crate) fn verify_consultation_transforms(
+/// Compile every selected fixed GovStack transformation from the exact pinned
+/// project closure. Read projections and Write ingress use their owning engine
+/// compilers, so `check`, `compile`, and runtime startup admit the same code.
+pub(crate) fn verify_govstack_transforms(
     project: &registry_adapter_core::AdapterProject,
     project_path: &Path,
     report: &mut Report,
 ) {
-    let Some(consultation) = project.consultation.as_ref() else {
+    if project.consultation.is_none() && project.write.is_none() {
         return;
-    };
+    }
     let directory = project_path.parent().unwrap_or_else(|| Path::new(""));
     for binding in project.bindings.iter() {
-        let Some(collection) = consultation.collections.get(binding.record_type.as_str()) else {
+        let output_schema = registry_adapter::govstack::consultation::ConsultationCapability::from_binding_operation(
+            binding.operation.as_str(),
+        )
+        .and_then(|_| {
+            project
+                .consultation
+                .as_ref()
+                .and_then(|consultation| {
+                    consultation.collections.get(binding.record_type.as_str())
+                })
+                .map(|collection| collection.data_schema.as_str())
+        })
+        .or_else(|| {
+            (binding.operation.as_str() == "writable-read").then_some(())?;
+            let collection = project
+                .write
+                .as_ref()?
+                .collections
+                .get(binding.record_type.as_str())?;
+            collection
+                .update
+                .as_ref()
+                .filter(|update| update.companion_read == binding.id)?;
+            collection.read_data_schema.as_deref().or_else(|| {
+                project
+                    .consultation
+                    .as_ref()
+                    .and_then(|consultation| {
+                        consultation.collections.get(binding.record_type.as_str())
+                    })
+                    .map(|collection| collection.data_schema.as_str())
+            })
+        });
+        let valid = if let Some(data_schema) = output_schema {
+            registry_adapter::engine::project_transform::CompiledProjectTransform::compile_from_directory(
+                project,
+                binding.id.as_str(),
+                data_schema,
+                directory,
+            )
+            .is_ok()
+        } else if matches!(binding.operation.as_str(), "create" | "update") {
+            let selected = project
+                .write
+                .as_ref()
+                .and_then(|write| write.collections.get(binding.record_type.as_str()))
+                .is_some_and(|collection| match binding.operation.as_str() {
+                    "create" => collection.create.is_some(),
+                    "update" => collection.update.is_some(),
+                    _ => false,
+                });
+            !selected
+                || registry_adapter::engine::inbound_transform::CompiledProjectInputTransform::compile_from_directory(
+                    project,
+                    binding.id.as_str(),
+                    directory,
+                )
+                .is_ok()
+        } else {
             continue;
         };
-        if registry_adapter::engine::project_transform::CompiledProjectTransform::compile_from_directory(
-            project,
-            binding.id.as_str(),
-            collection.data_schema.as_str(),
-            directory,
-        )
-        .is_ok()
-        {
+        if valid {
             continue;
         }
         let mut diagnostic = finding(
             CheckCode::ProjectTransformUncompilable,
             &format!("/bindingTransforms/{}", binding.id.as_str()),
-            "the Consultation binding transformation cannot be compiled from its pinned project closure",
+            "the fixed GovStack binding transformation cannot be compiled from its pinned project closure",
             "Restore the reviewed script and schema bytes, select their inventoried ids, and name an entrypoint with exactly one source parameter.",
         );
         diagnostic.source = Some(registry_platform_yaml::Source {
@@ -489,55 +541,127 @@ pub(crate) fn verify_consultation_transforms(
     }
 }
 
-/// Refuse a Lookup or Search input schema unless the runtime can capture its
-/// complete required scalar object and map every name to the selected source
-/// route's declared inputs and comparison support.
-pub(crate) fn verify_consultation_inputs(
+/// Verify the exact source-native replay form selected by each fixed Write
+/// binding. This is the same pure compiler runtime startup uses, after the
+/// selected route template has been instantiated with the project values.
+pub(crate) fn verify_govstack_native_replay(
     project: &registry_adapter_core::AdapterProject,
     pack: &registry_adapter_core::AdapterPack,
     project_path: &Path,
     report: &mut Report,
 ) {
-    let Some(consultation) = project.consultation.as_ref() else {
+    let Some(write) = project.write.as_ref() else {
         return;
     };
+    for (index, binding) in project.bindings.iter().enumerate() {
+        let selected = write
+            .collections
+            .get(binding.record_type.as_str())
+            .is_some_and(|collection| match binding.operation.as_str() {
+                "create" => collection.create.is_some(),
+                "update" => collection.update.is_some(),
+                _ => false,
+            });
+        if !selected {
+            continue;
+        }
+        let Some(templated) = project.templated_routes.get(binding.route.as_str()) else {
+            continue;
+        };
+        let Some(template) = pack.route_templates.get(templated.route_template.as_str()) else {
+            continue;
+        };
+        let valid = registry_adapter::engine::load::instantiate(template, &templated.parameters)
+            .and_then(|steps| {
+                registry_adapter::engine::target::validate_source_native_replay_plan(
+                    &steps,
+                    pack,
+                    registry_adapter::engine::target::SourceNativeReplayPlan::ExactKeyedSinglePost,
+                )
+            })
+            .is_ok();
+        if valid {
+            continue;
+        }
+        let mut diagnostic = finding(
+            CheckCode::ProjectWriteBindingInvalid,
+            &format!("/bindings/{index}"),
+            "the fixed Write binding is incompatible with exact keyed source-native replay",
+            "Use one exact-keyed idempotent consumer around deterministic preparation and one source-idempotent POST.",
+        );
+        diagnostic.source = Some(registry_platform_yaml::Source {
+            file: project_path.display().to_string(),
+            line: None,
+            column: None,
+        });
+        report.push(diagnostic);
+    }
+}
+
+/// Refuse a fixed GovStack read unless the runtime can capture its complete
+/// input and map every name to the selected source route's declared inputs and
+/// comparison support. This includes supporting reads selected by Write.
+pub(crate) fn verify_govstack_inputs(
+    project: &registry_adapter_core::AdapterProject,
+    pack: &registry_adapter_core::AdapterPack,
+    project_path: &Path,
+    report: &mut Report,
+) {
     let directory = project_path.parent().unwrap_or_else(|| Path::new(""));
     for (index, binding) in project.bindings.iter().enumerate() {
-        let Some(capability) =
-            registry_adapter::govstack::consultation::ConsultationCapability::from_binding_operation(
-                binding.operation.as_str(),
-            )
-        else {
+        let ordinary = registry_adapter::govstack::consultation::ConsultationCapability::from_binding_operation(
+            binding.operation.as_str(),
+        );
+        let writable_read = (binding.operation.as_str() == "writable-read")
+            .then(|| {
+                project
+                    .write
+                    .as_ref()?
+                    .collections
+                    .get(binding.record_type.as_str())?
+                    .update
+                    .as_ref()
+                    .filter(|update| update.companion_read == binding.id)?;
+                Some(registry_adapter::govstack::consultation::ConsultationCapability::Retrieve)
+            })
+            .flatten();
+        let (capability, selected) = if let Some(capability) = ordinary {
+            let Some(collection) = project.consultation.as_ref().and_then(|consultation| {
+                consultation.collections.get(binding.record_type.as_str())
+            }) else {
+                continue;
+            };
+            let selected = match capability {
+                registry_adapter::govstack::consultation::ConsultationCapability::Lookup => {
+                    collection.lookup.as_ref().map(|lookup| {
+                        (
+                            &lookup.input_schema,
+                            registry_adapter::engine::load::TargetInputShape::ReadOne,
+                        )
+                    })
+                }
+                registry_adapter::govstack::consultation::ConsultationCapability::Search => {
+                    collection.search.as_ref().map(|search| {
+                        (
+                            &search.input_schema,
+                            registry_adapter::engine::load::TargetInputShape::ReadPageEquality,
+                        )
+                    })
+                }
+                registry_adapter::govstack::consultation::ConsultationCapability::Retrieve
+                | registry_adapter::govstack::consultation::ConsultationCapability::List => None,
+            };
+            (capability, selected)
+        } else if let Some(capability) = writable_read {
+            (capability, None)
+        } else {
             continue;
-        };
-        let Some(collection) = consultation.collections.get(binding.record_type.as_str()) else {
-            continue;
-        };
-        let selected = match capability {
-            registry_adapter::govstack::consultation::ConsultationCapability::Lookup => {
-                collection.lookup.as_ref().map(|lookup| {
-                    (
-                        &lookup.input_schema,
-                        registry_adapter::engine::load::TargetInputShape::ReadOne,
-                    )
-                })
-            }
-            registry_adapter::govstack::consultation::ConsultationCapability::Search => {
-                collection.search.as_ref().map(|search| {
-                    (
-                        &search.input_schema,
-                        registry_adapter::engine::load::TargetInputShape::ReadPageEquality,
-                    )
-                })
-            }
-            registry_adapter::govstack::consultation::ConsultationCapability::Retrieve
-            | registry_adapter::govstack::consultation::ConsultationCapability::List => None,
         };
         let incompatible = |report: &mut Report| {
             let mut diagnostic = finding(
                 CheckCode::ProjectConsultationInputIncompatible,
                 &format!("/bindings/{index}"),
-                "the Consultation capability is incompatible with the selected source route",
+                "the fixed GovStack read capability is incompatible with the selected source route",
                 "Bind a route template with declared readSupport; use exactly one source input for Retrieve, none for List, matching inputs for Lookup, or equality-capable inputs for Search.",
             );
             diagnostic.source = Some(registry_platform_yaml::Source {

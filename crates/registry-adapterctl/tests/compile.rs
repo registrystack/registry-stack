@@ -742,9 +742,9 @@ fn colliding_concrete_paths_refuse() {
     );
 }
 
-fn compile_breg_govstack(write_only: bool) -> Value {
+fn copied_breg_govstack(write_only: bool) -> (tempfile::TempDir, String, String) {
     let example = repo_root().join("products/adapter/examples/breg-govstack");
-    let (_root, project) = copied_tree(&example);
+    let (root, project) = copied_tree(&example);
     if write_only {
         let mut text = std::fs::read_to_string(&project).unwrap();
         let start = text.find("consultation:\n").expect("Consultation block");
@@ -766,7 +766,66 @@ fn compile_breg_govstack(write_only: bool) -> Value {
         .to_str()
         .unwrap()
         .to_owned();
+    (root, project, pack)
+}
+
+fn compile_breg_govstack(write_only: bool) -> Value {
+    let (_root, project, pack) = copied_breg_govstack(write_only);
     compile(&project, &["--pack", &pack]).0
+}
+
+fn assert_check_compile_refused(project: &str, pack: &str, code: &str) {
+    let (check_exit, check_report, check_stderr) = run_json(&["check", project, "--pack", pack]);
+    assert_eq!(check_exit, ExitCode::from(1), "{check_report}");
+    assert!(check_stderr.is_empty());
+    assert_eq!(check_report["diagnostics"][0]["code"], code);
+
+    let output = Path::new(project)
+        .parent()
+        .expect("project directory")
+        .join("refused-openapi.json");
+    let (compile_exit, compile_report, compile_stderr) = run_json(&[
+        "compile",
+        project,
+        "--pack",
+        pack,
+        "--output",
+        output.to_str().expect("output path"),
+    ]);
+    assert_eq!(compile_exit, ExitCode::from(1), "{compile_report}");
+    assert!(compile_stderr.is_empty());
+    assert_eq!(compile_report["diagnostics"][0]["code"], code);
+    assert!(
+        !output.exists(),
+        "a refused transform writes no compiled contract"
+    );
+}
+
+fn assert_fixed_transform_refused(project: &str, pack: &str) {
+    assert_check_compile_refused(project, pack, "adapter.project.transform-uncompilable");
+}
+
+fn replace_project(project: &str, from: &str, to: &str) {
+    let text = std::fs::read_to_string(project).unwrap();
+    assert_eq!(text.matches(from).count(), 1, "one exact mutation site");
+    std::fs::write(project, text.replace(from, to)).unwrap();
+}
+
+fn copied_and_repinned_breg_pack(
+    root: &tempfile::TempDir,
+    project: &str,
+    mutate: impl FnOnce(&Path),
+) -> String {
+    let source = repo_root().join("products/adapter/packs/breg-records");
+    let copy = root.path().join("breg-records");
+    copy_fs(&source, &copy);
+    let pack = copy.join("pack.yaml");
+    let original_digest =
+        registry_platform_config::sha256_uri(&std::fs::read(source.join("pack.yaml")).unwrap());
+    mutate(&pack);
+    let changed_digest = registry_platform_config::sha256_uri(&std::fs::read(&pack).unwrap());
+    replace_project(project, &original_digest, &changed_digest);
+    pack.to_str().unwrap().to_owned()
 }
 
 fn assert_fixed_write_contract(document: &Value) {
@@ -825,5 +884,134 @@ fn the_real_write_only_breg_govstack_project_uses_the_fixed_target() {
     assert_eq!(
         path["patch"]["x-govstack-digital-registries-write"]["companionRead"]["operationId"],
         retrieve["operationId"]
+    );
+}
+
+#[test]
+fn missing_unified_create_ingress_refuses_check_and_compile() {
+    let (_root, project, pack) = copied_breg_govstack(false);
+    replace_project(
+        &project,
+        "entrypoint: create_contact",
+        "entrypoint: missing_create",
+    );
+    assert_fixed_transform_refused(&project, &pack);
+}
+
+#[test]
+fn missing_write_only_update_ingress_refuses_check_and_compile() {
+    let (_root, project, pack) = copied_breg_govstack(true);
+    replace_project(
+        &project,
+        "entrypoint: update_contact",
+        "entrypoint: missing_update",
+    );
+    assert_fixed_transform_refused(&project, &pack);
+}
+
+#[test]
+fn missing_write_only_companion_projection_refuses_check_and_compile() {
+    let (_root, project, pack) = copied_breg_govstack(true);
+    replace_project(
+        &project,
+        "entrypoint: public_contact",
+        "entrypoint: missing_public",
+    );
+    assert_fixed_transform_refused(&project, &pack);
+}
+
+#[test]
+fn a_valid_write_only_create_project_still_checks_and_compiles() {
+    let (_root, project, pack) = copied_breg_govstack(true);
+    for (from, to) in [
+        (
+            "      update:\n        inputSchema: contact-update\n        companionRead: contacts-writable-read\n",
+            "",
+        ),
+        (
+            "  - routeTemplate: read-record\n    routeId: breg-contact-read\n    parameters:\n      record-route: contacts\n      access-profile: directory-editor\n",
+            "",
+        ),
+        (
+            "  - routeTemplate: update-record\n    routeId: breg-contact-update\n    parameters:\n      record-route: contacts\n      access-profile: directory-editor\n",
+            "",
+        ),
+        (
+            "  - id: contacts-writable-read\n    operation: writable-read\n    recordType: contacts\n    route: breg-contact-read\n    maximumUpstreamCalls: 1\n",
+            "",
+        ),
+        (
+            "  - id: contacts-update\n    operation: update\n    recordType: contacts\n    route: breg-contact-update\n    maximumUpstreamCalls: 1\n",
+            "",
+        ),
+        (
+            "  contacts-writable-read: {script: contact-transform, entrypoint: public_contact}\n",
+            "",
+        ),
+        (
+            "  contacts-update: {script: contact-transform, entrypoint: update_contact}\n",
+            "",
+        ),
+        (
+            "  - id: records-reader\n    scopes: [records.read]\n    operations: [writable-read]\n    recordTypes: [contacts]\n",
+            "",
+        ),
+        ("operations: [create, update]", "operations: [create]"),
+    ] {
+        replace_project(&project, from, to);
+    }
+
+    let (check_exit, check_report, check_stderr) = run_json(&["check", &project, "--pack", &pack]);
+    assert_eq!(check_exit, ExitCode::SUCCESS, "{check_report}");
+    assert!(check_stderr.is_empty());
+    let document = compile(&project, &["--pack", &pack]).0;
+    assert!(document["paths"]["/v1/collections/contacts/records"]
+        .get("post")
+        .is_some());
+    assert!(
+        document["paths"]["/v1/collections/contacts/records/{recordId}"]
+            .get("patch")
+            .is_none()
+    );
+}
+
+#[test]
+fn an_extra_native_create_step_refuses_check_and_compile() {
+    let (root, project, _pack) = copied_breg_govstack(false);
+    let pack = copied_and_repinned_breg_pack(&root, &project, |pack| {
+        let text = std::fs::read_to_string(pack).unwrap();
+        let marker = "          steps:\n            - setBody:\n                rhai:\n                  file: scripts/batch-request.rhai\n                  entrypoint: create_batch";
+        assert_eq!(text.matches(marker).count(), 1);
+        let changed = text.replace(
+            marker,
+            "          steps:\n            - setHeader:\n                name: x-attempt\n                value: {constant: attempt}\n            - setBody:\n                rhai:\n                  file: scripts/batch-request.rhai\n                  entrypoint: create_batch",
+        );
+        std::fs::write(pack, changed).unwrap();
+    });
+
+    assert_check_compile_refused(&project, &pack, "adapter.project.write-binding-invalid");
+}
+
+#[test]
+fn a_write_only_companion_with_extra_source_input_refuses_check_and_compile() {
+    let (root, project, _pack) = copied_breg_govstack(true);
+    let pack = copied_and_repinned_breg_pack(&root, &project, |pack| {
+        let text = std::fs::read_to_string(pack).unwrap();
+        let marker = "      type: read-one\n      inputs: [record-id]";
+        assert_eq!(text.matches(marker).count(), 1);
+        std::fs::write(
+            pack,
+            text.replace(
+                marker,
+                "      type: read-one\n      inputs: [record-id, tenant-id]",
+            ),
+        )
+        .unwrap();
+    });
+
+    assert_check_compile_refused(
+        &project,
+        &pack,
+        "adapter.project.consultation-input-incompatible",
     );
 }
