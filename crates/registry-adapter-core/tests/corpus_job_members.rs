@@ -161,6 +161,7 @@ fn governed_ingestion_members_refuse_with_exactly_their_code() {
         "adapter.job.postgres-send-members",
         "adapter.job.profile-endpoint-bound",
         "adapter.job.profile-inconsistent",
+        "adapter.job.profile-read-required",
         "adapter.job.projection-bound",
         "adapter.job.projection-shape",
         "adapter.job.route-unknown",

@@ -204,7 +204,7 @@
         },
         "read": {
           "$ref": "#/$defs/ReadBounds",
-          "description": "The bounds of the reads the decoders produce."
+          "description": "The bounds of the reads the decoders produce. Required in effect\nwhere the source route reads a file or a PostgreSQL row, refused\nunder `adapter.job.profile-read-required` when absent there; a\nroute that reaches neither may omit it."
         }
       },
       "required": [
@@ -212,8 +212,7 @@
         "maximumResponseBytes",
         "maximumPageItems",
         "maximumPageBytes",
-        "maximumUpstreamCalls",
-        "read"
+        "maximumUpstreamCalls"
       ],
       "type": "object"
     },

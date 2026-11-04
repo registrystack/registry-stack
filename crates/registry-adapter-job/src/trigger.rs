@@ -567,12 +567,12 @@ mod tests {
             maximum_page_items: 100.try_into().expect("inside its range"),
             maximum_page_bytes: 65_536.try_into().expect("inside its range"),
             maximum_upstream_calls: 8.try_into().expect("inside its range"),
-            read: ReadBounds {
+            read: Some(ReadBounds {
                 maximum_file_bytes: 1_048_576.try_into().expect("inside its range"),
                 maximum_row_bytes: 65_536.try_into().expect("inside its range"),
                 maximum_field_bytes: 65_536.try_into().expect("inside its range"),
                 maximum_rows_per_page: 100.try_into().expect("inside its range"),
-            },
+            }),
         }
     }
 

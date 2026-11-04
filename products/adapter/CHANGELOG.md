@@ -177,6 +177,11 @@
 - A `writable-read` binding that no Write Update names as its companion read
   is refused by `adapterctl check` and at load, naming the binding, instead of
   stopping the Adapter.
+- An Adapter job profile may omit `read` when its source route reads no file
+  and no PostgreSQL row (an HTTP-only route). A route that reaches a
+  `pollEnrich` step or a `postgres:` send or enrich still needs the bounds,
+  and `adapterctl job check` refuses their absence with the new
+  `adapter.job.profile-read-required`. Existing jobs are unaffected.
 - BREAKING: job item and check codes are renamed in one pass, with no alias.
   A refusal a destination answered is now stored as
   `adapter.job.breg.<word>` or `adapter.job.coordinator.<word>` (the
