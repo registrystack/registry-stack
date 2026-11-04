@@ -122,11 +122,13 @@ That refused item is a preview input and a job seam test, not a pack fixture.
 
 ## Preview and deferred enhancements
 
-Preview runs the generated script through the existing Rust transformation API and shows its validated result or categorical, value-free failure.
+Preview runs the generated script through the existing Rust transformation API and shows its validated result or a value-free refusal.
 It runs on source items the author supplies, such as a documented synthetic fixture; pack fixtures hold upstream exchanges rather than source items, so for Consultation the end-to-end proof over them stays with `adapterctl fixtures replay`.
 The ingestion target previews the operation input inside the destination shape; the write direction is generated and checked only.
-Static authoring errors identify assignments; runtime failures use the diagnostics the engine currently provides.
-Do not promise field-level runtime errors or uniform native input-schema validation in this increment.
+Static authoring errors identify assignments.
+For a generated script, a refusal names the target field and the reason (`mapping.missing`, `mapping.duplicate` or `mapping.conversion`), never the value; preview accepts the thrown text only when it matches the generator's own shape for a field of this model, and the runtime refusal stays categorical.
+`mapping check` and `generate` apply the same compile acceptance as the runtime, so a target schema the runtime would refuse (`adapterctl.mapping-schema-not-public`) fails before preview.
+Uniform native input-schema validation is not in this increment.
 For ingestion, preview validates the output against an authored mirror of the destination operation input, which is kept in sync with the operation by hand.
 Preview performs no source acquisition, credential resolution, signing or activation.
 
@@ -140,7 +142,7 @@ General loops, general conditions, arbitrary code nodes, XML/XSLT, handwritten-R
 3. Browser tests cover setting, changing and clearing a field's source and rule from the keyboard, save and reopen, a refused sample that names its field, and the read-only state of a hand-edited script.
 4. The DHIS2 read example previews through Rust and proves nested targets, configured attribute selection and private-canary exclusion.
 5. The KoboToolbox ingestion example regenerates its mapping from a model, produces the destination input for accepted items, and refuses the missing-value item as an item-scoped refusal.
-6. Tests cover missing and duplicate matches, invalid dates, conversions, required-field gaps and extra output using static or existing categorical errors as appropriate.
+6. Tests cover missing and duplicate matches, invalid dates, conversions, required-field gaps and extra output, with static errors or the named preview refusals as appropriate.
 7. Authoring changes require revalidation and regeneration; identifiers never silently retarget.
 8. A hand-edited generated script produces the drift warning in `adapterctl check`, and Studio shows it read-only with one replace action; generation conflicts preserve existing files and handwritten projects still work.
 9. Generated mappings work for Consultation, Evidence and the ingestion direct destination with their existing host boundaries; a write-direction model generates and checks headlessly.

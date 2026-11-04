@@ -83,10 +83,11 @@ cargo run --locked -p registry-adapterctl -- mapping preview \
   --input products/adapter/examples/dhis2-consultation/preview/invalid-date-of-birth.json
 ```
 
-The accepted entity prints the validated result; the other two print a
-categorical refusal ("the project transformation failed") that carries no
-source value and does not say whether the cause was the duplicate or the date.
-Runtime diagnostics are no finer than the engine provides. Pack fixtures hold
+Preview prints one line per input: the first is accepted, the second is refused
+with `mapping.duplicate person.dateOfBirth` and the third with
+`mapping.conversion person.dateOfBirth`. A refusal names the target field,
+never the source value; `--format json` adds each accepted item's validated
+output. The runtime refusal stays categorical. Pack fixtures hold
 upstream exchanges rather than source items, so preview does not read them;
 `fixtures replay` is the end-to-end proof over them.
 
