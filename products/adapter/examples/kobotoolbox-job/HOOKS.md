@@ -21,8 +21,10 @@ reviewed webhook path, preserve the `Authorization` header, bound request
 sizes, header-read and idle timeouts, and connections, rate-limit failed
 authentication, and forward to `127.0.0.1:8091`. The host limits only
 authenticated requests per source; it does not time out a partly sent request
-head or count unauthenticated attempts. Do not expose the
-loopback plaintext listener directly or change it to a non-loopback bind.
+head, cap open connections, or count unauthenticated attempts, so a slow client
+can hold connections until the proxy closes them. That is why the listener
+stays on loopback behind the proxy: do not expose the loopback plaintext
+listener directly or change it to a non-loopback bind.
 `development-loopback` and port `0` are only for local development and tests.
 When port `0` is selected, the host writes one startup line to standard error
 as `adapter.job.hook-listening address=<loopback-address>:<assigned-port>`;
