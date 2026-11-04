@@ -178,6 +178,12 @@ references for the password or private key. The maintained
 [`sftp-source` example](examples/sftp-source/README.md) shows the runtime shape
 and producer lifecycle.
 
+Each page downloads the whole file, up to `maximumFileBytes`, within the
+`pollEnrich` step's `timeoutMilliseconds`. Size that timeout to at least the file
+size divided by the link bandwidth, and keep the number of pages per file low
+(a larger `maximumRowsPerPage` means fewer pages). Otherwise the pass stops with
+`adapter.job.read-timeout` and the next pass starts the same page again.
+
 ## Read a PostgreSQL view
 
 A job can page a read-only query over a PostgreSQL view and register each row in
@@ -267,6 +273,13 @@ page. The [Kobo job operations guide](examples/kobotoolbox-job/OPERATIONS.md)
 describes the receipt and the audit line. The job store keeps no audit row for
 the rebind; the stderr line and the stdout receipt are the record, so keep both
 in your log pipeline.
+
+A pass that stops with `adapter.job.page-bytes-bound` built a page larger than
+`profile.maximumPageBytes`. The cursor does not move, so every later pass
+stops at the same place until you change the profile. Lower
+`profile.read.maximumRowsPerPage` (or the file source's `maxMessagesPerPoll`) so
+a page fits, or raise `profile.maximumPageBytes`, which cannot exceed
+`profile.maximumResponseBytes`. Then run the job again.
 
 ## Check the product
 
