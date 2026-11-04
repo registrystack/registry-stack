@@ -264,7 +264,9 @@ again. The host never infers identity from stored keys, rewrites rows, or
 resets the cursor automatically. To keep the old identity instead, restore the
 previous job definition. `pass --dry-run` shows the same stop before reading a
 page. The [Kobo job operations guide](examples/kobotoolbox-job/OPERATIONS.md)
-describes the receipt and the audit line.
+describes the receipt and the audit line. The job store keeps no audit row for
+the rebind; the stderr line and the stdout receipt are the record, so keep both
+in your log pipeline.
 
 ## Check the product
 

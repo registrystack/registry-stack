@@ -297,6 +297,9 @@ a JSON receipt on stdout and an `adapter.job.identity-rebound` audit line on
 stderr; the next pass reads the current identity's items as new, so source rows may
 be delivered again. To keep the old identity instead, restore the previous
 job definition. `pass --dry-run` shows the same stop before reading a page.
+The job store keeps no audit row for the rebind: the audit line and the
+receipt are the only record, so send both to your log pipeline and retain them
+as you would any other operator change record.
 
 A new process reloads secret material behind the same environment reference.
 Restoring trusted material behind the same reference is corrected-material
