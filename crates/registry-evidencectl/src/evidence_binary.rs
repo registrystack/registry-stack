@@ -565,6 +565,34 @@ fn retry_busy_stub_while<T>(
     }
 }
 
+/// Return only once the stub at `path` can be exec'd. A stub that product code
+/// is about to exec cannot be retried by the test, so the test proves it
+/// runnable first; once one exec has succeeded no later exec of the file can be
+/// refused. The stub is run with `--version` and null standard streams, so it
+/// must answer that without side effects or delay.
+#[cfg(test)]
+pub(crate) fn wait_until_executable(path: &std::path::Path) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match std::process::Command::new(path)
+            .arg("--version")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+        {
+            Err(error)
+                if error.kind() == std::io::ErrorKind::ExecutableFileBusy
+                    && Instant::now() < deadline =>
+            {
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => panic!("the stub {} could not be run: {error}", path.display()),
+            Ok(_) => return,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
