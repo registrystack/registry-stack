@@ -5,7 +5,7 @@
 //! This crate owns the `adapterctl` binary. Its commands: `check`, the
 //! offline check over authored artifacts (project, profile, pack, fixtures,
 //! and with `--runtime` the runtime config); `job check`, the offline
-//! compile of one ingestion job; `mapping check`, `mapping generate`, and
+//! compile of one ingestion job; `job lock`, the job's pin rewriter; `mapping check`, `mapping generate`, and
 //! `mapping preview`, the checks, script generator, and offline preview of
 //! an `AdapterMapping` model; `project lock`, the pin rewriter; `schemas`, the generator and drift gate of the Adapter format
 //! JSON Schemas; `compile`, the per-deployment contract compiler;
@@ -142,7 +142,10 @@ where
     let Cli { format, command } = cli;
     let command_name = match &command {
         Command::Check(_) => "check",
-        Command::Job(_) => "job check",
+        Command::Job(job) => match job.command {
+            job::JobCommand::Check(_) => "job check",
+            job::JobCommand::Lock(_) => "job lock",
+        },
         Command::Mapping(mapping) => mapping::command_name(&mapping.command),
         Command::Project(project) => match project.command {
             project::ProjectCommand::Lock(_) => "project lock",
@@ -158,6 +161,9 @@ where
         Command::Check(args) => check_command(args, format, command_name, stdout, stderr),
         Command::Job(job) => match job.command {
             job::JobCommand::Check(args) => job_command(args, format, command_name, stdout, stderr),
+            job::JobCommand::Lock(args) => {
+                job_lock_command(args, format, command_name, stdout, stderr)
+            }
         },
         Command::Mapping(args) => mapping_command(args, format, command_name, stdout, stderr),
         Command::Project(args) => project_command(args, format, command_name, stdout, stderr),
@@ -342,6 +348,73 @@ fn job_command(
                 .map(|()| ExitCode::from(exit))
         }
     }
+}
+
+/// Run `job lock` and write its verdict: the rewritten pins, a refusal
+/// carrying the findings, or a failure naming the broken environment.
+fn job_lock_command(
+    args: job::JobLockArgs,
+    format: OutputFormat,
+    command_name: &'static str,
+    stdout: &mut dyn io::Write,
+    stderr: &mut dyn io::Write,
+) -> Result<ExitCode, ()> {
+    let run = match job::run_lock(&args) {
+        Ok(run) => run,
+        Err(project::LockFailure::Io { path, source }) => {
+            let exit = OPERATIONAL_FAILURE_EXIT;
+            let report = failure(
+                command_name,
+                exit,
+                vec![json!({
+                    "severity": "error",
+                    "code": "adapterctl.io-failure",
+                    "artifact": "filesystem",
+                    "path": path,
+                    "message": format!("the file could not be read or written: {source}"),
+                    "suggestedAction": "Correct the path or permissions, then retry.",
+                })],
+            );
+            return write_failure(&report, format, stdout, stderr).map(|()| ExitCode::from(exit));
+        }
+    };
+    let errors = refused(&run.diagnostics, false);
+    let mut checked = Report::new(run.diagnostics);
+    checked.set_files_checked(run.files_checked);
+    if errors {
+        let exit = DOMAIN_REFUSAL_EXIT;
+        let envelope = json!({
+            "ok": false,
+            "command": command_name,
+            "status": failure_status(exit),
+            "diagnostics": checked.to_json_value(),
+            "filesChecked": run.files_checked,
+        });
+        return write_configuration_report(
+            &checked,
+            command_name,
+            format,
+            envelope,
+            stdout,
+            stderr,
+        )
+        .map(|()| ExitCode::from(exit));
+    }
+    let mut envelope = json!({
+        "ok": true,
+        "command": command_name,
+        "status": "complete",
+        "job": run.job,
+        "filesChecked": run.files_checked,
+        "diagnostics": checked.to_json_value(),
+    });
+    if let Some(mapping) = run.mapping {
+        envelope["mapping"] = json!(mapping.as_str());
+    }
+    if let Some(pack) = run.pack {
+        envelope["pack"] = json!(pack.as_str());
+    }
+    write_success(&envelope, &checked, format, stdout)
 }
 
 /// Run a `mapping` subcommand and write its verdict: the command's report, a
@@ -771,7 +844,7 @@ fn write_failure(
     }
     if matches!(
         report["command"].as_str(),
-        Some("check") | Some("compile") | Some("project lock")
+        Some("check") | Some("compile") | Some("project lock") | Some("job lock")
     ) {
         let command = report["command"].as_str().unwrap_or_default();
         let _ = writeln!(stderr, "adapterctl {command} refused the input.");

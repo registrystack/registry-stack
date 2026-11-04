@@ -8,7 +8,8 @@
 //! pinned artifact the sandboxed engine runs. `generate` writes the script
 //! beside the model and prints the digest to pin; `check` and `job check`
 //! warn when a script that carries a generated header no longer matches the
-//! model it names.
+//! model it names, and `mapping check` warns when the script at the model's
+//! own path is not what the model generates now.
 
 use clap::{Args, Subcommand};
 use registry_adapter::engine::artifacts::ProjectArtifactBytes;
@@ -24,7 +25,7 @@ use registry_adapter_core::{
 };
 use registry_platform_config::{sha256_uri, AuthoredExpressions};
 use registry_platform_yaml::{
-    ApiVersion, Diagnostic, EnvelopeRule, Expect, FormatSpec, Reader, Report, Source,
+    ApiVersion, Diagnostic, EnvelopeRule, Expect, FormatSpec, Reader, Report, Severity, Source,
 };
 use serde_json::{json, Value};
 use std::io::{self, Write};
@@ -321,6 +322,26 @@ fn run_check(args: &MappingCheckArgs) -> Result<MappingRun, MappingFailure> {
         return Err(refusal(report, files));
     }
     let loaded = loaded.expect("the model decoded");
+    let Some(script) = generated(&loaded, &args.model, &mut report) else {
+        return Err(refusal(report, files));
+    };
+    // The script on disk is judged as generate would judge it: a missing
+    // script is fine (generate writes it), any other difference warns.
+    let path = loaded.script_path();
+    let existing = existing_script(&path, &args.model, &script)?;
+    if let Some(mut conflict) = script_conflict(&existing, &args.model) {
+        conflict.severity = Severity::Warning;
+        model_failure(&mut report, &args.model, conflict);
+    } else if existing == ExistingScript::Stale {
+        if let Some(warning) = drift_warning(
+            &path,
+            "/mapping/script",
+            None,
+            "the script bytes differ from what the model generates",
+        ) {
+            report.push(warning);
+        }
+    }
     let header = &loaded.mapping.mapping;
     Ok(MappingRun {
         warnings: report.into_diagnostics(),
@@ -356,18 +377,25 @@ fn generate_script(
     if report.has_errors() {
         return Ok(None);
     }
+    Ok(generated(&loaded, model, report).map(|script| (loaded, script)))
+}
+
+/// The script a loaded model generates, or `None` with the generator's
+/// findings reported against the model. The caller has checked the model
+/// reads cleanly.
+fn generated(loaded: &Loaded, model: &Path, report: &mut Report) -> Option<String> {
     let schema = loaded
         .schema
         .as_ref()
         .expect("an error reports an unread schema");
     let (reference, digest) = loaded.header();
     match generate(&loaded.mapping, schema, &reference, &digest) {
-        Ok(script) => Ok(Some((loaded, script))),
+        Ok(script) => Some(script),
         Err(findings) => {
             for finding in findings {
                 model_failure(report, model, finding);
             }
-            Ok(None)
+            None
         }
     }
 }
@@ -379,64 +407,22 @@ fn run_generate(args: &MappingGenerateArgs) -> Result<MappingRun, MappingFailure
         return Err(refusal(report, files));
     };
     let path = loaded.script_path();
-    let (changed, existed) = match std::fs::read(&path) {
-        Ok(existing) => {
-            // A script that opens with the generated marker is ours to
-            // regenerate, even when its header was edited.
-            let state = std::str::from_utf8(&existing)
-                .map_or(GeneratedHeaderState::Absent, parse_generated_header);
-            if let GeneratedHeaderState::Parsed(header) = &state {
-                let script_directory = path.parent().unwrap_or_else(|| Path::new(""));
-                let owner = script_directory.join(&header.model_reference);
-                if lexical(&owner) != lexical(&args.model) && !args.force {
-                    model_failure(
-                        &mut report,
-                        &args.model,
-                        Diagnostic::error(
-                            "adapterctl.mapping-script-owned",
-                            "/mapping/script",
-                            format!(
-                                "the script at mapping.script was generated from {}, not from {}; generate would overwrite it",
-                                owner.display(),
-                                args.model.display()
-                            ),
-                            "Point mapping.script at a path of its own, or pass --force to replace the other model's script.",
-                        ),
-                    );
-                    return Err(refusal(report, files));
-                }
-            }
-            let generated = state != GeneratedHeaderState::Absent;
-            if !generated && !args.force {
-                model_failure(
-                    &mut report,
-                    &args.model,
-                    Diagnostic::error(
-                        "adapterctl.mapping-script-handwritten",
-                        "/mapping/script",
-                        "the script at mapping.script exists and carries no generated header, so it is handwritten; generate would overwrite it",
-                        "Point mapping.script at a new path, move the handwritten script away, or pass --force to replace it.",
-                    ),
-                );
-                return Err(refusal(report, files));
-            }
-            (existing != script.as_bytes(), true)
+    let existing = existing_script(&path, &args.model, &script)?;
+    if !args.force {
+        if let Some(conflict) = script_conflict(&existing, &args.model) {
+            model_failure(&mut report, &args.model, conflict);
+            return Err(refusal(report, files));
         }
-        Err(source) if source.kind() == io::ErrorKind::NotFound => (true, false),
-        Err(source) => {
-            return Err(MappingFailure::Io {
-                path: path.display().to_string(),
-                source,
-            })
-        }
-    };
+    }
+    let changed = existing != ExistingScript::Current;
+    let existed = existing != ExistingScript::Missing;
     if changed {
         write_atomically(&path, &loaded.directory, script.as_bytes())?;
     }
     let digest = sha256_uri(script.as_bytes());
     let next_step = match loaded.mapping.mapping.target {
         MappingTarget::Ingestion => format!(
-            "Set destination.mapping.digest in the job to {digest}, then run adapterctl job check."
+            "Run adapterctl job lock on the job to set destination.mapping.digest to {digest}, then adapterctl job check."
         ),
         _ => "Run adapterctl project lock to pin the script digest, then adapterctl check."
             .to_owned(),
@@ -457,10 +443,88 @@ fn run_generate(args: &MappingGenerateArgs) -> Result<MappingRun, MappingFailure
     })
 }
 
+/// What stands at a model's script path, judged against the script the
+/// model generates now.
+#[derive(Debug, PartialEq, Eq)]
+enum ExistingScript {
+    Missing,
+    /// The bytes are what the model generates.
+    Current,
+    /// Generated from this model, or opening with the generated marker
+    /// under an edited header, but the bytes differ: ours to regenerate.
+    Stale,
+    /// Generated from another model, named by its path.
+    Owned(PathBuf),
+    /// No generated header: a person wrote it.
+    Handwritten,
+}
+
+fn existing_script(
+    path: &Path,
+    model: &Path,
+    script: &str,
+) -> Result<ExistingScript, MappingFailure> {
+    let existing = match std::fs::read(path) {
+        Ok(existing) => existing,
+        Err(source) if source.kind() == io::ErrorKind::NotFound => {
+            return Ok(ExistingScript::Missing)
+        }
+        Err(source) => {
+            return Err(MappingFailure::Io {
+                path: path.display().to_string(),
+                source,
+            })
+        }
+    };
+    if existing == script.as_bytes() {
+        return Ok(ExistingScript::Current);
+    }
+    let state =
+        std::str::from_utf8(&existing).map_or(GeneratedHeaderState::Absent, parse_generated_header);
+    Ok(match state {
+        GeneratedHeaderState::Absent => ExistingScript::Handwritten,
+        GeneratedHeaderState::Malformed => ExistingScript::Stale,
+        GeneratedHeaderState::Parsed(header) => {
+            let script_directory = path.parent().unwrap_or_else(|| Path::new(""));
+            let owner = script_directory.join(&header.model_reference);
+            if lexical(&owner) == lexical(model) {
+                ExistingScript::Stale
+            } else {
+                ExistingScript::Owned(owner)
+            }
+        }
+    })
+}
+
+/// The finding for a script `generate` refuses to replace without
+/// `--force`: an error from `generate`, a warning from `check`.
+fn script_conflict(existing: &ExistingScript, model: &Path) -> Option<Diagnostic> {
+    match existing {
+        ExistingScript::Owned(owner) => Some(Diagnostic::error(
+            "adapterctl.mapping-script-owned",
+            "/mapping/script",
+            format!(
+                "the script at mapping.script was generated from {}, not from {}; generate would overwrite it",
+                owner.display(),
+                model.display()
+            ),
+            "Point mapping.script at a path of its own, or pass --force to replace the other model's script.",
+        )),
+        ExistingScript::Handwritten => Some(Diagnostic::error(
+            "adapterctl.mapping-script-handwritten",
+            "/mapping/script",
+            "the script at mapping.script exists and carries no generated header, so it is handwritten; generate would overwrite it",
+            "Point mapping.script at a new path, move the handwritten script away, or pass --force to replace it.",
+        )),
+        ExistingScript::Missing | ExistingScript::Current | ExistingScript::Stale => None,
+    }
+}
+
 /// Write `bytes` to `path` through a temporary file in the same directory
 /// and a rename, so a reader never sees a half-written script. The script
-/// must land inside the model's directory.
-fn write_atomically(
+/// must land inside the model's directory. A file that already stands at
+/// `path` keeps its permissions.
+pub(crate) fn write_atomically(
     path: &Path,
     model_directory: &Path,
     bytes: &[u8],
@@ -516,6 +580,11 @@ fn write_atomically(
             .write(true)
             .create_new(true)
             .open(&temporary)?;
+        match std::fs::metadata(path) {
+            Ok(replaced) => file.set_permissions(replaced.permissions())?,
+            Err(source) if source.kind() == io::ErrorKind::NotFound => {}
+            Err(source) => return Err(source),
+        }
         file.write_all(bytes)?;
         file.sync_all()?;
         std::fs::rename(&temporary, path)

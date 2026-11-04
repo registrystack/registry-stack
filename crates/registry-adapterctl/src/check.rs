@@ -31,9 +31,9 @@ use registry_adapter_core::{
     check_fixture_expected_response, check_project_pins, check_workspace,
     derive_operation_result_schema, derive_problem_envelope_schema, finding, script_references,
     CheckCode, ScriptSite, Workspace, ADAPTER_FIXTURE_API_VERSION, ADAPTER_FIXTURE_KIND,
-    ADAPTER_PACK_API_VERSION, ADAPTER_PACK_KIND, ADAPTER_PROFILE_API_VERSION, ADAPTER_PROFILE_KIND,
-    ADAPTER_PROJECT_API_VERSION, ADAPTER_PROJECT_KIND, ADAPTER_RUNTIME_API_VERSION,
-    ADAPTER_RUNTIME_KIND,
+    ADAPTER_JOB_API_VERSION, ADAPTER_JOB_KIND, ADAPTER_PACK_API_VERSION, ADAPTER_PACK_KIND,
+    ADAPTER_PROFILE_API_VERSION, ADAPTER_PROFILE_KIND, ADAPTER_PROJECT_API_VERSION,
+    ADAPTER_PROJECT_KIND, ADAPTER_RUNTIME_API_VERSION, ADAPTER_RUNTIME_KIND,
 };
 use registry_platform_config::{
     sha256_uri, AuthoredExpressions, RuntimeConfigLoader, RuntimeEnvelope, DEFAULT_STAND_IN,
@@ -88,6 +88,16 @@ pub(crate) const PROFILE_FORMAT: FormatSpec<'static> = FormatSpec {
     kind: ADAPTER_PROFILE_KIND,
     envelope: EnvelopeRule::ApiVersionKind {
         api_versions: &[ApiVersion::current(ADAPTER_PROFILE_API_VERSION)],
+        retired_api_versions: &[],
+    },
+    removed_keys: &[],
+};
+
+/// The authored ingestion job format.
+pub(crate) const JOB_FORMAT: FormatSpec<'static> = FormatSpec {
+    kind: ADAPTER_JOB_KIND,
+    envelope: EnvelopeRule::ApiVersionKind {
+        api_versions: &[ApiVersion::current(ADAPTER_JOB_API_VERSION)],
         retired_api_versions: &[],
     },
     removed_keys: &[],
@@ -308,6 +318,7 @@ pub(crate) fn run(args: &CheckArgs) -> Result<CheckRun, CheckFailure> {
     let pinned = verify_digest_pins(&pack, &pack_path, &mut report, &mut files)?;
     verify_project_artifacts(&project, &project_path, &mut report, &mut files)?;
     verify_mapping_drift(&project, &project_path, &mut report);
+    verify_pack_mapping_drift(&pack, &pack_path, &mut report);
     verify_entrypoints(&pack, &pack_path, &pinned, &mut report);
     verify_query_files(&pack, &pack_path, &pinned, &mut report);
     verify_graphql_operations(&pack, &pack_path, &pinned, &mut report);
@@ -1034,6 +1045,26 @@ fn read_bounded_file(path: &Path, limit: usize) -> io::Result<BoundedRead> {
         Ok(BoundedRead::TooLarge)
     } else {
         Ok(BoundedRead::Bytes(bytes))
+    }
+}
+
+/// Warn for each script the pack inventories that carries a generated header
+/// but no longer matches the mapping model it names. The pack document owns
+/// its scripts, so the model must lie inside the pack's directory. A
+/// handwritten script produces nothing.
+pub(crate) fn verify_pack_mapping_drift(
+    pack: &registry_adapter_core::AdapterPack,
+    pack_path: &Path,
+    report: &mut Report,
+) {
+    let directory = pack_path.parent().unwrap_or_else(|| Path::new(""));
+    for (index, entry) in pack.scripts.iter().enumerate() {
+        let pointer = format!("/scripts/{index}");
+        if let Some(warning) =
+            crate::mapping::script_drift(&directory.join(&entry.path), directory, &pointer)
+        {
+            report.push(warning);
+        }
     }
 }
 

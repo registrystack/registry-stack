@@ -238,9 +238,11 @@ breg_govstack=products/adapter/examples/breg-govstack
 printf 'BReg GovStack example check and compile passed\n'
 
 # The authored mapping models behind generated scripts are checked against
-# their target schemas. The project and job checks only warn when a generated
-# script has drifted from its model, so the two examples that carry generated
-# scripts are re-run with --deny-warnings (the job check follows below).
+# their target schemas and, under --deny-warnings, against the scripts they
+# generate, which covers the source-request example no project or job
+# inventories. The project and job checks only warn when a generated script
+# has drifted from its model, so the two examples that carry generated scripts
+# are re-run with --deny-warnings (the job check follows below).
 for mapping_model in \
   products/adapter/examples/dhis2-consultation/person-registration.mapping.yaml \
   products/adapter/examples/kobotoolbox-job/mappings/register-household.mapping.yaml \

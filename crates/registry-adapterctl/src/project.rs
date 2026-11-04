@@ -904,7 +904,7 @@ fn pinned_digest_line(
 
 /// Whether one digest value is exactly the pinned uri form, unquoted and
 /// comment-free.
-fn is_bare_sha256_uri(value: &str) -> bool {
+pub(crate) fn is_bare_sha256_uri(value: &str) -> bool {
     let Some(hex) = value.strip_prefix("sha256:") else {
         return false;
     };
