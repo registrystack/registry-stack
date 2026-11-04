@@ -110,3 +110,20 @@ test('downloaded projects expose pack acquisition without retired source scripts
     assert.ok(sourceRecipeFiles.includes(`${recipe}/fixture-validation/adapter-packs/validation-seed/scripts/lookup.rhai`));
   }
 });
+
+test('tutorial fact snapshots follow the standalone projection schema', async () => {
+  const site = join(dirname(new URL(import.meta.url).pathname), '..');
+  const standalone = join(site, '../../products/evidence/examples/standalone');
+  const schema = JSON.parse(await readFile(join(standalone, 'schemas/person-facts.json'), 'utf8'));
+  const facts = Object.entries(schema.properties)
+    .sort(([left], [right]) => left.localeCompare(right, 'en'));
+  const factTypes = facts.map(([name, shape]) => `${name} (${shape.type})`).join(', ');
+  const factKeys = facts.map(([name]) => `\\"${name}\\"`).join(', ');
+  const [firstAssertion, proveProject] = await Promise.all([
+    readFile(join(site, 'src/content/docs/tutorials/first-evidence-assertion.mdx'), 'utf8'),
+    readFile(join(site, 'src/content/docs/tutorials/prove-an-evidence-project.mdx'), 'utf8'),
+  ]);
+
+  assert.ok(firstAssertion.includes(`      Facts: ${factTypes}`));
+  assert.ok(proveProject.includes(`"note": "fact keys [${factKeys}]"`));
+});
