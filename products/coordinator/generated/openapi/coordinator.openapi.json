@@ -1117,7 +1117,7 @@
   "info": {
     "description": "Registry Coordinator HTTP contract. Refusals use the closed problem vocabulary.",
     "title": "Registry Coordinator",
-    "version": "0.45.0"
+    "version": "0.45.1"
   },
   "openapi": "3.1.0",
   "paths": {
