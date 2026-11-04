@@ -131,6 +131,9 @@ expression, or a query with more than 16 positional parameters.
 The engine pages the statement itself: it appends `OFFSET $n+1` after the reviewed positions and
 binds the cursor's offset, zero on the first page.
 A root `LIMIT`, `OFFSET` or `FETCH` therefore refuses at compile.
+Each page is read with that `OFFSET`, so the database scans every earlier row
+again and the cost grows with table size; on a very large table, point the source at a
+narrower view, for example one limited to recently changed rows.
 Runtime values bind as text, checked integers, double-precision numbers, or booleans.
 
 Each result column crosses as one JSON value, by its PostgreSQL type:
