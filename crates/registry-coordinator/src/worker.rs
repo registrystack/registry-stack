@@ -473,10 +473,15 @@ impl Worker {
                         )
                         .await
                         {
-                            // A follow-up without an answer keeps the first read,
-                            // and the wait falls back to its scheduled spacing.
-                            Ok(CompletionObservation::Retryable { .. }) | Err(_) => {}
-                            Ok(follow_up) => read = Some(follow_up),
+                            // Only a follow-up that settles or follows the
+                            // Proposal replaces the first read. Any other answer
+                            // (unavailable, held, uncertain) keeps it, and the
+                            // wait falls back to its scheduled spacing.
+                            Ok(
+                                follow_up @ (CompletionObservation::Settled(_)
+                                | CompletionObservation::Followed { .. }),
+                            ) => read = Some(follow_up),
+                            Ok(_) | Err(_) => {}
                         }
                     }
                 }
