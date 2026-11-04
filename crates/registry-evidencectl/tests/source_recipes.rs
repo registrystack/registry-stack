@@ -61,7 +61,7 @@ async fn exported_recipe_routes_refuse_returned_identity_mismatch_before_facts()
             "endpoint": "tracker",
             "method": "GET",
             "path": "/api/tracker/trackedEntities",
-            "query": "fields=trackedEntity%2Cattributes%5Battribute%2Cvalue%5D&orgUnits=Org00000001&page=1&pageSize=2&program=Prg00000001&totalPages=true&trackedEntities=TeiSynthetic01",
+            "query": "fields=trackedEntity%2Cattributes%5Battribute%2Cvalue%5D&orgUnitMode=SELECTED&orgUnits=Org00000001&page=1&pageSize=2&program=Prg00000001&totalPages=true&trackedEntities=TeiSynthetic01",
             "headers": {"accept": "application/json"}
         }),
         dhis2_response(json!("TeiSynthetic01")),
