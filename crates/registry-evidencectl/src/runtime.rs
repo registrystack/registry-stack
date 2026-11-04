@@ -422,6 +422,7 @@ mod tests {
         )
         .expect("script");
         drop(script);
+        crate::evidence_binary::wait_until_executable(&binary);
 
         let outcome =
             invoke_check(&binary, &runtime, true, Some(root.path()), false).expect("preflight");

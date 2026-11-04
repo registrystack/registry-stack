@@ -1361,6 +1361,7 @@ cases:
         let mut permissions = fs::metadata(&binary).expect("stub metadata").permissions();
         permissions.set_mode(0o700);
         fs::set_permissions(&binary, permissions).expect("make stub executable");
+        crate::evidence_binary::wait_until_executable(&binary);
 
         for (operation, code, action) in [
             (
