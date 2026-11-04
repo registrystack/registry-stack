@@ -69,6 +69,8 @@ const requestLink: string | undefined = wait.requestLink
 void [turn, submissionVersion, requestLink]
 // @ts-expect-error a turn filter is one of party, official or nobody
 client.list('header.payload.signature', 20, null, null, null, null, 'someone')
+// @ts-expect-error an outcome filter is a name, not a list of names
+client.list('header.payload.signature', 20, null, null, null, null, null, ['applied'])
 
 declare const error: CoordinatorClientError
 if (error.kind === 'problem') {

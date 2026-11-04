@@ -3304,6 +3304,15 @@
               ],
               "type": "string"
             }
+          },
+          {
+            "description": "Selects runs that finished with this workflow outcome, matched exactly. A name no run finished with selects none.",
+            "in": "query",
+            "name": "outcome",
+            "schema": {
+              "pattern": "^[A-Za-z0-9_-]{1,64}$",
+              "type": "string"
+            }
           }
         ],
         "responses": {

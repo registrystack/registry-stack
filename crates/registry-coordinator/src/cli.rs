@@ -247,6 +247,9 @@ enum Command {
         #[arg(long, value_enum)]
         /// Return only runs whose Proposal wait last read this turn.
         turn: Option<ListTurn>,
+        #[arg(long, value_parser = list_outcome)]
+        /// Return only runs that finished with this workflow outcome, matched exactly.
+        outcome: Option<String>,
         #[command(flatten)]
         service: Service,
     },
@@ -895,6 +898,7 @@ async fn execute(cli: &Cli) -> Result<Value> {
             attention,
             proposal,
             turn,
+            outcome,
             service,
         } => {
             let mut query = format!("/v1/runs?limit={limit}");
@@ -916,6 +920,10 @@ async fn execute(cli: &Cli) -> Result<Value> {
             if let Some(turn) = turn {
                 query.push_str("&turn=");
                 query.push_str(turn.as_str());
+            }
+            if let Some(outcome) = outcome {
+                query.push_str("&outcome=");
+                query.push_str(outcome);
             }
             remote(
                 service,
@@ -1001,6 +1009,15 @@ fn bounded_list_cursor(value: &str) -> std::result::Result<String, String> {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
     {
         return Err("cursor must be the bounded opaque value returned by the service".into());
+    }
+    Ok(value.to_owned())
+}
+fn list_outcome(value: &str) -> std::result::Result<String, String> {
+    if !crate::definition::valid_name(value) {
+        return Err(
+            "outcome must be a workflow outcome name: 1 to 64 letters, digits, hyphens or underscores"
+                .into(),
+        );
     }
     Ok(value.to_owned())
 }

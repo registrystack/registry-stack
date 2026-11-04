@@ -449,6 +449,25 @@ class NativeRequestTests(unittest.TestCase):
                 self.assertEqual(raised.exception.kind, "invalid-request")
         self.assertEqual(len(self.observed()), 1)
 
+    def test_list_forwards_the_outcome_filter_and_refuses_a_name_no_workflow_could_declare(self) -> None:
+        finished = {**STATUS, "state": "finished", "outcome": "needs_review-2"}
+        self.service.script(ok({"runs": [finished]}))
+
+        outcome = self.client.list("list-token", 1, state="finished", outcome="needs_review-2")
+
+        self.assertEqual(outcome, {"kind": "complete", "value": {"runs": [finished]}})
+        (observed,) = self.observed()
+        self.assertEqual(
+            observed["path"],
+            "/deployment/v1/runs?limit=1&state=finished&outcome=needs_review-2",
+        )
+        for name in ("", "a.b", "needs review", "\u00e9", "o" * 65):
+            with self.subTest(outcome=name):
+                with self.assertRaises(CoordinatorClientError) as raised:
+                    self.client.list("token", 20, outcome=name)
+                self.assertEqual(raised.exception.kind, "invalid-request")
+        self.assertEqual(len(self.observed()), 1)
+
     def test_list_refuses_received_runs_outside_intersected_state_and_attention_filters(self) -> None:
         for state_filter, attention, returned in (
             (None, True, 'attention'), (None, True, 'failed'), (None, False, 'running'),

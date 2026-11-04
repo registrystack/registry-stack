@@ -12692,6 +12692,15 @@
               "environment": null
             },
             {
+              "display": "--outcome <OUTCOME>",
+              "description": "Return only runs that finished with this workflow outcome, matched exactly",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "--url <URL>",
               "description": "Authenticated Coordinator service origin, HTTPS or explicit loopback HTTP",
               "always_required": false,

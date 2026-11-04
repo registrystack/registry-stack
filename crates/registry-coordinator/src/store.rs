@@ -185,7 +185,7 @@ impl ProposalTurn {
 
 /// The optional filters a run-list page applies. A cursor is valid only with
 /// the filters that produced it.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct RunListFilter {
     pub state: Option<RunListState>,
     pub attention: Option<bool>,
@@ -193,6 +193,8 @@ pub struct RunListFilter {
     pub proposal: Option<Uuid>,
     /// Runs whose Proposal wait last observed this turn.
     pub turn: Option<ProposalTurn>,
+    /// Runs that finished with this workflow outcome, matched exactly.
+    pub outcome: Option<String>,
 }
 
 /// One stable page of caller-visible runs.
@@ -220,6 +222,10 @@ struct RunListCursor {
     /// The keyed Proposal wait commitment, never the Proposal id itself.
     proposal: Option<String>,
     turn: Option<ProposalTurn>,
+    /// Absent when the list has no outcome filter, so a cursor from a list
+    /// without one keeps its version-2 shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    outcome: Option<String>,
 }
 
 /// Bounded durable step state from Dispatch, without prepared request contents.
@@ -1338,7 +1344,7 @@ impl Store {
         cursor: Option<&str>,
         actor: &Actor,
         flows: &[String],
-        filter: RunListFilter,
+        filter: &RunListFilter,
     ) -> Result<Option<(DateTime<Utc>, Uuid)>> {
         let Some(cursor) = cursor else {
             return Ok(None);
@@ -1364,6 +1370,7 @@ impl Store {
             || decoded.attention != filter.attention
             || decoded.proposal != filter.proposal.map(|id| self.proposal_wait_key(id))
             || decoded.turn != filter.turn
+            || decoded.outcome != filter.outcome
         {
             return Err(invalid());
         }
@@ -1375,7 +1382,7 @@ impl Store {
         status: &RunStatus,
         actor: &Actor,
         flows: &[String],
-        filter: RunListFilter,
+        filter: &RunListFilter,
     ) -> Result<String> {
         let document = serde_json::to_vec(&RunListCursor {
             version: 2,
@@ -1388,6 +1395,7 @@ impl Store {
             attention: filter.attention,
             proposal: filter.proposal.map(|id| self.proposal_wait_key(id)),
             turn: filter.turn,
+            outcome: filter.outcome.clone(),
         })
         .map_err(|_| unavailable("cannot encode the run-list cursor"))?;
         let cursor = URL_SAFE_NO_PAD.encode(document);

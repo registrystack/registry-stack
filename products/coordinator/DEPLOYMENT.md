@@ -936,7 +936,8 @@ workflows its policy lists; an operator policy lists every owner's runs in those
 workflows. `limit` takes 1 to 100 and defaults to 20. Use `state` to filter by effective state, or `attention=true` for effective states
 `attention` and `failed` (`attention=false` excludes both). Use `proposal=<id>` to find the runs
 waiting on one BReg request, and `turn=party`, `official` or `nobody` for runs whose request
-last read that turn. Pass `nextCursor` as
+last read that turn. Use `outcome=<name>` for the runs that finished with that workflow
+outcome, matched exactly; a name no run finished with returns an empty page. Pass `nextCursor` as
 `cursor` with the same filters to continue; each page rechecks current caller and workflow
 permissions. The order is admission time and run ID, newest first. Keep the run ID a
 start returns for direct lookup with `GET /v1/runs/{run}`. Use the

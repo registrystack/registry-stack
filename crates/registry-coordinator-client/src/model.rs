@@ -448,7 +448,9 @@ impl ProposalTurn {
 
 /// One caller-controlled page request. A continuation must preserve every
 /// filter that produced its cursor. `proposal` selects runs waiting on that
-/// Proposal; `turn` selects runs whose Proposal wait last showed that turn.
+/// Proposal; `turn` selects runs whose Proposal wait last showed that turn;
+/// `outcome` selects runs that finished with that workflow outcome, matched
+/// exactly.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RunListQuery {
     pub limit: u32,
@@ -457,6 +459,7 @@ pub struct RunListQuery {
     pub attention: Option<bool>,
     pub proposal: Option<Uuid>,
     pub turn: Option<ProposalTurn>,
+    pub outcome: Option<String>,
 }
 
 impl RunListQuery {
@@ -469,6 +472,7 @@ impl RunListQuery {
             attention: None,
             proposal: None,
             turn: None,
+            outcome: None,
         }
     }
 }

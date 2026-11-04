@@ -232,11 +232,14 @@ class CoordinatorClient:
     # so it is sent exactly once. `reason` is bounded as for `retry_same`.
     def cancel(self, token: str, run_id: RunId, reason: str) -> Complete[RunStatus]: ...
     # One stable page of caller-visible runs. Pass nextCursor unchanged with
-    # the same caller, state, attention, proposal, and turn values.
+    # the same caller, state, attention, proposal, turn, and outcome values.
     # attention=True selects the effective states attention and failed.
     # proposal selects runs waiting on that BReg Proposal; turn selects runs
-    # whose Proposal wait last showed that turn. Declared last: mypy reads
-    # `list` in any later annotation in this class as this method.
-    def list(self, token: str, limit: int, cursor: str | None = None, state: RunListState | None = None, attention: bool | None = None, proposal: str | None = None, turn: ProposalTurn | None = None) -> Complete[RunList]: ...
+    # whose Proposal wait last showed that turn. outcome selects runs that
+    # finished with that workflow outcome, matched exactly; it is 1 to 64
+    # letters, digits, hyphens or underscores, checked before sending.
+    # Declared last: mypy reads `list` in any later annotation in this class
+    # as this method.
+    def list(self, token: str, limit: int, cursor: str | None = None, state: RunListState | None = None, attention: bool | None = None, proposal: str | None = None, turn: ProposalTurn | None = None, outcome: str | None = None) -> Complete[RunList]: ...
 
 __version__: str
