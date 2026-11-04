@@ -37,7 +37,9 @@ no authored profile file.
 A serving deployment supplies its own `runtime.yaml` using the example as a
 starting point. Publish the generated contract at the project's declared
 version-specific HTTPS `consultation.contract` URI. Authenticated callers use
-`GET /v1/capabilities` to discover their enabled operations and follow that
-contract for input and payload schemas. Discovery grants no Record access.
+`GET /govstack/registries/v1/capabilities` to discover their enabled operations
+and follow that contract for input and payload schemas. The generated OpenAPI
+uses `/govstack/registries` as `servers.url`, with the `/v1/...` operation paths
+relative to that base. Discovery grants no Record access.
 
 The selected Consultation draft surface does not imply full GovStack conformance.

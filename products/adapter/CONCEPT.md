@@ -100,7 +100,10 @@ deployment writes only a project file.
   Consultation target uses maintained Rust protocol definitions over the same
   facade and engine. Projects select their source routes, transformations,
   schemas and exposed operations; they do not author standard protocol
-  envelopes. [Consultation](CONSULTATION.md) defines its selected read surface.
+  envelopes. The host mounts this target at `/govstack/registries`; generated
+  OpenAPI uses that base as `servers.url` and keeps its `/v1/...` operation
+  paths relative. [Consultation](CONSULTATION.md) defines its selected read
+  surface.
 - One native binary, PostgreSQL for the audit journal and the idempotency
   store, deployment story identical to the rest of the stack.
 

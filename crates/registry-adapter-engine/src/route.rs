@@ -1477,17 +1477,23 @@ fn transform_item_page(
     transform: &crate::project_transform::CompiledProjectTransform,
     support: &registry_adapter_core::SourceReadSupport,
     pagination: Option<&crate::load::ServedPagination>,
+    projection: &crate::target::ItemProjection,
     code_maps: &crate::scripts::CodeMaps,
     absolute_deadline: tokio::time::Instant,
 ) -> Result<(), RouteFailure> {
     let mut page: registry_adapter_core::ItemPage =
         serde_json::from_value(exchange.message.body.clone())
             .map_err(|_| RouteFailure::of(ErrorClass::UpstreamMalformed))?;
-    if page
-        .items
-        .iter()
-        .any(|item| !crate::consultation::source_key_is_public_record_id(&item.key))
-    {
+    if page.items.iter().any(|item| {
+        item.key.is_empty()
+            || item.key.len() > projection.maximum_record_id_bytes
+            || item
+                .key
+                .chars()
+                .take(projection.maximum_record_id_characters + 1)
+                .count()
+                > projection.maximum_record_id_characters
+    }) {
         return Err(RouteFailure::of(ErrorClass::UpstreamMalformed));
     }
     match support {
@@ -1514,16 +1520,7 @@ fn transform_item_page(
     let mut wrapped = page
         .items
         .into_iter()
-        .map(|item| {
-            let mut record = Map::from_iter([
-                ("recordIdentifier".to_owned(), Value::String(item.key)),
-                ("domainData".to_owned(), item.value),
-            ]);
-            if let Some(revision) = item.revision {
-                record.insert("revisionIdentifier".to_owned(), Value::String(revision));
-            }
-            Value::Object(record)
-        })
+        .map(|item| project_source_item(item, projection))
         .collect::<Vec<_>>();
     exchange.message.body = match support {
         registry_adapter_core::SourceReadSupport::ReadOne { .. } => wrapped
@@ -1546,6 +1543,20 @@ fn transform_item_page(
     Ok(())
 }
 
+fn project_source_item(
+    item: registry_adapter_core::SourceItem,
+    projection: &crate::target::ItemProjection,
+) -> Value {
+    let mut record = Map::from_iter([
+        (projection.record_id_member.clone(), Value::String(item.key)),
+        (projection.value_member.clone(), item.value),
+    ]);
+    if let (Some(member), Some(revision)) = (projection.revision_member.as_ref(), item.revision) {
+        record.insert(member.clone(), Value::String(revision));
+    }
+    Value::Object(record)
+}
+
 fn project_transform_failure(
     error: crate::project_transform::ProjectTransformError,
 ) -> RouteFailure {
@@ -1566,33 +1577,33 @@ fn prepare_project_source_input(
     operation: &crate::load::ServedOperation,
     exchange: &mut Exchange,
 ) -> Result<(), RouteFailure> {
-    let Some(support) = operation.read_support.as_ref() else {
+    if operation.read_support.is_none() {
         return Ok(());
-    };
-    let body = match (operation.operation.as_str(), support) {
-        ("retrieve", registry_adapter_core::SourceReadSupport::ReadOne { inputs }) => {
-            let [input] = &**inputs else {
-                return Err(RouteFailure::of(ErrorClass::Facade));
-            };
+    }
+    let source_input = operation
+        .source_input
+        .as_ref()
+        .ok_or_else(|| RouteFailure::of(ErrorClass::Facade))?;
+    let body = match source_input {
+        crate::target::SourceInput::RecordId {
+            header,
+            source_input,
+        } => {
             let value = exchange
                 .message
-                .header("recordId")
+                .header(header)
                 .filter(|value| value.as_str().is_some_and(|text| !text.is_empty()))
                 .cloned()
                 .ok_or_else(|| RouteFailure::of(ErrorClass::Facade))?;
-            Value::Object(Map::from_iter([(input.as_str().to_owned(), value)]))
+            Value::Object(Map::from_iter([(source_input.clone(), value)]))
         }
-        ("lookup", registry_adapter_core::SourceReadSupport::ReadOne { .. })
-        | ("search", registry_adapter_core::SourceReadSupport::ReadPage { .. }) => exchange
+        crate::target::SourceInput::Filters => exchange
             .property(FILTERS_PROPERTY)
             .and_then(Value::as_object)
             .cloned()
             .map(Value::Object)
             .ok_or_else(|| RouteFailure::of(ErrorClass::Facade))?,
-        ("list", registry_adapter_core::SourceReadSupport::ReadPage { .. }) => {
-            Value::Object(Map::new())
-        }
-        _ => return Err(RouteFailure::of(ErrorClass::Facade)),
+        crate::target::SourceInput::EmptyObject => Value::Object(Map::new()),
     };
     if operation
         .project_input_schema
@@ -1775,21 +1786,25 @@ pub async fn run_served_route_until(
         operation.resume.as_ref(),
     )
     .await;
-    if let (Ok(exchange), Some(transform), Some(support)) = (
+    if let (Ok(exchange), Some(transform), Some(support), Some(projection)) = (
         outcome.result.as_mut(),
         operation.project_transform.as_ref(),
         operation.read_support.as_ref(),
+        operation.item_projection.as_ref(),
     ) {
         if let Err(failure) = transform_item_page(
             exchange,
             transform,
             support,
             operation.pagination.as_ref(),
+            projection,
             &context.code_maps,
             absolute_deadline,
         ) {
             outcome.result = Err(failure);
         }
+    } else if operation.project_transform.is_some() && outcome.result.is_ok() {
+        outcome.result = Err(RouteFailure::of(ErrorClass::Facade));
     }
     outcome
 }
@@ -5163,7 +5178,61 @@ mod send_attempt_tests {
             project_transform: None,
             project_input_schema: None,
             read_support: None,
+            source_input: None,
+            item_projection: None,
+            target_contract: None,
         }
+    }
+
+    #[test]
+    fn explicit_source_input_does_not_depend_on_a_standard_operation_id() {
+        let mut operation = async_served_operation(Vec::new());
+        operation.operation = "institution-defined-read".to_owned();
+        operation.read_support = Some(
+            serde_json::from_value(json!({
+                "type": "read-one",
+                "inputs": ["native-key"]
+            }))
+            .expect("read support"),
+        );
+        operation.source_input = Some(crate::target::SourceInput::RecordId {
+            header: "callerKey".to_owned(),
+            source_input: "native-key".to_owned(),
+        });
+        let mut exchange = Exchange::new("source-input".to_owned());
+        exchange.message.set_header("callerKey", json!("record-17"));
+
+        prepare_project_source_input(&operation, &mut exchange).expect("explicit source mapping");
+
+        assert_eq!(exchange.message.body, json!({"native-key": "record-17"}));
+    }
+
+    #[test]
+    fn explicit_item_projection_uses_only_host_supplied_member_names() {
+        let projection = crate::target::ItemProjection {
+            record_id_member: "externalKey".to_owned(),
+            value_member: "publicValue".to_owned(),
+            revision_member: Some("sourceRevision".to_owned()),
+            maximum_record_id_bytes: 64,
+            maximum_record_id_characters: 64,
+        };
+        let projected = project_source_item(
+            registry_adapter_core::SourceItem {
+                key: "record-17".to_owned(),
+                revision: Some("revision-3".to_owned()),
+                value: json!({"name": "Ada"}),
+            },
+            &projection,
+        );
+
+        assert_eq!(
+            projected,
+            json!({
+                "externalKey": "record-17",
+                "publicValue": {"name": "Ada"},
+                "sourceRevision": "revision-3"
+            })
+        );
     }
 
     /// Source acceptance is an engine control result, not an ordinary route

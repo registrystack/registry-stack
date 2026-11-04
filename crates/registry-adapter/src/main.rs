@@ -61,8 +61,14 @@ fn export_effective_contract(
     pack: Option<&std::path::Path>,
     runtime_config: &std::path::Path,
 ) -> Result<(), String> {
-    let loaded = registry_adapter::engine::load::load(project, profile, pack, runtime_config)
-        .map_err(|error| error.to_string())?;
+    let loaded = registry_adapter::engine::load::load_with_target(
+        project,
+        profile,
+        pack,
+        runtime_config,
+        registry_adapter::govstack::consultation::target_attachment,
+    )
+    .map_err(|error| error.to_string())?;
     let document =
         registry_adapter::engine::effective_contract::EffectiveContract::from_loaded(&loaded)
             .and_then(|contract| contract.to_pretty_json())

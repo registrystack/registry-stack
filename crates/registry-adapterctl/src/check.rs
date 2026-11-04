@@ -299,7 +299,7 @@ pub(crate) fn run(args: &CheckArgs) -> Result<CheckRun, CheckFailure> {
     let (profile, profile_bytes) = match profile {
         Some((decoded, bytes)) => (decoded.value, bytes),
         None => (
-            registry_adapter::engine::consultation::built_in_profile(),
+            registry_adapter::govstack::consultation::built_in_profile(),
             Vec::new(),
         ),
     };
@@ -504,7 +504,7 @@ pub(crate) fn verify_consultation_inputs(
     let directory = project_path.parent().unwrap_or_else(|| Path::new(""));
     for (index, binding) in project.bindings.iter().enumerate() {
         let Some(capability) =
-            registry_adapter::engine::consultation::ConsultationCapability::from_binding_operation(
+            registry_adapter::govstack::consultation::ConsultationCapability::from_binding_operation(
                 binding.operation.as_str(),
             )
         else {
@@ -513,35 +513,65 @@ pub(crate) fn verify_consultation_inputs(
         let Some(collection) = consultation.collections.get(binding.record_type.as_str()) else {
             continue;
         };
-        let schema_id = match capability {
-            registry_adapter::engine::consultation::ConsultationCapability::Lookup => collection
-                .lookup
-                .as_ref()
-                .map(|lookup| &lookup.input_schema),
-            registry_adapter::engine::consultation::ConsultationCapability::Search => collection
-                .search
-                .as_ref()
-                .map(|search| &search.input_schema),
-            registry_adapter::engine::consultation::ConsultationCapability::Retrieve
-            | registry_adapter::engine::consultation::ConsultationCapability::List => None,
+        let selected = match capability {
+            registry_adapter::govstack::consultation::ConsultationCapability::Lookup => {
+                collection.lookup.as_ref().map(|lookup| {
+                    (
+                        &lookup.input_schema,
+                        registry_adapter::engine::load::TargetInputShape::ReadOne,
+                    )
+                })
+            }
+            registry_adapter::govstack::consultation::ConsultationCapability::Search => {
+                collection.search.as_ref().map(|search| {
+                    (
+                        &search.input_schema,
+                        registry_adapter::engine::load::TargetInputShape::ReadPageEquality,
+                    )
+                })
+            }
+            registry_adapter::govstack::consultation::ConsultationCapability::Retrieve
+            | registry_adapter::govstack::consultation::ConsultationCapability::List => None,
         };
-        let Some(schema_id) = schema_id else {
-            continue;
+        let incompatible = |report: &mut Report| {
+            let mut diagnostic = finding(
+                CheckCode::ProjectConsultationInputIncompatible,
+                &format!("/bindings/{index}"),
+                "the Consultation capability is incompatible with the selected source route",
+                "Bind a route template with declared readSupport; use exactly one source input for Retrieve, none for List, matching inputs for Lookup, or equality-capable inputs for Search.",
+            );
+            diagnostic.source = Some(registry_platform_yaml::Source {
+                file: project_path.display().to_string(),
+                line: None,
+                column: None,
+            });
+            report.push(diagnostic);
         };
         let Some(templated) = project.templated_routes.get(binding.route.as_str()) else {
+            if pack.routes.get(binding.route.as_str()).is_some() {
+                incompatible(report);
+            }
             continue;
         };
         let Some(template) = pack.route_templates.get(templated.route_template.as_str()) else {
             continue;
         };
         let Some(support) = template.read_support.as_ref() else {
+            incompatible(report);
             continue;
         };
-        if registry_adapter::engine::load::compile_consultation_input_filters(
+        if registry_adapter::govstack::consultation::source_input(capability, support).is_none() {
+            incompatible(report);
+            continue;
+        }
+        let Some((schema_id, shape)) = selected else {
+            continue;
+        };
+        if registry_adapter::engine::load::compile_target_input_filters(
             project,
             schema_id.as_str(),
-            capability,
             support,
+            shape,
             directory,
         )
         .is_ok()
@@ -1308,17 +1338,17 @@ pub(crate) fn check_consultation_fixture_bodies(
                 continue;
             };
             let pointer = format!("/fixtures/{fixture_index}/entries/{entry_index}/expected/body");
-            let capability = registry_adapter::engine::consultation::ConsultationCapability::from_binding_operation(
+            let capability = registry_adapter::govstack::consultation::ConsultationCapability::from_binding_operation(
                 entry.facade_request.operation.as_str(),
             );
             let invalid = match capability {
                 Some(
-                    registry_adapter::engine::consultation::ConsultationCapability::Retrieve
-                    | registry_adapter::engine::consultation::ConsultationCapability::Lookup,
+                    registry_adapter::govstack::consultation::ConsultationCapability::Retrieve
+                    | registry_adapter::govstack::consultation::ConsultationCapability::Lookup,
                 ) => !valid_consultation_record(body.as_value(), schema),
                 Some(
-                    registry_adapter::engine::consultation::ConsultationCapability::List
-                    | registry_adapter::engine::consultation::ConsultationCapability::Search,
+                    registry_adapter::govstack::consultation::ConsultationCapability::List
+                    | registry_adapter::govstack::consultation::ConsultationCapability::Search,
                 ) => !valid_consultation_page(body.as_value(), schema),
                 None => false,
             };

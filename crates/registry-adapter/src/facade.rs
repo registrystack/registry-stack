@@ -41,11 +41,6 @@ use crate::engine::component::http::uri::encode_path_segment;
 use crate::engine::component::rest::continuation::{
     filter_digest, ContinuationCodec, CursorBinding, CursorRefusal,
 };
-use crate::engine::consultation::{
-    validate_capabilities, CallerCapabilities, CapabilityCollection, CapabilityOperation,
-    ConsultationCapability, CAPABILITIES_PATH, PROFILE_ID as CONSULTATION_PROFILE_ID,
-    SERVICE_UNAVAILABLE_PROBLEM_CODE as CONSULTATION_UNAVAILABLE_PROBLEM_CODE,
-};
 use crate::engine::effective_contract::{
     EffectiveContract, RuntimeContractResponse, PIN_HEADER, PIN_PROBLEM_CODE,
     UNAVAILABLE_PROBLEM_CODE, WELL_KNOWN_PATH,
@@ -60,6 +55,9 @@ use crate::engine::read_request::{parse_filter_text, ReadRefusal};
 use crate::engine::route::{
     run_async_status_poll, run_served_route_until, AsyncStatusPollKind, RouteContext, RouteFailure,
     EXCHANGE_DEADLINE,
+};
+use crate::govstack::consultation::{
+    CAPABILITIES_PATH, MOUNT_PATH, PROFILE_ID as CONSULTATION_PROFILE_ID,
 };
 use crate::idempotent::{
     PostgresIdempotencyStore, RecoveryLease, StatusLookup, StatusLookupRequest, StoredResponse,
@@ -288,6 +286,9 @@ pub fn router(state: Arc<FacadeState>) -> Router {
                 }
             }),
         );
+    }
+    if state.loaded.project.consultation.is_some() {
+        router = Router::new().nest(MOUNT_PATH, router);
     }
     let contract = Arc::clone(&state);
     let contract_method_fallback = Arc::clone(&state);
@@ -964,21 +965,24 @@ async fn caller_capabilities(state: Arc<FacadeState>, headers: HeaderMap) -> Res
         tracing::error!("the Consultation capability journal readiness check failed");
         return consultation_unavailable(&request_id);
     }
-    let document =
-        match derive_caller_capabilities(&state.loaded.project, &state.loaded.served, &caller) {
-            Ok(document) => document,
-            Err(error) => {
-                tracing::error!(%error, "the caller capability document was refused");
-                return journal_capability_refusal(
-                    &state,
-                    &caller,
-                    &request_id,
-                    ErrorClass::Facade,
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                )
-                .await;
-            }
-        };
+    let document = match crate::govstack::consultation::caller_capabilities(
+        &state.loaded.project,
+        &state.loaded.served,
+        |served| admits(&state.loaded.project, &caller, served),
+    ) {
+        Ok(document) => document,
+        Err(error) => {
+            tracing::error!(%error, "the caller capability document was refused");
+            return journal_capability_refusal(
+                &state,
+                &caller,
+                &request_id,
+                ErrorClass::Facade,
+                StatusCode::INTERNAL_SERVER_ERROR,
+            )
+            .await;
+        }
+    };
     let completed_at = SystemTime::now();
     let audit = ["exchangeCreated", "exchangeCompleted"]
         .into_iter()
@@ -1025,74 +1029,6 @@ async fn caller_capabilities(state: Arc<FacadeState>, headers: HeaderMap) -> Res
             )
         }
     }
-}
-
-fn derive_caller_capabilities(
-    project: &AdapterProject,
-    served_operations: &[ServedOperation],
-    caller: &Caller,
-) -> Result<CallerCapabilities, crate::engine::consultation::CapabilityError> {
-    let Some(consultation) = project.consultation.as_ref() else {
-        return Ok(CallerCapabilities {
-            collections: Vec::new(),
-        });
-    };
-    let mut collections = Vec::new();
-    for declared in consultation.collections.iter() {
-        let mut operations = Vec::new();
-        for served in served_operations
-            .iter()
-            .filter(|served| served.record_type == declared.record_type.as_str())
-        {
-            let Some(capability) =
-                ConsultationCapability::from_binding_operation(&served.operation)
-            else {
-                continue;
-            };
-            if !admits(project, caller, served) {
-                continue;
-            }
-            let (selectors, searches) = match capability {
-                ConsultationCapability::Lookup => (
-                    declared
-                        .lookup
-                        .as_ref()
-                        .map(|lookup| vec![lookup.selector.as_str().to_owned()])
-                        .unwrap_or_default(),
-                    Vec::new(),
-                ),
-                ConsultationCapability::Search => (
-                    Vec::new(),
-                    declared
-                        .search
-                        .as_ref()
-                        .map(|search| vec![search.search.as_str().to_owned()])
-                        .unwrap_or_default(),
-                ),
-                ConsultationCapability::Retrieve | ConsultationCapability::List => {
-                    (Vec::new(), Vec::new())
-                }
-            };
-            operations.push(CapabilityOperation {
-                operation_id: capability.operation_id(declared.record_type.as_str()),
-                contract: consultation.contract.clone(),
-                capability,
-                view: declared.view.as_str().to_owned(),
-                selectors,
-                searches,
-            });
-        }
-        if !operations.is_empty() {
-            collections.push(CapabilityCollection {
-                collection_id: declared.record_type.as_str().to_owned(),
-                registry: declared.registry.clone(),
-                operations,
-            });
-        }
-    }
-    let document = CallerCapabilities { collections };
-    validate_capabilities(&document)?;
-    Ok(document)
 }
 
 async fn journal_capability_refusal(
@@ -3860,11 +3796,7 @@ async fn refuse_request(
     if refusal.status == StatusCode::UNPROCESSABLE_ENTITY
         && profile.profile.id.as_str() == CONSULTATION_PROFILE_ID
     {
-        let pointer = match operation.operation.as_str() {
-            "lookup" => "/values",
-            "search" => "/criteria",
-            _ => "/request",
-        };
+        let pointer = crate::govstack::consultation::validation_pointer(&operation.operation);
         facade_validation_problem(
             profile,
             refusal.class,
@@ -4127,12 +4059,7 @@ fn contract_unavailable(request_id: &str) -> Response {
 fn consultation_unavailable(request_id: &str) -> Response {
     let mut response = json_response(
         StatusCode::SERVICE_UNAVAILABLE,
-        &json!({
-            "type": CONSULTATION_UNAVAILABLE_PROBLEM_CODE,
-            "title": "the service is unavailable",
-            "status": StatusCode::SERVICE_UNAVAILABLE.as_u16(),
-            "traceId": request_id,
-        }),
+        &crate::govstack::consultation::service_unavailable_problem(request_id),
     );
     response.headers_mut().insert(
         header::CONTENT_TYPE,
@@ -4270,6 +4197,9 @@ mod tests {
             project_transform: None,
             project_input_schema: None,
             read_support: None,
+            source_input: None,
+            item_projection: None,
+            target_contract: None,
         }
     }
 
@@ -4340,7 +4270,10 @@ mod tests {
             client_id: "registry-client".to_owned(),
             scopes: vec!["records.read".to_owned()],
         };
-        let document = derive_caller_capabilities(&project, &operations, &caller)
+        let document =
+            crate::govstack::consultation::caller_capabilities(&project, &operations, |served| {
+                admits(&project, &caller, served)
+            })
             .expect("bounded capability document");
         assert_eq!(document.collections.len(), 1);
         assert_eq!(document.collections[0].collection_id, "person");
@@ -4363,7 +4296,7 @@ mod tests {
 
     #[tokio::test]
     async fn consultation_invalid_field_is_a_bounded_validation_problem() {
-        let profile = crate::engine::consultation::built_in_profile();
+        let profile = crate::govstack::consultation::built_in_profile();
         let envelope = CompiledEnvelope::compile(profile.problem_envelope.text(), &BTreeMap::new())
             .expect("maintained problem envelope compiles");
         let response = facade_validation_problem(
@@ -4401,7 +4334,10 @@ mod tests {
             .await
             .expect("bounded problem body");
         let body: Value = serde_json::from_slice(&bytes).expect("problem JSON");
-        assert_eq!(body["type"], CONSULTATION_UNAVAILABLE_PROBLEM_CODE);
+        assert_eq!(
+            body["type"],
+            crate::govstack::consultation::SERVICE_UNAVAILABLE_PROBLEM_CODE
+        );
         assert_eq!(body["title"], "the service is unavailable");
         assert_eq!(body["status"], 503);
         assert_eq!(body["traceId"], "0123456789abcdef0123456789abcdef");

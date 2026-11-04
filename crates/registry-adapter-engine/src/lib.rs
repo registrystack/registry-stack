@@ -17,7 +17,6 @@ pub mod artifacts;
 pub mod async_completion;
 pub mod auth;
 pub mod component;
-pub mod consultation;
 #[cfg(feature = "job-file")]
 pub mod decoder;
 pub mod effective_contract;
@@ -42,6 +41,7 @@ pub mod resilience;
 mod resume;
 pub mod route;
 pub mod scripts;
+pub mod target;
 
 pub use resume::ResumeValue;
 
@@ -132,10 +132,10 @@ pub fn compile(
         EngineProfileKind::Facade => {
             if inputs.project.consultation.is_some() {
                 return Err(compile_refusal(
-                    "adapter.engine.consultation-artifacts-required",
+                    "adapter.engine.target-attachment-required",
                     "AdapterProject",
-                    "the in-memory facade compiler has no project artifact closure for Consultation",
-                    "Use the maintained directory loader or attach_consultation_project after compiling with supplied project artifacts.",
+                    "the in-memory facade compiler has no host target attachment",
+                    "Use the maintained host loader with the target's governed artifact closure.",
                 ));
             }
             let resolver =
@@ -522,7 +522,7 @@ profile:
     }
 
     #[test]
-    fn the_in_memory_facade_entry_never_returns_an_unattached_consultation_plan() {
+    fn the_in_memory_facade_entry_never_returns_an_unattached_target_plan() {
         let (
             pack,
             profile,
@@ -561,10 +561,10 @@ profile:
             },
             EngineProfileKind::Facade,
         )
-        .expect_err("Consultation cannot compile without its project artifact closure");
+        .expect_err("a fixed target cannot compile without its host attachment");
         assert_eq!(
             error.diagnostics[0].code,
-            "adapter.engine.consultation-artifacts-required"
+            "adapter.engine.target-attachment-required"
         );
     }
 

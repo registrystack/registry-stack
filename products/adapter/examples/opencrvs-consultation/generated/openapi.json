@@ -757,5 +757,10 @@
         }
       }
     }
-  }
+  },
+  "servers": [
+    {
+      "url": "/govstack/registries"
+    }
+  ]
 }

@@ -222,6 +222,9 @@ mod tests {
             project_transform: None,
             project_input_schema: None,
             read_support: None,
+            source_input: None,
+            item_projection: None,
+            target_contract: None,
         }
     }
 

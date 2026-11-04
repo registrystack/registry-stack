@@ -40,6 +40,7 @@ pub mod cli;
 pub mod custody;
 pub use registry_adapter_engine as engine;
 pub mod facade;
+pub mod govstack;
 pub mod idempotent;
 pub mod journal;
 pub mod notifier;
