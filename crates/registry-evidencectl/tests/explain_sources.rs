@@ -20,6 +20,50 @@ fn copy_tree(from: &Path, to: &Path) {
 }
 
 #[test]
+fn explain_captures_projection_assets_at_declared_project_relative_paths() {
+    let temporary = tempfile::tempdir().expect("temporary project");
+    copy_tree(&project("standalone"), temporary.path());
+    fs::create_dir_all(temporary.path().join("mappings/nested")).unwrap();
+    for (old, new) in [
+        (
+            "projections/person-facts.rhai",
+            "mappings/nested/person-facts.rhai",
+        ),
+        ("schemas/person-facts.json", "person-facts.json"),
+    ] {
+        fs::rename(temporary.path().join(old), temporary.path().join(new)).unwrap();
+        let manifest = temporary.path().join("evidence.yaml");
+        let authored = fs::read_to_string(&manifest).unwrap();
+        assert!(authored.contains(old));
+        fs::write(manifest, authored.replace(old, new)).unwrap();
+    }
+    let output = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+        .args(["--format", "json", "explain"])
+        .arg(temporary.path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let source = report["sources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|source| source["id"] == "person-record")
+        .unwrap();
+    assert_eq!(
+        source["projection"]["source"],
+        "mappings/nested/person-facts.rhai"
+    );
+    assert_eq!(source["projection"]["schema"], "person-facts.json");
+}
+
+#[test]
 fn explain_connects_a_real_definition_to_its_source_operation_facts_and_output() {
     let output = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
         .arg("explain")

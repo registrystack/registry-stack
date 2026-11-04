@@ -1483,6 +1483,13 @@ fn transform_item_page(
     let mut page: registry_adapter_core::ItemPage =
         serde_json::from_value(exchange.message.body.clone())
             .map_err(|_| RouteFailure::of(ErrorClass::UpstreamMalformed))?;
+    if page
+        .items
+        .iter()
+        .any(|item| !crate::consultation::source_key_is_public_record_id(&item.key))
+    {
+        return Err(RouteFailure::of(ErrorClass::UpstreamMalformed));
+    }
     match support {
         registry_adapter_core::SourceReadSupport::ReadOne { .. } => {
             if page.items.len() > 1 || page.next.as_ref().is_some_and(|next| !next.is_null()) {

@@ -171,6 +171,7 @@ fn capture_project_in(project: &Path, temporary_root: &Path) -> Result<ProjectSn
         )?;
     }
     capture_root_yaml(&project_descriptor, &mut capture)?;
+    capture_projection_assets(&project_descriptor, &mut capture)?;
 
     let Capture {
         root,
@@ -189,6 +190,91 @@ fn capture_project_in(project: &Path, temporary_root: &Path) -> Result<ProjectSn
         })?;
     }
     Ok(snapshot)
+}
+
+/// Select projection assets from the captured manifest, then read each path
+/// through the original root descriptor. Only the declared files are copied;
+/// their containing directories do not become additional asset inventories.
+fn capture_projection_assets(project: &rustix::fd::OwnedFd, capture: &mut Capture) -> Result<()> {
+    let file = registry_evidence_authoring::project::PROJECT_FILE;
+    let path = capture.root.join(file);
+    match fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.file_type().is_file() => {}
+        // The owning reader refuses a missing or linked project document.
+        Ok(_) => return Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error).context("inspecting the captured project manifest"),
+    }
+    let bytes = authored::read_authored_file(&path, "captured project manifest")?;
+    let Ok(decoded) = registry_evidence_authoring::project::read_project(file, &bytes) else {
+        // The owning authoring reader diagnoses these exact captured bytes.
+        // An invalid document supplies no asset-selection authority here.
+        return Ok(());
+    };
+    for source in decoded.value.sources.values() {
+        let Some(projection) = &source.projection else {
+            continue;
+        };
+        for (relative, extension, bound) in [
+            (&projection.source, "rhai", MAX_DERIVATION_BYTES),
+            (&projection.schema, "json", 256 * 1024),
+        ] {
+            if registry_evidence_authoring::project::valid_asset(relative, extension) {
+                capture_declared_asset(
+                    project,
+                    capture,
+                    Path::new(relative),
+                    Bound::Refuse(bound),
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn capture_declared_asset(
+    project: &rustix::fd::OwnedFd,
+    capture: &mut Capture,
+    relative: &Path,
+    bound: Bound,
+) -> Result<()> {
+    if relative.components().count() > MAX_SNAPSHOT_DEPTH {
+        return Err(InspectionDiagnostic::at(relative, Inspection::TreeTooLarge).into());
+    }
+    // Standard inventories and other Sources may already have captured this
+    // path. Retain their original bytes rather than reopening a selected file.
+    match fs::symlink_metadata(capture.root.join(relative)) {
+        Ok(_) => return Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error).context("inspecting a captured projection asset"),
+    }
+    let mut parent = rustix::io::dup(project).map_err(io::Error::from)?;
+    let mut parent_path = PathBuf::new();
+    let mut components = relative.components().peekable();
+    while let Some(component) = components.next() {
+        let name = component.as_os_str();
+        let path = parent_path.join(name);
+        if components.peek().is_none() {
+            return capture_snapshot_entry_at(&parent, capture, name, &path, bound);
+        }
+        let Some(directory) = open_snapshot_directory(&parent, name, &path)? else {
+            return Ok(());
+        };
+        let destination = capture.root.join(&path);
+        match fs::symlink_metadata(&destination) {
+            Ok(metadata) if metadata.is_dir() => {}
+            Ok(_) => return Err(InspectionDiagnostic::at(&path, Inspection::NotPlain).into()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                capture.record_entry(&path)?;
+                fs::DirBuilder::new().mode(0o700).create(&destination)?;
+                capture.directories.push(destination);
+            }
+            Err(error) => return Err(error).context("inspecting captured asset parent"),
+        }
+        parent = directory;
+        parent_path = path;
+    }
+    Ok(())
 }
 
 fn capture_access(project: &rustix::fd::OwnedFd, capture: &mut Capture) -> Result<()> {
@@ -593,6 +679,21 @@ mod tests {
     fn put_marker(root: &Path) {
         fs::write(root.join("evidence.yaml"), "kind: EvidenceProject\n").unwrap();
     }
+    fn put_projection_manifest(root: &Path, source: &str, schema: &str) {
+        let mut document = authored::runtime_document(
+            "evidence.yaml",
+            include_bytes!("../../../products/evidence/examples/standalone/evidence.yaml"),
+        )
+        .unwrap();
+        document["sources"]["person-record"]["projection"] = serde_json::json!({
+            "source": source, "schema": schema, "entrypoint": "project_facts"
+        });
+        fs::write(
+            root.join("evidence.yaml"),
+            serde_json::to_vec(&document).unwrap(),
+        )
+        .unwrap();
+    }
     fn is_operational(error: &anyhow::Error) -> bool {
         error
             .chain()
@@ -707,6 +808,101 @@ mod tests {
             assert_eq!(
                 fs::read_link(nested.join("linked.pem")).unwrap(),
                 Path::new("missing")
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_project_manifest_cannot_select_projection_assets() {
+        let temporary = temporary();
+        let project = temporary.path().join("project");
+        fs::create_dir_all(project.join("mappings")).unwrap();
+        let manifest = b"sources:\n  record:\n    projection:\n      source: mappings/facts.rhai\n      schema: facts.json\n";
+        fs::write(project.join("evidence.yaml"), manifest).unwrap();
+        fs::write(
+            project.join("mappings/facts.rhai"),
+            vec![b'x'; MAX_DERIVATION_BYTES as usize + 1],
+        )
+        .unwrap();
+        let snapshot = capture_project_in(&project, temporary.path()).unwrap();
+        assert!(!snapshot.root().join("mappings").exists());
+        let bytes = fs::read(snapshot.root().join("evidence.yaml")).unwrap();
+        assert_eq!(bytes, manifest);
+        let report = registry_evidence_authoring::project::read_project("evidence.yaml", &bytes)
+            .unwrap_err();
+        assert!(report
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code == "config.missing-envelope"));
+    }
+
+    #[test]
+    fn project_snapshot_captures_declared_projection_paths_without_extra_files() {
+        let temporary = temporary();
+        let project = temporary.path().join("project");
+        fs::create_dir_all(project.join("mappings/nested")).unwrap();
+        put_projection_manifest(&project, "mappings/nested/facts.rhai", "facts.json");
+        fs::write(
+            project.join("mappings/nested/facts.rhai"),
+            "fn project(x) { x }",
+        )
+        .unwrap();
+        fs::write(project.join("facts.json"), "{}").unwrap();
+        fs::write(project.join("mappings/private.txt"), "not selected").unwrap();
+        let snapshot = capture_project_in(&project, temporary.path()).unwrap();
+        assert_eq!(
+            fs::read_to_string(snapshot.root().join("mappings/nested/facts.rhai")).unwrap(),
+            "fn project(x) { x }"
+        );
+        assert_eq!(
+            fs::read_to_string(snapshot.root().join("facts.json")).unwrap(),
+            "{}"
+        );
+        assert!(!snapshot.root().join("mappings/private.txt").exists());
+    }
+
+    #[test]
+    fn declared_projection_capture_preserves_bounds_and_descriptor_custody() {
+        for boundary in ["oversize", "hardlink", "directory-link", "depth"] {
+            let temporary = temporary();
+            let project = temporary.path().join("project");
+            fs::create_dir_all(project.join("mappings")).unwrap();
+            let relative = if boundary == "depth" {
+                format!("{}facts.rhai", "nested/".repeat(MAX_SNAPSHOT_DEPTH))
+            } else {
+                "mappings/facts.rhai".to_owned()
+            };
+            put_projection_manifest(&project, &relative, "facts.json");
+            match boundary {
+                "oversize" => fs::write(
+                    project.join(&relative),
+                    vec![b'x'; MAX_DERIVATION_BYTES as usize + 1],
+                )
+                .unwrap(),
+                "hardlink" => {
+                    fs::write(
+                        temporary.path().join("original.rhai"),
+                        "fn project(x) { x }",
+                    )
+                    .unwrap();
+                    fs::hard_link(
+                        temporary.path().join("original.rhai"),
+                        project.join(&relative),
+                    )
+                    .unwrap();
+                }
+                "directory-link" => {
+                    fs::rename(project.join("mappings"), temporary.path().join("external"))
+                        .unwrap();
+                    symlink(temporary.path().join("external"), project.join("mappings")).unwrap();
+                }
+                "depth" => {}
+                _ => unreachable!(),
+            }
+            let error = capture_project_in(&project, temporary.path()).unwrap_err();
+            assert!(
+                error.downcast_ref::<InspectionDiagnostic>().is_some(),
+                "{boundary}: {error:#}"
             );
         }
     }

@@ -47,6 +47,8 @@ export const exampleFiles = [
   'standalone/functions/derive-parent-relationship.rhai',
   'standalone/functions/derive-residence-region.rhai',
   'standalone/local-target.yaml',
+  'standalone/projections/person-facts.rhai',
+  'standalone/schemas/person-facts.json',
   'standalone/serve-source.py',
 ].sort();
 

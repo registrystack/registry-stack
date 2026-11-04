@@ -709,7 +709,10 @@ test('shared Evidence source keys describe the pack binding and omit retired bra
     ['sources.*.connection', ['Named governed policy', 'runtime resource owner']],
     ['sources.*.inputs', ['Named route inputs', 'authorized selectors']],
     ['sources.*.posture', ['minimization posture', 'pinned route contract']],
-    ['sources.*.factSchema', ['Bundle fact schema', 'pinned route schema']],
+    [
+      'sources.*.factSchema',
+      ['Final facts schema', 'pinned source schema', 'governed projection'],
+    ],
   ]) {
     const description = byPath.get(keyPath)?.description ?? '';
     for (const part of expectedParts)
@@ -723,6 +726,9 @@ test('shared Evidence source keys describe the pack binding and omit retired bra
     'sources.*.inputs.*.selector.role',
     'sources.*.inputs.*.selector.profile',
     'sources.*.inputs.*.selector.field',
+    'sources.*.projection.script',
+    'sources.*.projection.entrypoint',
+    'sources.*.projection.digest',
   ]) {
     assert.ok(byPath.has(keyPath), keyPath + ' is missing');
   }

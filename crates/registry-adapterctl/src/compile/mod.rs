@@ -164,6 +164,7 @@ pub(crate) fn run(args: &CompileArgs) -> Result<CompileRun, CompileFailure> {
     }
     if !report.has_errors() {
         check::verify_consultation_transforms(&project, &project_path, &mut report);
+        check::verify_consultation_inputs(&project, &pack, &project_path, &mut report);
     }
     if report.has_errors() {
         return Err(CompileFailure::Refused {

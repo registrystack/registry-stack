@@ -1495,6 +1495,7 @@ name = "registry-evidence-authoring"
 version = "0.45.1"
 dependencies = [
  "anyhow",
+ "jsonschema",
  "registry-platform-yaml",
  "rhai",
  "serde",

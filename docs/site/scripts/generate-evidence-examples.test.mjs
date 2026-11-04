@@ -103,6 +103,8 @@ test('downloaded projects expose pack acquisition without retired source scripts
   for (const file of retiredExamples) assert.ok(!exampleFiles.includes(file), file);
   for (const file of retiredRecipes) assert.ok(!sourceRecipeFiles.includes(file), file);
   assert.ok(exampleFiles.includes('standalone/adapter-packs/synthetic-register/scripts/lookup.rhai'));
+  assert.ok(exampleFiles.includes('standalone/projections/person-facts.rhai'));
+  assert.ok(exampleFiles.includes('standalone/schemas/person-facts.json'));
   for (const recipe of ['dhis2-tracker', 'opencrvs-event-search']) {
     assert.ok(sourceRecipeFiles.includes(`${recipe}/adapter-packs/${recipe}/scripts/source-recipe.rhai`));
     assert.ok(sourceRecipeFiles.includes(`${recipe}/fixture-validation/adapter-packs/validation-seed/scripts/lookup.rhai`));
