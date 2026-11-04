@@ -16,8 +16,9 @@ this reusable source-identity check.
 It assumes the selected DHIS2 deployment supports:
 
 - `GET /api/tracker/trackedEntities`;
-- the `program`, `orgUnits`, `trackedEntities`, `fields`, `pageSize`, `page`, and
-  `totalPages` query parameters as used in Tracker 2.43;
+- the `program`, `orgUnits`, `orgUnitMode` (sent as `SELECTED`),
+  `trackedEntities`, `fields`, `pageSize`, `page`, and `totalPages` query
+  parameters as used in Tracker 2.43;
 - the projected `pager` and `trackedEntities[].attributes[]` response shape;
 - exact tracked-entity identifiers and the configured program, organisation
   unit, and status-attribute UIDs.

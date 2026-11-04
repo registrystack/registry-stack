@@ -664,7 +664,7 @@ unchanged.
 | `runtime secret initialization failed` | `evidence.deployment.secret-unavailable` |
 | `runtime audit initialization failed: ...` | `evidence.deployment.audit-refused` (the audit block), `evidence.deployment.audit-unavailable` (key, file, or storage) |
 | `runtime signing initialization failed: ...` | `evidence.deployment.signing-unavailable` (key or provider not available), `evidence.deployment.signing-refused` (a key that is not the governed one) |
-| `runtime source initialization failed` | `evidence.deployment.source-unavailable` |
+| `source pack or connection binding failed compilation: ...` | `evidence.deployment.refused` (with `--require-runtime-dependencies`) |
 | `runtime rate-limit initialization failed` | `evidence.deployment.rate-limit-unavailable` |
 | `runtime authentication initialization failed: ...` | `evidence.deployment.refused` |
 | `a required runtime dependency is unavailable` | `evidence.deployment.dependency-unavailable` |

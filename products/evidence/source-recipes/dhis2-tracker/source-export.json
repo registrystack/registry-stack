@@ -9,7 +9,7 @@
     "validation": "checked Adapter pack closure and local synthetic fixture replay"
   },
   "artifacts": [
-    {"path": "adapter-packs/dhis2-tracker/pack.yaml", "digest": "sha256:5311411ce2f4530b09cff37aff9c3d0006e7848ecb9965d6c2236b9b9cdfe5b6"},
+    {"path": "adapter-packs/dhis2-tracker/pack.yaml", "digest": "sha256:9e4140f5477edc671bc49635d113b4e24105ae5235d449a28c52553bed2c9dcd"},
     {"path": "adapter-packs/dhis2-tracker/schemas/facts.json", "digest": "sha256:75ae709dcfdff5c41b9ce83fc645b0388c879e4f1bae7b496d81906b1637abd8"},
     {"path": "adapter-packs/dhis2-tracker/schemas/inputs.json", "digest": "sha256:a2d205510180a304f7f30b2139a3f7d3ff7f7bb3be107fd28230c328988d85ab"},
     {"path": "adapter-packs/dhis2-tracker/schemas/provider-response.json", "digest": "sha256:c69e7d62f3bc76d3558a06f91902a4dd7bb4e3ad8312f59a442aa342acad12f3"},
