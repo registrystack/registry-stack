@@ -4258,7 +4258,7 @@
       },
       "artifact": {
         "path": "products/adapter/schemas/pack.v1alpha1.schema.json",
-        "sha256": "6031baaabca785fe6e0adfed4336fa555839e18ae1a3136cf3e895ad5e6f6dcb",
+        "sha256": "4cdeab4780b05f2a8a001e94d5caf247dfe899b418e8b46791bdaa19fecd58d3",
         "mediaType": "application/schema+json"
       }
     },
@@ -4294,7 +4294,7 @@
       },
       "artifact": {
         "path": "products/adapter/schemas/project.v1alpha1.schema.json",
-        "sha256": "2a31e088e66073cf94b5d3769aebbeef3552cafa59c2281405be83ccd5390435",
+        "sha256": "87c1255f47318157708cb8bdd5c377390a93c96b4c03e4b217a387b2668ebc7f",
         "mediaType": "application/schema+json"
       }
     },
@@ -5082,11 +5082,11 @@
       "description": "Evidence frozen Version 1 contract and configuration schemas, written as YAML.",
       "source": {
         "path": "products/evidence/contracts/bundle.schema.yaml",
-        "sha256": "2847a56eda9c8b838d28fde619853c36851acc57b094b74ec2665150f1ace8d4"
+        "sha256": "e880da093ee3d0b6200fc8963109746765971ad1747dd3ea29edb390328ab36a"
       },
       "artifact": {
         "path": "products/evidence/contracts/bundle.schema.yaml",
-        "sha256": "2847a56eda9c8b838d28fde619853c36851acc57b094b74ec2665150f1ace8d4",
+        "sha256": "e880da093ee3d0b6200fc8963109746765971ad1747dd3ea29edb390328ab36a",
         "mediaType": "application/yaml"
       }
     },
@@ -5230,7 +5230,7 @@
       },
       "artifact": {
         "path": "crates/registry-evidencectl/schemas/authoring/project.schema.json",
-        "sha256": "62c45846105e0231417e0450568a899ea05f78f41250b450353c074407cc5f26",
+        "sha256": "3acebd18796613bcbce03cf4f43429a55acfe78124216a319c233abe5ba87b51",
         "mediaType": "application/schema+json"
       }
     },
