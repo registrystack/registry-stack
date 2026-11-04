@@ -113,6 +113,12 @@ pub const BREG_BODY_CHANGED: &str = "adapter.job.breg-body-changed";
 /// position unchanged rather than panicking or wrapping the counter.
 pub const DELIVERY_ATTEMPT_EXHAUSTED: &str = "adapter.job.delivery-attempt-exhausted";
 
+/// A declared dotted projection field misses as a path while the item value
+/// carries a flat member of that exact name. The pass stops before staging
+/// any item of the page, with the position unchanged; the fix is to group
+/// the columns into a nested object in the route.
+pub const PROJECTION_FLAT_DOTTED_NAME: &str = "adapter.job.projection-flat-dotted-name";
+
 /// The governed file/SFTP item identity cannot be adopted over non-empty
 /// legacy state or changed in place. The operator accepts a change with
 /// `adapter-job rebind-identity`.
@@ -359,6 +365,26 @@ pub async fn run_pass(
     let source_receipt = page_result.source_receipt;
     let page = page_result.page;
     report.items_read = page.items.len() as u32;
+    // A flat dotted member would project as null; refuse the page before
+    // any item is staged, so nothing is delivered without the field.
+    if page
+        .items
+        .iter()
+        .any(|item| projection::flat_dotted_member(&job.projection, &item.value).is_some())
+    {
+        return finish_stopped(
+            db,
+            job_id,
+            &options,
+            lease_token,
+            report,
+            StopReason::PageFault {
+                code: PROJECTION_FLAT_DOTTED_NAME.to_owned(),
+                record: None,
+            },
+        )
+        .await;
+    }
     // Steps 3 to 6: per item, compare, stage, deliver, record.
     let mut consecutive = ConsecutiveRefusals::new(options.refusal_limit);
     for item in &page.items {

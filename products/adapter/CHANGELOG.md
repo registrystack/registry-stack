@@ -177,6 +177,12 @@
 - A `writable-read` binding that no Write Update names as its companion read
   is refused by `adapterctl check` and at load, naming the binding, instead of
   stopping the Adapter.
+- A job pass stops as the new `adapter.job.projection-flat-dotted-name`
+  when a declared dotted projection field (`household.size`) misses as a
+  path but the row carries a flat member of exactly that name, as a CSV
+  column or SQL alias can. The projection handed off `null` for it. The
+  stop comes before any item of the page is staged, and its next step says
+  to group the columns into a nested object in the route.
 - BREAKING: a local file job source must declare how it knows a file is
   complete, so a read never takes a file the producer is still writing.
   `adapterctl job check` and `adapter-job` startup refuse a source with no
