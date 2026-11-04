@@ -1442,6 +1442,50 @@ fn a_fresh_local_target_journey_checks_and_explains_complete_normalized_grants()
     assert!(stdout_of(&checked).contains("13 cases"));
 }
 
+/// `init` declares the connections its Sources reference in the project's
+/// local-target.yaml, and a target made for the same project must declare them
+/// too, or packaging it refuses every Source.
+#[test]
+fn a_local_target_carries_the_connections_the_project_declares() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = fs::canonicalize(dir.path()).unwrap();
+    let project = root.join("project");
+    let created = evidencectl()
+        .args(["init"])
+        .arg(&project)
+        .args(["--transport", "sqlite-extract", "--profile", "local"])
+        .output()
+        .expect("create SQLite starter");
+    assert!(created.status.success(), "{}", stderr_of(&created));
+    let declared = yaml_value(&project.join("local-target.yaml"))["connections"].clone();
+    assert!(
+        declared.as_object().is_some_and(|map| !map.is_empty()),
+        "the starter declares a connection for its Source: {declared}"
+    );
+
+    let target = project.join("targets/local");
+    let created = evidencectl()
+        .args(["target", "new"])
+        .arg(&target)
+        .arg("--project")
+        .arg(&project)
+        .arg("--local")
+        .output()
+        .expect("create the local target");
+    assert!(created.status.success(), "{}", stderr_of(&created));
+
+    assert_eq!(
+        yaml_value(&target.join("target.yaml"))["connections"],
+        declared,
+        "the target declares the connections the project declares"
+    );
+    assert!(
+        stdout_of(&created).contains("starter-source"),
+        "the command says which connections it carried over: {}",
+        stdout_of(&created)
+    );
+}
+
 #[test]
 fn local_target_generation_is_idempotent_and_refuses_changed_authored_settings() {
     let dir = tempfile::tempdir().expect("tempdir");
