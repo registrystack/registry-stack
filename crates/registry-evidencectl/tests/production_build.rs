@@ -569,6 +569,29 @@ fn provisioning_reports_the_bundle_and_runtime_secret_union_once() {
     }
 }
 
+/// A relying party pins each requirement's configuration revision. The JSON
+/// package report carries the revisions the delegated bundle check computed,
+/// so a caller reads them from this public report instead of a hidden command.
+#[test]
+fn package_json_report_carries_each_requirement_configuration_revision() {
+    let fixture = Fixture::new();
+
+    let output = fixture.package("json");
+
+    assert_success(&output, "package report with requirement revisions");
+    assert_value_free(&output);
+    let report: Value = serde_json::from_slice(&output.stdout).expect("JSON report");
+    assert_eq!(
+        report["requirements"],
+        json!([{
+            "id": "urn:example:requirements:allowed:v1",
+            "configurationRevision": format!("sha256:{}", "b".repeat(64)),
+        }]),
+        "the package report must carry the checked requirement revisions: {report}"
+    );
+    fixture.assert_no_staging_residue();
+}
+
 #[test]
 fn target_check_and_package_refuse_runtime_mismatches_at_the_authored_location() {
     for command in ["check", "package"] {

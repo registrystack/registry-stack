@@ -14,7 +14,7 @@ use std::{
 };
 
 use anyhow::{anyhow, bail, Context as _, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::{authoring, evidence_binary, source_import::ProjectLock, OutputFormat};
@@ -124,7 +124,7 @@ fn run_inner(
         interruption,
         args.revision.as_deref(),
     );
-    let (package_digest, secret_references) = match result {
+    let (checked, secret_references) = match result {
         Ok(result) => result,
         Err(error) => {
             close_candidate_staging(staging)?;
@@ -148,7 +148,8 @@ fn run_inner(
                 "package": args.output.join("bundle"),
                 "runtime": args.output.join("runtime.yaml"),
                 "authority": args.output.join("compiled-authority.yaml"),
-                "packageDigest": package_digest,
+                "packageDigest": checked.package_digest,
+                "requirements": checked.requirements,
                 "revision": args.revision,
                 "requiredSecrets": secret_references,
                 "proofBoundary": "offline deployment candidate compilation and fixture validation"
@@ -156,7 +157,7 @@ fn run_inner(
         ))?;
         return Ok(ExitCode::SUCCESS);
     }
-    println!("Package digest: {package_digest}");
+    println!("Package digest: {}", checked.package_digest);
     if let Some(revision) = &args.revision {
         println!("Revision: {revision}");
     }
@@ -441,12 +442,12 @@ fn prepare_candidate(
     evidence_bin: &Path,
     interruption: &BuildInterruption,
     revision: Option<&str>,
-) -> Result<(String, Vec<String>)> {
+) -> Result<(BundleCheckReport, Vec<String>)> {
     let compiled = compile_with_target(project, target, staging_root, evidence_bin, revision)?;
     interruption.check()?;
     reject_review_markers(&compiled.bundle_path)?;
     reject_review_markers_in_bytes(&target.runtime, "runtime.yaml")?;
-    let package_digest = run_bundle_check(
+    let checked = run_bundle_check_report(
         evidence_bin,
         &compiled.bundle_path,
         &compiled.runtime_path,
@@ -470,7 +471,7 @@ fn prepare_candidate(
     // that check at its authored location first.
     let runtime = runtime_value(&target.runtime).map_err(anyhow::Error::new)?;
     let secret_references = secret_references(&json!([compiled.bundle, runtime]))?;
-    Ok((package_digest, secret_references))
+    Ok((checked, secret_references))
 }
 
 /// Refuse a package whose deployment runtime would load a package
@@ -498,27 +499,6 @@ fn verify_stable_package_root(runtime_bytes: &[u8], candidate: &Path) -> Result<
         message: "deployment runtime package.root is inside the output directory of this package run; set it to a stable installed package path outside that directory".to_owned(),
     }
     .into())
-}
-
-fn run_bundle_check(
-    evidence_bin: &Path,
-    bundle: &Path,
-    runtime: &Path,
-    target: Option<&Path>,
-    project: &Path,
-    fixtures: &[String],
-    interruption: &BuildInterruption,
-) -> Result<String> {
-    Ok(run_bundle_check_report(
-        evidence_bin,
-        bundle,
-        runtime,
-        target,
-        project,
-        fixtures,
-        interruption,
-    )?
-    .package_digest)
 }
 
 fn run_bundle_check_report(
@@ -569,7 +549,9 @@ pub(crate) struct BundleCheckReport {
     pub(crate) requirements: Vec<BundleCheckRequirement>,
 }
 
-#[derive(Debug, Deserialize)]
+/// One requirement's configuration revision, as the bundle check computed it
+/// and as the JSON package report carries it.
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct BundleCheckRequirement {
     pub(crate) id: String,
