@@ -98,8 +98,9 @@ cargo run --locked -p registry-adapterctl -- mapping preview \
   --input products/adapter/examples/kobotoolbox-job/preview/missing-respondent.json
 ```
 
-The first two print the destination input; the third prints a categorical
-refusal. Preview shows no field-level runtime errors and does not run the
+The first two are accepted (`--format json` shows the destination input); the
+third is refused with `mapping.missing respondentName`, naming the field and
+never the value. Preview does not run the
 job, a source, or a destination.
 
 The generated script replaces a handwritten one that carried this note: the
