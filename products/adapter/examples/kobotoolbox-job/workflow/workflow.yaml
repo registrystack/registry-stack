@@ -217,7 +217,7 @@ workflow:
       output: {type: step, step: await-resolved-review}
     unresolved-reviewed:
       type: finish
-      outcome: revised-reviewed
+      outcome: unresolved-reviewed
       output: {type: step, step: await-unresolved-review}
     returned-reviewed:
       type: finish
@@ -230,5 +230,6 @@ workflow:
     proposal-cancelled: {type: 'null'}
     proposal-timeout: {type: 'null'}
     revised-reviewed: {completionOutput: {operation: submit-review, name: result}}
+    unresolved-reviewed: {completionOutput: {operation: submit-review, name: result}}
     returned-reviewed: {completionOutput: {operation: submit-review, name: result}}
     review-timeout: {type: 'null'}

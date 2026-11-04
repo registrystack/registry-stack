@@ -1320,7 +1320,7 @@ async fn postgres_source_reaches_native_coordinator_and_reviews_a_revised_row() 
         &issuer,
         &coordinator.origin,
         &no_prior_run,
-        "revised-reviewed",
+        "unresolved-reviewed",
     )
     .await;
     assert_revised_run_used_unresolved_review(&issuer, &coordinator.origin, &no_prior_run).await;
