@@ -499,8 +499,8 @@ fn rewrite_pins(
         // The digest token must be the whole unquoted value; a trailing
         // comment survives the rewrite.
         let (current, comment) = match value.split_once(" #") {
-            Some((value, comment)) => (value, Some(comment)),
-            None => (value, None),
+            Some((value, comment)) => (value.trim_end(), Some(comment)),
+            None => (value.trim_end(), None),
         };
         if !is_bare_sha256_uri(current) {
             faults.push(pointer);
@@ -599,5 +599,80 @@ mod tests {
             Err(JobCheckFailure::Refused { diagnostics }) => panic!("{diagnostics:?}"),
         };
         assert_eq!(run.files_checked, 5);
+    }
+
+    const OLD: &str = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+    const NEW: &str = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
+
+    fn rewrite(text: &str, pack: bool) -> Result<Rewritten, Vec<&'static str>> {
+        let digest = Digest::new(NEW).expect("digest");
+        rewrite_pins(text, Some(&digest), pack.then_some(&digest))
+    }
+
+    /// CRLF line endings and a trailing comment survive the rewrite.
+    #[test]
+    fn the_rewriter_keeps_crlf_and_trailing_comments() {
+        let text = format!(
+            "destination:\r\n  mapping:\r\n    digest: {OLD} # pinned\r\n    script: m.rhai\r\n"
+        );
+        let rewritten = rewrite(&text, false).expect("rewrites");
+        assert_eq!(rewritten.text, text.replace(OLD, NEW));
+        assert_eq!(rewritten.mapping, Some(PinStatus::Updated));
+    }
+
+    /// Indentation width is not assumed.
+    #[test]
+    fn the_rewriter_follows_four_space_indentation() {
+        let text = format!(
+            "source:\n    pack:\n        id: p\n        digest: {OLD}\ndestination:\n    mapping:\n        digest: {OLD}\n"
+        );
+        let rewritten = rewrite(&text, true).expect("rewrites");
+        assert_eq!(rewritten.text, text.replace(OLD, NEW));
+        assert_eq!(rewritten.pack, Some(PinStatus::Updated));
+    }
+
+    /// Indentless sequences elsewhere in the job do not close the sections
+    /// that hold the pins.
+    #[test]
+    fn the_rewriter_is_not_confused_by_indentless_sequences() {
+        let text = format!(
+            "projection:\n  fields:\n  - a\n  - b\ntriggers:\n- kind: schedule\n  every: 1h\ndestination:\n  mapping:\n    digest: {OLD}\n"
+        );
+        let rewritten = rewrite(&text, false).expect("rewrites");
+        assert_eq!(rewritten.text, text.replace(OLD, NEW));
+    }
+
+    /// A flow-form pin is refused rather than left behind.
+    #[test]
+    fn the_rewriter_refuses_a_flow_form_pin() {
+        let text = format!(
+            "source:\n  pack: {{id: p, digest: {OLD}}}\ndestination:\n  mapping:\n    digest: {OLD}\n"
+        );
+        assert_eq!(rewrite(&text, true).err(), Some(vec![PACK_POINTER]));
+    }
+
+    /// Text inside a block scalar that looks like a pin is not a pin.
+    #[test]
+    fn the_rewriter_ignores_pin_lookalikes_in_block_scalars() {
+        let text = format!(
+            "job:\n  notes: |\n    destination:\n      mapping:\n        digest: {OLD}\ndestination:\n  mapping:\n    digest: {OLD}\n"
+        );
+        let rewritten = rewrite(&text, false).expect("rewrites");
+        let expected = format!(
+            "job:\n  notes: |\n    destination:\n      mapping:\n        digest: {OLD}\ndestination:\n  mapping:\n    digest: {NEW}\n"
+        );
+        assert_eq!(rewritten.text, expected);
+    }
+
+    /// Trailing spaces after the digest are valid YAML and do not block
+    /// the lock.
+    #[test]
+    fn the_rewriter_accepts_trailing_spaces_after_the_digest() {
+        let text = format!("destination:\n  mapping:\n    digest: {OLD}   \n");
+        let rewritten = rewrite(&text, false).expect("rewrites");
+        assert_eq!(
+            rewritten.text,
+            format!("destination:\n  mapping:\n    digest: {NEW}\n")
+        );
     }
 }

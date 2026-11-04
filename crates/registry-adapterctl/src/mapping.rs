@@ -786,11 +786,14 @@ fn lexical(path: &Path) -> PathBuf {
     let mut resolved = PathBuf::new();
     for component in path.components() {
         match component {
-            Component::ParentDir => {
-                if !resolved.pop() {
-                    resolved.push("..");
+            Component::ParentDir => match resolved.components().next_back() {
+                Some(Component::Normal(_)) => {
+                    resolved.pop();
                 }
-            }
+                // `..` at the root is the root.
+                Some(Component::RootDir | Component::Prefix(_)) => {}
+                _ => resolved.push(".."),
+            },
             Component::CurDir => {}
             other => resolved.push(other.as_os_str()),
         }
@@ -885,5 +888,29 @@ pub(crate) fn script_drift(
         Ok(regenerated) if regenerated == text => None,
         Ok(_) => drift("the script bytes differ from what the model generates"),
         Err(_) => drift("the model no longer generates a script"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::lexical;
+    use std::path::{Path, PathBuf};
+
+    /// A `..` cancels only a named component, never an earlier `..`, so two
+    /// different files above the working directory stay different.
+    #[test]
+    fn lexical_keeps_leading_parent_components() {
+        assert_eq!(
+            lexical(Path::new("../../m.mapping.yaml")),
+            PathBuf::from("../../m.mapping.yaml")
+        );
+        assert_eq!(
+            lexical(Path::new("../../s/../../../m.mapping.yaml")),
+            PathBuf::from("../../../../m.mapping.yaml")
+        );
+        assert_eq!(
+            lexical(Path::new("a/./b/../m.mapping.yaml")),
+            PathBuf::from("a/m.mapping.yaml")
+        );
     }
 }
