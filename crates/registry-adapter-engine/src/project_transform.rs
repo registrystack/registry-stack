@@ -40,6 +40,16 @@ pub enum ProjectTransformError {
     OutputInvalid,
 }
 
+/// A preview refusal: the categorical error and, when the script failed, the
+/// innermost string it threw.
+#[derive(Debug)]
+pub struct PreviewRefusal {
+    pub error: ProjectTransformError,
+    /// Script-authored text that may carry source values. An authoring tool
+    /// shows it only after matching it against a shape it knows is value-free.
+    pub thrown: Option<String>,
+}
+
 /// One compiled binding transformation and its exact selected public schema.
 pub struct CompiledProjectTransform {
     transform: BindingTransform,
@@ -116,27 +126,50 @@ impl CompiledProjectTransform {
         source: &Value,
         deadline: Instant,
     ) -> Result<Value, ProjectTransformError> {
+        self.apply_for_preview(code_maps, source, deadline)
+            .map_err(|refusal| refusal.error)
+    }
+
+    /// `apply` for authoring preview: a script failure also returns the
+    /// innermost string the script threw. Runtime hosts use `apply`, whose
+    /// refusal stays categorical and value-free.
+    pub fn apply_for_preview(
+        &self,
+        code_maps: &CodeMaps,
+        source: &Value,
+        deadline: Instant,
+    ) -> Result<Value, PreviewRefusal> {
+        let refuse = |error| PreviewRefusal {
+            error,
+            thrown: None,
+        };
         if Instant::now() >= deadline {
-            return Err(ProjectTransformError::Budget);
+            return Err(refuse(ProjectTransformError::Budget));
         }
         let output = self
             .scripts
             .call_project_transform(code_maps, &self.script, &self.transform, source, deadline)
-            .map_err(script_failure)?;
+            .map_err(|(failure, thrown)| {
+                let error = script_failure(failure);
+                PreviewRefusal {
+                    error,
+                    thrown: thrown.filter(|_| error == ProjectTransformError::Failed),
+                }
+            })?;
         if Instant::now() > deadline {
-            return Err(ProjectTransformError::Budget);
+            return Err(refuse(ProjectTransformError::Budget));
         }
         if serde_json::to_vec(&output).map_or(true, |bytes| {
             bytes.len() > crate::exchange::MAXIMUM_EXCHANGE_BYTES
         }) {
-            return Err(ProjectTransformError::Budget);
+            return Err(refuse(ProjectTransformError::Budget));
         }
         let valid = self.schema.validates(&output);
         if Instant::now() > deadline {
-            return Err(ProjectTransformError::Budget);
+            return Err(refuse(ProjectTransformError::Budget));
         }
         if !valid {
-            return Err(ProjectTransformError::OutputInvalid);
+            return Err(refuse(ProjectTransformError::OutputInvalid));
         }
         Ok(output)
     }

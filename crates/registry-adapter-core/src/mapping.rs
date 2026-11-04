@@ -324,7 +324,9 @@ impl<'de> Deserialize<'de> for MappingConstant {
 pub struct Assignment {
     /// The dotted path of the target property.
     pub target: String,
-    /// The selector read from the source root.
+    /// The selector read from the source root: dotted names or "quoted"
+    /// keys, each optionally filtered with `[key = "value"]`. A key that
+    /// holds a dot is quoted, for example `'"household.household_size"'`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub from: Option<String>,
     /// A constant value instead of a selector.
@@ -898,6 +900,7 @@ pub fn check_mapping(mapping: &AdapterMapping, target_schema: &Value) -> Vec<Dia
             index,
             assignment,
             target_schema,
+            &mapping.mapping.target_schema,
             root_ok,
             &mut findings,
         ));
@@ -1003,6 +1006,7 @@ fn check_assignment(
     index: usize,
     assignment: &Assignment,
     schema: &Value,
+    schema_file: &str,
     root_ok: bool,
     findings: &mut Vec<Diagnostic>,
 ) -> Option<Vec<String>> {
@@ -1086,7 +1090,7 @@ fn check_assignment(
     };
 
     if root_ok {
-        check_against_schema(index, assignment, &target, schema, findings);
+        check_against_schema(index, assignment, &target, schema, schema_file, findings);
     }
     Some(target)
 }
@@ -1096,6 +1100,7 @@ fn check_against_schema(
     assignment: &Assignment,
     target: &[String],
     schema: &Value,
+    schema_file: &str,
     findings: &mut Vec<Diagnostic>,
 ) {
     let at = |member: &str| format!("/assignments/{index}/{member}");
@@ -1105,7 +1110,10 @@ fn check_against_schema(
             findings.push(finding(
                 MappingCode::TargetUnknown,
                 at("target"),
-                "the target path names no property of the target schema".to_string(),
+                format!(
+                    "the target path {} names no property of the target schema {schema_file}",
+                    assignment.target
+                ),
                 "Check the path against the schema's properties.",
             ));
             return;
@@ -2066,6 +2074,15 @@ mod tests {
             MappingCode::TargetUnknown,
             "/assignments/4/target"
         ));
+        let message = &findings
+            .iter()
+            .find(|finding| finding.path == "/assignments/3/target")
+            .expect("the unknown target")
+            .message;
+        assert!(
+            message.contains("missing") && message.contains("schemas/person.schema.json"),
+            "{message}"
+        );
     }
 
     #[test]

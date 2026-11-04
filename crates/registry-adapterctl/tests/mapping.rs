@@ -201,6 +201,62 @@ fn check_refuses_an_assignment_the_schema_does_not_declare() {
         "{report}"
     );
     assert!(!codes(&report).is_empty());
+    let unknown = report["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["code"] == "adapter.mapping.target-unknown")
+        .expect("a target-unknown finding");
+    let message = unknown["message"].as_str().unwrap();
+    assert!(
+        message.contains("household.sizes") && message.contains("schemas/person.schema.json"),
+        "{message}"
+    );
+}
+
+/// `mapping check` applies the acceptance the runtime applies when it
+/// compiles the script, so a schema preview would refuse fails here first.
+#[test]
+fn check_refuses_a_target_schema_the_runtime_would_not_compile() {
+    for (edit, rule, action) in [
+        (
+            (
+                "https://registry.example/schemas/person/1/schema.json",
+                "urn:person",
+            ),
+            "versioned absolute HTTPS $id",
+            "https://example.org/schemas/<name>/1/schema.json",
+        ),
+        (
+            (
+                "\"required\": [\"source\"],\n  \"additionalProperties\": false",
+                "\"required\": [\"source\"]",
+            ),
+            "closed object",
+            "\"additionalProperties\": false",
+        ),
+    ] {
+        let root = workspace();
+        let schema = root.path().join("schemas/person.schema.json");
+        let text = std::fs::read_to_string(&schema).unwrap();
+        assert!(text.contains(edit.0), "{}", edit.0);
+        std::fs::write(&schema, text.replace(edit.0, edit.1)).unwrap();
+        let model = path(&root, "person.mapping.yaml");
+        let (exit, report, _) = run_json(&["mapping", "check", &model]);
+        assert_refused(exit, &report, "adapterctl.mapping-schema-not-public");
+        let finding = &report["diagnostics"][0];
+        assert_eq!(finding["path"], "/mapping/targetSchema", "{report}");
+        let message = finding["message"].as_str().unwrap();
+        assert!(
+            message.contains("schemas/person.schema.json") && message.contains(rule),
+            "{message}"
+        );
+        let next = finding["suggestedAction"].as_str().unwrap();
+        assert!(next.contains(action), "{next}");
+        let (exit, report, _) = run_json(&["mapping", "generate", &model]);
+        assert_refused(exit, &report, "adapterctl.mapping-schema-not-public");
+        assert!(!root.path().join("scripts").exists());
+    }
 }
 
 #[test]
@@ -270,15 +326,51 @@ fn generate_for_ingestion_points_at_the_job_digest() {
     assert_eq!(exit, ExitCode::SUCCESS, "{report}");
     let next = report["nextStep"].as_str().unwrap();
     assert!(next.contains("adapterctl job lock"), "{next}");
-    assert!(
-        next.contains(report["scriptDigest"].as_str().unwrap()),
-        "{next}"
-    );
+    assert!(!next.contains("sha256:"), "{next}");
+    assert!(report["scriptDigest"]
+        .as_str()
+        .unwrap()
+        .starts_with("sha256:"));
     let script = std::fs::read_to_string(root.path().join("scripts/ingest.rhai")).unwrap();
     assert!(
         script.contains("fn ingest_person_input(source)"),
         "{script}"
     );
+}
+
+/// The human form says what was written and the one next step; the digests
+/// and the existed flag stay in `--format json`.
+#[test]
+fn generate_human_output_is_the_verdict_and_one_next_step() {
+    let root = workspace();
+    for (model, next) in [
+        ("person.mapping.yaml", "Next: Run adapterctl project lock"),
+        ("ingest.mapping.yaml", "Next: Run adapterctl job lock"),
+    ] {
+        let (exit, text) = run_human(&["mapping", "generate", &path(&root, model)]);
+        assert_eq!(exit, ExitCode::SUCCESS, "{text}");
+        assert!(text.contains("Generated script written."), "{text}");
+        assert_eq!(text.matches("Next: ").count(), 1, "{text}");
+        assert!(text.contains(next), "{text}");
+        for absent in [
+            "modelDigest",
+            "scriptDigest",
+            "existed",
+            "nextStep",
+            "sha256:",
+        ] {
+            assert!(!text.contains(absent), "{absent}: {text}");
+        }
+    }
+}
+
+#[test]
+fn generate_has_no_deny_warnings_flag() {
+    let root = workspace();
+    let model = path(&root, "person.mapping.yaml");
+    let (exit, _, _) = run_json(&["mapping", "generate", &model, "--deny-warnings"]);
+    assert_eq!(exit, ExitCode::from(2));
+    assert!(!root.path().join("scripts").exists());
 }
 
 #[test]
@@ -371,11 +463,126 @@ fn preview_reports_an_accepted_and_a_refused_consultation_input() {
         json!({"source": {"id": "501", "kind": "person"}, "household": {"size": 5}})
     );
     assert_eq!(report["results"][1]["outcome"], "refused");
-    assert_eq!(report["results"][1]["failure"], "failed");
+    assert_eq!(report["results"][1]["failure"], "mapping.missing");
+    assert_eq!(report["results"][1]["field"], "source.id");
     assert!(
         !root.path().join("scripts").exists(),
         "preview writes nothing"
     );
+}
+
+/// Each refusal the generated script raises names its category and the
+/// target field, never the source value.
+#[test]
+fn preview_names_the_failing_field_without_the_value() {
+    let root = workspace();
+    let model = path(&root, "person.mapping.yaml");
+    let text = std::fs::read_to_string(&model).unwrap();
+    let keyed = root.path().join("keyed.mapping.yaml");
+    std::fs::write(
+        &keyed,
+        text.replace("from: size", "from: 'items[k = \"size\"].v'")
+            .replace("scripts/person.rhai", "scripts/keyed.rhai"),
+    )
+    .unwrap();
+    let missing = write_input(&root, "missing.json", r#"{"size": "SECRET-ONE"}"#);
+    let conversion = write_input(
+        &root,
+        "conversion.json",
+        r#"{"id": "1", "size": "SECRET-TWO"}"#,
+    );
+    let duplicate = write_input(
+        &root,
+        "duplicate.json",
+        r#"{"id": "1", "items": [{"k": "size", "v": "SECRET-THREE"}, {"k": "size", "v": "4"}]}"#,
+    );
+    let (exit, report, _) = run_json(&[
+        "mapping",
+        "preview",
+        &model,
+        "--input",
+        &missing,
+        "--input",
+        &conversion,
+    ]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    let named = |report: &Value, index: usize| {
+        (
+            report["results"][index]["failure"]
+                .as_str()
+                .unwrap()
+                .to_owned(),
+            report["results"][index]["field"]
+                .as_str()
+                .unwrap()
+                .to_owned(),
+        )
+    };
+    assert_eq!(
+        named(&report, 0),
+        ("mapping.missing".into(), "source.id".into())
+    );
+    assert_eq!(
+        named(&report, 1),
+        ("mapping.conversion".into(), "household.size".into())
+    );
+    let (_, human) = run_human(&[
+        "mapping",
+        "preview",
+        &model,
+        "--input",
+        &missing,
+        "--input",
+        &conversion,
+    ]);
+    let keyed = keyed.to_str().unwrap();
+    let (exit, keyed_report, _) = run_json(&["mapping", "preview", keyed, "--input", &duplicate]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{keyed_report}");
+    assert_eq!(
+        named(&keyed_report, 0),
+        ("mapping.duplicate".into(), "household.size".into())
+    );
+    let printed = format!("{report}{keyed_report}{human}");
+    assert!(!printed.contains("SECRET"), "{printed}");
+}
+
+/// The human form is one line per input: its outcome, and for a refusal the
+/// failure and the field it names.
+#[test]
+fn preview_human_output_is_one_line_per_input() {
+    let root = workspace();
+    let good = write_input(&root, "good.json", r#"{"id": "501", "size": "5"}"#);
+    let bad = write_input(&root, "bad.json", r#"{"size": "5"}"#);
+    let broken = write_input(&root, "broken.json", "{ not: [valid");
+    let (exit, text) = run_human(&[
+        "mapping",
+        "preview",
+        &path(&root, "person.mapping.yaml"),
+        "--input",
+        &good,
+        "--input",
+        &bad,
+        "--input",
+        &broken,
+    ]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{text}");
+    assert!(text.contains(&format!("{good}  accepted\n")), "{text}");
+    assert!(
+        text.contains(&format!("{bad}  refused  mapping.missing source.id\n")),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!("{broken}  refused  input-unreadable\n")),
+        "{text}"
+    );
+    assert!(!text.contains("results:"), "{text}");
+}
+
+#[test]
+fn preview_help_says_the_script_is_generated_in_memory() {
+    let (exit, text) = run_human(&["mapping", "preview", "--help"]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{text}");
+    assert!(text.contains("in memory"), "{text}");
 }
 
 #[test]
@@ -566,6 +773,13 @@ fn check_warns_when_a_generated_script_is_hand_edited() {
     assert!(
         message.contains("gen.rhai") && message.contains("gen.mapping.yaml"),
         "{message}"
+    );
+    let next = warnings[0]["suggestedAction"].as_str().unwrap();
+    assert!(
+        next.contains("model changed since generation")
+            && next.contains("hand-edited")
+            && next.contains("adapterctl mapping generate"),
+        "{next}"
     );
     let (exit, report, _) = run_json(&["check", &project, "--deny-warnings"]);
     assert_eq!(exit, ExitCode::from(1), "{report}");
@@ -1104,6 +1318,33 @@ fn job_check_warns_when_the_destination_mapping_drifts_from_its_model() {
     assert_eq!(drift_warnings(&report).len(), 1, "{report}");
     let (exit, report, _) = check(&["--deny-warnings"]);
     assert_eq!(exit, ExitCode::from(1), "{report}");
+
+    // The human form prints the same warning.
+    let (pack, job, runtime, profile, project) = (
+        pack.to_str().unwrap().to_owned(),
+        argument("job.yaml"),
+        argument("job-runtime.example.yaml"),
+        argument("profile.yaml"),
+        argument("project.yaml"),
+    );
+    let (exit, text) = run_human(&[
+        "job",
+        "check",
+        &pack,
+        &job,
+        "--runtime",
+        &runtime,
+        "--profile",
+        &profile,
+        "--project",
+        &project,
+    ]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{text}");
+    assert!(
+        text.contains("warning[adapter.mapping.script-drift]"),
+        "{text}"
+    );
+    assert!(text.contains("1 warning"), "{text}");
 }
 
 #[test]
@@ -1306,9 +1547,13 @@ fn dhis2_person_registration_previews_accepted_duplicate_and_invalid_inputs() {
     );
     assert_eq!(report["accepted"], 1);
     assert_eq!(report["refused"], 2);
-    for refused in &report["results"].as_array().unwrap()[1..] {
+    for (refused, failure) in report["results"].as_array().unwrap()[1..]
+        .iter()
+        .zip(["mapping.duplicate", "mapping.conversion"])
+    {
         assert!(refused.get("output").is_none(), "{refused}");
-        assert_eq!(refused["message"], "the project transformation failed");
+        assert_eq!(refused["failure"], failure, "{refused}");
+        assert_eq!(refused["field"], "person.dateOfBirth", "{refused}");
     }
     assert!(
         !printed.contains("PRIVATE-CANARY"),

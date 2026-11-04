@@ -1222,15 +1222,6 @@
                   "environment": null
                 },
                 {
-                  "display": "--deny-warnings",
-                  "description": "Exit 1 when a warning is reported",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
                   "display": "--format <FORMAT>",
                   "description": "Emit the selected command's report in this format",
                   "always_required": false,
@@ -1260,7 +1251,7 @@
             {
               "name": "preview",
               "invocation": "adapterctl mapping preview",
-              "about": "Run the generated script over sample inputs and print the validated outputs or the categorical refusals; writes nothing",
+              "about": "Generate the script in memory and run it over sample inputs, printing the validated outputs or the categorical refusals; writes nothing, so `generate` need not run first",
               "long_about": null,
               "usage": "adapterctl mapping preview [OPTIONS] --input <FILE> <MODEL>",
               "arguments": [

@@ -13,7 +13,7 @@
           "description": "The conversion applied to a read value."
         },
         "from": {
-          "description": "The selector read from the source root.",
+          "description": "The selector read from the source root: dotted names or \"quoted\"\nkeys, each optionally filtered with `[key = \"value\"]`. A key that\nholds a dot is quoted, for example `'\"household.household_size\"'`.",
           "type": "string"
         },
         "target": {
