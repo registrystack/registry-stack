@@ -177,6 +177,14 @@
 - A `writable-read` binding that no Write Update names as its companion read
   is refused by `adapterctl check` and at load, naming the binding, instead of
   stopping the Adapter.
+- The maintained Kobo Coordinator workflow gives the unresolved-lookup revision
+  its own finish outcome, `unresolved-reviewed`; it finished as
+  `revised-reviewed`, the same as a resolved one. Its README lists every
+  outcome, notes that a review or Proposal timeout finishes the Run as
+  `review-timeout` or `proposal-timeout` rather than raising attention, and a
+  new `scenarios.yaml` covers the revised branches and the timeout. A client
+  that matches the outcome of an unresolved revision must now match
+  `unresolved-reviewed`.
 - An Adapter job profile may omit `read` when its source route reads no file
   and no PostgreSQL row (an HTTP-only route). A route that reaches a
   `pollEnrich` step or a `postgres:` send or enrich still needs the bounds,
