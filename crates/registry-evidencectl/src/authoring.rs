@@ -1706,7 +1706,8 @@ fn write_bundle(
     }
     let config_path = bundle.join("evidence.yaml");
     let description =
-        render_discovery_description(evidence_bin, &config_path, deployment_target_root.is_some())?;
+        render_discovery_description(evidence_bin, &config_path, deployment_target_root.is_some())
+            .map_err(|error| lead_with_undeclared_connections(error, &plan.bundle))?;
     // Evidence prints a description only for a bundle that declares a
     // publication, and prints nothing for one that does not. Which of the two
     // this is was decided by the bundle written just above, so nothing back
@@ -2026,6 +2027,50 @@ fn render_discovery_description(
         message,
     }
     .into())
+}
+
+/// What Evidence reports when a Source names a connection the target omits.
+const UNDECLARED_CONNECTION_REPORT: &str = "source connection reference is not declared";
+
+/// Make a refused publication lead with the connection the target is missing.
+///
+/// Evidence loads the whole configuration to render the publication, so a
+/// Source whose connection the target does not declare surfaces there, as a
+/// nested report that names the Source and not the connection. The bundle
+/// being written knows both, so the refusal names them first and the fix with
+/// them. The code and every other refusal are unchanged.
+fn lead_with_undeclared_connections(error: anyhow::Error, bundle: &Value) -> anyhow::Error {
+    let Some(diagnostic) = error.downcast_ref::<AuthoredDiagnostic>() else {
+        return error;
+    };
+    if !diagnostic.message.contains(UNDECLARED_CONNECTION_REPORT) {
+        return error;
+    }
+    let declared = bundle.get("sourceConnections").and_then(Value::as_object);
+    let missing = bundle
+        .get("sources")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+        .filter_map(|(source_id, source)| {
+            let connection = source.get("connection").and_then(Value::as_str)?;
+            declared
+                .is_none_or(|declared| !declared.contains_key(connection))
+                .then(|| format!("source `{source_id}` uses connection `{connection}`"))
+        })
+        .collect::<Vec<_>>();
+    if missing.is_empty() {
+        return error;
+    }
+    AuthoredDiagnostic {
+        code: diagnostic.code.clone(),
+        path: diagnostic.path.clone(),
+        message: format!(
+            "{}, which target.yaml does not declare under `connections`; add it there (`evidencectl target new --local` copies the connections of the project's local-target.yaml), then run the command again",
+            missing.join("; ")
+        ),
+    }
+    .into()
 }
 
 /// The longest provider publication description evidencectl accepts from the
@@ -3290,6 +3335,65 @@ mod tests {
             );
         }
         set_bundle_modes(&bundle, 0o700, 0o600).unwrap();
+    }
+
+    #[test]
+    fn package_writer_leads_with_the_source_connection_the_target_does_not_declare() {
+        let root = tempfile::tempdir().unwrap();
+        let evidence = root.path().join("evidence-stub");
+        write_stub_evidence(
+            &evidence,
+            "#!/bin/sh\necho 'evidence: the configuration reader refused the configuration' >&2\necho 'error[evidence.bundle.invalid-source] evidence.yaml:105:17 /sources/record-status/connection' >&2\necho '  source connection reference is not declared' >&2\nexit 1\n",
+        );
+        let stage = root.path().join("candidate");
+        create_private_directory(&stage).unwrap();
+        let plan = CompilePlan {
+            definitions: Vec::new(),
+            bundle: json!({
+                "sources": {
+                    "record-status": {"connection": "starter-source"},
+                    "other-status": {"connection": "declared-source"},
+                },
+                "sourceConnections": {"declared-source": {"endpoints": []}},
+            }),
+            local_public_jwk: None,
+            generated_artifacts: BTreeMap::new(),
+            authority_document: None,
+        };
+
+        let error = write_bundle(
+            root.path(),
+            Some(root.path()),
+            &stage,
+            &plan,
+            &evidence,
+            None,
+        )
+        .expect_err("an undeclared source connection must be refused");
+
+        let diagnostic = error
+            .downcast_ref::<AuthoredDiagnostic>()
+            .expect("the refusal stays a field-addressed authored diagnostic");
+        assert_eq!(diagnostic.code, "evidence.target.publication-invalid");
+        assert!(
+            diagnostic.message.starts_with(
+                "source `record-status` uses connection `starter-source`, which target.yaml does not declare"
+            ),
+            "{}",
+            diagnostic.message
+        );
+        assert!(
+            !diagnostic.message.contains("other-status"),
+            "a declared connection is not reported: {}",
+            diagnostic.message
+        );
+        assert!(
+            diagnostic
+                .message
+                .contains("evidencectl target new --local"),
+            "the fix is named: {}",
+            diagnostic.message
+        );
     }
 
     #[test]
