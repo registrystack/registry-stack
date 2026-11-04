@@ -2164,9 +2164,16 @@ need:
 sends it under keys derived from the item, so a lost response is recovered
 by sending the same request again and BReg replays its receipt. The job
 stores no prepared attempt: a retry re-reads the source, re-maps, and
-resends. If the item changed, or the mapping now produces different bytes,
-BReg answers `idempotency.key-reused` and the item is held for an
-operator, which is the safe direction. A Proposal uses two command
+resends. The job freezes two public digests durably before the first send:
+the receiver (BReg deployment, caller, access profile, Action and mode) and
+the mapped operation. A possibly accepted `pending` sequence whose receiver
+or mapped operation differs on retry stops the pass before any BReg call,
+with the position unchanged, as `adapter.job.breg-receiver-changed` or
+`adapter.job.breg-body-changed`; restoring the original configuration lets
+it settle. A pending row staged before the digests were recorded stops as
+`adapter.job.breg-identity-unrecorded`. If the item itself changed, BReg
+answers `idempotency.key-reused` and the item is held for an operator, which
+is the safe direction. A Proposal uses two command
 identities, start and submit, derived from the same item key and
 sequence; the start receipt returns the Proposal ID that submit needs.
 The receipt horizon falls on the job: BReg keeps a receipt for

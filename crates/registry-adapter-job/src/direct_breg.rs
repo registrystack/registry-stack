@@ -19,7 +19,9 @@ use registry_adapter_core::JobIdentity;
 use serde_json::Value;
 use sha2::{Digest as _, Sha256};
 
-use crate::destination::{DeliverableItem, HandOffOutcome, JobDestination};
+use crate::destination::{
+    DeliverableItem, DeliveryFamily, DeliveryIdentity, HandOffOutcome, JobDestination,
+};
 
 const REVISED_ITEM: &str = "adapter.job.revised-item";
 const MAPPING_REFUSED: &str = "adapter.job.breg-mapping-refused";
@@ -29,6 +31,8 @@ const DESTINATION_UNAVAILABLE: &str = "adapter.job.breg-unavailable";
 const DESTINATION_UNCERTAIN: &str = "adapter.job.breg-outcome-uncertain";
 const DESTINATION_PENDING: &str = "adapter.job.breg-outcome-pending";
 const DESTINATION_INVALID: &str = "adapter.job.breg-outcome-invalid";
+const RECEIVER_IDENTITY_DOMAIN: &[u8] = b"registry-adapter/direct-breg-receiver/v1";
+const BODY_IDENTITY_DOMAIN: &[u8] = b"registry-adapter/direct-breg-operation/v1";
 
 /// The one BReg operation a projected item maps to. The Proposal form
 /// is still one destination hand-off: start and submit use distinct,
@@ -71,19 +75,100 @@ where
     }
 }
 
+/// Public, credential-free configuration covered by the durable receiver
+/// identity. Idempotency receipts are scoped to the authenticated caller, so
+/// the caller and its issuer are part of the receiver; credential references
+/// and material, resolved TLS bytes and timeouts are deliberately excluded.
+/// The digest only establishes exact equality on retry.
+pub struct DirectBregReceiverDigestContext<'a> {
+    /// The runtime binding id.
+    pub binding: &'a str,
+    /// The BReg deployment origin.
+    pub base_url: &'a str,
+    /// The token endpoint the caller authenticates against.
+    pub token_endpoint: &'a str,
+    /// The authenticated caller's client id.
+    pub client_id: &'a str,
+    /// The private trust profile for the BReg origin, when one is set.
+    pub data_tls_trust_profile: Option<&'a str>,
+    /// The access profile every call selects under.
+    pub access_profile: &'a str,
+    /// The authored Action identifier.
+    pub action: &'a str,
+    /// The authored mode, `immediate` or `proposal`.
+    pub mode: &'a str,
+}
+
+/// Derive the durable 32-byte BReg receiver identity.
+#[must_use]
+pub fn receiver_identity(context: &DirectBregReceiverDigestContext<'_>) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    component(&mut digest, RECEIVER_IDENTITY_DOMAIN);
+    for value in [
+        context.binding,
+        context.base_url,
+        context.token_endpoint,
+        context.client_id,
+    ] {
+        component(&mut digest, value.as_bytes());
+    }
+    match context.data_tls_trust_profile {
+        Some(profile) => {
+            digest.update([1]);
+            component(&mut digest, profile.as_bytes());
+        }
+        None => digest.update([0]),
+    }
+    for value in [context.access_profile, context.action, context.mode] {
+        component(&mut digest, value.as_bytes());
+    }
+    digest.finalize().into()
+}
+
+/// The durable identity of one mapped operation: what the destination would
+/// send for the item, before any key or token enters. `serde_json` orders
+/// object members, so equal operations digest equally.
+fn operation_identity(operation: &DirectBregOperation) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    component(&mut digest, BODY_IDENTITY_DOMAIN);
+    let (tag, members): (u8, Vec<&Value>) = match operation {
+        DirectBregOperation::ImmediateAction { input } => (0, vec![input]),
+        DirectBregOperation::Proposal {
+            start_input,
+            submit_body,
+        } => (1, vec![start_input, submit_body]),
+    };
+    digest.update([tag]);
+    for member in members {
+        let bytes = serde_json::to_vec(member).expect("a JSON value always serializes");
+        component(&mut digest, &bytes);
+    }
+    digest.finalize().into()
+}
+
+fn component(digest: &mut Sha256, value: &[u8]) {
+    digest.update((value.len() as u64).to_be_bytes());
+    digest.update(value);
+}
+
 /// An operational direct destination over one metadata-bound BReg
 /// connector and one reviewed item mapper.
 pub struct DirectBregDestination<M> {
     connector: Arc<BregConnector>,
     mapper: M,
+    receiver: [u8; 32],
 }
 
 impl<M> DirectBregDestination<M> {
-    /// Bind the destination to one connector and mapper for the process
-    /// lifetime.
+    /// Bind the destination to one connector, mapper and durable receiver
+    /// identity ([`receiver_identity`]) for the process lifetime.
     #[must_use]
-    pub fn new(connector: Arc<BregConnector>, mapper: M) -> Self {
-        Self { connector, mapper }
+    pub fn new(connector: Arc<BregConnector>, mapper: M, receiver: [u8; 32]) -> Self {
+        Self {
+            connector,
+            mapper,
+            receiver,
+        }
     }
 }
 
@@ -164,6 +249,28 @@ impl<M: DirectBregMapper> DirectBregDestination<M> {
 }
 
 impl<M: DirectBregMapper> JobDestination for DirectBregDestination<M> {
+    /// An item handed off before is held, never sent, so only a delivery that
+    /// reaches BReg freezes an identity. A mapping refusal has no operation
+    /// to identify; the pass treats it as a body that cannot be confirmed.
+    fn delivery_identity(
+        &self,
+        _job: &JobIdentity,
+        item: &DeliverableItem,
+    ) -> Option<DeliveryIdentity> {
+        if item.admitted_before {
+            return None;
+        }
+        Some(DeliveryIdentity {
+            family: DeliveryFamily::Breg,
+            receiver: self.receiver,
+            canonical_body: self
+                .mapper
+                .map(item)
+                .map(|operation| operation_identity(&operation))
+                .map_err(|DirectBregMappingRefused| ()),
+        })
+    }
+
     fn deliver<'a>(
         &'a self,
         job: &'a JobIdentity,
@@ -318,6 +425,98 @@ mod tests {
         let first = command_key(&job, &item, "invoke");
         job.version = "2".to_string();
         assert_eq!(first, command_key(&job, &item, "invoke"));
+    }
+
+    fn receiver_context() -> DirectBregReceiverDigestContext<'static> {
+        DirectBregReceiverDigestContext {
+            binding: "breg-prod",
+            base_url: "https://breg.example/institution-a",
+            token_endpoint: "https://auth.example/token",
+            client_id: "adapter-job",
+            data_tls_trust_profile: None,
+            access_profile: "writer",
+            action: "register-household",
+            mode: "proposal",
+        }
+    }
+
+    #[test]
+    fn the_receiver_identity_covers_every_public_selector() {
+        let base = receiver_identity(&receiver_context());
+        assert_eq!(base, receiver_identity(&receiver_context()));
+        let changed = [
+            DirectBregReceiverDigestContext {
+                binding: "breg-staging",
+                ..receiver_context()
+            },
+            DirectBregReceiverDigestContext {
+                base_url: "https://breg.example/institution-b",
+                ..receiver_context()
+            },
+            DirectBregReceiverDigestContext {
+                token_endpoint: "https://auth.example/other",
+                ..receiver_context()
+            },
+            DirectBregReceiverDigestContext {
+                client_id: "another-job",
+                ..receiver_context()
+            },
+            DirectBregReceiverDigestContext {
+                data_tls_trust_profile: Some("private-ca"),
+                ..receiver_context()
+            },
+            DirectBregReceiverDigestContext {
+                access_profile: "reader",
+                ..receiver_context()
+            },
+            DirectBregReceiverDigestContext {
+                action: "update-household",
+                ..receiver_context()
+            },
+            DirectBregReceiverDigestContext {
+                mode: "immediate",
+                ..receiver_context()
+            },
+        ];
+        for context in &changed {
+            assert_ne!(base, receiver_identity(context), "{:?}", context.binding);
+        }
+        // A selector moved across a field boundary is a different receiver.
+        let shifted = DirectBregReceiverDigestContext {
+            binding: "breg-pro",
+            base_url: "dhttps://breg.example/institution-a",
+            ..receiver_context()
+        };
+        assert_ne!(base, receiver_identity(&shifted));
+    }
+
+    #[test]
+    fn the_operation_identity_follows_the_mapped_operation_only() {
+        let action = |input: Value| DirectBregOperation::ImmediateAction { input };
+        let proposal = |start_input: Value, submit_body: Value| DirectBregOperation::Proposal {
+            start_input,
+            submit_body,
+        };
+        let base = operation_identity(&action(serde_json::json!({"a": 1, "b": 2})));
+        assert_eq!(
+            base,
+            operation_identity(&action(serde_json::json!({"b": 2, "a": 1}))),
+            "member order is not part of the operation"
+        );
+        assert_ne!(
+            base,
+            operation_identity(&action(serde_json::json!({"a": 1, "b": 3})))
+        );
+        let started = proposal(serde_json::json!({"a": 1}), serde_json::json!({"b": 2}));
+        assert_ne!(base, operation_identity(&started));
+        assert_ne!(
+            operation_identity(&started),
+            operation_identity(&proposal(
+                serde_json::json!({"b": 2}),
+                serde_json::json!({"a": 1})
+            )),
+            "start input and submit body are distinct members"
+        );
     }
 
     #[test]

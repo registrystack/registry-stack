@@ -532,17 +532,21 @@ async fn a_lost_native_proposal_answer_recovers_the_same_proposal_through_the_jo
     let program =
         compile_job(&fixture.pack, &fixture.job, &fixture.runtime).expect("the job compiles");
     let pool = isolated_store().await;
-    let direct = DirectBregDestination::new(connector, move |item: &DeliverableItem| {
-        let label = item
-            .projected
-            .get("answers.age")
-            .cloned()
-            .unwrap_or(serde_json::Value::Null);
-        Ok::<_, DirectBregMappingRefused>(DirectBregOperation::Proposal {
-            start_input: json!({"input": {"targetId": target, "label": label}}),
-            submit_body: json!({}),
-        })
-    });
+    let direct = DirectBregDestination::new(
+        connector,
+        move |item: &DeliverableItem| {
+            let label = item
+                .projected
+                .get("answers.age")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            Ok::<_, DirectBregMappingRefused>(DirectBregOperation::Proposal {
+                start_input: json!({"input": {"targetId": target, "label": label}}),
+                submit_body: json!({}),
+            })
+        },
+        [0x42; 32],
+    );
     let destination = LoseFirstAnswer {
         inner: Arc::new(direct),
         accepted_reference: Mutex::new(None),
@@ -957,8 +961,9 @@ async fn postgres_source_reaches_native_breg_and_holds_a_revised_row() {
     let mapping_calls = Arc::new(AtomicUsize::new(0));
     let observed_mapping_calls = Arc::clone(&mapping_calls);
     let expected_target = target.clone();
-    let destination =
-        DirectBregDestination::new(connector.clone(), move |item: &DeliverableItem| {
+    let destination = DirectBregDestination::new(
+        connector.clone(),
+        move |item: &DeliverableItem| {
             observed_mapping_calls.fetch_add(1, Ordering::SeqCst);
             assert_eq!(
                 item.projected,
@@ -968,7 +973,9 @@ async fn postgres_source_reaches_native_breg_and_holds_a_revised_row() {
                 start_input: json!({"input": {"targetId": expected_target, "label": "045"}}),
                 submit_body: json!({}),
             })
-        });
+        },
+        [0x42; 32],
+    );
 
     let first = run_pass(&pool, &program, &destination, PassOptions::default()).await;
     assert_eq!(first.stopped, None);
@@ -994,7 +1001,9 @@ async fn postgres_source_reaches_native_breg_and_holds_a_revised_row() {
     let repeated = run_pass(&pool, &program, &destination, PassOptions::default()).await;
     assert_eq!(repeated.stopped, None);
     assert_eq!(repeated.items_skipped, 1);
-    assert_eq!(mapping_calls.load(Ordering::SeqCst), 1);
+    // One mapping freezes the operation identity before the send and one
+    // builds the send; a skipped or held item is never mapped again.
+    assert_eq!(mapping_calls.load(Ordering::SeqCst), 2);
 
     source.revise_label().await;
     let revised = run_pass(
@@ -1014,7 +1023,7 @@ async fn postgres_source_reaches_native_breg_and_holds_a_revised_row() {
         revised.holds_by_code.get("adapter.job.revised-item"),
         Some(&1)
     );
-    assert_eq!(mapping_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(mapping_calls.load(Ordering::SeqCst), 2);
     let client = pool.get().await.expect("a native item-store client");
     let held = store::inspect_item(&client, "case-daily", &item_key)
         .await
