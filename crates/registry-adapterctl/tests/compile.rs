@@ -797,4 +797,33 @@ fn the_real_unified_breg_govstack_project_compiles_create_and_update() {
 fn the_real_write_only_breg_govstack_project_uses_the_fixed_target() {
     let document = compile_breg_govstack(true);
     assert_fixed_write_contract(&document);
+    let path = &document["paths"]["/v1/collections/contacts/records/{recordId}"];
+    let retrieve = &path["get"];
+    assert_eq!(retrieve["operationId"], "retrieveContacts");
+    assert_eq!(
+        retrieve["responses"]["200"]["headers"]["ETag"]["required"],
+        true
+    );
+    assert_eq!(
+        retrieve["responses"]["200"]["headers"]["ETag"]["schema"]["pattern"],
+        r#"^"[\x21\x23-\x7E]{1,256}"(?![\s\S])"#
+    );
+    assert_eq!(
+        retrieve["x-govstack-digital-registries"],
+        json!({
+            "registry": "https://registry.example/registries/contacts",
+            "collection": "contacts",
+            "capability": "retrieve",
+            "view": "contact-public"
+        })
+    );
+    assert_eq!(
+        retrieve["responses"]["200"]["content"]["application/json"]["schema"]["properties"]["data"]
+            ["$ref"],
+        "#/components/schemas/contact-public"
+    );
+    assert_eq!(
+        path["patch"]["x-govstack-digital-registries-write"]["companionRead"]["operationId"],
+        retrieve["operationId"]
+    );
 }

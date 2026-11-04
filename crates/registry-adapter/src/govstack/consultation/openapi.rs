@@ -156,10 +156,114 @@ pub fn assemble_openapi(
             operation["requestBody"] =
                 json!({"required": true, "content": {"application/json": {"schema": schema}}});
         }
-        operation["responses"]["200"] = json!({"description": "The operation's response envelope for the bound record type.", "headers": response_headers("200"), "content": {"application/json": {"schema": success_schema}}});
+        let mut success_headers = response_headers("200");
+        if capability == ConsultationCapability::Retrieve
+            && is_write_update_companion(project, binding.id.as_str())
+        {
+            success_headers["ETag"] = strong_etag_header();
+        }
+        operation["responses"]["200"] = json!({"description": "The operation's response envelope for the bound record type.", "headers": success_headers, "content": {"application/json": {"schema": success_schema}}});
         paths.entry(path).or_insert_with(|| json!({}))[method] = operation;
     }
     if let Some(write) = project.write.as_ref() {
+        for collection in write
+            .collections
+            .iter()
+            .filter(|collection| collection.update.is_some())
+        {
+            let update = collection
+                .update
+                .as_ref()
+                .expect("the filtered Write collection has Update metadata");
+            let Some(binding) = project.bindings.get(update.companion_read.as_str()) else {
+                continue;
+            };
+            if binding.record_type != collection.record_type
+                || binding.operation.as_str() != "writable-read"
+            {
+                continue;
+            }
+            if !super::valid_collection_id(binding.record_type.as_str()) {
+                findings.push(refusal(
+                    "adapterctl.compile.govstack-collection-id",
+                    "a GovStack collection id must start with a lowercase letter and contain only lowercase letters, digits, and hyphens, with at most 128 characters",
+                ));
+                continue;
+            }
+            let metadata = match crate::govstack::write::metadata::collection_metadata(
+                project,
+                binding.record_type.as_str(),
+            ) {
+                Ok(metadata) => metadata,
+                Err(_) => {
+                    findings.push(refusal(
+                        "adapterctl.compile.write-companion-read",
+                        "a guarded Write operation has incomplete companion read metadata",
+                    ));
+                    continue;
+                }
+            };
+            let (Some(view), Some(data_schema)) = (metadata.view, metadata.read_data_schema) else {
+                findings.push(refusal(
+                    "adapterctl.compile.write-companion-read",
+                    "a guarded Write operation has incomplete companion read metadata",
+                ));
+                continue;
+            };
+            if !super::valid_view_id(view) {
+                findings.push(refusal(
+                    "adapterctl.compile.govstack-view-id",
+                    "a GovStack view id must start with a lowercase letter and contain only lowercase letters, digits, and hyphens, with at most 128 characters",
+                ));
+                continue;
+            }
+            if !schemas.contains_key(data_schema) {
+                findings.push(refusal(
+                    "adapterctl.compile.write-companion-read",
+                    "a guarded Write companion read schema has no loaded versioned identity",
+                ));
+                continue;
+            }
+            let operation_id =
+                ConsultationCapability::Retrieve.operation_id(binding.record_type.as_str());
+            if !operation_ids.insert(operation_id.clone()) {
+                findings.push(refusal(
+                    "adapterctl.compile.consultation-operation-id-collision",
+                    "two Consultation collections normalize to the same caller-visible operationId",
+                ));
+                continue;
+            }
+            let path = ConsultationCapability::Retrieve
+                .path()
+                .replace("{collectionId}", binding.record_type.as_str());
+            let mut responses = problem_responses(ConsultationCapability::Retrieve);
+            let mut success_headers = response_headers("200");
+            success_headers["ETag"] = strong_etag_header();
+            responses["200"] = json!({
+                "description": "The operation's response envelope for the bound record type.",
+                "headers": success_headers,
+                "content": {"application/json": {"schema": super::record_schema(
+                    &component_reference(data_schema)
+                )}}
+            });
+            paths.entry(path).or_insert_with(|| json!({}))["get"] = json!({
+                "operationId": operation_id,
+                "x-govstack-digital-registries": {
+                    "registry": metadata.registry,
+                    "collection": binding.record_type.as_str(),
+                    "capability": ConsultationCapability::Retrieve,
+                    "view": view
+                },
+                "parameters": [
+                    {"name": "recordId", "in": "path", "required": true, "schema": {
+                        "type": "string", "minLength": 1, "maxLength": 256
+                    }},
+                    traceparent_parameter()
+                ],
+                "responses": responses,
+                "security": [{"bearerAuth": []}]
+            });
+        }
         for binding in project.bindings.iter() {
             let Some(capability) =
                 crate::govstack::write::attachment::WriteCapability::from_binding_operation(
@@ -353,6 +457,34 @@ fn traceparent_parameter() -> Value {
     })
 }
 
+fn is_write_update_companion(project: &AdapterProject, binding: &str) -> bool {
+    project.write.as_ref().is_some_and(|write| {
+        write.collections.iter().any(|collection| {
+            collection
+                .update
+                .as_ref()
+                .is_some_and(|update| update.companion_read.as_str() == binding)
+        })
+    })
+}
+
+fn strong_etag_schema() -> Value {
+    json!({
+        "type": "string",
+        "minLength": 3,
+        "maxLength": 258,
+        "pattern": r#"^"[\x21\x23-\x7E]{1,256}"(?![\s\S])"#
+    })
+}
+
+fn strong_etag_header() -> Value {
+    json!({
+        "description": "Strong opaque validator suitable for If-Match; weak validators are forbidden.",
+        "required": true,
+        "schema": strong_etag_schema()
+    })
+}
+
 fn response_headers(status: &str) -> Value {
     let mut headers = json!({
         "Cache-Control": {
@@ -453,7 +585,7 @@ fn if_match_parameter() -> Value {
     json!({
         "name": "If-Match", "in": "header", "required": true,
         "description": "The strong validator returned by the exact companion read.",
-        "schema": {"type": "string", "minLength": 3, "maxLength": 258}
+        "schema": strong_etag_schema()
     })
 }
 
@@ -471,20 +603,18 @@ fn write_result_schema() -> Value {
         "properties": {
             "collectionId": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-z][a-z0-9-]{0,127}$"},
             "recordId": {"type": "string", "minLength": 1, "maxLength": 256},
-            "etag": {"type": "string", "minLength": 3, "maxLength": 258}
+            "etag": strong_etag_schema()
         }
     })
 }
 
 fn write_success_headers(create: bool) -> Value {
     let mut headers = write_response_headers("200");
-    headers["ETag"] = json!({
-        "description": "Strong validator for the committed guard state.",
-        "schema": {"type": "string", "minLength": 3, "maxLength": 258}
-    });
+    headers["ETag"] = strong_etag_header();
     if create {
         headers["Location"] = json!({
             "description": "URI of the created Record.",
+            "required": true,
             "schema": {"type": "string", "format": "uri-reference", "minLength": 1, "maxLength": 2048}
         });
     }
@@ -774,6 +904,12 @@ mod tests {
                 );
             }
         }
+        assert!(
+            contract["paths"]["/v1/collections/people/records/{recordId}"]["get"]["responses"]
+                ["200"]["headers"]
+                .get("ETag")
+                .is_none()
+        );
         for path in [
             "/v1/collections/people/lookup",
             "/v1/collections/people/search",
@@ -845,6 +981,32 @@ mod tests {
         assert!(update["responses"].get("204").is_some());
         assert!(update["responses"].get("412").is_some());
         assert!(update["responses"].get("428").is_some());
+        let strong_pattern = r#"^"[\x21\x23-\x7E]{1,256}"(?![\s\S])"#;
+        assert_eq!(
+            create["responses"]["201"]["content"]["application/json"]["schema"]["properties"]
+                ["etag"]["pattern"],
+            strong_pattern
+        );
+        for success in [&create["responses"]["201"], &update["responses"]["204"]] {
+            assert_eq!(success["headers"]["ETag"]["required"], true);
+            assert_eq!(
+                success["headers"]["ETag"]["schema"]["pattern"],
+                strong_pattern
+            );
+        }
+        assert_eq!(
+            create["responses"]["201"]["headers"]["Location"]["required"],
+            true
+        );
+        let companion = &contract["paths"]["/v1/collections/people/records/{recordId}"]["get"];
+        assert_eq!(
+            companion["responses"]["200"]["headers"]["ETag"]["required"],
+            true
+        );
+        assert_eq!(
+            companion["responses"]["200"]["headers"]["ETag"]["schema"]["pattern"],
+            strong_pattern
+        );
         assert_eq!(
             create["responses"]["422"]["content"]["application/problem+json"]["schema"]["$ref"],
             "#/components/schemas/UnprocessableContentProblem"
