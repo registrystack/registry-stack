@@ -181,7 +181,7 @@ class AdditionalInstallersTest(unittest.TestCase):
             pinned = (current / "adapter-v0.45.1-install.sh").read_text()
             self.assertEqual(pinned, (current / "adapter-install.sh").read_text())
             self.assertIn('default_version="v0.45.1"', pinned)
-            self.assertIn("binaries=(adapter adapterctl adapter-job)", pinned)
+            self.assertIn("binaries=(adapter adapterctl)", pinned)
             self.assertIn("ADAPTER_INSTALL_DIR", pinned)
 
     def test_stack_carry_forward_excludes_discovery_installers(self):

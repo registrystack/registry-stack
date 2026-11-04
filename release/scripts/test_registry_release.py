@@ -3942,7 +3942,7 @@ class RegistryReleaseTest(TestCase):
             if module.release_roster.coordinator_binaries_in_release(version_tuple):
                 inventory.update({"coordinator": version, "coordinatorctl": version})
             if module.release_roster.adapter_in_release(version_tuple):
-                inventory.update({"adapter": version, "adapterctl": version, "adapter-job": version})
+                inventory.update({"adapter": version, "adapterctl": version})
             if module.release_roster.rstack_in_release(version_tuple):
                 inventory.update({"rstack": version, "rstack-installer": version})
             if module.release_roster.scheduling_installer_in_release(version_tuple):
@@ -4007,7 +4007,7 @@ class RegistryReleaseTest(TestCase):
 
     def test_adapter_release_surface_begins_at_v0_45_1(self) -> None:
         module = load_registry_release()
-        adapter = {"adapter", "adapterctl", "adapter-job", "adapter-installer"}
+        adapter = {"adapter", "adapterctl", "adapter-installer"}
 
         def missing(version: str) -> set[str]:
             errors = module.artifact_inventory_errors(version, {})
@@ -4064,7 +4064,7 @@ class RegistryReleaseTest(TestCase):
             if roster.coordinator_binaries_in_release(version_tuple):
                 inventory.update({"coordinator": version, "coordinatorctl": version})
             if roster.adapter_in_release(version_tuple):
-                inventory.update({"adapter": version, "adapterctl": version, "adapter-job": version})
+                inventory.update({"adapter": version, "adapterctl": version})
             if roster.rstack_in_release(version_tuple):
                 inventory.update({"rstack": version, "rstack-installer": version})
             if roster.scheduling_installer_in_release(version_tuple):
@@ -4220,7 +4220,7 @@ class RegistryReleaseTest(TestCase):
                     if module.release_roster.coordinator_binaries_in_release(version_tuple):
                         current.update({"coordinator": version, "coordinatorctl": version})
                     if module.release_roster.adapter_in_release(version_tuple):
-                        current.update({"adapter": version, "adapterctl": version, "adapter-job": version})
+                        current.update({"adapter": version, "adapterctl": version})
                     if module.release_roster.rstack_in_release(version_tuple):
                         current.update({"rstack": version, "rstack-installer": version})
                     if module.release_roster.scheduling_installer_in_release(version_tuple):
@@ -6175,7 +6175,6 @@ def write_manifest(
     if load_release_roster().adapter_in_release(version_tuple):
         artifacts["adapter"] = version
         artifacts["adapterctl"] = version
-        artifacts["adapter-job"] = version
     if load_release_roster().rstack_in_release(version_tuple):
         artifacts["rstack"] = version
         artifacts["rstack-installer"] = version

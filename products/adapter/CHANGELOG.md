@@ -246,11 +246,11 @@
   `adapter.job.breg-body-changed`. A direct BReg item left pending by an
   earlier release stops as `adapter.job.breg-identity-unrecorded`; settle it
   with the previous binary before upgrading.
-- Registry Stack releases publish the `adapter`, `adapterctl`, and
-  `adapter-job` binaries for Linux amd64, Linux arm64, and macOS arm64, with
-  an `adapter-<tag>-install.sh` installer and an `adapter` component for
-  `rstack install`. `rstack adapter` runs `adapterctl`. There is no Adapter
-  container image.
+- Registry Stack releases publish the `adapter` and `adapterctl` binaries for
+  Linux amd64, Linux arm64, and macOS arm64, with an `adapter-<tag>-install.sh`
+  installer and an `adapter` component for `rstack install`. `rstack adapter`
+  runs `adapterctl`. There is no Adapter container image. `adapter-job` is not
+  released yet; build it from source.
 - `adapter` gains `--version`, and `adapter-job --version` reports the
   Registry Stack display version instead of its crate version, as the other
   release binaries do.

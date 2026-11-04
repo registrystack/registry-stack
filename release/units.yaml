@@ -18,8 +18,8 @@
       "status": "held",
       "tag_prefix": "adapter/",
       "asset_prefix": "registry-adapter",
-      "members": ["adapter", "adapterctl", "adapter-job"],
-      "artifact_patterns": ["adapter-v*-*", "adapter-install.sh", "adapterctl-v*-*", "adapter-job-v*-*"],
+      "members": ["adapter", "adapterctl"],
+      "artifact_patterns": ["adapter-v*-*", "adapter-install.sh", "adapterctl-v*-*"],
       "dependencies": [],
       "candidate": null
     },

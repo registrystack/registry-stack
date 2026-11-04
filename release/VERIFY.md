@@ -381,9 +381,10 @@ operator tool `coordinatorctl` join that verified binary payload under
 `COORDINATOR_BINARY_FIRST_RELEASE`; its separately governed image remains held.
 From `v0.44.0`, the unified Node.js and Python client packages carry the
 `coordinator` namespace under `COORDINATOR_CLIENT_FIRST_RELEASE`.
-From `v0.45.1`, the Adapter runtime `adapter`, author tool `adapterctl`, and
-ingestion-job host `adapter-job` join that payload on all three platforms with
-their installer pair, under `ADAPTER_FIRST_RELEASE`.
+From `v0.45.1`, the Adapter runtime `adapter` and author tool `adapterctl`
+join that payload on all three platforms with their installer pair, under
+`ADAPTER_FIRST_RELEASE`. The ingestion-job host `adapter-job` is not
+released; build it from the release source.
 No release payload carries the Document Store runtime `documents` or operator tool
 `documentsctl`; build them from the release source.
 

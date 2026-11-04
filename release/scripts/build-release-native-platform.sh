@@ -323,21 +323,20 @@ build_scheduling() {
 additional_platform_builds="$(python3 "${repo_root}/release/scripts/release_roster.py" additional-platform-builds "${version}")"
 if [[ "${exclude_discovery}" -eq 1 ]]; then
   filtered_platform_builds=""
-  while read -r package binary features; do
+  while read -r package binary; do
     if [[ "${package}" == registry-discovery* ]]; then
       continue
     fi
-    filtered_platform_builds+="${package} ${binary}${features:+ ${features}}"$'\n'
+    filtered_platform_builds+="${package} ${binary}"$'\n'
   done <<<"${additional_platform_builds}"
   additional_platform_builds="${filtered_platform_builds%$'\n'}"
 fi
 build_additional_platforms() {
-  local package binary features expected typst_pin
+  local package binary expected typst_pin
   [[ -n "${additional_platform_builds}" ]] || return 0
-  while read -r package binary features; do
+  while read -r package binary; do
     [[ "${binary}" != scheduling ]] || continue
-    "${cargo_bin}" build --release --locked -p "${package}" --bin "${binary}" \
-      ${features:+--features "${features}"} --target "${target}"
+    "${cargo_bin}" build --release --locked -p "${package}" --bin "${binary}" --target "${target}"
     stage "${binary}" "${binary}-${tag}-${asset}"
     expected="${binary} ${display_version}"
     if [[ "${binary}" == registry-render ]]; then
@@ -370,7 +369,7 @@ rm -rf -- "${temporary}/smoke"
 
 assets=()
 if [[ ("${group}" == core || "${group}" == all) && -n "${additional_platform_builds}" ]]; then
-  while read -r package binary _features; do
+  while read -r package binary; do
     [[ "${binary}" != scheduling ]] || continue
     assets+=("${binary}-${tag}-${asset}")
   done <<<"${additional_platform_builds}"

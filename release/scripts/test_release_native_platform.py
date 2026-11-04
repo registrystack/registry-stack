@@ -371,7 +371,6 @@ os.execv({sys.executable!r}, [{sys.executable!r}, *args])
                 "coordinatorctl",
                 "adapter",
                 "adapterctl",
-                "adapter-job",
             ]
             if missing_fips_binary is not None:
                 fips_binaries.remove(missing_fips_binary)
@@ -432,16 +431,15 @@ os.execv({sys.executable!r}, [{sys.executable!r}, *args])
         )
         return relayctl
 
-    def test_v0_45_1_core_bundles_each_adapter_binary_with_its_own_features(self):
+    def test_v0_45_1_core_bundles_the_adapter_binaries(self):
         result, output, calls = self.build("core", version="0.45.1")
         self.assertEqual(0, result.returncode, result.stderr)
-        for crate, binary, features in (
-            ("registry-adapter", "adapter", ()),
-            ("registry-adapterctl", "adapterctl", ()),
-            ("registry-adapter-job", "adapter-job", ("--features", "job-file,job-postgres")),
+        for crate, binary in (
+            ("registry-adapter", "adapter"),
+            ("registry-adapterctl", "adapterctl"),
         ):
             self.assertIn(
-                ["build", "--release", "--locked", "-p", crate, "--bin", binary, *features, "--target", TARGET],
+                ["build", "--release", "--locked", "-p", crate, "--bin", binary, "--target", TARGET],
                 calls,
             )
             self.assertTrue((output / "platform" / f"{binary}-v0.45.1-macos-arm64.tar.gz").is_file(), binary)

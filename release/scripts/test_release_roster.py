@@ -127,15 +127,19 @@ class ReleaseRosterTest(TestCase):
         adapter_builds = (
             ("registry-adapter", "adapter"),
             ("registry-adapterctl", "adapterctl"),
-            ("registry-adapter-job", "adapter-job"),
         )
         for build in adapter_builds:
             with self.subTest(build=build):
                 self.assertNotIn(build, release_roster.additional_platform_builds((0, 45, 0)))
                 self.assertIn(build, release_roster.additional_platform_builds((0, 45, 1)))
+        # adapter-job stays source-build only until a release build enables a destination.
+        self.assertNotIn(
+            ("registry-adapter-job", "adapter-job"),
+            release_roster.additional_platform_builds((0, 45, 1)),
+        )
         self.assertNotIn("adapter", release_roster.additional_installers((0, 45, 0)))
         self.assertEqual(
-            ("registry-adapter", "ADAPTER", ("adapter", "adapterctl", "adapter-job")),
+            ("registry-adapter", "ADAPTER", ("adapter", "adapterctl")),
             release_roster.additional_installers((0, 45, 1))["adapter"],
         )
 
@@ -199,7 +203,7 @@ class ReleaseRosterTest(TestCase):
             lines = stdout.getvalue().splitlines()
             self.assertIn("registry-adapter adapter", lines)
             self.assertIn("registry-adapterctl adapterctl", lines)
-            self.assertIn("registry-adapter-job adapter-job job-file,job-postgres", lines)
+            self.assertNotIn("registry-adapter-job adapter-job", lines)
             self.assertIn("registry-coordinator coordinator", lines)
 
         for version, expected in (("0.45.0", "false\n"), ("v0.45.1", "true\n")):
