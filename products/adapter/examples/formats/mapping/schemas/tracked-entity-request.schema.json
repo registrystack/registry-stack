@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://registry.example/schemas/tracked-entity-request/1/schema.json",
+  "title": "Tracked entity request body",
+  "type": "object",
+  "properties": {
+    "trackedEntity": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "orgUnit": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "trackedEntityType": { "type": "string", "minLength": 1, "maxLength": 128 }
+  },
+  "required": ["trackedEntity", "orgUnit", "trackedEntityType"],
+  "additionalProperties": false
+}

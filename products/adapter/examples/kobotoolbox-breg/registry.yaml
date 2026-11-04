@@ -4,8 +4,9 @@
 # (../kobotoolbox-job/job.yaml). It holds the `household` record type, the
 # `register-household` Proposal Action the job starts and submits, and the
 # `ingestion` access profile the job's destination names. The Action inputs
-# match the job-owned mapping (../kobotoolbox-job/mappings/register-household.rhai):
-# sourceSubmissionId, respondentName and householdSize.
+# match the job-owned mapping (../kobotoolbox-job/mappings/register-household.mapping.yaml,
+# which generates the beside-it register-household.rhai): sourceSubmissionId,
+# respondentName and householdSize.
 #
 # Check with:
 #   bregctl check products/adapter/examples/kobotoolbox-breg

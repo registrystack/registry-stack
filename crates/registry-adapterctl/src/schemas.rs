@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The generated JSON Schemas of the eight Adapter formats, derived from the
+//! The generated JSON Schemas of the nine Adapter formats, derived from the
 //! source-neutral model in `registry-adapter-core` with `schemars` or from
 //! the runtime's pure effective-contract projection, and
 //! written to `products/adapter/schemas/` (`products/adapter/CONCEPT.md`
@@ -11,8 +11,9 @@ use clap::Args;
 use registry_adapter_core::{
     AdapterJob, ErrorClass, ADAPTER_FIXTURE_API_VERSION, ADAPTER_FIXTURE_KIND,
     ADAPTER_FIXTURE_SCHEMA_ID, ADAPTER_JOB_API_VERSION, ADAPTER_JOB_KIND,
-    ADAPTER_JOB_RUNTIME_API_VERSION, ADAPTER_JOB_RUNTIME_KIND, ADAPTER_PACK_API_VERSION,
-    ADAPTER_PACK_KIND, ADAPTER_PACK_SCHEMA_ID, ADAPTER_PROFILE_API_VERSION, ADAPTER_PROFILE_KIND,
+    ADAPTER_JOB_RUNTIME_API_VERSION, ADAPTER_JOB_RUNTIME_KIND, ADAPTER_MAPPING_API_VERSION,
+    ADAPTER_MAPPING_KIND, ADAPTER_MAPPING_SCHEMA_ID, ADAPTER_PACK_API_VERSION, ADAPTER_PACK_KIND,
+    ADAPTER_PACK_SCHEMA_ID, ADAPTER_PROFILE_API_VERSION, ADAPTER_PROFILE_KIND,
     ADAPTER_PROFILE_SCHEMA_ID, ADAPTER_PROJECT_API_VERSION, ADAPTER_PROJECT_KIND,
     ADAPTER_PROJECT_SCHEMA_ID, ADAPTER_RUNTIME_API_VERSION, ADAPTER_RUNTIME_KIND,
     ADAPTER_RUNTIME_SCHEMA_ID,
@@ -71,7 +72,8 @@ struct Entry {
 
 fn entries() -> Result<Vec<Entry>, serde_json::Error> {
     use registry_adapter_core::{
-        AdapterFixture, AdapterPack, AdapterProfile, AdapterProject, AdapterRuntimeConfig,
+        AdapterFixture, AdapterMapping, AdapterPack, AdapterProfile, AdapterProject,
+        AdapterRuntimeConfig,
     };
     Ok(vec![
         Entry {
@@ -81,6 +83,14 @@ fn entries() -> Result<Vec<Entry>, serde_json::Error> {
             schema_id: ADAPTER_JOB_SCHEMA_ID,
             api_version: ADAPTER_JOB_API_VERSION,
             kind: ADAPTER_JOB_KIND,
+        },
+        Entry {
+            file: "mapping.v1alpha1.schema.json",
+            derived: serde_json::to_value(schemars::schema_for!(AdapterMapping))?,
+            title: "Registry Adapter mapping model",
+            schema_id: ADAPTER_MAPPING_SCHEMA_ID,
+            api_version: ADAPTER_MAPPING_API_VERSION,
+            kind: ADAPTER_MAPPING_KIND,
         },
         Entry {
             file: "job-runtime.v1alpha1.schema.json",
@@ -135,7 +145,7 @@ fn entries() -> Result<Vec<Entry>, serde_json::Error> {
     ])
 }
 
-/// The eight generated schema documents, keyed by file name. Deterministic:
+/// The nine generated schema documents, keyed by file name. Deterministic:
 /// the same workspace state renders the same bytes.
 pub fn documents() -> Result<BTreeMap<&'static str, String>, serde_json::Error> {
     let shared: Value =
@@ -564,7 +574,7 @@ mod tests {
     fn documents_are_deterministic_and_versioned() {
         let first = documents().unwrap();
         assert_eq!(documents().unwrap(), first);
-        assert_eq!(first.len(), 8);
+        assert_eq!(first.len(), 9);
         let effective: Value =
             serde_json::from_str(&first["effective-contract.v1alpha1.schema.json"])
                 .expect("the effective contract schema is JSON");

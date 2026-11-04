@@ -23,7 +23,7 @@ destination:
   mapping:
     file: mappings/register-household.rhai
     entrypoint: map_submission
-    digest: sha256:d910d0f72f70ea9dbf7dbb2e9f65ec3ad0a3231cf3baca7d96a1e03b2e54423e
+    digest: sha256:2c7fc6f8827a68158686d4e22180c316232f1516a7ca72a22427afcd8b3f4bdb
   receiptRetentionDays: 7
 projection:
   fields:

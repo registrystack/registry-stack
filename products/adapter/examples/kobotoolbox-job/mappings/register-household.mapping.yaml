@@ -1,0 +1,24 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/mapping/mapping.v1alpha1.schema.json
+#
+# The job-owned KoboToolbox mapping, authored as field assignments.
+# `adapterctl mapping generate` writes register-household.rhai beside this model;
+# the job pins that script's digest. The assignments produce the
+# `register-household` Action input of ../kobotoolbox-breg/registry.yaml.
+apiVersion: id.registrystack.org/formats/adapter/mapping/v1alpha1
+kind: AdapterMapping
+mapping:
+  id: register-household
+  target: ingestion
+  ingestionMode: proposal
+  targetSchema: register-household-input.schema.json
+  script: register-household.rhai
+  entrypoint: map_submission
+assignments:
+  - target: sourceSubmissionId
+    from: _id
+    convert: text
+  - target: respondentName
+    from: respondent_name
+  - target: householdSize
+    from: '"household.household_size"'
+    convert: integer

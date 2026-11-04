@@ -167,6 +167,26 @@ fn kobotoolbox_mapping_refuses_invalid_ids_and_household_sizes() {
     }
 }
 
+/// The generated mapping throws when a required answer is absent, and the
+/// runtime reports any mapping failure as a refusal of that item alone.
+#[test]
+fn kobotoolbox_mapping_refuses_a_projection_missing_the_respondent() {
+    let program = kobotoolbox_program();
+    for body in [
+        json!({"_id": "opaque-submission-003", "household.household_size": 4}),
+        json!({
+            "_id": "opaque-submission-003",
+            "respondent_name": null,
+            "household.household_size": 4
+        }),
+    ] {
+        let failure = map_kobotoolbox(&program, body).expect_err("a missing respondent refuses");
+        // The runtime reports any script failure as a value-free refusal of the
+        // item; the throw text naming the target path stays inside the script.
+        assert_eq!(failure, "the script raised an error");
+    }
+}
+
 fn job_identity() -> JobIdentity {
     JobIdentity {
         id: "case-daily".parse().expect("a local id"),

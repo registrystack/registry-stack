@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://registry.example/schemas/person-registration/1/schema.json",
+  "title": "Person registration data",
+  "type": "object",
+  "properties": {
+    "registration": {
+      "type": "object",
+      "properties": {
+        "organisationUnit": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "lastChangedAt": { "type": "string", "minLength": 1, "maxLength": 128 }
+      },
+      "required": ["organisationUnit", "lastChangedAt"],
+      "additionalProperties": false
+    },
+    "person": {
+      "type": "object",
+      "properties": {
+        "dateOfBirth": { "type": "string", "format": "date" }
+      },
+      "required": ["dateOfBirth"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["registration", "person"],
+  "additionalProperties": false
+}

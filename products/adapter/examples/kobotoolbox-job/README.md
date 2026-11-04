@@ -15,7 +15,8 @@ All three jobs reuse the same pinned `kobotoolbox` provider pack and its
 Choose exactly one job and runtime pair for each form:
 
 - `job.yaml` maps the declared projection through the job-owned,
-  digest-pinned `mappings/register-household.rhai`, then starts and submits a
+  digest-pinned `mappings/register-household.rhai` (generated from
+  `register-household.mapping.yaml`), then starts and submits a
   Base Registry Engine (BReg) Proposal directly. Its operator bindings are in
   `job-runtime.example.yaml`.
 - `job.coordinator.yaml` signs the same projection for a named Coordinator
@@ -39,6 +40,67 @@ reference, and nothing releases it, so BReg keeps the uncorrected value and the
 held count grows. If supervisors routinely correct submissions in Kobo, choose
 `job.coordinator.yaml` and let its workflow resolve the earlier record. Use the
 direct job for forms that are submitted once and not edited.
+
+## Editing the direct mapping
+
+`mappings/register-household.mapping.yaml` is an `AdapterMapping` model and the
+source of truth for the pinned `mappings/register-household.rhai`. The model
+sits beside its generated script, inside the directory that owns the job
+document, and paths in the model resolve against the model file. Its target
+schema, `mappings/register-household-input.schema.json`, mirrors the `register-household`
+Action input in [`../kobotoolbox-breg/registry.yaml`](../kobotoolbox-breg/registry.yaml).
+
+| Source selection | Target | Rule |
+| --- | --- | --- |
+| `_id` | `sourceSubmissionId` | `convert: text`: a string stays as is, an integer becomes its decimal string |
+| `respondent_name` | `respondentName` | Copy string |
+| `"household.household_size"` | `householdSize` | `convert: integer`: an integer, or an integer string of 1 to 18 digits |
+
+The ingestion target wraps the mapped input in the Proposal shape the job
+expects: `#{startInput: #{input: ...}, submitBody: #{}}`. A missing or null
+answer, an `_id` that is neither a string nor an integer, and a household size
+that is not an integer or integer string all make the script throw. The
+runtime maps any mapping failure to a refusal of that one item, with no value
+in the message.
+
+To change the mapping, edit the model, regenerate, repin, and check. Run the
+commands from the checkout root:
+
+```sh
+cargo run --locked -p registry-adapterctl -- mapping generate \
+  products/adapter/examples/kobotoolbox-job/mappings/register-household.mapping.yaml
+# copy the printed scriptDigest into destination.mapping.digest of job.yaml
+# and job.hook.yaml
+KOBO_USERNAME=check KOBO_PASSWORD=check cargo run --locked -p registry-adapterctl -- job check \
+  products/adapter/packs/kobotoolbox/pack.yaml \
+  products/adapter/examples/kobotoolbox-job/job.yaml \
+  --runtime products/adapter/examples/kobotoolbox-job/job-runtime.example.yaml \
+  --profile products/adapter/examples/kobotoolbox-job/profile.yaml \
+  --project products/adapter/examples/kobotoolbox-job/project.yaml
+```
+
+`adapterctl job check` warns (`adapter.mapping.script-drift`) when the script no
+longer matches its model, for example after a hand edit. Preview the mapping
+offline over the projected items in `preview/`, each file one projection as the
+job delivers it (an accepted string id, an accepted integer id with a numeric
+string size, and a submission missing `respondent_name`):
+
+```sh
+cargo run --locked -p registry-adapterctl -- mapping preview \
+  products/adapter/examples/kobotoolbox-job/mappings/register-household.mapping.yaml \
+  --input products/adapter/examples/kobotoolbox-job/preview/accepted-string-id.json \
+  --input products/adapter/examples/kobotoolbox-job/preview/accepted-integer-id.json \
+  --input products/adapter/examples/kobotoolbox-job/preview/missing-respondent.json
+```
+
+The first two print the destination input; the third prints a categorical
+refusal. Preview shows no field-level runtime errors and does not run the
+job, a source, or a destination.
+
+The generated script replaces a handwritten one that carried this note: the
+mapping is example-only programme mapping. The Kobo provider pack stays
+reusable, and this job-owned file maps the pack's declared projection into one
+synthetic BReg Proposal Action input and is pinned by the job document.
 
 The direct mapping is deliberately example-specific. Programme Action inputs
 do not belong in the reusable Kobo provider pack, and changing the mapping

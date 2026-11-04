@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://registry.example/schemas/kobotoolbox-register-household-input/1/schema.json",
+  "title": "Register household Action input",
+  "type": "object",
+  "properties": {
+    "sourceSubmissionId": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "respondentName": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "householdSize": { "type": "integer" }
+  },
+  "required": ["sourceSubmissionId", "respondentName", "householdSize"],
+  "additionalProperties": false
+}

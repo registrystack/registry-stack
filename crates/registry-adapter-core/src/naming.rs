@@ -91,3 +91,14 @@ pub const MAX_TOKEN_PARAMETER_BYTES: usize = 512;
 /// The upstream retention window an operator may declare for the audit
 /// journal, in days. It matches the platform access-log bound.
 pub const MAX_AUDIT_RETENTION_DAYS: u32 = 3_650;
+
+/// apiVersion of the authored mapping model.
+pub const ADAPTER_MAPPING_API_VERSION: &str =
+    "id.registrystack.org/formats/adapter/mapping/v1alpha1";
+
+/// Kind of the authored mapping model.
+pub const ADAPTER_MAPPING_KIND: &str = "AdapterMapping";
+
+/// `$id` of the mapping model's JSON Schema.
+pub const ADAPTER_MAPPING_SCHEMA_ID: &str =
+    "https://id.registrystack.org/schemas/adapter/mapping/mapping.v1alpha1.schema.json";

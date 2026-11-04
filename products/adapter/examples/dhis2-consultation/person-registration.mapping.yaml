@@ -1,0 +1,23 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/mapping/mapping.v1alpha1.schema.json
+#
+# The person-registration Consultation view, authored as field assignments.
+# `adapterctl mapping generate` writes scripts/person-registration.rhai from
+# this model; the script is the pinned artifact the engine runs. The date of
+# birth is one DHIS2 tracked-entity attribute (Dob00000001), selected by its
+# UID from the attributes array; no other attribute is disclosed.
+apiVersion: id.registrystack.org/formats/adapter/mapping/v1alpha1
+kind: AdapterMapping
+mapping:
+  id: person-registration
+  target: consultation
+  targetSchema: schemas/person-registration.schema.json
+  script: scripts/person-registration.rhai
+  entrypoint: project_person_registration
+assignments:
+  - target: registration.organisationUnit
+    from: orgUnit
+  - target: registration.lastChangedAt
+    from: updatedAt
+  - target: person.dateOfBirth
+    from: attributes[attribute = "Dob00000001"].value
+    convert: date

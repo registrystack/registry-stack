@@ -4062,6 +4062,43 @@ formats:
         whenOmitted: refused
     restrictingMembers: []
 
+  - id: adapter/mapping
+    product: adapter
+    title: Registry Adapter mapping model
+    files: ["*.mapping.yaml"]
+    syntax: yaml
+    audience: authored
+    stability: experimental
+    current:
+      apiVersion: id.registrystack.org/formats/adapter/mapping/v1alpha1
+      kind: AdapterMapping
+      checkedBy:
+        file: crates/registry-adapter-core/src/naming.rs
+        symbol: ADAPTER_MAPPING_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/adapter/mapping/v1alpha1
+      kind: AdapterMapping
+    schema:
+      path: products/adapter/schemas/mapping.v1alpha1.schema.json
+      id: https://id.registrystack.org/schemas/adapter/mapping/mapping.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-adapterctl -- schemas --output-dir products/adapter/schemas
+      driftCheck: products/adapter/scripts/check-contracts.sh
+    reader:
+      crate: registry-adapterctl
+      file: crates/registry-adapterctl/src/mapping.rs
+      function: load
+      type: AdapterMapping
+    check: adapterctl mapping check {file}
+    example: products/adapter/examples/formats/mapping/tracked-entity-request.mapping.yaml
+    conformance:
+      requiredText: /mapping/entrypoint
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+
   - id: adapter/fixture
     product: adapter
     title: Registry Adapter fixture suite
