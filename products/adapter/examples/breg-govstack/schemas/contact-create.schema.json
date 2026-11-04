@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://registry.example/schemas/contact-create/1.0.0/schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "email"],
+  "properties": {
+    "name": {"type": "string", "minLength": 1, "maxLength": 160},
+    "email": {"type": "string", "minLength": 1, "maxLength": 254},
+    "note": {"type": "string", "minLength": 1, "maxLength": 240}
+  }
+}

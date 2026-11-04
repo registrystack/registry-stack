@@ -524,6 +524,15 @@ fn retention_cadence(retention: Duration) -> Duration {
     (retention / 2).clamp(Duration::from_secs(1), Duration::from_secs(60))
 }
 
+fn source_replay_window_seconds(support: &registry_adapter_core::SourceWriteSupport) -> u64 {
+    match support {
+        registry_adapter_core::SourceWriteSupport::CreateOne { replay, .. }
+        | registry_adapter_core::SourceWriteSupport::ConditionalUpdateOne { replay, .. } => {
+            replay.replay_window_seconds.get()
+        }
+    }
+}
+
 /// The journal retention window `audit.retentionDays` names.
 fn journal_retention(retention_days: u32) -> Duration {
     Duration::from_secs(u64::from(retention_days) * 24 * 60 * 60)
@@ -607,7 +616,7 @@ pub async fn run(
         profile_path,
         pack_path,
         runtime_path,
-        crate::govstack::consultation::target_attachment,
+        crate::govstack::target_attachment,
     )?;
     for unserved in &loaded.unserved {
         tracing::warn!(binding = %unserved.binding, reason = %unserved.reason,
@@ -620,9 +629,46 @@ pub async fn run(
     }
     let effective_contract = EffectiveContract::from_loaded(&loaded)
         .map_err(|error| ServeError::Configuration(error.to_string()))?;
+    let serves_write = loaded.served.iter().any(|served| {
+        loaded
+            .profile
+            .operations
+            .get(served.operation.as_str())
+            .is_some_and(|operation| !operation.is_read())
+    });
+    let serves_fixed_write = loaded
+        .served
+        .iter()
+        .any(|served| served.write_support.is_some());
+    for operation in loaded.served.iter().filter(|served| {
+        matches!(
+            served.write_support.as_ref(),
+            Some(registry_adapter_core::SourceWriteSupport::ConditionalUpdateOne { .. })
+        )
+    }) {
+        let metadata = crate::govstack::write::metadata::resolve_runtime_write(&loaded, operation)
+            .map_err(|_| {
+                ServeError::Configuration(
+                    "a served fixed conditional Write operation requires its exact served companion read"
+                        .to_owned(),
+                )
+            })?;
+        if metadata.companion_read.is_none() {
+            return Err(ServeError::Configuration(
+                "a served fixed conditional Write operation requires its exact served companion read"
+                    .to_owned(),
+            ));
+        }
+    }
     let authenticator = authenticator(&loaded.runtime, &loaded.resolver).await?;
     // Every secret the runtime reads resolves before the listener binds.
     let codec = codec(&loaded.runtime, &loaded.resolver)?;
+    if serves_fixed_write && codec.is_none() {
+        return Err(ServeError::Configuration(
+            "cursorKeyRef is required when a fixed GovStack Write operation is served; configure one exact 32-byte key reference for opaque write guards and cursors"
+                .to_owned(),
+        ));
+    }
     let shutdown = shutdown_signal()?;
     let migration = pool(&loaded.runtime.database, &loaded.resolver, true)?;
     {
@@ -638,13 +684,6 @@ pub async fn run(
         })?;
     }
     let journal = pool(&loaded.runtime.database, &loaded.resolver, false)?;
-    let serves_write = loaded.served.iter().any(|served| {
-        loaded
-            .profile
-            .operations
-            .get(served.operation.as_str())
-            .is_some_and(|operation| !operation.is_read())
-    });
     let declares_recovery = loaded
         .served
         .iter()
@@ -691,14 +730,27 @@ pub async fn run(
     let journal_window = journal_retention(loaded.runtime.audit.retention_days.get());
     let journal_sweep_pool = journal.clone();
     let idempotency = match (serves_write, loaded.runtime.idempotency) {
-        (true, Some(retention)) => Some((
-            PostgresIdempotencyStore::new(
-                journal.clone(),
-                Duration::from_secs(retention.response_retention_seconds.get()),
-            )
-            .map_err(|error| ServeError::Configuration(format!("idempotency: {error}")))?,
-            Duration::from_secs(retention.response_retention_seconds.get()),
-        )),
+        (true, Some(retention)) => {
+            let response_retention_seconds = retention.response_retention_seconds.get();
+            if loaded.served.iter().any(|served| {
+                served.write_support.as_ref().is_some_and(|support| {
+                    source_replay_window_seconds(support) < response_retention_seconds
+                })
+            }) {
+                return Err(ServeError::Configuration(
+                    "a source write replay window is shorter than idempotency.responseRetentionSeconds; increase the source replayWindowSeconds or reduce response retention"
+                        .to_owned(),
+                ));
+            }
+            Some((
+                PostgresIdempotencyStore::new(
+                    journal.clone(),
+                    Duration::from_secs(response_retention_seconds),
+                )
+                .map_err(|error| ServeError::Configuration(format!("idempotency: {error}")))?,
+                Duration::from_secs(response_retention_seconds),
+            ))
+        }
         (true, None) => {
             return Err(ServeError::Configuration(
                 "idempotency.responseRetentionSeconds is required when a write is served"
@@ -987,5 +1039,28 @@ mod tests {
             retention_cadence(Duration::from_secs(365 * 24 * 60 * 60)),
             Duration::from_secs(60)
         );
+    }
+
+    #[test]
+    fn source_replay_window_is_read_from_both_fixed_write_guarantees() {
+        for (support, expected) in [
+            (
+                serde_json::json!({
+                    "type": "create-one", "identity": "source-assigned",
+                    "replay": {"type": "exact-keyed", "replayWindowSeconds": 300}
+                }),
+                300,
+            ),
+            (
+                serde_json::json!({
+                    "type": "conditional-update-one", "precondition": "strong-atomic-source",
+                    "replay": {"type": "exact-keyed", "replayWindowSeconds": 600}
+                }),
+                600,
+            ),
+        ] {
+            let support = serde_json::from_value(support).expect("source write support");
+            assert_eq!(source_replay_window_seconds(&support), expected);
+        }
     }
 }

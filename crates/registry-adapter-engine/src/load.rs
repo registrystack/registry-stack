@@ -186,12 +186,19 @@ pub struct ServedOperation {
     /// Optional project-owned transformation applied to each acquired source
     /// item before protocol wrapping and disclosure validation.
     pub project_transform: Option<Arc<crate::project_transform::CompiledProjectTransform>>,
+    /// Project-owned transformation from validated public write data to the
+    /// source route's private JSON object. It is absent on every read.
+    pub project_input_transform:
+        Option<Arc<crate::inbound_transform::CompiledProjectInputTransform>>,
     /// Full project-owned Lookup/Search values schema. The facade validates
     /// the captured input object against it before any source route runs.
     pub project_input_schema: Option<Arc<crate::public_schema::CheckedPublicSchema>>,
     /// Explicit source-neutral read semantics for the selected ordinary or
     /// instantiated route. A Consultation host never infers these guarantees.
     pub read_support: Option<registry_adapter_core::SourceReadSupport>,
+    /// Explicit source-native semantics of a fixed-target write. It is absent
+    /// on reads and on legacy generic-profile operations.
+    pub write_support: Option<registry_adapter_core::SourceWriteSupport>,
     /// Host-supplied mapping from admitted facade inputs to the generic
     /// source route body. Fixed targets must attach this before serving.
     pub source_input: Option<crate::target::SourceInput>,
@@ -625,8 +632,9 @@ fn load_inner(
     )?;
     let pack_directory = pack_path.parent().unwrap_or_else(|| Path::new("."));
     let mut target = None;
-    let (profile, profile_bytes) = match (&project.profile, &project.consultation) {
-        (Some(_), None) => {
+    let has_fixed_target = project.consultation.is_some() || project.write.is_some();
+    let (profile, profile_bytes) = match (&project.profile, has_fixed_target) {
+        (Some(_), false) => {
             let profile_path =
                 artifact_path(profile_path, project_directory, "profile.yaml", "--profile")?;
             read::<AdapterProfile>(
@@ -634,7 +642,7 @@ fn load_inner(
                 &format_spec(ADAPTER_PROFILE_KIND, ADAPTER_PROFILE_API_VERSION),
             )?
         }
-        (None, Some(_)) => {
+        (None, true) => {
             if profile_path.is_some() {
                 return Err(LoadError::Runtime(
                     "a host target deployment does not load an authored profile".to_owned(),
@@ -650,7 +658,7 @@ fn load_inner(
         }
         _ => {
             return Err(LoadError::Workspace(
-                "adapter.project.facade-selection exactly one of profile and consultation must be set"
+                "adapter.project.facade-selection selects either an authored profile or at least one fixed target"
                     .to_owned(),
             ));
         }
@@ -760,7 +768,7 @@ fn load_inner(
         },
     )?;
     if let Some(target) = target {
-        target.apply(&mut authored)?;
+        target.apply(&mut authored, &pack)?;
     }
     Ok(Loaded {
         profile,
@@ -1223,15 +1231,19 @@ fn compile_binding<S: ArtifactSource + ?Sized>(
             "a read facade operation is served only as GET or a readOnly POST",
         ));
     }
+    let fixed_write_patch = operation.method == registry_adapter_core::HttpMethod::Patch
+        && project.profile.is_none()
+        && project.write.is_some();
     if !is_read
         && !matches!(
             operation.method,
             registry_adapter_core::HttpMethod::Post | registry_adapter_core::HttpMethod::Put
         )
+        && !fixed_write_patch
     {
         return Err(not_served(
             UnservedReason::MethodUnsupported,
-            "a write facade operation is served only as POST or PUT in this slice",
+            "a write facade operation is served only as POST or PUT unless a fixed Write target explicitly selects PATCH",
         ));
     }
     if operation.method == registry_adapter_core::HttpMethod::Get
@@ -1469,8 +1481,10 @@ fn compile_binding<S: ArtifactSource + ?Sized>(
         record_schema: registry_adapter_core::binding_record_schema(project, binding)
             .map_err(|reason| not_served(UnservedReason::RecordSchemaUnavailable, reason))?,
         project_transform: None,
+        project_input_transform: None,
         project_input_schema: None,
         read_support: None,
+        write_support: None,
         source_input: None,
         item_projection: None,
         target_contract: None,
@@ -2192,8 +2206,10 @@ mod tests {
             async_completion: None,
             resume: None,
             project_transform: None,
+            project_input_transform: None,
             project_input_schema: None,
             read_support: None,
+            write_support: None,
             source_input: None,
             item_projection: None,
             target_contract: None,

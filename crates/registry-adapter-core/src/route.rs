@@ -1215,6 +1215,11 @@ pub struct RouteTemplate {
     /// preserves. Public protocol and view names remain project-owned.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub read_support: Option<crate::SourceReadSupport>,
+    /// Source-neutral direct-write guarantees every instantiation of this
+    /// template preserves. Public protocol and domain schemas remain
+    /// project-owned.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub write_support: Option<crate::SourceWriteSupport>,
     /// The typed parameters the template body references.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub parameters: Vec<TemplateParameter>,

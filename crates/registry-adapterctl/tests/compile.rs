@@ -741,3 +741,60 @@ fn colliding_concrete_paths_refuse() {
         "a colliding project writes no document"
     );
 }
+
+fn compile_breg_govstack(write_only: bool) -> Value {
+    let example = repo_root().join("products/adapter/examples/breg-govstack");
+    let (_root, project) = copied_tree(&example);
+    if write_only {
+        let mut text = std::fs::read_to_string(&project).unwrap();
+        let start = text.find("consultation:\n").expect("Consultation block");
+        let end = text.find("write:\n").expect("Write block");
+        text.replace_range(start..end, "");
+        text = text
+            .replace(
+                "    - recordType: contacts\n      create:",
+                "    - recordType: contacts\n      registry: https://registry.example/registries/contacts\n      view: contact-public\n      readDataSchema: contact-public\n      create:",
+            )
+            .replace("companionRead: contacts-retrieve", "companionRead: contacts-writable-read")
+            .replace("id: contacts-retrieve\n    operation: retrieve", "id: contacts-writable-read\n    operation: writable-read")
+            .replace("contacts-retrieve: {script:", "contacts-writable-read: {script:")
+            .replace("operations: [retrieve]", "operations: [writable-read]");
+        std::fs::write(&project, text).unwrap();
+    }
+    let pack = repo_root()
+        .join("products/adapter/packs/breg-records/pack.yaml")
+        .to_str()
+        .unwrap()
+        .to_owned();
+    compile(&project, &["--pack", &pack]).0
+}
+
+fn assert_fixed_write_contract(document: &Value) {
+    let create = &document["paths"]["/v1/collections/contacts/records"]["post"];
+    assert_eq!(
+        create["responses"]["201"]["description"],
+        "The Record was authoritatively created."
+    );
+    assert!(create["responses"].get("202").is_none());
+    assert!(create["responses"].get("422").is_some());
+    assert!(create["responses"].get("502").is_some());
+
+    let update = &document["paths"]["/v1/collections/contacts/records/{recordId}"]["patch"];
+    assert_eq!(
+        update["responses"]["204"]["description"],
+        "The Record was authoritatively updated."
+    );
+    assert!(update["responses"].get("412").is_some());
+    assert!(update["responses"].get("428").is_some());
+}
+
+#[test]
+fn the_real_unified_breg_govstack_project_compiles_create_and_update() {
+    assert_fixed_write_contract(&compile_breg_govstack(false));
+}
+
+#[test]
+fn the_real_write_only_breg_govstack_project_uses_the_fixed_target() {
+    let document = compile_breg_govstack(true);
+    assert_fixed_write_contract(&document);
+}

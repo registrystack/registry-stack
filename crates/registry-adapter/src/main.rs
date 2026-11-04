@@ -66,7 +66,7 @@ fn export_effective_contract(
         profile,
         pack,
         runtime_config,
-        registry_adapter::govstack::consultation::target_attachment,
+        registry_adapter::govstack::target_attachment,
     )
     .map_err(|error| error.to_string())?;
     let document =

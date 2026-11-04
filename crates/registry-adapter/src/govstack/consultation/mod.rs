@@ -28,6 +28,22 @@ pub const MAXIMUM_RECORD_ID_CHARACTERS: usize = 256;
 pub const PROFILE_ID: &str = "govstack-consultation";
 pub const PROFILE_VERSION: &str = "1.0.0-draft";
 
+#[must_use]
+pub fn valid_collection_id(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    (1..=128).contains(&bytes.len())
+        && bytes[0].is_ascii_lowercase()
+        && bytes
+            .iter()
+            .skip(1)
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
+}
+
+#[must_use]
+pub(crate) fn valid_view_id(value: &str) -> bool {
+    valid_collection_id(value)
+}
+
 /// The internal profile used only to reuse the existing facade execution,
 /// admission, problem, cursor and journal machinery. Deployments never pin
 /// or author these standard paths and envelopes.
@@ -202,7 +218,12 @@ pub fn record_page_schema(data_schema_reference: &str) -> Value {
                 "additionalProperties": false,
                 "required": ["nextCursor"],
                 "properties": {
-                    "nextCursor": {"type": ["string", "null"]},
+                    "nextCursor": {
+                        "anyOf": [
+                            crate::engine::effective_contract::cursor_schema(),
+                            {"type": "null"},
+                        ],
+                    },
                 },
             },
         },
@@ -235,7 +256,7 @@ pub fn search_request_schema(search: &str, input_schema_reference: &str) -> Valu
             "search": {"const": search},
             "criteria": {"$ref": input_schema_reference},
             "pageSize": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
-            "cursor": {"type": "string", "minLength": 1},
+            "cursor": crate::engine::effective_contract::cursor_schema(),
         },
     })
 }
@@ -244,6 +265,8 @@ pub fn search_request_schema(search: &str, input_schema_reference: &str) -> Valu
 #[serde(rename_all = "camelCase")]
 pub struct CallerCapabilities {
     pub collections: Vec<CapabilityCollection>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub operations: Vec<Value>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -259,12 +282,36 @@ pub struct CapabilityCollection {
 pub struct CapabilityOperation {
     pub operation_id: String,
     pub contract: String,
-    pub capability: ConsultationCapability,
-    pub view: String,
+    pub family: CapabilityFamily,
+    pub capability: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub view: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub write: Option<DiscoveredWriteMetadata>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub selectors: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub searches: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CapabilityFamily {
+    Consultation,
+    Write,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscoveredWriteMetadata {
+    pub companion_read: CompanionReadIdentity,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompanionReadIdentity {
+    pub operation_id: String,
+    pub view: String,
 }
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
@@ -284,7 +331,9 @@ pub fn validate_capabilities(document: &CallerCapabilities) -> Result<(), Capabi
     let mut collections = BTreeSet::new();
     let mut operations = BTreeSet::new();
     for collection in &document.collections {
-        if !collections.insert(collection.collection_id.as_str()) {
+        if !valid_collection_id(&collection.collection_id)
+            || !collections.insert(collection.collection_id.as_str())
+        {
             return Err(CapabilityError::Contradictory);
         }
         if collection.operations.is_empty()
@@ -294,25 +343,36 @@ pub fn validate_capabilities(document: &CallerCapabilities) -> Result<(), Capabi
         }
         let mut capabilities = BTreeSet::new();
         for operation in &collection.operations {
-            if operation.operation_id
-                != operation.capability.operation_id(&collection.collection_id)
-                || !capabilities.insert(operation.capability)
+            let expected_operation = discovered_operation_id(
+                operation.capability.as_str(),
+                collection.collection_id.as_str(),
+            );
+            if expected_operation.as_deref() != Some(operation.operation_id.as_str())
+                || !capabilities.insert(operation.capability.as_str())
                 || !operations.insert(operation.operation_id.as_str())
             {
                 return Err(CapabilityError::Contradictory);
             }
-            let named_input_is_consistent = match operation.capability {
-                ConsultationCapability::Lookup => {
-                    operation.selectors.len() == 1 && operation.searches.is_empty()
-                }
-                ConsultationCapability::Search => {
-                    operation.searches.len() == 1 && operation.selectors.is_empty()
-                }
-                ConsultationCapability::Retrieve | ConsultationCapability::List => {
+            let named_input_is_consistent = match operation.capability.as_str() {
+                "lookup" => operation.selectors.len() == 1 && operation.searches.is_empty(),
+                "search" => operation.searches.len() == 1 && operation.selectors.is_empty(),
+                "retrieve" | "list" | "create" | "update" => {
                     operation.selectors.is_empty() && operation.searches.is_empty()
                 }
+                _ => false,
             };
-            if !named_input_is_consistent {
+            let annotations_are_consistent = match operation.family {
+                CapabilityFamily::Consultation => {
+                    operation.view.as_deref().is_some_and(valid_view_id)
+                        && operation.write.is_none()
+                }
+                CapabilityFamily::Write if operation.capability == "update" => operation
+                    .write
+                    .as_ref()
+                    .is_some_and(|write| valid_view_id(&write.companion_read.view)),
+                CapabilityFamily::Write => operation.view.is_none() && operation.write.is_none(),
+            };
+            if !named_input_is_consistent || !annotations_are_consistent {
                 return Err(CapabilityError::Contradictory);
             }
         }
@@ -328,74 +388,166 @@ pub fn caller_capabilities(
     served_operations: &[crate::engine::load::ServedOperation],
     mut admitted: impl FnMut(&crate::engine::load::ServedOperation) -> bool,
 ) -> Result<CallerCapabilities, CapabilityError> {
-    let Some(consultation) = project.consultation.as_ref() else {
+    if project.consultation.is_none() && project.write.is_none() {
         return Ok(CallerCapabilities {
             collections: Vec::new(),
+            operations: Vec::new(),
         });
-    };
+    }
+    let consultation = project.consultation.as_ref();
+    let write = project.write.as_ref();
+    let record_types: BTreeSet<&str> = consultation
+        .into_iter()
+        .flat_map(|target| {
+            target
+                .collections
+                .iter()
+                .map(|entry| entry.record_type.as_str())
+        })
+        .chain(write.into_iter().flat_map(|target| {
+            target
+                .collections
+                .iter()
+                .map(|entry| entry.record_type.as_str())
+        }))
+        .collect();
     let mut collections = Vec::new();
-    for declared in consultation.collections.iter() {
+    for record_type in record_types {
+        let declared = consultation.and_then(|target| target.collections.get(record_type));
+        let write_collection = write.and_then(|target| target.collections.get(record_type));
+        let resolved = write_collection.and_then(|_| {
+            crate::govstack::write::metadata::collection_metadata(project, record_type).ok()
+        });
+        let registry = declared
+            .map(|collection| collection.registry.as_str())
+            .or_else(|| resolved.as_ref().map(|metadata| metadata.registry))
+            .ok_or(CapabilityError::Contradictory)?;
         let mut operations = Vec::new();
         for served in served_operations
             .iter()
-            .filter(|served| served.record_type == declared.record_type.as_str())
+            .filter(|served| served.record_type == record_type)
         {
-            let Some(capability) = SelfCapability::from_operation(&served.operation) else {
-                continue;
-            };
             if !admitted(served) {
                 continue;
             }
-            let capability = capability.0;
-            let (selectors, searches) = match capability {
-                ConsultationCapability::Lookup => (
-                    declared
-                        .lookup
-                        .as_ref()
-                        .map(|lookup| vec![lookup.selector.as_str().to_owned()])
-                        .unwrap_or_default(),
-                    Vec::new(),
-                ),
-                ConsultationCapability::Search => (
-                    Vec::new(),
-                    declared
-                        .search
-                        .as_ref()
-                        .map(|search| vec![search.search.as_str().to_owned()])
-                        .unwrap_or_default(),
-                ),
-                ConsultationCapability::Retrieve | ConsultationCapability::List => {
-                    (Vec::new(), Vec::new())
+            if let Some(capability) =
+                ConsultationCapability::from_binding_operation(&served.operation).or_else(|| {
+                    (served.operation == "writable-read")
+                        .then_some(ConsultationCapability::Retrieve)
+                })
+            {
+                let view = declared
+                    .map(|collection| collection.view.as_str())
+                    .or_else(|| resolved.as_ref().and_then(|metadata| metadata.view))
+                    .ok_or(CapabilityError::Contradictory)?;
+                let (selectors, searches) = match capability {
+                    ConsultationCapability::Lookup => (
+                        declared
+                            .and_then(|collection| collection.lookup.as_ref())
+                            .map(|lookup| vec![lookup.selector.as_str().to_owned()])
+                            .unwrap_or_default(),
+                        Vec::new(),
+                    ),
+                    ConsultationCapability::Search => (
+                        Vec::new(),
+                        declared
+                            .and_then(|collection| collection.search.as_ref())
+                            .map(|search| vec![search.search.as_str().to_owned()])
+                            .unwrap_or_default(),
+                    ),
+                    ConsultationCapability::Retrieve | ConsultationCapability::List => {
+                        (Vec::new(), Vec::new())
+                    }
+                };
+                operations.push(CapabilityOperation {
+                    operation_id: capability.operation_id(record_type),
+                    contract: if served.operation == "writable-read" {
+                        resolved.as_ref().map(|metadata| metadata.contract)
+                    } else {
+                        consultation.map(|target| target.contract.as_str())
+                    }
+                    .ok_or(CapabilityError::Contradictory)?
+                    .to_owned(),
+                    family: CapabilityFamily::Consultation,
+                    capability: capability.binding_operation().to_owned(),
+                    view: Some(view.to_owned()),
+                    write: None,
+                    selectors,
+                    searches,
+                });
+                continue;
+            }
+            let Some(capability) =
+                crate::govstack::write::attachment::WriteCapability::from_binding_operation(
+                    &served.operation,
+                )
+            else {
+                continue;
+            };
+            let selected = match capability {
+                crate::govstack::write::attachment::WriteCapability::Create => {
+                    write_collection.is_some_and(|collection| collection.create.is_some())
+                }
+                crate::govstack::write::attachment::WriteCapability::Update => {
+                    write_collection.is_some_and(|collection| collection.update.is_some())
                 }
             };
+            if !selected {
+                continue;
+            }
+            let write_metadata = if capability
+                == crate::govstack::write::attachment::WriteCapability::Update
+            {
+                let view = resolved
+                    .as_ref()
+                    .and_then(|metadata| metadata.view)
+                    .ok_or(CapabilityError::Contradictory)?;
+                Some(DiscoveredWriteMetadata {
+                    companion_read: CompanionReadIdentity {
+                        operation_id: ConsultationCapability::Retrieve.operation_id(record_type),
+                        view: view.to_owned(),
+                    },
+                })
+            } else {
+                None
+            };
             operations.push(CapabilityOperation {
-                operation_id: capability.operation_id(declared.record_type.as_str()),
-                contract: consultation.contract.clone(),
-                capability,
-                view: declared.view.as_str().to_owned(),
-                selectors,
-                searches,
+                operation_id: capability.operation_id(record_type),
+                contract: resolved
+                    .as_ref()
+                    .map(|metadata| metadata.contract.to_owned())
+                    .ok_or(CapabilityError::Contradictory)?,
+                family: CapabilityFamily::Write,
+                capability: capability.binding_operation().to_owned(),
+                view: None,
+                write: write_metadata,
+                selectors: Vec::new(),
+                searches: Vec::new(),
             });
         }
         if !operations.is_empty() {
             collections.push(CapabilityCollection {
-                collection_id: declared.record_type.as_str().to_owned(),
-                registry: declared.registry.clone(),
+                collection_id: record_type.to_owned(),
+                registry: registry.to_owned(),
                 operations,
             });
         }
     }
-    let document = CallerCapabilities { collections };
+    let document = CallerCapabilities {
+        collections,
+        operations: Vec::new(),
+    };
     validate_capabilities(&document)?;
     Ok(document)
 }
 
-struct SelfCapability(ConsultationCapability);
-
-impl SelfCapability {
-    fn from_operation(operation: &str) -> Option<Self> {
-        ConsultationCapability::from_binding_operation(operation).map(Self)
-    }
+fn discovered_operation_id(capability: &str, collection: &str) -> Option<String> {
+    ConsultationCapability::from_binding_operation(capability)
+        .map(|capability| capability.operation_id(collection))
+        .or_else(|| {
+            crate::govstack::write::attachment::WriteCapability::from_binding_operation(capability)
+                .map(|capability| capability.operation_id(collection))
+        })
 }
 
 #[must_use]
@@ -403,6 +555,7 @@ pub fn validation_pointer(operation: &str) -> &'static str {
     match operation {
         "lookup" => "/values",
         "search" => "/criteria",
+        "create" | "update" => "/data",
         _ => "/request",
     }
 }
@@ -425,30 +578,75 @@ pub fn target_attachment(
     pack: &AdapterPack,
     project_directory: &Path,
 ) -> Result<crate::engine::target::TargetAttachment, crate::engine::load::LoadError> {
-    let consultation = project.consultation.as_ref().ok_or_else(|| {
-        crate::engine::load::LoadError::Runtime(
-            "the GovStack Consultation metadata is unavailable".to_owned(),
-        )
-    })?;
-    let profile = built_in_profile();
+    if project.consultation.is_none() && project.write.is_none() {
+        return Err(crate::engine::load::LoadError::Runtime(
+            "the GovStack target metadata is unavailable".to_owned(),
+        ));
+    }
+    let consultation = project.consultation.as_ref();
+    let profile = crate::govstack::built_in_profile(project);
     let mut operations = BTreeMap::new();
     for binding in project.bindings.iter() {
-        let capability = ConsultationCapability::from_binding_operation(&binding.operation)
+        let ordinary_capability =
+            ConsultationCapability::from_binding_operation(&binding.operation);
+        let capability = match ordinary_capability {
+            Some(capability) => capability,
+            None if binding.operation.as_str() == "writable-read" => {
+                ConsultationCapability::Retrieve
+            }
+            None => continue,
+        };
+        if !valid_collection_id(binding.record_type.as_str()) {
+            return Err(crate::engine::load::LoadError::Runtime(
+                "a GovStack collection id must start with a lowercase letter and contain only lowercase letters, digits, and hyphens, with at most 128 characters"
+                    .to_owned(),
+            ));
+        }
+        let consultation_collection =
+            consultation.and_then(|target| target.collections.get(binding.record_type.as_str()));
+        let view = consultation_collection
+            .map(|collection| collection.view.as_str())
+            .or_else(|| {
+                project
+                    .write
+                    .as_ref()
+                    .and_then(|target| target.collections.get(binding.record_type.as_str()))
+                    .and_then(|collection| collection.view.as_deref())
+            })
+            .ok_or_else(|| {
+                crate::engine::load::LoadError::Runtime(
+                    "the GovStack public view metadata is unavailable".to_owned(),
+                )
+            })?;
+        if !valid_view_id(view) {
+            return Err(crate::engine::load::LoadError::Runtime(
+                "a GovStack view id must start with a lowercase letter and contain only lowercase letters, digits, and hyphens, with at most 128 characters"
+                    .to_owned(),
+            ));
+        }
+        let data_schema = if ordinary_capability.is_some() {
+            consultation_collection
+                .map(|collection| collection.data_schema.as_str())
+                .ok_or_else(|| {
+                    crate::engine::load::LoadError::Runtime(format!(
+                        "binding {} names no GovStack Consultation collection",
+                        binding.id
+                    ))
+                })?
+        } else {
+            crate::govstack::write::metadata::collection_metadata(
+                project,
+                binding.record_type.as_str(),
+            )
+            .ok()
+            .and_then(|metadata| metadata.read_data_schema)
             .ok_or_else(|| {
                 crate::engine::load::LoadError::Runtime(format!(
-                    "binding {} does not name a GovStack Consultation capability",
+                    "binding {} has no writable companion-read schema",
                     binding.id
                 ))
-            })?;
-        let collection = consultation
-            .collections
-            .get(binding.record_type.as_str())
-            .ok_or_else(|| {
-                crate::engine::load::LoadError::Runtime(format!(
-                    "binding {} names no GovStack Consultation collection",
-                    binding.id
-                ))
-            })?;
+            })?
+        };
         let templated = project
             .templated_routes
             .get(binding.route.as_str())
@@ -481,12 +679,14 @@ pub fn target_attachment(
         })?;
         let (selected_input, input_schema_id, input_shape) = match capability {
             ConsultationCapability::Lookup => {
-                let lookup = collection.lookup.as_ref().ok_or_else(|| {
-                    crate::engine::load::LoadError::Runtime(format!(
-                        "binding {} has no Consultation Lookup metadata",
-                        binding.id
-                    ))
-                })?;
+                let lookup = consultation_collection
+                    .and_then(|collection| collection.lookup.as_ref())
+                    .ok_or_else(|| {
+                        crate::engine::load::LoadError::Runtime(format!(
+                            "binding {} has no Consultation Lookup metadata",
+                            binding.id
+                        ))
+                    })?;
                 (
                     Some(lookup.selector.as_str()),
                     Some(lookup.input_schema.as_str()),
@@ -494,12 +694,14 @@ pub fn target_attachment(
                 )
             }
             ConsultationCapability::Search => {
-                let search = collection.search.as_ref().ok_or_else(|| {
-                    crate::engine::load::LoadError::Runtime(format!(
-                        "binding {} has no Consultation Search metadata",
-                        binding.id
-                    ))
-                })?;
+                let search = consultation_collection
+                    .and_then(|collection| collection.search.as_ref())
+                    .ok_or_else(|| {
+                        crate::engine::load::LoadError::Runtime(format!(
+                            "binding {} has no Consultation Search metadata",
+                            binding.id
+                        ))
+                    })?;
                 (
                     Some(search.search.as_str()),
                     Some(search.input_schema.as_str()),
@@ -541,7 +743,7 @@ pub fn target_attachment(
             crate::engine::project_transform::CompiledProjectTransform::compile_from_directory(
                 project,
                 binding.id.as_str(),
-                collection.data_schema.as_str(),
+                data_schema,
                 project_directory,
             )
             .map_err(|_| {
@@ -553,7 +755,7 @@ pub fn target_attachment(
         );
         let declared = profile
             .operations
-            .get(capability.binding_operation())
+            .get(binding.operation.as_str())
             .expect("the fixed capability has a fixed profile operation");
         let pagination =
             declared
@@ -599,27 +801,29 @@ pub fn target_attachment(
                 "additionalProperties": false
             }),
         };
-        let operation = crate::engine::target::TargetOperation {
-            filters,
-            request_template,
-            project_input_schema,
-            project_transform: transform,
-            read_support: support,
-            source_input,
-            item_projection: crate::engine::target::ItemProjection {
-                record_id_member: "recordIdentifier".to_owned(),
-                value_member: "domainData".to_owned(),
-                revision_member: Some("revisionIdentifier".to_owned()),
-                maximum_record_id_bytes: MAXIMUM_ITEM_KEY_BYTES,
-                maximum_record_id_characters: MAXIMUM_RECORD_ID_CHARACTERS,
+        let operation = crate::engine::target::TargetOperation::Read(Box::new(
+            crate::engine::target::TargetReadOperation {
+                filters,
+                request_template,
+                project_input_schema,
+                project_transform: transform,
+                read_support: support,
+                source_input,
+                item_projection: crate::engine::target::ItemProjection {
+                    record_id_member: "recordIdentifier".to_owned(),
+                    value_member: "domainData".to_owned(),
+                    revision_member: Some("revisionIdentifier".to_owned()),
+                    maximum_record_id_bytes: MAXIMUM_ITEM_KEY_BYTES,
+                    maximum_record_id_characters: MAXIMUM_RECORD_ID_CHARACTERS,
+                },
+                effective_contract: crate::engine::target::EffectiveContractOperation {
+                    path,
+                    path_parameters,
+                    request_body,
+                    response_body,
+                },
             },
-            effective_contract: crate::engine::target::EffectiveContractOperation {
-                path,
-                path_parameters,
-                request_body,
-                response_body,
-            },
-        };
+        ));
         if operations
             .insert(binding.id.as_str().to_owned(), operation)
             .is_some()
@@ -642,26 +846,29 @@ fn target_identity(
     profile: &AdapterProfile,
     operations: &BTreeMap<String, crate::engine::target::TargetOperation>,
 ) -> Result<Vec<u8>, crate::engine::load::LoadError> {
-    let identity_operations: Vec<Value> = operations
-        .iter()
-        .map(|(binding, operation)| {
-            json!({
-                "binding": binding,
-                "sourceInput": operation.source_input,
-                "itemProjection": operation.item_projection,
-                "readSupport": operation.read_support,
-                "inputSchema": operation
-                    .project_input_schema
-                    .as_ref()
-                    .map(|schema| schema.as_value()),
-                "outputSchema": operation.project_transform.schema().as_value(),
-                "effectivePath": operation.effective_contract.path,
-                "effectivePathParameters": operation.effective_contract.path_parameters,
-                "effectiveRequest": operation.effective_contract.request_body,
-                "effectiveResponse": operation.effective_contract.response_body,
-            })
-        })
-        .collect();
+    let mut identity_operations = Vec::with_capacity(operations.len());
+    for (binding, operation) in operations {
+        let crate::engine::target::TargetOperation::Read(operation) = operation else {
+            return Err(crate::engine::load::LoadError::Runtime(
+                "the Consultation target identity accepts read operations only".to_owned(),
+            ));
+        };
+        identity_operations.push(json!({
+            "binding": binding,
+            "sourceInput": operation.source_input,
+            "itemProjection": operation.item_projection,
+            "readSupport": operation.read_support,
+            "inputSchema": operation
+                .project_input_schema
+                .as_ref()
+                .map(|schema| schema.as_value()),
+            "outputSchema": operation.project_transform.schema().as_value(),
+            "effectivePath": operation.effective_contract.path,
+            "effectivePathParameters": operation.effective_contract.path_parameters,
+            "effectiveRequest": operation.effective_contract.request_body,
+            "effectiveResponse": operation.effective_contract.response_body,
+        }));
+    }
     let identity_value = json!({
         "domain": "registry-adapter:host-target:v1",
         "mount": MOUNT_PATH,
@@ -960,6 +1167,7 @@ mod tests {
                     )],
                 },
             ],
+            operations: Vec::new(),
         };
         assert_eq!(
             validate_capabilities(&document),
@@ -1000,8 +1208,10 @@ mod tests {
         CapabilityOperation {
             operation_id: id.to_owned(),
             contract: "https://registry.example/contracts/1/openapi.yaml".to_owned(),
-            capability,
-            view: "public".to_owned(),
+            family: CapabilityFamily::Consultation,
+            capability: capability.binding_operation().to_owned(),
+            view: Some("public".to_owned()),
+            write: None,
             selectors: Vec::new(),
             searches: Vec::new(),
         }
@@ -1028,6 +1238,7 @@ mod tests {
                     )],
                 },
             ],
+            operations: Vec::new(),
         };
         assert_eq!(
             validate_capabilities(&document),
@@ -1045,8 +1256,91 @@ mod tests {
                 registry: "https://registry.example/people".to_owned(),
                 operations: vec![lookup],
             }],
+            operations: Vec::new(),
         };
         assert_eq!(validate_capabilities(&document), Ok(()));
+    }
+
+    #[test]
+    fn guarded_write_discovery_has_closed_companion_read_metadata() {
+        let update = CapabilityOperation {
+            operation_id: "updatePeople".to_owned(),
+            contract: "https://registry.example/contracts/1/openapi.yaml".to_owned(),
+            family: CapabilityFamily::Write,
+            capability: "update".to_owned(),
+            view: None,
+            write: Some(DiscoveredWriteMetadata {
+                companion_read: CompanionReadIdentity {
+                    operation_id: "retrievePeople".to_owned(),
+                    view: "person-public".to_owned(),
+                },
+            }),
+            selectors: Vec::new(),
+            searches: Vec::new(),
+        };
+        let document = CallerCapabilities {
+            collections: vec![CapabilityCollection {
+                collection_id: "people".to_owned(),
+                registry: "https://registry.example/people".to_owned(),
+                operations: vec![update],
+            }],
+            operations: Vec::new(),
+        };
+        assert_eq!(validate_capabilities(&document), Ok(()));
+        assert_eq!(
+            serde_json::to_value(document).unwrap()["collections"][0]["operations"][0],
+            json!({
+                "operationId": "updatePeople",
+                "contract": "https://registry.example/contracts/1/openapi.yaml",
+                "family": "write",
+                "capability": "update",
+                "write": {"companionRead": {"operationId": "retrievePeople", "view": "person-public"}}
+            })
+        );
+    }
+
+    #[test]
+    fn caller_visible_read_and_companion_views_use_the_canonical_hyphen_grammar() {
+        let mut read = operation("retrievePeople", ConsultationCapability::Retrieve);
+        read.view = Some("person_public".to_owned());
+        let mut update = CapabilityOperation {
+            operation_id: "updatePeople".to_owned(),
+            contract: "https://registry.example/contracts/1/openapi.yaml".to_owned(),
+            family: CapabilityFamily::Write,
+            capability: "update".to_owned(),
+            view: None,
+            write: Some(DiscoveredWriteMetadata {
+                companion_read: CompanionReadIdentity {
+                    operation_id: "retrievePeople".to_owned(),
+                    view: "person-public".to_owned(),
+                },
+            }),
+            selectors: Vec::new(),
+            searches: Vec::new(),
+        };
+        let document = |operation| CallerCapabilities {
+            collections: vec![CapabilityCollection {
+                collection_id: "people".to_owned(),
+                registry: "https://registry.example/people".to_owned(),
+                operations: vec![operation],
+            }],
+            operations: Vec::new(),
+        };
+        assert_eq!(
+            validate_capabilities(&document(read)),
+            Err(CapabilityError::Contradictory)
+        );
+
+        update
+            .write
+            .as_mut()
+            .expect("Write metadata")
+            .companion_read
+            .view = "person_public".to_owned();
+        assert_eq!(
+            validate_capabilities(&document(update)),
+            Err(CapabilityError::Contradictory)
+        );
     }
 
     #[test]
@@ -1059,6 +1353,7 @@ mod tests {
                     operations: vec![],
                 })
                 .collect(),
+            operations: Vec::new(),
         };
         assert_eq!(
             validate_capabilities(&document),
@@ -1101,7 +1396,7 @@ mod tests {
         assert!(authored.served.is_empty());
         assert_eq!(authored.unserved.len(), project.bindings.len());
         attachment
-            .apply(&mut authored)
+            .apply(&mut authored, &pack)
             .expect("known unserved attachment entries remain valid");
 
         let mut attachment = target_attachment(
@@ -1119,7 +1414,7 @@ mod tests {
             .insert("unknown-binding".to_owned(), operation);
         let mut authored = maintained_unserved_authoring(&project, &pack, &pack_path);
         let failure = attachment
-            .apply(&mut authored)
+            .apply(&mut authored, &pack)
             .expect_err("an unknown attachment entry is refused");
         assert!(failure.to_string().contains("unknown-binding"));
     }
@@ -1143,44 +1438,120 @@ mod tests {
         );
         assert!(operation["outputSchema"].is_object());
 
-        attachment
+        let operation = attachment
             .operations
             .get_mut("people-retrieve")
-            .expect("retrieve attachment")
-            .item_projection
-            .value_member = "publicData".to_owned();
+            .expect("retrieve attachment");
+        let crate::engine::target::TargetOperation::Read(operation) = operation else {
+            panic!("the Consultation retrieve attachment is a read");
+        };
+        operation.item_projection.value_member = "publicData".to_owned();
         let projection = target_identity(&attachment.profile, &attachment.operations)
             .expect("projection identity");
         assert_ne!(baseline, projection);
 
         let mut attachment = maintained_attachment();
-        attachment
+        let operation = attachment
             .operations
             .get_mut("people-retrieve")
-            .expect("retrieve attachment")
-            .effective_contract
-            .response_body["properties"]["recordId"]["maxLength"] = json!(128);
+            .expect("retrieve attachment");
+        let crate::engine::target::TargetOperation::Read(operation) = operation else {
+            panic!("the Consultation retrieve attachment is a read");
+        };
+        operation.effective_contract.response_body["properties"]["recordId"]["maxLength"] =
+            json!(128);
         let schema =
             target_identity(&attachment.profile, &attachment.operations).expect("schema identity");
         assert_ne!(baseline, schema);
 
         let mut attachment = maintained_attachment();
-        attachment
+        let operation = attachment
             .operations
             .get_mut("people-retrieve")
-            .expect("retrieve attachment")
-            .effective_contract
-            .path
-            .push_str("/changed");
+            .expect("retrieve attachment");
+        let crate::engine::target::TargetOperation::Read(operation) = operation else {
+            panic!("the Consultation retrieve attachment is a read");
+        };
+        operation.effective_contract.path.push_str("/changed");
         let path =
             target_identity(&attachment.profile, &attachment.operations).expect("path identity");
         assert_ne!(baseline, path);
     }
 
     #[test]
+    fn consultation_identity_refuses_write_operations_without_values() {
+        let mut attachment = maintained_attachment();
+        let operation = attachment
+            .operations
+            .remove("people-search")
+            .expect("Search attachment");
+        let crate::engine::target::TargetOperation::Read(operation) = operation else {
+            panic!("the Consultation Search attachment is a read");
+        };
+        let source = br#"fn prepare(source) { #{person: #{name: source.name}} }"#;
+        let script = registry_adapter_core::ProjectScript {
+            id: registry_platform_yaml::LocalId::new("write-input").expect("script id"),
+            file: "scripts/write-input.rhai".to_owned(),
+            digest: registry_platform_yaml::Digest::new(registry_platform_config::sha256_uri(
+                source,
+            ))
+            .expect("script digest"),
+        };
+        let transform = registry_adapter_core::BindingTransform {
+            script: script.id.clone(),
+            entrypoint: "prepare".to_owned(),
+        };
+        let artifacts = crate::engine::artifacts::ProjectArtifactBytes::new([(
+            script.file.clone(),
+            source.to_vec(),
+        )]);
+        let input_transform =
+            crate::engine::inbound_transform::CompiledProjectInputTransform::compile_parts(
+                "write-identity",
+                &script,
+                &transform,
+                &artifacts,
+            )
+            .expect("input transform compiles");
+        let write_support = serde_json::from_value(json!({
+            "type": "create-one",
+            "identity": "source-assigned",
+            "replay": {"type": "exact-keyed", "replayWindowSeconds": 300}
+        }))
+        .expect("write support");
+        attachment.operations.insert(
+            "people-search".to_owned(),
+            crate::engine::target::TargetOperation::Write(
+                crate::engine::target::TargetWriteOperation {
+                    project_input_schema: operation
+                        .project_input_schema
+                        .expect("Search has an input schema"),
+                    project_input_transform: std::sync::Arc::new(input_transform),
+                    write_support,
+                    native_replay:
+                        crate::engine::target::SourceNativeReplayPlan::ExactKeyedSinglePost,
+                    effective_contract: operation.effective_contract,
+                },
+            ),
+        );
+
+        let error = target_identity(&attachment.profile, &attachment.operations)
+            .expect_err("Consultation identity is read-only");
+        assert_eq!(
+            error.to_string(),
+            "the Consultation target identity accepts read operations only"
+        );
+    }
+
+    #[test]
     fn effective_schemas_preserve_cursor_and_path_segment_bounds() {
         let attachment = maintained_attachment();
-        let cursor = &attachment.operations["people-search"]
+        let crate::engine::target::TargetOperation::Read(search) =
+            &attachment.operations["people-search"]
+        else {
+            panic!("the Consultation Search attachment is a read");
+        };
+        let cursor = &search
             .effective_contract
             .request_body
             .as_ref()
@@ -1190,9 +1561,12 @@ mod tests {
             crate::engine::component::rest::continuation::CURSOR_MAXIMUM_TOKEN_BYTES
         );
         assert_eq!(cursor["pattern"], "^[A-Za-z0-9_-]+$");
-        let segment = &attachment.operations["people-retrieve"]
-            .effective_contract
-            .path_parameters["properties"]["recordId"];
+        let crate::engine::target::TargetOperation::Read(retrieve) =
+            &attachment.operations["people-retrieve"]
+        else {
+            panic!("the Consultation Retrieve attachment is a read");
+        };
+        let segment = &retrieve.effective_contract.path_parameters["properties"]["recordId"];
         assert_eq!(segment["maxLength"], MAXIMUM_RECORD_ID_CHARACTERS);
         assert!(segment["not"]["anyOf"].is_array());
     }

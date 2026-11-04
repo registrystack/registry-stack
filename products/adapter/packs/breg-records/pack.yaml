@@ -1,0 +1,248 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/pack/pack.v1alpha1.schema.json
+#
+# Generic HTTP routes over one configured Base Registry Engine Record type.
+# The project supplies the native route and access profile. The pack owns the
+# BReg HTTP shapes and normalizes them into Adapter source items and receipts.
+apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: breg-records
+version: "1"
+testedVersions: ["0.45"]
+endpoints:
+  - id: registry
+    component: http
+    authentication:
+      type: static-authorization
+    attemptTimeoutMilliseconds: 10000
+    maximumResponseBytes: 65536
+    responseHeaders: [etag]
+    operations:
+      - id: record-read
+      - id: record-batch
+        idempotentUpstream: true
+    testedVersions: ["0.45"]
+routeTemplates:
+  - id: read-record
+    readSupport:
+      type: read-one
+      inputs: [record-id]
+    parameters:
+      - name: record-route
+        type: string
+        required: true
+        description: The compiled BReg Record route segment.
+      - name: route
+        type: string
+        required: false
+        description: The runtime path slot bound from record-route.
+      - name: access-profile
+        type: string
+        required: true
+        description: The BReg access profile used for reads and writes.
+      - name: id
+        type: string
+        required: false
+        description: The exact source record identifier supplied at read time.
+    steps:
+      - onException:
+          exception: [upstream.http]
+          onWhen:
+            rhai:
+              file: scripts/not-found.rhai
+              entrypoint: is_not_found
+          steps:
+            - throwException:
+                exceptionType: outcome.not-found
+                message: No record with that identifier is available at the source.
+      - setProperty:
+          name: bregRecordId
+          value:
+            jsonpath: "$['record-id']"
+      - to:
+          uri: http:registry
+          parameters:
+            httpMethod: GET
+            path: /v1/records/{{route}}/{{id}}
+            pathParameters:
+              route: {constant: "{{record-route}}"}
+              id: {exchangeProperty: bregRecordId}
+            query:
+              accessProfile: {constant: "{{access-profile}}"}
+            operation: record-read
+      - setBody:
+          rhai:
+            file: scripts/source-read-one.rhai
+            entrypoint: source_read_one
+  - id: create-record
+    writeSupport:
+      type: create-one
+      identity: source-assigned
+      replay:
+        type: exact-keyed
+        replayWindowSeconds: 604800
+    parameters:
+      - name: record-route
+        type: string
+        required: true
+        description: The compiled BReg Record route segment.
+      - name: route
+        type: string
+        required: false
+        description: The runtime path slot bound from record-route.
+      - name: access-profile
+        type: string
+        required: true
+        description: The BReg access profile used for reads and writes.
+    steps:
+      - onException:
+          exception: [upstream.http]
+          onWhen:
+            rhai:
+              file: scripts/not-found.rhai
+              entrypoint: is_not_found
+          steps:
+            - throwException:
+                exceptionType: outcome.not-found
+                message: No record with that identifier is available at the source.
+      - onException:
+          exception: [upstream.http]
+          onWhen:
+            rhai:
+              file: scripts/not-found.rhai
+              entrypoint: is_invalid_request
+          steps:
+            - throwException:
+                exceptionType: outcome.invalid-request
+                message: The source refused the record content.
+      - onException:
+          exception: [upstream.http]
+          onWhen:
+            rhai:
+              file: scripts/not-found.rhai
+              entrypoint: is_rejected_request_shape
+          steps:
+            - throwException:
+                exceptionType: outcome.rejected
+                message: The source rejected the native request shape.
+      - idempotentConsumer:
+          expression:
+            header: Idempotency-Key
+          steps:
+            - setBody:
+                rhai:
+                  file: scripts/batch-request.rhai
+                  entrypoint: create_batch
+            - to:
+                uri: http:registry
+                parameters:
+                  httpMethod: POST
+                  path: /v1/records/{{route}}:batch
+                  pathParameters:
+                    route: {constant: "{{record-route}}"}
+                  query:
+                    accessProfile: {constant: "{{access-profile}}"}
+                  body: {jsonpath: "$"}
+                  operation: record-batch
+            - setBody:
+                rhai:
+                  file: scripts/batch-receipt.rhai
+                  entrypoint: create_receipt
+  - id: update-record
+    writeSupport:
+      type: conditional-update-one
+      replay:
+        type: exact-keyed
+        replayWindowSeconds: 604800
+      precondition: strong-atomic-source
+    parameters:
+      - name: record-route
+        type: string
+        required: true
+        description: The compiled BReg Record route segment.
+      - name: route
+        type: string
+        required: false
+        description: The runtime path slot bound from record-route.
+      - name: access-profile
+        type: string
+        required: true
+        description: The BReg access profile used for reads and writes.
+    steps:
+      - onException:
+          exception: [upstream.http]
+          onWhen:
+            rhai:
+              file: scripts/not-found.rhai
+              entrypoint: is_not_found
+          steps:
+            - throwException:
+                exceptionType: outcome.not-found
+                message: No record with that identifier is available at the source.
+      - onException:
+          exception: [upstream.http]
+          onWhen:
+            rhai:
+              file: scripts/not-found.rhai
+              entrypoint: is_invalid_request
+          steps:
+            - throwException:
+                exceptionType: outcome.invalid-request
+                message: The source refused the record content.
+      - onException:
+          exception: [upstream.http]
+          onWhen:
+            rhai:
+              file: scripts/not-found.rhai
+              entrypoint: is_rejected_request_shape
+          steps:
+            - throwException:
+                exceptionType: outcome.rejected
+                message: The source rejected the native request shape.
+      - idempotentConsumer:
+          expression:
+            header: Idempotency-Key
+          steps:
+            - setBody:
+                rhai:
+                  file: scripts/batch-request.rhai
+                  entrypoint: update_batch
+            - to:
+                uri: http:registry
+                parameters:
+                  httpMethod: POST
+                  path: /v1/records/{{route}}:batch
+                  pathParameters:
+                    route: {constant: "{{record-route}}"}
+                  query:
+                    accessProfile: {constant: "{{access-profile}}"}
+                  body: {jsonpath: "$"}
+                  operation: record-batch
+            - setBody:
+                rhai:
+                  file: scripts/batch-receipt.rhai
+                  entrypoint: update_receipt
+scripts:
+  - path: scripts/batch-receipt.rhai
+    digest: sha256:8c7e5022ebd776bf4f35c5adfd2665a526ce94d10d7804f44759af8423da4ac0
+  - path: scripts/batch-request.rhai
+    digest: sha256:d99aa3c7e03ca876ea616033abe03d079126568540f67800dda87f2432fe1658
+  - path: scripts/not-found.rhai
+    digest: sha256:c3ebff5545c34589c9e54cb8205c2835622cc03995d3525f7d327a538f05ac8e
+  - path: scripts/source-read-one.rhai
+    digest: sha256:90c4076f798cd9bedf691af3f70516b19319dc439bcc9e34e140af76a44b4817
+capabilities:
+  components:
+    - http
+  languages:
+    - constant
+    - exchangeProperty
+    - header
+    - jsonpath
+    - rhai
+  eips:
+    - idempotentConsumer
+    - onException
+    - setBody
+    - setProperty
+    - throwException
+    - to

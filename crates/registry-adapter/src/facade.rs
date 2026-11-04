@@ -18,9 +18,10 @@ use axum::body::Body;
 use axum::extract::rejection::PathRejection;
 use axum::extract::{Path, RawQuery};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
+use axum::middleware;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post, put, MethodRouter};
-use axum::Router;
+use axum::routing::{get, patch, post, put, MethodRouter};
+use axum::{Extension, Router};
 use deadpool_postgres::Pool;
 use registry_adapter_core::{
     decode_slot, fixed_facade_problem_response, parse_envelope_template, problem_data_schema,
@@ -59,6 +60,7 @@ use crate::engine::route::{
 use crate::govstack::consultation::{
     CAPABILITIES_PATH, MOUNT_PATH, PROFILE_ID as CONSULTATION_PROFILE_ID,
 };
+use crate::govstack::correlation::RequestCorrelation;
 use crate::idempotent::{
     PostgresIdempotencyStore, RecoveryLease, StatusLookup, StatusLookupRequest, StoredResponse,
     TerminalOutcome, VerifiedCallerIdentity, MAX_STORED_RESPONSE_BYTES,
@@ -151,34 +153,39 @@ pub fn router(state: Arc<FacadeState>) -> Router {
         for (method, indexes) in methods {
             let shared = Arc::clone(&state);
             let indexes: Arc<[usize]> = indexes.into();
-            let handler = move |headers: HeaderMap,
+            let handler = move |correlation: Option<Extension<RequestCorrelation>>,
+                                headers: HeaderMap,
                                 params: Result<Path<HashMap<String, String>>, PathRejection>,
                                 RawQuery(query): RawQuery,
                                 body: Body| {
                 let shared = Arc::clone(&shared);
                 let indexes = Arc::clone(&indexes);
                 async move {
+                    let correlation = correlation.map(|Extension(value)| value);
                     // A path segment that is not UTF-8 never reaches a
                     // call: it answers the profile's bad-request problem,
                     // not the framework's bare rejection.
                     let Ok(Path(params)) = params else {
+                        let request_id = correlation
+                            .as_ref()
+                            .map_or_else(new_id, |value| value.request_id().to_owned());
                         return facade_problem(
                             shared.loaded.problems(),
                             ErrorClass::FacadeInvalidRequest,
                             StatusCode::BAD_REQUEST,
                             "",
-                            &new_id(),
+                            &request_id,
                         );
                     };
                     let index = dispatch(&shared.loaded.served, &indexes, &params);
-                    handle(shared, index, headers, params, query, body).await
+                    handle(shared, index, correlation, headers, params, query, body).await
                 }
             };
             allowed.push(match method {
                 HttpMethod::Get => "GET",
                 HttpMethod::Post => "POST",
                 HttpMethod::Put => "PUT",
-                HttpMethod::Patch => unreachable!("the loader refuses PATCH facade operations"),
+                HttpMethod::Patch => "PATCH",
             });
             routes = Some(match (routes.take(), method) {
                 (None, HttpMethod::Post) => post(handler),
@@ -187,9 +194,8 @@ pub fn router(state: Arc<FacadeState>) -> Router {
                 (Some(existing), HttpMethod::Post) => existing.post(handler),
                 (Some(existing), HttpMethod::Put) => existing.put(handler),
                 (Some(existing), HttpMethod::Get) => existing.get(handler),
-                (_, HttpMethod::Patch) => {
-                    unreachable!("the loader refuses PATCH facade operations")
-                }
+                (None, HttpMethod::Patch) => patch(handler),
+                (Some(existing), HttpMethod::Patch) => existing.patch(handler),
             });
         }
         let Some(routes) = routes else { continue };
@@ -197,16 +203,19 @@ pub fn router(state: Arc<FacadeState>) -> Router {
         let allow = allowed.join(", ");
         router = router.route(
             &path,
-            routes.fallback(move || {
+            routes.fallback(move |correlation: Option<Extension<RequestCorrelation>>| {
                 let shared = Arc::clone(&shared);
                 let allow = allow.clone();
                 async move {
+                    let request_id = correlation
+                        .as_ref()
+                        .map_or_else(new_id, |Extension(value)| value.request_id().to_owned());
                     let mut response = facade_problem(
                         shared.loaded.problems(),
                         ErrorClass::FacadeMethodNotAllowed,
                         StatusCode::METHOD_NOT_ALLOWED,
                         "",
-                        &new_id(),
+                        &request_id,
                     );
                     if let Ok(value) = HeaderValue::from_str(&allow) {
                         response.headers_mut().insert(header::ALLOW, value);
@@ -260,24 +269,31 @@ pub fn router(state: Arc<FacadeState>) -> Router {
             }),
         );
     }
-    if state.loaded.project.consultation.is_some() {
+    if state.loaded.project.consultation.is_some() || state.loaded.project.write.is_some() {
         let capabilities = Arc::clone(&state);
         let capabilities_method_fallback = Arc::clone(&state);
         router = router.route(
             CAPABILITIES_PATH,
-            get(move |headers: HeaderMap| {
-                let shared = Arc::clone(&capabilities);
-                async move { caller_capabilities(shared, headers).await }
-            })
-            .fallback(move || {
+            get(
+                move |correlation: Option<Extension<RequestCorrelation>>, headers: HeaderMap| {
+                    let shared = Arc::clone(&capabilities);
+                    let correlation = correlation
+                        .map_or_else(RequestCorrelation::server_created, |Extension(value)| value);
+                    async move { caller_capabilities(shared, correlation, headers).await }
+                },
+            )
+            .fallback(move |correlation: Option<Extension<RequestCorrelation>>| {
                 let shared = Arc::clone(&capabilities_method_fallback);
                 async move {
+                    let request_id = correlation
+                        .as_ref()
+                        .map_or_else(new_id, |Extension(value)| value.request_id().to_owned());
                     let mut response = facade_problem(
                         shared.loaded.problems(),
                         ErrorClass::FacadeMethodNotAllowed,
                         StatusCode::METHOD_NOT_ALLOWED,
                         "",
-                        &new_id(),
+                        &request_id,
                     );
                     response
                         .headers_mut()
@@ -287,8 +303,11 @@ pub fn router(state: Arc<FacadeState>) -> Router {
             }),
         );
     }
-    if state.loaded.project.consultation.is_some() {
-        router = Router::new().nest(MOUNT_PATH, router);
+    if state.loaded.project.consultation.is_some() || state.loaded.project.write.is_some() {
+        router = Router::new().nest(
+            MOUNT_PATH,
+            router.layer(middleware::from_fn(crate::govstack::correlation::boundary)),
+        );
     }
     let contract = Arc::clone(&state);
     let contract_method_fallback = Arc::clone(&state);
@@ -316,15 +335,18 @@ pub fn router(state: Arc<FacadeState>) -> Router {
         }),
     );
     let unmatched = Arc::clone(&state);
-    router.fallback(move || {
+    router.fallback(move |correlation: Option<Extension<RequestCorrelation>>| {
         let shared = Arc::clone(&unmatched);
         async move {
+            let request_id = correlation
+                .as_ref()
+                .map_or_else(new_id, |Extension(value)| value.request_id().to_owned());
             facade_problem(
                 shared.loaded.problems(),
                 ErrorClass::FacadeNotFound,
                 StatusCode::NOT_FOUND,
                 "",
-                &new_id(),
+                &request_id,
             )
         }
     })
@@ -355,6 +377,7 @@ fn dispatch(
 async fn handle(
     state: Arc<FacadeState>,
     index: usize,
+    correlation: Option<RequestCorrelation>,
     headers: HeaderMap,
     params: HashMap<String, String>,
     query: Option<String>,
@@ -363,7 +386,9 @@ async fn handle(
     let fallback = Arc::clone(&state);
     // The id is minted before the task starts, so the fallback answer
     // carries the same request id the journal rows would have.
-    let request_id = new_id();
+    let request_id = correlation
+        .as_ref()
+        .map_or_else(new_id, |value| value.request_id().to_owned());
     let fallback_id = request_id.clone();
     let fallback_record_type = params
         .get(&state.loaded.served[index].record_type_parameter)
@@ -374,6 +399,7 @@ async fn handle(
             &state,
             index,
             request_id,
+            correlation.as_ref(),
             &headers,
             &params,
             query.as_deref(),
@@ -941,8 +967,12 @@ async fn runtime_contract(state: Arc<FacadeState>, headers: HeaderMap) -> Respon
 /// Return only the built-in Consultation operations visible under the
 /// authenticated caller's current machine scopes. Discovery remains
 /// advisory: every operation request repeats current authorization.
-async fn caller_capabilities(state: Arc<FacadeState>, headers: HeaderMap) -> Response {
-    let request_id = new_id();
+async fn caller_capabilities(
+    state: Arc<FacadeState>,
+    correlation: RequestCorrelation,
+    headers: HeaderMap,
+) -> Response {
+    let request_id = correlation.request_id().to_owned();
     let caller = match authenticate(&state, &headers).await {
         Ok(caller) => caller,
         Err(refusal) => return refusal_response(state.loaded.problems(), refusal, &request_id),
@@ -1016,7 +1046,7 @@ async fn caller_capabilities(state: Arc<FacadeState>, headers: HeaderMap) -> Res
             response
                 .headers_mut()
                 .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-            response
+            with_write_replay_window(&state, response)
         }
         Err(error) => {
             tracing::error!(%error, "the caller capability response could not be serialized");
@@ -1059,10 +1089,12 @@ async fn journal_capability_refusal(
     facade_problem(state.loaded.problems(), class, status, "", request_id)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn answer(
     state: &FacadeState,
     index: usize,
     request_id: String,
+    correlation: Option<&RequestCorrelation>,
     headers: &HeaderMap,
     params: &HashMap<String, String>,
     query: Option<&str>,
@@ -1132,10 +1164,64 @@ async fn answer(
         return refuse_contract_pin(state, operation, &caller, &request_id).await;
     }
 
+    let govstack_write = operation.write_support.is_some();
+    let mut native_condition = None;
+    let mut semantic_condition = None;
+    if govstack_write && operation.method == HttpMethod::Patch {
+        let values: Vec<_> = headers.get_all(header::IF_MATCH).iter().collect();
+        let refusal = if values.is_empty() {
+            Some(Refusal::write(
+                "precondition-required",
+                StatusCode::PRECONDITION_REQUIRED,
+            ))
+        } else if values.len() != 1 {
+            Some(Refusal::invalid_request("one strong If-Match is required"))
+        } else if let Ok(value) = values[0].to_str() {
+            semantic_condition = Some(value.to_owned());
+            match write_validator_context(state, &record_type, &record_id).and_then(|context| {
+                state.codec.as_ref().and_then(|codec| {
+                    crate::govstack::write::unwrap_validator(value, context, codec).ok()
+                })
+            }) {
+                Some(native) => {
+                    native_condition = Some(native);
+                    None
+                }
+                None if !crate::govstack::write::is_strong_etag(value) => {
+                    Some(Refusal::invalid_request("one strong If-Match is required"))
+                }
+                None => Some(Refusal::write(
+                    "precondition-failed",
+                    StatusCode::PRECONDITION_FAILED,
+                )),
+            }
+        } else {
+            Some(Refusal::invalid_request("one strong If-Match is required"))
+        };
+        if let Some(refusal) = refusal {
+            return refuse_request(
+                state,
+                operation,
+                &caller,
+                &record_type,
+                &request_id,
+                refusal,
+            )
+            .await;
+        }
+    }
     let mut inputs = RequestInputs::default();
     let mut write_request: Option<(Value, Vec<u8>)> = None;
-    if matches!(operation.method, HttpMethod::Post | HttpMethod::Put) {
-        if !has_json_content_type(headers) {
+    if matches!(
+        operation.method,
+        HttpMethod::Post | HttpMethod::Put | HttpMethod::Patch
+    ) {
+        let expected_media = if govstack_write && operation.method == HttpMethod::Patch {
+            "application/merge-patch+json"
+        } else {
+            "application/json"
+        };
+        if !has_content_type(headers, expected_media) {
             return refuse_call(
                 state,
                 operation,
@@ -1208,10 +1294,15 @@ async fn answer(
                     &request_id,
                 );
             };
-            match capture_write_record(template.text(), &parsed).and_then(|captured| {
-                validate_write_record(operation, &captured, &record_id)?;
-                Ok(captured)
-            }) {
+            let captured = if govstack_write {
+                capture_govstack_write(operation, &parsed)
+            } else {
+                capture_write_record(template.text(), &parsed).and_then(|captured| {
+                    validate_write_record(operation, &captured, &record_id)?;
+                    Ok(captured)
+                })
+            };
+            match captured {
                 Ok(captured) => {
                     if let Some(captured_id) = captured.record_id {
                         if !names_record_id {
@@ -1332,6 +1423,21 @@ async fn answer(
         .checked_add(route_deadline.duration_since(route_clock))
         .expect("the fixed exchange deadline fits SystemTime");
     let mut exchange = Exchange::new(request_id.clone());
+    if let Some(correlation) = correlation {
+        if let Err(error) = correlation.install(&mut exchange) {
+            tracing::error!(
+                error,
+                "the Consultation trace context could not be installed"
+            );
+            return facade_problem(
+                profile,
+                ErrorClass::Facade,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &record_type,
+                &request_id,
+            );
+        }
+    }
     let write_execution = if is_write {
         let Some((record, raw_body)) = write_request else {
             return facade_problem(
@@ -1342,14 +1448,32 @@ async fn answer(
                 &request_id,
             );
         };
-        let Some(key) = idempotency_key(headers) else {
+        let key = if govstack_write {
+            let mut values = headers.get_all("idempotency-key").iter();
+            let key = values
+                .next()
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| crate::govstack::write::parse_idempotency_key(value).ok());
+            if values.next().is_some() {
+                None
+            } else {
+                key
+            }
+        } else {
+            idempotency_key(headers)
+        };
+        let Some(key) = key else {
             return refuse_request(
                 state,
                 operation,
                 &caller,
                 &record_type,
                 &request_id,
-                Refusal::invalid_field("the Idempotency-Key header is absent or invalid"),
+                if govstack_write {
+                    Refusal::invalid_request("the Idempotency-Key header is absent or invalid")
+                } else {
+                    Refusal::invalid_field("the Idempotency-Key header is absent or invalid")
+                },
             )
             .await;
         };
@@ -1387,12 +1511,83 @@ async fn answer(
             "{}:{}:{}",
             operation.operation, operation.binding, record_type
         );
-        let digest = write_request_digest(
-            &state.loaded.deployment,
-            &record_type,
-            &record_id,
-            &raw_body,
-        );
+        let digest = if govstack_write {
+            let method = if operation.method == HttpMethod::Patch {
+                "PATCH"
+            } else {
+                "POST"
+            };
+            let target = if operation.method == HttpMethod::Patch {
+                crate::govstack::write::record_location(&record_type, &record_id)
+            } else {
+                Ok(format!("{MOUNT_PATH}/v1/collections/{record_type}/records"))
+            };
+            let Ok(target) = target else {
+                return refuse_request(
+                    state,
+                    operation,
+                    &caller,
+                    &record_type,
+                    &request_id,
+                    Refusal::invalid_request("the record identifier is not supported"),
+                )
+                .await;
+            };
+            let media = if operation.method == HttpMethod::Patch {
+                "application/merge-patch+json"
+            } else {
+                "application/json"
+            };
+            let canonical_body = json!({"data": exchange.message.body});
+            let Ok(digest) = crate::govstack::write::request_fingerprint(
+                method,
+                &target,
+                media,
+                &canonical_body,
+                semantic_condition.as_deref(),
+            ) else {
+                return refuse_request(
+                    state,
+                    operation,
+                    &caller,
+                    &record_type,
+                    &request_id,
+                    Refusal::invalid_request("the write request cannot be canonicalized"),
+                )
+                .await;
+            };
+            let scope = crate::govstack::write::source_key_scope(
+                &caller.issuer,
+                &caller.reference,
+                &caller.client_id,
+                state.loaded.runtime.id.as_str(),
+                method,
+                &target,
+                key,
+            );
+            let installed = crate::engine::exchange::SourceWriteInputs::try_new(
+                scope,
+                native_condition.as_deref(),
+            )
+            .and_then(|inputs| exchange.install_source_write_inputs(inputs));
+            if installed.is_err() {
+                return facade_problem(
+                    profile,
+                    ErrorClass::Facade,
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &record_type,
+                    &request_id,
+                );
+            }
+            digest
+        } else {
+            write_request_digest(
+                &state.loaded.deployment,
+                &record_type,
+                &record_id,
+                &raw_body,
+            )
+        };
         let async_write = operation
             .async_completion
             .as_ref()
@@ -1485,7 +1680,7 @@ async fn answer(
         .set_header("recordType", Value::String(record_type.clone()));
     exchange
         .message
-        .set_header("recordId", Value::String(record_id));
+        .set_header("recordId", Value::String(record_id.clone()));
     let journal_event = |kind: &'static str, detail: Option<Value>| JournalEvent {
         event_kind: kind,
         exchange_id: request_id.clone(),
@@ -1594,6 +1789,9 @@ async fn answer(
     // the facade then failed to seal or render.
     let mut resume_host_validation_pending = false;
     let mut retry_later = false;
+    let mut success_etag = None;
+    let mut success_location = None;
+    let mut success_bodyless = false;
     let rendered = match write_resolution.clone() {
         WriteResolution::Replay { outcome, response } => {
             let event = match outcome {
@@ -1601,9 +1799,15 @@ async fn answer(
                 TerminalOutcome::Failed => "exchangeFailed",
             };
             events.push((journal_event(event, None), SystemTime::now()));
-            Finished::Replay(response)
+            Finished::Replay {
+                response,
+                failed: outcome == TerminalOutcome::Failed,
+            }
         }
-        WriteResolution::Accepted { response } => Finished::Replay(response),
+        WriteResolution::Accepted { response } => Finished::Replay {
+            response,
+            failed: false,
+        },
         WriteResolution::Conflict
         | WriteResolution::ResponseExpired
         | WriteResolution::UnsupportedIncomplete
@@ -1652,95 +1856,153 @@ async fn answer(
                     .source_id
                     .clone(),
             ),
-            Ok(done) => match disclosed_slots(
-                operation,
-                &done.message.body,
-                requested_page_size,
-                &record_type,
-                &request_id,
-            ) {
-                Ok(slots) => {
-                    match seal_next(
-                        state,
-                        operation,
-                        &caller,
-                        search_binding,
-                        requested_page_size.unwrap_or_default(),
-                        &done,
-                    )
-                    .and_then(|next_cursor| {
-                        render_success(operation, slots, next_cursor, &record_type, &request_id)
-                    }) {
-                        Ok(body) => {
-                            events.push((
-                                journal_event("exchangeCompleted", None),
-                                SystemTime::now(),
-                            ));
-                            Finished::Body(body)
-                        }
-                        Err(error) => {
-                            tracing::error!(%error, "the response could not be built");
-                            events.push((
-                                journal_event(
-                                    "exchangeFailed",
-                                    Some(exchange_failure_detail(profile, ErrorClass::Facade)),
-                                ),
-                                SystemTime::now(),
-                            ));
-                            Finished::Internal
-                        }
+            Ok(done) if govstack_write => {
+                match govstack_write_success(
+                    state,
+                    operation,
+                    &done,
+                    &record_id,
+                    route_deadline.into_std(),
+                ) {
+                    Ok((body, etag, location)) => {
+                        success_etag = Some(etag);
+                        success_location = location;
+                        success_bodyless = operation.method == HttpMethod::Patch;
+                        events.push((journal_event("exchangeCompleted", None), SystemTime::now()));
+                        Finished::Body(body)
                     }
-                }
-                Err(violations) => {
-                    tracing::error!(
-                        violations,
-                        "a route ended with a record its type does not declare"
-                    );
-                    if operation.resume_step_count().is_some() {
-                        let retained = match write_execution.as_ref() {
-                            Some(write) => write
-                                .retain_resume_after_host_validation_failure()
-                                .await
-                                .map_err(|error| error.to_string()),
-                            None => Err("write custody is absent".to_owned()),
-                        };
-                        if let Err(error) = retained {
-                            tracing::error!(
-                                %error,
-                                "the resumable write lease could not be released after host validation failed"
-                            );
+                    Err(()) => {
+                        // A source may have committed before returning an invalid receipt.
+                        // Keep the native replay lease available rather than spend it on a
+                        // fabricated terminal acknowledgement.
+                        if let Some(write) = &write_execution {
+                            if let Err(error) =
+                                write.retain_resume_after_host_validation_failure().await
+                            {
+                                tracing::error!(%error, "the source receipt recovery lease could not be released");
+                            }
                         }
                         resume_host_validation_pending = true;
                         retry_later = true;
-                        events.push((
-                            journal_event(
-                                "exchangeFailed",
-                                Some(exchange_failure_detail(profile, ErrorClass::FacadeConflict)),
-                            ),
-                            SystemTime::now(),
-                        ));
+                        events.push((journal_event("exchangeFailed", None), SystemTime::now()));
                         Finished::FacadeProblem(ErrorClass::FacadeConflict, StatusCode::CONFLICT)
-                    } else {
-                        let failure = RouteFailure {
-                            class: ErrorClass::DisclosureViolation,
-                            message: None,
-                            data: None,
-                            auth: None,
-                            code: None,
-                            record: None,
-                            evidence_diagnostic: None,
-                        };
-                        events.push((
-                            journal_event(
-                                "exchangeFailed",
-                                Some(exchange_failure_detail(profile, failure.class)),
-                            ),
-                            SystemTime::now(),
-                        ));
-                        Finished::Route(failure)
                     }
                 }
-            },
+            }
+            Ok(done) => {
+                if is_companion_read(state, operation) {
+                    success_etag = write_validator_context(state, &record_type, &record_id)
+                        .and_then(|context| {
+                            let native = done
+                                .message
+                                .body
+                                .get("revisionIdentifier")
+                                .and_then(Value::as_str)?;
+                            let codec = state.codec.as_ref()?;
+                            crate::govstack::write::wrap_validator(native, context, codec).ok()
+                        });
+                    if success_etag.is_none() {
+                        events.push((journal_event("exchangeFailed", None), SystemTime::now()));
+                        return audited_internal_failure(state, events, &record_type, &request_id)
+                            .await;
+                    }
+                }
+                match disclosed_slots(
+                    operation,
+                    &done.message.body,
+                    requested_page_size,
+                    &record_type,
+                    &request_id,
+                ) {
+                    Ok(slots) => {
+                        match seal_next(
+                            state,
+                            operation,
+                            &caller,
+                            search_binding,
+                            requested_page_size.unwrap_or_default(),
+                            &done,
+                        )
+                        .and_then(|next_cursor| {
+                            render_success(operation, slots, next_cursor, &record_type, &request_id)
+                        }) {
+                            Ok(body) => {
+                                events.push((
+                                    journal_event("exchangeCompleted", None),
+                                    SystemTime::now(),
+                                ));
+                                Finished::Body(body)
+                            }
+                            Err(error) => {
+                                tracing::error!(%error, "the response could not be built");
+                                events.push((
+                                    journal_event(
+                                        "exchangeFailed",
+                                        Some(exchange_failure_detail(profile, ErrorClass::Facade)),
+                                    ),
+                                    SystemTime::now(),
+                                ));
+                                Finished::Internal
+                            }
+                        }
+                    }
+                    Err(violations) => {
+                        tracing::error!(
+                            violations,
+                            "a route ended with a record its type does not declare"
+                        );
+                        if operation.resume_step_count().is_some() {
+                            let retained = match write_execution.as_ref() {
+                                Some(write) => write
+                                    .retain_resume_after_host_validation_failure()
+                                    .await
+                                    .map_err(|error| error.to_string()),
+                                None => Err("write custody is absent".to_owned()),
+                            };
+                            if let Err(error) = retained {
+                                tracing::error!(
+                                    %error,
+                                    "the resumable write lease could not be released after host validation failed"
+                                );
+                            }
+                            resume_host_validation_pending = true;
+                            retry_later = true;
+                            events.push((
+                                journal_event(
+                                    "exchangeFailed",
+                                    Some(exchange_failure_detail(
+                                        profile,
+                                        ErrorClass::FacadeConflict,
+                                    )),
+                                ),
+                                SystemTime::now(),
+                            ));
+                            Finished::FacadeProblem(
+                                ErrorClass::FacadeConflict,
+                                StatusCode::CONFLICT,
+                            )
+                        } else {
+                            let failure = RouteFailure {
+                                class: ErrorClass::DisclosureViolation,
+                                message: None,
+                                data: None,
+                                auth: None,
+                                code: None,
+                                record: None,
+                                evidence_diagnostic: None,
+                            };
+                            events.push((
+                                journal_event(
+                                    "exchangeFailed",
+                                    Some(exchange_failure_detail(profile, failure.class)),
+                                ),
+                                SystemTime::now(),
+                            ));
+                            Finished::Route(failure)
+                        }
+                    }
+                }
+            }
             Err(failure) => {
                 let failure = enforce_problem_data(profile.profile, failure);
                 let mut detail = exchange_failure_detail(profile, failure.class);
@@ -1891,12 +2153,52 @@ async fn answer(
             )
         }
         Finished::Route(failure) => {
-            let response = route_problem(profile, &failure, &record_type, &request_id);
+            let response = if govstack_write
+                && operation.method == HttpMethod::Patch
+                && failure.class == ErrorClass::OutcomeConflict
+            {
+                govstack_problem(
+                    "precondition-failed",
+                    StatusCode::PRECONDITION_FAILED,
+                    &request_id,
+                )
+            } else if govstack_write && failure.class == ErrorClass::OutcomeConflict {
+                govstack_problem("conflict", StatusCode::CONFLICT, &request_id)
+            } else if govstack_write && failure.class == ErrorClass::OutcomeRejected {
+                govstack_problem("bad-gateway", StatusCode::BAD_GATEWAY, &request_id)
+            } else if govstack_write && failure.class == ErrorClass::OutcomeInvalidRequest {
+                govstack_problem(
+                    "invalid-content",
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    &request_id,
+                )
+            } else {
+                route_problem(profile, &failure, &record_type, &request_id)
+            };
             warn_exchange_failed(failure.class, response.status());
             (response, Some(TerminalOutcome::Failed))
         }
         Finished::Accepted(_) => unreachable!("acceptance returned after its atomic commit"),
-        Finished::Replay(response) => (replay_response(response), None),
+        Finished::Replay { response, failed } => {
+            let response = if govstack_write && failed {
+                match replay_govstack_failed_response(response) {
+                    Ok(response) => response,
+                    Err(()) => {
+                        tracing::error!(
+                            "custodied GovStack failure has no canonical Problem identity"
+                        );
+                        govstack_problem(
+                            "internal-error",
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            &request_id,
+                        )
+                    }
+                }
+            } else {
+                replay_response(response)
+            };
+            (response, None)
+        }
         Finished::FacadeProblem(class, status) => {
             warn_exchange_failed(class, status);
             (
@@ -1905,6 +2207,53 @@ async fn answer(
             )
         }
     };
+    if govstack_write && matches!(write_resolution, WriteResolution::Mismatch) {
+        response = govstack_problem(
+            "idempotency-fingerprint-mismatch",
+            StatusCode::UNPROCESSABLE_ENTITY,
+            &request_id,
+        );
+    } else if govstack_write
+        && matches!(
+            write_resolution,
+            WriteResolution::InFlight | WriteResolution::ResumePending
+        )
+    {
+        response = govstack_problem("idempotency-in-flight", StatusCode::CONFLICT, &request_id);
+    } else if govstack_write
+        && response.status() == StatusCode::CONFLICT
+        && response
+            .extensions()
+            .get::<ReplayedResponseRequestId>()
+            .is_none()
+    {
+        response = govstack_problem("conflict", StatusCode::CONFLICT, &request_id);
+    }
+    if terminal == Some(TerminalOutcome::Completed) {
+        if success_bodyless {
+            response = no_store(StatusCode::NO_CONTENT.into_response());
+        }
+        if let Some(etag) = success_etag {
+            response.headers_mut().insert(
+                header::ETAG,
+                HeaderValue::from_str(&etag).expect("validated strong validator"),
+            );
+        }
+        if let Some(location) = success_location {
+            response.headers_mut().insert(
+                header::LOCATION,
+                HeaderValue::from_str(&location).expect("encoded record URI"),
+            );
+        }
+    }
+    if govstack_write {
+        stamp_terminal_problem(&mut events, &response);
+    }
+    // Render the first attempt's effective trace before exact response custody.
+    // Stored replays carry no mutable problem marker and keep their original body.
+    if let Some(correlation) = correlation {
+        response = correlation.finish(response);
+    }
     if resume_host_validation_pending {
         terminal = None;
     }
@@ -1934,7 +2283,21 @@ async fn answer(
                     SystemTime::now(),
                 ));
                 terminal = Some(TerminalOutcome::Failed);
-                response = bounded_internal_problem(&request_id);
+                response = if govstack_write {
+                    govstack_problem(
+                        "internal-error",
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        &request_id,
+                    )
+                } else {
+                    bounded_internal_problem(&request_id)
+                };
+                stamp_terminal_problem(&mut events, &response);
+                if govstack_write {
+                    if let Some(correlation) = correlation {
+                        response = correlation.finish(response);
+                    }
+                }
                 prepare_write_response(response, &request_id)
                     .await
                     .expect("the fixed internal problem fits response custody")
@@ -1958,6 +2321,27 @@ async fn answer(
             &record_type,
             &request_id,
         );
+    }
+    if govstack_write {
+        with_write_replay_window(state, response)
+    } else {
+        response
+    }
+}
+
+fn with_replay_window_seconds(mut response: Response, seconds: u64) -> Response {
+    response.headers_mut().insert(
+        "x-registry-idempotency-replay-window-seconds",
+        HeaderValue::from_str(&seconds.to_string()).expect("bounded decimal replay window"),
+    );
+    response
+}
+
+fn with_write_replay_window(state: &FacadeState, response: Response) -> Response {
+    if state.loaded.project.write.is_some() && state.idempotency.is_some() {
+        if let Some(policy) = state.loaded.runtime.idempotency.as_ref() {
+            return with_replay_window_seconds(response, policy.response_retention_seconds.get());
+        }
     }
     response
 }
@@ -2004,7 +2388,10 @@ enum Finished {
     Accepted(String),
     Internal,
     Route(RouteFailure),
-    Replay(StoredResponse),
+    Replay {
+        response: StoredResponse,
+        failed: bool,
+    },
     FacadeProblem(ErrorClass, StatusCode),
 }
 
@@ -2915,6 +3302,9 @@ fn refusal_response(profile: Problems<'_>, refusal: CallerRefusal, request_id: &
         CallerRefusal::Unauthenticated => {
             (ErrorClass::FacadeUnauthenticated, StatusCode::UNAUTHORIZED)
         }
+        CallerRefusal::Unavailable if profile.profile.id.as_str() == CONSULTATION_PROFILE_ID => {
+            return consultation_unavailable(request_id);
+        }
         CallerRefusal::Unavailable => (ErrorClass::Facade, StatusCode::SERVICE_UNAVAILABLE),
     };
     let mut response = facade_problem(profile, class, status, "", request_id);
@@ -3162,10 +3552,13 @@ struct SearchBinding {
 
 /// Why a request was refused: the class and status the caller sees, and a
 /// value-free reason for the journal.
+#[derive(Debug)]
 pub(crate) struct Refusal {
     class: ErrorClass,
     status: StatusCode,
     reason: String,
+    write_problem: Option<&'static str>,
+    validation_pointer: Option<&'static str>,
 }
 
 trait LoadedProblems {
@@ -3185,11 +3578,30 @@ impl LoadedProblems for crate::engine::load::Loaded {
 }
 
 impl Refusal {
+    fn invalid_field_at(reason: &str, pointer: &'static str) -> Self {
+        Self {
+            validation_pointer: Some(pointer),
+            ..Self::invalid_field(reason)
+        }
+    }
+
+    fn write(code: &'static str, status: StatusCode) -> Self {
+        Self {
+            class: ErrorClass::FacadeInvalidRequest,
+            status,
+            reason: code.to_owned(),
+            write_problem: Some(code),
+            validation_pointer: None,
+        }
+    }
+
     fn invalid_request(reason: &str) -> Self {
         Self {
             class: ErrorClass::FacadeInvalidRequest,
             status: StatusCode::BAD_REQUEST,
             reason: reason.to_owned(),
+            write_problem: None,
+            validation_pointer: None,
         }
     }
 
@@ -3198,6 +3610,8 @@ impl Refusal {
             class: ErrorClass::FacadeInvalidField,
             status: StatusCode::UNPROCESSABLE_ENTITY,
             reason: reason.to_owned(),
+            write_problem: None,
+            validation_pointer: None,
         }
     }
 
@@ -3206,6 +3620,8 @@ impl Refusal {
             class: ErrorClass::FacadeInvalidCursor,
             status: StatusCode::BAD_REQUEST,
             reason: reason.to_owned(),
+            write_problem: None,
+            validation_pointer: None,
         }
     }
 }
@@ -3392,13 +3808,12 @@ fn accepts_json(headers: &HeaderMap) -> bool {
         })
 }
 
-/// Whether the request declares `application/json` as its body type.
-fn has_json_content_type(headers: &HeaderMap) -> bool {
+fn has_content_type(headers: &HeaderMap, expected: &str) -> bool {
     headers
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.split(';').next())
-        .is_some_and(|media| media.trim().eq_ignore_ascii_case("application/json"))
+        .is_some_and(|media| media.trim().eq_ignore_ascii_case(expected))
 }
 
 /// Read a request body of at most `limit` bytes. A declared length past
@@ -3414,6 +3829,203 @@ async fn read_body(headers: &HeaderMap, body: Body, limit: usize) -> Result<axum
         return Err(());
     }
     axum::body::to_bytes(body, limit).await.map_err(|_| ())
+}
+
+pub(crate) fn capture_govstack_write(
+    operation: &ServedOperation,
+    body: &Value,
+) -> Result<CapturedWriteRequest, Refusal> {
+    let object = body
+        .as_object()
+        .ok_or_else(|| Refusal::invalid_request("the write input must be an object"))?;
+    // SourceReference is optional in the standard, but needs source-owned
+    // evidence validation. This source profile refuses it explicitly.
+    if object.contains_key("source") {
+        return Err(Refusal::invalid_field_at(
+            "this source does not support source references",
+            "/source",
+        ));
+    }
+    if object.len() != 1 || !object.contains_key("data") {
+        return Err(Refusal::invalid_request(
+            "only the declared data member is writable",
+        ));
+    }
+    let data = object["data"]
+        .as_object()
+        .ok_or_else(|| Refusal::invalid_request("the data member must be an object"))?;
+    if operation.method == HttpMethod::Patch && data.is_empty() {
+        return Err(Refusal::invalid_field(
+            "an Update requires a nonempty domain merge patch",
+        ));
+    }
+    let schema = operation
+        .project_input_schema
+        .as_ref()
+        .ok_or_else(|| Refusal::invalid_request("the Write input schema is unavailable"))?;
+    if !schema.validates(&object["data"]) {
+        return Err(Refusal::invalid_field(
+            "the domain input does not match its selected schema",
+        ));
+    }
+    Ok(CapturedWriteRequest {
+        record: object["data"].clone(),
+        record_id: None,
+    })
+}
+
+fn write_validator_context<'a>(
+    state: &'a FacadeState,
+    collection: &'a str,
+    record: &'a str,
+) -> Option<crate::govstack::write::ValidatorContext<'a>> {
+    let metadata =
+        crate::govstack::write::metadata::collection_metadata(&state.loaded.project, collection)
+            .ok()?;
+    Some(crate::govstack::write::ValidatorContext {
+        registry: metadata.registry,
+        collection,
+        record,
+        view: metadata.view.unwrap_or("write-receipt"),
+        closure: crate::govstack::write::metadata::validator_closure(&state.loaded, collection)
+            .ok()?,
+    })
+}
+
+fn is_companion_read(state: &FacadeState, operation: &ServedOperation) -> bool {
+    state
+        .loaded
+        .project
+        .write
+        .as_ref()
+        .and_then(|write| write.collections.get(&operation.record_type))
+        .and_then(|collection| collection.update.as_ref())
+        .is_some_and(|update| update.companion_read.as_str() == operation.binding)
+}
+
+fn govstack_write_success(
+    state: &FacadeState,
+    operation: &ServedOperation,
+    done: &Exchange,
+    path_record: &str,
+    deadline: std::time::Instant,
+) -> Result<(Value, String, Option<String>), ()> {
+    let metadata =
+        crate::govstack::write::metadata::resolve_runtime_write(&state.loaded, operation)
+            .map_err(|_| ())?;
+    let result = done.final_source_result().ok_or(())?;
+    if metadata.capability == crate::govstack::write::attachment::WriteCapability::Update
+        && result.key != path_record
+    {
+        return Err(());
+    }
+    let create = operation.method == HttpMethod::Post;
+    let context = crate::govstack::write::ValidatorContext {
+        registry: metadata.registry,
+        collection: metadata.collection,
+        record: if create { &result.key } else { path_record },
+        view: metadata.view.unwrap_or("write-receipt"),
+        closure: metadata.closure,
+    };
+    let receipt = crate::govstack::write::render_receipt(
+        result,
+        context,
+        state.codec.as_ref().ok_or(())?,
+        create,
+    )
+    .map_err(|_| ())?;
+    // Validate using the same pinned output projection as the companion GET.
+    let companion = metadata.companion_read.or_else(|| {
+        let update = state
+            .loaded
+            .project
+            .write
+            .as_ref()?
+            .collections
+            .get(&operation.record_type)?
+            .update
+            .as_ref()?;
+        state
+            .loaded
+            .served
+            .iter()
+            .find(|served| served.binding == update.companion_read.as_str())
+    });
+    if let Some(companion) = companion {
+        companion
+            .project_transform
+            .as_ref()
+            .ok_or(())?
+            .apply(
+                &state.loaded.code_maps,
+                &Value::Object(result.data.clone()),
+                deadline,
+            )
+            .map_err(|_| ())?;
+    }
+    Ok((receipt.body, receipt.etag, receipt.location))
+}
+
+pub(crate) fn govstack_problem(code: &str, status: StatusCode, request_id: &str) -> Response {
+    govstack_problem_at(code, status, request_id, "/data")
+}
+
+fn govstack_problem_at(
+    code: &str,
+    status: StatusCode,
+    request_id: &str,
+    pointer: &str,
+) -> Response {
+    let mut body = json!({"type": format!("https://govstack.global/problems/digital-registries/{code}"),
+        "title": code.replace('-', " "), "status": status.as_u16(), "traceId": request_id});
+    if code == "invalid-content" {
+        body["errors"] =
+            json!([{"pointer": pointer, "message": "the submitted field is not valid"}]);
+    }
+    let mut response = json_response(status, &body);
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/problem+json"),
+    );
+    crate::govstack::correlation::mark_problem(&mut response, body);
+    response
+}
+
+fn stamp_terminal_problem(events: &mut [(JournalEvent, SystemTime)], response: &Response) {
+    let Some(code) = crate::govstack::correlation::problem_type(response) else {
+        return;
+    };
+    for (event, _) in events
+        .iter_mut()
+        .filter(|(event, _)| event.event_kind == "exchangeFailed")
+    {
+        let mut detail: serde_json::Map<String, Value> = event
+            .detail
+            .as_deref()
+            .map(|text| serde_json::from_str(text).expect("host journal detail is a JSON object"))
+            .unwrap_or_default();
+        detail.insert("problemCode".to_owned(), Value::String(code.to_owned()));
+        detail.insert("status".to_owned(), json!(response.status().as_u16()));
+        event.detail = Some(Value::Object(detail).to_string());
+    }
+}
+
+async fn audited_internal_failure(
+    state: &FacadeState,
+    events: Vec<(JournalEvent, SystemTime)>,
+    record_type: &str,
+    request_id: &str,
+) -> Response {
+    if let Err(fault) = append_all(&state.journal, events).await {
+        tracing::error!(%fault, "the invalid source guard journal could not commit");
+    }
+    facade_problem(
+        state.loaded.problems(),
+        ErrorClass::Facade,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        record_type,
+        request_id,
+    )
 }
 
 fn idempotency_key(headers: &HeaderMap) -> Option<&str> {
@@ -3599,32 +4211,71 @@ async fn prepare_write_response(
     request_id: &str,
 ) -> Result<(Response, Option<StoredResponse>), String> {
     let (parts, body) = response.into_parts();
-    let content_type = parts
-        .headers
-        .get(header::CONTENT_TYPE)
-        .ok_or_else(|| "adapter.idempotency-response: content type absent".to_owned())?
-        .as_bytes()
-        .to_vec();
+    let semantic = |name| -> Result<Option<Vec<u8>>, String> {
+        let mut values = parts.headers.get_all(name).iter();
+        let value = values.next().map(|value| value.as_bytes().to_vec());
+        if values.next().is_some() {
+            return Err("adapter.idempotency-response: repeated semantic header".to_owned());
+        }
+        Ok(value)
+    };
+    let content_type = semantic(header::CONTENT_TYPE)?;
+    let location = semantic(header::LOCATION)?;
+    let etag = semantic(header::ETAG)?;
     let body = axum::body::to_bytes(body, MAX_STORED_RESPONSE_BYTES)
         .await
         .map_err(|_| "adapter.idempotency-response: body exceeds custody bound".to_owned())?;
-    let stored = StoredResponse::new(
-        parts.status.as_u16(),
-        content_type,
-        body.to_vec(),
-        request_id,
-    )
+    let stored = match (parts.status, content_type, location, etag) {
+        (StatusCode::NO_CONTENT, Some(content_type), None, None) => StoredResponse::new(
+            parts.status.as_u16(),
+            content_type,
+            body.to_vec(),
+            request_id,
+        ),
+        (_, content_type, location, etag) => StoredResponse::with_semantic_headers(
+            parts.status.as_u16(),
+            content_type,
+            location,
+            etag,
+            body.to_vec(),
+            request_id,
+        ),
+    }
     .map_err(|error| error.to_string())?;
     Ok((Response::from_parts(parts, Body::from(body)), Some(stored)))
 }
 
 fn replay_response(stored: StoredResponse) -> Response {
+    replay_response_ref(&stored)
+}
+
+fn replay_govstack_failed_response(stored: StoredResponse) -> Result<Response, ()> {
+    let mut response = replay_response_ref(&stored);
+    crate::govstack::correlation::mark_stored_problem_identity(
+        &mut response,
+        stored.status(),
+        stored.content_type_header(),
+        stored.body(),
+    )?;
+    Ok(response)
+}
+
+fn replay_response_ref(stored: &StoredResponse) -> Response {
     let status = StatusCode::from_u16(stored.status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-    let mut response = (status, stored.body().to_vec()).into_response();
-    if let Ok(content_type) = HeaderValue::from_bytes(stored.content_type()) {
-        response
-            .headers_mut()
-            .insert(header::CONTENT_TYPE, content_type);
+    let mut response = Response::new(Body::from(stored.body().to_vec()));
+    *response.status_mut() = status;
+    // These bytes passed the closed custody constructor on capture and load.
+    for (name, value) in [
+        (header::CONTENT_TYPE, stored.content_type_header()),
+        (header::LOCATION, stored.location()),
+        (header::ETAG, stored.etag()),
+    ] {
+        if let Some(value) = value {
+            response.headers_mut().insert(
+                name,
+                HeaderValue::from_bytes(value).expect("custodied semantic header"),
+            );
+        }
     }
     response
         .extensions_mut()
@@ -3778,6 +4429,17 @@ async fn refuse_request(
     };
     let mut failure = exchange_failure_detail(profile, refusal.class);
     failure["reason"] = Value::String(refusal.reason);
+    if operation.write_support.is_some() {
+        let code = refusal.write_problem.or_else(|| {
+            (refusal.status == StatusCode::UNPROCESSABLE_ENTITY).then_some("invalid-content")
+        });
+        if let Some(code) = code {
+            failure["problemCode"] = Value::String(format!(
+                "https://govstack.global/problems/digital-registries/{code}"
+            ));
+            failure["status"] = json!(refusal.status.as_u16());
+        }
+    }
     let events = vec![
         event("exchangeCreated", None),
         event("exchangeFailed", Some(failure)),
@@ -3793,6 +4455,17 @@ async fn refuse_request(
         );
     }
     warn_exchange_failed(refusal.class, refusal.status);
+    if let Some(code) = refusal.write_problem {
+        return govstack_problem(code, refusal.status, request_id);
+    }
+    if operation.write_support.is_some() && refusal.status == StatusCode::UNPROCESSABLE_ENTITY {
+        return govstack_problem_at(
+            "invalid-content",
+            refusal.status,
+            request_id,
+            refusal.validation_pointer.unwrap_or("/data"),
+        );
+    }
     if refusal.status == StatusCode::UNPROCESSABLE_ENTITY
         && profile.profile.id.as_str() == CONSULTATION_PROFILE_ID
     {
@@ -4012,6 +4685,9 @@ fn problem_response(
                 header::CONTENT_TYPE,
                 HeaderValue::from_static("application/problem+json"),
             );
+            if problems.profile.id.as_str() == CONSULTATION_PROFILE_ID {
+                crate::govstack::correlation::mark_problem(&mut response, rendered);
+            }
             with_request_id(response, request_id)
         }
         Err(error) => {
@@ -4057,14 +4733,13 @@ fn contract_unavailable(request_id: &str) -> Response {
 }
 
 fn consultation_unavailable(request_id: &str) -> Response {
-    let mut response = json_response(
-        StatusCode::SERVICE_UNAVAILABLE,
-        &crate::govstack::consultation::service_unavailable_problem(request_id),
-    );
+    let body = crate::govstack::consultation::service_unavailable_problem(request_id);
+    let mut response = json_response(StatusCode::SERVICE_UNAVAILABLE, &body);
     response.headers_mut().insert(
         header::CONTENT_TYPE,
         HeaderValue::from_static("application/problem+json"),
     );
+    crate::govstack::correlation::mark_problem(&mut response, body);
     with_request_id(response, request_id)
 }
 
@@ -4196,6 +4871,8 @@ mod tests {
             async_completion: None,
             project_transform: None,
             project_input_schema: None,
+            project_input_transform: None,
+            write_support: None,
             read_support: None,
             source_input: None,
             item_projection: None,
@@ -4252,6 +4929,195 @@ mod tests {
             "an unbound record type falls to the first operation, which \
              authenticates before it refuses 404"
         );
+    }
+
+    #[test]
+    fn terminal_audit_uses_the_actual_govstack_problem_identity() {
+        let response = govstack_problem(
+            "precondition-failed",
+            StatusCode::PRECONDITION_FAILED,
+            "0123456789abcdef0123456789abcdef",
+        );
+        let mut events = vec![(JournalEvent {
+            event_kind: "exchangeFailed", exchange_id: "attempt".to_owned(), operation: "update".to_owned(),
+            caller_ref: "caller".to_owned(), route_id: "route".to_owned(),
+            detail: Some(json!({"class": "outcome.conflict", "problemCode": "old-profile-code", "auth": {"kind": "verified"}}).to_string()),
+        }, SystemTime::now())];
+        stamp_terminal_problem(&mut events, &response);
+        let detail: Value = serde_json::from_str(events[0].0.detail.as_deref().unwrap()).unwrap();
+        assert_eq!(
+            detail["problemCode"],
+            "https://govstack.global/problems/digital-registries/precondition-failed"
+        );
+        assert_eq!(detail["status"], 412);
+        assert_eq!(detail["class"], "outcome.conflict");
+        assert_eq!(detail["auth"]["kind"], "verified");
+    }
+
+    #[tokio::test]
+    async fn write_semantic_validation_and_fingerprint_mismatch_have_distinct_contracts() {
+        let request_id = "0123456789abcdef0123456789abcdef";
+        for (code, has_errors) in [
+            ("invalid-content", true),
+            ("idempotency-fingerprint-mismatch", false),
+        ] {
+            let response = govstack_problem(code, StatusCode::UNPROCESSABLE_ENTITY, request_id);
+            let body = axum::body::to_bytes(response.into_body(), 4096)
+                .await
+                .unwrap();
+            let problem: Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(
+                problem["type"],
+                format!("https://govstack.global/problems/digital-registries/{code}")
+            );
+            assert_eq!(problem["status"], 422);
+            assert_eq!(problem.get("errors").is_some(), has_errors);
+            if has_errors {
+                assert_eq!(problem["errors"][0]["pointer"], "/data");
+            }
+        }
+    }
+
+    #[test]
+    fn replay_window_header_publishes_decimal_seconds_without_changing_the_body() {
+        let response = with_replay_window_seconds(
+            json_response(StatusCode::OK, &json!({"collections": []})),
+            86400,
+        );
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-registry-idempotency-replay-window-seconds")
+                .unwrap(),
+            "86400"
+        );
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL).unwrap(),
+            "no-store"
+        );
+    }
+
+    #[tokio::test]
+    async fn custodied_write_problem_keeps_original_trace_body_on_a_new_attempt() {
+        let first = RequestCorrelation::server_created();
+        let second = RequestCorrelation::server_created();
+        let response = first.finish(govstack_problem(
+            "precondition-failed",
+            StatusCode::PRECONDITION_FAILED,
+            first.request_id(),
+        ));
+        let (_, stored) = prepare_write_response(response, first.request_id())
+            .await
+            .expect("capture first effective trace");
+        let stored = stored.expect("custody");
+        let original_body = stored.body().to_vec();
+        let response = second.finish(replay_response(stored));
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        assert_eq!(body.as_ref(), original_body);
+        let problem: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(problem["traceId"], first.trace_id().as_str());
+        assert_ne!(first.trace_id(), second.trace_id());
+    }
+
+    #[tokio::test]
+    async fn write_response_custody_keeps_semantic_headers_and_bodyless_update() {
+        let request_id = "0123456789abcdef0123456789abcdef";
+        let mut update = no_store(StatusCode::NO_CONTENT.into_response());
+        update
+            .headers_mut()
+            .insert(header::ETAG, HeaderValue::from_static("\"committed\""));
+        let (first, stored) = prepare_write_response(update, request_id)
+            .await
+            .expect("capture 204");
+        assert_eq!(first.status(), StatusCode::NO_CONTENT);
+        let replay = replay_response(stored.expect("custody"));
+        assert_eq!(replay.status(), StatusCode::NO_CONTENT);
+        assert_eq!(replay.headers().get(header::CONTENT_TYPE), None);
+        assert_eq!(
+            replay.headers().get(header::ETAG),
+            Some(&HeaderValue::from_static("\"committed\""))
+        );
+        assert!(axum::body::to_bytes(replay.into_body(), 1024)
+            .await
+            .unwrap()
+            .is_empty());
+
+        let mut created = json_response(StatusCode::CREATED, &json!({"recordId": "r1"}));
+        created.headers_mut().insert(
+            header::LOCATION,
+            HeaderValue::from_static("/govstack/registries/v1/collections/people/records/r1"),
+        );
+        created
+            .headers_mut()
+            .insert(header::ETAG, HeaderValue::from_static("\"created\""));
+        let (_, stored) = prepare_write_response(created, request_id)
+            .await
+            .expect("capture 201");
+        let replay = replay_response(stored.expect("custody"));
+        assert_eq!(replay.status(), StatusCode::CREATED);
+        assert_eq!(
+            replay.headers().get(header::LOCATION).unwrap(),
+            "/govstack/registries/v1/collections/people/records/r1"
+        );
+        assert_eq!(replay.headers().get(header::ETAG).unwrap(), "\"created\"");
+        assert_eq!(
+            replay.headers().get(header::CONTENT_TYPE).unwrap(),
+            "application/json"
+        );
+
+        let mut generic = Response::new(Body::from(br#"{"legacy":true}"#.as_slice()));
+        *generic.status_mut() = StatusCode::NO_CONTENT;
+        generic.headers_mut().insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        );
+        let (_, stored) = prepare_write_response(generic, request_id)
+            .await
+            .expect("capture the historical generic 204 shape");
+        let replay = replay_response(stored.expect("generic custody"));
+        assert_eq!(replay.status(), StatusCode::NO_CONTENT);
+        assert_eq!(
+            replay.headers().get(header::CONTENT_TYPE).unwrap(),
+            "application/json"
+        );
+        assert_eq!(
+            axum::body::to_bytes(replay.into_body(), 1024)
+                .await
+                .unwrap(),
+            br#"{"legacy":true}"#.as_slice()
+        );
+    }
+
+    #[test]
+    fn govstack_write_capture_checks_only_the_declared_domain_before_source_effects() {
+        let mut operation = served("update", "person");
+        operation.method = HttpMethod::Patch;
+        operation.project_input_schema = Some(Arc::new(
+            crate::engine::public_schema::check_public_schema(json!({
+                "$id": "https://registry.example/schemas/1/person-patch.json",
+                "type": "object", "additionalProperties": false,
+                "properties": {"name": {"type": "string"}, "note": {"type": ["string", "null"]}}
+            }))
+            .expect("input schema"),
+        ));
+        let captured = capture_govstack_write(&operation, &json!({"data": {"note": null}}))
+            .expect("null removes an optional field");
+        assert_eq!(captured.record, json!({"note": null}));
+        let source = capture_govstack_write(&operation, &json!({"data": {"name": "Ada"}, "source": {"system": "https://source.example", "revision": "r1"}}))
+            .err().expect("unsupported source evidence is explicit");
+        assert_eq!(source.validation_pointer, Some("/source"));
+        for body in [
+            json!({"data": {}}),
+            json!({"data": []}),
+            json!({"data": {"unknown": true}}),
+            json!({"data": {"name": "Ada"}, "recordId": "chosen"}),
+            json!({"data": {"name": "Ada"}, "source": {"system": "https://source.example", "revision": "r1"}}),
+        ] {
+            assert!(capture_govstack_write(&operation, &body).is_err());
+        }
     }
 
     #[test]
@@ -4341,6 +5207,31 @@ mod tests {
         assert_eq!(body["title"], "the service is unavailable");
         assert_eq!(body["status"], 503);
         assert_eq!(body["traceId"], "0123456789abcdef0123456789abcdef");
+    }
+
+    #[tokio::test]
+    async fn consultation_auth_backend_failure_uses_its_service_unavailable_problem() {
+        let profile = crate::govstack::consultation::built_in_profile();
+        let envelope = CompiledEnvelope::compile(profile.problem_envelope.text(), &BTreeMap::new())
+            .expect("maintained problem envelope compiles");
+        let response = refusal_response(
+            Problems {
+                profile: &profile,
+                envelope: &envelope,
+            },
+            CallerRefusal::Unavailable,
+            "0123456789abcdef0123456789abcdef",
+        );
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let bytes = axum::body::to_bytes(response.into_body(), 16 * 1024)
+            .await
+            .expect("bounded problem body");
+        let body: Value = serde_json::from_slice(&bytes).expect("problem JSON");
+        assert_eq!(
+            body["type"],
+            crate::govstack::consultation::SERVICE_UNAVAILABLE_PROBLEM_CODE
+        );
+        assert_eq!(body["status"], 503);
     }
 
     #[test]

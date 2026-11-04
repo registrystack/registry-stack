@@ -45,6 +45,12 @@ pub const MAX_CONCRETE_OPERATION_BYTES: usize = 256;
 /// Longest accepted caller-supplied idempotency key in bytes.
 /// Longest exact facade content type retained with a response.
 pub const MAX_CONTENT_TYPE_BYTES: usize = 256;
+/// Longest exact `Location` header retained with a response.
+pub const MAX_LOCATION_BYTES: usize = 2_048;
+/// Longest exact `ETag` header retained with a response.
+///
+/// This fits the Base Registry Engine's canonical strong ETag wire form.
+pub const MAX_ETAG_BYTES: usize = 258;
 /// Exact lowercase-hex length of an Adapter-generated response request id.
 pub const RESPONSE_REQUEST_ID_BYTES: usize = 32;
 /// Largest exact facade response body the idempotency store will retain.
@@ -92,7 +98,7 @@ const ASYNC_BINDING_DIGEST_DOMAIN: &[u8] = b"registry-adapter:async-binding:v1\0
 
 const LOGICAL_DEPLOYMENT_IDENTITY_MIGRATION: i64 = 200;
 const RESPONSE_REQUEST_ID_MIGRATION: i64 = 300;
-const MIGRATIONS: [(i64, &str); 5] = [
+const MIGRATIONS: [(i64, &str); 7] = [
     (
         100,
         include_str!("idempotent/migrations/0100_idempotency_store.sql"),
@@ -112,6 +118,14 @@ const MIGRATIONS: [(i64, &str); 5] = [
     (
         500,
         include_str!("idempotent/migrations/0500_linear_write_resume.sql"),
+    ),
+    (
+        600,
+        include_str!("idempotent/migrations/0600_source_native_single_resume.sql"),
+    ),
+    (
+        700,
+        include_str!("idempotent/migrations/0700_semantic_response_headers.sql"),
     ),
 ];
 const SUPPORTED_SCHEMA_VERSION: i64 = MIGRATIONS[MIGRATIONS.len() - 1].0;
@@ -422,7 +436,9 @@ impl TerminalOutcome {
 #[derive(Clone, Eq, PartialEq)]
 pub struct StoredResponse {
     status: u16,
-    content_type: Vec<u8>,
+    content_type: Option<Vec<u8>>,
+    location: Option<Vec<u8>>,
+    etag: Option<Vec<u8>>,
     body: Vec<u8>,
     request_id: String,
 }
@@ -435,23 +451,86 @@ impl StoredResponse {
         body: Vec<u8>,
         request_id: impl Into<String>,
     ) -> Result<Self, IdempotencyError> {
-        let request_id = request_id.into();
+        Self::validated(
+            status,
+            Some(content_type),
+            None,
+            None,
+            body,
+            request_id.into(),
+            false,
+        )
+    }
+
+    /// Validate and take custody of the closed semantic response headers.
+    ///
+    /// No arbitrary header map is retained. A `204` is explicitly bodyless
+    /// and has no `Content-Type`; an absent content type on any other status
+    /// is admitted only with an empty body.
+    pub fn with_semantic_headers(
+        status: u16,
+        content_type: Option<Vec<u8>>,
+        location: Option<Vec<u8>>,
+        etag: Option<Vec<u8>>,
+        body: Vec<u8>,
+        request_id: impl Into<String>,
+    ) -> Result<Self, IdempotencyError> {
+        Self::validated(
+            status,
+            content_type,
+            location,
+            etag,
+            body,
+            request_id.into(),
+            true,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn validated(
+        status: u16,
+        content_type: Option<Vec<u8>>,
+        location: Option<Vec<u8>>,
+        etag: Option<Vec<u8>>,
+        body: Vec<u8>,
+        request_id: String,
+        bodyless_204: bool,
+    ) -> Result<Self, IdempotencyError> {
         if !(100..=599).contains(&status) {
             return Err(IdempotencyError::InvalidInput {
                 field: "response status",
             });
         }
-        if content_type.is_empty()
-            || content_type.len() > MAX_CONTENT_TYPE_BYTES
-            || HeaderValue::from_bytes(&content_type).is_err()
-        {
-            return Err(IdempotencyError::InvalidInput {
-                field: "response content type",
-            });
-        }
+        validate_optional_response_header(
+            content_type.as_deref(),
+            MAX_CONTENT_TYPE_BYTES,
+            "response content type",
+        )?;
+        validate_optional_response_header(
+            location.as_deref(),
+            MAX_LOCATION_BYTES,
+            "response location",
+        )?;
+        validate_optional_response_header(etag.as_deref(), MAX_ETAG_BYTES, "response etag")?;
         if body.len() > MAX_STORED_RESPONSE_BYTES {
             return Err(IdempotencyError::InvalidInput {
                 field: "response body",
+            });
+        }
+        if bodyless_204 && status == 204 {
+            if !body.is_empty() {
+                return Err(IdempotencyError::InvalidInput {
+                    field: "response body",
+                });
+            }
+            if content_type.is_some() {
+                return Err(IdempotencyError::InvalidInput {
+                    field: "response content type",
+                });
+            }
+        } else if !body.is_empty() && content_type.is_none() {
+            return Err(IdempotencyError::InvalidInput {
+                field: "response content type",
             });
         }
         if request_id.len() != RESPONSE_REQUEST_ID_BYTES
@@ -466,9 +545,34 @@ impl StoredResponse {
         Ok(Self {
             status,
             content_type,
+            location,
+            etag,
             body,
             request_id,
         })
+    }
+
+    fn from_storage(
+        status: u16,
+        content_type: Option<Vec<u8>>,
+        location: Option<Vec<u8>>,
+        etag: Option<Vec<u8>>,
+        body: Vec<u8>,
+        request_id: String,
+    ) -> Result<Self, IdempotencyError> {
+        // Rows written before semantic headers existed can contain a generic
+        // 204 response with Content-Type and body. The v0700 migration adds
+        // nullable columns without changing those historically valid bytes.
+        let historical_generic_204 = status == 204 && location.is_none() && etag.is_none();
+        Self::validated(
+            status,
+            content_type,
+            location,
+            etag,
+            body,
+            request_id,
+            !historical_generic_204,
+        )
     }
 
     /// Exact HTTP status to replay.
@@ -478,9 +582,30 @@ impl StoredResponse {
     }
 
     /// Exact `Content-Type` bytes to replay.
+    ///
+    /// An empty slice means the explicit semantic constructor admitted no
+    /// header. New replay code should prefer [`Self::content_type_header`].
     #[must_use]
     pub fn content_type(&self) -> &[u8] {
-        &self.content_type
+        self.content_type.as_deref().unwrap_or_default()
+    }
+
+    /// Exact optional `Content-Type` bytes to replay.
+    #[must_use]
+    pub fn content_type_header(&self) -> Option<&[u8]> {
+        self.content_type.as_deref()
+    }
+
+    /// Exact optional `Location` bytes to replay.
+    #[must_use]
+    pub fn location(&self) -> Option<&[u8]> {
+        self.location.as_deref()
+    }
+
+    /// Exact optional `ETag` bytes to replay.
+    #[must_use]
+    pub fn etag(&self) -> Option<&[u8]> {
+        self.etag.as_deref()
     }
 
     /// Exact facade body bytes to replay.
@@ -501,10 +626,28 @@ impl fmt::Debug for StoredResponse {
         formatter
             .debug_struct("StoredResponse")
             .field("status", &self.status)
-            .field("content_type_bytes", &self.content_type.len())
+            .field(
+                "content_type_bytes",
+                &self.content_type.as_ref().map(Vec::len),
+            )
+            .field("has_location", &self.location.is_some())
+            .field("has_etag", &self.etag.is_some())
             .field("body_bytes", &self.body.len())
             .finish()
     }
+}
+
+fn validate_optional_response_header(
+    value: Option<&[u8]>,
+    maximum_bytes: usize,
+    field: &'static str,
+) -> Result<(), IdempotencyError> {
+    if value.is_some_and(|value| {
+        value.is_empty() || value.len() > maximum_bytes || HeaderValue::from_bytes(value).is_err()
+    }) {
+        return Err(IdempotencyError::InvalidInput { field });
+    }
+    Ok(())
 }
 
 /// Exclusive permission returned only to the request that inserted a new
@@ -800,7 +943,8 @@ impl PostgresIdempotencyStore {
         let row = client
             .query_one(
                 "SELECT request_digest, state, response_status, \
-                        response_content_type, response_body, response_request_id, \
+                        response_content_type, response_location, response_etag, \
+                        response_body, response_request_id, \
                         effect_started_at \
                  FROM adapter_idempotency_entries WHERE scope_digest = $1",
                 &[&scope_digest.as_slice()],
@@ -819,7 +963,7 @@ impl PostgresIdempotencyStore {
         now: SystemTime,
     ) -> Result<Claim, IdempotencyError> {
         validate_claim_request(&request)?;
-        if !(2..=100_000).contains(&context.step_count) {
+        if !(1..=100_000).contains(&context.step_count) {
             return Err(IdempotencyError::InvalidInput {
                 field: "resume step count",
             });
@@ -913,7 +1057,8 @@ impl PostgresIdempotencyStore {
         let row = transaction
             .query_one(
                 "SELECT request_digest, state, response_status, response_content_type, \
-                        response_body, response_request_id, claimed_at, effect_started_at \
+                        response_location, response_etag, response_body, \
+                        response_request_id, claimed_at, effect_started_at \
                  FROM adapter_idempotency_entries WHERE scope_digest = $1",
                 &[&scope_digest.as_slice()],
             )
@@ -1216,6 +1361,70 @@ impl PostgresIdempotencyStore {
         Ok(())
     }
 
+    /// Release a source-native single-step claim only when PostgreSQL proves
+    /// that no attempt has crossed its durable pre-send boundary.
+    ///
+    /// A resumed execution starts with an in-memory `effect_attempted` value
+    /// of false even when an earlier attempt may have sent the source effect.
+    /// The parent state, exact live lease, step marker, and artifact fence are
+    /// therefore all checked together before cascading the resume row away.
+    pub async fn try_release_resume_before_any_effect(
+        &self,
+        execution: &Execution,
+        now: SystemTime,
+    ) -> Result<bool, IdempotencyError> {
+        let resume = execution
+            .resume
+            .as_ref()
+            .ok_or(IdempotencyError::StateConflict)?;
+        if execution.effect_attempted
+            || resume.next_step != 0
+            || resume.step_count != 1
+            || now >= resume.expires_at
+        {
+            return Ok(false);
+        }
+        let mut client = self.pool.get().await?;
+        let transaction = client.transaction().await?;
+        lock_async_artifact_fence(
+            &transaction,
+            resume.deployment_digest,
+            resume.artifact_digest,
+            now,
+            false,
+        )
+        .await?;
+        let deleted = transaction
+            .execute(
+                "DELETE FROM adapter_idempotency_entries AS entries \
+                 WHERE entries.scope_digest = $1 AND entries.request_digest = $2 \
+                   AND entries.state = 'claimed' AND entries.effect_started_at IS NULL \
+                   AND entries.claimed_at = $3 \
+                   AND EXISTS (SELECT 1 FROM adapter_idempotency_resumes AS resumes \
+                               WHERE resumes.scope_digest = entries.scope_digest \
+                                 AND resumes.request_digest = entries.request_digest \
+                                 AND resumes.deployment_digest = $4 \
+                                 AND resumes.artifact_digest = $5 \
+                                 AND resumes.lease_id = $6 \
+                                 AND resumes.next_step = 0 AND resumes.step_count = 1 \
+                                 AND NOT resumes.step_started \
+                                 AND resumes.expires_at > $7 \
+                                 AND resumes.lease_until > $7)",
+                &[
+                    &execution.scope_digest.as_slice(),
+                    &execution.request_digest.as_slice(),
+                    &execution.claimed_at,
+                    &resume.deployment_digest.as_slice(),
+                    &resume.artifact_digest.as_slice(),
+                    &resume.lease_id.as_slice(),
+                    &now,
+                ],
+            )
+            .await?;
+        transaction.commit().await?;
+        Ok(deleted == 1)
+    }
+
     /// Persist asynchronous recovery authority before a non-safe send.
     ///
     /// The uncertainty horizon covers the route's remaining finite deadline
@@ -1350,10 +1559,11 @@ impl PostgresIdempotencyStore {
                 "UPDATE adapter_idempotency_entries \
                  SET state = 'accepted', async_source_id = $3, \
                      async_accepted_at = $4, async_expires_at = $5, expires_at = $5, \
-                     response_status = $6, response_content_type = $7, response_body = $8 \
+                     response_status = $6, response_content_type = $7, \
+                     response_location = $8, response_etag = $9, response_body = $10 \
                  WHERE scope_digest = $1 AND request_digest = $2 \
                    AND state = 'effect_started' \
-                   AND response_request_id = $9 AND async_binding_digest IS NOT NULL \
+                   AND response_request_id = $11 AND async_binding_digest IS NOT NULL \
                    AND async_poll_lease_id IS NULL AND async_expires_at > $4",
                 &[
                     &execution.scope_digest.as_slice(),
@@ -1363,6 +1573,8 @@ impl PostgresIdempotencyStore {
                     &expires_at,
                     &status,
                     &response.content_type,
+                    &response.location,
+                    &response.etag,
                     &response.body,
                     &response.request_id,
                 ],
@@ -1444,13 +1656,14 @@ impl PostgresIdempotencyStore {
             .execute(
                 "UPDATE adapter_idempotency_entries \
                  SET state = $3, terminal_at = $4, expires_at = $5, \
-                     response_status = $6, response_content_type = $7, response_body = $8, \
-                     response_request_id = $9, async_source_id = NULL, \
+                     response_status = $6, response_content_type = $7, \
+                     response_location = $8, response_etag = $9, response_body = $10, \
+                     response_request_id = $11, async_source_id = NULL, \
                      async_recovery_id = NULL, async_poll_lease_id = NULL, \
                      async_poll_lease_until = NULL \
-                 WHERE scope_digest = $1 AND request_digest = $2 AND state = $10 \
-                   AND (state <> 'claimed' OR claimed_at = $11) \
-                   AND (async_binding_digest IS NULL OR response_request_id = $9)",
+                 WHERE scope_digest = $1 AND request_digest = $2 AND state = $12 \
+                   AND (state <> 'claimed' OR claimed_at = $13) \
+                   AND (async_binding_digest IS NULL OR response_request_id = $11)",
                 &[
                     &execution.scope_digest.as_slice(),
                     &execution.request_digest.as_slice(),
@@ -1459,6 +1672,8 @@ impl PostgresIdempotencyStore {
                     &expires_at,
                     &status,
                     &response.content_type,
+                    &response.location,
+                    &response.etag,
                     &response.body,
                     &response.request_id,
                     &expected_state,
@@ -1509,7 +1724,8 @@ impl PostgresIdempotencyStore {
                 "SELECT scope_digest, request_digest, state, artifact_digest, \
                         async_binding_digest, async_binding_id, async_profile_operation, \
                         async_concrete_operation, async_record_type, async_expires_at, \
-                        response_status, response_content_type, response_body, \
+                        response_status, response_content_type, response_location, \
+                        response_etag, response_body, \
                         response_request_id \
                  FROM adapter_idempotency_entries \
                  WHERE response_request_id = $1 AND async_binding_digest IS NOT NULL \
@@ -1758,13 +1974,14 @@ impl PostgresIdempotencyStore {
                 "UPDATE adapter_idempotency_entries \
                  SET state = $7, terminal_at = $8, expires_at = $9, \
                      response_status = $10, response_content_type = $11, \
-                     response_body = $12, async_source_id = NULL, \
+                     response_location = $12, response_etag = $13, \
+                     response_body = $14, async_source_id = NULL, \
                      async_recovery_id = NULL, async_poll_lease_id = NULL, \
                      async_poll_lease_until = NULL \
                  WHERE scope_digest = $1 AND request_digest = $2 \
                    AND async_binding_digest = $3 AND artifact_digest = $4 \
                    AND state = $5 AND async_poll_lease_id = $6 \
-                   AND response_request_id = $13 \
+                   AND response_request_id = $15 \
                    AND async_poll_lease_until > $8 AND async_expires_at > $8",
                 &[
                     &recovery.scope_digest.as_slice(),
@@ -1778,6 +1995,8 @@ impl PostgresIdempotencyStore {
                     &expires_at,
                     &status,
                     &response.content_type,
+                    &response.location,
+                    &response.etag,
                     &response.body,
                     &response.request_id,
                 ],
@@ -1817,7 +2036,8 @@ impl PostgresIdempotencyStore {
                  SET state = 'accepted', async_source_id = $7, \
                      async_accepted_at = $8, async_expires_at = $9, expires_at = $9, \
                      response_status = $10, response_content_type = $11, \
-                     response_body = $12, async_poll_lease_id = NULL, \
+                     response_location = $12, response_etag = $13, \
+                     response_body = $14, async_poll_lease_id = NULL, \
                      async_poll_lease_until = NULL \
                  WHERE scope_digest = $1 AND request_digest = $2 \
                    AND async_binding_digest = $3 AND artifact_digest = $4 \
@@ -1836,6 +2056,8 @@ impl PostgresIdempotencyStore {
                     &expires_at,
                     &status,
                     &response.content_type,
+                    &response.location,
+                    &response.etag,
                     &response.body,
                 ],
             )
@@ -1946,6 +2168,16 @@ impl PostgresIdempotencyStore {
                            OR (entries.state IN ('completed', 'failed') \
                                AND entries.expires_at <= $1) THEN NULL \
                          ELSE entries.response_content_type END, \
+                     response_location = CASE \
+                         WHEN entries.state = 'accepted' \
+                           OR (entries.state IN ('completed', 'failed') \
+                               AND entries.expires_at <= $1) THEN NULL \
+                         ELSE entries.response_location END, \
+                     response_etag = CASE \
+                         WHEN entries.state = 'accepted' \
+                           OR (entries.state IN ('completed', 'failed') \
+                               AND entries.expires_at <= $1) THEN NULL \
+                         ELSE entries.response_etag END, \
                      response_body = CASE \
                          WHEN entries.state = 'accepted' \
                            OR (entries.state IN ('completed', 'failed') \
@@ -2329,14 +2561,18 @@ fn status_metadata_from_row(row: &Row) -> Result<StatusMetadata, IdempotencyErro
 fn response_from_row(row: &Row) -> Result<StoredResponse, IdempotencyError> {
     let status: Option<i16> = row.get("response_status");
     let content_type: Option<Vec<u8>> = row.get("response_content_type");
+    let location: Option<Vec<u8>> = row.get("response_location");
+    let etag: Option<Vec<u8>> = row.get("response_etag");
     let body: Option<Vec<u8>> = row.get("response_body");
     let request_id: Option<String> = row.get("response_request_id");
     let status = status
         .and_then(|value| u16::try_from(value).ok())
         .ok_or(IdempotencyError::StoredDataInvalid)?;
-    StoredResponse::new(
+    StoredResponse::from_storage(
         status,
-        content_type.ok_or(IdempotencyError::StoredDataInvalid)?,
+        content_type,
+        location,
+        etag,
         body.ok_or(IdempotencyError::StoredDataInvalid)?,
         request_id.ok_or(IdempotencyError::StoredDataInvalid)?,
     )
@@ -2415,6 +2651,14 @@ async fn erase_one_if_expired(
                      WHEN state = 'accepted' \
                        OR (state IN ('completed', 'failed') AND expires_at <= $2) THEN NULL \
                      ELSE response_content_type END, \
+                 response_location = CASE \
+                     WHEN state = 'accepted' \
+                       OR (state IN ('completed', 'failed') AND expires_at <= $2) THEN NULL \
+                     ELSE response_location END, \
+                 response_etag = CASE \
+                     WHEN state = 'accepted' \
+                       OR (state IN ('completed', 'failed') AND expires_at <= $2) THEN NULL \
+                     ELSE response_etag END, \
                  response_body = CASE \
                      WHEN state = 'accepted' \
                        OR (state IN ('completed', 'failed') AND expires_at <= $2) THEN NULL \
@@ -2548,5 +2792,25 @@ mod tests {
             digest_for("deployment-ab", "c"),
             digest_for("deployment-a", "bc")
         );
+    }
+
+    #[test]
+    fn storage_decoder_preserves_historical_generic_204_bytes() {
+        let response = StoredResponse::from_storage(
+            204,
+            Some(b"application/json".to_vec()),
+            None,
+            None,
+            br#"{"legacy":true}"#.to_vec(),
+            "00000000000000000000000000000001".to_owned(),
+        )
+        .expect("v0600 generic response custody remains replayable");
+
+        assert_eq!(response.status(), 204);
+        assert_eq!(
+            response.content_type_header(),
+            Some(&b"application/json"[..])
+        );
+        assert_eq!(response.body(), br#"{"legacy":true}"#);
     }
 }

@@ -293,6 +293,7 @@ fn project(budget: u64) -> AdapterProject {
             digest: digest(),
         }),
         consultation: None,
+        write: None,
         pack: PinnedRef {
             id: local("generated-pack"),
             version: "1".to_owned(),

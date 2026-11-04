@@ -19,6 +19,7 @@
                   "type": "string"
                 },
                 "pointer": {
+                  "format": "json-pointer",
                   "maxLength": 512,
                   "minLength": 1,
                   "type": "string"
@@ -45,14 +46,14 @@
             "type": "string"
           },
           "traceId": {
-            "maxLength": 128,
-            "minLength": 1,
+            "pattern": "^(?!0{32}$)[\\da-f]{32}$",
             "type": "string"
           },
           "type": {
             "format": "uri",
             "maxLength": 512,
             "minLength": 1,
+            "pattern": "^https://govstack\\.global/problems/[a-z][a-z0-9-]{1,30}/[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
             "type": "string"
           }
         },
@@ -63,6 +64,72 @@
           "traceId"
         ],
         "type": "object"
+      },
+      "UnprocessableContentProblem": {
+        "description": "Semantic body validation failure or idempotency fingerprint mismatch.",
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ValidationProblem"
+              },
+              {
+                "description": "Bind semantic field validation failure to its 422 identity.",
+                "properties": {
+                  "status": {
+                    "const": 422
+                  },
+                  "type": {
+                    "const": "https://govstack.global/problems/digital-registries/invalid-content"
+                  }
+                },
+                "required": [
+                  "type",
+                  "title",
+                  "status",
+                  "traceId"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Problem"
+              },
+              {
+                "description": "Bind idempotency fingerprint mismatch to its distinct 422 identity.",
+                "not": {
+                  "required": [
+                    "errors"
+                  ]
+                },
+                "properties": {
+                  "status": {
+                    "const": 422
+                  },
+                  "type": {
+                    "const": "https://govstack.global/problems/digital-registries/idempotency-fingerprint-mismatch"
+                  }
+                },
+                "required": [
+                  "type",
+                  "title",
+                  "status",
+                  "traceId"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        ],
+        "required": [
+          "type",
+          "title",
+          "status",
+          "traceId"
+        ]
       },
       "ValidationProblem": {
         "additionalProperties": false,
@@ -82,6 +149,7 @@
                   "type": "string"
                 },
                 "pointer": {
+                  "format": "json-pointer",
                   "maxLength": 512,
                   "minLength": 1,
                   "type": "string"
@@ -108,14 +176,14 @@
             "type": "string"
           },
           "traceId": {
-            "maxLength": 128,
-            "minLength": 1,
+            "pattern": "^(?!0{32}$)[\\da-f]{32}$",
             "type": "string"
           },
           "type": {
             "format": "uri",
             "maxLength": 512,
             "minLength": 1,
+            "pattern": "^https://govstack\\.global/problems/[a-z][a-z0-9-]{1,30}/[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
             "type": "string"
           }
         },
@@ -195,6 +263,17 @@
     "/v1/capabilities": {
       "get": {
         "operationId": "getCallerCapabilities",
+        "parameters": [
+          {
+            "description": "W3C Trace Context. A valid context is propagated; absent or invalid context is replaced.",
+            "in": "header",
+            "name": "traceparent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -207,8 +286,9 @@
                         "additionalProperties": false,
                         "properties": {
                           "collectionId": {
-                            "maxLength": 64,
+                            "maxLength": 128,
                             "minLength": 1,
+                            "pattern": "^[a-z][a-z0-9-]{0,127}$",
                             "type": "string"
                           },
                           "operations": {
@@ -224,7 +304,9 @@
                                     "retrieve",
                                     "lookup",
                                     "list",
-                                    "search"
+                                    "search",
+                                    "create",
+                                    "update"
                                   ]
                                 },
                                 "contract": {
@@ -232,6 +314,13 @@
                                   "maxLength": 2048,
                                   "minLength": 1,
                                   "pattern": "^https://\\S+$",
+                                  "type": "string"
+                                },
+                                "family": {
+                                  "enum": [
+                                    "consultation",
+                                    "write"
+                                  ],
                                   "type": "string"
                                 },
                                 "operationId": {
@@ -266,15 +355,45 @@
                                 "view": {
                                   "maxLength": 128,
                                   "minLength": 1,
-                                  "pattern": "^[a-z][a-z0-9_-]{0,127}$",
+                                  "pattern": "^[a-z][a-z0-9-]{0,127}$",
                                   "type": "string"
+                                },
+                                "write": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "companionRead": {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "operationId": {
+                                          "maxLength": 128,
+                                          "pattern": "^[A-Za-z][A-Za-z0-9]*$",
+                                          "type": "string"
+                                        },
+                                        "view": {
+                                          "maxLength": 128,
+                                          "minLength": 1,
+                                          "pattern": "^[a-z][a-z0-9-]{0,127}$",
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": [
+                                        "operationId",
+                                        "view"
+                                      ],
+                                      "type": "object"
+                                    }
+                                  },
+                                  "required": [
+                                    "companionRead"
+                                  ],
+                                  "type": "object"
                                 }
                               },
                               "required": [
                                 "operationId",
                                 "contract",
                                 "capability",
-                                "view"
+                                "family"
                               ],
                               "type": "object"
                             },
@@ -300,6 +419,11 @@
                       "maxItems": 64,
                       "type": "array",
                       "uniqueItems": true
+                    },
+                    "operations": {
+                      "maxItems": 64,
+                      "type": "array",
+                      "uniqueItems": true
                     }
                   },
                   "required": [
@@ -312,8 +436,18 @@
             "description": "Bounded caller-filtered capability document.",
             "headers": {
               "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
                 "schema": {
-                  "const": "no-store"
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "x-registry-idempotency-replay-window-seconds": {
+                "description": "Registry Stack operational extension publishing the deployment's idempotencyReplayWindow in seconds. During this window an identical key replays its exact terminal response; after it expires the key remains spent.",
+                "schema": {
+                  "maximum": 31536000,
+                  "minimum": 1,
+                  "type": "integer"
                 }
               }
             }
@@ -326,7 +460,22 @@
                 }
               }
             },
-            "description": "The caller was not authenticated."
+            "description": "The caller was not authenticated.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge with no record-specific facts.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -336,7 +485,16 @@
                 }
               }
             },
-            "description": "The caller is not authorized."
+            "description": "The caller is not authorized.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "406": {
             "content": {
@@ -346,7 +504,16 @@
                 }
               }
             },
-            "description": "The response media type is not acceptable."
+            "description": "The response media type is not acceptable.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "500": {
             "content": {
@@ -356,7 +523,16 @@
                 }
               }
             },
-            "description": "The request could not be served."
+            "description": "The request could not be served.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "503": {
             "content": {
@@ -366,7 +542,22 @@
                 }
               }
             },
-            "description": "The service is unavailable."
+            "description": "The service is unavailable.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Optional delay in seconds or HTTP-date before retrying.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -379,6 +570,17 @@
     "/v1/collections/birth-registrations/lookup": {
       "post": {
         "operationId": "lookupBirthRegistrations",
+        "parameters": [
+          {
+            "description": "W3C Trace Context. A valid context is propagated; absent or invalid context is replaced.",
+            "in": "header",
+            "name": "traceparent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -426,7 +628,16 @@
                 }
               }
             },
-            "description": "The operation's response envelope for the bound record type."
+            "description": "The operation's response envelope for the bound record type.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "400": {
             "content": {
@@ -436,7 +647,16 @@
                 }
               }
             },
-            "description": "The request is not valid."
+            "description": "The request is not valid.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "401": {
             "content": {
@@ -446,7 +666,22 @@
                 }
               }
             },
-            "description": "The caller was not authenticated."
+            "description": "The caller was not authenticated.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge with no record-specific facts.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -456,7 +691,16 @@
                 }
               }
             },
-            "description": "The caller is not authorized."
+            "description": "The caller is not authorized.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "404": {
             "content": {
@@ -466,7 +710,16 @@
                 }
               }
             },
-            "description": "The collection or record is not available."
+            "description": "The collection or record is not available.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "406": {
             "content": {
@@ -476,7 +729,16 @@
                 }
               }
             },
-            "description": "The response media type is not acceptable."
+            "description": "The response media type is not acceptable.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "413": {
             "content": {
@@ -486,7 +748,16 @@
                 }
               }
             },
-            "description": "The request body is too large."
+            "description": "The request body is too large.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "415": {
             "content": {
@@ -496,7 +767,16 @@
                 }
               }
             },
-            "description": "The request media type is not supported."
+            "description": "The request media type is not supported.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "422": {
             "content": {
@@ -506,7 +786,16 @@
                 }
               }
             },
-            "description": "A request field is not valid."
+            "description": "A request field is not valid.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "429": {
             "content": {
@@ -516,7 +805,22 @@
                 }
               }
             },
-            "description": "The source is throttling requests."
+            "description": "The source is throttling requests.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Optional delay in seconds or HTTP-date before retrying.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "500": {
             "content": {
@@ -526,7 +830,16 @@
                 }
               }
             },
-            "description": "The request could not be served."
+            "description": "The request could not be served.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "502": {
             "content": {
@@ -536,7 +849,16 @@
                 }
               }
             },
-            "description": "The source answered with an error."
+            "description": "The source answered with an error.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "503": {
             "content": {
@@ -546,7 +868,22 @@
                 }
               }
             },
-            "description": "The service is unavailable."
+            "description": "The service is unavailable.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Optional delay in seconds or HTTP-date before retrying.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "504": {
             "content": {
@@ -556,7 +893,16 @@
                 }
               }
             },
-            "description": "The source did not answer in time."
+            "description": "The source did not answer in time.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -585,6 +931,15 @@
               "minLength": 1,
               "type": "string"
             }
+          },
+          {
+            "description": "W3C Trace Context. A valid context is propagated; absent or invalid context is replaced.",
+            "in": "header",
+            "name": "traceparent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -611,7 +966,16 @@
                 }
               }
             },
-            "description": "The operation's response envelope for the bound record type."
+            "description": "The operation's response envelope for the bound record type.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "400": {
             "content": {
@@ -621,7 +985,16 @@
                 }
               }
             },
-            "description": "The request is not valid."
+            "description": "The request is not valid.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "401": {
             "content": {
@@ -631,7 +1004,22 @@
                 }
               }
             },
-            "description": "The caller was not authenticated."
+            "description": "The caller was not authenticated.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge with no record-specific facts.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -641,7 +1029,16 @@
                 }
               }
             },
-            "description": "The caller is not authorized."
+            "description": "The caller is not authorized.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "404": {
             "content": {
@@ -651,7 +1048,16 @@
                 }
               }
             },
-            "description": "The collection or record is not available."
+            "description": "The collection or record is not available.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "406": {
             "content": {
@@ -661,37 +1067,16 @@
                 }
               }
             },
-            "description": "The response media type is not acceptable."
-          },
-          "413": {
-            "content": {
-              "application/problem+json": {
+            "description": "The response media type is not acceptable.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
                 "schema": {
-                  "$ref": "#/components/schemas/Problem"
+                  "const": "no-store",
+                  "type": "string"
                 }
               }
-            },
-            "description": "The request body is too large."
-          },
-          "415": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The request media type is not supported."
-          },
-          "422": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ValidationProblem"
-                }
-              }
-            },
-            "description": "A request field is not valid."
+            }
           },
           "429": {
             "content": {
@@ -701,7 +1086,22 @@
                 }
               }
             },
-            "description": "The source is throttling requests."
+            "description": "The source is throttling requests.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Optional delay in seconds or HTTP-date before retrying.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "500": {
             "content": {
@@ -711,7 +1111,16 @@
                 }
               }
             },
-            "description": "The request could not be served."
+            "description": "The request could not be served.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "502": {
             "content": {
@@ -721,7 +1130,16 @@
                 }
               }
             },
-            "description": "The source answered with an error."
+            "description": "The source answered with an error.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "503": {
             "content": {
@@ -731,7 +1149,22 @@
                 }
               }
             },
-            "description": "The service is unavailable."
+            "description": "The service is unavailable.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Optional delay in seconds or HTTP-date before retrying.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "504": {
             "content": {
@@ -741,7 +1174,16 @@
                 }
               }
             },
-            "description": "The source did not answer in time."
+            "description": "The source did not answer in time.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "security": [

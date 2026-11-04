@@ -44,6 +44,7 @@ fn evidence_compiles_the_same_source_native_dhis2_exact_read() {
         artifact(&directory, "schemas/evidence-inputs.json"),
         artifact(&directory, "schemas/evidence-native-entity.json"),
         artifact(&directory, "scripts/evidence-native.rhai"),
+        artifact(&directory, "scripts/is-not-found.rhai"),
         artifact(&directory, "scripts/source-identity.rhai"),
     ]);
 

@@ -26,6 +26,7 @@ pub mod errorhandler;
 pub mod evidence;
 pub mod exchange;
 pub mod host_protocol;
+pub mod inbound_transform;
 pub mod job;
 pub mod job_sources;
 pub(crate) mod json_bounds;

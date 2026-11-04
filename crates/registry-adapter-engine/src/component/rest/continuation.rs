@@ -199,6 +199,16 @@ impl fmt::Debug for CursorKey {
     }
 }
 
+// HKDF-Expand from an already uniform cursor key, with separate purpose
+// labels for stable bounded values, encryption and nonce derivation.
+fn bound_value_key(key: &CursorKey, purpose: &[u8]) -> Zeroizing<[u8; 32]> {
+    let mut mac = HmacSha256::new_from_slice(&key.aead).expect("HMAC accepts a 32-byte key");
+    mac.update(b"registry-adapter/bound-value/v1/");
+    mac.update(purpose);
+    mac.update(&[1]);
+    Zeroizing::new(mac.finalize().into_bytes().into())
+}
+
 /// A validated `cursorTtlSeconds`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CursorTtl(u64);
@@ -470,6 +480,90 @@ impl ContinuationCodec {
         }
     }
 
+    /// Seal a short opaque value with stable equality for a fixed context.
+    /// The value and context are both bounded. This purpose uses independent
+    /// HKDF-Expand keys and a keyed 192-bit nonce over context and plaintext,
+    /// separate from random-nonce pagination cursors. Equality is visible;
+    /// plaintext and context are authenticated and remain confidential.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the value or context exceeds its bound, the value
+    /// is empty, or authenticated encryption fails.
+    pub fn seal_bound_value(&self, context: &[u8], value: &[u8]) -> Result<String, SealError> {
+        if value.is_empty() || value.len() > 128 || context.len() > 1024 {
+            return Err(SealError::ValueTooLarge);
+        }
+        let aead_key = bound_value_key(&self.current, b"aead-key");
+        let nonce_key = bound_value_key(&self.current, b"nonce-key");
+        let mut mac =
+            HmacSha256::new_from_slice(nonce_key.as_slice()).map_err(|_| SealError::Encryption)?;
+        for member in [context, value] {
+            mac.update(&(member.len() as u64).to_be_bytes());
+            mac.update(member);
+        }
+        let digest = Zeroizing::new(<[u8; 32]>::from(mac.finalize().into_bytes()));
+        let nonce: [u8; NONCE_BYTES] = digest[..NONCE_BYTES]
+            .try_into()
+            .map_err(|_| SealError::Encryption)?;
+        let cipher = XChaCha20Poly1305::new_from_slice(aead_key.as_slice())
+            .map_err(|_| SealError::Encryption)?;
+        let ciphertext = cipher
+            .encrypt(
+                &XNonce::from(nonce),
+                Payload {
+                    msg: value,
+                    aad: context,
+                },
+            )
+            .map_err(|_| SealError::Encryption)?;
+        let mut wire = Vec::with_capacity(HEADER_BYTES + ciphertext.len());
+        wire.push(WIRE_VERSION);
+        wire.extend_from_slice(&nonce);
+        wire.extend_from_slice(&ciphertext);
+        Ok(URL_SAFE_NO_PAD.encode(wire))
+    }
+
+    /// Open a short context-bound value under the current or previous key.
+    /// This value has no clock lifetime: its host owns semantic validity.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for malformed or oversized tokens, an oversized context,
+    /// or a token that neither configured key authenticates for this context.
+    pub fn open_bound_value(&self, context: &[u8], token: &str) -> Result<Vec<u8>, SealError> {
+        if context.len() > 1024 || token.len() > 228 {
+            return Err(SealError::Encryption);
+        }
+        let wire = URL_SAFE_NO_PAD
+            .decode(token)
+            .map_err(|_| SealError::Encryption)?;
+        if wire.len() <= HEADER_BYTES + TAG_BYTES
+            || wire.len() > HEADER_BYTES + TAG_BYTES + 128
+            || wire[0] != WIRE_VERSION
+        {
+            return Err(SealError::Encryption);
+        }
+        let nonce: [u8; NONCE_BYTES] = wire[1..HEADER_BYTES]
+            .try_into()
+            .map_err(|_| SealError::Encryption)?;
+        for key in std::iter::once(&self.current).chain(self.previous.iter()) {
+            let derived = bound_value_key(key, b"aead-key");
+            let cipher = XChaCha20Poly1305::new_from_slice(derived.as_slice())
+                .map_err(|_| SealError::Encryption)?;
+            if let Ok(value) = cipher.decrypt(
+                &XNonce::from(nonce),
+                Payload {
+                    msg: &wire[HEADER_BYTES..],
+                    aad: context,
+                },
+            ) {
+                return Ok(value);
+            }
+        }
+        Err(SealError::Encryption)
+    }
+
     /// The configured cursor lifetime.
     #[must_use]
     pub const fn ttl(&self) -> CursorTtl {
@@ -634,4 +728,59 @@ fn unix_seconds(now: SystemTime) -> Option<u64> {
     now.duration_since(UNIX_EPOCH)
         .ok()
         .map(|elapsed| elapsed.as_secs())
+}
+
+#[cfg(test)]
+mod bound_value_tests {
+    use super::*;
+
+    fn codec(secret: u8, previous: Option<u8>) -> ContinuationCodec {
+        let key = |byte| CursorKey::new(Zeroizing::new(vec![byte; 32])).unwrap();
+        ContinuationCodec::new(key(secret), previous.map(key), CursorTtl::default())
+    }
+
+    #[test]
+    fn bound_value_sealing_is_opaque_stable_and_context_authenticated() {
+        let codec = codec(7, None);
+        let value = b"\"PRIVATE-SOURCE-VALIDATOR-CANARY\"";
+        let token = codec
+            .seal_bound_value(b"record-view-context", value)
+            .unwrap();
+        assert_eq!(
+            token,
+            codec
+                .seal_bound_value(b"record-view-context", value)
+                .unwrap()
+        );
+        let wire = URL_SAFE_NO_PAD.decode(&token).unwrap();
+        assert!(!wire.windows(value.len()).any(|window| window == value));
+        assert_eq!(
+            codec
+                .open_bound_value(b"record-view-context", &token)
+                .unwrap(),
+            value
+        );
+        assert!(codec.open_bound_value(b"other-record", &token).is_err());
+        let mut tampered = wire;
+        tampered[25] ^= 1;
+        assert!(codec
+            .open_bound_value(b"record-view-context", &URL_SAFE_NO_PAD.encode(tampered))
+            .is_err());
+        assert!(codec.seal_bound_value(b"context", &[1; 129]).is_err());
+    }
+
+    #[test]
+    fn bound_value_rotation_opens_previous_but_seals_only_current_key() {
+        let old = codec(7, None);
+        let rotated = codec(8, Some(7));
+        let token = old.seal_bound_value(b"context", b"native").unwrap();
+        assert_eq!(
+            rotated.open_bound_value(b"context", &token).unwrap(),
+            b"native"
+        );
+        let next = rotated.seal_bound_value(b"context", b"native").unwrap();
+        assert_ne!(next, token);
+        assert!(old.open_bound_value(b"context", &next).is_err());
+        assert!(codec(9, None).open_bound_value(b"context", &token).is_err());
+    }
 }

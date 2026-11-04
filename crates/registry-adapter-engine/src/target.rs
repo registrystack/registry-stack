@@ -10,10 +10,11 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use registry_adapter_core::{AdapterProfile, ServedFilter, SourceReadSupport};
+use registry_adapter_core::{AdapterProfile, ServedFilter, SourceReadSupport, SourceWriteSupport};
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::inbound_transform::CompiledProjectInputTransform;
 use crate::project_transform::CompiledProjectTransform;
 use crate::public_schema::CheckedPublicSchema;
 use crate::read_request::ReadRequestTemplate;
@@ -31,7 +32,14 @@ pub struct TargetAttachment {
 
 /// Target behavior attached to one compiled source binding.
 #[derive(Debug)]
-pub struct TargetOperation {
+pub enum TargetOperation {
+    Read(Box<TargetReadOperation>),
+    Write(TargetWriteOperation),
+}
+
+/// Fixed-target metadata for a source-backed read.
+#[derive(Debug)]
+pub struct TargetReadOperation {
     pub filters: Vec<ServedFilter>,
     pub request_template: Option<ReadRequestTemplate>,
     pub project_input_schema: Option<Arc<CheckedPublicSchema>>,
@@ -39,6 +47,26 @@ pub struct TargetOperation {
     pub read_support: SourceReadSupport,
     pub source_input: SourceInput,
     pub item_projection: ItemProjection,
+    pub effective_contract: EffectiveContractOperation,
+}
+
+/// The exact engine-native recovery form selected for one fixed-target write.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SourceNativeReplayPlan {
+    /// One outer idempotent consumer around deterministic preparation and one
+    /// reviewed source-idempotent HTTP POST.
+    ExactKeyedSinglePost,
+}
+
+/// Fixed-target metadata for one source-backed write. Public input validation
+/// and transformation are separate: the public schema does not describe the
+/// source route's private fields.
+#[derive(Debug)]
+pub struct TargetWriteOperation {
+    pub project_input_schema: Arc<CheckedPublicSchema>,
+    pub project_input_transform: Arc<CompiledProjectInputTransform>,
+    pub write_support: SourceWriteSupport,
+    pub native_replay: SourceNativeReplayPlan,
     pub effective_contract: EffectiveContractOperation,
 }
 
@@ -84,6 +112,7 @@ impl TargetAttachment {
     pub fn apply(
         mut self,
         authored: &mut crate::load::CompiledAuthoring,
+        pack: &registry_adapter_core::AdapterPack,
     ) -> Result<(AdapterProfile, Vec<u8>), crate::load::LoadError> {
         for operation in &mut authored.served {
             let attached = self.operations.remove(&operation.binding).ok_or_else(|| {
@@ -92,15 +121,41 @@ impl TargetAttachment {
                     operation.binding
                 ))
             })?;
-            operation.filters = attached.filters;
-            operation.request_template = attached.request_template;
-            operation.record_schema = attached.project_transform.schema().as_value().clone();
-            operation.project_input_schema = attached.project_input_schema;
-            operation.project_transform = Some(attached.project_transform);
-            operation.read_support = Some(attached.read_support);
-            operation.source_input = Some(attached.source_input);
-            operation.item_projection = Some(attached.item_projection);
-            operation.target_contract = Some(attached.effective_contract);
+            match attached {
+                TargetOperation::Read(attached) => {
+                    operation.filters = attached.filters;
+                    operation.request_template = attached.request_template;
+                    operation.record_schema =
+                        attached.project_transform.schema().as_value().clone();
+                    operation.project_input_schema = attached.project_input_schema;
+                    operation.project_transform = Some(attached.project_transform);
+                    operation.read_support = Some(attached.read_support);
+                    operation.source_input = Some(attached.source_input);
+                    operation.item_projection = Some(attached.item_projection);
+                    operation.target_contract = Some(attached.effective_contract);
+                }
+                TargetOperation::Write(attached) => {
+                    let resume = match attached.native_replay {
+                        SourceNativeReplayPlan::ExactKeyedSinglePost => {
+                            crate::resume::compile_source_native_single_resume_operation(
+                                operation.steps.as_ref(),
+                                pack,
+                            )
+                            .map_err(|reason| {
+                                crate::load::LoadError::Runtime(format!(
+                                    "binding {} source-native replay was refused: {reason}",
+                                    operation.binding
+                                ))
+                            })?
+                        }
+                    };
+                    operation.project_input_schema = Some(attached.project_input_schema);
+                    operation.project_input_transform = Some(attached.project_input_transform);
+                    operation.write_support = Some(attached.write_support);
+                    operation.resume = Some(resume);
+                    operation.target_contract = Some(attached.effective_contract);
+                }
+            }
         }
         let unserved: std::collections::BTreeSet<&str> = authored
             .unserved

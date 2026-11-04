@@ -1024,6 +1024,7 @@ mod tests {
     fn project(bound: bool) -> AdapterProject {
         AdapterProject {
             consultation: None,
+            write: None,
             artifacts: Default::default(),
             binding_transforms: Default::default(),
             project: ProjectIdentity {

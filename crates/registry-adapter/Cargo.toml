@@ -58,6 +58,7 @@ registry-platform-buildinfo.workspace = true
 registry-platform-config.workspace = true
 registry-platform-crypto.workspace = true
 registry-platform-httputil.workspace = true
+registry-platform-httpsec = { workspace = true, features = ["server"] }
 registry-platform-oidc.workspace = true
 registry-platform-yaml.workspace = true
 axum.workspace = true

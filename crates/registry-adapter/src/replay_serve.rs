@@ -14,7 +14,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use axum::http::StatusCode;
+use axum::http::{header, HeaderValue, StatusCode};
 use registry_adapter_core::{
     AdapterFixture, AdapterPack, AdapterProfile, AdapterProject, ErrorClass, HttpMethod,
     RecordedHeaders,
@@ -144,8 +144,8 @@ pub async fn run_with_project_directory(
     fixture: &AdapterFixture,
     entry_index: usize,
 ) -> Result<ReplayFacade, ReplayRunFailure> {
-    let target = if project.consultation.is_some() {
-        Some(crate::govstack::consultation::target_attachment(
+    let target = if project.consultation.is_some() || project.write.is_some() {
+        Some(crate::govstack::target_attachment(
             project,
             pack,
             project_directory,
@@ -159,6 +159,15 @@ pub async fn run_with_project_directory(
         .entries
         .get(entry_index)
         .ok_or(ReplayFailure::EntryMissing)?;
+    let target_request_path = if target.is_some() {
+        entry
+            .facade_request
+            .path
+            .strip_prefix(crate::govstack::consultation::MOUNT_PATH)
+            .unwrap_or(entry.facade_request.path.as_str())
+    } else {
+        entry.facade_request.path.as_str()
+    };
     let transcript = Arc::new(ReplayTranscript::new(fixture, entry_index)?);
     let mut authored = compile_authored_with(
         project,
@@ -177,14 +186,14 @@ pub async fn run_with_project_directory(
         },
     )?;
     if let Some(target) = target {
-        target.apply(&mut authored)?;
+        target.apply(&mut authored, pack)?;
     }
     // One profile operation serves one concrete operation per record type
     // it is bound to, so the captured request's record type picks among
     // them.
     let operation_id = entry.facade_request.operation.as_str();
     let requested_type = profile.operations.get(operation_id).and_then(|declared| {
-        path_parameters(&declared.path, &entry.facade_request.path)?
+        path_parameters(&declared.path, target_request_path)?
             .remove(declared.record_type_parameter.as_str())
     });
     let of_operation = || {
@@ -232,7 +241,7 @@ pub async fn run_with_project_directory(
             }
         }
     };
-    let parameters = path_parameters(&operation.method_path, &entry.facade_request.path)
+    let parameters = path_parameters(&operation.method_path, target_request_path)
         .ok_or(ReplayRunFailure::Request)?;
     let record_type = parameters
         .get(&operation.record_type_parameter)
@@ -252,11 +261,15 @@ pub async fn run_with_project_directory(
         .get(operation.operation.as_str())
         .ok_or(ReplayRunFailure::Operation)?;
     let is_write = !declared.is_read();
+    let govstack_write = operation.write_support.is_some();
     let mut filters = serde_json::Map::new();
     let mut page_size = None;
     let mut request_cursor = None;
     let mut write_record = None;
-    if matches!(operation.method, HttpMethod::Post | HttpMethod::Put) {
+    if matches!(
+        operation.method,
+        HttpMethod::Post | HttpMethod::Put | HttpMethod::Patch
+    ) {
         let body = entry
             .facade_request
             .body
@@ -264,14 +277,20 @@ pub async fn run_with_project_directory(
             .map(|body| body.as_value())
             .ok_or(ReplayRunFailure::Request)?;
         if is_write {
-            let template = declared
-                .request_envelope
-                .as_ref()
-                .ok_or(ReplayRunFailure::Request)?;
-            let captured = crate::facade::capture_write_record(template.text(), body)
-                .map_err(|_| ReplayRunFailure::Request)?;
-            crate::facade::validate_write_record(operation, &captured, &record_id)
-                .map_err(|_| ReplayRunFailure::Request)?;
+            let captured = if govstack_write {
+                crate::facade::capture_govstack_write(operation, body)
+                    .map_err(|_| ReplayRunFailure::Request)?
+            } else {
+                let template = declared
+                    .request_envelope
+                    .as_ref()
+                    .ok_or(ReplayRunFailure::Request)?;
+                let captured = crate::facade::capture_write_record(template.text(), body)
+                    .map_err(|_| ReplayRunFailure::Request)?;
+                crate::facade::validate_write_record(operation, &captured, &record_id)
+                    .map_err(|_| ReplayRunFailure::Request)?;
+                captured
+            };
             if let Some(id) = captured.record_id {
                 record_id = id;
             }
@@ -369,7 +388,7 @@ pub async fn run_with_project_directory(
         .set_header("recordType", Value::String(record_type.clone()));
     exchange
         .message
-        .set_header("recordId", Value::String(record_id));
+        .set_header("recordId", Value::String(record_id.clone()));
 
     let replay_write = if is_write {
         let key = entry
@@ -379,9 +398,57 @@ pub async fn run_with_project_directory(
             .find(|(name, _)| name.eq_ignore_ascii_case("idempotency-key"))
             .map(|(_, value)| value.as_str())
             .ok_or(ReplayRunFailure::Request)?;
+        let key = if govstack_write {
+            crate::govstack::write::parse_idempotency_key(key)
+                .map_err(|_| ReplayRunFailure::Request)?
+        } else {
+            key
+        };
         exchange
             .message
             .set_header("Idempotency-Key", Value::String(key.to_owned()));
+        if govstack_write {
+            let native_condition = if operation.method == HttpMethod::Patch {
+                let supplied = entry
+                    .facade_request
+                    .headers
+                    .iter()
+                    .find(|(name, _)| name.eq_ignore_ascii_case("if-match"))
+                    .map(|(_, value)| value.as_str())
+                    .ok_or(ReplayRunFailure::Request)?;
+                Some(
+                    crate::govstack::write::unwrap_validator(
+                        supplied,
+                        replay_validator_context(project, &record_type, &record_id)?,
+                        &replay_cursor_codec()?,
+                    )
+                    .map_err(|_| ReplayRunFailure::Request)?,
+                )
+            } else {
+                None
+            };
+            let scope = crate::govstack::write::source_key_scope(
+                REPLAY_CURSOR_ISSUER,
+                REPLAY_CURSOR_SUBJECT,
+                "fixture-replay-client",
+                REPLAY_DEPLOYMENT,
+                match operation.method {
+                    HttpMethod::Post => "POST",
+                    HttpMethod::Patch => "PATCH",
+                    _ => return Err(ReplayRunFailure::Request),
+                },
+                &entry.facade_request.path,
+                key,
+            );
+            let inputs = crate::engine::exchange::SourceWriteInputs::try_new(
+                scope,
+                native_condition.as_deref(),
+            )
+            .map_err(|_| ReplayRunFailure::WriteCapability)?;
+            exchange
+                .install_source_write_inputs(inputs)
+                .map_err(|_| ReplayRunFailure::WriteCapability)?;
+        }
         let write = ReplayWriteContext::install(&mut exchange)
             .map_err(|_| ReplayRunFailure::WriteCapability)?;
         Some(write)
@@ -441,6 +508,19 @@ pub async fn run_with_project_directory(
     }
     match outcome.result {
         Ok(done) => {
+            if govstack_write {
+                return replay_govstack_write_success(
+                    project,
+                    &authored.served,
+                    &authored.code_maps,
+                    operation,
+                    &done,
+                    &record_type,
+                    &record_id,
+                    durability,
+                )
+                .await;
+            }
             let next_cursor = match (cursor_filters, page_size) {
                 (Some((filters, _)), Some(page_size)) => {
                     let wrapped = done
@@ -502,6 +582,48 @@ pub async fn run_with_project_directory(
             .await
         }
         Err(failure) => {
+            if govstack_write
+                && matches!(
+                    operation.write_support.as_ref(),
+                    Some(registry_adapter_core::SourceWriteSupport::ConditionalUpdateOne { .. })
+                )
+                && failure.class == ErrorClass::OutcomeConflict
+            {
+                return replay_govstack_write_problem(
+                    "precondition-failed",
+                    StatusCode::PRECONDITION_FAILED,
+                    ErrorClass::OutcomeConflict,
+                    durability,
+                )
+                .await;
+            }
+            if govstack_write && failure.class == ErrorClass::OutcomeNotFound {
+                return replay_govstack_write_problem(
+                    "record-not-available",
+                    StatusCode::NOT_FOUND,
+                    failure.class,
+                    durability,
+                )
+                .await;
+            }
+            if govstack_write && failure.class == ErrorClass::OutcomeInvalidRequest {
+                return replay_govstack_write_problem(
+                    "invalid-content",
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    failure.class,
+                    durability,
+                )
+                .await;
+            }
+            if govstack_write && failure.class == ErrorClass::OutcomeRejected {
+                return replay_govstack_write_problem(
+                    "bad-gateway",
+                    StatusCode::BAD_GATEWAY,
+                    failure.class,
+                    durability,
+                )
+                .await;
+            }
             replay_problem(
                 profile,
                 &authored.problem_envelope,
@@ -512,6 +634,125 @@ pub async fn run_with_project_directory(
             .await
         }
     }
+}
+
+fn replay_validator_context<'a>(
+    project: &'a AdapterProject,
+    collection: &'a str,
+    record: &'a str,
+) -> Result<crate::govstack::write::ValidatorContext<'a>, ReplayRunFailure> {
+    let metadata = crate::govstack::write::metadata::collection_metadata(project, collection)
+        .map_err(|_| ReplayRunFailure::WriteCapability)?;
+    Ok(crate::govstack::write::ValidatorContext {
+        registry: metadata.registry,
+        collection,
+        record,
+        view: metadata.view.unwrap_or("write-receipt"),
+        closure: REPLAY_DEPLOYMENT.to_owned(),
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn replay_govstack_write_success(
+    project: &AdapterProject,
+    served_operations: &[crate::engine::load::ServedOperation],
+    code_maps: &crate::engine::scripts::CodeMaps,
+    operation: &crate::engine::load::ServedOperation,
+    done: &Exchange,
+    collection: &str,
+    path_record: &str,
+    durability: ReplayDurability,
+) -> Result<ReplayFacade, ReplayRunFailure> {
+    let result = done.final_source_result().ok_or(ReplayRunFailure::Render)?;
+    let create = operation.method == HttpMethod::Post;
+    let record = if create {
+        result.key.as_str()
+    } else {
+        path_record
+    };
+    let context = replay_validator_context(project, collection, record)?;
+    let receipt =
+        crate::govstack::write::render_receipt(result, context, &replay_cursor_codec()?, create)
+            .map_err(|_| ReplayRunFailure::Render)?;
+    if let Some(companion) = replay_companion_read(project, served_operations, collection) {
+        companion
+            .project_transform
+            .as_ref()
+            .ok_or(ReplayRunFailure::Render)?
+            .apply(
+                code_maps,
+                &Value::Object(result.data.clone()),
+                std::time::Instant::now() + Duration::from_secs(1),
+            )
+            .map_err(|_| ReplayRunFailure::Render)?;
+    }
+    let status = if create {
+        StatusCode::CREATED
+    } else {
+        StatusCode::NO_CONTENT
+    };
+    let mut response = if create {
+        crate::facade::json_response(status, &receipt.body)
+    } else {
+        axum::response::Response::builder()
+            .status(status)
+            .body(axum::body::Body::empty())
+            .map_err(|_| ReplayRunFailure::Render)?
+    };
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response.headers_mut().insert(
+        header::ETAG,
+        HeaderValue::from_str(&receipt.etag).map_err(|_| ReplayRunFailure::Render)?,
+    );
+    if let Some(location) = receipt.location {
+        response.headers_mut().insert(
+            header::LOCATION,
+            HeaderValue::from_str(&location).map_err(|_| ReplayRunFailure::Render)?,
+        );
+    }
+    facade_result(response, None, None, durability).await
+}
+
+fn replay_companion_read<'a>(
+    project: &AdapterProject,
+    served_operations: &'a [crate::engine::load::ServedOperation],
+    collection: &str,
+) -> Option<&'a crate::engine::load::ServedOperation> {
+    let selected = project
+        .write
+        .as_ref()?
+        .collections
+        .get(collection)?
+        .update
+        .as_ref()
+        .map(|update| update.companion_read.as_str());
+    match selected {
+        Some(binding) => served_operations
+            .iter()
+            .find(|served| served.binding == binding),
+        None => served_operations.iter().find(|served| {
+            served.record_type == collection
+                && matches!(served.operation.as_str(), "retrieve" | "writable-read")
+        }),
+    }
+}
+
+async fn replay_govstack_write_problem(
+    code: &str,
+    status: StatusCode,
+    class: ErrorClass,
+    durability: ReplayDurability,
+) -> Result<ReplayFacade, ReplayRunFailure> {
+    let problem_code = format!("https://govstack.global/problems/digital-registries/{code}");
+    facade_result(
+        crate::facade::govstack_problem(code, status, "00000000000000000000000000000001"),
+        Some(class),
+        Some(problem_code),
+        durability,
+    )
+    .await
 }
 
 async fn replay_problem(
@@ -994,6 +1235,35 @@ mod tests {
             replay.body.expect("the replay has a body")["data"]["name"],
             "Example Person"
         );
+    }
+
+    #[tokio::test]
+    async fn replay_uses_the_write_specific_invalid_content_problem() {
+        let replay = replay_govstack_write_problem(
+            "invalid-content",
+            StatusCode::UNPROCESSABLE_ENTITY,
+            ErrorClass::OutcomeInvalidRequest,
+            ReplayDurability::Simulated,
+        )
+        .await
+        .expect("the canonical Write problem renders");
+
+        assert_eq!(replay.status, 422);
+        assert_eq!(
+            replay.problem_class,
+            Some(ErrorClass::OutcomeInvalidRequest)
+        );
+        assert_eq!(
+            replay.problem_code.as_deref(),
+            Some("https://govstack.global/problems/digital-registries/invalid-content")
+        );
+        let body = replay.body.expect("the problem has a body");
+        let errors = body["errors"].as_array().expect("validation errors");
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0]["pointer"], "/data");
+        assert!(errors[0]["message"]
+            .as_str()
+            .is_some_and(|text| !text.is_empty()));
     }
 
     #[test]

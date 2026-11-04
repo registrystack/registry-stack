@@ -96,6 +96,51 @@ fn the_minimal_fixture_project_checks_green() {
     assert_eq!(report["diagnostics"], json!([]));
 }
 
+#[test]
+fn a_real_write_only_breg_govstack_project_checks_with_the_fixed_target() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let source = repository.join("products/adapter/examples/breg-govstack");
+    let root = tempfile::tempdir().unwrap();
+    let copy = root.path().join("breg-govstack");
+    copy_fs(&source, &copy);
+    let project = copy.join("project.yaml");
+    let mut text = std::fs::read_to_string(&project).unwrap();
+    let start = text.find("consultation:\n").expect("Consultation block");
+    let end = text.find("write:\n").expect("Write block");
+    text.replace_range(start..end, "");
+    text = text
+        .replace(
+            "    - recordType: contacts\n      create:",
+            "    - recordType: contacts\n      registry: https://registry.example/registries/contacts\n      view: contact-public\n      readDataSchema: contact-public\n      create:",
+        )
+        .replace(
+            "companionRead: contacts-retrieve",
+            "companionRead: contacts-writable-read",
+        )
+        .replace(
+            "id: contacts-retrieve\n    operation: retrieve",
+            "id: contacts-writable-read\n    operation: writable-read",
+        )
+        .replace(
+            "contacts-retrieve: {script:",
+            "contacts-writable-read: {script:",
+        )
+        .replace("operations: [retrieve]", "operations: [writable-read]");
+    std::fs::write(&project, text).unwrap();
+    let pack = repository.join("products/adapter/packs/breg-records/pack.yaml");
+
+    let (exit, report, stderr) = run_json(&[
+        "check",
+        project.to_str().unwrap(),
+        "--pack",
+        pack.to_str().unwrap(),
+    ]);
+
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    assert!(stderr.is_empty(), "{}", String::from_utf8_lossy(&stderr));
+    assert_eq!(report["diagnostics"], json!([]));
+}
+
 /// Copy the minimal fixture project into a fresh directory and hand the
 /// copy's `project.yaml` back with the directory guard that keeps it
 /// alive. `mutate` edits the copy in place.
@@ -885,6 +930,75 @@ fn project_lock_repins_consultation_artifacts_without_a_profile() {
         project.contains(&format!("digest: {expected}")),
         "the edited project script must be repinned: {project}"
     );
+}
+
+/// The maintained OpenCRVS project uses valid indentless YAML sequences.
+/// Locking preserves that layout and repins every selected script and schema.
+#[test]
+fn project_lock_preserves_indentless_consultation_artifact_lists() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let root = tempfile::tempdir().unwrap();
+    let copy = root.path().join("opencrvs-consultation");
+    let pack_directory = root.path().join("opencrvs-events");
+    copy_fs(
+        &repository.join("products/adapter/examples/opencrvs-consultation"),
+        &copy,
+    );
+    copy_fs(
+        &repository.join("products/adapter/packs/opencrvs-events"),
+        &pack_directory,
+    );
+    let project = copy.join("project.yaml");
+    let pack = pack_directory.join("pack.yaml");
+    let before = std::fs::read_to_string(&project).unwrap();
+    assert!(before.contains("  scripts:\n  - id:"));
+    assert!(before.contains("  schemas:\n  - id:"));
+    let arguments = [
+        "project",
+        "lock",
+        project.to_str().unwrap(),
+        "--pack",
+        pack.to_str().unwrap(),
+    ];
+    let (exit, report, stderr) = run_json(&arguments);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    assert!(stderr.is_empty(), "{}", String::from_utf8_lossy(&stderr));
+    assert_eq!(report["inventory"], "unchanged", "{report}");
+    assert_eq!(std::fs::read_to_string(&project).unwrap(), before);
+
+    let mut expected = before;
+    for artifact in [
+        "scripts/birth-summary.rhai",
+        "schemas/birth-summary.schema.json",
+        "schemas/tracking-id.schema.json",
+    ] {
+        let path = copy.join(artifact);
+        let mut bytes = std::fs::read(&path).unwrap();
+        let original = registry_platform_config::sha256_uri(&bytes);
+        bytes.push(b'\n');
+        std::fs::write(&path, &bytes).unwrap();
+        let updated = registry_platform_config::sha256_uri(&bytes);
+        assert!(expected.contains(&original), "the artifact is pinned");
+        expected = expected.replace(&original, &updated);
+    }
+    let (exit, report, stderr) = run_json(&arguments);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    assert!(stderr.is_empty(), "{}", String::from_utf8_lossy(&stderr));
+    assert_eq!(report["inventory"], "updated", "{report}");
+    assert_eq!(std::fs::read_to_string(&project).unwrap(), expected);
+    let (exit, report, stderr) = run_json(&arguments);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    assert!(stderr.is_empty(), "{}", String::from_utf8_lossy(&stderr));
+    assert_eq!(report["inventory"], "unchanged", "{report}");
+    assert_eq!(std::fs::read_to_string(&project).unwrap(), expected);
+    let (exit, report, stderr) = run_json(&[
+        "check",
+        project.to_str().unwrap(),
+        "--pack",
+        pack.to_str().unwrap(),
+    ]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    assert!(stderr.is_empty(), "{}", String::from_utf8_lossy(&stderr));
 }
 
 /// A pin is a byte digest: the lock pins whatever bytes the artifact
