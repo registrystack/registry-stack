@@ -58,7 +58,9 @@ Prepare the source and one destination:
    `_uuid`, sorted keyset reads, edit discovery, and form size.
 2. Bind `kobo-api` to the selected form's
    `/api/v2/assets/<asset-uid>/data` URL and give the job a source account
-   restricted to that form.
+   restricted to that form. Bind that account's API token through the
+   credential's `tokenRef` (`secret:env/KOBO_TOKEN` in the examples), not its
+   password: a Kobo password also signs in to the web UI.
 3. For the direct job, configure the reviewed Base Registry Engine (BReg)
    Action, mapping, ingestion access profile, and narrowly scoped BReg
    credential. The [`kobotoolbox-breg`](../kobotoolbox-breg/README.md) example

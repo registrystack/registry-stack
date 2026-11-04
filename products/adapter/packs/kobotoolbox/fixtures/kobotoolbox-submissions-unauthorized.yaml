@@ -1,7 +1,7 @@
 # yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json
 #
 # Synthetic fixture (NOT captured, and NOT from a real KoboToolbox
-# server): refused credential: the data endpoint answers 401 and the
+# server): refused token: the data endpoint answers 401 and the
 # engine raises credential.rejected before any route step.
 # The upstream shape follows the documented v2 data endpoint ({count,
 # next, previous, results} over GET /api/v2/assets/<uid>/data/ with
@@ -40,7 +40,7 @@ entries:
     response:
       status: 401
       body:
-        detail: Invalid username/password.
+        detail: Invalid token.
   expected:
     type: problem
     class: credential.rejected
