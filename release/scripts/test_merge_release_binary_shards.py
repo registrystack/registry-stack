@@ -448,7 +448,7 @@ class MergeReleaseBinaryShardsTest(unittest.TestCase):
         )
         self.assertNotIn("coordinator", dict(images_held))
 
-    def test_adapter_joins_the_core_shard_from_v0_45_1_without_an_image(self) -> None:
+    def test_adapter_joins_the_core_shard_from_v0_46_0_without_an_image(self) -> None:
         rosters_045, _ = MODULE.rosters("0.45.0")
         self.assertFalse(
             any(
@@ -457,11 +457,11 @@ class MergeReleaseBinaryShardsTest(unittest.TestCase):
                 for name in names
             )
         )
-        rosters, images = MODULE.rosters("0.45.1")
+        rosters, images = MODULE.rosters("0.46.0")
         self.assertEqual(
             [
-                "adapter-v0.45.1-linux-amd64",
-                "adapterctl-v0.45.1-linux-amd64",
+                "adapter-v0.46.0-linux-amd64",
+                "adapterctl-v0.46.0-linux-amd64",
             ],
             rosters["core"][-2:],
         )

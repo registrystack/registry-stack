@@ -431,8 +431,8 @@ os.execv({sys.executable!r}, [{sys.executable!r}, *args])
         )
         return relayctl
 
-    def test_v0_45_1_core_bundles_the_adapter_binaries(self):
-        result, output, calls = self.build("core", version="0.45.1")
+    def test_v0_46_0_core_bundles_the_adapter_binaries(self):
+        result, output, calls = self.build("core", version="0.46.0")
         self.assertEqual(0, result.returncode, result.stderr)
         for crate, binary in (
             ("registry-adapter", "adapter"),
@@ -442,9 +442,9 @@ os.execv({sys.executable!r}, [{sys.executable!r}, *args])
                 ["build", "--release", "--locked", "-p", crate, "--bin", binary, "--target", TARGET],
                 calls,
             )
-            self.assertTrue((output / "platform" / f"{binary}-v0.45.1-macos-arm64.tar.gz").is_file(), binary)
+            self.assertTrue((output / "platform" / f"{binary}-v0.46.0-macos-arm64.tar.gz").is_file(), binary)
         self.assertEqual(
-            MODULE.rosters("0.45.1")["core"],
+            MODULE.rosters("0.46.0")["core"],
             [line.split("  ", 1)[1] for line in (output / "SHA256SUMS").read_text().splitlines()],
         )
 

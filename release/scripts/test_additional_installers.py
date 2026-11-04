@@ -157,11 +157,11 @@ class AdditionalInstallersTest(unittest.TestCase):
             self.assertEqual([], list(scratch.iterdir()))
             self.assertFalse((bundle / "SHA256SUMS").exists())
 
-    def test_adapter_installer_joins_the_numbered_release_from_v0_45_1(self):
+    def test_adapter_installer_joins_the_numbered_release_from_v0_46_0(self):
         with tempfile.TemporaryDirectory() as temporary:
             before = Path(temporary) / "before"
             current = Path(temporary) / "current"
-            for output, version in ((before, "0.45.0"), (current, "0.45.1")):
+            for output, version in ((before, "0.45.0"), (current, "0.46.0")):
                 result = subprocess.run(
                     [
                         sys.executable,
@@ -178,9 +178,9 @@ class AdditionalInstallersTest(unittest.TestCase):
                 )
                 self.assertEqual(0, result.returncode, result.stderr)
             self.assertFalse(any(path.name.startswith("adapter") for path in before.iterdir()))
-            pinned = (current / "adapter-v0.45.1-install.sh").read_text()
+            pinned = (current / "adapter-v0.46.0-install.sh").read_text()
             self.assertEqual(pinned, (current / "adapter-install.sh").read_text())
-            self.assertIn('default_version="v0.45.1"', pinned)
+            self.assertIn('default_version="v0.46.0"', pinned)
             self.assertIn("binaries=(adapter adapterctl)", pinned)
             self.assertIn("ADAPTER_INSTALL_DIR", pinned)
 

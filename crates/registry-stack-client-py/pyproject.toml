@@ -1,6 +1,6 @@
 [project]
 name = "registry-stack-client"
-version = "0.45.1"
+version = "0.46.0"
 description = "Unified Python client for Registry Stack products."
 readme = "README.md"
 license = { text = "Apache-2.0" }

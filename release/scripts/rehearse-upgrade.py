@@ -15,10 +15,11 @@ the report says why. The forward state path started at 0.42.0 with Evidence's
 normalized baseline and the Messaging and Scheduling fresh schema baselines.
 Release 0.43.0 continued that path from 0.42.0. Release 0.44.0 starts Casework
 and Scheduling at a fresh version 200 baseline and has BReg refuse the 0.43.0
-attachment verification state, so those legs remain omitted. This source reads
-retained Evidence and Messaging state from 0.44.0, its immediate predecessor;
-the Messaging leg also checks the corrected dispatch job shape after the
-upgrade.
+attachment verification state, so those legs remain omitted. Release 0.45.0
+retired the tagged Evidence Source form for Adapter packs; a 0.44.0 Evidence
+project moves forward only by hand migration. This source reads retained
+Evidence and Messaging state from 0.45.0, its immediate predecessor; the
+Messaging leg also checks the corrected dispatch job shape after the upgrade.
 
 While no release on the forward state path is published, there is no
 predecessor to download: the rehearsal then runs every leg with this source's
@@ -95,10 +96,13 @@ FIPS_LIBRARY = re.compile(r"^libaws_lc_fips_[A-Za-z0-9_]+\.dylib$")
 # name. Release 0.43.0 continued that path from 0.42.0. Release 0.44.0 starts
 # Casework and Scheduling again at a version 200 baseline that refuses a ledger
 # below 200, and BReg refuses the 0.43.0 attachment verification shape, so all
-# three are RETIRED_PRODUCTS. This source reads retained Evidence and Messaging
-# state from 0.44.0, its immediate predecessor. Messaging keeps its version 100
-# baseline and migrates forward through version 101.
-FORWARD_PATH_FLOOR = (0, 44, 0)
+# three are RETIRED_PRODUCTS. Release 0.45.0 retired the tagged Evidence Source
+# form for Adapter packs, so a 0.44.0 Evidence project moves forward only by the
+# hand migration products/evidence/reference/authoring-projects/CONFIG.md
+# describes. This source reads retained Evidence and Messaging state from
+# 0.45.0, its immediate predecessor. Messaging keeps its version 100 baseline and
+# migrates forward through version 101.
+FORWARD_PATH_FLOOR = (0, 45, 0)
 
 STACK_VERSION = re.compile(r"\Astack:\n(?:  .*\n)*?  version: (\S+)\n")
 STACK_RELEASED = re.compile(r"\Astack:\n(?:  .*\n)*?  status: released\n")
@@ -140,22 +144,6 @@ RETIRED_PRODUCTS = {
     "casework": CASEWORK_NO_IN_PLACE_UPGRADE,
     "scheduling": SCHEDULING_NO_IN_PLACE_UPGRADE,
 }
-# 0.45.0 is a migration boundary for the retired Evidence Source form. The
-# 0.44.0 `evidencectl init --transport sqlite-extract` writes the tagged
-# `sqlite-extract` Source, and the 0.45.0 reader refuses it with
-# `evidence.project.source-acquisition-retired`, so a project authored by the
-# previous release cannot be re-packaged by this source. The Evidence leg is
-# skipped only for a rehearsal that crosses this boundary. It is dead code, and
-# a unit test fails, once FORWARD_PATH_FLOOR reaches the boundary.
-EVIDENCE_SOURCE_PACK_BOUNDARY = (0, 45, 0)
-EVIDENCE_SOURCE_PACK_MIGRATION = (
-    "0.45.0 retires the tagged Evidence Source form (`http-json`, `sqlite-extract`) "
-    "for Adapter packs, and the project the previous release authored is refused "
-    "with evidence.project.source-acquisition-retired, so there is no in-place "
-    "upgrade to rehearse. Migrate the project by hand and verify a fresh "
-    "synthetic assertion before cutover, as products/evidence/reference/"
-    "authoring-projects/CONFIG.md#migrate-a-retired-source-project describes"
-)
 # A product joins the rehearsal from the first release that published it, and
 # is downloaded only for the platforms that release publishes it for.
 # release_roster.MESSAGING_FIRST_RELEASE names Messaging's first release; while
@@ -317,21 +305,14 @@ def check_floor_is_current(released: list[str], version: str) -> None:
 
 
 def select_products(requested: list[str] | None, from_tag: str, platform: str,
-                    downloading: bool,
-                    workspace_version: str | None = None) -> tuple[list[str], dict[str, str]]:
+                    downloading: bool) -> tuple[list[str], dict[str, str]]:
     """The legs to run, and the reason for every default omission.
 
     A product named with --product whose rehearsal is unavailable is refused
-    rather than omitted, so a focused run never passes empty. Given the
-    workspace version, a rehearsal that crosses EVIDENCE_SOURCE_PACK_BOUNDARY
-    has no Evidence leg.
+    rather than omitted, so a focused run never passes empty.
     """
 
     start = parse_tag(from_tag)
-    crosses_source_pack_boundary = (
-        workspace_version is not None
-        and start < EVIDENCE_SOURCE_PACK_BOUNDARY <= parse_version(workspace_version)
-    )
     products: list[str] = []
     omitted = {} if requested else dict(RETIRED_PRODUCTS)
     for product in requested or PRODUCTS:
@@ -339,8 +320,6 @@ def select_products(requested: list[str] | None, from_tag: str, platform: str,
         platforms = PRODUCT_PLATFORMS.get(product, PLATFORMS)
         if product in RETIRED_PRODUCTS:
             reason = RETIRED_PRODUCTS[product]
-        elif product == "evidence" and crosses_source_pack_boundary:
-            reason = EVIDENCE_SOURCE_PACK_MIGRATION
         elif product == "messaging" and not release_roster.messaging_in_release(start):
             first = release_roster.MESSAGING_FIRST_RELEASE
             if first is None:
@@ -1669,8 +1648,7 @@ def main(argv: list[str]) -> int:
             from_tag = f"v{version}"
         check_forward_path(from_tag, version)
         products, omitted = select_products(args.product, from_tag, args.platform,
-                                            args.from_bin_dir is None and not unpublished,
-                                            workspace_version=version)
+                                            args.from_bin_dir is None and not unpublished)
         if args.work_dir.exists():
             raise RehearsalError(f"{args.work_dir} already exists")
         work = private_directory(args.work_dir.resolve())
