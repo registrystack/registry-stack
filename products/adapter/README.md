@@ -250,6 +250,11 @@ an unchanged held item is skipped by ordinary passes and rescans. Resolve a
 BReg outcome in BReg, or a Coordinator Run and linked review in their owning
 products.
 
+A refusal the destination answered is stored as
+`adapter.job.breg.<word>` or `adapter.job.coordinator.<word>`, where `<word>`
+is the destination's own refusal word. The prefix says which product to ask;
+the word is the one its documentation uses.
+
 For `adapter.job.rabbitmq-event-changed`, first establish any possible
 destination outcome. The broker operator then resolves the old unsettled
 delivery under approved broker policy. Only after that does the source

@@ -43,8 +43,22 @@ const MAX_BASIC_PAYLOAD_BYTES: usize = 6_000;
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum HookIngressError {
-    #[error("adapter.job.hook-configuration")]
-    Configuration,
+    /// An authored hook trigger lacks its `path` or its `binding`.
+    #[error("adapter.job.hook-configuration-trigger")]
+    TriggerIncomplete,
+    /// The job authors hooks but the runtime has no `hookIngress`.
+    #[error("adapter.job.hook-configuration-ingress-missing")]
+    IngressMissing,
+    /// The runtime has a `hookIngress` but the job authors no hook.
+    #[error("adapter.job.hook-configuration-ingress-unused")]
+    IngressUnused,
+    /// The authored hook bindings and the runtime `hookIngress` sources are
+    /// not the same set.
+    #[error("adapter.job.hook-configuration-binding")]
+    BindingMismatch,
+    /// Two authored hooks serve the same path.
+    #[error("adapter.job.hook-configuration-path")]
+    PathRepeated,
     /// The detail names the source, the runtime member, the secret reference
     /// and a closed cause with the fix; it never carries a secret value.
     #[error("adapter.job.hook-credential: {0}")]
@@ -73,30 +87,31 @@ pub fn validate_hook_runtime(
             let path = trigger
                 .path
                 .as_deref()
-                .ok_or(HookIngressError::Configuration)?;
+                .ok_or(HookIngressError::TriggerIncomplete)?;
             let binding = trigger
                 .binding
                 .as_ref()
-                .ok_or(HookIngressError::Configuration)?;
+                .ok_or(HookIngressError::TriggerIncomplete)?;
             Ok((path, binding))
         })
         .collect::<Result<Vec<_>, HookIngressError>>()?;
     match (authored.is_empty(), runtime.hook_ingress.as_ref()) {
         (true, None) => return Ok(()),
-        (true, Some(_)) | (false, None) => return Err(HookIngressError::Configuration),
+        (true, Some(_)) => return Err(HookIngressError::IngressUnused),
+        (false, None) => return Err(HookIngressError::IngressMissing),
         (false, Some(_)) => {}
     }
     let ingress = runtime
         .hook_ingress
         .as_ref()
-        .ok_or(HookIngressError::Configuration)?;
+        .ok_or(HookIngressError::IngressMissing)?;
     let authored_bindings = authored
         .iter()
         .map(|(_, binding)| (*binding).clone())
         .collect::<BTreeSet<_>>();
     let configured_bindings = ingress.sources.keys().cloned().collect::<BTreeSet<_>>();
     if authored_bindings != configured_bindings {
-        return Err(HookIngressError::Configuration);
+        return Err(HookIngressError::BindingMismatch);
     }
     Ok(())
 }
@@ -118,15 +133,15 @@ pub fn activate(
         let path = trigger
             .path
             .as_ref()
-            .ok_or(HookIngressError::Configuration)?;
+            .ok_or(HookIngressError::TriggerIncomplete)?;
         let binding = trigger
             .binding
             .as_ref()
-            .ok_or(HookIngressError::Configuration)?;
+            .ok_or(HookIngressError::TriggerIncomplete)?;
         let config = ingress
             .sources
             .get(binding)
-            .ok_or(HookIngressError::Configuration)?;
+            .ok_or(HookIngressError::BindingMismatch)?;
         let source = HookSource {
             credential: BasicCredential::resolve(binding, config, resolver)?,
             limiter: TokenBucketLimiter::new(TokenBucketConfig {
@@ -138,7 +153,7 @@ pub fn activate(
             .map_err(|_| HookIngressError::RateLimit)?,
         };
         if sources.insert(path.clone(), Arc::new(source)).is_some() {
-            return Err(HookIngressError::Configuration);
+            return Err(HookIngressError::PathRepeated);
         }
     }
     Ok(Some(HookIngressPlan {
@@ -618,6 +633,121 @@ mod tests {
             "burst": 2
         }))
         .expect("a hook source config")
+    }
+
+    fn hook_example() -> (AdapterJob, JobRuntimeConfig) {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/adapter/examples/kobotoolbox-job");
+        let (job, _bytes) = registry_adapter_engine::load::read_artifact::<AdapterJob>(
+            &root.join("job.hook.yaml"),
+            registry_adapter_core::ADAPTER_JOB_KIND,
+            registry_adapter_core::ADAPTER_JOB_API_VERSION,
+        )
+        .expect("the maintained hook job reads");
+        let runtime = JobRuntimeConfig::load(&root.join("job-runtime.hook.example.yaml"))
+            .expect("the maintained hook runtime reads");
+        (job, runtime)
+    }
+
+    fn hook_trigger(index: usize, job: &mut AdapterJob) -> &mut registry_adapter_core::JobTrigger {
+        job.triggers
+            .iter_mut()
+            .filter(|trigger| trigger.kind == "hook")
+            .nth(index)
+            .expect("the example declares the hook trigger")
+    }
+
+    /// Each way the authored hooks and the runtime hookIngress disagree
+    /// refuses under its own closed code.
+    #[test]
+    fn each_hook_configuration_disagreement_has_its_own_code() {
+        let (job, runtime) = hook_example();
+        assert_eq!(validate_hook_runtime(&job, &runtime), Ok(()));
+
+        let mut without_ingress = hook_example().1;
+        without_ingress.hook_ingress = None;
+        assert_eq!(
+            validate_hook_runtime(&job, &without_ingress),
+            Err(HookIngressError::IngressMissing)
+        );
+
+        let (mut without_hooks, runtime) = hook_example();
+        without_hooks
+            .triggers
+            .retain(|trigger| trigger.kind != "hook");
+        assert_eq!(
+            validate_hook_runtime(&without_hooks, &runtime),
+            Err(HookIngressError::IngressUnused)
+        );
+
+        let (mut pathless, runtime) = hook_example();
+        hook_trigger(0, &mut pathless).path = None;
+        assert_eq!(
+            validate_hook_runtime(&pathless, &runtime),
+            Err(HookIngressError::TriggerIncomplete)
+        );
+        let (mut unbound, runtime) = hook_example();
+        hook_trigger(0, &mut unbound).binding = None;
+        assert_eq!(
+            validate_hook_runtime(&unbound, &runtime),
+            Err(HookIngressError::TriggerIncomplete)
+        );
+
+        let (mut renamed, runtime) = hook_example();
+        hook_trigger(0, &mut renamed).binding = Some("another-source".parse().expect("a local id"));
+        assert_eq!(
+            validate_hook_runtime(&renamed, &runtime),
+            Err(HookIngressError::BindingMismatch)
+        );
+    }
+
+    #[test]
+    fn two_hooks_on_one_path_refuse_under_the_path_code() {
+        let (mut job, mut runtime) = hook_example();
+        let mut second = hook_trigger(0, &mut job).clone();
+        second.binding = Some("second-source".parse().expect("a local id"));
+        job.triggers.push(second);
+        let ingress = runtime.hook_ingress.as_mut().expect("the example hooks");
+        for config in ingress.sources.values_mut() {
+            *config = source_config();
+        }
+        ingress.sources.insert(
+            "second-source".parse().expect("a local id"),
+            source_config(),
+        );
+        let (_root, resolver) = secret_resolver();
+        assert_eq!(
+            activate(&job, &runtime, &resolver, Arc::new(HookPassGate::default())).err(),
+            Some(HookIngressError::PathRepeated)
+        );
+    }
+
+    #[test]
+    fn the_hook_configuration_codes_are_closed_and_value_free() {
+        for (error, code) in [
+            (
+                HookIngressError::TriggerIncomplete,
+                "adapter.job.hook-configuration-trigger",
+            ),
+            (
+                HookIngressError::IngressMissing,
+                "adapter.job.hook-configuration-ingress-missing",
+            ),
+            (
+                HookIngressError::IngressUnused,
+                "adapter.job.hook-configuration-ingress-unused",
+            ),
+            (
+                HookIngressError::BindingMismatch,
+                "adapter.job.hook-configuration-binding",
+            ),
+            (
+                HookIngressError::PathRepeated,
+                "adapter.job.hook-configuration-path",
+            ),
+        ] {
+            assert_eq!(error.to_string(), code);
+        }
     }
 
     #[test]

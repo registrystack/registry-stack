@@ -3045,8 +3045,8 @@ fn job_send_checks(
                     ));
                 }
                 for member in postgres_send_member_faults(parameters) {
-                    findings.push(finding(
-                        CheckCode::RouteGraphQlSendMembers,
+                    findings.push(job_finding(
+                        JobCode::PostgresSendMembers,
                         &format!("{pointer}/parameters/{member}"),
                         "the postgres send carries a member its component does not take",
                         "A postgres send carries queryParameters only; the HTTP request members ride an http send.",
@@ -3125,7 +3125,7 @@ fn poll_enrich_checks(
         }
     }
     if !poll.valid_key_pointer() {
-        findings.push(job_finding(JobCode::DecoderUnknown,
+        findings.push(job_finding(JobCode::PollKeyPointer,
             &format!("{pointer}/keyPointer"),
             "the row identity selector is missing, malformed, overbound, or selected for a non-row decoder",
             "Declare one RFC 6901 keyPointer of at most 512 bytes for csv or jsonl only; the selected row key must be a non-empty string."));
@@ -17078,7 +17078,8 @@ mod tests {
             );
             if !accepted {
                 assert!(
-                    findings.iter().all(|f| f.path == "/pollEnrich/keyPointer"),
+                    findings.iter().all(|f| f.path == "/pollEnrich/keyPointer"
+                        && f.code == JobCode::PollKeyPointer.code()),
                     "{findings:?}"
                 );
             }
@@ -17121,7 +17122,7 @@ mod tests {
         assert_eq!(
             findings
                 .iter()
-                .filter(|finding| finding.code == CheckCode::RouteGraphQlSendMembers.code())
+                .filter(|finding| finding.code == JobCode::PostgresSendMembers.code())
                 .count(),
             2,
             "the httpMethod member and the url query refuse on a postgres send: {findings:?}"

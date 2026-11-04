@@ -212,11 +212,13 @@ pub enum JobCode {
     PollEndpointKind,
     PollEndpointUnknown,
     PollFacadeRefused,
+    PollKeyPointer,
     PollTimeout,
     PostgresKeyRequired,
     PostgresParametersRequired,
     PostgresParametersUnbounded,
     PostgresQueryUnpinned,
+    PostgresSendMembers,
     ProfileEndpointBound,
     ProfileInconsistent,
     ProjectionBound,
@@ -232,8 +234,10 @@ pub enum JobCode {
     SourceRescanDelay,
     SourceScanRequired,
     TriggerBound,
-    TriggerHookUnserved,
+    TriggerHookBinding,
+    TriggerHookPath,
     TriggerKind,
+    TriggerMember,
     TriggersRequired,
 }
 
@@ -255,11 +259,13 @@ impl JobCode {
         Self::PollEndpointKind,
         Self::PollEndpointUnknown,
         Self::PollFacadeRefused,
+        Self::PollKeyPointer,
         Self::PollTimeout,
         Self::PostgresKeyRequired,
         Self::PostgresParametersRequired,
         Self::PostgresParametersUnbounded,
         Self::PostgresQueryUnpinned,
+        Self::PostgresSendMembers,
         Self::ProfileEndpointBound,
         Self::ProfileInconsistent,
         Self::ProjectionBound,
@@ -275,8 +281,10 @@ impl JobCode {
         Self::SourceRescanDelay,
         Self::SourceScanRequired,
         Self::TriggerBound,
-        Self::TriggerHookUnserved,
+        Self::TriggerHookBinding,
+        Self::TriggerHookPath,
         Self::TriggerKind,
+        Self::TriggerMember,
         Self::TriggersRequired,
     ];
 
@@ -298,11 +306,13 @@ impl JobCode {
             Self::PollEndpointKind => "adapter.job.poll-endpoint-kind",
             Self::PollEndpointUnknown => "adapter.job.poll-endpoint-unknown",
             Self::PollFacadeRefused => "adapter.job.poll-facade-refused",
+            Self::PollKeyPointer => "adapter.job.poll-key-pointer",
             Self::PollTimeout => "adapter.job.poll-timeout",
             Self::PostgresKeyRequired => "adapter.job.postgres-key-required",
             Self::PostgresParametersRequired => "adapter.job.postgres-parameters-required",
             Self::PostgresParametersUnbounded => "adapter.job.postgres-parameters-unbounded",
             Self::PostgresQueryUnpinned => "adapter.job.postgres-query-unpinned",
+            Self::PostgresSendMembers => "adapter.job.postgres-send-members",
             Self::ProfileEndpointBound => "adapter.job.profile-endpoint-bound",
             Self::ProfileInconsistent => "adapter.job.profile-inconsistent",
             Self::ProjectionBound => "adapter.job.projection-bound",
@@ -318,8 +328,10 @@ impl JobCode {
             Self::SourceRescanDelay => "adapter.job.source-rescan-delay",
             Self::SourceScanRequired => "adapter.job.source-scan-required",
             Self::TriggerBound => "adapter.job.trigger-bound",
-            Self::TriggerHookUnserved => "adapter.job.trigger-hook-unserved",
+            Self::TriggerHookBinding => "adapter.job.trigger-hook-binding",
+            Self::TriggerHookPath => "adapter.job.trigger-hook-path",
             Self::TriggerKind => "adapter.job.trigger-kind",
+            Self::TriggerMember => "adapter.job.trigger-member",
             Self::TriggersRequired => "adapter.job.triggers-required",
         }
     }
@@ -336,11 +348,13 @@ impl JobCode {
             | Self::PollEndpointKind
             | Self::PollEndpointUnknown
             | Self::PollFacadeRefused
+            | Self::PollKeyPointer
             | Self::PollTimeout
             | Self::PostgresKeyRequired
             | Self::PostgresParametersRequired
             | Self::PostgresParametersUnbounded
             | Self::PostgresQueryUnpinned
+            | Self::PostgresSendMembers
             | Self::SendComponentRefused
             | Self::SourceBoundRefused
             | Self::SourceCalledRefused
@@ -365,8 +379,10 @@ impl JobCode {
             | Self::ProjectionShape
             | Self::RouteUnknown
             | Self::TriggerBound
-            | Self::TriggerHookUnserved
+            | Self::TriggerHookBinding
+            | Self::TriggerHookPath
             | Self::TriggerKind
+            | Self::TriggerMember
             | Self::TriggersRequired => ADAPTER_JOB_KIND,
         }
     }
@@ -1567,7 +1583,7 @@ fn trigger_checks(triggers: &[JobTrigger]) -> Vec<Diagnostic> {
             "interval" => {
                 if trigger.path.is_some() {
                     findings.push(job_finding(
-                        JobCode::TriggerKind,
+                        JobCode::TriggerMember,
                         &format!("{prefix}/path"),
                         "the interval trigger carries the hook-only path member",
                         "Drop path; only a hook trigger names a path.",
@@ -1575,7 +1591,7 @@ fn trigger_checks(triggers: &[JobTrigger]) -> Vec<Diagnostic> {
                 }
                 if trigger.binding.is_some() {
                     findings.push(job_finding(
-                        JobCode::TriggerKind,
+                        JobCode::TriggerMember,
                         &format!("{prefix}/binding"),
                         "the interval trigger carries the hook-only binding member",
                         "Drop binding; only a hook trigger names a binding.",
@@ -1633,14 +1649,14 @@ fn trigger_checks(triggers: &[JobTrigger]) -> Vec<Diagnostic> {
                     None => None,
                 };
                 if let Some(cause) = cause {
-                    findings.push(job_finding(JobCode::TriggerKind, &format!("{prefix}/path"),
+                    findings.push(job_finding(JobCode::TriggerHookPath, &format!("{prefix}/path"),
                         cause,
                         "Declare one unique absolute path of at most 256 bytes using slash-separated ASCII unreserved segments (letters, digits, `-._~`), without dot segments."));
                 }
                 if let Some(binding) = trigger.binding.as_ref() {
                     if !hook_bindings.insert(binding) {
                         findings.push(job_finding(
-                            JobCode::TriggerKind,
+                            JobCode::TriggerHookBinding,
                             &format!("{prefix}/binding"),
                             "the hook binding is repeated",
                             "Declare one unique runtime hook binding.",
@@ -1648,7 +1664,7 @@ fn trigger_checks(triggers: &[JobTrigger]) -> Vec<Diagnostic> {
                     }
                 } else {
                     findings.push(job_finding(
-                        JobCode::TriggerHookUnserved,
+                        JobCode::TriggerHookBinding,
                         &format!("{prefix}/binding"),
                         "the hook has no runtime authentication and rate binding",
                         "Declare the unique hookIngress source binding that serves this hook.",
@@ -1662,7 +1678,7 @@ fn trigger_checks(triggers: &[JobTrigger]) -> Vec<Diagnostic> {
                     || trigger.backoff_multiplier != 1
                 {
                     findings.push(job_finding(
-                        JobCode::TriggerKind,
+                        JobCode::TriggerMember,
                         &prefix,
                         "the hook carries interval scheduling options",
                         "Declare scheduling options only on the interval trigger.",
@@ -2602,7 +2618,7 @@ mod tests {
         assert!(
             findings
                 .iter()
-                .any(|finding| finding.code == JobCode::TriggerKind.code()
+                .any(|finding| finding.code == JobCode::TriggerHookPath.code()
                     && finding.path == "/triggers/0/path"),
             "{findings:?}"
         );
@@ -2618,7 +2634,7 @@ mod tests {
         assert!(
             findings
                 .iter()
-                .any(|finding| finding.code == JobCode::TriggerKind.code()
+                .any(|finding| finding.code == JobCode::TriggerHookPath.code()
                     && finding.path == "/triggers/0/path"),
             "a hook trigger without its path refuses: {findings:?}"
         );
@@ -3129,7 +3145,7 @@ mod tests {
         let findings = check_job(&parsed, &pack());
         assert!(
             findings.iter().any(|finding| {
-                finding.code == JobCode::TriggerHookUnserved.code()
+                finding.code == JobCode::TriggerHookBinding.code()
                     && finding.path == "/triggers/1/binding"
             }),
             "a hook with no runtime binding is unserved: {findings:?}"
@@ -3148,13 +3164,15 @@ mod tests {
         let findings = check_job(&parsed, &pack());
         assert!(
             findings.iter().any(|finding| {
-                finding.code == JobCode::TriggerKind.code() && finding.path == "/triggers/2/path"
+                finding.code == JobCode::TriggerHookPath.code()
+                    && finding.path == "/triggers/2/path"
             }),
             "{findings:?}"
         );
         assert!(
             findings.iter().any(|finding| {
-                finding.code == JobCode::TriggerKind.code() && finding.path == "/triggers/2/binding"
+                finding.code == JobCode::TriggerHookBinding.code()
+                    && finding.path == "/triggers/2/binding"
             }),
             "a repeated binding is malformed, not unserved: {findings:?}"
         );
@@ -3179,7 +3197,7 @@ mod tests {
             let findings = check_job(&parsed, &pack());
             assert!(
                 findings.iter().any(|finding| {
-                    finding.code == JobCode::TriggerKind.code()
+                    finding.code == JobCode::TriggerMember.code()
                         && finding.path == format!("/triggers/0/{member}")
                         && finding.message.contains(message)
                 }),
@@ -3198,7 +3216,7 @@ mod tests {
         let findings = check_job(&parsed, &pack());
         assert!(
             findings.iter().any(|finding| {
-                finding.code == JobCode::TriggerKind.code()
+                finding.code == JobCode::TriggerMember.code()
                     && finding.path == "/triggers/1"
                     && finding.message.contains("interval scheduling options")
             }),
@@ -3251,6 +3269,7 @@ mod tests {
                 .iter()
                 .find(|finding| finding.path == "/triggers/1/path")
                 .unwrap_or_else(|| panic!("{path:?} refuses: {findings:?}"));
+            assert_eq!(finding.code, JobCode::TriggerHookPath.code(), "{path:?}");
             assert!(
                 finding.message.starts_with(cause),
                 "{path:?} names its cause: {}",

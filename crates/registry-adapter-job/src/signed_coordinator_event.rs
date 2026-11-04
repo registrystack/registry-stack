@@ -17,7 +17,8 @@ use sha2::{Digest as _, Sha256};
 use uuid::Uuid;
 
 use crate::destination::{
-    DeliverableItem, DeliveryFamily, DeliveryIdentity, HandOffOutcome, JobDestination,
+    coordinator_item_code, DeliverableItem, DeliveryFamily, DeliveryIdentity, HandOffOutcome,
+    JobDestination,
 };
 
 const REVISED_ITEM: &str = "adapter.job.revised-item";
@@ -178,13 +179,13 @@ impl JobDestination for SignedCoordinatorEventDestination {
                     code: EVENT_UNSIGNABLE.to_string(),
                 },
                 CoordinatorEventOutcome::Refused { code } => HandOffOutcome::Refused {
-                    code: code.to_string(),
+                    code: coordinator_item_code(code),
                 },
                 CoordinatorEventOutcome::Stop { code } => HandOffOutcome::StopPass {
-                    code: code.to_string(),
+                    code: coordinator_item_code(code),
                 },
                 CoordinatorEventOutcome::Uncertain => HandOffOutcome::StopPass {
-                    code: EVENT_UNCERTAIN.to_string(),
+                    code: coordinator_item_code(EVENT_UNCERTAIN),
                 },
             }
         })

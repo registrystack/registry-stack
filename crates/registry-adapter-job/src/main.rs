@@ -955,9 +955,15 @@ fn compile(
         .map_err(|error| job_error_message(&error))
 }
 
+/// The job authors a hook trigger this build cannot serve.
+const HOOK_TRIGGER_NOT_COMPILED: &str = "adapter.job.hook-not-compiled-trigger";
+/// The runtime configures `hookIngress` this build cannot serve.
+#[cfg(not(feature = "job-hook"))]
+const HOOK_INGRESS_NOT_COMPILED: &str = "adapter.job.hook-not-compiled-ingress";
+
 fn require_compiled_hooks(job: &AdapterJob) -> Result<(), &'static str> {
     if job.triggers.iter().any(|trigger| trigger.kind == "hook") && !cfg!(feature = "job-hook") {
-        return Err("adapter.job.hook-not-compiled");
+        return Err(HOOK_TRIGGER_NOT_COMPILED);
     }
     Ok(())
 }
@@ -972,7 +978,7 @@ fn check_hook_runtime(job: &AdapterJob, runtime: &JobRuntimeConfig) -> Result<()
     #[cfg(not(feature = "job-hook"))]
     {
         if runtime.hook_ingress.is_some() {
-            return Err("adapter.job.hook-not-compiled".to_string());
+            return Err(HOOK_INGRESS_NOT_COMPILED.to_string());
         }
         Ok(())
     }
@@ -1352,8 +1358,26 @@ mod tests {
         #[cfg(not(feature = "job-hook"))]
         assert_eq!(
             require_compiled_hooks(&job),
-            Err("adapter.job.hook-not-compiled")
+            Err("adapter.job.hook-not-compiled-trigger")
         );
+    }
+
+    #[cfg(not(feature = "job-hook"))]
+    #[test]
+    fn a_hook_ingress_without_the_host_feature_has_its_own_code() {
+        let job = example_job("job.yaml");
+        let mut runtime =
+            JobRuntimeConfig::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join(
+                "../../products/adapter/examples/kobotoolbox-job/job-runtime.hook.example.yaml",
+            ))
+            .expect("the maintained hook runtime reads");
+        assert!(runtime.hook_ingress.is_some());
+        assert_eq!(
+            check_hook_runtime(&job, &runtime),
+            Err("adapter.job.hook-not-compiled-ingress".to_string())
+        );
+        runtime.hook_ingress = None;
+        assert_eq!(check_hook_runtime(&job, &runtime), Ok(()));
     }
 
     #[test]
@@ -1407,13 +1431,13 @@ mod tests {
             ),
             (
                 &direct.destination,
-                "idempotency.key-reused",
+                "adapter.job.breg.idempotency.key-reused",
                 "proposal-reused",
                 "breg",
             ),
             (
                 &direct.destination,
-                "idempotency.expired",
+                "adapter.job.breg.idempotency.expired",
                 "proposal-expired",
                 "breg",
             ),
@@ -1425,7 +1449,7 @@ mod tests {
             ),
             (
                 &coordinator.destination,
-                "coordinator.event.start-conflict",
+                "adapter.job.coordinator.event.start-conflict",
                 "run-conflict",
                 "coordinator",
             ),
@@ -1495,13 +1519,13 @@ mod tests {
         for (destination, code, authority, records) in [
             (
                 &direct.destination,
-                "idempotency.expired",
+                "adapter.job.breg.idempotency.expired",
                 "BReg's own authority",
                 "BReg admission and idempotency records",
             ),
             (
                 &coordinator.destination,
-                "coordinator.event.start-conflict",
+                "adapter.job.coordinator.event.start-conflict",
                 "Coordinator's own authority",
                 "Coordinator admission and event-idempotency records",
             ),
@@ -1553,7 +1577,7 @@ mod tests {
         let guidance = hold_guidance(
             &direct.destination,
             ItemStatus::Held,
-            Some("idempotency.key-reused"),
+            Some("adapter.job.breg.idempotency.key-reused"),
             HoldGuidanceScope::Item(Some("proposal-a")),
         )
         .expect("the held item has guidance");
