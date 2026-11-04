@@ -526,6 +526,31 @@ async fn the_follow_up_read_is_once_and_only_for_an_automatic_application() {
 }
 
 #[tokio::test]
+async fn a_follow_up_read_that_cannot_settle_keeps_the_first_read() {
+    for failed in [
+        CompletionObservation::Hold {
+            code: "proposal-not-found".into(),
+        },
+        CompletionObservation::Retryable {
+            code: "dependency-outage".into(),
+            retry_after: None,
+        },
+    ] {
+        let h = harness().await;
+        let fake = Fake::new(vec![waiting("nobody"), failed]);
+        let worker = Worker::new(h.store.clone(), fake.clone());
+        let run = h.admit().await;
+        h.drain(&worker).await;
+        assert_eq!(fake.reads(), 2, "the start read and one follow-up read");
+        assert_eq!(
+            h.status(run).await,
+            ("running".into(), None, None),
+            "an unanswered follow-up does not hold a Proposal the first read saw pending"
+        );
+    }
+}
+
+#[tokio::test]
 async fn inspection_offers_the_configured_request_link() {
     let h = harness().await;
     let fake = Fake::new(vec![]);
