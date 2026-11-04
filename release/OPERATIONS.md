@@ -1417,7 +1417,11 @@ the workspace version in its `workspace-versions`, `client-package-versions`,
 dependencies and `Cargo.lock`, the native client packages and generated
 loaders, the lockfiles in `FUZZ_LOCK_RELEASE_SURFACE_PATHS`, the VS Code and
 Zed extension manifests and lockfiles in `EDITOR_RELEASE_SURFACE_PATHS`, and
-the committed OpenAPI documents.
+the committed OpenAPI documents. The Rust tests also hold two committed report
+examples to a development build's `<version>-dev`:
+`products/breg/examples/formats/ctl-report.json` and
+`products/casework/examples/formats/reports/check-report.json`; move their
+`version` member in the same PR.
 The upgrade promise moves to the release just published once `main` both
 names the next minor version and records that release as published. Naming a
 patch version of the same minor line leaves the floor where it is. The PR that
