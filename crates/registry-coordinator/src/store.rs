@@ -423,8 +423,14 @@ impl FrozenCommand {
 }
 
 pub(crate) enum ObservationPermit {
-    Observe { timed_out: bool },
-    Pause { seconds: u32 },
+    /// Read now. `first` is the wait's first read.
+    Observe {
+        timed_out: bool,
+        first: bool,
+    },
+    Pause {
+        seconds: u32,
+    },
     TimedOut,
     Exhausted,
 }
@@ -2174,6 +2180,7 @@ impl Store {
         tx.commit().await.map_err(unavailable)?;
         Ok(Some(ObservationPermit::Observe {
             timed_out: now >= timeout,
+            first: observations == 0,
         }))
     }
 
@@ -2284,6 +2291,8 @@ fn decode(row: &Row, first: usize) -> std::result::Result<Job, DispatchError> {
     })
 }
 /// The least time between two reads of one review wait, whatever wakes it.
+/// The worker's one follow-up read of an automatic Proposal application is
+/// part of the wait's first read, not a second one.
 pub(crate) const WAIT_READ_SPACING_SECONDS: u32 =
     crate::operations::MINIMUM_OBSERVATION_INTERVAL_SECONDS;
 /// How long one attempt may run; its lease lasts this long plus Dispatch's
