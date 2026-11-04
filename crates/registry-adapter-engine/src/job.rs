@@ -1123,6 +1123,13 @@ fn compile_job_sources<S: ArtifactSource + ?Sized>(
                             "Set readLock to none or changed; readLockTimeoutMilliseconds and readLockCheckIntervalMilliseconds apply only with readLock: changed.",
                         )
                     })?;
+                    config.completion_declared().map_err(|reason| {
+                        runtime_refusal(
+                            &format!("/sources/file/{id}"),
+                            &format!("endpoint {id} source was refused: {reason}"),
+                            "Declare how the source knows a file is complete: doneFileName for a done-file convention, readLock: changed for a file whose size and time must settle, or producerAtomicHandover: true when the producer renames each finished file into the directory.",
+                        )
+                    })?;
                     files.insert(id.to_owned(), config.clone());
                 }
                 #[cfg(not(feature = "job-file"))]

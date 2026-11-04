@@ -149,6 +149,11 @@ fn local_id_map_schema<V: JsonSchema>(
 #[allow(dead_code)]
 #[derive(JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[schemars(extend("anyOf" = [
+    {"required": ["doneFileName"]},
+    {"required": ["readLock"], "properties": {"readLock": {"const": "changed"}}},
+    {"required": ["producerAtomicHandover"]}
+]))]
 struct FileSource {
     /// The absolute path of the directory the read lists and reads. A
     /// relative path refuses at the reader.
@@ -179,6 +184,13 @@ struct FileSource {
     /// lock but `changed`.
     #[serde(default)]
     read_lock_check_interval_milliseconds: Option<BoundedU64<100, 5_000>>,
+    /// The producer's declaration that a file appears in the directory
+    /// only once complete, renamed in after it is written. A source
+    /// declares this, a `doneFileName`, or `readLock: changed`; one with
+    /// none refuses.
+    #[serde(default)]
+    #[schemars(schema_with = "required_true_schema")]
+    producer_atomic_handover: Option<bool>,
     /// Camel's `maxMessagesPerPoll`, accepted for Camel parity; absent,
     /// 500. One read emits at most one file, so the member bounds
     /// nothing a read does not already bound.
@@ -503,6 +515,38 @@ mod tests {
             let path = directory.path().join("job-runtime.yaml");
             std::fs::write(&path, &text).unwrap();
             assert!(JobRuntimeConfig::load(&path).is_err());
+        }
+    }
+
+    /// The schema holds the file source's completion declaration the way
+    /// the compile does: `readLock: none` or no declaration refuses, and
+    /// each of the three declarations validates.
+    #[test]
+    fn the_schema_requires_a_file_source_completion_declaration() {
+        let validator = validator();
+        let base = std::fs::read_to_string(repository_file(
+            "products/adapter/fixtures/corpus/base-job/job-runtime.yaml",
+        ))
+        .unwrap();
+        let declared = "      readLock: changed\n";
+        assert!(
+            base.contains(declared),
+            "the control declares readLock: changed"
+        );
+        for (replacement, accepted) in [
+            ("", false),
+            ("      readLock: none\n", false),
+            ("      producerAtomicHandover: false\n", false),
+            (declared, true),
+            ("      doneFileName: \"${file:name}.done\"\n", true),
+            ("      producerAtomicHandover: true\n", true),
+        ] {
+            let text = base.replace(declared, replacement);
+            assert_eq!(
+                validator.validate(&yaml_as_json(text.as_bytes())).is_ok(),
+                accepted,
+                "{replacement:?}"
+            );
         }
     }
 

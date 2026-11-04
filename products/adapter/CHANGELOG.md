@@ -177,6 +177,14 @@
 - A `writable-read` binding that no Write Update names as its companion read
   is refused by `adapterctl check` and at load, naming the binding, instead of
   stopping the Adapter.
+- BREAKING: a local file job source must declare how it knows a file is
+  complete, so a read never takes a file the producer is still writing.
+  `adapterctl job check` and `adapter-job` startup refuse a source with no
+  `doneFileName`, no `readLock: changed`, and no `producerAtomicHandover:
+  true` (the SFTP `completed-name` promise, for a producer that renames each
+  finished file into the directory). Migration: add one of the three to
+  each `sources.file` entry; `readLock: changed` suits a producer you do not
+  control.
 - BREAKING: the maintained `kobotoolbox` pack authenticates with the
   account's API token (`static-authorization`, `scheme: Token`) instead of
   Basic, so a leaked adapter credential no longer signs in to the Kobo web
