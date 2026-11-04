@@ -31,7 +31,7 @@ use zeroize::Zeroizing;
 
 use crate::engine::component::rest::continuation::{ContinuationCodec, CursorKey, CursorTtl};
 use crate::engine::effective_contract::EffectiveContract;
-use crate::engine::load::{load, LoadError, Loaded};
+use crate::engine::load::{LoadError, Loaded};
 use crate::facade::{router, FacadeState};
 use crate::idempotent::{
     self, PostgresIdempotencyStore, MAX_CALLER_IDENTITY_BYTES, MAX_CALLER_ISSUER_BYTES,
@@ -602,7 +602,13 @@ pub async fn run(
     pack_path: Option<&std::path::Path>,
     runtime_path: &std::path::Path,
 ) -> Result<(), ServeError> {
-    let loaded = load(project_directory, profile_path, pack_path, runtime_path)?;
+    let loaded = crate::engine::load::load_with_target(
+        project_directory,
+        profile_path,
+        pack_path,
+        runtime_path,
+        crate::govstack::consultation::target_attachment,
+    )?;
     for unserved in &loaded.unserved {
         tracing::warn!(binding = %unserved.binding, reason = %unserved.reason,
             reason_code = unserved.reason_code, "binding not served");

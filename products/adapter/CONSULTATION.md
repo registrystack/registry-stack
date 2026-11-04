@@ -19,9 +19,11 @@ Their output is validated before disclosure.
 A transformation cannot grant source authority, read secrets or create source-backed guarantees.
 Shared mapping parameters and scripts may be reused without requiring a separate transformation-package format.
 
-The GovStack host owns the versioned HTTP paths, methods, request and response shapes, problem mapping, headers, cursor context and capability annotations.
+The GovStack host owns the canonical `/govstack/registries` mount, versioned HTTP paths, methods, request and response shapes, problem mapping, headers, cursor context and capability annotations.
+Generated OpenAPI uses `/govstack/registries` as `servers.url` and keeps its operation paths relative under `/v1/...`.
+The facade crate exposes this protocol through its public `govstack::consultation` module; the shared engine remains responsible for generic source execution, projections and schema validation.
+The host adds no separate crate, deployed service, or project-specific runtime configuration.
 It reuses the facade's authentication, access admission, bounded engine and durable journal.
-It does not add a second deployed service.
 Evidence consumes the source pack through its listener-free engine binding and keeps its own facts contract, assertion evaluation, authorization, signing and release audit.
 It does not need to construct a GovStack Record.
 An Evidence Source can select a package-owned projection of matched native facts and its own versioned facts schema without changing its pack.
@@ -44,7 +46,7 @@ Source-dependent features require declared source semantics and verified prerequ
 Host-provided features do not require an upstream feature of the same name.
 Unsupported capabilities and feature declarations fail explicitly instead of being advertised or silently ignored.
 
-The facade serves caller-filtered `GET /v1/capabilities` with `Cache-Control: no-store`.
+The facade serves caller-filtered `GET /govstack/registries/v1/capabilities` with `Cache-Control: no-store`.
 Entries reference stable operation identifiers in a version-specific HTTPS OpenAPI contract and identify their Registry, Collection and view.
 The contract supplies input and output schemas and the selected features.
 Discovery does not grant access to any Record or replace authorization at invocation.
@@ -70,7 +72,7 @@ A generated frontend can discover operations and schemas; it does not infer doma
 
 1. Source acquisition and deployment-owned transformation are separate, digest-covered execution steps; two different projections reuse the same source pack without modifying its source routes.
 2. A versioned project-selected data schema supports nested objects and arrays; invalid schema references, digest mismatches, undeclared output and incorrectly typed output are refused visibly.
-3. The built-in Consultation path uses maintained Rust protocol definitions, without requiring deployments to author standard envelopes, paths or problem mappings.
+3. The built-in Consultation host mounts maintained Rust protocol definitions at `/govstack/registries`, without requiring deployments to author standard envelopes, paths or problem mappings.
 4. Enabled reads, generated OpenAPI and caller capability discovery agree on operation, Registry, Collection, view, input and output schema and supported features.
 5. Authentication and scope denial precede source effects; required audit failure releases no protected result; discovery remains advisory and caller-filtered.
 6. Continuation is bound to the effective transformation/schema deployment and original request/access context; malformed, expired or mismatched cursors are refused before source execution.

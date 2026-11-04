@@ -192,6 +192,15 @@ pub struct ServedOperation {
     /// Explicit source-neutral read semantics for the selected ordinary or
     /// instantiated route. A Consultation host never infers these guarantees.
     pub read_support: Option<registry_adapter_core::SourceReadSupport>,
+    /// Host-supplied mapping from admitted facade inputs to the generic
+    /// source route body. Fixed targets must attach this before serving.
+    pub source_input: Option<crate::target::SourceInput>,
+    /// Host-supplied mapping from generic source items to the target's
+    /// internal record object.
+    pub item_projection: Option<crate::target::ItemProjection>,
+    /// Host-supplied fixed-target schemas and externally reachable path for
+    /// effective-contract export.
+    pub target_contract: Option<crate::target::EffectiveContractOperation>,
     /// The cursor and page-size parameters of a search operation.
     pub pagination: Option<ServedPagination>,
     /// The compiled source-native 202 and status proof contract, absent on
@@ -565,10 +574,57 @@ pub fn load(
     pack_path: Option<&Path>,
     runtime_path: &Path,
 ) -> Result<Loaded, LoadError> {
+    load_inner(
+        project_directory,
+        profile_path,
+        pack_path,
+        runtime_path,
+        None,
+    )
+}
+
+/// A runtime host callback that derives immutable fixed-target metadata from
+/// the exact project, pack, and project directory selected for compilation.
+pub type TargetBuilder =
+    fn(&AdapterProject, &AdapterPack, &Path) -> Result<crate::target::TargetAttachment, LoadError>;
+
+/// Load a deployment whose fixed target is supplied by the runtime host.
+/// The builder sees the exact parsed project and pack used by compilation and
+/// returns immutable target metadata. It is not called for authored profiles.
+pub fn load_with_target(
+    project_directory: &Path,
+    profile_path: Option<&Path>,
+    pack_path: Option<&Path>,
+    runtime_path: &Path,
+    target_builder: TargetBuilder,
+) -> Result<Loaded, LoadError> {
+    load_inner(
+        project_directory,
+        profile_path,
+        pack_path,
+        runtime_path,
+        Some(target_builder),
+    )
+}
+
+fn load_inner(
+    project_directory: &Path,
+    profile_path: Option<&Path>,
+    pack_path: Option<&Path>,
+    runtime_path: &Path,
+    target_builder: Option<TargetBuilder>,
+) -> Result<Loaded, LoadError> {
     let (project, project_bytes): (AdapterProject, _) = read(
         &project_directory.join("project.yaml"),
         &format_spec(ADAPTER_PROJECT_KIND, ADAPTER_PROJECT_API_VERSION),
     )?;
+    let pack_path = artifact_path(pack_path, project_directory, "pack.yaml", "--pack")?;
+    let (pack, pack_bytes): (AdapterPack, _) = read(
+        &pack_path,
+        &format_spec(ADAPTER_PACK_KIND, ADAPTER_PACK_API_VERSION),
+    )?;
+    let pack_directory = pack_path.parent().unwrap_or_else(|| Path::new("."));
+    let mut target = None;
     let (profile, profile_bytes) = match (&project.profile, &project.consultation) {
         (Some(_), None) => {
             let profile_path =
@@ -581,15 +637,16 @@ pub fn load(
         (None, Some(_)) => {
             if profile_path.is_some() {
                 return Err(LoadError::Runtime(
-                    "a built-in Consultation deployment does not load an authored profile"
-                        .to_owned(),
+                    "a host target deployment does not load an authored profile".to_owned(),
                 ));
             }
-            let profile = crate::consultation::built_in_profile();
-            let mut identity = crate::consultation::PROFILE_ID.as_bytes().to_vec();
-            identity.push(0);
-            identity.extend_from_slice(crate::consultation::PROFILE_VERSION.as_bytes());
-            (profile, identity)
+            let builder = target_builder.ok_or_else(|| {
+                LoadError::Runtime("the selected facade target has no host attachment".to_owned())
+            })?;
+            let attached = builder(&project, &pack, project_directory)?;
+            let selected = (attached.profile.clone(), attached.identity.clone());
+            target = Some(attached);
+            selected
         }
         _ => {
             return Err(LoadError::Workspace(
@@ -598,12 +655,6 @@ pub fn load(
             ));
         }
     };
-    let pack_path = artifact_path(pack_path, project_directory, "pack.yaml", "--pack")?;
-    let (pack, pack_bytes): (AdapterPack, _) = read(
-        &pack_path,
-        &format_spec(ADAPTER_PACK_KIND, ADAPTER_PACK_API_VERSION),
-    )?;
-    let pack_directory = pack_path.parent().unwrap_or_else(|| Path::new("."));
     let absolute = std::fs::canonicalize(runtime_path).map_err(|_| LoadError::Unreadable {
         path: runtime_path.display().to_string(),
     })?;
@@ -708,8 +759,8 @@ pub fn load(
             Ok(EndpointCompilation::Served(Box::new(egress)))
         },
     )?;
-    if project.consultation.is_some() {
-        attach_consultation_project(&project, &pack, project_directory, &mut authored)?;
+    if let Some(target) = target {
+        target.apply(&mut authored)?;
     }
     Ok(Loaded {
         profile,
@@ -727,170 +778,8 @@ pub fn load(
     })
 }
 
-/// Attach the built-in Consultation projection and source semantics to an
-/// already compiled authored plan. Live loading and offline fixture replay
-/// call the same helper so neither can serve an unprojected source result.
-pub fn attach_consultation_project(
-    project: &AdapterProject,
-    pack: &AdapterPack,
-    project_directory: &Path,
-    authored: &mut CompiledAuthoring,
-) -> Result<(), LoadError> {
-    let consultation = project.consultation.as_ref().ok_or_else(|| {
-        LoadError::Runtime("the built-in Consultation metadata is unavailable".to_owned())
-    })?;
-    for operation in &mut authored.served {
-        let capability = crate::consultation::ConsultationCapability::from_binding_operation(
-            &operation.operation,
-        )
-        .ok_or_else(|| {
-            LoadError::Runtime(format!(
-                "binding {} does not name a built-in Consultation capability",
-                operation.binding
-            ))
-        })?;
-        let collection = consultation
-            .collections
-            .get(&operation.record_type)
-            .ok_or_else(|| {
-                LoadError::Runtime(format!(
-                    "binding {} names no Consultation collection",
-                    operation.binding
-                ))
-            })?;
-        let binding = project.bindings.get(&operation.binding).ok_or_else(|| {
-            LoadError::Runtime("a compiled binding is absent from its project".to_owned())
-        })?;
-        let templated = project
-            .templated_routes
-            .get(binding.route.as_str())
-            .ok_or_else(|| {
-                LoadError::Runtime(format!(
-                    "binding {} must select an instantiated route template",
-                    operation.binding
-                ))
-            })?;
-        let template = pack
-            .route_templates
-            .get(templated.route_template.as_str())
-            .ok_or_else(|| {
-                LoadError::Runtime(format!(
-                    "binding {} names no reusable source route template",
-                    operation.binding
-                ))
-            })?;
-        let support = template.read_support.clone().ok_or_else(|| {
-            LoadError::Runtime(format!(
-                "binding {} selects a route template with no declared read support",
-                operation.binding
-            ))
-        })?;
-        let source_shape_matches = matches!(
-            (capability, &support),
-            (
-                crate::consultation::ConsultationCapability::Lookup,
-                registry_adapter_core::SourceReadSupport::ReadOne { .. }
-            ) | (
-                crate::consultation::ConsultationCapability::Search,
-                registry_adapter_core::SourceReadSupport::ReadPage { .. }
-            )
-        ) || matches!(
-            (capability, &support),
-            (
-                crate::consultation::ConsultationCapability::Retrieve,
-                registry_adapter_core::SourceReadSupport::ReadOne { inputs }
-            ) if inputs.len() == 1
-        ) || matches!(
-            (capability, &support),
-            (
-                crate::consultation::ConsultationCapability::List,
-                registry_adapter_core::SourceReadSupport::ReadPage { inputs, .. }
-            ) if inputs.is_empty()
-        );
-        if !source_shape_matches {
-            return Err(LoadError::Runtime(format!(
-                "binding {} selects incompatible source read support",
-                operation.binding
-            )));
-        }
-        let (selected_input, input_schema) = match capability {
-            crate::consultation::ConsultationCapability::Lookup => {
-                let lookup = collection.lookup.as_ref().ok_or_else(|| {
-                    LoadError::Runtime(format!(
-                        "binding {} has no Consultation Lookup metadata",
-                        operation.binding
-                    ))
-                })?;
-                (
-                    Some(lookup.selector.as_str()),
-                    Some(lookup.input_schema.as_str()),
-                )
-            }
-            crate::consultation::ConsultationCapability::Search => {
-                let search = collection.search.as_ref().ok_or_else(|| {
-                    LoadError::Runtime(format!(
-                        "binding {} has no Consultation Search metadata",
-                        operation.binding
-                    ))
-                })?;
-                (
-                    Some(search.search.as_str()),
-                    Some(search.input_schema.as_str()),
-                )
-            }
-            crate::consultation::ConsultationCapability::Retrieve
-            | crate::consultation::ConsultationCapability::List => (None, None),
-        };
-        if let Some(input_schema) = input_schema {
-            let (filters, schema) = compile_consultation_input_filters(
-                project,
-                input_schema,
-                capability,
-                &support,
-                project_directory,
-            )
-            .map_err(|_| {
-                LoadError::Runtime(format!(
-                    "binding {} Consultation input schema was refused",
-                    operation.binding
-                ))
-            })?;
-            operation.filters = filters;
-            operation.project_input_schema = Some(schema);
-        }
-        operation.request_template =
-            crate::consultation::request_envelope(capability, selected_input)
-                .map(|template| ReadRequestTemplate::compile(&template))
-                .transpose()
-                .map_err(|_| {
-                    LoadError::Runtime(format!(
-                        "binding {} has an unusable Consultation request contract",
-                        operation.binding
-                    ))
-                })?;
-        let transform = Arc::new(
-            crate::project_transform::CompiledProjectTransform::compile_from_directory(
-                project,
-                &operation.binding,
-                collection.data_schema.as_str(),
-                project_directory,
-            )
-            .map_err(|_| {
-                LoadError::Runtime(format!(
-                    "binding {} project transformation was refused",
-                    operation.binding
-                ))
-            })?,
-        );
-        operation.record_schema = transform.schema().as_value().clone();
-        operation.project_transform = Some(transform);
-        operation.read_support = Some(support);
-    }
-    Ok(())
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ConsultationInputError {
+pub enum TargetInputError {
     Schema,
     Shape,
     Scalar,
@@ -900,49 +789,49 @@ pub enum ConsultationInputError {
 /// Compile one selected Lookup or Search input against the exact scalar
 /// capture shape and source support the runtime executes. Authoring commands
 /// call this same function before publishing a contract.
-pub fn compile_consultation_input_filters(
+pub fn compile_target_input_filters(
     project: &AdapterProject,
     schema_id: &str,
-    capability: crate::consultation::ConsultationCapability,
     support: &registry_adapter_core::SourceReadSupport,
+    shape: TargetInputShape,
     project_directory: &Path,
 ) -> Result<
     (
         Vec<ServedFilter>,
         Arc<crate::public_schema::CheckedPublicSchema>,
     ),
-    ConsultationInputError,
+    TargetInputError,
 > {
     let declared = project
         .artifacts
         .schemas
         .get(schema_id)
-        .ok_or(ConsultationInputError::Schema)?;
+        .ok_or(TargetInputError::Schema)?;
     let schema = crate::project_transform::compile_project_schema_from_directory(
         declared,
         project_directory,
     )
-    .map_err(|_| ConsultationInputError::Schema)?;
+    .map_err(|_| TargetInputError::Schema)?;
     let properties = schema
         .as_value()
         .get("properties")
         .and_then(Value::as_object)
         .filter(|properties| !properties.is_empty())
-        .ok_or(ConsultationInputError::Shape)?;
+        .ok_or(TargetInputError::Shape)?;
     let required = schema
         .as_value()
         .get("required")
         .and_then(Value::as_array)
-        .ok_or(ConsultationInputError::Shape)?
+        .ok_or(TargetInputError::Shape)?
         .iter()
-        .map(|name| name.as_str().ok_or(ConsultationInputError::Shape))
+        .map(|name| name.as_str().ok_or(TargetInputError::Shape))
         .collect::<Result<BTreeSet<_>, _>>()?;
     if required.len() != properties.len()
         || properties
             .keys()
             .any(|name| !required.contains(name.as_str()))
     {
-        return Err(ConsultationInputError::Shape);
+        return Err(TargetInputError::Shape);
     }
     let mut filters = Vec::with_capacity(properties.len());
     for (name, property) in properties {
@@ -952,13 +841,13 @@ pub fn compile_consultation_input_filters(
             field_type,
         });
     }
-    validate_consultation_filter_support(capability, support, &filters)?;
+    validate_target_filter_support(shape, support, &filters)?;
     Ok((filters, Arc::new(schema)))
 }
 
 fn scalar_filter_type(
     property: &Value,
-) -> Result<registry_adapter_core::RecordFieldType, ConsultationInputError> {
+) -> Result<registry_adapter_core::RecordFieldType, TargetInputError> {
     match (
         property.get("type").and_then(Value::as_str),
         property.get("format").and_then(Value::as_str),
@@ -969,28 +858,34 @@ fn scalar_filter_type(
         (Some("integer"), None) => Ok(registry_adapter_core::RecordFieldType::Integer),
         (Some("number"), None) => Ok(registry_adapter_core::RecordFieldType::Decimal),
         (Some("boolean"), None) => Ok(registry_adapter_core::RecordFieldType::Boolean),
-        _ => Err(ConsultationInputError::Scalar),
+        _ => Err(TargetInputError::Scalar),
     }
 }
 
-fn validate_consultation_filter_support(
-    capability: crate::consultation::ConsultationCapability,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TargetInputShape {
+    ReadOne,
+    ReadPageEquality,
+}
+
+fn validate_target_filter_support(
+    shape: TargetInputShape,
     support: &registry_adapter_core::SourceReadSupport,
     filters: &[ServedFilter],
-) -> Result<(), ConsultationInputError> {
+) -> Result<(), TargetInputError> {
     let filter_names: BTreeSet<&str> = filters.iter().map(|filter| filter.name.as_str()).collect();
-    match (capability, support) {
+    match (shape, support) {
         (
-            crate::consultation::ConsultationCapability::Lookup,
+            TargetInputShape::ReadOne,
             registry_adapter_core::SourceReadSupport::ReadOne { inputs },
         ) => {
             let source_names: BTreeSet<&str> = inputs.iter().map(|input| input.as_str()).collect();
             (source_names == filter_names)
                 .then_some(())
-                .ok_or(ConsultationInputError::SourceSupport)
+                .ok_or(TargetInputError::SourceSupport)
         }
         (
-            crate::consultation::ConsultationCapability::Search,
+            TargetInputShape::ReadPageEquality,
             registry_adapter_core::SourceReadSupport::ReadPage { inputs, .. },
         ) => {
             let source_names: BTreeSet<&str> =
@@ -1005,9 +900,9 @@ fn validate_consultation_filter_support(
                     })
                 }))
             .then_some(())
-            .ok_or(ConsultationInputError::SourceSupport)
+            .ok_or(TargetInputError::SourceSupport)
         }
-        _ => Err(ConsultationInputError::SourceSupport),
+        _ => Err(TargetInputError::SourceSupport),
     }
 }
 
@@ -1576,6 +1471,9 @@ fn compile_binding<S: ArtifactSource + ?Sized>(
         project_transform: None,
         project_input_schema: None,
         read_support: None,
+        source_input: None,
+        item_projection: None,
+        target_contract: None,
         pagination: operation
             .pagination
             .as_ref()
@@ -2296,6 +2194,9 @@ mod tests {
             project_transform: None,
             project_input_schema: None,
             read_support: None,
+            source_input: None,
+            item_projection: None,
+            target_contract: None,
         }
     }
 

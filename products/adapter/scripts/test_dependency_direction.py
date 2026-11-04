@@ -312,6 +312,16 @@ class DependentTests(unittest.TestCase):
                     failures(**{outside: [*INTENDED[outside], "connectors"]}),
                 )
 
+    def test_evidence_cannot_reach_the_facade_host_even_for_tests(self):
+        for edge in ("engine", ("engine", "dev")):
+            with self.subTest(edge=edge):
+                found = failures(evidence=[*INTENDED["evidence"], edge])
+                self.assertIn(
+                    "registry-evidence depends on Adapter package(s) it is not listed for: "
+                    "registry-adapter",
+                    found,
+                )
+
     def test_cli_docs_carries_only_the_engine_command_trees(self):
         self.assertEqual(
             MODULE.ALLOWED_DEPENDENTS,
@@ -543,6 +553,91 @@ class EngineModuleBoundaryTests(unittest.TestCase):
         self.assertNotIn("crate::serve", stripped)
         self.assertIn("let a = 1;", stripped)
         self.assertIn("let b = 2;", stripped)
+
+class GovStackProtocolBoundaryTests(unittest.TestCase):
+    """Fixed GovStack wire behavior stays in the facade host."""
+
+    def tree(self, files: dict[str, str]) -> Path:
+        root = tempfile.TemporaryDirectory()
+        self.addCleanup(root.cleanup)
+        base = Path(root.name)
+        engine = base / "crates/registry-adapter-engine/src"
+        engine.mkdir(parents=True)
+        for name, body in files.items():
+            path = engine / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(body, encoding="utf-8")
+        return base
+
+    def test_generic_consultation_metadata_and_transform_code_pass(self):
+        root = self.tree(
+            {
+                "load.rs": (
+                    "let metadata = project.consultation.as_ref();\n"
+                    "fn attach_project_transform() {}\n"
+                    "struct ConsultationFacade;\n"
+                ),
+                "project_transform.rs": (
+                    "fn compile_consultation_input_filters() {}\n"
+                    "fn consultation_output_schema() {}\n"
+                ),
+            }
+        )
+        self.assertEqual(MODULE.govstack_protocol_violations(root), [])
+
+    def test_a_consultation_protocol_module_in_the_engine_refuses(self):
+        root = self.tree({"consultation.rs": "pub const PROFILE_ID: &str = \"fixed\";\n"})
+        found = "\n".join(MODULE.govstack_protocol_violations(root))
+        self.assertIn("protocol module path", found)
+        self.assertIn("consultation.rs", found)
+
+    def test_a_govstack_module_path_in_the_engine_refuses(self):
+        root = self.tree({"govstack/consultation.rs": "pub struct Protocol;\n"})
+        found = "\n".join(MODULE.govstack_protocol_violations(root))
+        self.assertIn("protocol module path", found)
+        self.assertIn("govstack/consultation.rs", found)
+
+    def test_an_engine_reference_to_the_protocol_module_refuses(self):
+        for body in (
+            "use crate::consultation::ConsultationCapability;\n",
+            "use crate::govstack::consultation;\n",
+            "let path = super::super::consultation::CAPABILITIES_PATH;\n",
+        ):
+            with self.subTest(body=body):
+                root = self.tree({"sub/mod.rs": body})
+                self.assertTrue(
+                    any(
+                        "protocol module consultation" in failure
+                        or "protocol module govstack" in failure
+                        for failure in MODULE.govstack_protocol_violations(root)
+                    )
+                )
+
+    def test_fixed_wire_types_and_urls_in_the_engine_refuse(self):
+        for marker in (
+            "ConsultationCapability",
+            "CallerCapabilities",
+            "CapabilityCollection",
+            "CapabilityOperation",
+            "CAPABILITIES_PATH",
+            "/govstack/registries",
+        ):
+            with self.subTest(marker=marker):
+                root = self.tree({"load.rs": f'let marker = "{marker}";\n'})
+                found = "\n".join(MODULE.govstack_protocol_violations(root))
+                self.assertIn("fixed GovStack wire marker", found)
+
+    def test_comments_about_the_boundary_pass(self):
+        root = self.tree(
+            {
+                "load.rs": (
+                    "//! crate::consultation once owned ConsultationCapability.\n"
+                    "// The host mounts /govstack/registries.\n"
+                    "pub struct GenericPlan;\n"
+                )
+            }
+        )
+        self.assertEqual(MODULE.govstack_protocol_violations(root), [])
 
 
 class JobHostGraphTests(unittest.TestCase):

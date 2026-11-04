@@ -159,7 +159,7 @@ pub(crate) fn run(args: &ReplayArgs) -> Result<ReplayRun, ReplayFailure> {
     let (profile, profile_bytes) = match profile {
         Some((decoded, bytes)) => (decoded.value, bytes),
         None => (
-            registry_adapter::engine::consultation::built_in_profile(),
+            registry_adapter::govstack::consultation::built_in_profile(),
             Vec::new(),
         ),
     };
@@ -433,7 +433,7 @@ fn compiled_operation<'a>(
             .as_str()
     };
     let wanted = if project.consultation.is_some() {
-        registry_adapter::engine::consultation::ConsultationCapability::from_binding_operation(
+        registry_adapter::govstack::consultation::ConsultationCapability::from_binding_operation(
             operation.as_str(),
         )?
         .operation_id(record_type)

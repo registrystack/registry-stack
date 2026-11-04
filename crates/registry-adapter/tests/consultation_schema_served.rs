@@ -110,13 +110,15 @@ async fn composed_project_schema_preserves_record_identity_for_every_read_capabi
     let served = Served::start_with_project(&upstream.url(""), directory.path()).await;
     let token = served.token("records.read");
 
-    let (status, _, retrieve) =
-        served.get("/v1/collections/people/records/EeBJ3Sn9uLg", Some(&token));
+    let (status, _, retrieve) = served.get(
+        "/govstack/registries/v1/collections/people/records/EeBJ3Sn9uLg",
+        Some(&token),
+    );
     assert_eq!(status, 200, "{retrieve}\n{}", served.stderr_text());
     assert_eq!(retrieve["recordId"], "EeBJ3Sn9uLg");
 
     let (status, _, lookup) = served.post(
-        "/v1/collections/people/lookup",
+        "/govstack/registries/v1/collections/people/lookup",
         Some(&token),
         &json!({
             "selector": "by-record-id",
@@ -126,12 +128,15 @@ async fn composed_project_schema_preserves_record_identity_for_every_read_capabi
     assert_eq!(status, 200, "{lookup}\n{}", served.stderr_text());
     assert_eq!(lookup["recordId"], "EeBJ3Sn9uLg");
 
-    let (status, _, list) = served.get("/v1/collections/people/records?pageSize=5", Some(&token));
+    let (status, _, list) = served.get(
+        "/govstack/registries/v1/collections/people/records?pageSize=5",
+        Some(&token),
+    );
     assert_eq!(status, 200, "{list}\n{}", served.stderr_text());
     assert_eq!(list["items"][0]["recordId"], "EeBJ3Sn9uLg");
 
     let (status, _, search) = served.post(
-        "/v1/collections/people/search",
+        "/govstack/registries/v1/collections/people/search",
         Some(&token),
         &json!({
             "search": "by-org-unit",
@@ -164,7 +169,10 @@ async fn composed_project_schema_still_denies_invalid_projection_output() {
     let served = Served::start_with_project(&upstream.url(""), directory.path()).await;
     let token = served.token("records.read");
 
-    let (status, _, body) = served.get("/v1/collections/people/records/EeBJ3Sn9uLg", Some(&token));
+    let (status, _, body) = served.get(
+        "/govstack/registries/v1/collections/people/records/EeBJ3Sn9uLg",
+        Some(&token),
+    );
     assert_eq!(status, 500, "{body}\n{}", served.stderr_text());
     assert!(!body.to_string().contains("PRIVATE-CANARY"));
     assert!(!served.journal_text().await.contains("PRIVATE-CANARY"));

@@ -15,8 +15,8 @@ use std::path::Path;
 
 const PROBLEMS: &str = "https://govstack.global/problems/digital-registries/";
 const RECORD_ID: &str = "TV7SRzsjKQi";
-const RETRIEVE_PATH: &str = "/v1/collections/people/records/TV7SRzsjKQi";
-const LOOKUP_PATH: &str = "/v1/collections/people/lookup";
+const RETRIEVE_PATH: &str = "/govstack/registries/v1/collections/people/records/TV7SRzsjKQi";
+const LOOKUP_PATH: &str = "/govstack/registries/v1/collections/people/lookup";
 
 fn project() -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/adapter/examples/dhis2-consultation")

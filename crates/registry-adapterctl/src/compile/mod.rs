@@ -135,7 +135,7 @@ pub(crate) fn run(args: &CompileArgs) -> Result<CompileRun, CompileFailure> {
     let (profile, profile_bytes) = match profile {
         Some((decoded, bytes)) => (decoded.value, bytes),
         None => (
-            registry_adapter::engine::consultation::built_in_profile(),
+            registry_adapter::govstack::consultation::built_in_profile(),
             Vec::new(),
         ),
     };

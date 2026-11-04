@@ -53,6 +53,22 @@ ENGINE_MODULE_DIRECTORY = Path("crates/registry-adapter-engine/src")
 ENGINE_CRATE = "registry-adapter-engine"
 JOB_HOST = "registry-adapter-job"
 
+# The built-in GovStack Consultation wire protocol belongs to the facade host
+# under `registry-adapter::govstack::consultation`. The generic engine may keep
+# declarative project metadata and source/schema/transform mechanisms, but not
+# this fixed protocol module, its wire DTOs, its public URLs, or its mount.
+GOVSTACK_PROTOCOL_MODULES = frozenset({"govstack", "consultation"})
+GOVSTACK_WIRE_IDENTIFIERS = (
+    "ConsultationCapability",
+    "CallerCapabilities",
+    "CapabilityCollection",
+    "CapabilityOperation",
+    "CAPABILITIES_PATH",
+)
+GOVSTACK_WIRE_TEXT = (
+    "/govstack/registries",
+)
+
 ADAPTER_REACH = {
     "registry-adapter-engine": frozenset({"registry-adapter-core"}),
     "registry-adapter": frozenset(
@@ -463,6 +479,45 @@ def module_violations(repository_root: Path) -> list[str]:
     return failures
 
 
+def govstack_protocol_violations(repository_root: Path) -> list[str]:
+    """Refuse fixed GovStack wire behavior in the listener-free engine.
+
+    The check is deliberately narrower than a search for "consultation". The
+    project DTO and generic loading, schema and transformation code may retain
+    that domain-neutral metadata name. What may not return is a protocol module,
+    a fixed wire DTO/constant, a GovStack problem URL, or the host mount.
+    """
+    engine_root = repository_root / ENGINE_MODULE_DIRECTORY
+    if not engine_root.is_dir():
+        return []
+    failures: list[str] = []
+    for path in sorted(engine_root.rglob("*.rs")):
+        source_relative = path.relative_to(engine_root)
+        relative = path.relative_to(repository_root)
+        if source_relative.stem == "consultation" or "govstack" in source_relative.parts:
+            failures.append(f"{relative} is a fixed GovStack protocol module path")
+
+        text = strip_comments(path.read_text(encoding="utf-8"))
+        depth = module_depth(source_relative)
+        for module in sorted(
+            crate_root_modules(text, depth) & GOVSTACK_PROTOCOL_MODULES
+        ):
+            failures.append(f"{relative} names the fixed GovStack protocol module {module}")
+
+        markers = [
+            identifier
+            for identifier in GOVSTACK_WIRE_IDENTIFIERS
+            if re.search(rf"\b{re.escape(identifier)}\b", text)
+        ]
+        markers.extend(marker for marker in GOVSTACK_WIRE_TEXT if marker in text)
+        if markers:
+            failures.append(
+                f"{relative} contains fixed GovStack wire marker(s): "
+                + ", ".join(markers)
+            )
+    return failures
+
+
 def module_depth(relative: Path) -> int:
     """How many `super::` steps from a file under the engine reach the crate root."""
     parts = list(relative.with_suffix("").parts)
@@ -557,6 +612,7 @@ def main() -> int:
         failures = violations(metadata)
         failures.extend(job_feature_violations(metadata))
         failures.extend(module_violations(repository_root))
+        failures.extend(govstack_protocol_violations(repository_root))
     except (
         OSError,
         ValueError,
@@ -575,6 +631,7 @@ def main() -> int:
         return 1
     print("Adapter dependency direction holds: the engine is source-neutral;")
     print("the engine crate names no facade module or facade-only dependency;")
+    print("fixed GovStack wire behavior stays in the facade host;")
     print("the job's off-by-default direct-BReg path reaches the connector,")
     print("the signed-event path reaches platform primitives only, the connector")
     print("reaches registry-breg-client alone, and no Adapter crate links a")

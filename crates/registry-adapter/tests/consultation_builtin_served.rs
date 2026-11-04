@@ -122,7 +122,7 @@ async fn capabilities_expose_only_the_two_schema_bound_views_the_caller_can_read
     let upstream = UpstreamDouble::start();
     let served = Served::start_with_project(&upstream.url(""), &project()).await;
 
-    let (status, _, body) = served.get("/v1/capabilities", None);
+    let (status, _, body) = served.get("/govstack/registries/v1/capabilities", None);
     assert_eq!(status, 401, "capability discovery is authenticated: {body}");
     assert_eq!(
         upstream.request_count(),
@@ -131,7 +131,7 @@ async fn capabilities_expose_only_the_two_schema_bound_views_the_caller_can_read
     );
 
     let token = served.token("records.read");
-    let (status, head, body) = served.get("/v1/capabilities", Some(&token));
+    let (status, head, body) = served.get("/govstack/registries/v1/capabilities", Some(&token));
     assert_eq!(status, 200, "{body}");
     assert_eq!(header(&head, "cache-control"), Some("no-store"));
 
@@ -237,7 +237,7 @@ async fn capabilities_are_not_released_when_the_audit_append_fails() {
         .await;
 
     let token = served.token("records.read");
-    let (status, _, body) = served.get("/v1/capabilities", Some(&token));
+    let (status, _, body) = served.get("/govstack/registries/v1/capabilities", Some(&token));
 
     assert_eq!(status, 500, "capabilities fail closed: {body}");
     assert!(
@@ -258,8 +258,10 @@ async fn one_source_entity_is_projected_into_two_closed_views_without_private_at
     let served = Served::start_with_project(&upstream.url(""), &project()).await;
     let token = served.token("records.read");
 
-    let (status, _, public) =
-        served.get("/v1/collections/people/records/EeBJ3Sn9uLg", Some(&token));
+    let (status, _, public) = served.get(
+        "/govstack/registries/v1/collections/people/records/EeBJ3Sn9uLg",
+        Some(&token),
+    );
     assert_eq!(status, 200, "{public}\n{}", served.stderr_text());
     assert_eq!(
         public,
@@ -277,7 +279,7 @@ async fn one_source_entity_is_projected_into_two_closed_views_without_private_at
     );
 
     let (status, _, summary) = served.get(
-        "/v1/collections/people-summary/records/EeBJ3Sn9uLg",
+        "/govstack/registries/v1/collections/people-summary/records/EeBJ3Sn9uLg",
         Some(&token),
     );
     assert_eq!(status, 200, "{summary}");
@@ -312,7 +314,7 @@ async fn lookup_list_and_search_use_native_inputs_and_the_stable_source_order() 
     let token = served.token("records.read");
 
     let (status, _, lookup) = served.post(
-        "/v1/collections/people/lookup",
+        "/govstack/registries/v1/collections/people/lookup",
         Some(&token),
         &serde_json::json!({
             "selector": "by-record-id",
@@ -322,12 +324,15 @@ async fn lookup_list_and_search_use_native_inputs_and_the_stable_source_order() 
     assert_eq!(status, 200, "{lookup}\n{}", served.stderr_text());
     assert_eq!(lookup["recordId"], "EeBJ3Sn9uLg");
 
-    let (status, _, list) = served.get("/v1/collections/people/records?pageSize=5", Some(&token));
+    let (status, _, list) = served.get(
+        "/govstack/registries/v1/collections/people/records?pageSize=5",
+        Some(&token),
+    );
     assert_eq!(status, 200, "{list}");
     assert_eq!(list["items"][0]["recordId"], "EeBJ3Sn9uLg");
 
     let (status, _, search) = served.post(
-        "/v1/collections/people/search",
+        "/govstack/registries/v1/collections/people/search",
         Some(&token),
         &serde_json::json!({
             "search": "by-org-unit",
@@ -372,7 +377,10 @@ async fn an_exact_read_refuses_a_source_entity_with_another_identity() {
     let served = Served::start_with_project(&upstream.url(""), &project()).await;
     let token = served.token("records.read");
 
-    let (status, _, body) = served.get("/v1/collections/people/records/EeBJ3Sn9uLg", Some(&token));
+    let (status, _, body) = served.get(
+        "/govstack/registries/v1/collections/people/records/EeBJ3Sn9uLg",
+        Some(&token),
+    );
 
     assert_eq!(
         status, 502,
@@ -390,14 +398,14 @@ async fn authorization_and_collection_denials_happen_before_source_io() {
 
     let unscoped = served.token("records.write");
     let (status, _, _) = served.get(
-        "/v1/collections/people/records/EeBJ3Sn9uLg",
+        "/govstack/registries/v1/collections/people/records/EeBJ3Sn9uLg",
         Some(&unscoped),
     );
     assert_eq!(status, 403);
 
     let reader = served.token("records.read");
     let (status, _, _) = served.get(
-        "/v1/collections/not-enabled/records/EeBJ3Sn9uLg",
+        "/govstack/registries/v1/collections/not-enabled/records/EeBJ3Sn9uLg",
         Some(&reader),
     );
     assert_eq!(status, 404);
@@ -429,7 +437,10 @@ async fn a_projection_field_outside_the_pinned_schema_is_not_disclosed() {
     let served = Served::start_with_project(&upstream.url(""), directory.path()).await;
     let token = served.token("records.read");
 
-    let (status, _, body) = served.get("/v1/collections/people/records/EeBJ3Sn9uLg", Some(&token));
+    let (status, _, body) = served.get(
+        "/govstack/registries/v1/collections/people/records/EeBJ3Sn9uLg",
+        Some(&token),
+    );
 
     assert_eq!(
         status, 500,
@@ -485,12 +496,12 @@ async fn opencrvs_retrieve_and_lookup_use_the_same_exact_native_read_with_oauth(
     let token = served.token("records.read");
 
     let (status, _, retrieved) = served.get(
-        "/v1/collections/birth-registrations/records/EVT-SYNTHETIC-001",
+        "/govstack/registries/v1/collections/birth-registrations/records/EVT-SYNTHETIC-001",
         Some(&token),
     );
     assert_eq!(status, 200, "{retrieved}\n{}", served.stderr_text());
     let (status, _, looked_up) = served.post(
-        "/v1/collections/birth-registrations/lookup",
+        "/govstack/registries/v1/collections/birth-registrations/lookup",
         Some(&token),
         &serde_json::json!({
             "selector": "by-tracking-id",

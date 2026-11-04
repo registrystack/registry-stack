@@ -13,7 +13,7 @@ use served_harness::upstream::{Response, UpstreamDouble};
 use served_harness::{fixture, Served};
 use std::path::Path;
 
-const LIST_PATH: &str = "/v1/collections/people-summary/records?pageSize=5";
+const LIST_PATH: &str = "/govstack/registries/v1/collections/people-summary/records?pageSize=5";
 
 fn project() -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/adapter/examples/dhis2-consultation")

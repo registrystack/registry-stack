@@ -36,9 +36,7 @@ use crate::engine::replay::{
 use crate::engine::exchange::{
     Exchange, CONTINUATION_PROPERTY, FILTERS_PROPERTY, NEXT_CONTINUATION_PROPERTY, PAGE_SIZE_HEADER,
 };
-use crate::engine::load::{
-    attach_consultation_project, compile_authored_with, EndpointCompilation, LoadError,
-};
+use crate::engine::load::{compile_authored_with, EndpointCompilation, LoadError};
 use crate::engine::route::{run_served_route, RouteContext, RouteFailure};
 
 /// The rendered facade result of one actual offline route execution.
@@ -146,6 +144,17 @@ pub async fn run_with_project_directory(
     fixture: &AdapterFixture,
     entry_index: usize,
 ) -> Result<ReplayFacade, ReplayRunFailure> {
+    let target = if project.consultation.is_some() {
+        Some(crate::govstack::consultation::target_attachment(
+            project,
+            pack,
+            project_directory,
+        )?)
+    } else {
+        None
+    };
+    let target_profile = target.as_ref().map(|target| target.profile.clone());
+    let profile = target_profile.as_ref().unwrap_or(profile);
     let entry = fixture
         .entries
         .get(entry_index)
@@ -167,8 +176,8 @@ pub async fn run_with_project_directory(
                 .map_err(|fault| LoadError::Runtime(fault.to_string()))
         },
     )?;
-    if project.consultation.is_some() {
-        attach_consultation_project(project, pack, project_directory, &mut authored)?;
+    if let Some(target) = target {
+        target.apply(&mut authored)?;
     }
     // One profile operation serves one concrete operation per record type
     // it is bound to, so the captured request's record type picks among

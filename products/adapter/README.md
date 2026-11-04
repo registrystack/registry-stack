@@ -20,6 +20,9 @@ change.
 The [Consultation specification](CONSULTATION.md) defines the built-in
 GovStack read target, reusable source-pack boundary, project-owned output
 transformations and schemas, and generated caller capability discovery.
+The built-in target is mounted at `/govstack/registries`; its generated
+OpenAPI contract uses that mount as `servers.url` and keeps `/v1/...` paths
+relative to it.
 Its selected draft capabilities do not imply general GovStack conformance.
 Use the [DHIS2 Consultation example](examples/dhis2-consultation/README.md)
 for two public views over the same native source routes, or the
