@@ -14,6 +14,20 @@ One workflow owns two signed event triggers and one common input:
   creates a registry record automatically. A revised event does not require
   `priorRunId`.
 
+A Run finishes with one named outcome per branch: `proposal-applied`,
+`proposal-rejected`, `proposal-cancelled`, `proposal-timeout`,
+`revised-reviewed` (the lookup resolved), `unresolved-reviewed` (the lookup did
+not resolve), `returned-reviewed`, and `review-timeout`. A review or Proposal
+that nobody answers within fourteen days finishes as `review-timeout` or
+`proposal-timeout`; the workflow language has no step that raises attention, so
+these are ordinary finished Runs. The Adapter has already acknowledged the
+source item by then, so an operator who wants to catch timeouts reads the
+finished Runs and their outcomes (`GET /v1/runs?state=finished`, then the
+`outcome` member of each).
+
+`scenarios.yaml` runs the revised branches and the timeout offline:
+`coordinatorctl test --project .`.
+
 The checked-in Action contract is a synthetic authoring fixture. A deployment
 must replace it with the operator-generated contract from the exact active
 BReg package, and must replace the synthetic review-policy digest in

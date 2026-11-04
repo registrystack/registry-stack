@@ -1,0 +1,167 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/coordinator/scenarios/scenarios.v1alpha1.schema.json
+# Synthetic replies, review results and virtual time for the revised-submission
+# branches. No credentials or live I/O.
+apiVersion: id.registrystack.org/formats/coordinator/scenarios/v1alpha1
+kind: CoordinatorScenarios
+cases:
+- id: resolved-revision-finishes-as-revised-reviewed
+  admittedAt: '2026-10-12T09:00:00Z'
+  input:
+    kind: revised
+    event:
+      job: {id: kobotoolbox-submissions-workflow-example, version: '1'}
+      key: '4103'
+      sequence: 2
+      digest: sha256:1111111111111111111111111111111111111111111111111111111111111111
+      item:
+        _id: 4103
+        respondent_name: Amina Example
+        household.household_size: 5
+  replies:
+    lookup-revised:
+    - type: success
+      value:
+        recordIdentifier: 00000000-0000-4000-8000-0000000000a1
+        revisionIdentifier: '7'
+        domainData:
+          name: Amina Example
+        provenance:
+          recordIdentifier: 00000000-0000-4000-8000-0000000000a1
+          revisionIdentifier: '7'
+          observedAt: '2026-10-12T09:00:00Z'
+    review-resolved:
+    - type: success
+      value:
+        requestId: 00000000-0000-4000-8000-000000000010
+        subject:
+          source: adapter-ingestion
+          type: kobotoolbox-submissions-workflow-example
+          id: '4103'
+          version: '2'
+          digest: sha256:1111111111111111111111111111111111111111111111111111111111111111
+        policy:
+          id: household-ingestion-review
+          version: '1'
+          digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+  waits:
+    await-resolved-review:
+      type: event
+      value:
+        resultId: 00000000-0000-4000-8000-000000000011
+        requestId: 00000000-0000-4000-8000-000000000010
+        subject:
+          source: adapter-ingestion
+          type: kobotoolbox-submissions-workflow-example
+          id: '4103'
+          version: '2'
+          digest: sha256:1111111111111111111111111111111111111111111111111111111111111111
+        policy:
+          id: household-ingestion-review
+          version: '1'
+          digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+        status: approved
+        outcome: approved
+        completedAt: '2026-10-13T09:00:00Z'
+        availableUntil: '2026-11-13T09:00:00Z'
+  expect:
+    path: [choose-kind, lookup-revised, review-resolved, await-resolved-review, revised-reviewed]
+    state: completed
+    outcome: {type: named, value: revised-reviewed}
+- id: unresolved-revision-finishes-as-unresolved-reviewed
+  admittedAt: '2026-10-12T09:00:00Z'
+  input:
+    kind: revised
+    event:
+      job: {id: kobotoolbox-submissions-workflow-example, version: '1'}
+      key: '4103'
+      sequence: 2
+      digest: sha256:1111111111111111111111111111111111111111111111111111111111111111
+      item:
+        _id: 4103
+        respondent_name: Amina Example
+        household.household_size: 5
+  replies:
+    lookup-revised:
+    - type: declared-refusal
+      refusalCode: unresolved
+    review-unresolved:
+    - type: success
+      value:
+        requestId: 00000000-0000-4000-8000-000000000010
+        subject:
+          source: adapter-ingestion
+          type: kobotoolbox-submissions-workflow-example
+          id: '4103'
+          version: '2'
+          digest: sha256:1111111111111111111111111111111111111111111111111111111111111111
+        policy:
+          id: household-ingestion-review
+          version: '1'
+          digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+  waits:
+    await-unresolved-review:
+      type: event
+      value:
+        resultId: 00000000-0000-4000-8000-000000000011
+        requestId: 00000000-0000-4000-8000-000000000010
+        subject:
+          source: adapter-ingestion
+          type: kobotoolbox-submissions-workflow-example
+          id: '4103'
+          version: '2'
+          digest: sha256:1111111111111111111111111111111111111111111111111111111111111111
+        policy:
+          id: household-ingestion-review
+          version: '1'
+          digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+        status: approved
+        outcome: approved
+        completedAt: '2026-10-13T09:00:00Z'
+        availableUntil: '2026-11-13T09:00:00Z'
+  expect:
+    path: [choose-kind, lookup-revised, review-unresolved, await-unresolved-review, unresolved-reviewed]
+    state: completed
+    outcome: {type: named, value: unresolved-reviewed}
+- id: an-unanswered-revision-review-finishes-as-review-timeout
+  admittedAt: '2026-10-12T09:00:00Z'
+  input:
+    kind: revised
+    event:
+      job: {id: kobotoolbox-submissions-workflow-example, version: '1'}
+      key: '4103'
+      sequence: 2
+      digest: sha256:1111111111111111111111111111111111111111111111111111111111111111
+      item:
+        _id: 4103
+        respondent_name: Amina Example
+        household.household_size: 5
+  replies:
+    lookup-revised:
+    - type: declared-refusal
+      refusalCode: unresolved
+    review-unresolved:
+    - type: success
+      value:
+        requestId: 00000000-0000-4000-8000-000000000010
+        subject:
+          source: adapter-ingestion
+          type: kobotoolbox-submissions-workflow-example
+          id: '4103'
+          version: '2'
+          digest: sha256:1111111111111111111111111111111111111111111111111111111111111111
+        policy:
+          id: household-ingestion-review
+          version: '1'
+          digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+  waits:
+    await-unresolved-review:
+      type: timeout
+  expect:
+    path: [choose-kind, lookup-revised, review-unresolved, await-unresolved-review, review-timeout]
+    state: completed
+    outcome: {type: named, value: review-timeout}
