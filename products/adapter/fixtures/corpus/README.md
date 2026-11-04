@@ -235,6 +235,10 @@ derivation sees, and their sweep expectations list both codes.
 | `adapter.project.template-not-instantiated` | Binding names the raw template `find-cases`; `templatedRoutes` is empty | `adapter.project.template-not-instantiated` | checks |
 | `adapter.project.upstream-budget-exceeded` | Worst case 2 sends (loop bound 2) against a budget of 1 | `adapter.project.upstream-budget-exceeded` | checks |
 | `adapter.project.artifact-path` | A project script inventory path contains a parent segment | `adapter.project.artifact-path` | checks |
+| `adapter.pack.write-support-invalid` | One source route declares both read and write semantics | `adapter.pack.write-support-invalid` | checks |
+| `adapter.project.write-binding-invalid` | Create is selected without a required source binding | `adapter.project.write-binding-invalid` | checks |
+| `adapter.project.write-collection-invalid` | The Write Registry contradicts its Read Registry | `adapter.project.write-collection-invalid` | checks |
+| `adapter.project.write-contract-invalid` | The Write contract uses HTTP rather than versioned HTTPS | `adapter.project.write-contract-invalid` | checks |
 | `adapter.project.consultation-contract-invalid` | The Consultation contract uses HTTP instead of a versioned HTTPS URI | `adapter.project.consultation-contract-invalid` | checks |
 | `adapter.project.consultation-input-incompatible` | A lookup schema requires a property the selected source route does not support | `adapter.project.consultation-input-incompatible` | tool |
 | `adapter.project.consultation-operation-collision` | Two collection ids collapse to the same public operation-id suffix | `adapter.project.consultation-operation-collision` | checks |

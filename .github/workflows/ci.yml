@@ -1347,6 +1347,7 @@ jobs:
       - name: Registry Adapter contract consistency
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/target
+          ADAPTER_CONTRACTS_CLEAN_BETWEEN_LANES: "1"
         run: products/adapter/scripts/check-contracts.sh
 
       - name: Registry Adapter facade recovery runner

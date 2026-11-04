@@ -5,6 +5,7 @@
 
 use std::{collections::BTreeMap, fs, path::Path, path::PathBuf};
 
+use registry_adapter_engine::route::EvidenceHttpDiagnostic;
 use registry_evidence::{
     bundle::{evidence_package_limits, Bundle},
     config::{AuthorityKind, ValueOrigin},
@@ -187,6 +188,25 @@ fn captured_acquisition(returned_record_reference: &str) -> Value {
     json!({"intercepts": fixture["intercepts"], "exchanges": exchanges})
 }
 
+fn captured_http_failure(status: u16) -> Value {
+    let fixture: Value = serde_norway::from_slice(
+        &fs::read(repository_root().join("products/adapter/fixtures/dhis2-tracker/get-found.yaml"))
+            .expect("read captured DHIS2 fixture"),
+    )
+    .expect("parse captured DHIS2 fixture");
+    let mut exchanges = fixture["entries"][0]["upstream"].clone();
+    exchanges[0]["request"]["headers"] = json!({"accept": "application/json"});
+    exchanges[0]["response"] = json!({
+        "status": status,
+        "body": {
+            "httpStatusCode": status,
+            "status": "ERROR",
+            "message": "PRIVATE-ERROR-CANARY"
+        }
+    });
+    json!({"intercepts": fixture["intercepts"], "exchanges": exchanges})
+}
+
 #[tokio::test]
 async fn maintained_native_dhis2_route_projects_facts_through_evidence_only() {
     let (_temporary, bundle) = projected_bundle();
@@ -232,4 +252,52 @@ async fn maintained_native_dhis2_route_projects_facts_through_evidence_only() {
         )
         .await;
     assert!(matches!(mismatch, Err(KernelError::SourceProtocol)));
+}
+
+#[tokio::test]
+async fn maintained_native_dhis2_route_normalizes_only_not_found_without_provider_values() {
+    let (_temporary, bundle) = projected_bundle();
+    let programs = compile_sources(&bundle).expect("compile the listener-free Evidence sources");
+    let source = programs
+        .get(SOURCE_ID)
+        .expect("the native projected source compiled");
+    let observed_at = chrono::DateTime::parse_from_rfc3339("2026-08-02T00:00:00Z")
+        .expect("parse fixed observation instant")
+        .with_timezone(&chrono::Utc);
+
+    let not_found = source
+        .execute_observed(
+            &authorization(),
+            fixture_acquisition(&captured_http_failure(404))
+                .expect("convert the captured native 404 exchange"),
+            None,
+            observed_at,
+        )
+        .await;
+    assert_eq!(not_found.outcome, Ok(LookupResult::NoMatch));
+    assert_eq!(not_found.data_operations, 1);
+    assert_eq!(not_found.http_cause, None);
+
+    for (status, cause) in [
+        (400, None),
+        (500, Some(EvidenceHttpDiagnostic::ServerError)),
+    ] {
+        let failed = source
+            .execute_observed(
+                &authorization(),
+                fixture_acquisition(&captured_http_failure(status))
+                    .expect("convert the captured native failure exchange"),
+                None,
+                observed_at,
+            )
+            .await;
+        assert!(matches!(&failed.outcome, Err(KernelError::SourceProtocol)));
+        assert_eq!(
+            failed.http_cause,
+            cause.map(|cause| ("tracker".to_owned(), cause)),
+            "HTTP {status} must retain only its value-free categorical cause"
+        );
+        let surfaced = format!("{:?} {:?}", failed.outcome, failed.http_cause);
+        assert!(!surfaced.contains("PRIVATE-ERROR-CANARY"));
+    }
 }

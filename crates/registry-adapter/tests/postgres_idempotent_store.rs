@@ -26,14 +26,14 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use deadpool_postgres::{GenericClient, Manager, ManagerConfig, Pool, RecyclingMethod};
-use registry_adapter::custody::{WriteExecutionContext, WriteResolution};
+use registry_adapter::custody::{ResumeWriteContext, WriteExecutionContext, WriteResolution};
 use registry_adapter::engine::exchange::{WriteClaim, WriteCustody};
 use registry_adapter::engine::ResumeValue;
 use registry_adapter::idempotent::{
     self, AsyncEffectAttempt, Claim, ClaimRequest, IdempotencyError, RecoveryLease,
     ResumeClaimContext, StatusLookup, StatusLookupRequest, StoredResponse, TerminalOutcome,
-    VerifiedCallerIdentity, MAX_CALLER_IDENTITY_BYTES, MAX_CALLER_ISSUER_BYTES,
-    MAX_STORED_RESPONSE_BYTES,
+    VerifiedCallerIdentity, MAX_CALLER_IDENTITY_BYTES, MAX_CALLER_ISSUER_BYTES, MAX_ETAG_BYTES,
+    MAX_LOCATION_BYTES, MAX_STORED_RESPONSE_BYTES,
 };
 use tokio::sync::Barrier;
 use tokio_postgres::{Client, Config as PgConfig, NoTls};
@@ -44,6 +44,11 @@ const V0200_SCHEMA: &str =
     include_str!("../src/idempotent/migrations/0200_logical_deployment_identity.sql");
 const V0300_SCHEMA: &str =
     include_str!("../src/idempotent/migrations/0300_response_request_id.sql");
+const V0400_SCHEMA: &str = include_str!("../src/idempotent/migrations/0400_async_completion.sql");
+const V0500_SCHEMA: &str =
+    include_str!("../src/idempotent/migrations/0500_linear_write_resume.sql");
+const V0600_SCHEMA: &str =
+    include_str!("../src/idempotent/migrations/0600_source_native_single_resume.sql");
 const RESPONSE_REQUEST_ID: &str = "00000000000000000000000000000001";
 const OTHER_RESPONSE_REQUEST_ID: &str = "00000000000000000000000000000002";
 const THIRD_RESPONSE_REQUEST_ID: &str = "00000000000000000000000000000004";
@@ -175,6 +180,40 @@ async fn install_v0300(client: &impl GenericClient) {
         .expect("record the historical v0300 migration");
 }
 
+async fn install_v0500(client: &impl GenericClient) {
+    install_v0300(client).await;
+    for (version, schema) in [(400_i64, V0400_SCHEMA), (500_i64, V0500_SCHEMA)] {
+        client
+            .batch_execute(schema)
+            .await
+            .expect("apply the historical idempotency migration");
+        client
+            .execute(
+                "INSERT INTO adapter_idempotency_schema_migrations(version, applied_at) \
+                 VALUES ($1, now())",
+                &[&version],
+            )
+            .await
+            .expect("record the historical idempotency migration");
+    }
+}
+
+async fn install_v0600(client: &impl GenericClient) {
+    install_v0500(client).await;
+    client
+        .batch_execute(V0600_SCHEMA)
+        .await
+        .expect("apply the historical v0600 single-resume migration");
+    client
+        .execute(
+            "INSERT INTO adapter_idempotency_schema_migrations(version, applied_at) \
+             VALUES (600, now())",
+            &[],
+        )
+        .await
+        .expect("record the historical v0600 migration");
+}
+
 async fn migration_versions(client: &impl GenericClient) -> Vec<i64> {
     client
         .query(
@@ -277,6 +316,548 @@ fn resume_context(artifact_byte: u8, deadline: SystemTime) -> ResumeClaimContext
         effect_deadline: deadline,
         step_count: 2,
     }
+}
+
+fn single_resume_context(artifact_byte: u8, deadline: SystemTime) -> ResumeClaimContext {
+    ResumeClaimContext {
+        artifact_digest: [artifact_byte; 32],
+        effect_deadline: deadline,
+        step_count: 1,
+    }
+}
+
+fn single_resume_write_context(artifact_byte: u8, deadline: SystemTime) -> ResumeWriteContext {
+    ResumeWriteContext {
+        artifact_digest: [artifact_byte; 32],
+        effect_deadline: deadline,
+        step_count: 1,
+    }
+}
+
+#[tokio::test]
+async fn write_context_without_a_claim_is_released_for_original_failure_rendering() {
+    let isolated = isolated().await;
+    let store = isolated.store(Duration::from_secs(60)).await;
+    let context = WriteExecutionContext::new(
+        store,
+        caller("unclaimed-write-failure"),
+        "deployment-a".to_owned(),
+        "records-create.person".to_owned(),
+        [63; 32],
+    );
+
+    assert_eq!(context.resolution().await, WriteResolution::Released);
+}
+
+#[tokio::test]
+async fn failed_single_resume_before_any_effect_releases_its_key_and_artifact_fence() {
+    let isolated = isolated().await;
+    let store = isolated.store(Duration::from_secs(60)).await;
+    let caller = caller("single-before-effect-release");
+    let start = SystemTime::now();
+    let context = WriteExecutionContext::new_resume(
+        store.clone(),
+        caller.clone(),
+        "deployment-a".to_owned(),
+        "records-create.person".to_owned(),
+        [67; 32],
+        single_resume_write_context(37, start + Duration::from_secs(10)),
+    );
+
+    assert_eq!(
+        context
+            .claim("single-before-effect-key", true)
+            .await
+            .expect("claim the source-native single write"),
+        WriteClaim::Execute
+    );
+    context
+        .complete(false, true)
+        .await
+        .expect("removeOnFailure releases a proven no-effect single write");
+    assert_eq!(context.resolution().await, WriteResolution::Released);
+
+    store
+        .ensure_async_artifact_compatible("deployment-a", [38; 32], start + Duration::from_secs(1))
+        .await
+        .expect("the released resume no longer blocks artifact activation");
+    assert!(matches!(
+        store
+            .claim_resume(
+                request(
+                    &caller,
+                    "records-create.person",
+                    "single-before-effect-key",
+                    67,
+                ),
+                single_resume_context(38, start + Duration::from_secs(11)),
+                start + Duration::from_secs(1),
+            )
+            .await
+            .expect("claim the released key under the activated artifact"),
+        Claim::Execute(_)
+    ));
+}
+
+#[tokio::test]
+async fn reacquired_single_resume_cannot_release_a_prior_unknown_source_effect() {
+    let isolated = isolated().await;
+    let store = isolated.store(Duration::from_secs(60)).await;
+    let caller = caller("single-prior-effect");
+    let start = UNIX_EPOCH + Duration::from_secs(3_860_000);
+    let mut first = match store
+        .claim_resume(
+            request(
+                &caller,
+                "records-create.person",
+                "single-prior-effect-key",
+                66,
+            ),
+            single_resume_context(36, start + Duration::from_secs(10)),
+            start,
+        )
+        .await
+        .expect("claim the first single write attempt")
+    {
+        Claim::Execute(execution) => execution,
+        other => panic!("the first single write executes: {other:?}"),
+    };
+    store
+        .mark_resume_step_attempted(&mut first, 0, start + Duration::from_secs(1))
+        .await
+        .expect("durably mark the possibly sent source effect");
+    store
+        .release_resume_lease(&first, start + Duration::from_secs(2))
+        .await
+        .expect("release only the failed attempt's lease");
+    let resumed = match store
+        .claim_resume(
+            request(
+                &caller,
+                "records-create.person",
+                "single-prior-effect-key",
+                66,
+            ),
+            single_resume_context(36, start + Duration::from_secs(12)),
+            start + Duration::from_secs(2),
+        )
+        .await
+        .expect("reacquire the unfinished source-native step")
+    {
+        Claim::Resume {
+            execution,
+            next_step: 0,
+            bindings,
+        } if bindings.is_empty() => execution,
+        other => panic!("the unknown source effect remains resumable: {other:?}"),
+    };
+
+    assert!(!store
+        .try_release_resume_before_any_effect(&resumed, start + Duration::from_secs(3))
+        .await
+        .expect("the proof mismatch is a retained resume, not a store failure"));
+    store
+        .release_resume_lease(&resumed, start + Duration::from_secs(3))
+        .await
+        .expect("the retained resume releases only its current lease");
+    assert!(matches!(
+        store
+            .claim_resume(
+                request(
+                    &caller,
+                    "records-create.person",
+                    "single-prior-effect-key",
+                    66
+                ),
+                single_resume_context(36, start + Duration::from_secs(13)),
+                start + Duration::from_secs(3),
+            )
+            .await
+            .expect("the prior possible effect remains resumable"),
+        Claim::Resume { next_step: 0, .. }
+    ));
+}
+
+#[tokio::test]
+async fn stale_single_resume_lease_cannot_delete_the_current_claim() {
+    let isolated = isolated().await;
+    let store = isolated.store(Duration::from_secs(60)).await;
+    let caller = caller("single-stale-lease");
+    let start = UNIX_EPOCH + Duration::from_secs(3_870_000);
+    let old = match store
+        .claim_resume(
+            request(
+                &caller,
+                "records-create.person",
+                "single-stale-lease-key",
+                65,
+            ),
+            single_resume_context(35, start + Duration::from_secs(10)),
+            start,
+        )
+        .await
+        .expect("claim the old lease")
+    {
+        Claim::Execute(execution) => execution,
+        other => panic!("the old lease executes first: {other:?}"),
+    };
+    store
+        .release_resume_lease(&old, start + Duration::from_secs(1))
+        .await
+        .expect("release the old lease");
+    let current = match store
+        .claim_resume(
+            request(
+                &caller,
+                "records-create.person",
+                "single-stale-lease-key",
+                65,
+            ),
+            single_resume_context(35, start + Duration::from_secs(11)),
+            start + Duration::from_secs(1),
+        )
+        .await
+        .expect("acquire the current lease")
+    {
+        Claim::Resume { execution, .. } => execution,
+        other => panic!("the successor owns the current lease: {other:?}"),
+    };
+
+    assert!(!store
+        .try_release_resume_before_any_effect(&old, start + Duration::from_secs(2))
+        .await
+        .expect("a stale lease is a proof mismatch"));
+    assert!(store
+        .try_release_resume_before_any_effect(&current, start + Duration::from_secs(2))
+        .await
+        .expect("the exact current lease can release the no-effect claim"));
+}
+
+#[tokio::test]
+async fn remove_on_failure_false_keeps_a_failed_single_resume_member() {
+    let isolated = isolated().await;
+    let store = isolated.store(Duration::from_secs(60)).await;
+    let caller = caller("single-retained-member");
+    let start = SystemTime::now();
+    let context = WriteExecutionContext::new_resume(
+        store,
+        caller,
+        "deployment-a".to_owned(),
+        "records-create.person".to_owned(),
+        [64; 32],
+        single_resume_write_context(34, start + Duration::from_secs(10)),
+    );
+
+    assert_eq!(
+        context
+            .claim("single-retained-member-key", true)
+            .await
+            .expect("claim the retained single write"),
+        WriteClaim::Execute
+    );
+    context
+        .complete(false, false)
+        .await
+        .expect("the failed attempt releases its lease but retains membership");
+    assert_eq!(context.resolution().await, WriteResolution::ResumePending);
+}
+
+#[tokio::test]
+async fn single_effect_resume_reacquires_exactly_one_post_and_cleans_up_on_terminal_replay() {
+    let isolated = isolated().await;
+    let store = isolated.store(Duration::from_secs(60)).await;
+    let caller = caller("single-resume-operator");
+    let start = UNIX_EPOCH + Duration::from_secs(3_900_000);
+    let mut first = match store
+        .claim_resume(
+            request(&caller, "records-create.person", "single-resume-key", 70),
+            single_resume_context(40, start + Duration::from_secs(10)),
+            start,
+        )
+        .await
+        .expect("claim the source-native single write")
+    {
+        Claim::Execute(execution) => execution,
+        other => panic!("a fresh single write executes: {other:?}"),
+    };
+    store
+        .mark_resume_step_attempted(&mut first, 0, start + Duration::from_secs(1))
+        .await
+        .expect("premark the only physical POST");
+    store
+        .release_resume_lease(&first, start + Duration::from_secs(2))
+        .await
+        .expect("a cleanly returned attempt releases its finite lease");
+
+    let mut resumed = match store
+        .claim_resume(
+            request(&caller, "records-create.person", "single-resume-key", 70),
+            single_resume_context(40, start + Duration::from_secs(12)),
+            start + Duration::from_secs(2),
+        )
+        .await
+        .expect("reacquire the only unfinished step")
+    {
+        Claim::Resume {
+            execution,
+            next_step: 0,
+            bindings,
+        } if bindings.is_empty() => execution,
+        other => panic!("the only POST resumes without payload custody: {other:?}"),
+    };
+    store
+        .mark_resume_step_attempted(&mut resumed, 0, start + Duration::from_secs(3))
+        .await
+        .expect("premark the replayed physical POST");
+    store
+        .finish(
+            resumed,
+            TerminalOutcome::Completed,
+            response(201, b"application/json", br#"{"batch":"accepted"}"#),
+            start + Duration::from_secs(4),
+        )
+        .await
+        .expect("commit terminal response custody and resume cleanup");
+
+    assert!(matches!(
+        store
+            .claim_resume(
+                request(&caller, "records-create.person", "single-resume-key", 70),
+                single_resume_context(40, start + Duration::from_secs(15)),
+                start + Duration::from_secs(5),
+            )
+            .await
+            .expect("resolve the exact-key retry"),
+        Claim::Replay {
+            outcome: TerminalOutcome::Completed,
+            ..
+        }
+    ));
+    assert!(matches!(
+        store
+            .claim_resume(
+                request(&caller, "records-create.person", "single-resume-key", 99),
+                single_resume_context(40, start + Duration::from_secs(15)),
+                start + Duration::from_secs(5),
+            )
+            .await
+            .expect("resolve a different request under the spent key"),
+        Claim::Mismatch
+    ));
+    let client = isolated.client().await;
+    assert_eq!(
+        client
+            .query_one("SELECT count(*) FROM adapter_idempotency_resumes", &[])
+            .await
+            .expect("inspect terminal resume cleanup")
+            .get::<_, i64>(0),
+        0
+    );
+}
+
+#[tokio::test]
+async fn single_effect_resume_expiry_erases_recovery_but_never_reopens_an_attempted_post() {
+    let isolated = isolated().await;
+    let store = isolated.store(Duration::from_secs(60)).await;
+    let caller = caller("single-resume-expiry");
+    let start = UNIX_EPOCH + Duration::from_secs(3_950_000);
+    let mut execution = match store
+        .claim_resume(
+            request(&caller, "records-create.person", "single-expiry-key", 69),
+            single_resume_context(39, start + Duration::from_secs(10)),
+            start,
+        )
+        .await
+        .expect("claim the source-native single write")
+    {
+        Claim::Execute(execution) => execution,
+        other => panic!("a fresh single write executes: {other:?}"),
+    };
+    store
+        .mark_resume_step_attempted(&mut execution, 0, start + Duration::from_secs(1))
+        .await
+        .expect("premark the only physical POST");
+    let after_expiry = start + Duration::from_secs(61);
+    store
+        .sweep_expired(after_expiry, 100)
+        .await
+        .expect("erase expired single-step recovery authority");
+    assert!(matches!(
+        store
+            .claim_resume(
+                request(&caller, "records-create.person", "single-expiry-key", 69),
+                single_resume_context(39, after_expiry + Duration::from_secs(10)),
+                after_expiry,
+            )
+            .await
+            .expect("resolve the spent key after recovery expiry"),
+        Claim::EffectUnknown { .. }
+    ));
+}
+
+#[tokio::test]
+async fn source_native_single_resume_refuses_zero_steps() {
+    let isolated = isolated().await;
+    let store = isolated.store(Duration::from_secs(60)).await;
+    let caller = caller("single-resume-zero");
+    let start = UNIX_EPOCH + Duration::from_secs(3_980_000);
+    assert!(matches!(
+        store
+            .claim_resume(
+                request(&caller, "records-create.person", "zero-step-key", 68),
+                ResumeClaimContext {
+                    artifact_digest: [38; 32],
+                    effect_deadline: start + Duration::from_secs(10),
+                    step_count: 0,
+                },
+                start,
+            )
+            .await,
+        Err(IdempotencyError::InvalidInput {
+            field: "resume step count"
+        })
+    ));
+}
+
+#[tokio::test]
+async fn v0600_additively_admits_one_step_without_rewriting_v0500_rows() {
+    let isolated = isolated().await;
+    let mut client = isolated.client().await;
+    install_v0500(&client).await;
+    client
+        .execute(
+            "INSERT INTO adapter_idempotency_entries \
+             (scope_digest, request_digest, state, claimed_at) \
+             VALUES ($1, $2, 'claimed', now())",
+            &[&[11_u8; 32].as_slice(), &[12_u8; 32].as_slice()],
+        )
+        .await
+        .expect("insert a historical v0500 claim");
+    client
+        .execute(
+            "INSERT INTO adapter_idempotency_resumes \
+             (scope_digest, request_digest, deployment_digest, artifact_digest, \
+              next_step, step_count, expires_at, lease_id, lease_until) \
+             VALUES ($1, $2, $3, $4, 0, 2, now() + interval '1 hour', $5, \
+                     now() + interval '1 minute')",
+            &[
+                &[11_u8; 32].as_slice(),
+                &[12_u8; 32].as_slice(),
+                &[13_u8; 32].as_slice(),
+                &[14_u8; 32].as_slice(),
+                &[15_u8; 16].as_slice(),
+            ],
+        )
+        .await
+        .expect("insert one historical two-step resume");
+
+    idempotent::migrate(&mut client)
+        .await
+        .expect("upgrade v0500 to the additive single-step constraint");
+    assert_eq!(
+        migration_versions(&client).await,
+        vec![100, 200, 300, 400, 500, 600, 700]
+    );
+    assert_eq!(
+        client
+            .query_one(
+                "SELECT step_count FROM adapter_idempotency_resumes WHERE scope_digest = $1",
+                &[&[11_u8; 32].as_slice()],
+            )
+            .await
+            .expect("read the preserved v0500 resume")
+            .get::<_, i32>(0),
+        2
+    );
+}
+
+#[tokio::test]
+async fn v0700_adds_optional_semantic_headers_without_rewriting_v0600_custody() {
+    let isolated = isolated().await;
+    let mut client = isolated.client().await;
+    install_v0600(&client).await;
+    client
+        .execute(
+            "INSERT INTO adapter_idempotency_entries \
+             (scope_digest, request_digest, state, claimed_at, terminal_at, expires_at, \
+              response_status, response_content_type, response_body, response_request_id) \
+             VALUES ($1, $2, 'completed', now(), now(), now() + interval '1 hour', \
+                     201, $3, $4, $5)",
+            &[
+                &[21_u8; 32].as_slice(),
+                &[22_u8; 32].as_slice(),
+                &b"application/json".as_slice(),
+                &br#"{"created":true}"#.as_slice(),
+                &RESPONSE_REQUEST_ID,
+            ],
+        )
+        .await
+        .expect("insert v0600 response custody");
+    client
+        .execute(
+            "INSERT INTO adapter_idempotency_entries \
+             (scope_digest, request_digest, state, claimed_at, terminal_at, expires_at, \
+              response_status, response_content_type, response_body, response_request_id) \
+             VALUES ($1, $2, 'completed', now(), now(), now() + interval '1 hour', \
+                     204, $3, $4, $5)",
+            &[
+                &[23_u8; 32].as_slice(),
+                &[24_u8; 32].as_slice(),
+                &b"application/json".as_slice(),
+                &br#"{"legacy":true}"#.as_slice(),
+                &OTHER_RESPONSE_REQUEST_ID,
+            ],
+        )
+        .await
+        .expect("insert historically valid v0600 generic 204 custody");
+
+    idempotent::migrate(&mut client)
+        .await
+        .expect("upgrade v0600 response custody to semantic headers");
+    assert_eq!(
+        migration_versions(&client).await,
+        vec![100, 200, 300, 400, 500, 600, 700]
+    );
+    let row = client
+        .query_one(
+            "SELECT response_status, response_content_type, response_location, \
+                    response_etag, response_body \
+             FROM adapter_idempotency_entries WHERE scope_digest = $1",
+            &[&[21_u8; 32].as_slice()],
+        )
+        .await
+        .expect("inspect preserved v0600 response custody");
+    assert_eq!(row.get::<_, Option<i16>>(0), Some(201));
+    assert_eq!(
+        row.get::<_, Option<Vec<u8>>>(1).as_deref(),
+        Some(&b"application/json"[..])
+    );
+    assert_eq!(row.get::<_, Option<Vec<u8>>>(2), None);
+    assert_eq!(row.get::<_, Option<Vec<u8>>>(3), None);
+    assert_eq!(
+        row.get::<_, Option<Vec<u8>>>(4).as_deref(),
+        Some(&br#"{"created":true}"#[..])
+    );
+    let legacy = client
+        .query_one(
+            "SELECT response_status, response_content_type, response_location, \
+                    response_etag, response_body \
+             FROM adapter_idempotency_entries WHERE scope_digest = $1",
+            &[&[23_u8; 32].as_slice()],
+        )
+        .await
+        .expect("inspect preserved generic v0600 204 custody");
+    assert_eq!(legacy.get::<_, Option<i16>>(0), Some(204));
+    assert_eq!(
+        legacy.get::<_, Option<Vec<u8>>>(1).as_deref(),
+        Some(&b"application/json"[..])
+    );
+    assert_eq!(legacy.get::<_, Option<Vec<u8>>>(2), None);
+    assert_eq!(legacy.get::<_, Option<Vec<u8>>>(3), None);
+    assert_eq!(
+        legacy.get::<_, Option<Vec<u8>>>(4).as_deref(),
+        Some(&br#"{"legacy":true}"#[..])
+    );
 }
 
 #[tokio::test]
@@ -567,6 +1148,124 @@ fn caller_identity_and_response_custody_are_bounded_without_echoing_values() {
             field: "response request id"
         })
     ));
+    assert!(matches!(
+        StoredResponse::with_semantic_headers(
+            204,
+            Some(b"application/json".to_vec()),
+            None,
+            None,
+            Vec::new(),
+            RESPONSE_REQUEST_ID,
+        ),
+        Err(IdempotencyError::InvalidInput {
+            field: "response content type"
+        })
+    ));
+    assert!(StoredResponse::new(
+        204,
+        b"application/json".to_vec(),
+        br#"{"legacy":true}"#.to_vec(),
+        RESPONSE_REQUEST_ID,
+    )
+    .is_ok());
+    assert!(matches!(
+        StoredResponse::with_semantic_headers(204, None, None, None, vec![1], RESPONSE_REQUEST_ID,),
+        Err(IdempotencyError::InvalidInput {
+            field: "response body"
+        })
+    ));
+    assert!(matches!(
+        StoredResponse::with_semantic_headers(
+            201,
+            None,
+            Some(vec![b'x'; MAX_LOCATION_BYTES + 1]),
+            None,
+            Vec::new(),
+            RESPONSE_REQUEST_ID,
+        ),
+        Err(IdempotencyError::InvalidInput {
+            field: "response location"
+        })
+    ));
+    assert!(matches!(
+        StoredResponse::with_semantic_headers(
+            200,
+            Some(b"application/json".to_vec()),
+            None,
+            Some(vec![b'x'; MAX_ETAG_BYTES + 1]),
+            b"{}".to_vec(),
+            RESPONSE_REQUEST_ID,
+        ),
+        Err(IdempotencyError::InvalidInput {
+            field: "response etag"
+        })
+    ));
+}
+
+#[tokio::test]
+async fn bodyless_204_replays_exact_semantic_headers_then_erases_all_custody() {
+    let isolated = isolated().await;
+    let store = isolated.store(Duration::from_secs(1)).await;
+    let owner = caller("bodyless-replay-owner");
+    let now = SystemTime::now();
+    let Claim::Execute(execution) = store
+        .claim(
+            request(&owner, "records-delete.person", "bodyless-key", 61),
+            now,
+        )
+        .await
+        .expect("claim the bodyless response")
+    else {
+        panic!("the bodyless response must execute first");
+    };
+    let stored = StoredResponse::with_semantic_headers(
+        204,
+        None,
+        Some(b"/v1/records/person/17".to_vec()),
+        Some(b"\"0123456789abcdef\"".to_vec()),
+        Vec::new(),
+        RESPONSE_REQUEST_ID,
+    )
+    .expect("the bodyless semantic response is bounded");
+    store
+        .finish(execution, TerminalOutcome::Completed, stored.clone(), now)
+        .await
+        .expect("store exact bodyless response custody");
+    let Claim::Replay { response, .. } = store
+        .claim(
+            request(&owner, "records-delete.person", "bodyless-key", 61),
+            now,
+        )
+        .await
+        .expect("replay the bodyless response")
+    else {
+        panic!("the terminal response must replay");
+    };
+    assert_eq!(response, stored);
+    assert_eq!(response.content_type_header(), None);
+    assert_eq!(response.content_type(), b"");
+    assert_eq!(response.location(), Some(&b"/v1/records/person/17"[..]));
+    assert_eq!(response.etag(), Some(&b"\"0123456789abcdef\""[..]));
+    assert!(response.body().is_empty());
+
+    let after_expiry = now + Duration::from_secs(2);
+    store
+        .sweep_expired(after_expiry, 100)
+        .await
+        .expect("erase all semantic response custody");
+    let client = isolated.client().await;
+    let row = client
+        .query_one(
+            "SELECT response_content_type, response_location, response_etag, response_body \
+             FROM adapter_idempotency_entries",
+            &[],
+        )
+        .await
+        .expect("inspect the erased bodyless response");
+    assert_eq!(row.get::<_, Option<Vec<u8>>>(0), None);
+    assert_eq!(row.get::<_, Option<Vec<u8>>>(1), None);
+    assert_eq!(row.get::<_, Option<Vec<u8>>>(2), None);
+    assert_eq!(row.get::<_, Option<Vec<u8>>>(3), None);
 }
 
 #[tokio::test]
@@ -620,7 +1319,7 @@ async fn an_interrupted_migration_commits_neither_its_schema_nor_its_ledger_row(
         .into_iter()
         .map(|row| row.get::<_, i64>(0))
         .collect::<Vec<_>>();
-    assert_eq!(versions, [100, 200, 300, 400, 500]);
+    assert_eq!(versions, [100, 200, 300, 400, 500, 600, 700]);
 }
 
 #[tokio::test]
@@ -659,7 +1358,7 @@ async fn migration_owns_a_separate_idempotency_ledger_and_is_idempotent() {
     );
     assert_eq!(
         migration_versions(&client).await,
-        vec![100, 200, 300, 400, 500]
+        vec![100, 200, 300, 400, 500, 600, 700]
     );
 }
 
@@ -703,7 +1402,7 @@ async fn logical_deployment_migration_accepts_an_empty_v0100_ledger() {
         .expect("an empty v0100 ledger can adopt the logical deployment namespace");
     assert_eq!(
         migration_versions(&client).await,
-        vec![100, 200, 300, 400, 500]
+        vec![100, 200, 300, 400, 500, 600, 700]
     );
 }
 
@@ -775,7 +1474,7 @@ async fn response_identity_migration_accepts_and_preserves_expired_v0200_tombsto
         .expect("an expired tombstone has no response identity to recover");
     assert_eq!(
         migration_versions(&client).await,
-        vec![100, 200, 300, 400, 500]
+        vec![100, 200, 300, 400, 500, 600, 700]
     );
     let row = client
         .query_one(
@@ -804,7 +1503,7 @@ async fn current_rows_do_not_block_a_subsequent_startup() {
         .expect("the applied semantic migration does not inspect current rows again");
     assert_eq!(
         migration_versions(&client).await,
-        vec![100, 200, 300, 400, 500]
+        vec![100, 200, 300, 400, 500, 600, 700]
     );
     assert_eq!(
         client
@@ -848,7 +1547,7 @@ async fn current_cached_response_ids_do_not_block_a_subsequent_startup() {
         .expect("an already-applied response-id migration accepts current custody");
     assert_eq!(
         migration_versions(&client).await,
-        vec![100, 200, 300, 400, 500]
+        vec![100, 200, 300, 400, 500, 600, 700]
     );
     assert_eq!(
         client
@@ -1597,7 +2296,7 @@ async fn v0400_preserves_v0300_terminal_and_spent_rows_without_inventing_async_a
 
     assert_eq!(
         migration_versions(&client).await,
-        vec![100, 200, 300, 400, 500]
+        vec![100, 200, 300, 400, 500, 600, 700]
     );
     let rows = client
         .query(
@@ -1646,11 +2345,15 @@ async fn accepted_response_replays_exactly_and_status_metadata_is_exposed_only_a
         )
         .await
         .expect("precommit asynchronous recovery before the effect");
-    let accepted = response(
+    let accepted = StoredResponse::with_semantic_headers(
         202,
-        b"application/vnd.registry+json; profile=accepted",
-        br#"{"status":"accepted", "requestId":"00000000000000000000000000000001"}\n"#,
-    );
+        Some(b"application/vnd.registry+json; profile=accepted".to_vec()),
+        Some(b"/v1/status/00000000000000000000000000000001".to_vec()),
+        Some(b"\"accepted-17\"".to_vec()),
+        br#"{"status":"accepted", "requestId":"00000000000000000000000000000001"}\n"#.to_vec(),
+        RESPONSE_REQUEST_ID,
+    )
+    .expect("the accepted semantic response is bounded");
     store
         .accept(execution, "source-operation-7", accepted.clone(), now)
         .await
@@ -1701,6 +2404,11 @@ async fn accepted_response_replays_exactly_and_status_metadata_is_exposed_only_a
         panic!("the matching caller and artifact must see accepted custody");
     };
     assert_eq!(status.response(), &accepted);
+    assert_eq!(
+        status.response().location(),
+        Some(&b"/v1/status/00000000000000000000000000000001"[..])
+    );
+    assert_eq!(status.response().etag(), Some(&b"\"accepted-17\""[..]));
     assert_eq!(status.metadata().binding_id(), "person-create-binding");
     assert_eq!(status.metadata().profile_operation(), "records-create");
     assert_eq!(
@@ -1845,7 +2553,15 @@ async fn one_recovery_lease_owns_a_row_and_terminal_status_lives_until_original_
     let terminal_at = accepted_at
         .checked_add(Duration::from_secs(2))
         .expect("terminal time is representable");
-    let terminal = response(200, b"application/json", br#"{"done":true}"#);
+    let terminal = StoredResponse::with_semantic_headers(
+        200,
+        Some(b"application/json".to_vec()),
+        Some(b"/v1/records/person/17".to_vec()),
+        Some(b"\"record-17\"".to_vec()),
+        br#"{"done":true}"#.to_vec(),
+        RESPONSE_REQUEST_ID,
+    )
+    .expect("the recovered terminal semantic response is bounded");
     store
         .finish_recovery(
             recovery,
@@ -2059,7 +2775,15 @@ async fn accepted_expiry_erases_custody_and_never_reopens_the_key() {
         .accept(
             execution,
             "source-expiry",
-            response(202, b"application/json", br#"{"accepted":true}"#),
+            StoredResponse::with_semantic_headers(
+                202,
+                Some(b"application/json".to_vec()),
+                Some(b"/v1/status/source-expiry".to_vec()),
+                Some(b"\"accepted-expiry\"".to_vec()),
+                br#"{"accepted":true}"#.to_vec(),
+                RESPONSE_REQUEST_ID,
+            )
+            .expect("the expiring semantic response is bounded"),
             accepted_at,
         )
         .await
@@ -2088,8 +2812,9 @@ async fn accepted_expiry_erases_custody_and_never_reopens_the_key() {
     let client = isolated.client().await;
     let row = client
         .query_one(
-            "SELECT response_status, response_body, response_request_id, \
-                    artifact_digest, async_binding_digest, async_source_id, async_recovery_id \
+            "SELECT response_status, response_content_type, response_location, response_etag, \
+                    response_body, response_request_id, artifact_digest, \
+                    async_binding_digest, async_source_id, async_recovery_id \
              FROM adapter_idempotency_entries",
             &[],
         )
@@ -2097,11 +2822,14 @@ async fn accepted_expiry_erases_custody_and_never_reopens_the_key() {
         .expect("inspect accepted tombstone");
     assert_eq!(row.get::<_, Option<i16>>(0), None);
     assert_eq!(row.get::<_, Option<Vec<u8>>>(1), None);
-    assert_eq!(row.get::<_, Option<String>>(2), None);
+    assert_eq!(row.get::<_, Option<Vec<u8>>>(2), None);
     assert_eq!(row.get::<_, Option<Vec<u8>>>(3), None);
     assert_eq!(row.get::<_, Option<Vec<u8>>>(4), None);
     assert_eq!(row.get::<_, Option<String>>(5), None);
-    assert_eq!(row.get::<_, Option<String>>(6), None);
+    assert_eq!(row.get::<_, Option<Vec<u8>>>(6), None);
+    assert_eq!(row.get::<_, Option<Vec<u8>>>(7), None);
+    assert_eq!(row.get::<_, Option<String>>(8), None);
+    assert_eq!(row.get::<_, Option<String>>(9), None);
 }
 
 #[tokio::test]
@@ -2643,16 +3371,40 @@ async fn an_expired_uncertain_capability_cannot_accept_but_its_successor_can() {
     else {
         panic!("the successor recovered acceptance checker must acquire the row");
     };
+    let recovered_acceptance = StoredResponse::with_semantic_headers(
+        202,
+        Some(b"application/json".to_vec()),
+        Some(b"/v1/status/recovered-source-id".to_vec()),
+        Some(b"\"recovered-acceptance\"".to_vec()),
+        br#"{"accepted":true}"#.to_vec(),
+        RESPONSE_REQUEST_ID,
+    )
+    .expect("the recovered accepted semantic response is bounded");
     store
         .accept_recovery_with_client(
             &client,
             successor,
             "recovered-source-id",
-            response(202, b"application/json", br#"{"accepted":true}"#),
+            recovered_acceptance.clone(),
             after_first_lease,
         )
         .await
         .expect("the live successor recovered acceptance capability commits");
+    assert!(matches!(
+        store
+            .claim(
+                request(
+                    &owner,
+                    "records-create.person",
+                    "expired-accept-capability",
+                    145,
+                ),
+                after_first_lease,
+            )
+            .await
+            .expect("replay recovered acceptance custody"),
+        Claim::Accepted { response } if response == recovered_acceptance
+    ));
 }
 
 #[tokio::test]

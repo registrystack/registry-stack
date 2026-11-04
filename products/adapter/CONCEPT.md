@@ -1451,6 +1451,46 @@ process (draft, declare), several `to` steps in sequence.
   its own artifact digest, so it answers the older artifact's status links
   as unknown, and that older artifact answers them again if it is redeployed.
 
+### 9.1 Fixed GovStack direct Write
+
+The maintained GovStack host selects synchronous Create and conditional Update
+without an authored facade profile. `CONSULTATION.md` owns the selected wire
+surface and links the unified draft; `govstack::write` owns target-specific
+admission and responses within the existing facade crate.
+
+A project declares a domain input schema and pinned ingress transformation per
+write binding. The public input and the source's private route input are
+separate. The source template explicitly declares `writeSupport`, including
+source-assigned Create identity or atomic conditional Update, and its exact
+native replay window. These declarations require source-specific proof;
+neither an HTTP success nor a transformation creates those guarantees.
+
+This target's idempotency key is a bounded quoted Structured Field String. Its
+fingerprint binds canonical JSON, method, canonical public URI, media type and
+semantic If-Match, rather than the generic profile's exact request bytes.
+Public mutation guards reuse `cursorKeyRef` through a separately derived
+authenticated opaque codec. They bind the source/read/access context and never
+expose the native validator as reversible plain encoding.
+Caller identity and logical deployment remain in the key namespace. The
+upstream key is independently derived from that trusted namespace and the
+source step ordinal, so a shared service credential cannot collapse callers.
+
+The target explicitly opts one deterministic, source-idempotent POST into the
+existing resumable custody plan; ordinary generic one-send routes retain their
+previous behavior. Recovery keeps typed progress and source identity only,
+requires the same request to be resubmitted, and depends on the native provider
+returning the original committed receipt within its declared replay window.
+The facade refuses a retention window longer than that source guarantee.
+
+Terminal response custody includes only the closed semantic headers
+Content-Type, Location and ETag, exact status/body and original response id.
+Content-Type is optional for an empty response; 204 is bodyless and has none.
+Fresh Problems receive their effective trace before terminal storage; replay
+keeps their body unchanged while per-attempt trace headers are regenerated.
+Response custody and terminal audit remain one PostgreSQL transaction.
+Migration600 adds the explicit one-step recovery shape and migration700 adds
+semantic-header custody without rewriting historical migrations.
+
 ## 10. Authorization and secrets
 
 ### 10.1 Facade callers

@@ -116,6 +116,13 @@ impl crate::exchange::WriteCustody for ReplayWriteContext {
         Box::pin(async { Ok(()) })
     }
 
+    fn mark_definitive_source_rejection<'a>(
+        &'a self,
+    ) -> Pin<Box<dyn std::future::Future<Output = Result<(), RouteFailure>> + std::marker::Send + 'a>>
+    {
+        Box::pin(async move { ReplayWriteContext::mark_definitive_source_rejection(self).await })
+    }
+
     fn mark_unsupported_incomplete<'a>(
         &'a self,
     ) -> Pin<
@@ -163,6 +170,21 @@ impl ReplayWriteContext {
         };
         *effect_started = true;
         Ok(())
+    }
+
+    async fn mark_definitive_source_rejection(&self) -> Result<(), RouteFailure> {
+        let state = self.state.lock().await;
+        if matches!(
+            *state,
+            ReplayWriteState::Claimed {
+                effect_started: true,
+                ..
+            }
+        ) {
+            Ok(())
+        } else {
+            Err(RouteFailure::of(ErrorClass::Facade))
+        }
     }
 
     async fn complete(&self, succeeded: bool, remove_on_failure: bool) -> Result<(), RouteFailure> {
@@ -614,6 +636,43 @@ pub(crate) fn match_headers(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn definitive_source_rejection_is_inert_but_requires_a_started_effect() {
+        let before_effect = ReplayWriteContext {
+            state: AsyncMutex::new(ReplayWriteState::Ready),
+        };
+        before_effect
+            .claim("fixture-key", true)
+            .await
+            .expect("the fixture write is claimed");
+        assert!(before_effect
+            .mark_definitive_source_rejection()
+            .await
+            .is_err());
+
+        let after_effect = ReplayWriteContext {
+            state: AsyncMutex::new(ReplayWriteState::Ready),
+        };
+        after_effect
+            .claim("fixture-key", true)
+            .await
+            .expect("the fixture write is claimed");
+        after_effect
+            .before_upstream_effect()
+            .await
+            .expect("the source attempt starts");
+        after_effect
+            .mark_definitive_source_rejection()
+            .await
+            .expect("the terminal non-effect is accepted");
+        after_effect
+            .complete(false, true)
+            .await
+            .expect("the failed fixture route completes");
+
+        assert!(after_effect.was_claimed().await);
+    }
 
     fn raw_transcript(wire: &[u8]) -> ReplayTranscript {
         raw_transcript_with_headers(wire, serde_json::json!({}))

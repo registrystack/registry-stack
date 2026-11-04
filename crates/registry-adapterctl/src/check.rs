@@ -208,10 +208,10 @@ pub(crate) fn run(args: &CheckArgs) -> Result<CheckRun, CheckFailure> {
         &mut report,
         &mut files,
     )?;
-    let built_in_consultation = project.as_ref().is_some_and(|(decoded, _)| {
-        decoded.value.profile.is_none() && decoded.value.consultation.is_some()
-    });
-    let profile = if built_in_consultation {
+    let built_in_govstack = project
+        .as_ref()
+        .is_some_and(|(decoded, _)| uses_built_in_govstack(&decoded.value));
+    let profile = if built_in_govstack {
         None
     } else {
         let profile_path = artifact_path(
@@ -299,7 +299,7 @@ pub(crate) fn run(args: &CheckArgs) -> Result<CheckRun, CheckFailure> {
     let (profile, profile_bytes) = match profile {
         Some((decoded, bytes)) => (decoded.value, bytes),
         None => (
-            registry_adapter::govstack::consultation::built_in_profile(),
+            registry_adapter::govstack::built_in_profile(&project),
             Vec::new(),
         ),
     };
@@ -1215,6 +1215,10 @@ pub(crate) fn digest_of(bytes: &[u8]) -> Digest {
     Digest::new(sha256_uri(bytes)).expect("a computed sha256 uri is a valid digest")
 }
 
+pub(crate) fn uses_built_in_govstack(project: &registry_adapter_core::AdapterProject) -> bool {
+    project.profile.is_none() && (project.consultation.is_some() || project.write.is_some())
+}
+
 /// Check every fixture entry's expected facade response body against the
 /// schema its expected status selects: the operation's derived result
 /// schema for a 2xx status, the profile's derived problem envelope for any
@@ -1228,7 +1232,7 @@ pub(crate) fn check_fixture_bodies(
     fixtures: &[registry_adapter_core::AdapterFixture],
     report: &mut Report,
 ) {
-    if project.consultation.is_some() {
+    if project.consultation.is_some() || project.write.is_some() {
         return;
     }
     // The workspace check derives every envelope once (core's

@@ -1599,6 +1599,30 @@ pub fn check_pack(pack: &AdapterPack) -> Vec<Diagnostic> {
     findings.extend(code_map_checks(pack));
     findings.extend(source_route_checks(pack));
     findings.extend(read_support_checks(pack));
+    findings.extend(write_support_checks(pack));
+    findings
+}
+
+fn write_support_checks(pack: &AdapterPack) -> Vec<Diagnostic> {
+    let mut findings = Vec::new();
+    for (index, template) in pack.route_templates.iter().enumerate() {
+        if template.write_support.is_some() && template.steps.is_empty() {
+            findings.push(finding(
+                CheckCode::PackWriteSupportInvalid,
+                &format!("/routeTemplates/{index}/writeSupport"),
+                "a source write declaration has no route steps that can perform its mutation",
+                "Add the bounded source mutation steps, or remove writeSupport.",
+            ));
+        }
+        if template.write_support.is_some() && template.read_support.is_some() {
+            findings.push(finding(
+                CheckCode::PackWriteSupportInvalid,
+                &format!("/routeTemplates/{index}/writeSupport"),
+                "one route template declares both source read and source write semantics",
+                "Keep the mutation and read paths in separate route templates.",
+            ));
+        }
+    }
     findings
 }
 
@@ -4630,6 +4654,7 @@ pub fn check_project(workspace: &Workspace<'_>) -> Vec<Diagnostic> {
     let body_prefixes = authored_body_prefixes(pack, project);
 
     findings.extend(check_project_transform_artifacts(project));
+    findings.extend(check_write_project(project, pack));
 
     for (index, instantiated) in project.templated_routes.iter().enumerate() {
         let prefix = format!("/templatedRoutes/{index}");
@@ -4981,12 +5006,13 @@ pub fn check_project(workspace: &Workspace<'_>) -> Vec<Diagnostic> {
 #[must_use]
 pub fn check_project_transform_artifacts(project: &AdapterProject) -> Vec<Diagnostic> {
     let mut findings = Vec::new();
-    if project.profile.is_some() == project.consultation.is_some() {
+    let built_in_selected = project.consultation.is_some() || project.write.is_some();
+    if project.profile.is_some() == built_in_selected {
         findings.push(finding(
             CheckCode::ProjectFacadeSelection,
             "",
-            "the project must select exactly one facade contract",
-            "Set either profile or consultation, and omit the other.",
+            "the project must select an authored profile or at least one built-in target, but not both",
+            "Set profile alone, or omit profile and set consultation, write, or both built-in targets.",
         ));
     }
     if let Some(consultation) = &project.consultation {
@@ -5096,6 +5122,323 @@ pub fn check_project_transform_artifacts(project: &AdapterProject) -> Vec<Diagno
         }
     }
     findings
+}
+
+/// Pure direct-Write checks over one composed project and its reusable source
+/// pack. The public contract, collection metadata, binding/route guarantees,
+/// project schemas, and transformations must all agree before a host exposes
+/// a mutation.
+#[must_use]
+pub fn check_write_project(project: &AdapterProject, pack: &AdapterPack) -> Vec<Diagnostic> {
+    let mut findings = Vec::new();
+    let Some(write) = &project.write else {
+        return findings;
+    };
+
+    if !versioned_bounded_https_uri(&write.contract) {
+        findings.push(finding(
+            CheckCode::ProjectWriteContractInvalid,
+            "/write/contract",
+            "the Write contract is not one bounded version-specific HTTPS URI",
+            "Use an HTTPS OpenAPI URI with a version path segment and no credentials, query, fragment, whitespace, or control characters.",
+        ));
+    }
+
+    for (index, collection) in write.collections.iter().enumerate() {
+        let prefix = format!("/write/collections/{index}");
+        let consultation = project.consultation.as_ref().and_then(|consultation| {
+            consultation
+                .collections
+                .get(collection.record_type.as_str())
+        });
+
+        if project
+            .record_types
+            .get(collection.record_type.as_str())
+            .is_none()
+        {
+            findings.push(finding(
+                CheckCode::ProjectWriteCollectionInvalid,
+                &format!("{prefix}/recordType"),
+                "the Write collection names no declared project record type",
+                "Name a record type declared under recordTypes.",
+            ));
+        }
+
+        match (collection.registry.as_deref(), consultation) {
+            (Some(registry), _) if !bounded_registry_uri(registry) => findings.push(finding(
+                CheckCode::ProjectWriteCollectionInvalid,
+                &format!("{prefix}/registry"),
+                "the Write Registry identifier is not one bounded URN or HTTPS URI",
+                "Use a non-secret URN or HTTPS Registry identifier without credentials, query, fragment, whitespace, or control characters.",
+            )),
+            (Some(registry), Some(read)) if registry != read.registry => findings.push(finding(
+                CheckCode::ProjectWriteCollectionInvalid,
+                &format!("{prefix}/registry"),
+                "the Write collection repeats a different Registry identifier from its matching Consultation collection",
+                "Omit registry to inherit it, or write the exact matching Consultation Registry identifier.",
+            )),
+            (None, None) => findings.push(finding(
+                CheckCode::ProjectWriteCollectionInvalid,
+                &format!("{prefix}/registry"),
+                "a Write-only collection declares no Registry identifier",
+                "Set registry, or add a matching Consultation collection from which it can be inherited.",
+            )),
+            _ => {}
+        }
+
+        if let Some(read) = consultation {
+            if collection
+                .view
+                .as_ref()
+                .is_some_and(|view| view != &read.view)
+            {
+                findings.push(finding(
+                    CheckCode::ProjectWriteCollectionInvalid,
+                    &format!("{prefix}/view"),
+                    "the Write collection repeats a different view from its matching Consultation collection",
+                    "Omit view to inherit it, or name the exact matching Consultation view.",
+                ));
+            }
+            if collection
+                .read_data_schema
+                .as_ref()
+                .is_some_and(|schema| schema != &read.data_schema)
+            {
+                findings.push(finding(
+                    CheckCode::ProjectWriteCollectionInvalid,
+                    &format!("{prefix}/readDataSchema"),
+                    "the Write collection repeats a different read schema from its matching Consultation collection",
+                    "Omit readDataSchema to inherit it, or name the exact matching Consultation dataSchema.",
+                ));
+            }
+        } else if collection.update.is_some() {
+            if collection.view.is_none() {
+                findings.push(finding(
+                    CheckCode::ProjectWriteCollectionInvalid,
+                    &format!("{prefix}/view"),
+                    "a Write-only Update collection declares no writable view",
+                    "Set view for the supporting writable-read operation.",
+                ));
+            }
+            if collection.read_data_schema.is_none() {
+                findings.push(finding(
+                    CheckCode::ProjectWriteCollectionInvalid,
+                    &format!("{prefix}/readDataSchema"),
+                    "a Write-only Update collection declares no read data schema",
+                    "Set readDataSchema to a project schema for the supporting writable-read operation.",
+                ));
+            }
+        }
+
+        let effective_read_schema = collection
+            .read_data_schema
+            .as_ref()
+            .or_else(|| consultation.map(|read| &read.data_schema));
+        if let Some(schema) = effective_read_schema {
+            if project.artifacts.schemas.get(schema.as_str()).is_none() {
+                findings.push(finding(
+                    CheckCode::ProjectWriteCollectionInvalid,
+                    &format!("{prefix}/readDataSchema"),
+                    "the Write collection's read schema is not in the project artifact inventory",
+                    "Name a schema id declared under artifacts.schemas.",
+                ));
+            }
+        }
+
+        if let Some(create) = &collection.create {
+            check_write_operation(
+                project,
+                pack,
+                collection.record_type.as_str(),
+                &create.input_schema,
+                SourceWriteKind::Create,
+                &format!("{prefix}/create"),
+                &mut findings,
+            );
+        }
+        if let Some(update) = &collection.update {
+            check_write_operation(
+                project,
+                pack,
+                collection.record_type.as_str(),
+                &update.input_schema,
+                SourceWriteKind::ConditionalUpdate,
+                &format!("{prefix}/update"),
+                &mut findings,
+            );
+
+            let companion = project.bindings.get(update.companion_read.as_str());
+            let consultation_retrieve = consultation.and_then(|_| {
+                project.bindings.iter().find(|binding| {
+                    binding.record_type == collection.record_type
+                        && binding.operation.as_str() == "retrieve"
+                })
+            });
+            let expected_operation = if consultation_retrieve.is_some() {
+                "retrieve"
+            } else {
+                "writable-read"
+            };
+            if companion.is_none_or(|binding| {
+                binding.record_type != collection.record_type
+                    || binding.operation.as_str() != expected_operation
+            }) || consultation_retrieve
+                .is_some_and(|retrieve| retrieve.id != update.companion_read)
+            {
+                findings.push(finding(
+                    CheckCode::ProjectWriteBindingInvalid,
+                    &format!("{prefix}/update/companionRead"),
+                    "the Update companion read is not the same-collection supporting read binding",
+                    "Name the matching Consultation retrieve binding when present; otherwise name a same-recordType writable-read binding.",
+                ));
+            }
+            if let Some(binding) = companion {
+                check_read_one_binding(
+                    project,
+                    pack,
+                    binding,
+                    &format!("{prefix}/update/companionRead"),
+                    &mut findings,
+                );
+            }
+        }
+    }
+    findings
+}
+
+#[derive(Clone, Copy)]
+enum SourceWriteKind {
+    Create,
+    ConditionalUpdate,
+}
+
+fn check_write_operation(
+    project: &AdapterProject,
+    pack: &AdapterPack,
+    record_type: &str,
+    input_schema: &registry_platform_yaml::LocalId,
+    expected: SourceWriteKind,
+    prefix: &str,
+    findings: &mut Vec<Diagnostic>,
+) {
+    if project
+        .artifacts
+        .schemas
+        .get(input_schema.as_str())
+        .is_none()
+    {
+        findings.push(finding(
+            CheckCode::ProjectWriteCollectionInvalid,
+            &format!("{prefix}/inputSchema"),
+            "the direct-write domain input schema is not in the project artifact inventory",
+            "Name a schema id declared under artifacts.schemas.",
+        ));
+    }
+
+    let operation = match expected {
+        SourceWriteKind::Create => "create",
+        SourceWriteKind::ConditionalUpdate => "update",
+    };
+    let bindings: Vec<&crate::Binding> = project
+        .bindings
+        .iter()
+        .filter(|binding| {
+            binding.record_type.as_str() == record_type && binding.operation.as_str() == operation
+        })
+        .collect();
+    if bindings.len() != 1 {
+        findings.push(finding(
+            CheckCode::ProjectWriteBindingInvalid,
+            prefix,
+            "the direct-write operation does not have exactly one same-collection binding",
+            "Declare exactly one binding for this recordType and operation.",
+        ));
+        return;
+    }
+    let binding = bindings[0];
+    if binding.async_completion.is_some() {
+        findings.push(finding(
+            CheckCode::ProjectWriteBindingInvalid,
+            prefix,
+            "the bounded direct-write operation declares asynchronous completion",
+            "Remove asyncCompletion; this target serves synchronous Create and Update only.",
+        ));
+    }
+    if !project.binding_transforms.contains_key(&binding.id) {
+        findings.push(finding(
+            CheckCode::ProjectWriteBindingInvalid,
+            &format!("/bindingTransforms/{}", binding.id.as_str()),
+            "the direct-write binding has no project-owned ingress transformation",
+            "Add a bindingTransforms entry that maps admitted domain data to the source data object.",
+        ));
+    }
+    let support = write_support_for_binding(project, pack, binding);
+    let matches = matches!(
+        (expected, support),
+        (
+            SourceWriteKind::Create,
+            Some(crate::SourceWriteSupport::CreateOne { .. })
+        ) | (
+            SourceWriteKind::ConditionalUpdate,
+            Some(crate::SourceWriteSupport::ConditionalUpdateOne { .. })
+        )
+    );
+    if !matches {
+        findings.push(finding(
+            CheckCode::ProjectWriteBindingInvalid,
+            prefix,
+            "the direct-write binding's source route does not declare the required write guarantee",
+            "Bind Create to a create-one template and Update to a conditional-update-one template.",
+        ));
+    }
+}
+
+fn write_support_for_binding<'a>(
+    project: &'a AdapterProject,
+    pack: &'a AdapterPack,
+    binding: &crate::Binding,
+) -> Option<&'a crate::SourceWriteSupport> {
+    let instantiated = project
+        .templated_routes
+        .iter()
+        .find(|route| route.route_id.as_str() == binding.route.as_str())?;
+    pack.route_templates
+        .get(instantiated.route_template.as_str())?
+        .write_support
+        .as_ref()
+}
+
+fn check_read_one_binding(
+    project: &AdapterProject,
+    pack: &AdapterPack,
+    binding: &crate::Binding,
+    path: &str,
+    findings: &mut Vec<Diagnostic>,
+) {
+    let read_one = project
+        .templated_routes
+        .iter()
+        .find(|route| route.route_id.as_str() == binding.route.as_str())
+        .and_then(|route| pack.route_templates.get(route.route_template.as_str()))
+        .and_then(|template| template.read_support.as_ref())
+        .is_some_and(|support| matches!(support, crate::SourceReadSupport::ReadOne { .. }));
+    if !read_one {
+        findings.push(finding(
+            CheckCode::ProjectWriteBindingInvalid,
+            path,
+            "the Update companion binding is not backed by an exact one-record source read",
+            "Bind companionRead to an instantiated template declaring readSupport type read-one.",
+        ));
+    }
+    if !project.binding_transforms.contains_key(&binding.id) {
+        findings.push(finding(
+            CheckCode::ProjectWriteBindingInvalid,
+            &format!("/bindingTransforms/{}", binding.id.as_str()),
+            "the Update companion read has no project-owned outward transformation",
+            "Add a bindingTransforms entry for the companion read; do not infer an inverse from the write transform.",
+        ));
+    }
 }
 
 fn bounded_uri_text(value: &str) -> bool {
@@ -7214,6 +7557,7 @@ mod tests {
     fn project_builder(pack: &AdapterPack) -> AdapterProject {
         AdapterProject {
             consultation: None,
+            write: None,
             artifacts: Default::default(),
             binding_transforms: Default::default(),
             project: ProjectIdentity {
@@ -7308,6 +7652,161 @@ mod tests {
         ] {
             assert!(!versioned_bounded_https_uri(malformed));
         }
+    }
+
+    #[test]
+    fn built_in_consultation_and_write_may_coexist_but_profile_stays_exclusive() {
+        let pack = pack_builder(Vec::new(), Vec::new());
+        let mut project = project_builder(&pack);
+        project.write = Some(
+            serde_json::from_value(serde_json::json!({
+                "contract": "https://registry.example/contracts/write/1.0.0/openapi.yaml",
+                "collections": [{
+                    "recordType": "case",
+                    "registry": "urn:registry:cases",
+                    "create": {"inputSchema": "case-create"}
+                }]
+            }))
+            .expect("write"),
+        );
+        project.artifacts.schemas = UniqueIdList::new(vec![
+            crate::ProjectSchema {
+                id: local("case-create"),
+                file: "schemas/case-create.json".to_owned(),
+                digest: digest(),
+            },
+            crate::ProjectSchema {
+                id: local("case-readable"),
+                file: "schemas/case-readable.json".to_owned(),
+                digest: digest(),
+            },
+        ])
+        .expect("schemas");
+        assert_has(
+            &check_project_transform_artifacts(&project),
+            CheckCode::ProjectFacadeSelection,
+        );
+
+        project.profile = None;
+        assert!(
+            !codes(&check_project_transform_artifacts(&project))
+                .contains(&CheckCode::ProjectFacadeSelection.code()),
+            "write-only is a built-in facade selection"
+        );
+        project.consultation = Some(
+            serde_json::from_value(serde_json::json!({
+                "contract": "https://registry.example/contracts/read/1.0.0/openapi.yaml",
+                "collections": [{
+                    "recordType": "case",
+                    "registry": "urn:registry:cases",
+                    "view": "case-public",
+                    "dataSchema": "case-readable"
+                }]
+            }))
+            .expect("consultation"),
+        );
+        assert!(
+            !codes(&check_project_transform_artifacts(&project))
+                .contains(&CheckCode::ProjectFacadeSelection.code()),
+            "the two built-in targets may coexist"
+        );
+    }
+
+    #[test]
+    fn write_only_update_requires_explicit_read_metadata_and_same_collection_companion() {
+        let pack = pack_builder(Vec::new(), Vec::new());
+        let mut project = project_builder(&pack);
+        project.profile = None;
+        project.write = Some(
+            serde_json::from_value(serde_json::json!({
+                "contract": "https://registry.example/contracts/write/1.0.0/openapi.yaml",
+                "collections": [{
+                    "recordType": "case",
+                    "registry": "urn:registry:cases",
+                    "update": {"inputSchema": "case-update", "companionRead": "other-read"}
+                }]
+            }))
+            .expect("write"),
+        );
+        project.bindings = UniqueIdList::new(vec![Binding {
+            id: local("other-read"),
+            operation: id("writable-read"),
+            record_type: local("other"),
+            route: id("read-other"),
+            filters: UniqueList::new(Vec::new()).expect("filters"),
+            maximum_upstream_calls: BoundedU64::new(1).expect("bound"),
+            async_completion: None,
+        }])
+        .expect("bindings");
+
+        let findings = check_write_project(&project, &pack);
+        assert_has(&findings, CheckCode::ProjectWriteCollectionInvalid);
+        assert_has(&findings, CheckCode::ProjectWriteBindingInvalid);
+    }
+
+    #[test]
+    fn matching_consultation_metadata_is_inherited_and_mismatches_refuse() {
+        let pack = pack_builder(Vec::new(), Vec::new());
+        let mut project = project_builder(&pack);
+        project.profile = None;
+        project.consultation = Some(
+            serde_json::from_value(serde_json::json!({
+                "contract": "https://registry.example/contracts/read/1.0.0/openapi.yaml",
+                "collections": [{
+                    "recordType": "case",
+                    "registry": "urn:registry:cases",
+                    "view": "case-public",
+                    "dataSchema": "case-readable"
+                }]
+            }))
+            .expect("consultation"),
+        );
+        project.write = Some(
+            serde_json::from_value(serde_json::json!({
+                "contract": "https://registry.example/contracts/write/1.0.0/openapi.yaml",
+                "collections": [{
+                    "recordType": "case",
+                    "create": {"inputSchema": "case-create"}
+                }]
+            }))
+            .expect("write"),
+        );
+        project.artifacts.schemas = UniqueIdList::new(vec![
+            crate::ProjectSchema {
+                id: local("case-create"),
+                file: "schemas/case-create.json".to_owned(),
+                digest: digest(),
+            },
+            crate::ProjectSchema {
+                id: local("case-readable"),
+                file: "schemas/case-readable.json".to_owned(),
+                digest: digest(),
+            },
+        ])
+        .expect("schemas");
+        assert!(
+            !codes(&check_write_project(&project, &pack))
+                .contains(&CheckCode::ProjectWriteCollectionInvalid.code()),
+            "omitted metadata inherits from Consultation"
+        );
+
+        project.write = Some(
+            serde_json::from_value(serde_json::json!({
+                "contract": "https://registry.example/contracts/write/1.0.0/openapi.yaml",
+                "collections": [{
+                    "recordType": "case",
+                    "registry": "urn:registry:another",
+                    "view": "another-view",
+                    "readDataSchema": "another-schema",
+                    "create": {"inputSchema": "case-create"}
+                }]
+            }))
+            .expect("mismatched write"),
+        );
+        assert_has(
+            &check_write_project(&project, &pack),
+            CheckCode::ProjectWriteCollectionInvalid,
+        );
     }
 
     fn workspace<'a>(
@@ -7557,6 +8056,7 @@ mod tests {
         let mut pack = pack_builder(vec![endpoint], vec![route]);
         pack.route_templates = UniqueIdList::new(vec![RouteTemplate {
             read_support: None,
+            write_support: None,
             id: local("pager"),
             parameters: Vec::new(),
             steps: vec![Step::SetBody(rhai("scripts/tpl.rhai"))],
@@ -7942,6 +8442,7 @@ mod tests {
     fn unbound_problem_data_template_does_not_constrain_a_read_only_project() {
         let template = RouteTemplate {
             read_support: None,
+            write_support: None,
             id: local("write-partial"),
             parameters: Vec::new(),
             steps: vec![Step::ThrowException(ThrowExceptionStep {
@@ -8010,12 +8511,14 @@ mod tests {
     fn problem_data_fault_uses_the_instantiated_template_source_index() {
         let harmless = RouteTemplate {
             read_support: None,
+            write_support: None,
             id: local("read-template"),
             parameters: Vec::new(),
             steps: vec![],
         };
         let bad = RouteTemplate {
             read_support: None,
+            write_support: None,
             id: local("write-partial"),
             parameters: Vec::new(),
             steps: vec![Step::ThrowException(ThrowExceptionStep {
@@ -9002,6 +9505,7 @@ mod tests {
         };
         let template = RouteTemplate {
             read_support: None,
+            write_support: None,
             id: local("pager"),
             parameters: Vec::new(),
             steps: vec![Step::SetBody(rhai("scripts/unpinned.rhai"))],
@@ -9246,6 +9750,7 @@ mod tests {
         let mut pack = pack_builder(vec![oauth_endpoint()], vec![]);
         pack.route_templates = UniqueIdList::new(vec![RouteTemplate {
             read_support: None,
+            write_support: None,
             id: local("by-status"),
             parameters: Vec::new(),
             steps: vec![convert_body("statuses")],
@@ -9488,6 +9993,7 @@ mod tests {
         let profile = profile_builder(vec![operation("cases-find", HttpMethod::Get)]);
         let template = RouteTemplate {
             read_support: None,
+            write_support: None,
             id: local("pager"),
             parameters: Vec::new(),
             steps: vec![to_get("case-api")],
@@ -9549,6 +10055,7 @@ mod tests {
         });
         let template = RouteTemplate {
             read_support: None,
+            write_support: None,
             id: local("pager"),
             parameters: Vec::new(),
             steps: vec![bad_send],
@@ -9851,6 +10358,7 @@ mod tests {
     fn template_paths_reference_declared_parameters() {
         let template = |path: Option<String>| RouteTemplate {
             read_support: None,
+            write_support: None,
             id: local("pager"),
             parameters: vec![TemplateParameter {
                 name: local("cursor"),
@@ -11227,6 +11735,7 @@ mod tests {
         let profile = profile_builder(vec![operation("cases-find", HttpMethod::Get)]);
         let template = RouteTemplate {
             read_support: None,
+            write_support: None,
             id: local("fetch-page"),
             parameters: Vec::new(),
             steps: vec![to_get("case-api")],
@@ -11288,6 +11797,7 @@ mod tests {
         let mut pack = pack_builder(vec![], vec![]);
         pack.route_templates = UniqueIdList::new(vec![RouteTemplate {
             read_support: None,
+            write_support: None,
             id: local("fetch-page"),
             parameters: Vec::new(),
             steps: vec![body()],
@@ -11297,6 +11807,7 @@ mod tests {
 
         pack.route_templates = UniqueIdList::new(vec![RouteTemplate {
             read_support: None,
+            write_support: None,
             id: local("fetch-page"),
             parameters: vec![TemplateParameter {
                 name: local("region"),
@@ -11321,6 +11832,7 @@ mod tests {
             let mut pack = pack_builder(vec![basic_endpoint()], vec![]);
             pack.route_templates = UniqueIdList::new(vec![RouteTemplate {
                 read_support: None,
+                write_support: None,
                 id: local("fetch-page"),
                 parameters: vec![TemplateParameter {
                     name: local("labels"),
@@ -11378,6 +11890,7 @@ mod tests {
             let mut pack = pack_builder(vec![], vec![]);
             pack.route_templates = UniqueIdList::new(vec![RouteTemplate {
                 read_support: None,
+                write_support: None,
                 id: local("fetch-page"),
                 parameters: vec![TemplateParameter {
                     name: local("labels"),
@@ -11414,6 +11927,7 @@ mod tests {
         let profile = profile_builder(vec![operation("cases-find", HttpMethod::Get)]);
         let template = || RouteTemplate {
             read_support: None,
+            write_support: None,
             id: local("fetch-page"),
             parameters: vec![
                 TemplateParameter {
@@ -11568,6 +12082,7 @@ mod tests {
         let profile = profile_builder(vec![]);
         let template_route = RouteTemplate {
             read_support: None,
+            write_support: None,
             id: local("paged-fetch"),
             parameters: Vec::new(),
             steps: vec![],

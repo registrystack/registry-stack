@@ -310,6 +310,7 @@ mod tests {
             },
             profile: None,
             consultation: None,
+            write: None,
             pack: PinnedRef {
                 id: LocalId::new("source-pack").unwrap(),
                 version: "1".to_owned(),

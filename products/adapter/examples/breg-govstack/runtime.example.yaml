@@ -1,0 +1,26 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/runtime/runtime.v1alpha1.schema.json
+# Replace every example value and secret reference for a deployment.
+apiVersion: id.registrystack.org/formats/adapter/runtime/v1alpha1
+kind: AdapterRuntimeConfig
+id: breg-govstack-example
+endpoints:
+  - endpoint: registry
+    baseUrl: https://breg.example.invalid
+    credential:
+      type: static-authorization
+      tokenRef: secret:file/breg-access-token
+listener:
+  bind: 127.0.0.1:8080
+database:
+  runtimeUrlRef: secret:env/ADAPTER_DB_RUNTIME
+  migrationUrlRef: secret:env/ADAPTER_DB_MIGRATION
+oidc:
+  issuer: https://issuer.example.invalid
+  audience: registry-adapter-example
+allowedClients: [registry-adapter-example-client]
+allowedPrivateCidrs: [10.0.0.0/8]
+audit:
+  retentionDays: 90
+idempotency:
+  responseRetentionSeconds: 604800
+cursorKeyRef: secret:env/ADAPTER_BREG_CURSOR_KEY

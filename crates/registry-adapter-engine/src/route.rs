@@ -22,6 +22,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
+use http::HeaderValue;
 use registry_adapter_core::{
     effective_clause_redelivery_policy, is_facade_input_header_name,
     is_route_unwritable_header_name, is_route_unwritable_property_name, origin_relative_path_fault,
@@ -48,8 +49,8 @@ use crate::egress::{
     SourceRecoveryHeader,
 };
 use crate::exchange::{
-    Exchange, ResumeExecution, FILTERS_PROPERTY, NEXT_CONTINUATION_PROPERTY, REDELIVERED_HEADER,
-    REDELIVERY_COUNTER_HEADER, REDELIVERY_MAX_COUNTER_HEADER,
+    Exchange, FinalSourceResult, ResumeExecution, FILTERS_PROPERTY, NEXT_CONTINUATION_PROPERTY,
+    REDELIVERED_HEADER, REDELIVERY_COUNTER_HEADER, REDELIVERY_MAX_COUNTER_HEADER,
 };
 use crate::host_protocol::{
     HostProtocolMethod, HostProtocolRequestContext, HostProtocolResponseRefusal,
@@ -1573,10 +1574,117 @@ fn project_transform_failure(
     }
 }
 
+fn project_input_transform_failure(
+    error: crate::inbound_transform::ProjectInputTransformError,
+) -> RouteFailure {
+    use crate::inbound_transform::ProjectInputTransformError;
+    match error {
+        ProjectInputTransformError::Budget => RouteFailure::of(ErrorClass::BudgetExhausted),
+        ProjectInputTransformError::OutputNotObject => RouteFailure::of(ErrorClass::Validation),
+        ProjectInputTransformError::TransformMissing
+        | ProjectInputTransformError::ScriptMissing
+        | ProjectInputTransformError::ScriptInvalid
+        | ProjectInputTransformError::Failed => RouteFailure::of(ErrorClass::Script),
+    }
+}
+
+fn normalize_source_write_result(exchange: &mut Exchange) -> Result<(), RouteFailure> {
+    let receipt: registry_adapter_core::SourceWriteReceipt =
+        serde_json::from_value(exchange.message.body.clone())
+            .map_err(|_| RouteFailure::of(ErrorClass::UpstreamMalformed))?;
+    exchange.set_final_source_result(FinalSourceResult {
+        key: receipt.key.as_str().to_owned(),
+        native_version: receipt.native_validator.as_str().to_owned(),
+        data: receipt.data,
+    })
+}
+
+/// Preserve ordinary upstream classification except for the one source-native
+/// precondition signal a fixed conditional write understands. The host keeps
+/// the source condition separately from caller-controlled route data, so its
+/// presence identifies this as the strong conditional-write path without
+/// inspecting a source-specific error body.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SourceWriteFailure {
+    class: ErrorClass,
+    definitive_source_rejection: bool,
+}
+
+fn classify_source_write_failure(
+    class: ErrorClass,
+    status: Option<u16>,
+    has_source_condition: bool,
+) -> SourceWriteFailure {
+    if class == ErrorClass::UpstreamHttp && status == Some(412) && has_source_condition {
+        SourceWriteFailure {
+            class: ErrorClass::OutcomeConflict,
+            definitive_source_rejection: true,
+        }
+    } else {
+        SourceWriteFailure {
+            class,
+            definitive_source_rejection: false,
+        }
+    }
+}
+
+async fn mark_normalized_source_rejection(
+    exchange: &Exchange,
+    resume_plan: Option<&crate::resume::ServedResumeOperation>,
+    result: &Result<Flow, RouteFailure>,
+) -> Result<(), RouteFailure> {
+    let (Some(plan), Err(failure)) = (resume_plan, result) else {
+        return Ok(());
+    };
+    let status = exchange
+        .message
+        .header("CamelHttpResponseCode")
+        .and_then(Value::as_u64)
+        .and_then(|status| u16::try_from(status).ok());
+    if plan.is_definitive_source_rejection(status, failure.class) {
+        exchange.mark_definitive_source_rejection().await?;
+    }
+    Ok(())
+}
+
 fn prepare_project_source_input(
     operation: &crate::load::ServedOperation,
     exchange: &mut Exchange,
+    code_maps: &crate::scripts::CodeMaps,
+    absolute_deadline: tokio::time::Instant,
 ) -> Result<(), RouteFailure> {
+    if let Some(write_support) = operation.write_support.as_ref() {
+        let input_schema = operation
+            .project_input_schema
+            .as_ref()
+            .ok_or_else(|| RouteFailure::of(ErrorClass::Facade))?;
+        if !input_schema.validates(&exchange.message.body) {
+            return Err(RouteFailure::of(ErrorClass::FacadeInvalidField));
+        }
+        let needs_condition = matches!(
+            write_support,
+            registry_adapter_core::SourceWriteSupport::ConditionalUpdateOne { .. }
+        );
+        if exchange.source_idempotency_key(0).is_none()
+            || needs_condition != exchange.source_condition().is_some()
+        {
+            return Err(RouteFailure::of(ErrorClass::Facade));
+        }
+        let transform = operation
+            .project_input_transform
+            .as_ref()
+            .ok_or_else(|| RouteFailure::of(ErrorClass::Facade))?;
+        exchange.message.body = transform
+            .apply(
+                code_maps,
+                &exchange.message.body,
+                absolute_deadline.into_std(),
+            )
+            .map_err(project_input_transform_failure)?;
+        exchange.refresh_source_condition_snapshot();
+        exchange.ensure_bounded().map_err(RouteFailure::of)?;
+        return Ok(());
+    }
     if operation.read_support.is_none() {
         return Ok(());
     }
@@ -1762,8 +1870,13 @@ pub async fn run_served_route_until(
             events: Vec::new(),
         };
     }
-    if operation.project_transform.is_some() {
-        if let Err(failure) = prepare_project_source_input(operation, &mut exchange) {
+    if operation.project_transform.is_some() || operation.project_input_transform.is_some() {
+        if let Err(failure) = prepare_project_source_input(
+            operation,
+            &mut exchange,
+            &context.code_maps,
+            absolute_deadline,
+        ) {
             return RouteOutcome {
                 result: Err(failure),
                 events: Vec::new(),
@@ -1786,7 +1899,13 @@ pub async fn run_served_route_until(
         operation.resume.as_ref(),
     )
     .await;
-    if let (Ok(exchange), Some(transform), Some(support), Some(projection)) = (
+    if let (Ok(exchange), Some(_support)) =
+        (outcome.result.as_mut(), operation.write_support.as_ref())
+    {
+        if let Err(failure) = normalize_source_write_result(exchange) {
+            outcome.result = Err(failure);
+        }
+    } else if let (Ok(exchange), Some(transform), Some(support), Some(projection)) = (
         outcome.result.as_mut(),
         operation.project_transform.as_ref(),
         operation.read_support.as_ref(),
@@ -1961,6 +2080,11 @@ async fn run_route_within_profile<'a>(
     if run.async_accepted() {
         result = Ok(Flow::Stop);
         run.deferred_write_completion = None;
+    }
+    if let Err(failure) =
+        mark_normalized_source_rejection(&run.exchange, run.resume_plan, &result).await
+    {
+        result = Err(failure);
     }
     if let Some(remove_on_failure) = run.deferred_write_completion.take() {
         let succeeded = run.completion_succeeded(result.is_ok());
@@ -3131,6 +3255,19 @@ impl Run<'_, '_> {
         // credential failure never reads as a send that began.
         let mut credential = authorized.map_err(|error| auth_failure(&error, &auth_events))?;
         let headers = self.exchange.message.string_headers();
+        let system_traceparent = self.exchange.system_traceparent().cloned();
+        let source_idempotency_key = match resume_send {
+            ResumeSend::Execute { ordinal, .. } => {
+                let ordinal =
+                    u32::try_from(ordinal).map_err(|_| RouteFailure::of(ErrorClass::Facade))?;
+                self.exchange
+                    .source_idempotency_key(ordinal)
+                    .map(|key| HeaderValue::from_bytes(key.as_bytes()))
+                    .transpose()
+                    .map_err(|_| RouteFailure::of(ErrorClass::Facade))?
+            }
+            ResumeSend::Ordinary | ResumeSend::Skip => None,
+        };
         let safe = endpoint.send_is_safe(to.uri.component, parameters);
         if matches!(&self.async_policy, Some(AsyncRoutePolicy::Status { .. })) && !safe {
             return Err(RouteFailure::of(ErrorClass::EgressRefused));
@@ -3213,7 +3350,9 @@ impl Run<'_, '_> {
                 return Err(RouteFailure::of(ErrorClass::BudgetExhausted));
             }
             let started = Instant::now();
-            if recovery_header.is_some() && prepared_protocol.is_some() {
+            if (recovery_header.is_some() || source_idempotency_key.is_some())
+                && prepared_protocol.is_some()
+            {
                 return Err(RouteFailure::of(ErrorClass::EgressRefused));
             }
             let reply = if let Some(prepared) = prepared_protocol.take() {
@@ -3262,22 +3401,25 @@ impl Run<'_, '_> {
                     };
                     let reply = tokio::time::timeout_at(
                         self.deadline,
-                        endpoint.egress.send_protocol(ProtocolOutboundSend {
-                            link: &link,
-                            protocol_headers: &protocol_headers,
-                            response_headers: host_protocol
-                                .as_ref()
-                                .expect("a prepared attempt has a selected protocol")
-                                .response_header_names(),
-                            body: protocol_body,
-                            authorization: credential.as_ref().map(|c| &c.header),
-                            attempt: endpoint.attempt.min(remaining),
-                            maximum_response_bytes: endpoint.maximum_response_bytes,
-                            readable_replay_body: host_protocol
-                                .as_ref()
-                                .expect("a prepared attempt has a selected protocol")
-                                .replays_readable_body(),
-                        }),
+                        endpoint.egress.send_protocol_with_trace(
+                            ProtocolOutboundSend {
+                                link: &link,
+                                protocol_headers: &protocol_headers,
+                                response_headers: host_protocol
+                                    .as_ref()
+                                    .expect("a prepared attempt has a selected protocol")
+                                    .response_header_names(),
+                                body: protocol_body,
+                                authorization: credential.as_ref().map(|c| &c.header),
+                                attempt: endpoint.attempt.min(remaining),
+                                maximum_response_bytes: endpoint.maximum_response_bytes,
+                                readable_replay_body: host_protocol
+                                    .as_ref()
+                                    .expect("a prepared attempt has a selected protocol")
+                                    .replays_readable_body(),
+                            },
+                            system_traceparent.as_ref(),
+                        ),
                     )
                     .await
                     .map_err(|_| RouteFailure::of(ErrorClass::BudgetExhausted))?;
@@ -3305,7 +3447,7 @@ impl Run<'_, '_> {
                     PhysicalSendReply::Ordinary(
                         tokio::time::timeout_at(
                             self.deadline,
-                            endpoint.egress.send_with_recovery_header(
+                            endpoint.egress.send_with_system_headers(
                                 OutboundSend {
                                     link: &link,
                                     exchange_headers: &passthrough_headers,
@@ -3325,6 +3467,8 @@ impl Run<'_, '_> {
                                         .unwrap_or(false),
                                 },
                                 recovery_header.as_ref(),
+                                system_traceparent.as_ref(),
+                                source_idempotency_key.as_ref(),
                             ),
                         )
                         .await
@@ -3335,7 +3479,7 @@ impl Run<'_, '_> {
                 PhysicalSendReply::Ordinary(
                     tokio::time::timeout_at(
                         self.deadline,
-                        endpoint.egress.send_with_recovery_header(
+                        endpoint.egress.send_with_system_headers(
                             OutboundSend {
                                 link: &link,
                                 exchange_headers: &headers,
@@ -3355,6 +3499,8 @@ impl Run<'_, '_> {
                                     .unwrap_or(graphql),
                             },
                             recovery_header.as_ref(),
+                            system_traceparent.as_ref(),
+                            source_idempotency_key.as_ref(),
                         ),
                     )
                     .await
@@ -3634,7 +3780,15 @@ impl Run<'_, '_> {
                     Ok(Flow::Continue)
                 }
                 Err(error) => {
-                    let class = error.class();
+                    let source_failure = classify_source_write_failure(
+                        error.class(),
+                        status,
+                        self.exchange.source_condition().is_some(),
+                    );
+                    if source_failure.definitive_source_rejection {
+                        self.exchange.mark_definitive_source_rejection().await?;
+                    }
+                    let class = source_failure.class;
                     if let EgressError::Refused(reason) = &error {
                         tracing::warn!(endpoint = %to.uri.id, reason = %reason, "an upstream send was refused");
                     }
@@ -3908,6 +4062,50 @@ pub fn is_served_auth(kind: AuthKind) -> bool {
 mod served_tests {
     use super::*;
 
+    #[derive(Debug)]
+    struct SourceRejectionCustody(std::sync::atomic::AtomicUsize);
+
+    impl crate::exchange::WriteCustody for SourceRejectionCustody {
+        fn claim<'a>(
+            &'a self,
+            _key: &'a str,
+            _eager: bool,
+        ) -> Pin<
+            Box<dyn Future<Output = Result<crate::exchange::WriteClaim, RouteFailure>> + Send + 'a>,
+        > {
+            unreachable!("the classifier test starts after the write was claimed")
+        }
+
+        fn before_effect<'a>(
+            &'a self,
+        ) -> Pin<Box<dyn Future<Output = Result<(), RouteFailure>> + Send + 'a>> {
+            unreachable!("the classifier test starts after the source answered")
+        }
+
+        fn mark_definitive_source_rejection<'a>(
+            &'a self,
+        ) -> Pin<Box<dyn Future<Output = Result<(), RouteFailure>> + Send + 'a>> {
+            Box::pin(async move {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            })
+        }
+
+        fn mark_unsupported_incomplete<'a>(
+            &'a self,
+        ) -> Pin<Box<dyn Future<Output = Result<bool, RouteFailure>> + Send + 'a>> {
+            unreachable!("the classifier test never sees asynchronous acceptance")
+        }
+
+        fn complete<'a>(
+            &'a self,
+            _succeeded: bool,
+            _remove_on_failure: bool,
+        ) -> Pin<Box<dyn Future<Output = Result<(), RouteFailure>> + Send + 'a>> {
+            unreachable!("the classifier test does not complete custody")
+        }
+    }
+
     #[test]
     fn every_compiled_authentication_kind_is_served() {
         for kind in [
@@ -3919,6 +4117,115 @@ mod served_tests {
             AuthKind::Oauth2PrivateKeyJwt,
         ] {
             assert!(is_served_auth(kind), "{} must be served", kind.tag());
+        }
+    }
+
+    #[test]
+    fn source_write_receipt_normalizes_without_a_header_bag() {
+        let mut exchange = Exchange::new("write-result".to_owned());
+        exchange.message.body = json!({
+            "key": "source-1",
+            "nativeValidator": "revision-17",
+            "data": {"name": "Ada"}
+        });
+
+        normalize_source_write_result(&mut exchange).expect("receipt normalizes");
+
+        assert_eq!(
+            exchange.message.body,
+            json!({"key": "source-1", "data": {"name": "Ada"}})
+        );
+        let result = exchange.final_source_result().expect("typed result");
+        assert_eq!(result.native_version, "revision-17");
+        assert!(exchange.message.header("etag").is_none());
+    }
+
+    #[test]
+    fn malformed_or_multi_item_source_write_result_is_refused() {
+        for body in [
+            json!([{"key": "source-1", "nativeValidator": "v1", "data": {}}]),
+            json!({"key": "", "nativeValidator": "v1", "data": {}}),
+            json!({"key": "source-1", "nativeValidator": "", "data": {}}),
+            json!({"key": "source-1", "nativeValidator": "v1", "data": []}),
+        ] {
+            let mut exchange = Exchange::new("bad-write-result".to_owned());
+            exchange.message.body = body;
+            assert_eq!(
+                normalize_source_write_result(&mut exchange)
+                    .expect_err("invalid receipt")
+                    .class,
+                ErrorClass::UpstreamMalformed
+            );
+        }
+    }
+
+    #[test]
+    fn only_a_conditional_source_write_maps_native_precondition_failure_to_conflict() {
+        let rejection = classify_source_write_failure(ErrorClass::UpstreamHttp, Some(412), true);
+        assert_eq!(rejection.class, ErrorClass::OutcomeConflict);
+        assert!(rejection.definitive_source_rejection);
+        assert_eq!(
+            classify_source_write_failure(ErrorClass::UpstreamHttp, Some(412), false),
+            SourceWriteFailure {
+                class: ErrorClass::UpstreamHttp,
+                definitive_source_rejection: false,
+            }
+        );
+        assert_eq!(
+            classify_source_write_failure(ErrorClass::UpstreamHttp, Some(409), true),
+            SourceWriteFailure {
+                class: ErrorClass::UpstreamHttp,
+                definitive_source_rejection: false,
+            }
+        );
+        assert_eq!(
+            classify_source_write_failure(ErrorClass::UpstreamMalformed, Some(412), true),
+            SourceWriteFailure {
+                class: ErrorClass::UpstreamMalformed,
+                definitive_source_rejection: false,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn only_an_admitted_normalized_4xx_marks_a_definitive_source_rejection() {
+        let plan = crate::resume::ServedResumeOperation::source_native_for_tests([
+            ErrorClass::OutcomeInvalidRequest,
+        ]);
+        let marked = Arc::new(SourceRejectionCustody(std::sync::atomic::AtomicUsize::new(
+            0,
+        )));
+        let mut exchange = Exchange::new("terminal-rejection".to_owned());
+        exchange.install_write(marked.clone());
+        exchange
+            .message
+            .set_header("CamelHttpResponseCode", json!(422));
+
+        mark_normalized_source_rejection(
+            &exchange,
+            Some(&plan),
+            &Err(RouteFailure::of(ErrorClass::OutcomeInvalidRequest)),
+        )
+        .await
+        .expect("the host records the definitive non-effect");
+
+        assert_eq!(marked.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        for (status, class) in [
+            (Some(503), ErrorClass::OutcomeInvalidRequest),
+            (Some(422), ErrorClass::OutcomeNotFound),
+            (Some(422), ErrorClass::UpstreamHttp),
+            (None, ErrorClass::OutcomeInvalidRequest),
+        ] {
+            let mut exchange = Exchange::new("non-terminal-source-failure".to_owned());
+            if let Some(status) = status {
+                exchange
+                    .message
+                    .set_header("CamelHttpResponseCode", json!(status));
+            }
+            mark_normalized_source_rejection(&exchange, Some(&plan), &Err(RouteFailure::of(class)))
+                .await
+                .expect("an unproved failure remains resumable without custody access");
         }
     }
 
@@ -4671,6 +4978,7 @@ mod send_attempt_tests {
     };
     use registry_platform_yaml::SecretProvider;
     use std::io::{Read, Write};
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Mutex;
 
     /// A loopback source that answers each connection with the next
@@ -4762,6 +5070,81 @@ mod send_attempt_tests {
             _remove_on_failure: bool,
         ) -> Pin<Box<dyn Future<Output = Result<(), RouteFailure>> + Send + 'a>> {
             Box::pin(async { panic!("accepted custody is completed by the host") })
+        }
+    }
+
+    #[derive(Debug)]
+    struct TerminalRejectionCustody {
+        effect_started: AtomicBool,
+        definitive: AtomicBool,
+        completed: AtomicBool,
+    }
+
+    impl TerminalRejectionCustody {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                effect_started: AtomicBool::new(false),
+                definitive: AtomicBool::new(false),
+                completed: AtomicBool::new(false),
+            })
+        }
+    }
+
+    impl crate::exchange::WriteCustody for TerminalRejectionCustody {
+        fn claim<'a>(
+            &'a self,
+            _key: &'a str,
+            _eager: bool,
+        ) -> Pin<
+            Box<dyn Future<Output = Result<crate::exchange::WriteClaim, RouteFailure>> + Send + 'a>,
+        > {
+            Box::pin(async { Ok(crate::exchange::WriteClaim::Execute) })
+        }
+
+        fn before_effect<'a>(
+            &'a self,
+        ) -> Pin<Box<dyn Future<Output = Result<(), RouteFailure>> + Send + 'a>> {
+            unreachable!("the source-native path marks the numbered resume step")
+        }
+
+        fn before_resume_step<'a>(
+            &'a self,
+            ordinal: u32,
+        ) -> Pin<Box<dyn Future<Output = Result<(), RouteFailure>> + Send + 'a>> {
+            Box::pin(async move {
+                assert_eq!(ordinal, 0);
+                self.effect_started.store(true, Ordering::SeqCst);
+                Ok(())
+            })
+        }
+
+        fn mark_definitive_source_rejection<'a>(
+            &'a self,
+        ) -> Pin<Box<dyn Future<Output = Result<(), RouteFailure>> + Send + 'a>> {
+            Box::pin(async move {
+                assert!(self.effect_started.load(Ordering::SeqCst));
+                self.definitive.store(true, Ordering::SeqCst);
+                Ok(())
+            })
+        }
+
+        fn mark_unsupported_incomplete<'a>(
+            &'a self,
+        ) -> Pin<Box<dyn Future<Output = Result<bool, RouteFailure>> + Send + 'a>> {
+            unreachable!("the synchronous source returned a terminal rejection")
+        }
+
+        fn complete<'a>(
+            &'a self,
+            succeeded: bool,
+            _remove_on_failure: bool,
+        ) -> Pin<Box<dyn Future<Output = Result<(), RouteFailure>> + Send + 'a>> {
+            Box::pin(async move {
+                assert!(!succeeded);
+                assert!(self.definitive.load(Ordering::SeqCst));
+                self.completed.store(true, Ordering::SeqCst);
+                Ok(())
+            })
         }
     }
 
@@ -5070,6 +5453,77 @@ mod send_attempt_tests {
         }
     }
 
+    #[tokio::test]
+    async fn normalized_source_400_404_and_422_are_terminal_non_effects() {
+        for (index, status, class, class_name) in [
+            (0, 404, ErrorClass::OutcomeNotFound, "outcome.not-found"),
+            (
+                1,
+                422,
+                ErrorClass::OutcomeInvalidRequest,
+                "outcome.invalid-request",
+            ),
+            (2, 400, ErrorClass::OutcomeRejected, "outcome.rejected"),
+        ] {
+            let key_env = format!("ROUTE_TERMINAL_REJECTION_{index}_KEY");
+            std::env::set_var(&key_env, "terminal-rejection-key");
+            let resolver =
+                SecretResolver::new([SecretProvider::Environment], "").expect("resolver");
+            let (base_url, received) = canned_source(vec![(status, r#"{"error":true}"#)]);
+            let endpoints = super::credential_order_tests::compiled(&base_url, &key_env, &resolver);
+            let scripts = ScriptSet::default();
+            let resilience = crate::resilience::ResilienceRuntime::empty();
+            let routes = RouteTable::new();
+            let context = RouteContext {
+                endpoints: &endpoints,
+                scripts: &scripts,
+                resolver: &resolver,
+                resilience: &resilience,
+                routes: &routes,
+                code_maps: Arc::new(BTreeMap::new()),
+                maximum_upstream_calls: 1,
+                job: crate::job_sources::JobPageState::default(),
+            };
+            let mut operation = async_served_operation(steps(json!([
+                {"onException": {
+                    "exception": ["upstream.http"],
+                    "onWhen": {"constant": true},
+                    "steps": [{"throwException": {"exceptionType": class_name}}]
+                }},
+                {"idempotentConsumer": {
+                    "expression": {"header": "Idempotency-Key"},
+                    "steps": [{"to": {"uri": "http:tracker", "parameters": {
+                        "httpMethod": "POST",
+                        "path": "/records",
+                        "body": {"jsonpath": "$"},
+                        "operation": "create-record"
+                    }}}]
+                }}
+            ])));
+            operation.async_completion = None;
+            operation.resume =
+                Some(crate::resume::ServedResumeOperation::source_native_for_tests([class]));
+            let mut exchange = Exchange::new(format!("terminal-rejection-{status}"));
+            exchange.message.body = json!({"name": "Ada"});
+            exchange
+                .message
+                .set_header("Idempotency-Key", json!("terminal-rejection-key"));
+            let custody = TerminalRejectionCustody::new();
+            exchange.install_write(custody.clone());
+            let profile = crate::load::two_record_types_inputs().0;
+
+            let failure = run_served_route(&context, &profile, &operation, exchange)
+                .await
+                .result
+                .expect_err("the source rejection remains a terminal problem");
+
+            assert_eq!(failure.class, class);
+            assert_eq!(received.lock().expect("requests").len(), 1);
+            assert!(custody.definitive.load(Ordering::SeqCst));
+            assert!(custody.completed.load(Ordering::SeqCst));
+        }
+    }
+
     /// A job source step that reaches the interpreter of a build without
     /// its component says so under the closed job code, rather than
     /// blaming the route kind.
@@ -5176,8 +5630,10 @@ mod send_attempt_tests {
             }),
             resume: None,
             project_transform: None,
+            project_input_transform: None,
             project_input_schema: None,
             read_support: None,
+            write_support: None,
             source_input: None,
             item_projection: None,
             target_contract: None,
@@ -5202,7 +5658,13 @@ mod send_attempt_tests {
         let mut exchange = Exchange::new("source-input".to_owned());
         exchange.message.set_header("callerKey", json!("record-17"));
 
-        prepare_project_source_input(&operation, &mut exchange).expect("explicit source mapping");
+        prepare_project_source_input(
+            &operation,
+            &mut exchange,
+            &Arc::new(BTreeMap::new()),
+            tokio::time::Instant::now() + Duration::from_secs(1),
+        )
+        .expect("explicit source mapping");
 
         assert_eq!(exchange.message.body, json!({"native-key": "record-17"}));
     }

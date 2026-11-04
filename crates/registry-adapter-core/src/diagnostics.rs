@@ -60,6 +60,7 @@ pub enum CheckCode {
     PackTransportRefusedHeader,
     PackUnknownScript,
     PackUnknownTemplateParameter,
+    PackWriteSupportInvalid,
     // adapter.profile.*
     ProfileAsyncStatusPathCollision,
     ProfileInvalidPath,
@@ -114,6 +115,9 @@ pub enum CheckCode {
     ProjectUnknownTemplate,
     ProjectUnknownTemplateParameter,
     ProjectUpstreamBudgetExceeded,
+    ProjectWriteBindingInvalid,
+    ProjectWriteCollectionInvalid,
+    ProjectWriteContractInvalid,
     // adapter.route.*
     RouteCircuitBreakerExceptionClass,
     RouteCodeMapUnknown,
@@ -211,6 +215,7 @@ impl CheckCode {
         Self::PackTransportRefusedHeader,
         Self::PackUnknownScript,
         Self::PackUnknownTemplateParameter,
+        Self::PackWriteSupportInvalid,
         Self::ProfileAsyncStatusPathCollision,
         Self::ProfileInvalidPath,
         Self::ProfilePageSizeDefaultOutOfBounds,
@@ -263,6 +268,9 @@ impl CheckCode {
         Self::ProjectUnknownTemplate,
         Self::ProjectUnknownTemplateParameter,
         Self::ProjectUpstreamBudgetExceeded,
+        Self::ProjectWriteBindingInvalid,
+        Self::ProjectWriteCollectionInvalid,
+        Self::ProjectWriteContractInvalid,
         Self::RouteCircuitBreakerExceptionClass,
         Self::RouteCodeMapUnknown,
         Self::RouteConvertShape,
@@ -355,6 +363,7 @@ impl CheckCode {
             Self::PackInvalidHeaderName => "adapter.pack.invalid-header-name",
             Self::PackMapParameterMisplaced => "adapter.pack.map-parameter-misplaced",
             Self::PackReadSupportInvalid => "adapter.pack.read-support-invalid",
+            Self::PackWriteSupportInvalid => "adapter.pack.write-support-invalid",
             Self::PackReservedHeaderName => "adapter.pack.reserved-header-name",
             Self::PackSqliteExtractInvalid => "adapter.pack.sqlite-extract-invalid",
             Self::PackScriptUncompilable => "adapter.pack.script-uncompilable",
@@ -438,6 +447,9 @@ impl CheckCode {
             Self::ProjectUnknownTemplate => "adapter.project.unknown-template",
             Self::ProjectUnknownTemplateParameter => "adapter.project.unknown-template-parameter",
             Self::ProjectUpstreamBudgetExceeded => "adapter.project.upstream-budget-exceeded",
+            Self::ProjectWriteBindingInvalid => "adapter.project.write-binding-invalid",
+            Self::ProjectWriteCollectionInvalid => "adapter.project.write-collection-invalid",
+            Self::ProjectWriteContractInvalid => "adapter.project.write-contract-invalid",
             Self::RouteCodeMapUnknown => "adapter.route.code-map-unknown",
             Self::RouteCircuitBreakerExceptionClass => {
                 "adapter.route.circuit-breaker-exception-class"
@@ -571,6 +583,7 @@ impl CheckCode {
             | Self::PackInvalidHeaderName
             | Self::PackMapParameterMisplaced
             | Self::PackReadSupportInvalid
+            | Self::PackWriteSupportInvalid
             | Self::PackReservedHeaderName
             | Self::PackScriptUncompilable
             | Self::PackSqliteExtractInvalid
@@ -648,6 +661,9 @@ impl CheckCode {
             | Self::ProjectUnknownRoute
             | Self::ProjectUnknownTemplate
             | Self::ProjectUnknownTemplateParameter
+            | Self::ProjectWriteBindingInvalid
+            | Self::ProjectWriteCollectionInvalid
+            | Self::ProjectWriteContractInvalid
             | Self::ProjectUpstreamBudgetExceeded => crate::naming::ADAPTER_PROJECT_KIND,
         }
     }

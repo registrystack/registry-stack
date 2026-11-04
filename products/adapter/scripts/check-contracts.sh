@@ -6,6 +6,10 @@ set -euo pipefail
 repo_root=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)
 cd "$repo_root"
 
+# shellcheck source=products/adapter/scripts/contract-lane-cache.sh
+source "$repo_root/products/adapter/scripts/contract-lane-cache.sh"
+python3 -m unittest discover -s products/adapter/scripts -p 'test_contract_lane_cache.py'
+
 # The dependency-direction gate runs first, before any cargo build: its
 # unittest, then the check against the resolved graph and the engine
 # module's imports. Both are cheap and a violation should not wait on a
@@ -20,17 +24,20 @@ python3 -m unittest discover -s products/adapter/scripts -p 'test_test_connector
 # example generator rejects it. PATH keeps cargo reachable when it is not on
 # the caller's PATH.
 PATH="$HOME/.cargo/bin:$PATH" cargo fmt --all --check
+clear_completed_adapter_lane
 PATH="$HOME/.cargo/bin:$PATH" cargo clippy --locked -p registry-adapter -p registry-adapter-core -p registry-adapter-engine -p registry-adapter-job -p registry-adapterctl --all-targets -- -D warnings
 PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter -p registry-adapter-core -p registry-adapter-engine -p registry-adapter-job -p registry-adapterctl --no-fail-fast
 # The BReg connector is default-off. Compile every connector target with its
 # feature and execute its scripted suites here; the real-runtime scenarios
 # remain isolated under test-connector-native.py because they provision BReg
 # and PostgreSQL explicitly.
+clear_completed_adapter_lane
 PATH="$HOME/.cargo/bin:$PATH" cargo clippy --locked -p registry-adapter-connectors --features breg --all-targets -- -D warnings
 PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter-connectors --features breg --no-fail-fast
 # The signed Coordinator event connector is its own default-off feature: its
 # admission matrix, retry byte identity, and signature checks run here, not
 # only behind the job host.
+clear_completed_adapter_lane
 PATH="$HOME/.cargo/bin:$PATH" cargo clippy --locked -p registry-adapter-connectors --features coordinator-event --all-targets -- -D warnings
 PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter-connectors --features coordinator-event --lib
 # The live verifier's HTTPS policy is proven against a deterministic local
@@ -44,23 +51,29 @@ PATH="$HOME/.cargo/bin:$PATH" cargo test -p registry-adapterctl --locked --featu
 # registry-adapter-engine on their own: the combined run above links
 # registry-adapterctl, which turns both gates on, so only this lane runs the
 # suites that hold a build without them to its refusals.
+clear_completed_adapter_lane
 PATH="$HOME/.cargo/bin:$PATH" cargo clippy --locked -p registry-adapter -p registry-adapter-engine --all-targets -- -D warnings
 PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter -p registry-adapter-engine
+clear_completed_adapter_lane
 PATH="$HOME/.cargo/bin:$PATH" cargo clippy --locked -p registry-adapter -p registry-adapter-engine --features registry-adapter/job-file,registry-adapter-engine/job-file --all-targets -- -D warnings
 PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter -p registry-adapter-engine --features registry-adapter/job-file,registry-adapter-engine/job-file
+clear_completed_adapter_lane
 PATH="$HOME/.cargo/bin:$PATH" cargo clippy --locked -p registry-adapter -p registry-adapter-engine --features registry-adapter/job-postgres,registry-adapter-engine/job-postgres --all-targets -- -D warnings
 PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter -p registry-adapter-engine --features registry-adapter/job-postgres,registry-adapter-engine/job-postgres
+clear_completed_adapter_lane
 PATH="$HOME/.cargo/bin:$PATH" cargo clippy --locked -p registry-adapter -p registry-adapter-engine --features registry-adapter/job-file,registry-adapter/job-postgres,registry-adapter-engine/job-file,registry-adapter-engine/job-postgres --all-targets -- -D warnings
 PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter -p registry-adapter-engine --features registry-adapter/job-file,registry-adapter/job-postgres,registry-adapter-engine/job-file,registry-adapter-engine/job-postgres
 
 # SFTP uses an in-process loopback SSH fixture here. Its real CLI and item-store
 # acceptance runs in test-job-postgres.sh with a disposable PostgreSQL database.
+clear_completed_adapter_lane
 PATH="$HOME/.cargo/bin:$PATH" cargo clippy --locked -p registry-adapter-engine -p registry-adapter-job --features registry-adapter-job/job-sftp --all-targets -- -D warnings
 PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter-engine -p registry-adapter-job --features registry-adapter-job/job-sftp
 
 # The broker host remains default-off. Keep its production feature graph and
 # in-process seams here; broker transport and durable settlement run serially
 # with the service fixtures in test-job-postgres.sh.
+clear_completed_adapter_lane
 PATH="$HOME/.cargo/bin:$PATH" cargo clippy --locked -p registry-adapter-engine -p registry-adapter-job --features registry-adapter-job/job-rabbitmq --all-targets -- -D warnings
 PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter-engine -p registry-adapter-job --features registry-adapter-job/job-rabbitmq
 PATH="$HOME/.cargo/bin:$PATH" cargo check --locked -p registry-adapter-job --features job-sftp,job-rabbitmq
@@ -68,14 +81,17 @@ PATH="$HOME/.cargo/bin:$PATH" cargo check --locked -p registry-adapter-job --fea
 # Hook ingress is separate from facade admission and default-off. Exercise its
 # real local HTTP boundary and trigger coalescing; the CLI/store acceptance is
 # mandatory in test-job-postgres.sh.
+clear_completed_adapter_lane
 PATH="$HOME/.cargo/bin:$PATH" cargo clippy --locked -p registry-adapter-job --features job-hook --all-targets -- -D warnings
 PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter-job --features job-hook --lib
 
 # Each job destination is a default-off host feature with its own clippy and
 # unit-test lane; the PostgreSQL-backed destination suites run in
 # test-job-postgres.sh.
+clear_completed_adapter_lane
 PATH="$HOME/.cargo/bin:$PATH" cargo clippy --locked -p registry-adapter-job --features direct-breg --all-targets -- -D warnings
 PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter-job --features direct-breg --lib
+clear_completed_adapter_lane
 PATH="$HOME/.cargo/bin:$PATH" cargo clippy --locked -p registry-adapter-job --features signed-coordinator-event --all-targets -- -D warnings
 PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter-job --features signed-coordinator-event --lib
 
@@ -230,6 +246,15 @@ for example in dhis2-consultation opencrvs-consultation; do
   "$adapterctl_bin" fixtures replay "${project_dir}/project.yaml" --pack "$pack" "${consultation_flags[@]}" >/dev/null
   printf 'Built-in Consultation check, compile and replay passed: %s\n' "$example"
 done
+
+# The unified BReg-backed GovStack example owns its domain schema and mappings.
+# Native source mutation and recovery run in the PostgreSQL gate.
+breg_govstack=products/adapter/examples/breg-govstack
+"$adapterctl_bin" check "$breg_govstack/project.yaml" \
+  --pack products/adapter/packs/breg-records/pack.yaml >/dev/null
+"$adapterctl_bin" compile --check "$breg_govstack/project.yaml" \
+  --pack products/adapter/packs/breg-records/pack.yaml >/dev/null
+printf 'BReg GovStack example check and compile passed\n'
 
 # The OpenCRVS birth example is held to the same two commands. Its fixtures
 # are hand-derived from the reviewed Evidence reference and marked synthetic

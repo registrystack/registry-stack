@@ -130,6 +130,7 @@ fn project_for(model: &GeneratedModel) -> (AdapterProject, Binding) {
         },
         profile: Some(pin("generated-profile")),
         consultation: None,
+        write: None,
         pack: pin("generated-pack"),
         record_types: UniqueIdList::new(vec![RecordType {
             name: local("generated-record"),
@@ -203,8 +204,10 @@ fn served_operation(record_schema: Value, paginated: bool) -> ServedOperation {
         }),
         async_completion: None,
         project_transform: None,
+        project_input_transform: None,
         project_input_schema: None,
         read_support: None,
+        write_support: None,
         source_input: None,
         item_projection: None,
         target_contract: None,

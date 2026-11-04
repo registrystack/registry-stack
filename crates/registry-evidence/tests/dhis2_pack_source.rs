@@ -33,12 +33,27 @@ async fn dhis2_reference_reuses_the_maintained_pack_and_replays_both_routes() {
     let maintained_pack =
         fs::read(repository.join("products/adapter/packs/dhis2-tracker/pack.yaml"))
             .expect("the maintained DHIS2 pack is readable");
-    Reader::new("products/adapter/packs/dhis2-tracker/pack.yaml")
+    let maintained_pack_document = Reader::new("products/adapter/packs/dhis2-tracker/pack.yaml")
         .decode::<registry_adapter_core::AdapterPack>(
             &maintained_pack,
             &Expect::one(&ADAPTER_PACK_FORMAT),
         )
         .expect("the maintained DHIS2 pack follows its typed envelope and grammar");
+    let native_route = maintained_pack_document
+        .value
+        .source_routes
+        .iter()
+        .find(|route| route.id.as_str() == "evidence-native-entity")
+        .expect("the maintained pack carries its native Evidence route");
+    assert_eq!(
+        native_route
+            .evidence
+            .as_ref()
+            .expect("the native route declares an Evidence contract")
+            .acquisition_posture,
+        registry_adapter_core::EvidenceAcquisitionPosture::RecordTransformed,
+        "the complete native entity crosses the source boundary before projection"
+    );
     let verified = registry_platform_config::verify_package(
         &bundle_root,
         &evidence_package_limits(),

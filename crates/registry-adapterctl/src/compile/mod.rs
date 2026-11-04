@@ -96,10 +96,10 @@ pub(crate) fn run(args: &CompileArgs) -> Result<CompileRun, CompileFailure> {
         &mut files,
     )
     .map_err(io_failure)?;
-    let built_in_consultation = project.as_ref().is_some_and(|(decoded, _)| {
-        decoded.value.profile.is_none() && decoded.value.consultation.is_some()
-    });
-    let profile = if built_in_consultation {
+    let built_in_govstack = project
+        .as_ref()
+        .is_some_and(|(decoded, _)| check::uses_built_in_govstack(&decoded.value));
+    let profile = if built_in_govstack {
         None
     } else {
         let profile_path = check::artifact_path(
@@ -135,7 +135,7 @@ pub(crate) fn run(args: &CompileArgs) -> Result<CompileRun, CompileFailure> {
     let (profile, profile_bytes) = match profile {
         Some((decoded, bytes)) => (decoded.value, bytes),
         None => (
-            registry_adapter::govstack::consultation::built_in_profile(),
+            registry_adapter::govstack::built_in_profile(&project),
             Vec::new(),
         ),
     };
@@ -172,7 +172,7 @@ pub(crate) fn run(args: &CompileArgs) -> Result<CompileRun, CompileFailure> {
         });
     }
 
-    let compiled = if project.consultation.is_some() {
+    let compiled = if project.consultation.is_some() || project.write.is_some() {
         let schemas = consultation_schemas(&project, &directory)?;
         document::assemble_consultation(&project, &schemas)
     } else {

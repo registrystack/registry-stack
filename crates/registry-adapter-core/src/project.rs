@@ -82,6 +82,109 @@ pub struct BindingTransform {
     pub entrypoint: String,
 }
 
+/// One deployment of the built-in GovStack direct Write target. Protocol
+/// paths, envelopes, error shapes, and Create/Update wrappers remain
+/// maintained Rust; the project selects collections and domain schemas.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WriteFacade {
+    /// Version-specific HTTPS OpenAPI contract published for this deployment.
+    pub contract: String,
+    /// Collection metadata, unique by the record type that also supplies the
+    /// public collection identifier.
+    pub collections: UniqueIdList<WriteCollection>,
+}
+
+/// Deployment metadata for direct Create of one record.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WriteCreate {
+    /// Project-owned domain schema for `CreateInput.data`.
+    pub input_schema: LocalId,
+}
+
+/// Deployment metadata for conditional Update of one record.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WriteUpdate {
+    /// Project-owned domain merge-patch schema for `UpdateInput.data`.
+    pub input_schema: LocalId,
+    /// Existing same-collection read binding used by the one supporting GET.
+    pub companion_read: LocalId,
+}
+
+/// Direct-write selection for one project record type. At least one of
+/// Create and Update is required. Registry, view, and readable data-schema
+/// metadata may be inherited from a matching Consultation collection; a
+/// Write-only Update supplies them explicitly.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WriteCollection {
+    /// Project record type and literal Write collection identifier.
+    pub record_type: LocalId,
+    /// Stable identifier of the Registry that owns the Records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registry: Option<String>,
+    /// Public writable view, required for a Write-only Update.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view: Option<LocalId>,
+    /// Project schema for the companion read's public `data`, required for a
+    /// Write-only Update and separate by selection from each input schema.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_data_schema: Option<LocalId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub create: Option<WriteCreate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update: Option<WriteUpdate>,
+}
+
+impl<'de> Deserialize<'de> for WriteCollection {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct Wire {
+            record_type: LocalId,
+            #[serde(default)]
+            registry: Option<String>,
+            #[serde(default)]
+            view: Option<LocalId>,
+            #[serde(default)]
+            read_data_schema: Option<LocalId>,
+            #[serde(default)]
+            create: Option<WriteCreate>,
+            #[serde(default)]
+            update: Option<WriteUpdate>,
+        }
+
+        let wire = Wire::deserialize(deserializer)?;
+        if wire.create.is_none() && wire.update.is_none() {
+            return Err(registry_platform_yaml::Invalid::expected(
+                "at least one direct write operation: create or update",
+                "Add create, update, or both.",
+            )
+            .into_error());
+        }
+        Ok(Self {
+            record_type: wire.record_type,
+            registry: wire.registry,
+            view: wire.view,
+            read_data_schema: wire.read_data_schema,
+            create: wire.create,
+            update: wire.update,
+        })
+    }
+}
+
+impl registry_platform_yaml::Identified for WriteCollection {
+    fn id(&self) -> &str {
+        self.record_type.as_str()
+    }
+}
+
 /// A pinned reference to a profile or pack: plain identifier plus the
 /// version and digest `adapterctl check` verifies (CFG-ID-4,
 /// `products/adapter/CONCEPT.md` section 6).
@@ -280,6 +383,11 @@ pub struct AdapterProject {
     /// envelopes, problems, and protocol schemas remain maintained Rust.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub consultation: Option<crate::ConsultationFacade>,
+    /// The project metadata for the built-in synchronous GovStack direct
+    /// Write target. It may coexist with Consultation, but never with an
+    /// authored generic profile.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub write: Option<WriteFacade>,
     /// The pinned adapter pack.
     pub pack: PinnedRef,
     /// The declared record types and fields.
@@ -361,6 +469,7 @@ mod tests {
             },
             profile: Some(pin("case-api")),
             consultation: None,
+            write: None,
             pack: pin("case-api-pack"),
             record_types: UniqueIdList::new(vec![record_type()]).expect("unique"),
             templated_routes: UniqueIdList::new(vec![crate::route::TemplatedRoute {
@@ -439,6 +548,66 @@ mod tests {
             .is_none());
     }
 
+    #[test]
+    fn direct_write_metadata_round_trips_without_authored_protocol_envelopes() {
+        let write: WriteFacade = serde_json::from_value(serde_json::json!({
+            "contract": "https://registry.example/contracts/write/1.0.0-draft/openapi.yaml",
+            "collections": [{
+                "recordType": "people",
+                "registry": "https://registry.example/registries/people",
+                "view": "person-writable",
+                "readDataSchema": "person-readable",
+                "create": {"inputSchema": "person-create"},
+                "update": {"inputSchema": "person-update", "companionRead": "people-writable-read"}
+            }]
+        }))
+        .expect("write metadata");
+
+        let collection = write.collections.get("people").expect("collection");
+        assert_eq!(collection.record_type.as_str(), "people");
+        assert_eq!(
+            collection
+                .update
+                .as_ref()
+                .expect("update")
+                .companion_read
+                .as_str(),
+            "people-writable-read"
+        );
+        let encoded = serde_json::to_value(write).expect("serialize");
+        assert!(encoded.get("paths").is_none());
+        assert!(encoded["collections"][0]["create"]
+            .get("sourceSchema")
+            .is_none());
+    }
+
+    #[test]
+    fn direct_write_metadata_is_closed_and_each_collection_selects_an_operation() {
+        let collection =
+            |members: serde_json::Value| serde_json::from_value::<WriteCollection>(members);
+        assert!(collection(serde_json::json!({
+            "recordType": "people",
+            "create": {"inputSchema": "person-create"}
+        }))
+        .is_ok());
+        assert!(collection(serde_json::json!({
+            "recordType": "people",
+            "update": {"inputSchema": "person-update", "companionRead": "people-writable-read"}
+        }))
+        .is_ok());
+        assert!(collection(serde_json::json!({"recordType": "people"})).is_err());
+        assert!(collection(serde_json::json!({
+            "recordType": "people",
+            "transition": {"inputSchema": "transition"}
+        }))
+        .is_err());
+        assert!(collection(serde_json::json!({
+            "recordType": "people",
+            "create": {"inputSchema": "person-create", "sourceReference": true}
+        }))
+        .is_err());
+    }
+
     /// A binding's filter list is unique (CFG-ID-6): a repeated field
     /// name refuses at the reader, a declared list reads back in order,
     /// and an omitted list reads as empty and serializes omitted.
@@ -479,6 +648,7 @@ mod tests {
     fn the_project_identity_block_is_required() {
         let project = AdapterProject {
             consultation: None,
+            write: None,
             artifacts: Default::default(),
             binding_transforms: Default::default(),
             project: ProjectIdentity {

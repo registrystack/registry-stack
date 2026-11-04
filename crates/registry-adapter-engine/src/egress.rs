@@ -88,6 +88,12 @@ impl TokenSend for NoTokenSend {
 
 const NO_TOKEN_SEND: NoTokenSend = NoTokenSend;
 
+/// Header slots the runtime alone may populate after authored filtering.
+/// They are frozen into every live data template because reads carry trace
+/// context and explicit source-native writes may also carry a derived replay
+/// key. Neither name enters the authored [`HeaderFilter`].
+const HOST_SYSTEM_REQUEST_HEADERS: [&str; 2] = ["traceparent", "idempotency-key"];
+
 struct ReplayTokenSend<'a> {
     transcript: &'a ReplayTranscript,
     endpoint: &'a str,
@@ -738,6 +744,12 @@ impl fmt::Debug for EndpointEgress {
     }
 }
 
+struct ReplaySystemHeaders<'a> {
+    recovery: Option<&'a SourceRecoveryHeader>,
+    traceparent: Option<&'a HeaderValue>,
+    source_idempotency_key: Option<&'a HeaderValue>,
+}
+
 impl EndpointEgress {
     /// Compile one endpoint binding against its declared endpoint.
     pub(crate) fn compile(
@@ -749,11 +761,11 @@ impl EndpointEgress {
         Self::compile_with_recovery_headers(binding, declared, config, resolver, &[])
     }
 
-    /// Compile the live endpoint with the closed source-native correlation
-    /// headers declared by its own asynchronous operations. They extend only
-    /// the frozen request template; the ordinary authored header filter still
-    /// cannot forward them, and `send_with_recovery_header` supplies the sole
-    /// trusted value after filtering.
+    /// Compile the live endpoint with the closed host-owned headers and the
+    /// source-native correlation headers declared by its own asynchronous
+    /// operations. They extend only the frozen request template; the ordinary
+    /// authored header filter still cannot forward them, and private send
+    /// methods supply their sole trusted values after filtering.
     pub(crate) fn compile_with_recovery_headers(
         binding: &EndpointBinding,
         declared: &Endpoint,
@@ -872,7 +884,11 @@ impl EndpointEgress {
             .map(|name| name.as_str().to_owned())
             .collect();
         let mut request_names: Vec<&str> = request_allowlist.iter().map(String::as_str).collect();
-        for header in recovery_headers {
+        for header in HOST_SYSTEM_REQUEST_HEADERS
+            .iter()
+            .copied()
+            .chain(recovery_headers.iter().copied())
+        {
             if !request_names
                 .iter()
                 .any(|existing| existing.eq_ignore_ascii_case(header))
@@ -1321,6 +1337,19 @@ impl EndpointEgress {
         send: OutboundSend<'_>,
         recovery: Option<&SourceRecoveryHeader>,
     ) -> Result<SentReply, EgressError> {
+        self.send_with_system_headers(send, recovery, None, None)
+            .await
+    }
+
+    /// Send with the narrowly scoped headers the serving host, rather than a
+    /// pack, owns. Both are appended only after the authored allowlist.
+    pub(crate) async fn send_with_system_headers(
+        &self,
+        send: OutboundSend<'_>,
+        recovery: Option<&SourceRecoveryHeader>,
+        traceparent: Option<&HeaderValue>,
+        source_idempotency_key: Option<&HeaderValue>,
+    ) -> Result<SentReply, EgressError> {
         // A declared attempt above the ceiling the authoring check
         // bounds `attemptTimeoutMilliseconds` with is refused, never
         // shortened (`products/adapter/CONCEPT.md` section 8.8).
@@ -1351,6 +1380,15 @@ impl EndpointEgress {
             )
             .map_err(EgressRefusal::Header)
             .map_err(EgressError::Refused)?;
+        if source_idempotency_key.is_some()
+            && outbound
+                .iter()
+                .any(|(name, _)| name.as_str().eq_ignore_ascii_case("idempotency-key"))
+        {
+            return Err(EgressError::Refused(EgressRefusal::Header(
+                OutboundHeaderError::Duplicate { index: 0 },
+            )));
+        }
         let link = self
             .origin
             .pin(send.link)
@@ -1358,7 +1396,17 @@ impl EndpointEgress {
             .map_err(EgressError::Refused)?;
 
         if let EndpointTransport::Replay(transcript) = self.transport.as_ref() {
-            return self.send_replay(transcript, &send, &outbound, recovery, &link);
+            return self.send_replay(
+                transcript,
+                &send,
+                &outbound,
+                ReplaySystemHeaders {
+                    recovery,
+                    traceparent,
+                    source_idempotency_key,
+                },
+                &link,
+            );
         }
         let EndpointTransport::Live(live) = self.transport.as_ref() else {
             unreachable!("replay transport returned above")
@@ -1387,6 +1435,12 @@ impl EndpointEgress {
             .collect();
         if let Some(recovery) = recovery {
             header_values.push((recovery.name.as_str(), recovery.value.as_bytes()));
+        }
+        if let Some(traceparent) = traceparent {
+            header_values.push(("traceparent", traceparent.as_bytes()));
+        }
+        if let Some(source_idempotency_key) = source_idempotency_key {
+            header_values.push(("idempotency-key", source_idempotency_key.as_bytes()));
         }
         let rendered = template
             .render_script(
@@ -1510,11 +1564,12 @@ impl EndpointEgress {
         })
     }
 
-    /// Send one selected host-protocol request and return its exact bounded
-    /// wire bytes without JSON decoding or script visibility.
-    pub(crate) async fn send_protocol(
+    /// Send one selected host-protocol request with trusted trace context
+    /// appended after the protocol's authored header filter.
+    pub(crate) async fn send_protocol_with_trace(
         &self,
         send: ProtocolOutboundSend<'_>,
+        traceparent: Option<&HeaderValue>,
     ) -> Result<ProtocolSentReply, EgressError> {
         let maximum_attempt = self.timeout_policy.map_or(
             Duration::from_millis(MAXIMUM_ATTEMPT_TIMEOUT_MILLISECONDS),
@@ -1555,7 +1610,7 @@ impl EndpointEgress {
                     ),
                     None => (HttpMethod::Get, None),
                 };
-            let headers: Vec<(&str, &str)> = outbound
+            let mut headers: Vec<(&str, &str)> = outbound
                 .iter()
                 .map(|(name, value)| {
                     (
@@ -1566,6 +1621,14 @@ impl EndpointEgress {
                     )
                 })
                 .collect();
+            if let Some(traceparent) = traceparent {
+                headers.push((
+                    "traceparent",
+                    traceparent
+                        .to_str()
+                        .expect("the host installs visible ASCII trace context"),
+                ));
+            }
             let response = transcript
                 .answer_protocol(crate::replay::ProtocolReplaySend {
                     endpoint: self.endpoint.as_str(),
@@ -1628,10 +1691,13 @@ impl EndpointEgress {
         let (authorization, api_key) = self
             .credential_slots(send.authorization)
             .map_err(EgressError::Refused)?;
-        let header_values: Vec<(&str, &[u8])> = outbound
+        let mut header_values: Vec<(&str, &[u8])> = outbound
             .iter()
             .map(|(name, value)| (name.as_str(), value.as_bytes()))
             .collect();
+        if let Some(traceparent) = traceparent {
+            header_values.push(("traceparent", traceparent.as_bytes()));
+        }
         let (template, body_format, body) = match send.body {
             Some(body) => (
                 &live.post_template,
@@ -1729,9 +1795,14 @@ impl EndpointEgress {
         transcript: &ReplayTranscript,
         send: &OutboundSend<'_>,
         outbound: &OutboundHeaders,
-        recovery: Option<&SourceRecoveryHeader>,
+        system_headers: ReplaySystemHeaders<'_>,
         link: &PinnedLink,
     ) -> Result<SentReply, EgressError> {
+        let ReplaySystemHeaders {
+            recovery,
+            traceparent,
+            source_idempotency_key,
+        } = system_headers;
         let (method, body) = match &send.shape {
             SendShape::Get => (HttpMethod::Get, None),
             SendShape::Post(body) => {
@@ -1770,6 +1841,22 @@ impl EndpointEgress {
                     .value
                     .to_str()
                     .expect("the recovery id is validated visible ASCII"),
+            ));
+        }
+        if let Some(traceparent) = traceparent {
+            headers.push((
+                "traceparent",
+                traceparent
+                    .to_str()
+                    .expect("the host installs visible ASCII trace context"),
+            ));
+        }
+        if let Some(source_idempotency_key) = source_idempotency_key {
+            headers.push((
+                "idempotency-key",
+                source_idempotency_key
+                    .to_str()
+                    .expect("the host installs a lowercase hex source key"),
             ));
         }
         let response = transcript
@@ -2580,6 +2667,67 @@ mod tests {
     }
 
     #[test]
+    fn live_frozen_template_admits_only_host_system_headers() {
+        let runtime: AdapterEndpointBindings = serde_json::from_value(serde_json::json!({
+            "id": "system-headers",
+            "endpoints": [{
+                "endpoint": "api",
+                "baseUrl": "http://127.0.0.1:9",
+                "credential": {"type": "none"}
+            }],
+            "allowedPrivateCidrs": []
+        }))
+        .expect("runtime bindings");
+        let endpoint: Endpoint = serde_json::from_value(serde_json::json!({
+            "id": "api",
+            "component": "http",
+            "authentication": {"type": "none"},
+            "attemptTimeoutMilliseconds": 1000,
+            "maximumResponseBytes": 4096,
+            "requestHeaders": []
+        }))
+        .expect("endpoint");
+        let resolver =
+            SecretResolver::new([registry_platform_config::SecretProvider::Environment], "")
+                .expect("resolver");
+        let binding = runtime.endpoints.get("api").expect("binding");
+        let egress = EndpointEgress::compile(binding, &endpoint, &runtime, &resolver)
+            .expect("compile live egress");
+
+        let authored = [
+            ("traceparent".to_owned(), "caller-trace".to_owned()),
+            ("idempotency-key".to_owned(), "caller-key".to_owned()),
+        ];
+        assert!(
+            egress
+                .filter
+                .outbound(authored.iter().map(|(name, value)| (name, value)))
+                .expect("filter authored headers")
+                .is_empty(),
+            "the authored filter still denies host-owned headers"
+        );
+
+        let EndpointTransport::Live(live) = egress.transport.as_ref() else {
+            panic!("compiled ordinary egress is live");
+        };
+        let traceparent = b"00-0123456789abcdef0123456789abcdef-0123456789abcdef-01";
+        let source_key = b"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        live.post_template
+            .render_script(
+                "/records",
+                &[
+                    ("traceparent", traceparent.as_slice()),
+                    ("idempotency-key", source_key.as_slice()),
+                ],
+                None,
+                None,
+                Some(ScriptRequestBodyFormat::Json),
+                Some(Zeroizing::new(br#"{"name":"Ada"}"#.to_vec())),
+            )
+            .expect("the frozen template admits private host system headers");
+    }
+
+    #[test]
     fn an_evidence_binding_may_lower_a_declared_pack_attempt_but_never_raise_it() {
         let runtime = |attempt: u64| -> AdapterEndpointBindings {
             serde_json::from_value(serde_json::json!({
@@ -2774,6 +2922,131 @@ mod tests {
         ));
         assert!(SourceRecoveryHeader::try_new("authorization", &recovery_id).is_err());
         assert!(SourceRecoveryHeader::try_new("x-source-recovery-id", "ABC").is_err());
+    }
+
+    #[tokio::test]
+    async fn source_idempotency_key_is_appended_after_authored_filtering() {
+        let source_key = HeaderValue::from_static(
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        );
+        let fixture: registry_adapter_core::AdapterFixture =
+            serde_json::from_value(serde_json::json!({
+                "id": "system-write-replay",
+                "pack": "test-pack",
+                "upstreamVersion": "1",
+                "provenance": {"type": "documented", "reference": "unit test"},
+                "intercepts": [{"type": "endpoint", "endpoint": "api"}],
+                "entries": [{
+                    "facadeRequest": {"operation": "write", "path": "/records"},
+                    "upstream": [{
+                        "request": {
+                            "endpoint": "api",
+                            "method": "POST",
+                            "path": "/records",
+                            "headers": {"idempotency-key": source_key.to_str().expect("ASCII")},
+                            "body": {"name": "Ada"}
+                        },
+                        "response": {"status": 200, "body": {"ok": true}}
+                    }],
+                    "expected": {"type": "response", "status": 200}
+                }]
+            }))
+            .expect("fixture");
+        let endpoint: Endpoint = serde_json::from_value(serde_json::json!({
+            "id": "api",
+            "component": "http",
+            "authentication": {"type": "none"},
+            "attemptTimeoutMilliseconds": 1000,
+            "maximumResponseBytes": 4096,
+            "requestHeaders": []
+        }))
+        .expect("endpoint");
+        let transcript =
+            Arc::new(ReplayTranscript::new(&fixture, 0).expect("ordered replay transcript"));
+        let egress = EndpointEgress::compile_replay(&endpoint, transcript).expect("replay egress");
+        let body = serde_json::to_vec(&serde_json::json!({"name": "Ada"})).expect("body");
+
+        let reply = egress
+            .send_with_system_headers(
+                OutboundSend {
+                    link: "http://127.0.0.1/records",
+                    exchange_headers: &[],
+                    shape: SendShape::Post(SendBody {
+                        bytes: &body,
+                        format: SendBodyFormat::Json,
+                    }),
+                    authorization: None,
+                    attempt: Duration::from_secs(1),
+                    maximum_response_bytes: 4096,
+                    ok_status_ranges: OkStatusCodeRanges::default(),
+                    throw_exception_on_failure: false,
+                },
+                None,
+                None,
+                Some(&source_key),
+            )
+            .await
+            .expect("trusted source idempotency key matches replay");
+        assert_eq!(reply.status, 200);
+    }
+
+    #[tokio::test]
+    async fn system_traceparent_is_appended_after_authored_filtering() {
+        let traceparent =
+            HeaderValue::from_static("00-0123456789abcdef0123456789abcdef-0123456789abcdef-01");
+        let fixture: registry_adapter_core::AdapterFixture =
+            serde_json::from_value(serde_json::json!({
+                "id": "system-trace-replay",
+                "pack": "test-pack",
+                "upstreamVersion": "1",
+                "provenance": {"type": "documented", "reference": "unit test"},
+                "intercepts": [{"type": "endpoint", "endpoint": "api"}],
+                "entries": [{
+                    "facadeRequest": {"operation": "read", "path": "/records"},
+                    "upstream": [{
+                        "request": {
+                            "endpoint": "api",
+                            "method": "GET",
+                            "path": "/records",
+                            "headers": {"traceparent": traceparent.to_str().expect("ASCII")}
+                        },
+                        "response": {"status": 200, "body": {"ok": true}}
+                    }],
+                    "expected": {"type": "response", "status": 200}
+                }]
+            }))
+            .expect("fixture");
+        let endpoint: Endpoint = serde_json::from_value(serde_json::json!({
+            "id": "api",
+            "component": "http",
+            "authentication": {"type": "none"},
+            "attemptTimeoutMilliseconds": 1000,
+            "maximumResponseBytes": 4096,
+            "requestHeaders": []
+        }))
+        .expect("endpoint");
+        let transcript =
+            Arc::new(ReplayTranscript::new(&fixture, 0).expect("ordered replay transcript"));
+        let egress = EndpointEgress::compile_replay(&endpoint, transcript).expect("replay egress");
+        let reply = egress
+            .send_with_system_headers(
+                OutboundSend {
+                    link: "http://127.0.0.1/records",
+                    exchange_headers: &[],
+                    shape: SendShape::Get,
+                    authorization: None,
+                    attempt: Duration::from_secs(1),
+                    maximum_response_bytes: 4096,
+                    ok_status_ranges: OkStatusCodeRanges::default(),
+                    throw_exception_on_failure: false,
+                },
+                None,
+                Some(&traceparent),
+                None,
+            )
+            .await
+            .expect("trusted trace header matches replay");
+        assert_eq!(reply.status, 200);
     }
 
     fn replay_resolver() -> SecretResolver {

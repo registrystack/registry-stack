@@ -12,6 +12,9 @@ set -euo pipefail
 repo_root=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd -P)
 cd "$repo_root"
 
+# shellcheck source=scripts/cargo-runtime-library-path.sh
+source "$repo_root/scripts/cargo-runtime-library-path.sh"
+
 # Same image as the CI postgres services in .github/workflows/ci.yml.
 image='docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675'
 db_user=adapter
@@ -70,6 +73,22 @@ if [[ -z "${ADAPTER_TEST_DATABASE_URL:-}" ]]; then
 else
 	printf '%s\n' 'Using ADAPTER_TEST_DATABASE_URL from the environment.' >&2
 fi
+
+if ! docker_bin=$(command -v docker); then
+	printf '%s\n' 'docker is required for the real BReg-backed Adapter journey.' >&2
+	exit 2
+fi
+
+# The PostgreSQL feature lane includes the maintained real BReg source test.
+# Build its explicit native binaries before the broad test command so the test
+# cannot silently skip or depend on an ambient development installation.
+printf '%s\n' 'Building the native BReg fixture binaries.' >&2
+PATH="$HOME/.cargo/bin:$PATH" registry_cargo_build "$repo_root" \
+	--manifest-path "$repo_root/Cargo.toml" --target-dir "$CARGO_TARGET_DIR" --locked \
+	-p registry-bregctl -p registry-breg --features registry-breg/runtime
+export BREG_TEST_BREG_BINARY="$CARGO_TARGET_DIR/debug/breg"
+export BREG_TEST_BREGCTL_BINARY="$CARGO_TARGET_DIR/debug/bregctl"
+export BREG_TEST_DOCKER_BINARY="$docker_bin"
 
 # Native source-shape acceptance invokes the matching authoring CLI as well as
 # the feature-enabled runtime. Build the CLI first: building default-feature

@@ -472,6 +472,93 @@
         "routeId"
       ],
       "type": "object"
+    },
+    "WriteCollection": {
+      "additionalProperties": false,
+      "description": "Direct-write selection for one project record type. At least one of\nCreate and Update is required. Registry, view, and readable data-schema\nmetadata may be inherited from a matching Consultation collection; a\nWrite-only Update supplies them explicitly.",
+      "properties": {
+        "create": {
+          "$ref": "#/$defs/WriteCreate"
+        },
+        "readDataSchema": {
+          "$ref": "#/$defs/LocalId",
+          "description": "Project schema for the companion read's public `data`, required for a\nWrite-only Update and separate by selection from each input schema."
+        },
+        "recordType": {
+          "$ref": "#/$defs/LocalId",
+          "description": "Project record type and literal Write collection identifier."
+        },
+        "registry": {
+          "description": "Stable identifier of the Registry that owns the Records.",
+          "type": "string"
+        },
+        "update": {
+          "$ref": "#/$defs/WriteUpdate"
+        },
+        "view": {
+          "$ref": "#/$defs/LocalId",
+          "description": "Public writable view, required for a Write-only Update."
+        }
+      },
+      "required": [
+        "recordType"
+      ],
+      "type": "object"
+    },
+    "WriteCreate": {
+      "additionalProperties": false,
+      "description": "Deployment metadata for direct Create of one record.",
+      "properties": {
+        "inputSchema": {
+          "$ref": "#/$defs/LocalId",
+          "description": "Project-owned domain schema for `CreateInput.data`."
+        }
+      },
+      "required": [
+        "inputSchema"
+      ],
+      "type": "object"
+    },
+    "WriteFacade": {
+      "additionalProperties": false,
+      "description": "One deployment of the built-in GovStack direct Write target. Protocol\npaths, envelopes, error shapes, and Create/Update wrappers remain\nmaintained Rust; the project selects collections and domain schemas.",
+      "properties": {
+        "collections": {
+          "description": "Collection metadata, unique by the record type that also supplies the\npublic collection identifier.",
+          "items": {
+            "$ref": "#/$defs/WriteCollection"
+          },
+          "type": "array"
+        },
+        "contract": {
+          "description": "Version-specific HTTPS OpenAPI contract published for this deployment.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "contract",
+        "collections"
+      ],
+      "type": "object"
+    },
+    "WriteUpdate": {
+      "additionalProperties": false,
+      "description": "Deployment metadata for conditional Update of one record.",
+      "properties": {
+        "companionRead": {
+          "$ref": "#/$defs/LocalId",
+          "description": "Existing same-collection read binding used by the one supporting GET."
+        },
+        "inputSchema": {
+          "$ref": "#/$defs/LocalId",
+          "description": "Project-owned domain merge-patch schema for `UpdateInput.data`."
+        }
+      },
+      "required": [
+        "inputSchema",
+        "companionRead"
+      ],
+      "type": "object"
     }
   },
   "$id": "https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json",
@@ -557,6 +644,10 @@
         "$ref": "#/$defs/TemplatedRoute"
       },
       "type": "array"
+    },
+    "write": {
+      "$ref": "#/$defs/WriteFacade",
+      "description": "The project metadata for the built-in synchronous GovStack direct\nWrite target. It may coexist with Consultation, but never with an\nauthored generic profile."
     }
   },
   "required": [

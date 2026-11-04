@@ -562,7 +562,7 @@
     },
     "cursorKeyRef": {
       "$ref": "#/$defs/SecretReference",
-      "description": "The secret that seals pagination cursors: exactly 32 bytes. A\ndeployment that binds a paginated operation declares it; one\nthat serves only reads by identifier may omit it."
+      "description": "The 32-byte secret for pagination cursors and opaque fixed Write\nguards, with separate cryptographic domains. Paginated reads and\nfixed Write require it; identifier-only reads may omit it."
     },
     "cursorTtlSeconds": {
       "description": "How long a cursor stays valid, in seconds (60 to 86400); absent,\n900.",
@@ -608,7 +608,7 @@
     },
     "previousCursorKeyRef": {
       "$ref": "#/$defs/SecretReference",
-      "description": "The retiring cursor key, still accepted when opening a cursor so\na key rotation does not strand cursors in flight."
+      "description": "The retiring key, still accepted when opening a cursor or fixed\nWrite guard so one key rotation does not strand active clients."
     }
   },
   "required": [

@@ -373,13 +373,13 @@ pub struct AdapterRuntimeConfig {
     /// startup refuses a served write without an explicit operator choice.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idempotency: Option<IdempotencyRetention>,
-    /// The secret that seals pagination cursors: exactly 32 bytes. A
-    /// deployment that binds a paginated operation declares it; one
-    /// that serves only reads by identifier may omit it.
+    /// The 32-byte secret for pagination cursors and opaque fixed Write
+    /// guards, with separate cryptographic domains. Paginated reads and
+    /// fixed Write require it; identifier-only reads may omit it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor_key_ref: Option<SecretReference>,
-    /// The retiring cursor key, still accepted when opening a cursor so
-    /// a key rotation does not strand cursors in flight.
+    /// The retiring key, still accepted when opening a cursor or fixed
+    /// Write guard so one key rotation does not strand active clients.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub previous_cursor_key_ref: Option<SecretReference>,
     /// How long a cursor stays valid, in seconds (60 to 86400); absent,

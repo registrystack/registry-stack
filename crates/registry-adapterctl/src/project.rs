@@ -627,8 +627,10 @@ fn rewrite_project_inventory_lines(
             continue;
         }
 
+        let is_entry = trimmed == "-" || trimmed.starts_with("- ");
         if let Some((_, section_indent)) = section {
-            if indent <= section_indent {
+            // An indentless sequence entry still belongs to its inventory.
+            if indent < section_indent || (indent == section_indent && !is_entry) {
                 section = None;
                 entry = None;
             }
@@ -643,11 +645,11 @@ fn rewrite_project_inventory_lines(
             continue;
         }
         let (open_section, section_indent) = section.expect("the section is open");
-        if indent <= section_indent {
+        if indent < section_indent {
             lines.push(line.to_owned());
             continue;
         }
-        if trimmed == "-" || trimmed.starts_with("- ") {
+        if is_entry {
             let next = items.entry(open_section).or_insert(0);
             entry = Some(*next);
             *next += 1;

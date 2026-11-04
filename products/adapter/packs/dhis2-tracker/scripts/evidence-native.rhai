@@ -14,3 +14,10 @@ fn lookup_native_entity(exchange) {
     }
     #{lookup: "matched", facts: entity}
 }
+
+// Normalize the source's reviewed not-found answer to Evidence's closed,
+// data-free absence result. The onException predicate decides whether the
+// upstream failure is a 404 before this function can run.
+fn lookup_no_match(exchange) {
+    #{lookup: "no-match"}
+}

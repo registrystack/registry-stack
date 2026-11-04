@@ -4258,7 +4258,7 @@
       },
       "artifact": {
         "path": "products/adapter/schemas/pack.v1alpha1.schema.json",
-        "sha256": "4cdeab4780b05f2a8a001e94d5caf247dfe899b418e8b46791bdaa19fecd58d3",
+        "sha256": "9725612cd2892a40abf58b65b79051fef452c0e0eb05038d5a0669cc017697e8",
         "mediaType": "application/schema+json"
       }
     },
@@ -4294,7 +4294,7 @@
       },
       "artifact": {
         "path": "products/adapter/schemas/project.v1alpha1.schema.json",
-        "sha256": "87c1255f47318157708cb8bdd5c377390a93c96b4c03e4b217a387b2668ebc7f",
+        "sha256": "f0c9eee1e929f34a44e9a230f3ffaeb9b32f9e62d1975f5151fb4752e5d39e01",
         "mediaType": "application/schema+json"
       }
     },
@@ -4312,7 +4312,7 @@
       },
       "artifact": {
         "path": "products/adapter/schemas/runtime.v1alpha1.schema.json",
-        "sha256": "169ce8657f2ab5a3140216b6aeeeaaaf7dfcea0f508364a76de142b93c6a0a14",
+        "sha256": "1468ea66961add80215fe5a88bca4a096b17d78bf86338350478d82cce8d491e",
         "mediaType": "application/schema+json"
       }
     },

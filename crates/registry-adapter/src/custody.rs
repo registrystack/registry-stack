@@ -65,6 +65,7 @@ pub enum WriteResolution {
     ResponseExpired,
     UnsupportedIncomplete,
     ResumePending,
+    /// No durable claim exists because the consumer never claimed or safely released it.
     Released,
     Finished,
 }
@@ -75,6 +76,7 @@ enum WriteState {
         execution: Option<Execution>,
         key: String,
         effect_marked: bool,
+        definitive_source_rejection: bool,
         /// Camel repository membership is eager or completion-time. The
         /// execution above is the host's independent durable reservation.
         eager: bool,
@@ -218,7 +220,11 @@ impl WriteExecutionContext {
     /// when the route answers.
     pub async fn resolution(&self) -> WriteResolution {
         match &*self.state.lock().await {
-            WriteState::Ready | WriteState::Executing { .. } => WriteResolution::Pending,
+            // No idempotency reservation exists before the consumer claims.
+            // The facade may render and audit the original route failure
+            // without attempting a terminal store transition.
+            WriteState::Ready => WriteResolution::Released,
+            WriteState::Executing { .. } => WriteResolution::Pending,
             WriteState::Replay { outcome, response } => WriteResolution::Replay {
                 outcome: *outcome,
                 response: response.clone(),
@@ -421,6 +427,7 @@ impl WriteCustody for WriteExecutionContext {
                         execution: Some(execution),
                         key: key.to_owned(),
                         effect_marked: false,
+                        definitive_source_rejection: false,
                         eager,
                         completion_recorded: false,
                     };
@@ -435,6 +442,7 @@ impl WriteCustody for WriteExecutionContext {
                         execution: Some(execution),
                         key: key.to_owned(),
                         effect_marked: false,
+                        definitive_source_rejection: false,
                         eager,
                         completion_recorded: false,
                     };
@@ -582,6 +590,33 @@ impl WriteCustody for WriteExecutionContext {
         })
     }
 
+    fn mark_definitive_source_rejection<'a>(
+        &'a self,
+    ) -> Pin<Box<dyn Future<Output = Result<(), RouteFailure>> + Send + 'a>> {
+        Box::pin(async move {
+            if self.async_write.is_some()
+                || self
+                    .resume_write
+                    .as_ref()
+                    .is_none_or(|resume| resume.step_count != 1)
+            {
+                return Err(RouteFailure::of(ErrorClass::Facade));
+            }
+            let mut state = self.state.lock().await;
+            let WriteState::Executing {
+                effect_marked: true,
+                definitive_source_rejection,
+                completion_recorded: false,
+                ..
+            } = &mut *state
+            else {
+                return Err(RouteFailure::of(ErrorClass::Facade));
+            };
+            *definitive_source_rejection = true;
+            Ok(())
+        })
+    }
+
     fn checkpoint_resume_step<'a>(
         &'a self,
         ordinal: u32,
@@ -664,6 +699,7 @@ impl WriteCustody for WriteExecutionContext {
             let WriteState::Executing {
                 execution,
                 effect_marked,
+                definitive_source_rejection,
                 eager,
                 completion_recorded,
                 ..
@@ -675,10 +711,29 @@ impl WriteCustody for WriteExecutionContext {
                 return Err(RouteFailure::of(ErrorClass::Facade));
             }
             *completion_recorded = true;
-            if self.resume_write.is_some() && !succeeded {
+            if should_release_resume_after_failure(
+                self.resume_write.is_some(),
+                succeeded,
+                *definitive_source_rejection,
+            ) {
                 let execution = execution
                     .as_ref()
                     .ok_or_else(|| RouteFailure::of(ErrorClass::Facade))?;
+                if !*effect_marked
+                    && remove_on_failure
+                    && self
+                        .resume_write
+                        .as_ref()
+                        .is_some_and(|resume| resume.step_count == 1)
+                    && self
+                        .store
+                        .try_release_resume_before_any_effect(execution, SystemTime::now())
+                        .await
+                        .map_err(idempotency_failure)?
+                {
+                    *state = WriteState::Released;
+                    return Ok(());
+                }
                 self.store
                     .release_resume_lease(execution, SystemTime::now())
                     .await
@@ -703,5 +758,26 @@ impl WriteCustody for WriteExecutionContext {
             *state = WriteState::Released;
             Ok(())
         })
+    }
+}
+
+fn should_release_resume_after_failure(
+    has_resume_write: bool,
+    succeeded: bool,
+    definitive_source_rejection: bool,
+) -> bool {
+    has_resume_write && !succeeded && !definitive_source_rejection
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_release_resume_after_failure;
+
+    #[test]
+    fn only_ambiguous_native_failure_releases_the_resume_lease() {
+        assert!(should_release_resume_after_failure(true, false, false));
+        assert!(!should_release_resume_after_failure(true, false, true));
+        assert!(!should_release_resume_after_failure(true, true, false));
+        assert!(!should_release_resume_after_failure(false, false, false));
     }
 }

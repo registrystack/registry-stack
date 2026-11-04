@@ -1,0 +1,91 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# One unified GovStack read/write collection over a BReg contact Record type.
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: breg-govstack-example
+  version: "1.0.0"
+consultation:
+  contract: https://registry.example/contracts/1.0.0-draft/openapi.yaml
+  collections:
+    - recordType: contacts
+      registry: https://registry.example/registries/contacts
+      view: contact-public
+      dataSchema: contact-public
+write:
+  contract: https://registry.example/contracts/1.0.0-draft/openapi.yaml
+  collections:
+    - recordType: contacts
+      create:
+        inputSchema: contact-create
+      update:
+        inputSchema: contact-update
+        companionRead: contacts-retrieve
+pack:
+  id: breg-records
+  version: "1"
+  digest: sha256:2fd2a439113a14b9e21d5d93b73ee6922dacd31d057d72d3f7b70e9376999553
+artifacts:
+  scripts:
+    - id: contact-transform
+      file: scripts/contact.rhai
+      digest: sha256:72078edf8c7ae7316b5de9263f13210a0538f8e08d82a3be473f8b709c4b294f
+  schemas:
+    - id: contact-public
+      file: schemas/contact-public.schema.json
+      digest: sha256:3f7ce40805d9dfd43aea92cc0187c69a2d450aeb0a591452f0032c5a97ae646d
+    - id: contact-create
+      file: schemas/contact-create.schema.json
+      digest: sha256:77d909e4b1d54428d42687268bcdae8df3384b4896863f7e1daf33b1e204ea0f
+    - id: contact-update
+      file: schemas/contact-update.schema.json
+      digest: sha256:7e6c44498cdddc0caa252c1f91d27841a3504f15da2fa8fd3d650f7d9ebcacf5
+recordTypes:
+  - name: contacts
+    fields: []
+templatedRoutes:
+  - routeTemplate: read-record
+    routeId: breg-contact-read
+    parameters:
+      record-route: contacts
+      access-profile: directory-editor
+  - routeTemplate: create-record
+    routeId: breg-contact-create
+    parameters:
+      record-route: contacts
+      access-profile: directory-editor
+  - routeTemplate: update-record
+    routeId: breg-contact-update
+    parameters:
+      record-route: contacts
+      access-profile: directory-editor
+bindings:
+  - id: contacts-retrieve
+    operation: retrieve
+    recordType: contacts
+    route: breg-contact-read
+    maximumUpstreamCalls: 1
+  - id: contacts-create
+    operation: create
+    recordType: contacts
+    route: breg-contact-create
+    maximumUpstreamCalls: 1
+  - id: contacts-update
+    operation: update
+    recordType: contacts
+    route: breg-contact-update
+    maximumUpstreamCalls: 1
+bindingTransforms:
+  contacts-retrieve: {script: contact-transform, entrypoint: public_contact}
+  contacts-create: {script: contact-transform, entrypoint: create_contact}
+  contacts-update: {script: contact-transform, entrypoint: update_contact}
+accessProfiles:
+  - id: records-reader
+    scopes: [records.read]
+    operations: [retrieve]
+    recordTypes: [contacts]
+  - id: records-writer
+    scopes: [records.write]
+    operations: [create, update]
+    recordTypes: [contacts]

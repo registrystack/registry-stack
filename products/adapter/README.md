@@ -17,9 +17,9 @@ engine is a bounded port of Apache Camel's route model, so packs use Camel's
 EIP names and semantics. A new source system is a new pack, not a Rust
 change.
 
-The [Consultation specification](CONSULTATION.md) defines the built-in
-GovStack read target, reusable source-pack boundary, project-owned output
-transformations and schemas, and generated caller capability discovery.
+The [GovStack facade specification](CONSULTATION.md) defines the built-in
+Read and direct Write target, reusable source-pack boundary, project-owned
+input/output transformations and schemas, and caller capability discovery.
 The built-in target is mounted at `/govstack/registries`; its generated
 OpenAPI contract uses that mount as `servers.url` and keeps `/v1/...` paths
 relative to it.
@@ -28,7 +28,11 @@ Use the [DHIS2 Consultation example](examples/dhis2-consultation/README.md)
 for two public views over the same native source routes, or the
 [OpenCRVS exact-read example](examples/opencrvs-consultation/README.md) for
 schema-bound Retrieve and Lookup. These projects omit `--profile`; the
-Consultation protocol is built in. Source access remains in the reusable pack.
+GovStack protocol is built in. Source access remains in the reusable pack.
+The [BReg HTTP Write example](examples/breg-govstack/README.md) selects
+source-assigned Create and strong conditional Update with separate domain
+input schemas and transformations. DHIS2 Write remains unavailable until
+its source can preserve those guarantees.
 
 The [product concept](CONCEPT.md) is the contract: artifact model, engine,
 exchange contract, failure semantics, authorization, audit, configuration
@@ -60,7 +64,7 @@ owns the ingestion contract and its declared limits.
 |---|---|
 | `schemas/` | Generated JSON Schemas for eight formats (profile, pack, project, runtime, job, job runtime, fixture, effective contract) |
 | `profiles/` | Facade profiles: `breg-records`, plus `case-api` and `govstack-consultation`, which prove the exposed API is configuration |
-| `packs/` | Maintained facade and ingestion packs: `dhis2-tracker`, `opencrvs-events`, `kobotoolbox` and `odk-central` |
+| `packs/` | Maintained facade and ingestion packs: `dhis2-tracker`, `opencrvs-events`, `breg-records`, `kobotoolbox` and `odk-central` |
 | `examples/` | Example projects that bind the packs to profiles, and the registered format examples |
 | `fixtures/` | Recorded or documented upstream exchanges for the maintained packs, the bad-authoring `corpus/`, and `source-shapes/` |
 | `fixtures/source-shapes/` | Authored packs over five upstream API shapes (FHIR R4 search and conditional create, Relay GraphQL, JSON:API behind mTLS, and a second target profile); each README states what the shape proves and the gaps it records |
@@ -273,7 +277,13 @@ generators, runs the platform configuration-format lint and
 shape to its committed contract and fixtures, and runs the bad-authoring
 corpus. `products/adapter/scripts/test-postgres.sh` runs the
 PostgreSQL-gated suites; without `ADAPTER_TEST_DATABASE_URL` it starts and
-removes its own loopback PostgreSQL container.
+removes its own loopback PostgreSQL container. Docker is also required for the
+real BReg-backed GovStack Write journey: the gate builds matching `breg` and
+`bregctl` binaries and tests Create, conditional Update and uncertain-send
+recovery through the real services. Its BReg development fixtures are stopped
+and retained. To run only that journey against an existing test database, use
+`products/adapter/scripts/test-govstack-breg-write.sh` with
+`ADAPTER_TEST_DATABASE_URL` and `CARGO_TARGET_DIR` set.
 
 `products/adapter/scripts/test-job-postgres.sh` also builds BReg and
 Coordinator together from the current checkout and runs the ignored direct

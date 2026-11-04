@@ -805,6 +805,7 @@ mod tests {
             endpoints: UniqueIdList::new(vec![endpoint()]).expect("unique"),
             route_templates: UniqueIdList::new(vec![RouteTemplate {
                 read_support: None,
+                write_support: None,
                 id: LocalId::new("paged-fetch").expect("id"),
                 parameters: Vec::new(),
                 steps: Vec::new(),
@@ -1061,6 +1062,44 @@ mod tests {
             .is_err(),
             "an unknown member beside the claim refuses"
         );
+    }
+
+    #[test]
+    fn route_templates_declare_source_write_semantics_without_source_brand_fields() {
+        let pack: AdapterPack = serde_json::from_value(serde_json::json!({
+            "id": "source-registry",
+            "version": "1.0.0",
+            "testedVersions": ["1.0"],
+            "routeTemplates": [{
+                "id": "create-record",
+                "writeSupport": {
+                    "type": "create-one",
+                    "identity": "source-assigned",
+                    "replay": {"type": "exact-keyed", "replayWindowSeconds": 604800}
+                }
+            }, {
+                "id": "update-record",
+                "writeSupport": {
+                    "type": "conditional-update-one",
+                    "replay": {"type": "exact-keyed", "replayWindowSeconds": 604800},
+                    "precondition": "strong-atomic-source"
+                }
+            }]
+        }))
+        .expect("pack");
+
+        assert!(matches!(
+            pack.route_templates
+                .get("create-record")
+                .and_then(|template| template.write_support.as_ref()),
+            Some(crate::SourceWriteSupport::CreateOne { .. })
+        ));
+        assert!(matches!(
+            pack.route_templates
+                .get("update-record")
+                .and_then(|template| template.write_support.as_ref()),
+            Some(crate::SourceWriteSupport::ConditionalUpdateOne { .. })
+        ));
     }
 
     /// GraphQL operation kinds spell lowercase on the wire: the

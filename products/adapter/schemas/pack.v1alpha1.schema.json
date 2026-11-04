@@ -1440,6 +1440,10 @@
             "$ref": "#/$defs/Step"
           },
           "type": "array"
+        },
+        "writeSupport": {
+          "$ref": "#/$defs/SourceWriteSupport",
+          "description": "Source-neutral direct-write guarantees every instantiation of this\ntemplate preserves. Public protocol and domain schemas remain\nproject-owned."
         }
       },
       "required": [
@@ -1700,6 +1704,100 @@
           "const": "ongoing",
           "description": "The scan continues: the job re-runs the route until stopped.",
           "type": "string"
+        }
+      ]
+    },
+    "SourceWriteIdentity": {
+      "description": "The source-owned identity behavior a direct Create route guarantees.\nThe first supported shape is intentionally singular: the source assigns\nthe durable key returned in [`SourceWriteReceipt`].",
+      "enum": [
+        "source-assigned"
+      ],
+      "type": "string"
+    },
+    "SourceWritePrecondition": {
+      "description": "The source-owned concurrency behavior an Update route guarantees.",
+      "oneOf": [
+        {
+          "const": "strong-atomic-source",
+          "description": "The source compares and commits the supplied native validator in the\nsame atomic mutation boundary.",
+          "type": "string"
+        }
+      ]
+    },
+    "SourceWriteReplay": {
+      "additionalProperties": false,
+      "description": "Exact source replay semantics and their finite provider-owned window.\nThe host keeps its own idempotency custody within, never beyond, this\ndeclared source guarantee.",
+      "properties": {
+        "replayWindowSeconds": {
+          "description": "Seconds for which the source guarantees an exact same-key replay.",
+          "format": "uint64",
+          "maximum": 31536000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "type": {
+          "$ref": "#/$defs/SourceWriteReplayKind"
+        }
+      },
+      "required": [
+        "type",
+        "replayWindowSeconds"
+      ],
+      "type": "object"
+    },
+    "SourceWriteReplayKind": {
+      "description": "The source-owned replay behavior a direct write guarantees.",
+      "enum": [
+        "exact-keyed"
+      ],
+      "type": "string"
+    },
+    "SourceWriteSupport": {
+      "description": "Source-neutral direct-write semantics explicitly promised by one reusable\npack route template. A host never infers these guarantees from an HTTP\nmethod, provider brand, route id, or successful fixture.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Create exactly one source record and return its source-assigned key.",
+          "properties": {
+            "identity": {
+              "$ref": "#/$defs/SourceWriteIdentity"
+            },
+            "replay": {
+              "$ref": "#/$defs/SourceWriteReplay"
+            },
+            "type": {
+              "const": "create-one",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "identity",
+            "replay"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Update exactly one source record under an atomic source precondition.",
+          "properties": {
+            "precondition": {
+              "$ref": "#/$defs/SourceWritePrecondition"
+            },
+            "replay": {
+              "$ref": "#/$defs/SourceWriteReplay"
+            },
+            "type": {
+              "const": "conditional-update-one",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "replay",
+            "precondition"
+          ],
+          "type": "object"
         }
       ]
     },

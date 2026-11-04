@@ -635,7 +635,7 @@ routeTemplates:
                           entrypoint: accepted_record
 scripts:
   - path: scripts/evidence-native.rhai
-    digest: sha256:0dc33dd86857fc128ec527a87ef272d2cbd7cee80561d339e71a845c2cd9950e
+    digest: sha256:11cbd7e68e9f9de279975fe4bf15f2712e9ce17fddeb8c903f75bee9886d27bd
   - path: scripts/source-identity.rhai
     digest: sha256:0ffb2c9f0d62729346a965a2955ea7fa4dfe2c323623d37f29a2be6343796a0d
   - path: scripts/source-read-one.rhai
@@ -702,8 +702,20 @@ sourceRoutes:
       factsSchema:
         path: schemas/evidence-native-entity.json
         digest: sha256:403584b196f1a0d701db204ab61f94f4d099b61b47c40f2cdfd47e845ecd0121
-      acquisitionPosture: source-derived
+      acquisitionPosture: record-transformed
     steps:
+      - onException:
+          exception: [upstream.http]
+          onWhen:
+            rhai:
+              file: scripts/is-not-found.rhai
+              entrypoint: is_not_found
+          handled: true
+          steps:
+            - setBody:
+                rhai:
+                  file: scripts/evidence-native.rhai
+                  entrypoint: lookup_no_match
       - setProperty:
           name: dhis2EvidenceRecordReference
           value:
