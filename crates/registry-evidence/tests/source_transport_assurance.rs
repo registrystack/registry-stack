@@ -11,8 +11,9 @@ use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use registry_adapter_engine::evidence::ConnectionPolicyReason;
 use registry_evidence::bundle::{evidence_package_limits, DeploymentInputs};
-use registry_evidence::pack_source::{build_sources, PackSourceError};
+use registry_evidence::pack_source::{build_sources, SourceBindingError, SourceBindingReason};
 use registry_evidence::secrets::{SecretProvider, SecretResolver};
 use tempfile::TempDir;
 
@@ -76,6 +77,16 @@ struct PreparedDeployment {
 }
 
 fn prepare_deployment(assurance: &str, base_url: &str) -> PreparedDeployment {
+    prepare_drifted_deployment(assurance, base_url, base_url)
+}
+
+/// Bind the reviewed bundle to `base_url` and the runtime file to
+/// `runtime_base_url`, so a test can drift one from the other.
+fn prepare_drifted_deployment(
+    assurance: &str,
+    base_url: &str,
+    runtime_base_url: &str,
+) -> PreparedDeployment {
     let temporary = tempfile::tempdir().expect("temporary deployment root");
     let bundle_root = temporary.path().join("bundle");
     let secret_root = temporary.path().join("secrets");
@@ -121,7 +132,7 @@ fn prepare_deployment(assurance: &str, base_url: &str) -> PreparedDeployment {
         "  path: /var/lib/registry-evidence/audit/evidence.jsonl",
         &format!("  path: {}", temporary.path().join("audit.jsonl").display()),
     );
-    let runtime = replace_once(runtime, "https://dhis2.gov.example", base_url);
+    let runtime = replace_once(runtime, "https://dhis2.gov.example", runtime_base_url);
     let runtime = runtime.replace("        tlsTrustProfile: government-internal-pki\n", "");
     let runtime = runtime.replace(
         "    outboundTls:\n      trustProfiles:\n        government-internal-pki:\n          caBundleFile: /etc/registry-evidence/ca/government-internal.pem\n",
@@ -151,6 +162,16 @@ fn prepare_deployment(assurance: &str, base_url: &str) -> PreparedDeployment {
         secrets,
         secret_root,
     }
+}
+
+/// The refusal source compilation returns, if any.
+fn binding_refusal(prepared: &PreparedDeployment) -> Option<SourceBindingError> {
+    build_sources(
+        prepared.deployment.bundle(),
+        prepared.deployment.runtime(),
+        &prepared.secrets,
+    )
+    .err()
 }
 
 fn assert_secrets_unread(prepared: &PreparedDeployment) {
@@ -235,13 +256,9 @@ fn bundle_contract_matches_source_transport_assurance() {
 fn deployable_profiles_refuse_mixed_case_plain_http_before_credentials() {
     for assurance in ["production", "evidence-grade"] {
         let prepared = prepare_deployment(assurance, "HtTp://127.0.0.1:19091");
-        let result = build_sources(
-            prepared.deployment.bundle(),
-            prepared.deployment.runtime(),
-            &prepared.secrets,
-        );
-        assert!(
-            matches!(result, Err(PackSourceError::Plan)),
+        assert_eq!(
+            binding_refusal(&prepared).map(|error| error.reason()),
+            Some(SourceBindingReason::BaseUrlRefused),
             "{assurance} accepted a mixed-case plain-HTTP source transport"
         );
         assert_secrets_unread(&prepared);
@@ -281,15 +298,9 @@ fn local_authenticated_http_is_limited_to_canonical_numeric_loopback() {
         "http://10.0.0.1:19091",
     ] {
         let prepared = prepare_deployment("local", refused);
-        assert!(
-            matches!(
-                build_sources(
-                    prepared.deployment.bundle(),
-                    prepared.deployment.runtime(),
-                    &prepared.secrets,
-                ),
-                Err(PackSourceError::Plan)
-            ),
+        assert_eq!(
+            binding_refusal(&prepared).map(|error| error.reason()),
+            Some(SourceBindingReason::BaseUrlRefused),
             "local authenticated source accepted non-canonical or non-loopback HTTP: {refused}"
         );
         assert_secrets_unread(&prepared);
@@ -311,15 +322,9 @@ fn source_base_url_refuses_query_and_fragment_before_credentials() {
         ("local", "http://127.0.0.1:19091/registry#fragment"),
     ] {
         let prepared = prepare_deployment(assurance, refused);
-        assert!(
-            matches!(
-                build_sources(
-                    prepared.deployment.bundle(),
-                    prepared.deployment.runtime(),
-                    &prepared.secrets,
-                ),
-                Err(PackSourceError::Plan)
-            ),
+        assert_eq!(
+            binding_refusal(&prepared).map(|error| error.reason()),
+            Some(SourceBindingReason::BaseUrlRefused),
             "{assurance} source accepted a query or fragment: {refused}"
         );
         assert_secrets_unread(&prepared);
@@ -337,14 +342,9 @@ fn source_startup_refuses_noncanonical_base_paths_before_source_effects() {
         "https://dhis2.gov.example/%7e",
     ] {
         let prepared = prepare_deployment("local", base_url);
-        if !matches!(
-            build_sources(
-                prepared.deployment.bundle(),
-                prepared.deployment.runtime(),
-                &prepared.secrets,
-            ),
-            Err(PackSourceError::Plan)
-        ) {
+        if binding_refusal(&prepared).map(|error| error.reason())
+            != Some(SourceBindingReason::BaseUrlRefused)
+        {
             accepted.push(base_url);
         }
         assert_secrets_unread(&prepared);
@@ -353,6 +353,46 @@ fn source_startup_refuses_noncanonical_base_paths_before_source_effects() {
         accepted.is_empty(),
         "startup admitted noncanonical base paths: {accepted:?}"
     );
+}
+
+#[test]
+fn a_runtime_origin_drifted_from_the_reviewed_one_names_the_source_endpoint_and_rule() {
+    let prepared = prepare_drifted_deployment(
+        "evidence-grade",
+        "https://dhis2.gov.example",
+        "https://drifted.gov.example",
+    );
+    let error = binding_refusal(&prepared).expect("a drifted runtime origin is refused");
+    assert_eq!(error.source_id(), Some("population-tracker"));
+    assert_eq!(error.endpoint(), Some("tracker"));
+    assert_eq!(
+        error.reason(),
+        SourceBindingReason::Policy(ConnectionPolicyReason::BaseUrlMismatch)
+    );
+    let message = error.to_string();
+    assert_eq!(
+        message,
+        "source `population-tracker` endpoint `tracker`: the runtime `baseUrl` differs from the reviewed `baseUrl`"
+    );
+    assert!(
+        !message.contains("gov.example"),
+        "the refusal must not carry an origin: {message}"
+    );
+    assert_secrets_unread(&prepared);
+}
+
+#[test]
+fn a_reviewed_origin_refused_for_its_transport_names_the_source_and_endpoint() {
+    let prepared = prepare_deployment("evidence-grade", "http://127.0.0.1:19091");
+    let error = binding_refusal(&prepared).expect("plain HTTP is refused outside local");
+    assert_eq!(error.source_id(), Some("population-tracker"));
+    assert_eq!(error.endpoint(), Some("tracker"));
+    assert_eq!(error.reason(), SourceBindingReason::BaseUrlRefused);
+    assert!(
+        !error.to_string().contains("127.0.0.1"),
+        "the refusal must not carry an origin: {error}"
+    );
+    assert_secrets_unread(&prepared);
 }
 
 #[test]

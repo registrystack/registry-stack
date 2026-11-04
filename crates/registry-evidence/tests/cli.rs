@@ -1335,6 +1335,90 @@ fn check_refuses_an_already_stale_bound_extract_with_only_the_governed_source() 
 }
 
 #[test]
+fn check_names_the_source_endpoint_and_rule_when_a_runtime_origin_drifts_from_review() {
+    let root = tempfile::tempdir().expect("temporary deployment");
+    let project = Path::new(env!("CARGO_MANIFEST_DIR")).join(
+        "../../products/evidence/reference/request-adapter/deployment-projects/dhis2-tracker-evidence",
+    );
+    let bundle = root.path().join("bundle");
+    copy_tree(&project.join("bundle"), &bundle);
+    let bundle_configuration = bundle.join("evidence.yaml");
+    let bundle_document = fs::read_to_string(&bundle_configuration).expect("read bundle document");
+    fs::write(
+        &bundle_configuration,
+        bundle_document.replace("        tlsTrustProfile: government-internal-pki\n", ""),
+    )
+    .expect("drop the private trust profile");
+
+    let secret_root = root.path().join("secrets");
+    fs::create_dir(&secret_root).expect("create private secret root");
+    fs::set_permissions(&secret_root, fs::Permissions::from_mode(0o700))
+        .expect("set private secret-root mode");
+
+    let reviewed_origin = "https://dhis2.gov.example";
+    let drifted_origin = "https://drifted-tracker.gov.example";
+    let runtime = fs::read_to_string(project.join("runtime.yaml")).expect("read runtime template");
+    let runtime = runtime
+        .replacen(
+            "/etc/registry-evidence/bundle",
+            bundle.to_str().expect("bundle path is UTF-8"),
+            1,
+        )
+        .replacen(
+            "/run/secrets/registry-evidence",
+            secret_root.to_str().expect("secret path is UTF-8"),
+            1,
+        )
+        .replacen(
+            "/var/lib/registry-evidence/audit/evidence.jsonl",
+            root.path()
+                .join("audit.jsonl")
+                .to_str()
+                .expect("audit path is UTF-8"),
+            1,
+        )
+        .replacen(reviewed_origin, drifted_origin, 1)
+        .replace("        tlsTrustProfile: government-internal-pki\n", "")
+        .replace(
+            "    outboundTls:\n      trustProfiles:\n        government-internal-pki:\n          caBundleFile: /etc/registry-evidence/ca/government-internal.pem\n",
+            "",
+        );
+    let runtime_path = root.path().join("runtime.yaml");
+    fs::write(&runtime_path, runtime).expect("stage runtime");
+    refresh_package_envelope(&bundle);
+    set_tree_mode(&bundle, 0o555, 0o444);
+    fs::set_permissions(&runtime_path, fs::Permissions::from_mode(0o444)).expect("seal runtime");
+
+    let output = invoke(&runtime_path, &["check", "--require-runtime-dependencies"]);
+
+    set_tree_mode(&bundle, 0o755, 0o644);
+    fs::set_permissions(&runtime_path, fs::Permissions::from_mode(0o644)).expect("unseal runtime");
+    assert_one_check_error(
+        &output,
+        1,
+        "evidence.deployment.refused",
+        "source pack or connection binding failed compilation: source `population-tracker` endpoint `tracker`: the runtime `baseUrl` differs from the reviewed `baseUrl`",
+    );
+    let diagnostic = String::from_utf8_lossy(&output.stderr);
+    for withheld in [
+        reviewed_origin,
+        drifted_origin,
+        "gov.example",
+        "secret:",
+        "dhis2-username",
+        "dhis2-password",
+        "government-internal",
+        "BEGIN CERTIFICATE",
+        secret_root.to_str().expect("secret path is UTF-8"),
+    ] {
+        assert!(
+            !diagnostic.contains(withheld),
+            "the binding refusal carried `{withheld}`: {diagnostic}"
+        );
+    }
+}
+
+#[test]
 fn check_reports_a_current_over_budget_extract_as_unavailable_not_stale() {
     let root = tempfile::tempdir().expect("temporary deployment");
     let project = Path::new(env!("CARGO_MANIFEST_DIR")).join(
