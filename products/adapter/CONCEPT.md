@@ -2050,8 +2050,12 @@ destination. A path walks nested objects of `value`, and the projected item
 carries one member per path, named by the path as written:
 `household.household_size` reads `{"household": {"household_size": 3}}`
 and hands off `{"household.household_size": 3}`. A source with flat rows,
-such as the PostgreSQL source, projects its column names, or groups columns
-in its route when a workflow expects a grouped path. The item digest covers the projected fields by default
+such as the PostgreSQL source or a CSV file, projects its column names, or groups columns
+in its route when a workflow expects a grouped path. A flat member whose
+name is the dotted path (a CSV column headed `household.household_size`)
+is not that path: the pass stops as `adapter.job.projection-flat-dotted-name`
+before staging the page, rather than hand off a `null`, and the fix is to
+group the columns into a nested object in the route. The item digest covers the projected fields by default
 (`digestOf: projection`); a job may declare `digestOf: value` to digest
 the route's whole `value` together with the sorted declared field list
 instead, so a field-list edit still changes every digest. The store records the projection
