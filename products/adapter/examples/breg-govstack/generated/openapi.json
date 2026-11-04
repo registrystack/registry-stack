@@ -663,6 +663,7 @@
                     "etag": {
                       "maxLength": 258,
                       "minLength": 3,
+                      "pattern": "^\"[\\x21\\x23-\\x7E]{1,256}\"(?![\\s\\S])",
                       "type": "string"
                     },
                     "recordId": {
@@ -690,15 +691,18 @@
                 }
               },
               "ETag": {
-                "description": "Strong validator for the committed guard state.",
+                "description": "Strong opaque validator suitable for If-Match; weak validators are forbidden.",
+                "required": true,
                 "schema": {
                   "maxLength": 258,
                   "minLength": 3,
+                  "pattern": "^\"[\\x21\\x23-\\x7E]{1,256}\"(?![\\s\\S])",
                   "type": "string"
                 }
               },
               "Location": {
                 "description": "URI of the created Record.",
+                "required": true,
                 "schema": {
                   "format": "uri-reference",
                   "maxLength": 2048,
@@ -1101,6 +1105,16 @@
                   "const": "no-store",
                   "type": "string"
                 }
+              },
+              "ETag": {
+                "description": "Strong opaque validator suitable for If-Match; weak validators are forbidden.",
+                "required": true,
+                "schema": {
+                  "maxLength": 258,
+                  "minLength": 3,
+                  "pattern": "^\"[\\x21\\x23-\\x7E]{1,256}\"(?![\\s\\S])",
+                  "type": "string"
+                }
               }
             }
           },
@@ -1366,6 +1380,7 @@
             "schema": {
               "maxLength": 258,
               "minLength": 3,
+              "pattern": "^\"[\\x21\\x23-\\x7E]{1,256}\"(?![\\s\\S])",
               "type": "string"
             }
           }
@@ -1401,10 +1416,12 @@
                 }
               },
               "ETag": {
-                "description": "Strong validator for the committed guard state.",
+                "description": "Strong opaque validator suitable for If-Match; weak validators are forbidden.",
+                "required": true,
                 "schema": {
                   "maxLength": 258,
                   "minLength": 3,
+                  "pattern": "^\"[\\x21\\x23-\\x7E]{1,256}\"(?![\\s\\S])",
                   "type": "string"
                 }
               },

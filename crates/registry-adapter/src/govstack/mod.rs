@@ -34,7 +34,18 @@ pub fn built_in_profile(project: &AdapterProject) -> AdapterProfile {
             .collections
             .iter()
             .any(|collection| collection.update.is_some());
-        if project.consultation.is_none() && has_update {
+        let has_writable_companion = write.collections.iter().any(|collection| {
+            collection.update.as_ref().is_some_and(|update| {
+                project
+                    .bindings
+                    .get(update.companion_read.as_str())
+                    .is_some_and(|binding| {
+                        binding.record_type == collection.record_type
+                            && binding.operation.as_str() == "writable-read"
+                    })
+            })
+        });
+        if has_writable_companion {
             operations.push(json!({
                 "id":"writable-read","method":"GET",
                 "path":"/v1/collections/{collection_id}/records/{record_id}",
@@ -196,7 +207,11 @@ mod tests {
                 "update": {"inputSchema": "person-update", "companionRead": "people-read"}
             }]},
             "pack": {"id": "source", "version": "1", "digest": "sha256:678260a56715cba21db1f0687e5a2c5e5efb2ea0b8eea687b5f3ee8723c5f6c9"},
-            "recordTypes": [{"name": "people", "fields": []}]
+            "recordTypes": [{"name": "people", "fields": []}],
+            "bindings": [{
+                "id": "people-read", "operation": "writable-read",
+                "recordType": "people", "route": "read", "maximumUpstreamCalls": 1
+            }]
         })).expect("write-only project");
         let profile = built_in_profile(&project);
         assert_eq!(profile.operations.len(), 3);
@@ -219,5 +234,162 @@ mod tests {
             204
         );
         assert!(profile.operations.get("writable-read").is_some());
+    }
+
+    #[test]
+    fn mixed_collections_select_and_compile_each_exact_companion_read() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let project_path = root.join("products/adapter/examples/breg-govstack/project.yaml");
+        let pack_path = root.join("products/adapter/packs/breg-records/pack.yaml");
+        let (project, _): (AdapterProject, _) = crate::engine::load::read_artifact(
+            &project_path,
+            registry_adapter_core::ADAPTER_PROJECT_KIND,
+            registry_adapter_core::ADAPTER_PROJECT_API_VERSION,
+        )
+        .expect("the maintained project reads");
+        let (pack, _): (AdapterPack, _) = crate::engine::load::read_artifact(
+            &pack_path,
+            registry_adapter_core::ADAPTER_PACK_KIND,
+            registry_adapter_core::ADAPTER_PACK_API_VERSION,
+        )
+        .expect("the maintained pack reads");
+        let mut value = serde_json::to_value(project).expect("the project serializes");
+        value["write"]["collections"]
+            .as_array_mut()
+            .expect("Write collections")
+            .push(json!({
+                "recordType": "permits",
+                "registry": "https://registry.example/registries/permits",
+                "view": "permit-public",
+                "readDataSchema": "contact-public",
+                "update": {
+                    "inputSchema": "contact-update",
+                    "companionRead": "permits-writable-read"
+                }
+            }));
+        value["recordTypes"]
+            .as_array_mut()
+            .expect("record types")
+            .push(json!({"name": "permits", "fields": []}));
+        value["templatedRoutes"]
+            .as_array_mut()
+            .expect("templated routes")
+            .extend([
+                json!({
+                    "routeTemplate": "read-record",
+                    "routeId": "breg-permit-read",
+                    "parameters": {
+                        "record-route": "contacts",
+                        "access-profile": "directory-editor"
+                    }
+                }),
+                json!({
+                    "routeTemplate": "update-record",
+                    "routeId": "breg-permit-update",
+                    "parameters": {
+                        "record-route": "contacts",
+                        "access-profile": "directory-editor"
+                    }
+                }),
+            ]);
+        value["bindings"].as_array_mut().expect("bindings").extend([
+            json!({
+                "id": "permits-writable-read",
+                "operation": "writable-read",
+                "recordType": "permits",
+                "route": "breg-permit-read",
+                "maximumUpstreamCalls": 1
+            }),
+            json!({
+                "id": "permits-update",
+                "operation": "update",
+                "recordType": "permits",
+                "route": "breg-permit-update",
+                "maximumUpstreamCalls": 1
+            }),
+        ]);
+        value["bindingTransforms"]["permits-writable-read"] =
+            json!({"script": "contact-transform", "entrypoint": "public_contact"});
+        value["bindingTransforms"]["permits-update"] =
+            json!({"script": "contact-transform", "entrypoint": "update_contact"});
+        for access in value["accessProfiles"]
+            .as_array_mut()
+            .expect("access profiles")
+        {
+            access["recordTypes"]
+                .as_array_mut()
+                .expect("access record types")
+                .push(json!("permits"));
+            if access["id"] == "records-reader" {
+                access["operations"]
+                    .as_array_mut()
+                    .expect("reader operations")
+                    .push(json!("writable-read"));
+            }
+        }
+        let project: AdapterProject =
+            serde_json::from_value(value).expect("the mixed project parses");
+        let profile = built_in_profile(&project);
+
+        assert!(profile.operations.get("retrieve").is_some());
+        assert!(profile.operations.get("writable-read").is_some());
+        let findings = registry_adapter_core::check_workspace(&registry_adapter_core::Workspace {
+            profile: &profile,
+            pack: &pack,
+            project: &project,
+            runtime: None,
+            fixtures: &[],
+        });
+        assert!(findings.is_empty(), "{findings:?}");
+        target_attachment(
+            &project,
+            &pack,
+            project_path.parent().expect("project directory"),
+        )
+        .expect("the mixed target attaches");
+
+        let schemas = ["contact-public", "contact-create", "contact-update"]
+            .into_iter()
+            .map(|id| {
+                (
+                    id.to_owned(),
+                    consultation::OpenApiSchema {
+                        identity: format!("https://registry.example/schemas/{id}/1"),
+                        component: json!({"type": "object", "additionalProperties": false}),
+                    },
+                )
+            })
+            .collect();
+        let document = consultation::assemble_openapi(&project, &schemas)
+            .expect("the mixed contract assembles");
+        let contacts = &document["paths"]["/v1/collections/contacts/records/{recordId}"]["get"];
+        let permits = &document["paths"]["/v1/collections/permits/records/{recordId}"]["get"];
+        assert_eq!(contacts["operationId"], "retrieveContacts");
+        assert_eq!(permits["operationId"], "retrievePermits");
+        for companion in [contacts, permits] {
+            assert_eq!(
+                companion["responses"]["200"]["headers"]["ETag"]["required"],
+                true
+            );
+            assert_eq!(
+                companion["responses"]["200"]["headers"]["ETag"]["schema"]["pattern"],
+                r#"^"[\x21\x23-\x7E]{1,256}"(?![\s\S])"#
+            );
+        }
+        assert_eq!(
+            document["paths"]
+                .as_object()
+                .expect("paths")
+                .values()
+                .filter(|path| path.get("get").is_some())
+                .count(),
+            3,
+            "two companion reads plus capabilities"
+        );
+        assert_eq!(
+            document["paths"]["/v1/collections/permits/records/{recordId}"]["patch"]
+                ["x-govstack-digital-registries-write"]["companionRead"]["operationId"],
+            permits["operationId"]
+        );
     }
 }
