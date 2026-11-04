@@ -636,6 +636,45 @@ class AdvisoryRenewalTest(TestCase):
         self.assert_refused("future-dated exception", reviewed_at="2026-09-16")
         self.assert_refused("not an ISO date", reviewed_at="15/09/2026")
 
+    def test_future_review_date_is_refused_naming_the_exception(self) -> None:
+        stderr = self.assert_refused("future-dated exception", reviewed_at="2026-09-16")
+        exception = self.read_json(self.baseline_path("breg"))["exceptions"][0]
+        key = " ".join(renewal.checker.exception_key(exception))
+        self.assertIn(f"breg: {key}: future-dated exception", stderr)
+        self.assertIn("2026-09-16", stderr)
+        self.assertIn("2026-09-15", stderr)
+
+    def test_review_timestamps_are_refused_as_not_plain_dates(self) -> None:
+        for timestamp in (
+            "2026-09-15T08:00:00",
+            "2026-09-15T08:00:00+00:00",
+            "2026-09-15T08:00:00Z",
+            "2026-09-15 08:00",
+        ):
+            with self.subTest(timestamp=timestamp):
+                self.assert_refused("not an ISO date", reviewed_at=timestamp)
+
+    def test_default_evaluation_date_is_the_utc_date(self) -> None:
+        behind_utc = dt.datetime(
+            2026, 9, 15, 22, 30, tzinfo=dt.timezone(dt.timedelta(hours=-5))
+        )
+        self.assertEqual(
+            dt.date(2026, 9, 16), renewal.evaluation_date(None, now=behind_utc)
+        )
+        ahead_of_utc = dt.datetime(
+            2026, 9, 16, 1, 30, tzinfo=dt.timezone(dt.timedelta(hours=5))
+        )
+        self.assertEqual(
+            dt.date(2026, 9, 15), renewal.evaluation_date(None, now=ahead_of_utc)
+        )
+        self.assertEqual(
+            dt.date(2026, 9, 1), renewal.evaluation_date("2026-09-01", now=behind_utc)
+        )
+
+    def test_evaluation_clock_without_a_utc_offset_is_refused(self) -> None:
+        with self.assertRaisesRegex(renewal.RenewalError, "UTC offset"):
+            renewal.evaluation_date(None, now=dt.datetime(2026, 9, 15, 8, 0))
+
     def test_refuses_expired_exception_instead_of_extending_it(self) -> None:
         self.edit_json(
             self.baseline_path("evidence"),
