@@ -989,7 +989,7 @@ where
     let value = bool::deserialize(deserializer)?;
     if !value {
         return Err(serde::de::Error::custom(
-            "producerAtomicHandover must be true for completed-name readiness",
+            "producerAtomicHandover must be true: the producer renames each finished file into the directory; declare another completion rule if it does not",
         ));
     }
     Ok(value)
@@ -1224,7 +1224,7 @@ impl FileSourceConfig {
         {
             return Ok(());
         }
-        Err("the source declares no way to know a file is complete; declare one of doneFileName, readLock: changed, or producerAtomicHandover: true".to_owned())
+        Err("the source declares no way to know a file is complete".to_owned())
     }
 
     /// The source's resolved read lock. A lock name outside the closed
@@ -1856,9 +1856,9 @@ mod tests {
 
     /// A local file source declares how it knows a file is complete: a
     /// done file, the changed read lock, or the producer's atomic
-    /// handover. A source declaring none refuses, and the refusal names
-    /// all three choices; a false handover refuses at the reader, the
-    /// way the SFTP completed-name declaration does.
+    /// handover. A source declaring none refuses (the job's next step
+    /// names the three choices); a false handover refuses at the reader,
+    /// the way the SFTP completed-name declaration does.
     #[test]
     fn a_file_source_must_declare_how_it_knows_a_file_is_complete() {
         let source = |extra: &str| {
@@ -1871,13 +1871,10 @@ mod tests {
                 .expect("the reader carries the members")
                 .completion_declared()
                 .expect_err("a source with no completion declaration refuses");
-            for wanted in [
-                "doneFileName",
-                "readLock: changed",
-                "producerAtomicHandover: true",
-            ] {
-                assert!(refusal.contains(wanted), "{wanted}: {refusal}");
-            }
+            assert!(
+                refusal.contains("no way to know a file is complete"),
+                "{refusal}"
+            );
         }
         for declared in [
             r#", "doneFileName": "${file:name}.done""#,
