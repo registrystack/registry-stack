@@ -370,6 +370,53 @@ fn the_generated_sqlite_starter_target_binds_its_extract_profile() {
     assert!(!printed.contains("source-extract-unbound"), "{printed}");
 }
 
+/// A fresh starter, a local target made for it, then a package. The target must
+/// carry the connections the starter's Source references, or the real Evidence
+/// binary refuses to render the publication. The one edit the journey keeps is
+/// the deployment's own: binding the published extract file the Source reads.
+/// The refusal lives in that binary, so this exact gate needs `EVIDENCE_BIN`.
+#[test]
+#[ignore = "exact gate: needs the real Evidence binary in EVIDENCE_BIN"]
+fn a_fresh_starter_packages_against_its_new_local_target() {
+    let workspace = TempDir::new().expect("temporary directory");
+    let root = fs::canonicalize(workspace.path()).expect("canonical temporary directory");
+    let project = root.join("project");
+    let output = sqlite_new(&project, &[]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let evidence = std::env::var_os("EVIDENCE_BIN")
+        .expect("set EVIDENCE_BIN to the Evidence binary built from this source");
+
+    let target = root.join("target");
+    let created = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+        .args(["target", "new", path(&target), "--project", path(&project)])
+        .arg("--local")
+        .output()
+        .expect("create the local target");
+    assert!(created.status.success(), "{}", stderr(&created));
+    let mut target_file = fs::OpenOptions::new()
+        .append(true)
+        .open(target.join("target.yaml"))
+        .expect("open the new target");
+    std::io::Write::write_all(
+        &mut target_file,
+        b"extracts:\n  record-status:\n    path: extracts/record-status.sqlite\n",
+    )
+    .expect("bind the published extract");
+
+    let packaged = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+        .args(["package", path(&project), "--target", path(&target)])
+        .args(["--output", path(&root.join("package"))])
+        .env("EVIDENCE_BIN", evidence)
+        .output()
+        .expect("package the starter");
+    let printed = format!("{}{}", stdout(&packaged), stderr(&packaged));
+    assert!(packaged.status.success(), "{printed}");
+    assert!(
+        !printed.contains("publication-invalid"),
+        "no publication refusal: {printed}"
+    );
+}
+
 /// `check --target` refuses a complete target authority grant that exceeds its
 /// AssertionDefinition ceiling, then accepts the exact generated grant again.
 #[test]
