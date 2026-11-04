@@ -10,6 +10,9 @@ use std::{
     process::{Command, Stdio},
 };
 
+#[path = "support/executable.rs"]
+mod executable;
+
 const VERSION: &str = registry_platform_buildinfo::DISPLAY_VERSION;
 
 fn evidencectl() -> Command {
@@ -35,6 +38,8 @@ fn write_evidence_stub(path: &Path, body: &str) {
         "#!/bin/sh\nif [ \"${{1:-}}\" = \"--version\" ]; then\n  printf 'evidence %s\\n' '{VERSION}'\n  exit 0\nfi\n{body}"
     )
     .expect("write evidence stub");
+    drop(file);
+    executable::wait_until_executable(path);
 }
 
 fn unmanaged_stub(root: &Path, body: &str) -> PathBuf {

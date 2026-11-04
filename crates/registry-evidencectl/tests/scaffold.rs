@@ -13,6 +13,9 @@ use std::{
 
 use tempfile::TempDir;
 
+#[path = "support/executable.rs"]
+mod executable;
+
 const OPENAPI: &str = "# retained comment\r\nopenapi: 3.1.0\r\ninfo:\r\n  title: Records\r\n  version: 1.0.0\r\npaths: {}\r\n";
 
 #[test]
@@ -217,6 +220,7 @@ exit 0
     let mut permissions = fs::metadata(&path).expect("stat stub").permissions();
     permissions.set_mode(0o755);
     fs::set_permissions(&path, permissions).expect("chmod stub");
+    executable::wait_until_executable(&path);
     path
 }
 
