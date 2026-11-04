@@ -21,9 +21,10 @@ not resolve), `returned-reviewed`, and `review-timeout`. A review or Proposal
 that nobody answers within fourteen days finishes as `review-timeout` or
 `proposal-timeout`; the workflow language has no step that raises attention, so
 these are ordinary finished Runs. The Adapter has already acknowledged the
-source item by then, so an operator who wants to catch timeouts reads the
-finished Runs and their outcomes (`GET /v1/runs?state=finished`, then the
-`outcome` member of each).
+source item by then, so an operator who wants to catch timeouts lists them by
+outcome: `coordinatorctl list --outcome review-timeout` and
+`coordinatorctl list --outcome proposal-timeout` (the same filter is
+`GET /v1/runs?outcome=review-timeout`).
 
 `scenarios.yaml` runs the revised branches and the timeout offline:
 `coordinatorctl test --project .`.
@@ -34,7 +35,7 @@ BReg package, and must replace the synthetic review-policy digest in
 `functions.rhai` with the binding reported by `caseworkctl check`. Coordinator
 package checking then pins both values.
 
-Coordinator currently exposes state/attention, Proposal following, and Run
-turn operations needed by this journey. It has no Run-list filter by finish
-outcome. `GET /v1/runs?attention=true` remains sufficient for stopped or failed
+Coordinator currently exposes state/attention, Proposal following, finish
+outcome, and Run turn operations needed by this journey.
+`GET /v1/runs?attention=true` remains sufficient for stopped or failed
 work; it does not replace Casework for revised items requiring a person.
