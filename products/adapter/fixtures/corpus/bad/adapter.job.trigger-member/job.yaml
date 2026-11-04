@@ -1,12 +1,12 @@
 # yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/job/job.v1alpha1.schema.json
 #
-# Bad-corpus member adapter.job.trigger-hook-unserved: this artifact set must be refused with
-# exactly adapter.job.trigger-hook-unserved. The clean hook has no runtime authentication and rate binding.
+# Bad-corpus member adapter.job.trigger-member: this artifact set must be refused with
+# exactly adapter.job.trigger-member. The job's interval trigger carries path, a member only a hook trigger takes.
 #
 # The job definition is refused by the job compiler's check_job over the
 # pinned pack beside this file (the workspace itself stays clean):
-#   job check products/adapter/fixtures/corpus/bad/adapter.job.trigger-hook-unserved/job.yaml
-#     --pack products/adapter/fixtures/corpus/bad/adapter.job.trigger-hook-unserved/pack.yaml
+#   job check products/adapter/fixtures/corpus/bad/adapter.job.trigger-member/job.yaml
+#     --pack products/adapter/fixtures/corpus/bad/adapter.job.trigger-member/pack.yaml
 apiVersion: id.registrystack.org/formats/adapter/job/v1alpha1
 kind: AdapterJob
 job:
@@ -16,7 +16,7 @@ source:
   pack:
     id: case-api-pack
     version: "1"
-    digest: sha256:a5dafe4e4235f5e939a69878803c2fe9dbfb5569e0db0d663047b17c437e6066
+    digest: sha256:558db3f23ab3db04d0b6d2ec3a29c15052703b6bcb95b423230e37cd65e86ab8
   route: kobo-submissions
 destination:
   type: signed-coordinator-event
@@ -33,7 +33,6 @@ projection:
 triggers:
   - kind: interval
     delayMilliseconds: 60000
-  - kind: hook
     path: /hooks/submissions
 profile:
   pageDeadlineMilliseconds: 300000

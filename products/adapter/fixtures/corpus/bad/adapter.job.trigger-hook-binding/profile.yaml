@@ -1,10 +1,10 @@
 # yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/profile/profile.v1alpha1.schema.json
 #
-# Bad-corpus member adapter.job.trigger-hook-unserved: this artifact set must be refused with
-# exactly adapter.job.trigger-hook-unserved. Clean baseline profile; the job's hook has no runtime binding.
+# Bad-corpus member adapter.job.trigger-hook-binding: this artifact set must be refused with
+# exactly adapter.job.trigger-hook-binding. Clean baseline profile; the job's hook has no runtime binding.
 #
 # Refuse with:
-#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.job.trigger-hook-unserved/project.yaml
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.job.trigger-hook-binding/project.yaml
 apiVersion: id.registrystack.org/formats/adapter/profile/v1alpha1
 kind: AdapterProfile
 id: case-api

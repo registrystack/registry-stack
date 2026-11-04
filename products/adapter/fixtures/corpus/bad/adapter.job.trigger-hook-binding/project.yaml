@@ -1,0 +1,43 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.job.trigger-hook-binding: this artifact set must be refused with
+# exactly adapter.job.trigger-hook-binding. Clean baseline project; the job's hook has no runtime binding.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.job.trigger-hook-binding/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-api-example
+  version: "1"
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:c410fde1ff68a723a101f3372bce741a7136d0283b190e1a88e225abf0a40d6d
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:aee921fc41ab2c52c904ac8ec5dc75484b6bd7c91a4d2290e6154881de45797d
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplate: find-cases
+    routeId: case-find
+bindings:
+  - id: case-get
+    operation: cases-get
+    recordType: case
+    route: case-find
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases-get
+    recordTypes:
+      - case

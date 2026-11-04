@@ -816,7 +816,7 @@ async fn a_pending_delivery_stops_on_receiver_drift_and_recovers_on_equality() {
     let original = IdentifiedDestination::script(
         [0x11; 32],
         vec![HandOffOutcome::StopPass {
-            code: "coordinator.event.outcome-uncertain".to_string(),
+            code: "adapter.job.coordinator.event.outcome-uncertain".to_string(),
         }],
     );
     let first = run_pass(&pool, &program, &original, options(20)).await;
@@ -2806,8 +2806,8 @@ async fn status_explains_aggregate_holds_without_promising_release() {
     let isolated = isolated().await;
     let client = isolated.pool.get().await.expect("a pooled client");
     for (key, code) in [
-        ("submissions/a", "idempotency.expired"),
-        ("submissions/b", "idempotency.expired"),
+        ("submissions/a", "adapter.job.breg.idempotency.expired"),
+        ("submissions/b", "adapter.job.breg.idempotency.expired"),
         ("submissions/c", "adapter.job.breg-receipt-horizon"),
         ("submissions/d", "adapter.job.rabbitmq-event-changed"),
     ] {
@@ -2835,7 +2835,7 @@ async fn status_explains_aggregate_holds_without_promising_release() {
     let report: Value = serde_json::from_slice(&output.stdout).expect("status prints JSON");
     assert_eq!(report.pointer("/items/held"), Some(&json!(4)));
     assert_eq!(
-        report.pointer("/holdsByCode/idempotency.expired"),
+        report.pointer("/holdsByCode/adapter.job.breg.idempotency.expired"),
         Some(&json!(2))
     );
     assert_eq!(
@@ -2851,7 +2851,7 @@ async fn status_explains_aggregate_holds_without_promising_release() {
         .expect("status prints aggregate hold guidance");
     assert_eq!(guidance.len(), 3);
     for (code, count, owner) in [
-        ("idempotency.expired", 2, "breg"),
+        ("adapter.job.breg.idempotency.expired", 2, "breg"),
         ("adapter.job.breg-receipt-horizon", 1, "breg"),
         ("adapter.job.rabbitmq-event-changed", 1, "broker-operator"),
     ] {
@@ -2908,7 +2908,7 @@ async fn inspect_explains_direct_and_coordinator_holds_without_item_values() {
     for (fixture, code, run_id, prior_run_id, owner, reference, authority) in [
         (
             &direct,
-            "idempotency.expired",
+            "adapter.job.breg.idempotency.expired",
             Some("proposal-a"),
             None,
             "breg",
@@ -3281,7 +3281,7 @@ async fn a_stale_lease_epoch_refuses_every_fenced_write() {
             &mut client,
             "case-daily",
             "submissions/a",
-            "idempotency.expired",
+            "adapter.job.breg.idempotency.expired",
             None,
             SystemTime::now(),
             stale,
@@ -3472,7 +3472,10 @@ async fn an_answer_code_over_its_bound_stops_under_the_invalid_answer_code() {
             code: "y".repeat(300),
         },
         held(&"z".repeat(300), None),
-        held("idempotency.expired", Some(&"r".repeat(300))),
+        held(
+            "adapter.job.breg.idempotency.expired",
+            Some(&"r".repeat(300)),
+        ),
         acknowledged(&"r".repeat(300)),
     ] {
         let (fixture, pool) = pass_fixture().await;

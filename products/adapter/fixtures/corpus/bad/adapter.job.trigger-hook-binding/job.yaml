@@ -1,0 +1,48 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/job/job.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.job.trigger-hook-binding: this artifact set must be refused with
+# exactly adapter.job.trigger-hook-binding. The clean hook has no runtime authentication and rate binding.
+#
+# The job definition is refused by the job compiler's check_job over the
+# pinned pack beside this file (the workspace itself stays clean):
+#   job check products/adapter/fixtures/corpus/bad/adapter.job.trigger-hook-binding/job.yaml
+#     --pack products/adapter/fixtures/corpus/bad/adapter.job.trigger-hook-binding/pack.yaml
+apiVersion: id.registrystack.org/formats/adapter/job/v1alpha1
+kind: AdapterJob
+job:
+  id: kobo-daily
+  version: "1"
+source:
+  pack:
+    id: case-api-pack
+    version: "1"
+    digest: sha256:aee921fc41ab2c52c904ac8ec5dc75484b6bd7c91a4d2290e6154881de45797d
+  route: kobo-submissions
+destination:
+  type: signed-coordinator-event
+  binding: coordinator-test
+  workflow: case-ingestion
+  trigger: submitted
+  source: urn:registry-adapter:job:kobo-daily
+  eventType: org.example.case-submitted.v1
+  dataSchema: urn:example:schema:case-submitted:v1
+projection:
+  fields:
+    - submission.id
+    - submission.status
+triggers:
+  - kind: interval
+    delayMilliseconds: 60000
+  - kind: hook
+    path: /hooks/submissions
+profile:
+  pageDeadlineMilliseconds: 300000
+  maximumResponseBytes: 16777216
+  maximumPageItems: 500
+  maximumPageBytes: 1048576
+  maximumUpstreamCalls: 4
+  read:
+    maximumFileBytes: 1073741824
+    maximumRowBytes: 1048576
+    maximumFieldBytes: 65536
+    maximumRowsPerPage: 500
