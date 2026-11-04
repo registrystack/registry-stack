@@ -60,6 +60,11 @@
   it uses `curry`: settle runs with the 0.45.0 binaries, then check and
   promote the project again.
 
+- A Proposal wait whose first read shows BReg applying the Proposal
+  automatically (`submitted`, `turn: nobody`) reads once more about three
+  seconds later, so a review-free Proposal settles at once instead of after
+  `resultCheckSeconds`.
+
 ## 0.45.0 - 2026-11-03
 
 - BREAKING: Registry Record v1 renames `entityTypeIdentifier` to

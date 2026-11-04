@@ -163,7 +163,11 @@ the BReg connection's `resultCheckSeconds` (60 to 86,400 seconds, default 900). 
 and budgets its reads by the deployment read floor, `minimumObservationIntervalSeconds` (default 30
 seconds), as a Casework `result` wait does: its observation limit is
 one read per floor interval over its timeout, plus one, and a wake-up or Check now may read
-early, down to the floor, without exhausting that budget before the timeout. The step settles
+early, down to the floor, without exhausting that budget before the timeout. When the wait's
+first read shows the Proposal `submitted` with `turn: nobody`, BReg is applying it automatically,
+so the same read asks once more about three seconds later; a review-free Proposal then settles
+at once instead of after `resultCheckSeconds`. That follow-up is part of the first read and does
+not count against the budget. The step settles
 only from the current Proposal Get, never from a Casework result for the Proposal subject and
 never from a lifecycle event. A later `wait-for` may name the same `proposal` completion after an
 earlier wait on it timed out, and observes the same Proposal afresh.
