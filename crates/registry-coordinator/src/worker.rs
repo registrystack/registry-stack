@@ -466,22 +466,21 @@ impl Worker {
                         .and_then(|budget| budget.checked_sub(PROPOSAL_FOLLOW_UP_DELAY))
                     {
                         tokio::time::sleep(PROPOSAL_FOLLOW_UP_DELAY).await;
-                        match tokio::time::timeout(
+                        // Only a follow-up that settles or follows the Proposal
+                        // replaces the first read. Any other answer (unavailable,
+                        // held, uncertain, no answer in time) keeps it, and the
+                        // wait falls back to its scheduled spacing.
+                        if let Ok(
+                            follow_up @ (CompletionObservation::Settled(_)
+                            | CompletionObservation::Followed { .. }),
+                        ) = tokio::time::timeout(
                             budget,
                             self.adapters
                                 .observe_completion(request, accepted_value, completion),
                         )
                         .await
                         {
-                            // Only a follow-up that settles or follows the
-                            // Proposal replaces the first read. Any other answer
-                            // (unavailable, held, uncertain) keeps it, and the
-                            // wait falls back to its scheduled spacing.
-                            Ok(
-                                follow_up @ (CompletionObservation::Settled(_)
-                                | CompletionObservation::Followed { .. }),
-                            ) => read = Some(follow_up),
-                            Ok(_) | Err(_) => {}
+                            read = Some(follow_up);
                         }
                     }
                 }
