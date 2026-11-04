@@ -330,6 +330,9 @@ pub(crate) fn run(args: &CheckArgs) -> Result<CheckRun, CheckFailure> {
     for diagnostic in check_workspace(&workspace) {
         report.push(diagnostic);
     }
+    if !report.has_errors() {
+        verify_consultation_transforms(&project, &project_path, &mut report);
+    }
     check_fixture_bodies(&profile, &project, &fixtures, &mut report);
     check_consultation_fixture_bodies(&project, &directory, &fixtures, &mut report);
 
@@ -442,6 +445,47 @@ pub(crate) fn verify_project_artifacts(
         }
     }
     Ok(())
+}
+
+/// Compile every selected Consultation transformation from the exact pinned
+/// project closure. `check` and `compile` call this same boundary, so neither
+/// can publish a contract that the runtime would later refuse at startup.
+pub(crate) fn verify_consultation_transforms(
+    project: &registry_adapter_core::AdapterProject,
+    project_path: &Path,
+    report: &mut Report,
+) {
+    let Some(consultation) = project.consultation.as_ref() else {
+        return;
+    };
+    let directory = project_path.parent().unwrap_or_else(|| Path::new(""));
+    for binding in project.bindings.iter() {
+        let Some(collection) = consultation.collections.get(binding.record_type.as_str()) else {
+            continue;
+        };
+        if registry_adapter::engine::project_transform::CompiledProjectTransform::compile_from_directory(
+            project,
+            binding.id.as_str(),
+            collection.data_schema.as_str(),
+            directory,
+        )
+        .is_ok()
+        {
+            continue;
+        }
+        let mut diagnostic = finding(
+            CheckCode::ProjectTransformUncompilable,
+            &format!("/bindingTransforms/{}", binding.id.as_str()),
+            "the Consultation binding transformation cannot be compiled from its pinned project closure",
+            "Restore the reviewed script and schema bytes, select their inventoried ids, and name an entrypoint with exactly one source parameter.",
+        );
+        diagnostic.source = Some(registry_platform_yaml::Source {
+            file: project_path.display().to_string(),
+            line: None,
+            column: None,
+        });
+        report.push(diagnostic);
+    }
 }
 
 fn project_artifact_finding(

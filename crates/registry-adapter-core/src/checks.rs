@@ -5032,6 +5032,16 @@ pub fn check_project_transform_artifacts(project: &AdapterProject) -> Vec<Diagno
                 ));
             }
         }
+        for binding in project.bindings.iter() {
+            if !project.binding_transforms.contains_key(&binding.id) {
+                findings.push(finding(
+                    CheckCode::ProjectTransformMissing,
+                    &format!("/bindingTransforms/{}", binding.id.as_str()),
+                    "a Consultation binding has no project transformation",
+                    "Add a bindingTransforms entry keyed by this binding id.",
+                ));
+            }
+        }
     }
     for (index, script) in project.artifacts.scripts.iter().enumerate() {
         if !clean_project_artifact_path(&script.file) {

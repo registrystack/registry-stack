@@ -1089,7 +1089,7 @@
             {
               "name": "lock",
               "invocation": "adapterctl project lock",
-              "about": "Compute and write the profile and pack digest pins in project.yaml, and the pack's script and query-file digest pins, from the artifacts beside them",
+              "about": "Compute and write every project, profile, and pack artifact digest pin from the artifacts beside the authored documents",
               "long_about": null,
               "usage": "adapterctl project lock [OPTIONS] <PROJECT>",
               "arguments": [
