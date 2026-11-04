@@ -494,8 +494,9 @@ Each source is a thin governed binding to an Adapter pack route:
 | `route` | yes | Evidence route id declared by the pinned pack. The route contract fixes its input schema, facts schema, and acquisition posture. |
 | `connection` | yes | Governed `sourceConnections` owner and matching runtime resource id. SQLite-only and no-send routes still use a named empty owner, which grants no network authority. |
 | `inputs` | when the route declares inputs | Named route inputs, each projected from one authorized selector `role`, `profile`, and `field`. Caller values cannot select another input or endpoint. |
-| `posture` | yes | `source-derived`, `field-projected`, or `record-transformed`, exactly equal to the digest-pinned route contract. |
-| `factSchema` | yes | Bundle-relative schema under `schemas/`, with JSON meaning equal to the pinned route facts schema. Nested objects, arrays, and optional declared fields are preserved. |
+| `posture` | yes | `source-derived`, `field-projected`, or `record-transformed`, never stronger than the digest-pinned route contract. A project projection requires `record-transformed`. |
+| `factSchema` | yes | Bundle-relative final facts schema under `schemas/`. It equals the pinned route facts schema when no projection is selected; a project projection instead validates its output against this versioned, closed schema. |
+| `projection` | no | Governed `{script, entrypoint, digest}` for a project-owned Rhai projection of already-matched native facts. The script is under `derivations/`, its exact SHA-256 pin is checked, and it retains the acquisition deadline. It cannot change acquisition or lookup classification. |
 
 The pack owns the closed HTTP, GraphQL, SQLite, extraction, and response-
 validation steps. Evidence does not compile a second inline request language
@@ -673,8 +674,11 @@ declare `onFallback`, `ignoreException` or `recordException`. Retry-only
 as `no-match`, catch `upstream.http` with an `onWhen` status test. The
 `registry-lookup-v1` host protocol needs no handler: it verifies its declared
 Problem Details 404 and hands the route an `unresolved` body. Matched facts are validated against the
-pinned route facts schema and the semantically equal bundle `factSchema`
-before requirement derivation runs.
+pinned route facts schema before any optional project projection. Without a
+projection the bundle `factSchema` is semantically identical. With a projection,
+its output must validate against the bundle's versioned final facts schema.
+Both schemas and the script remain governed; failures release no derived result.
+No-match, ambiguous and unresolved outcomes bypass the projection unchanged.
 
 ### Requirement derivation selector inputs
 
@@ -1395,6 +1399,10 @@ sources.*.pack.digest
 sources.*.pack.id
 sources.*.pack.version
 sources.*.posture
+sources.*.projection
+sources.*.projection.digest
+sources.*.projection.entrypoint
+sources.*.projection.script
 sources.*.route
 subjectBinding
 subjectBinding.keyVersion

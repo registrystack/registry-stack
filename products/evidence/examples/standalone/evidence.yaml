@@ -27,6 +27,10 @@ sources:
     pack: {id: synthetic-register, version: '1'}
     route: person
     connection: synthetic-register
+    projection:
+      source: projections/person-facts.rhai
+      entrypoint: project_facts
+      schema: schemas/person-facts.json
     acquisitionPosture: record-transformed
     inputs:
       recordId:

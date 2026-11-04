@@ -52,6 +52,7 @@ pub enum CheckCode {
     PackGraphQlQueryRequired,
     PackInvalidHeaderName,
     PackMapParameterMisplaced,
+    PackReadSupportInvalid,
     PackReservedHeaderName,
     PackScriptUncompilable,
     PackSqliteExtractInvalid,
@@ -74,6 +75,7 @@ pub enum CheckCode {
     ProfileProblemClassUnresolved,
     ProfileProblemEnvelopeMissingCodeSlot,
     ProfileProblemEnvelopeUncompilable,
+    ProfileProblemErrorsSlotForm,
     ProfileReadOnlyMethod,
     ProfileRecordIdParameterMissing,
     ProfileRequestEnvelopeMissingRecordSlot,
@@ -85,8 +87,13 @@ pub enum CheckCode {
     ProfileUnresolvedPathParameter,
     // adapter.project.*
     ProjectAccessProfileScopesEmpty,
+    ProjectArtifactPath,
     ProjectAsyncDeclarationMismatch,
+    ProjectConsultationContractInvalid,
     ProjectDuplicateRouteId,
+    ProjectConsultationOperationCollision,
+    ProjectConsultationRegistryInvalid,
+    ProjectFacadeSelection,
     ProjectFilterParameterCollision,
     ProjectParameterTypeMismatch,
     ProjectParameterizedPartUnbound,
@@ -94,6 +101,9 @@ pub enum CheckCode {
     ProjectPinVersionMismatch,
     ProjectRequiredParameterUnbound,
     ProjectTemplateNotInstantiated,
+    ProjectTransformBindingUnknown,
+    ProjectTransformEntrypoint,
+    ProjectTransformScriptUnknown,
     ProjectUnknownFilterField,
     ProjectUnknownOperation,
     ProjectUnknownRecordType,
@@ -190,6 +200,7 @@ impl CheckCode {
         Self::PackGraphQlQueryRequired,
         Self::PackInvalidHeaderName,
         Self::PackMapParameterMisplaced,
+        Self::PackReadSupportInvalid,
         Self::PackReservedHeaderName,
         Self::PackScriptUncompilable,
         Self::PackSqliteExtractInvalid,
@@ -211,6 +222,7 @@ impl CheckCode {
         Self::ProfileProblemDataSlotUnused,
         Self::ProfileProblemEnvelopeMissingCodeSlot,
         Self::ProfileProblemEnvelopeUncompilable,
+        Self::ProfileProblemErrorsSlotForm,
         Self::ProfileReadOnlyMethod,
         Self::ProfileRecordIdParameterMissing,
         Self::ProfileRequestEnvelopeMissingRecordSlot,
@@ -221,8 +233,13 @@ impl CheckCode {
         Self::ProfileUnknownSlot,
         Self::ProfileUnresolvedPathParameter,
         Self::ProjectAccessProfileScopesEmpty,
+        Self::ProjectArtifactPath,
         Self::ProjectAsyncDeclarationMismatch,
+        Self::ProjectConsultationContractInvalid,
+        Self::ProjectConsultationOperationCollision,
+        Self::ProjectConsultationRegistryInvalid,
         Self::ProjectDuplicateRouteId,
+        Self::ProjectFacadeSelection,
         Self::ProjectFilterParameterCollision,
         Self::ProjectParameterTypeMismatch,
         Self::ProjectParameterizedPartUnbound,
@@ -230,6 +247,9 @@ impl CheckCode {
         Self::ProjectPinVersionMismatch,
         Self::ProjectRequiredParameterUnbound,
         Self::ProjectTemplateNotInstantiated,
+        Self::ProjectTransformBindingUnknown,
+        Self::ProjectTransformEntrypoint,
+        Self::ProjectTransformScriptUnknown,
         Self::ProjectUnknownFilterField,
         Self::ProjectUnknownOperation,
         Self::ProjectUnknownRecordType,
@@ -328,6 +348,7 @@ impl CheckCode {
             Self::PackGraphQlQueryRequired => "adapter.pack.graphql-query-required",
             Self::PackInvalidHeaderName => "adapter.pack.invalid-header-name",
             Self::PackMapParameterMisplaced => "adapter.pack.map-parameter-misplaced",
+            Self::PackReadSupportInvalid => "adapter.pack.read-support-invalid",
             Self::PackReservedHeaderName => "adapter.pack.reserved-header-name",
             Self::PackSqliteExtractInvalid => "adapter.pack.sqlite-extract-invalid",
             Self::PackScriptUncompilable => "adapter.pack.script-uncompilable",
@@ -357,6 +378,7 @@ impl CheckCode {
             Self::ProfileProblemEnvelopeUncompilable => {
                 "adapter.profile.problem-envelope-uncompilable"
             }
+            Self::ProfileProblemErrorsSlotForm => "adapter.profile.problem-errors-slot-form",
             Self::ProfileReadOnlyMethod => "adapter.profile.read-only-method",
             Self::ProfileRecordIdParameterMissing => "adapter.profile.record-id-parameter-missing",
             Self::ProfileRequestEnvelopeMissingRecordSlot => {
@@ -375,8 +397,19 @@ impl CheckCode {
             Self::ProfileUnknownSlot => "adapter.profile.unknown-slot",
             Self::ProfileUnresolvedPathParameter => "adapter.profile.unresolved-path-parameter",
             Self::ProjectAccessProfileScopesEmpty => "adapter.project.access-profile-scopes-empty",
+            Self::ProjectArtifactPath => "adapter.project.artifact-path",
             Self::ProjectAsyncDeclarationMismatch => "adapter.project.async-declaration-mismatch",
+            Self::ProjectConsultationContractInvalid => {
+                "adapter.project.consultation-contract-invalid"
+            }
             Self::ProjectDuplicateRouteId => "adapter.project.duplicate-route-id",
+            Self::ProjectConsultationOperationCollision => {
+                "adapter.project.consultation-operation-collision"
+            }
+            Self::ProjectConsultationRegistryInvalid => {
+                "adapter.project.consultation-registry-invalid"
+            }
+            Self::ProjectFacadeSelection => "adapter.project.facade-selection",
             Self::ProjectFilterParameterCollision => "adapter.project.filter-parameter-collision",
             Self::ProjectParameterTypeMismatch => "adapter.project.parameter-type-mismatch",
             Self::ProjectParameterizedPartUnbound => "adapter.project.parameterized-part-unbound",
@@ -384,6 +417,9 @@ impl CheckCode {
             Self::ProjectPinVersionMismatch => "adapter.project.pin-version-mismatch",
             Self::ProjectRequiredParameterUnbound => "adapter.project.required-parameter-unbound",
             Self::ProjectTemplateNotInstantiated => "adapter.project.template-not-instantiated",
+            Self::ProjectTransformBindingUnknown => "adapter.project.transform-binding-unknown",
+            Self::ProjectTransformEntrypoint => "adapter.project.transform-entrypoint",
+            Self::ProjectTransformScriptUnknown => "adapter.project.transform-script-unknown",
             Self::ProjectUnknownFilterField => "adapter.project.unknown-filter-field",
             Self::ProjectUnknownOperation => "adapter.project.unknown-operation",
             Self::ProjectUnknownRecordType => "adapter.project.unknown-record-type",
@@ -487,6 +523,7 @@ impl CheckCode {
             | Self::ProfileProblemClassUnresolved
             | Self::ProfileProblemEnvelopeMissingCodeSlot
             | Self::ProfileProblemEnvelopeUncompilable
+            | Self::ProfileProblemErrorsSlotForm
             | Self::ProfileReadOnlyMethod
             | Self::ProfileRecordIdParameterMissing
             | Self::ProfileRequestEnvelopeMissingRecordSlot
@@ -522,6 +559,7 @@ impl CheckCode {
             | Self::PackGraphQlQueryRequired
             | Self::PackInvalidHeaderName
             | Self::PackMapParameterMisplaced
+            | Self::PackReadSupportInvalid
             | Self::PackReservedHeaderName
             | Self::PackScriptUncompilable
             | Self::PackSqliteExtractInvalid
@@ -573,8 +611,13 @@ impl CheckCode {
             | Self::RouteUnknownOperation
             | Self::RouteWriteWithoutIdempotency => crate::naming::ADAPTER_PACK_KIND,
             Self::ProjectAccessProfileScopesEmpty
+            | Self::ProjectArtifactPath
             | Self::ProjectAsyncDeclarationMismatch
+            | Self::ProjectConsultationContractInvalid
             | Self::ProjectDuplicateRouteId
+            | Self::ProjectConsultationOperationCollision
+            | Self::ProjectConsultationRegistryInvalid
+            | Self::ProjectFacadeSelection
             | Self::ProjectFilterParameterCollision
             | Self::ProjectParameterTypeMismatch
             | Self::ProjectParameterizedPartUnbound
@@ -582,6 +625,9 @@ impl CheckCode {
             | Self::ProjectPinVersionMismatch
             | Self::ProjectRequiredParameterUnbound
             | Self::ProjectTemplateNotInstantiated
+            | Self::ProjectTransformBindingUnknown
+            | Self::ProjectTransformEntrypoint
+            | Self::ProjectTransformScriptUnknown
             | Self::ProjectUnknownFilterField
             | Self::ProjectUnknownOperation
             | Self::ProjectUnknownRecordType

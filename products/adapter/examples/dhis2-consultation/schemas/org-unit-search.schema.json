@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://registry.example/schemas/dhis2-org-unit-search/1/schema.json",
+  "title": "DHIS2 organisation unit search",
+  "type": "object",
+  "properties": {
+    "org-unit": { "type": "string", "minLength": 1, "maxLength": 128 }
+  },
+  "required": ["org-unit"],
+  "additionalProperties": false
+}

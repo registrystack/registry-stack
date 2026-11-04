@@ -52,6 +52,27 @@ fn read_decoded(root: &Path) -> Result<(Decoded<EvidenceProject>, BTreeMap<Strin
             String::from_utf8(bytes).context("Function asset must be UTF-8")?,
         );
     }
+    for source in decoded.value.sources.values() {
+        if let Some(projection) = &source.projection {
+            for asset in [&projection.source, &projection.schema] {
+                let path = safe_asset(directory, asset)?;
+                let bytes =
+                    authored::read_authored_file(&path, "reviewed source projection asset")?;
+                let limit = if asset == &projection.source {
+                    64 * 1024
+                } else {
+                    256 * 1024
+                };
+                if bytes.len() > limit {
+                    bail!("source projection asset exceeds its byte bound");
+                }
+                scripts.insert(
+                    asset.to_owned(),
+                    String::from_utf8(bytes).context("source projection asset must be UTF-8")?,
+                );
+            }
+        }
+    }
     let assets = decoded
         .value
         .assertion_definitions
@@ -447,7 +468,7 @@ pub(crate) fn inspect(root: &Path, target: Option<&Path>, command: &str) -> Resu
         report: crate::report::success(
             command,
             "complete",
-            json!({"project":root,"target":target.as_deref(),"proof":"authoring","diagnostics":diagnostics.to_json_value(),"projectPresentation":{"id":project.id,"label":project.label,"description":project.description},"selectorProfiles":project.selector_profiles,"capabilityCeilings":{"maximumHolderBoundBatchSize":project.maximum_holder_bound_batch_size},"assertionDefinitions":definitions,"sources":project.sources.iter().map(|(id,source)| json!({"id":id,"label":source.label,"description":source.description,"pack":source.pack,"route":source.route,"connection":source.connection,"inputs":source.inputs,"acquisitionPosture":source.acquisition_posture,"facts":compiled.source_facts.get(id.as_str())})).collect::<Vec<_>>(),"functions":compiled.functions,"authority":authority,"offline":true,"networkAccess":false,"secretResolution":false,"fixtureExecution":false}),
+            json!({"project":root,"target":target.as_deref(),"proof":"authoring","diagnostics":diagnostics.to_json_value(),"projectPresentation":{"id":project.id,"label":project.label,"description":project.description},"selectorProfiles":project.selector_profiles,"capabilityCeilings":{"maximumHolderBoundBatchSize":project.maximum_holder_bound_batch_size},"assertionDefinitions":definitions,"sources":project.sources.iter().map(|(id,source)| json!({"id":id,"label":source.label,"description":source.description,"pack":source.pack,"route":source.route,"connection":source.connection,"inputs":source.inputs,"acquisitionPosture":source.acquisition_posture,"projection":source.projection.as_ref().map(|projection| json!({"source":projection.source,"entrypoint":projection.entrypoint,"schema":projection.schema,"digest":compiled.model["sources"][id.as_str()]["projection"]["digest"]})),"facts":compiled.source_facts.get(id.as_str())})).collect::<Vec<_>>(),"functions":compiled.functions,"authority":authority,"offline":true,"networkAccess":false,"secretResolution":false,"fixtureExecution":false}),
         ),
         diagnostics,
     })
@@ -963,4 +984,33 @@ fn filesystem_pack_closure_reaches_the_checked_compiler_without_conversion() {
     std::fs::write(pack_root.join("schemas/facts.json"), b"{}").unwrap();
     let changed = read_pack_routes(root.path(), &project).unwrap();
     assert!(compile::compile_with_pack_routes(&project, &scripts, &changed).is_err());
+}
+
+#[cfg(test)]
+#[test]
+fn inspection_reports_the_governed_source_projection() {
+    let root =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/evidence/examples/standalone");
+    let checked = inspect(&root, None, "explain").unwrap();
+    let source = checked.report["sources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|source| source["id"] == "person-record")
+        .unwrap();
+    assert_eq!(
+        source["projection"]["source"],
+        "projections/person-facts.rhai"
+    );
+    assert_eq!(source["projection"]["schema"], "schemas/person-facts.json");
+    assert_eq!(source["projection"]["entrypoint"], "project_facts");
+    assert!(source["projection"]["digest"]
+        .as_str()
+        .unwrap()
+        .starts_with("sha256:"));
+    let mut output = Vec::new();
+    crate::check::render_human(&checked.report, &checked.diagnostics, &mut output).unwrap();
+    let output = String::from_utf8(output).unwrap();
+    assert!(output.contains("projections/person-facts.rhai"));
+    assert!(output.contains("schemas/person-facts.json"));
 }

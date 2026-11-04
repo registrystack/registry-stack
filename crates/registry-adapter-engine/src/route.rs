@@ -32,7 +32,7 @@ use registry_adapter_core::{
     ToParameters, ToStep, MAX_PROBLEM_DATA_BYTES, RESUME_PROPERTY_PREFIX,
 };
 use registry_platform_config::SecretResolver;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 
 use crate::async_completion::{
     fresh_status_exchange, validate_status_outcome, AsyncSourceAcceptance, AsyncStatusPollOutcome,
@@ -48,7 +48,7 @@ use crate::egress::{
     SourceRecoveryHeader,
 };
 use crate::exchange::{
-    Exchange, ResumeExecution, NEXT_CONTINUATION_PROPERTY, REDELIVERED_HEADER,
+    Exchange, ResumeExecution, FILTERS_PROPERTY, NEXT_CONTINUATION_PROPERTY, REDELIVERED_HEADER,
     REDELIVERY_COUNTER_HEADER, REDELIVERY_MAX_COUNTER_HEADER,
 };
 use crate::host_protocol::{
@@ -1472,6 +1472,132 @@ pub async fn run_route(
     .await
 }
 
+fn transform_item_page(
+    exchange: &mut Exchange,
+    transform: &crate::project_transform::CompiledProjectTransform,
+    support: &registry_adapter_core::SourceReadSupport,
+    pagination: Option<&crate::load::ServedPagination>,
+    code_maps: &crate::scripts::CodeMaps,
+    absolute_deadline: tokio::time::Instant,
+) -> Result<(), RouteFailure> {
+    let mut page: registry_adapter_core::ItemPage =
+        serde_json::from_value(exchange.message.body.clone())
+            .map_err(|_| RouteFailure::of(ErrorClass::UpstreamMalformed))?;
+    match support {
+        registry_adapter_core::SourceReadSupport::ReadOne { .. } => {
+            if page.items.len() > 1 || page.next.as_ref().is_some_and(|next| !next.is_null()) {
+                return Err(RouteFailure::of(ErrorClass::UpstreamMalformed));
+            }
+        }
+        registry_adapter_core::SourceReadSupport::ReadPage { .. } => {
+            let maximum = pagination
+                .map(|pagination| pagination.page_size_maximum)
+                .unwrap_or(1_000);
+            if u64::try_from(page.items.len()).map_or(true, |count| count > maximum) {
+                return Err(RouteFailure::of(ErrorClass::UpstreamMalformed));
+            }
+        }
+    }
+    let deadline = absolute_deadline.into_std();
+    for item in &mut page.items {
+        item.value = transform
+            .apply(code_maps, &item.value, deadline)
+            .map_err(project_transform_failure)?;
+    }
+    let mut wrapped = page
+        .items
+        .into_iter()
+        .map(|item| {
+            let mut record = Map::from_iter([
+                ("recordIdentifier".to_owned(), Value::String(item.key)),
+                ("domainData".to_owned(), item.value),
+            ]);
+            if let Some(revision) = item.revision {
+                record.insert("revisionIdentifier".to_owned(), Value::String(revision));
+            }
+            Value::Object(record)
+        })
+        .collect::<Vec<_>>();
+    exchange.message.body = match support {
+        registry_adapter_core::SourceReadSupport::ReadOne { .. } => wrapped
+            .pop()
+            .ok_or_else(|| RouteFailure::of(ErrorClass::OutcomeNotFound))?,
+        registry_adapter_core::SourceReadSupport::ReadPage { .. } => {
+            match page.next {
+                Some(next) if !next.is_null() => {
+                    exchange.set_property(NEXT_CONTINUATION_PROPERTY, next);
+                }
+                _ => exchange.remove_property(NEXT_CONTINUATION_PROPERTY),
+            }
+            Value::Array(wrapped)
+        }
+    };
+    exchange.ensure_bounded().map_err(RouteFailure::of)?;
+    if std::time::Instant::now() > deadline {
+        return Err(RouteFailure::of(ErrorClass::BudgetExhausted));
+    }
+    Ok(())
+}
+
+fn project_transform_failure(
+    error: crate::project_transform::ProjectTransformError,
+) -> RouteFailure {
+    use crate::project_transform::ProjectTransformError;
+    match error {
+        ProjectTransformError::Budget => RouteFailure::of(ErrorClass::BudgetExhausted),
+        ProjectTransformError::OutputInvalid => RouteFailure::of(ErrorClass::DisclosureViolation),
+        ProjectTransformError::TransformMissing
+        | ProjectTransformError::ScriptMissing
+        | ProjectTransformError::SchemaMissing
+        | ProjectTransformError::ScriptInvalid
+        | ProjectTransformError::SchemaInvalid
+        | ProjectTransformError::Failed => RouteFailure::of(ErrorClass::Script),
+    }
+}
+
+fn prepare_project_source_input(
+    operation: &crate::load::ServedOperation,
+    exchange: &mut Exchange,
+) -> Result<(), RouteFailure> {
+    let Some(support) = operation.read_support.as_ref() else {
+        return Ok(());
+    };
+    let body = match (operation.operation.as_str(), support) {
+        ("retrieve", registry_adapter_core::SourceReadSupport::ReadOne { inputs }) => {
+            let [input] = &**inputs else {
+                return Err(RouteFailure::of(ErrorClass::Facade));
+            };
+            let value = exchange
+                .message
+                .header("recordId")
+                .filter(|value| value.as_str().is_some_and(|text| !text.is_empty()))
+                .cloned()
+                .ok_or_else(|| RouteFailure::of(ErrorClass::Facade))?;
+            Value::Object(Map::from_iter([(input.as_str().to_owned(), value)]))
+        }
+        ("lookup", registry_adapter_core::SourceReadSupport::ReadOne { .. })
+        | ("search", registry_adapter_core::SourceReadSupport::ReadPage { .. }) => exchange
+            .property(FILTERS_PROPERTY)
+            .and_then(Value::as_object)
+            .cloned()
+            .map(Value::Object)
+            .ok_or_else(|| RouteFailure::of(ErrorClass::Facade))?,
+        ("list", registry_adapter_core::SourceReadSupport::ReadPage { .. }) => {
+            Value::Object(Map::new())
+        }
+        _ => return Err(RouteFailure::of(ErrorClass::Facade)),
+    };
+    if operation
+        .project_input_schema
+        .as_ref()
+        .is_some_and(|schema| !schema.validates(&body))
+    {
+        return Err(RouteFailure::of(ErrorClass::FacadeInvalidField));
+    }
+    exchange.message.body = body;
+    Ok(())
+}
+
 /// Run a route with the checked facade profile that governs any optional
 /// `throwException.data`. A data-bearing throw without this trusted profile
 /// fails closed as `disclosure.violation`; live serving and fixture replay
@@ -1602,7 +1728,7 @@ pub async fn run_served_route_until(
     context: &RouteContext<'_>,
     profile: &AdapterProfile,
     operation: &crate::load::ServedOperation,
-    exchange: Exchange,
+    mut exchange: Exchange,
     absolute_deadline: tokio::time::Instant,
 ) -> RouteOutcome {
     if operation.async_completion.is_some() && !exchange.has_write_custody() {
@@ -1618,7 +1744,15 @@ pub async fn run_served_route_until(
             events: Vec::new(),
         };
     }
-    run_route_within_profile(
+    if operation.project_transform.is_some() {
+        if let Err(failure) = prepare_project_source_input(operation, &mut exchange) {
+            return RouteOutcome {
+                result: Err(failure),
+                events: Vec::new(),
+            };
+        }
+    }
+    let mut outcome = run_route_within_profile(
         context,
         Some(profile),
         &operation.steps,
@@ -1633,7 +1767,24 @@ pub async fn run_served_route_until(
             .map(AsyncRoutePolicy::Initial),
         operation.resume.as_ref(),
     )
-    .await
+    .await;
+    if let (Ok(exchange), Some(transform), Some(support)) = (
+        outcome.result.as_mut(),
+        operation.project_transform.as_ref(),
+        operation.read_support.as_ref(),
+    ) {
+        if let Err(failure) = transform_item_page(
+            exchange,
+            transform,
+            support,
+            operation.pagination.as_ref(),
+            &context.code_maps,
+            absolute_deadline,
+        ) {
+            outcome.result = Err(failure);
+        }
+    }
+    outcome
 }
 
 /// Execute one safe source-native status poll within the host's absolute
@@ -5002,6 +5153,9 @@ mod send_attempt_tests {
                 uncertainty: None,
             }),
             resume: None,
+            project_transform: None,
+            project_input_schema: None,
+            read_support: None,
         }
     }
 

@@ -533,3 +533,174 @@ fn derivation_inspection_bindings_have_only_the_current_call_contract() {
     );
     assert_eq!(binding["outputs"]["type"], "array");
 }
+
+#[test]
+fn a_project_projection_changes_facts_without_changing_the_source_pack() {
+    let mut authored = serde_json::to_value(project()).unwrap();
+    authored["sources"]["family"]["projection"] = json!({
+        "source": "projections/family.rhai",
+        "entrypoint": "project_facts",
+        "schema": "schemas/family-facts.json"
+    });
+    let project: project::EvidenceProject =
+        serde_json::from_value(authored).expect("a governed source projection is project-owned");
+    let schema = json!({
+        "$id": "https://registry.example/schemas/family-facts/1.0.0",
+        "type": "object", "additionalProperties": false,
+        "required": ["parentCount"],
+        "properties": {"parentCount": {"type": "integer", "minimum": 0, "maximum": 16}}
+    });
+    let mut assets = scripts();
+    assets.insert("functions/derive.rhai".to_owned(),
+        "fn derive(facts, selectors, context) { [#{output: \"matched\", value: facts.parentCount > 0}] }".to_owned());
+    assets.insert(
+        "projections/family.rhai".to_owned(),
+        "fn project_facts(source) { #{parentCount: source.parents.len} }".to_owned(),
+    );
+    assets.insert("schemas/family-facts.json".to_owned(), schema.to_string());
+    let route = checked_route();
+    let original_pack = route.pack_bytes.clone();
+    let compiled = compile::compile_with_pack_routes(&project, &assets, &[route])
+        .expect("project schema and script compile over the same source pack");
+    assert_eq!(compiled.source_facts["family"], schema);
+    let source = &compiled.model["sources"]["family"];
+    assert_eq!(source["projection"]["entrypoint"], "project_facts");
+    let path = source["projection"]["script"].as_str().unwrap();
+    assert_eq!(
+        compiled.artifacts[path],
+        assets["projections/family.rhai"].as_bytes()
+    );
+    let prefix = source["pack"]["artifactPrefix"].as_str().unwrap();
+    assert_eq!(
+        compiled.artifacts[&format!("{prefix}/pack.yaml")],
+        original_pack
+    );
+    assert_eq!(
+        source["projection"]["digest"],
+        sha256_uri(assets["projections/family.rhai"].as_bytes())
+    );
+}
+
+#[test]
+fn a_project_projection_refuses_missing_assets_and_traversal() {
+    let mut authored = serde_json::to_value(project()).unwrap();
+    authored["sources"]["family"]["projection"] = json!({
+        "source": "projections/family.rhai", "entrypoint": "project_facts",
+        "schema": "schemas/family-facts.json"
+    });
+    let project: project::EvidenceProject =
+        serde_json::from_value(authored.clone()).expect("projection grammar");
+    let findings = compile::compile_with_pack_routes(&project, &scripts(), &[checked_route()])
+        .expect_err("missing project assets fail visibly");
+    assert!(findings
+        .iter()
+        .any(|finding| finding.code == "source-projection-asset"));
+    authored["sources"]["family"]["projection"]["source"] = json!("../outside.rhai");
+    let project: project::EvidenceProject = serde_json::from_value(authored).unwrap();
+    assert!(project::validate_project(&project)
+        .iter()
+        .any(|finding| finding.code == "source-projection-asset"));
+}
+
+#[test]
+fn a_project_projection_refuses_schemas_the_runtime_cannot_admit() {
+    let mut authored = serde_json::to_value(project()).unwrap();
+    authored["sources"]["family"]["projection"] = json!({
+        "source":"projections/family.rhai", "entrypoint":"project_facts",
+        "schema":"schemas/family-facts.json"
+    });
+    let project: project::EvidenceProject = serde_json::from_value(authored).unwrap();
+    let base = json!({
+        "$id":"https://registry.example/schemas/family/1.0.0", "type":"object",
+        "additionalProperties":false,"required":["parents"],
+        "properties":{"parents":{"type":"array","maxItems":16,"items":{"type":"object",
+            "additionalProperties":false,"properties":{"name":{"type":"string"}}}}}
+    });
+    let mut cases = Vec::new();
+    let mut missing_id = base.clone();
+    missing_id.as_object_mut().unwrap().remove("$id");
+    cases.push(missing_id);
+    let mut open_nested = base.clone();
+    open_nested["properties"]["parents"]["items"]["additionalProperties"] = json!(true);
+    cases.push(open_nested);
+    let mut unbounded = base.clone();
+    unbounded["properties"]["parents"]
+        .as_object_mut()
+        .unwrap()
+        .remove("maxItems");
+    cases.push(unbounded);
+    let mut remote = base.clone();
+    remote["properties"]["parents"] = json!({"$ref":"file:///private/projection-canary.json"});
+    cases.push(remote);
+    let mut invalid = base.clone();
+    invalid["properties"]["parents"]["maxItems"] = json!("16");
+    cases.push(invalid);
+    for (index, schema) in cases.into_iter().enumerate() {
+        let mut assets = scripts();
+        assets.insert(
+            "projections/family.rhai".to_owned(),
+            "fn project_facts(source) { source }".to_owned(),
+        );
+        assets.insert("schemas/family-facts.json".to_owned(), schema.to_string());
+        let findings = compile::compile_with_pack_routes(&project, &assets, &[checked_route()])
+            .expect_err(&format!(
+                "inadmissible projection schema case {index} must fail authoring"
+            ));
+        assert!(findings
+            .iter()
+            .any(|finding| finding.code == "source-projection-schema"));
+    }
+}
+
+#[test]
+fn a_project_projection_refuses_scripts_without_one_unique_unary_entrypoint() {
+    let mut authored = serde_json::to_value(project()).unwrap();
+    authored["sources"]["family"]["projection"] = json!({
+        "source":"projections/family.rhai", "entrypoint":"project_facts",
+        "schema":"schemas/family-facts.json"
+    });
+    let project: project::EvidenceProject = serde_json::from_value(authored).unwrap();
+    let schema = json!({
+        "$id":"https://registry.example/schemas/family/1.0.0", "type":"object",
+        "additionalProperties":false,"required":["parentCount"],
+        "properties":{"parentCount":{"type":"integer","minimum":0,"maximum":16}}
+    });
+    for (script, code) in [
+        ("fn project_facts(source) {", "source-projection-compile"),
+        (
+            "fn another_function(source) { source }",
+            "source-projection-signature",
+        ),
+        (
+            "fn project_facts() { #{} }",
+            "source-projection-signature",
+        ),
+        (
+            "fn project_facts(source) { source } fn project_facts(source, context) { source }",
+            "source-projection-signature",
+        ),
+        (
+            "fn project_facts(record) { record }",
+            "source-projection-signature",
+        ),
+        (
+            "private fn project_facts(source) { source }",
+            "source-projection-signature",
+        ),
+        (
+            "fn helper(value) { value } fn helper(value, other) { value } fn project_facts(source) { source }",
+            "source-projection-signature",
+        ),
+        (
+            "fn project_facts(source) { print(source); source }",
+            "source-projection-compile",
+        ),
+    ] {
+        let mut assets = scripts();
+        assets.insert("projections/family.rhai".to_owned(), script.to_owned());
+        assets.insert("schemas/family-facts.json".to_owned(), schema.to_string());
+        let findings = compile::compile_with_pack_routes(&project, &assets, &[checked_route()])
+            .expect_err("an inadmissible projection entrypoint must fail authoring");
+        assert!(findings.iter().any(|finding| finding.code == code));
+    }
+}

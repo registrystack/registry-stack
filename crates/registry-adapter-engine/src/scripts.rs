@@ -17,7 +17,8 @@ use std::time::{Duration, Instant};
 use crate::artifacts::{ArtifactReadError, ArtifactSource};
 use crate::load::MAXIMUM_RESPONSE_BYTES;
 use registry_adapter_core::{
-    AdapterPack, CodeMap, DestinationMapping, ErrorClass, ScriptReference,
+    AdapterPack, BindingTransform, CodeMap, DestinationMapping, ErrorClass, ProjectScript,
+    ScriptReference,
 };
 use registry_platform_config::sha256_uri;
 use registry_platform_script::rhai::{
@@ -62,6 +63,7 @@ pub const SCRIPT_PROFILE: RhaiProfile = RhaiProfile {
 /// How long one entrypoint call may run.
 const CALL_DEADLINE: Duration = Duration::from_secs(2);
 const JOB_MAPPING_PREFIX: &str = "\0job-mapping:";
+const PROJECT_TRANSFORM_PREFIX: &str = "\0project-transform:";
 
 /// A deployment's declared code maps, keyed by id: the one table the
 /// conversion steps and the Rhai `code_map(id, key)` helper read
@@ -228,6 +230,50 @@ impl ScriptSet {
         )
     }
 
+    /// Compile one project-owned transformation. Its namespace is disjoint
+    /// from provider-pack and job-owned scripts, so a same-named artifact can
+    /// never replace source behavior or a destination mapping.
+    pub(crate) fn add_project_transform_from<S: ArtifactSource + ?Sized>(
+        &mut self,
+        artifacts: &S,
+        script: &ProjectScript,
+        transform: &BindingTransform,
+    ) -> Result<(), ScriptLoadError> {
+        let key = project_transform_key(script.id.as_str());
+        if self
+            .compiled
+            .contains_key(&(key.clone(), transform.entrypoint.clone()))
+        {
+            return Ok(());
+        }
+        let bytes = match artifacts.read_bounded(&script.file, SCRIPT_PROFILE.maximum_source_bytes)
+        {
+            Ok(bytes) => bytes,
+            Err(ArtifactReadError::Unavailable) => {
+                return Err(ScriptLoadError::Unreadable(script.file.clone()))
+            }
+            Err(ArtifactReadError::TooLarge) => {
+                return Err(ScriptLoadError::TooLarge(script.file.clone()))
+            }
+        };
+        let actual = sha256_uri(&bytes);
+        if actual != script.digest.as_str() {
+            return Err(ScriptLoadError::DigestMismatch {
+                path: script.file.clone(),
+                pinned: script.digest.as_str().to_owned(),
+                actual,
+            });
+        }
+        self.compile_bytes_into(
+            key,
+            &script.file,
+            &transform.entrypoint,
+            &bytes,
+            &["source"],
+            false,
+        )
+    }
+
     /// Compile `(file, entrypoint)` as an aggregation strategy entrypoint:
     /// a two-parameter function over the old and new bodies, named for
     /// Camel's own `AggregationStrategy.aggregate(oldExchange, newExchange)`
@@ -351,6 +397,26 @@ impl ScriptSet {
         )
     }
 
+    /// Run one project-owned transformation over exactly one acquired source
+    /// value. Record identity, continuation, route headers and exchange
+    /// properties stay outside this call.
+    pub(crate) fn call_project_transform(
+        &self,
+        maps: &CodeMaps,
+        script: &ProjectScript,
+        transform: &BindingTransform,
+        source: &Value,
+        deadline: Instant,
+    ) -> Result<Value, ScriptFailure> {
+        self.call_with_deadline(
+            maps,
+            &project_transform_key(script.id.as_str()),
+            &transform.entrypoint,
+            source,
+            deadline,
+        )
+    }
+
     /// Run one entrypoint over `exchange` and return its JSON result.
     pub fn call(
         &self,
@@ -465,6 +531,10 @@ impl ScriptSet {
 
 fn job_mapping_key(file: &str) -> String {
     format!("{JOB_MAPPING_PREFIX}{file}")
+}
+
+fn project_transform_key(script: &str) -> String {
+    format!("{PROJECT_TRANSFORM_PREFIX}{script}")
 }
 
 /// Register `code_map(id, key)` over the declared maps: the same single

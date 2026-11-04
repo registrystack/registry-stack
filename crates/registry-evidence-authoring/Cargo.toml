@@ -30,6 +30,8 @@ schema = ["dep:schemars", "registry-platform-yaml/schema"]
 
 [dependencies]
 anyhow.workspace = true
+# No default HTTP/file resolvers; source schemas use an explicit refusing resolver.
+jsonschema.workspace = true
 # The shared configuration reader. It reads from bytes the caller hands it
 # and performs no input or output itself.
 registry-platform-yaml.workspace = true
@@ -42,9 +44,3 @@ serde_json.workspace = true
 serde_norway.workspace = true
 sha2.workspace = true
 url.workspace = true
-
-[dev-dependencies]
-# The parity test compiles the generated schema and runs the corpus through it,
-# because a claim that the schema and the checks agree is worth only as much as
-# the validator that proves it. Test-only: no shipped code here validates JSON.
-jsonschema.workspace = true

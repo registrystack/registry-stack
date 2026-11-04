@@ -14,7 +14,7 @@ use crate::envelope::{
 };
 use crate::profile::{
     resolve_problem, AdapterProfile, ParameterizedPart, Problem, FIXED_FACADE_PROBLEM_RESPONSES,
-    SLOT_PROBLEM_DATA, SLOT_RECORD, SLOT_RECORDS,
+    SLOT_PROBLEM_DATA, SLOT_PROBLEM_ERRORS, SLOT_RECORD, SLOT_RECORDS,
 };
 use crate::project::{AdapterProject, Binding, RecordFieldType, RecordType};
 use registry_platform_yaml::Diagnostic;
@@ -474,6 +474,28 @@ fn slot_schema(
         SLOT_PROBLEM_DATA => problem
             .and_then(|problem| problem_data_schema(problem.problem))
             .ok_or_else(|| "the problemData slot has no selected problem data declaration".to_string()),
+        SLOT_PROBLEM_ERRORS => Ok(json!({
+            "type": "array",
+            "minItems": 1,
+            "maxItems": crate::profile::MAX_PROBLEM_ERRORS,
+            "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["pointer", "message"],
+                "properties": {
+                    "pointer": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": crate::profile::MAX_PROBLEM_ERROR_TEXT_BYTES,
+                    },
+                    "message": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": crate::profile::MAX_PROBLEM_ERROR_TEXT_BYTES,
+                    },
+                },
+            },
+        })),
         "statusLink" if kind == EnvelopeKind::AsyncAccepted => Ok(json!({
             "type": "string",
             "minLength": 1,
@@ -1001,11 +1023,14 @@ mod tests {
 
     fn project(bound: bool) -> AdapterProject {
         AdapterProject {
+            consultation: None,
+            artifacts: Default::default(),
+            binding_transforms: Default::default(),
             project: ProjectIdentity {
                 id: local("case-deployment"),
                 version: "1.0.0".to_string(),
             },
-            profile: pin("case-api"),
+            profile: Some(pin("case-api")),
             pack: pin("case-api-pack"),
             record_types: UniqueIdList::new(vec![record_type()]).expect("unique"),
             templated_routes: UniqueIdList::<TemplatedRoute>::new(Vec::new()).expect("empty"),
@@ -1272,6 +1297,22 @@ mod tests {
         let with_status = problem_envelope(r#"{"code":"{{problemCode}}","status":{{status}}}"#);
         let schema = derive_problem_envelope_schema(&with_status).expect("derive");
         assert_eq!(schema["properties"]["status"], json!({"type": "integer"}));
+
+        let with_errors =
+            problem_envelope(r#"{"code":"{{problemCode}}","errors":{{?problemErrors}}}"#);
+        let schema = derive_problem_envelope_schema(&with_errors).expect("derive errors");
+        assert_eq!(
+            schema["properties"]["errors"]["maxItems"],
+            json!(crate::profile::MAX_PROBLEM_ERRORS)
+        );
+        assert_eq!(
+            schema["properties"]["errors"]["items"]["required"],
+            json!(["pointer", "message"])
+        );
+        assert_eq!(
+            schema["properties"]["errors"]["items"]["additionalProperties"],
+            json!(false)
+        );
 
         let record_slot = problem_envelope(r#"{"code": "{{problemCode}}", "record": {{record}}}"#);
         assert!(

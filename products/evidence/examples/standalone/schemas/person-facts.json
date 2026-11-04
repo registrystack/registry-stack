@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://registry.example/schemas/standalone/person-facts/1.0.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "birth-date",
+    "residence-region"
+  ],
+  "properties": {
+    "birth-date": {
+      "type": "string",
+      "format": "date"
+    },
+    "residence-region": {
+      "type": "string",
+      "enum": [
+        "north",
+        "south"
+      ]
+    }
+  }
+}

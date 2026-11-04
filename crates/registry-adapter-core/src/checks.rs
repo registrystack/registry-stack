@@ -15,8 +15,8 @@ use crate::model::{ComponentKind, Expression, HttpMethod, SendComponent};
 use crate::pack::{AdapterPack, GraphQlOperationKind, SourceRouteDecl};
 use crate::profile::{
     resolve_problem, AdapterProfile, EnvelopeTemplate, ProfileOperation, MAX_PROBLEM_DATA_FIELDS,
-    READ_REQUEST_SLOTS, SLOT_PROBLEM_CODE, SLOT_PROBLEM_DATA, SLOT_RECORD, SLOT_RECORDS,
-    SLOT_STATUS_EXPIRES_AT, SLOT_STATUS_LINK,
+    READ_REQUEST_SLOTS, SLOT_PROBLEM_CODE, SLOT_PROBLEM_DATA, SLOT_PROBLEM_ERRORS, SLOT_RECORD,
+    SLOT_RECORDS, SLOT_STATUS_EXPIRES_AT, SLOT_STATUS_LINK,
 };
 use crate::project::{AdapterProject, BindingAsyncCompletion};
 use crate::route::{
@@ -31,7 +31,7 @@ use registry_platform_httputil::destination::{
     MAX_DESTINATION_OPERATION_TIMEOUT, MAX_DESTINATION_REQUEST_HEADERS,
 };
 use registry_platform_yaml::{Diagnostic, Digest, ExternalId, UniqueList};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// The deepest `direct:` call chain the graph may form
 /// (`products/adapter/CONCEPT.md` section 8.3).
@@ -479,6 +479,18 @@ pub fn check_profile(profile: &AdapterProfile) -> Vec<Diagnostic> {
             "problemData is not one optional whole-value slot",
             "Place problemData once as {{?problemData}} so unrelated failures may omit it.",
         )),
+    }
+    let error_slots: Vec<SlotForm> = envelope_placeholders(profile.problem_envelope.text())
+        .into_iter()
+        .filter_map(|(name, form)| (name == SLOT_PROBLEM_ERRORS).then_some(form))
+        .collect();
+    if !matches!(error_slots.as_slice(), [] | [SlotForm::Optional]) {
+        findings.push(finding(
+            CheckCode::ProfileProblemErrorsSlotForm,
+            "/problemEnvelope",
+            "problemErrors is not one optional whole-value slot",
+            "Place problemErrors once as {{?problemErrors}} so only field-validation failures carry it.",
+        ));
     }
     findings.extend(problems_faults(profile));
     findings
@@ -1586,6 +1598,75 @@ pub fn check_pack(pack: &AdapterPack) -> Vec<Diagnostic> {
     findings.extend(template_parameter_checks(pack));
     findings.extend(code_map_checks(pack));
     findings.extend(source_route_checks(pack));
+    findings.extend(read_support_checks(pack));
+    findings
+}
+
+fn read_support_checks(pack: &AdapterPack) -> Vec<Diagnostic> {
+    let mut findings = Vec::new();
+    let supports = pack
+        .route_templates
+        .iter()
+        .enumerate()
+        .filter_map(|(index, template)| {
+            template
+                .read_support
+                .as_ref()
+                .map(|support| (format!("/routeTemplates/{index}/readSupport"), support))
+        })
+        .chain(
+            pack.source_routes
+                .iter()
+                .enumerate()
+                .filter_map(|(index, route)| {
+                    route
+                        .read_support
+                        .as_ref()
+                        .map(|support| (format!("/sourceRoutes/{index}/readSupport"), support))
+                }),
+        );
+    for (path, support) in supports {
+        match support {
+            crate::SourceReadSupport::ReadOne { inputs } => {
+                if inputs.is_empty() {
+                    findings.push(finding(
+                        CheckCode::PackReadSupportInvalid,
+                        &format!("{path}/inputs"),
+                        "an exact source read declares no native identity input",
+                        "Declare the complete native identity key the route accepts.",
+                    ));
+                }
+            }
+            crate::SourceReadSupport::ReadPage {
+                inputs,
+                order,
+                unique_tie_breaker,
+            } => {
+                if order.is_empty()
+                    || !order
+                        .iter()
+                        .any(|term| term.name.as_str() == unique_tie_breaker.as_str())
+                {
+                    findings.push(finding(
+                        CheckCode::PackReadSupportInvalid,
+                        &format!("{path}/uniqueTieBreaker"),
+                        "a paged source read does not include its unique tie-breaker in the declared order",
+                        "Declare a non-empty deterministic order containing the unique tie-breaker and its direction.",
+                    ));
+                }
+                for (index, input) in inputs.iter().enumerate() {
+                    if input.comparisons.is_empty() {
+                        findings.push(finding(
+                            CheckCode::PackReadSupportInvalid,
+                            &format!("{path}/inputs/{index}/comparisons"),
+                            "a native page input declares no supported comparison",
+                            "Declare at least one comparison the source route implements.",
+                        ));
+                    }
+                }
+            }
+        }
+    }
     findings
 }
 
@@ -4142,28 +4223,30 @@ pub fn check_project_pins(
     computed_pack_digest: &Digest,
 ) -> Vec<Diagnostic> {
     let mut findings = Vec::new();
-    if project.profile.version != computed_profile_version {
-        findings.push(finding(
-            CheckCode::ProjectPinVersionMismatch,
-            "/profile/version",
-            "the pinned profile version does not match the profile bytes",
-            "Pin the version the profile artifact's bytes carry.",
-        ));
-    }
-    if &project.profile.digest != computed_profile_digest {
-        findings.push(finding(
-            CheckCode::ProjectPinDigestMismatch,
-            "/profile/digest",
-            &format!(
-                "the pinned profile digest {} does not match the profile bytes, which hash to {}",
-                project.profile.digest.as_str(),
-                computed_profile_digest.as_str()
-            ),
-            &format!(
-                "Pin {}, the sha256 digest of the profile artifact's bytes, after reviewing the change.",
-                computed_profile_digest.as_str()
-            ),
-        ));
+    if let Some(profile) = &project.profile {
+        if profile.version != computed_profile_version {
+            findings.push(finding(
+                CheckCode::ProjectPinVersionMismatch,
+                "/profile/version",
+                "the pinned profile version does not match the profile bytes",
+                "Pin the version the profile artifact's bytes carry.",
+            ));
+        }
+        if &profile.digest != computed_profile_digest {
+            findings.push(finding(
+                CheckCode::ProjectPinDigestMismatch,
+                "/profile/digest",
+                &format!(
+                    "the pinned profile digest {} does not match the profile bytes, which hash to {}",
+                    profile.digest.as_str(),
+                    computed_profile_digest.as_str()
+                ),
+                &format!(
+                    "Pin {}, the sha256 digest of the profile artifact's bytes, after reviewing the change.",
+                    computed_profile_digest.as_str()
+                ),
+            ));
+        }
     }
     if project.pack.version != computed_pack_version {
         findings.push(finding(
@@ -4546,6 +4629,8 @@ pub fn check_project(workspace: &Workspace<'_>) -> Vec<Diagnostic> {
     let bodies_by_id = route_bodies_by_id(pack, project);
     let body_prefixes = authored_body_prefixes(pack, project);
 
+    findings.extend(check_project_transform_artifacts(project));
+
     for (index, instantiated) in project.templated_routes.iter().enumerate() {
         let prefix = format!("/templatedRoutes/{index}");
         if pack
@@ -4888,6 +4973,175 @@ pub fn check_project(workspace: &Workspace<'_>) -> Vec<Diagnostic> {
         }
     }
     findings
+}
+
+/// Pure checks over the project-owned transformation closure. Schema bytes and
+/// script bytes are checked by the engine loader; this layer checks only
+/// authored references and clean relative locations.
+#[must_use]
+pub fn check_project_transform_artifacts(project: &AdapterProject) -> Vec<Diagnostic> {
+    let mut findings = Vec::new();
+    if project.profile.is_some() == project.consultation.is_some() {
+        findings.push(finding(
+            CheckCode::ProjectFacadeSelection,
+            "",
+            "the project must select exactly one facade contract",
+            "Set either profile or consultation, and omit the other.",
+        ));
+    }
+    if let Some(consultation) = &project.consultation {
+        if !versioned_bounded_https_uri(&consultation.contract) {
+            findings.push(finding(
+                CheckCode::ProjectConsultationContractInvalid,
+                "/consultation/contract",
+                "the Consultation contract is not one bounded version-specific HTTPS URI",
+                "Use an HTTPS OpenAPI URI with a version path segment and no credentials, query, fragment, whitespace, or control characters.",
+            ));
+        }
+        let mut operation_suffixes = BTreeMap::new();
+        for (index, collection) in consultation.collections.iter().enumerate() {
+            if !bounded_registry_uri(&collection.registry) {
+                findings.push(finding(
+                    CheckCode::ProjectConsultationRegistryInvalid,
+                    &format!("/consultation/collections/{index}/registry"),
+                    "the Consultation Registry identifier is not one bounded URN or HTTPS URI",
+                    "Use a non-secret URN or HTTPS Registry identifier without credentials, query, fragment, whitespace, or control characters.",
+                ));
+            }
+            let suffix = collection
+                .record_type
+                .as_str()
+                .split(['-', '_'])
+                .filter(|part| !part.is_empty())
+                .map(|part| {
+                    let mut characters = part.chars();
+                    characters
+                        .next()
+                        .into_iter()
+                        .flat_map(char::to_uppercase)
+                        .chain(characters)
+                        .collect::<String>()
+                })
+                .collect::<String>();
+            if operation_suffixes.insert(suffix, index).is_some() {
+                findings.push(finding(
+                    CheckCode::ProjectConsultationOperationCollision,
+                    &format!("/consultation/collections/{index}/recordType"),
+                    "two Consultation collection ids produce the same public operation ids",
+                    "Choose collection ids that remain distinct when hyphens and underscores become operation-id word boundaries.",
+                ));
+            }
+        }
+    }
+    for (index, script) in project.artifacts.scripts.iter().enumerate() {
+        if !clean_project_artifact_path(&script.file) {
+            findings.push(finding(
+                CheckCode::ProjectArtifactPath,
+                &format!("/artifacts/scripts/{index}/file"),
+                "a project script path is not a clean bounded relative path",
+                "Use a project-relative path without empty, dot, parent, drive, or backslash segments.",
+            ));
+        }
+    }
+    for (index, schema) in project.artifacts.schemas.iter().enumerate() {
+        if !clean_project_artifact_path(&schema.file) {
+            findings.push(finding(
+                CheckCode::ProjectArtifactPath,
+                &format!("/artifacts/schemas/{index}/file"),
+                "a project schema path is not a clean bounded relative path",
+                "Use a project-relative path without empty, dot, parent, drive, or backslash segments.",
+            ));
+        }
+    }
+    for (binding, transform) in &project.binding_transforms {
+        let prefix = format!("/bindingTransforms/{binding}");
+        if project.bindings.get(binding.as_str()).is_none() {
+            findings.push(finding(
+                CheckCode::ProjectTransformBindingUnknown,
+                &prefix,
+                "a project transformation names no declared binding",
+                "Key the transformation by a binding id the project declares.",
+            ));
+        }
+        if project
+            .artifacts
+            .scripts
+            .get(transform.script.as_str())
+            .is_none()
+        {
+            findings.push(finding(
+                CheckCode::ProjectTransformScriptUnknown,
+                &format!("{prefix}/script"),
+                "a project transformation names no inventoried script",
+                "Name a script id from artifacts.scripts.",
+            ));
+        }
+        if !crate::is_placeholder_name(&transform.entrypoint) || transform.entrypoint.len() > 128 {
+            findings.push(finding(
+                CheckCode::ProjectTransformEntrypoint,
+                &format!("{prefix}/entrypoint"),
+                "a project transformation entrypoint is not a bounded function name",
+                "Use an ASCII function name of at most 128 characters.",
+            ));
+        }
+    }
+    findings
+}
+
+fn bounded_uri_text(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 2_048
+        && !value
+            .chars()
+            .any(|character| character.is_whitespace() || character.is_control())
+        && !value
+            .chars()
+            .any(|character| matches!(character, '?' | '#' | '\\'))
+}
+
+fn bounded_https_uri(value: &str) -> bool {
+    if !bounded_uri_text(value) {
+        return false;
+    }
+    let Ok(url) = registry_platform_yaml::Url::new(value) else {
+        return false;
+    };
+    let parsed = url.to_url();
+    url.is_https() && parsed.query().is_none() && parsed.fragment().is_none()
+}
+
+fn versioned_bounded_https_uri(value: &str) -> bool {
+    bounded_https_uri(value)
+        && value
+            .strip_prefix("https://")
+            .and_then(|rest| rest.split_once('/').map(|(_, path)| path))
+            .is_some_and(|path| {
+                path.split('/').any(|segment| {
+                    let version = segment.strip_prefix('v').unwrap_or(segment);
+                    version.starts_with(|character: char| character.is_ascii_digit())
+                })
+            })
+}
+
+fn bounded_registry_uri(value: &str) -> bool {
+    bounded_https_uri(value)
+        || (bounded_uri_text(value)
+            && value.strip_prefix("urn:").is_some_and(|rest| {
+                let mut parts = rest.split(':');
+                parts.next().is_some_and(|part| !part.is_empty())
+                    && parts.next().is_some_and(|part| !part.is_empty())
+            }))
+}
+
+fn clean_project_artifact_path(path: &str) -> bool {
+    !path.is_empty()
+        && path.len() <= 256
+        && !path.starts_with('/')
+        && !path.contains('\\')
+        && !path.contains(':')
+        && path
+            .split('/')
+            .all(|segment| !segment.is_empty() && segment != "." && segment != "..")
 }
 
 fn async_contract_checks(
@@ -6949,15 +7203,18 @@ mod tests {
 
     fn project_builder(pack: &AdapterPack) -> AdapterProject {
         AdapterProject {
+            consultation: None,
+            artifacts: Default::default(),
+            binding_transforms: Default::default(),
             project: ProjectIdentity {
                 id: local("case-deployment"),
                 version: "1.0.0".to_string(),
             },
-            profile: PinnedRef {
+            profile: Some(PinnedRef {
                 id: local("case-api"),
                 version: "1.0.0".to_string(),
                 digest: digest(),
-            },
+            }),
             pack: PinnedRef {
                 id: pack.id.clone(),
                 version: "1.0.0".to_string(),
@@ -6983,6 +7240,63 @@ mod tests {
             }])
             .expect("unique"),
             parameterized_parts: Default::default(),
+        }
+    }
+
+    #[test]
+    fn consultation_collection_ids_must_remain_distinct_as_operation_ids() {
+        let pack = pack_builder(Vec::new(), Vec::new());
+        let mut project = project_builder(&pack);
+        project.profile = None;
+        project.consultation = Some(
+            serde_json::from_value(serde_json::json!({
+                "contract": "https://registry.example/contracts/1.0.0/openapi.yaml",
+                "collections": [
+                    {"recordType":"people-summary","registry":"urn:registry:people","view":"public","dataSchema":"people"},
+                    {"recordType":"people_summary","registry":"urn:registry:people","view":"summary","dataSchema":"people"}
+                ]
+            }))
+            .expect("consultation"),
+        );
+        let findings = check_project_transform_artifacts(&project);
+        assert!(findings.iter().any(|finding| {
+            finding.code == CheckCode::ProjectConsultationOperationCollision.code()
+        }));
+    }
+
+    #[test]
+    fn consultation_public_identifiers_refuse_credentials_and_unversioned_contracts() {
+        let pack = pack_builder(Vec::new(), Vec::new());
+        let mut project = project_builder(&pack);
+        project.profile = None;
+        project.consultation = Some(
+            serde_json::from_value(serde_json::json!({
+                "contract": "https://user:password@registry.example/contracts/openapi.yaml",
+                "collections": [
+                    {"recordType":"people","registry":"https://user@registry.example/people#private","view":"public","dataSchema":"people"}
+                ]
+            }))
+            .expect("consultation"),
+        );
+        let findings = check_project_transform_artifacts(&project);
+        assert!(findings.iter().any(|finding| {
+            finding.code == CheckCode::ProjectConsultationContractInvalid.code()
+        }));
+        assert!(findings.iter().any(|finding| {
+            finding.code == CheckCode::ProjectConsultationRegistryInvalid.code()
+        }));
+    }
+
+    #[test]
+    fn consultation_contract_requires_a_parsed_https_authority() {
+        assert!(versioned_bounded_https_uri(
+            "https://registry.example/contracts/1.0.0/openapi.yaml"
+        ));
+        for malformed in [
+            "https://:/contracts/1.0.0/openapi.yaml",
+            "https://registry.example:bad/contracts/1.0.0/openapi.yaml",
+        ] {
+            assert!(!versioned_bounded_https_uri(malformed));
         }
     }
 
@@ -7232,6 +7546,7 @@ mod tests {
         endpoint.variables = Some(rhai("scripts/vars.rhai"));
         let mut pack = pack_builder(vec![endpoint], vec![route]);
         pack.route_templates = UniqueIdList::new(vec![RouteTemplate {
+            read_support: None,
             id: local("pager"),
             parameters: Vec::new(),
             steps: vec![Step::SetBody(rhai("scripts/tpl.rhai"))],
@@ -7616,6 +7931,7 @@ mod tests {
     #[test]
     fn unbound_problem_data_template_does_not_constrain_a_read_only_project() {
         let template = RouteTemplate {
+            read_support: None,
             id: local("write-partial"),
             parameters: Vec::new(),
             steps: vec![Step::ThrowException(ThrowExceptionStep {
@@ -7683,11 +7999,13 @@ mod tests {
     #[test]
     fn problem_data_fault_uses_the_instantiated_template_source_index() {
         let harmless = RouteTemplate {
+            read_support: None,
             id: local("read-template"),
             parameters: Vec::new(),
             steps: vec![],
         };
         let bad = RouteTemplate {
+            read_support: None,
             id: local("write-partial"),
             parameters: Vec::new(),
             steps: vec![Step::ThrowException(ThrowExceptionStep {
@@ -8673,6 +8991,7 @@ mod tests {
             steps: vec![Step::SetBody(rhai("scripts/unpinned.rhai"))],
         };
         let template = RouteTemplate {
+            read_support: None,
             id: local("pager"),
             parameters: Vec::new(),
             steps: vec![Step::SetBody(rhai("scripts/unpinned.rhai"))],
@@ -8916,6 +9235,7 @@ mod tests {
         // (section 8.6).
         let mut pack = pack_builder(vec![oauth_endpoint()], vec![]);
         pack.route_templates = UniqueIdList::new(vec![RouteTemplate {
+            read_support: None,
             id: local("by-status"),
             parameters: Vec::new(),
             steps: vec![convert_body("statuses")],
@@ -9157,6 +9477,7 @@ mod tests {
     fn project_refuses_a_binding_of_a_never_instantiated_template() {
         let profile = profile_builder(vec![operation("cases-find", HttpMethod::Get)]);
         let template = RouteTemplate {
+            read_support: None,
             id: local("pager"),
             parameters: Vec::new(),
             steps: vec![to_get("case-api")],
@@ -9217,6 +9538,7 @@ mod tests {
             }),
         });
         let template = RouteTemplate {
+            read_support: None,
             id: local("pager"),
             parameters: Vec::new(),
             steps: vec![bad_send],
@@ -9518,6 +9840,7 @@ mod tests {
     #[test]
     fn template_paths_reference_declared_parameters() {
         let template = |path: Option<String>| RouteTemplate {
+            read_support: None,
             id: local("pager"),
             parameters: vec![TemplateParameter {
                 name: local("cursor"),
@@ -10893,6 +11216,7 @@ mod tests {
     fn project_admits_a_resolved_instantiation_within_budget() {
         let profile = profile_builder(vec![operation("cases-find", HttpMethod::Get)]);
         let template = RouteTemplate {
+            read_support: None,
             id: local("fetch-page"),
             parameters: Vec::new(),
             steps: vec![to_get("case-api")],
@@ -10953,6 +11277,7 @@ mod tests {
         };
         let mut pack = pack_builder(vec![], vec![]);
         pack.route_templates = UniqueIdList::new(vec![RouteTemplate {
+            read_support: None,
             id: local("fetch-page"),
             parameters: Vec::new(),
             steps: vec![body()],
@@ -10961,6 +11286,7 @@ mod tests {
         assert_has(&check_pack(&pack), CheckCode::PackUnknownTemplateParameter);
 
         pack.route_templates = UniqueIdList::new(vec![RouteTemplate {
+            read_support: None,
             id: local("fetch-page"),
             parameters: vec![TemplateParameter {
                 name: local("region"),
@@ -10984,6 +11310,7 @@ mod tests {
         let instantiate = |value: serde_json::Value| {
             let mut pack = pack_builder(vec![basic_endpoint()], vec![]);
             pack.route_templates = UniqueIdList::new(vec![RouteTemplate {
+                read_support: None,
                 id: local("fetch-page"),
                 parameters: vec![TemplateParameter {
                     name: local("labels"),
@@ -11040,6 +11367,7 @@ mod tests {
         let template = |steps: Vec<Step>| {
             let mut pack = pack_builder(vec![], vec![]);
             pack.route_templates = UniqueIdList::new(vec![RouteTemplate {
+                read_support: None,
                 id: local("fetch-page"),
                 parameters: vec![TemplateParameter {
                     name: local("labels"),
@@ -11075,6 +11403,7 @@ mod tests {
     fn project_checks_templated_parameter_names_types_and_bindings() {
         let profile = profile_builder(vec![operation("cases-find", HttpMethod::Get)]);
         let template = || RouteTemplate {
+            read_support: None,
             id: local("fetch-page"),
             parameters: vec![
                 TemplateParameter {
@@ -11228,6 +11557,7 @@ mod tests {
     fn project_refuses_an_instantiated_route_id_that_collides() {
         let profile = profile_builder(vec![]);
         let template_route = RouteTemplate {
+            read_support: None,
             id: local("paged-fetch"),
             parameters: Vec::new(),
             steps: vec![],

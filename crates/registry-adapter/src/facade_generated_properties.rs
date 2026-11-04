@@ -128,7 +128,8 @@ fn project_for(model: &GeneratedModel) -> (AdapterProject, Binding) {
             id: local("generated-project"),
             version: "1".to_owned(),
         },
-        profile: pin("generated-profile"),
+        profile: Some(pin("generated-profile")),
+        consultation: None,
         pack: pin("generated-pack"),
         record_types: UniqueIdList::new(vec![RecordType {
             name: local("generated-record"),
@@ -139,6 +140,8 @@ fn project_for(model: &GeneratedModel) -> (AdapterProject, Binding) {
         bindings: UniqueIdList::new(vec![binding.clone()]).expect("one binding"),
         access_profiles: UniqueIdList::<AccessProfile>::new(Vec::new())
             .expect("no access profiles needed for schema derivation"),
+        artifacts: Default::default(),
+        binding_transforms: BTreeMap::new(),
         parameterized_parts: BTreeMap::new(),
     };
     (project, binding)
@@ -199,6 +202,9 @@ fn served_operation(record_schema: Value, paginated: bool) -> ServedOperation {
             page_size_default: Some(20),
         }),
         async_completion: None,
+        project_transform: None,
+        project_input_schema: None,
+        read_support: None,
     }
 }
 

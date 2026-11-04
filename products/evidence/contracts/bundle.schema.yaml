@@ -981,10 +981,27 @@ $defs:
         description: Reviewed minimization posture, equal to the pinned route contract.
         enum: [source-derived, field-projected, record-transformed]
       factSchema:
-        description: Bundle fact schema whose JSON meaning must equal the pinned route schema.
+        description: Final facts schema, equal to the pinned source schema unless a governed projection is selected.
         allOf:
           - {$ref: '#/$defs/relative-path'}
           - {pattern: '^schemas/'}
+      projection:
+        description: Package-owned projection of matched native facts under the acquisition deadline.
+        type: object
+        additionalProperties: false
+        required: [script, entrypoint, digest]
+        properties:
+          script:
+            allOf:
+              - {$ref: '#/$defs/relative-path'}
+              - {pattern: '^derivations/.*\.rhai$'}
+          entrypoint: {type: string, minLength: 1, maxLength: 128, pattern: '^[A-Za-z_][A-Za-z0-9_]*$'}
+          digest: {$ref: '#/$defs/Digest'}
+    allOf:
+      - if: {required: [projection]}
+        then:
+          properties:
+            posture: {const: record-transformed}
   source-connection:
     type: object
     additionalProperties: false

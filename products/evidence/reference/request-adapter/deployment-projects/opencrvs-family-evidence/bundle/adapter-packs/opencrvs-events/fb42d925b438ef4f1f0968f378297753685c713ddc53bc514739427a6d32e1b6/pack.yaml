@@ -99,6 +99,55 @@ endpoints:
         safeUpstream: true
     testedVersions: []
 routeTemplates:
+  # Exact source-native acquisition. The consuming project owns its public
+  # view and schema; this route preserves the uniquely resolved event.
+  - id: read-registered-event
+    readSupport:
+      type: read-one
+      inputs: [recordId]
+    parameters:
+      - name: event_type
+        type: string
+        required: true
+        description: The source event type this deployment is permitted to read.
+    steps:
+      - onException:
+          exception: [upstream.timeout, upstream.connection]
+          redeliveryPolicy:
+            maximumRedeliveries: 1
+            retryDelaySeconds: 2
+      - setProperty:
+          name: opencrvsEventType
+          value: {constant: "{{event_type}}"}
+      - setProperty:
+          name: opencrvsRecordId
+          value: {jsonpath: "$.recordId"}
+      - to:
+          uri: http:events
+          parameters:
+            httpMethod: POST
+            path: /events/search
+            operation: events-search
+            body:
+              rhai:
+                file: scripts/source-read.rhai
+                entrypoint: source_query
+      - choice:
+          when:
+            - rhai: {file: scripts/source-read.rhai, entrypoint: is_missing}
+              steps:
+                - throwException:
+                    exceptionType: outcome.not-found
+                    message: No registered event is available for that source identifier.
+            - rhai: {file: scripts/source-read.rhai, entrypoint: is_unique}
+              steps:
+                - setBody:
+                    rhai: {file: scripts/source-read.rhai, entrypoint: source_page}
+          otherwise:
+            steps:
+              - throwException:
+                  exceptionType: upstream.malformed
+                  message: The source did not resolve one exact registered event.
   - id: search-events
     parameters:
       - name: event_type
@@ -230,6 +279,8 @@ routeTemplates:
                   exceptionType: upstream.malformed
                   message: The source answered something other than one registered event for that tracking ID.
 scripts:
+  - path: scripts/source-read.rhai
+    digest: sha256:098481a7e04406e7904bed1069d0667765322de40f12cd1dd661d1bd4a4191f4
   - path: scripts/search-query.rhai
     digest: sha256:ee07bee2fc027a90791f3e83dd6b365d79ad7158a904adae8b590177c1e37481
   - path: scripts/page-sound.rhai

@@ -508,6 +508,8 @@ entries:
       - {file: crates/registry-adapter-engine/tests/evidence_acquisition_deadlines.rs, name: reviewed_page_loop_cannot_resolve_credentials_or_send_after_its_deadline}
   - id: sec-fetch-set-bounded
     tests:
+      - {file: crates/registry-evidence/src/bundle.rs, name: project_projection_preserves_pack_bytes_and_discloses_only_its_facts_schema}
+      - {file: crates/registry-evidence/src/bundle.rs, name: project_projection_refuses_changed_scripts_invalid_output_and_expired_budget}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: fetch_set_is_one_search_then_one_fixed_call_per_declared_member_in_order}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: fetch_set_member_body_carries_only_its_declared_fact_inputs}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: fetch_set_stops_before_member_calls_when_search_omits_a_required_reference}

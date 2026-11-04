@@ -17,6 +17,7 @@ pub mod artifacts;
 pub mod async_completion;
 pub mod auth;
 pub mod component;
+pub mod consultation;
 #[cfg(feature = "job-file")]
 pub mod decoder;
 pub mod effective_contract;
@@ -32,6 +33,8 @@ pub(crate) mod json_bounds;
 pub mod language;
 pub mod load;
 pub mod processor;
+pub mod project_transform;
+pub mod public_schema;
 pub mod rabbitmq_config;
 pub mod read_request;
 pub mod replay;
@@ -127,6 +130,14 @@ pub fn compile(
             )))
         }
         EngineProfileKind::Facade => {
+            if inputs.project.consultation.is_some() {
+                return Err(compile_refusal(
+                    "adapter.engine.consultation-artifacts-required",
+                    "AdapterProject",
+                    "the in-memory facade compiler has no project artifact closure for Consultation",
+                    "Use the maintained directory loader or attach_consultation_project after compiling with supplied project artifacts.",
+                ));
+            }
             let resolver =
                 SecretResolver::new([SecretProvider::Environment], "").map_err(|_| {
                     compile_refusal(
@@ -508,6 +519,53 @@ profile:
             "no binding serves an operation in this deployment"
         );
         let _ = BTreeMap::<String, String>::new();
+    }
+
+    #[test]
+    fn the_in_memory_facade_entry_never_returns_an_unattached_consultation_plan() {
+        let (
+            pack,
+            profile,
+            mut project,
+            job,
+            bindings,
+            pack_text,
+            profile_text,
+            project_text,
+            _job_text,
+            _directory,
+        ) = artifacts();
+        project.profile = None;
+        project.consultation = Some(
+            serde_json::from_value(serde_json::json!({
+                "contract": "https://registry.example/contracts/1.0.0/openapi.yaml",
+                "collections": []
+            }))
+            .expect("consultation"),
+        );
+        let pack_artifacts = pack_artifacts();
+        let job_artifacts = artifacts::PackArtifactBytes::default();
+        let error = compile(
+            &CompileInputs {
+                pack: &pack,
+                profile: &profile,
+                project: &project,
+                job: job.as_ref(),
+                bindings: &bindings,
+                sources: None,
+                pack_bytes: pack_text.as_bytes(),
+                profile_bytes: profile_text.as_bytes(),
+                project_bytes: project_text.as_bytes(),
+                pack_artifacts: &pack_artifacts,
+                job_artifacts: &job_artifacts,
+            },
+            EngineProfileKind::Facade,
+        )
+        .expect_err("Consultation cannot compile without its project artifact closure");
+        assert_eq!(
+            error.diagnostics[0].code,
+            "adapter.engine.consultation-artifacts-required"
+        );
     }
 
     /// A library host supplies the governed artifact bytes once. Compilation

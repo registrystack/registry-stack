@@ -101,20 +101,27 @@ pub(crate) fn run(args: &ReplayArgs) -> Result<ReplayRun, ReplayFailure> {
         &mut files,
     )
     .map_err(io_failure)?;
-    let profile_path = check::artifact_path(
-        args.profile.as_deref(),
-        &directory,
-        "profile.yaml",
-        "--profile",
-    )
-    .map_err(io_failure)?;
-    let profile = check::read::<AdapterProfile>(
-        &profile_path,
-        &check::PROFILE_FORMAT,
-        &mut report,
-        &mut files,
-    )
-    .map_err(io_failure)?;
+    let built_in_consultation = project.as_ref().is_some_and(|(decoded, _)| {
+        decoded.value.profile.is_none() && decoded.value.consultation.is_some()
+    });
+    let profile = if built_in_consultation {
+        None
+    } else {
+        let profile_path = check::artifact_path(
+            args.profile.as_deref(),
+            &directory,
+            "profile.yaml",
+            "--profile",
+        )
+        .map_err(io_failure)?;
+        check::read::<AdapterProfile>(
+            &profile_path,
+            &check::PROFILE_FORMAT,
+            &mut report,
+            &mut files,
+        )
+        .map_err(io_failure)?
+    };
     let pack_path = check::artifact_path(args.pack.as_deref(), &directory, "pack.yaml", "--pack")
         .map_err(io_failure)?;
     let pack_directory = pack_path
@@ -147,11 +154,19 @@ pub(crate) fn run(args: &ReplayArgs) -> Result<ReplayRun, ReplayFailure> {
         });
     }
     let (project_decoded, _) = project.expect("the project decoded");
-    let (profile_decoded, profile_bytes) = profile.expect("the profile decoded");
     let (pack_decoded, pack_bytes) = pack.expect("the pack decoded");
     let project = project_decoded.value;
-    let profile = profile_decoded.value;
+    let (profile, profile_bytes) = match profile {
+        Some((decoded, bytes)) => (decoded.value, bytes),
+        None => (
+            registry_adapter::engine::consultation::built_in_profile(),
+            Vec::new(),
+        ),
+    };
     let pack = pack_decoded.value;
+
+    check::verify_project_artifacts(&project, &project_path, &mut report, &mut files)
+        .map_err(io_failure)?;
 
     for finding in check_project_pins(
         &project,
@@ -172,6 +187,7 @@ pub(crate) fn run(args: &ReplayArgs) -> Result<ReplayRun, ReplayFailure> {
         report.push(finding);
     }
     check::check_fixture_bodies(&profile, &project, &fixtures, &mut report);
+    check::check_consultation_fixture_bodies(&project, &directory, &fixtures, &mut report);
     if report.has_errors() {
         return Err(ReplayFailure::Refused {
             diagnostics: report.into_diagnostics(),
@@ -181,11 +197,26 @@ pub(crate) fn run(args: &ReplayArgs) -> Result<ReplayRun, ReplayFailure> {
     // The contract half is `compile`'s: the same assembled document the
     // deployment publishes, so the replay holds expectations against what
     // callers actually receive.
-    let compiled = compile::document::assemble(&profile, &project).map_err(|findings| {
-        ReplayFailure::Refused {
-            diagnostics: findings,
-        }
-    })?;
+    let compiled = if project.consultation.is_some() {
+        let schemas =
+            compile::consultation_schemas(&project, &directory).map_err(
+                |failure| match failure {
+                    compile::CompileFailure::Io { path, source } => {
+                        ReplayFailure::Io { path, source }
+                    }
+                    compile::CompileFailure::Refused { diagnostics } => {
+                        ReplayFailure::Refused { diagnostics }
+                    }
+                    compile::CompileFailure::Drift { .. } => {
+                        unreachable!("assembly reads no output")
+                    }
+                },
+            )?;
+        compile::document::assemble_consultation(&project, &schemas)
+    } else {
+        compile::document::assemble(&profile, &project)
+    }
+    .map_err(|diagnostics| ReplayFailure::Refused { diagnostics })?;
     replay_contract(&profile, &project, &compiled, &fixtures, &mut report);
     if report.has_errors() {
         return Err(ReplayFailure::Refused {
@@ -203,14 +234,17 @@ pub(crate) fn run(args: &ReplayArgs) -> Result<ReplayRun, ReplayFailure> {
     let mut writes_simulated = 0;
     for (fixture_index, fixture) in fixtures.iter().enumerate() {
         for (entry_index, entry) in fixture.entries.iter().enumerate() {
-            let actual = match runtime.block_on(registry_adapter::replay_serve::run(
-                &project,
-                &profile,
-                &pack,
-                pack_directory,
-                fixture,
-                entry_index,
-            )) {
+            let actual = match runtime.block_on(
+                registry_adapter::replay_serve::run_with_project_directory(
+                    &project,
+                    &profile,
+                    &pack,
+                    pack_directory,
+                    &directory,
+                    fixture,
+                    entry_index,
+                ),
+            ) {
                 Ok(actual) => actual,
                 Err(fault) => {
                     report.push(Diagnostic::error(
@@ -317,9 +351,12 @@ fn replay_contract(
 ) {
     for (fixture_index, fixture) in fixtures.iter().enumerate() {
         for (entry_index, entry) in fixture.entries.iter().enumerate() {
-            let Some(operation) =
-                compiled_operation(compiled, project, &entry.facade_request.operation)
-            else {
+            let Some(operation) = compiled_operation(
+                compiled,
+                project,
+                &entry.facade_request.operation,
+                &entry.facade_request.path,
+            ) else {
                 // A bound operation always compiles to exactly one
                 // concrete operation; the core checks refused anything
                 // else before this ran.
@@ -383,16 +420,26 @@ fn compiled_operation<'a>(
     compiled: &'a Value,
     project: &AdapterProject,
     operation: &registry_platform_yaml::ExternalId,
+    request_path: &str,
 ) -> Option<&'a Value> {
-    let record_type = project
-        .bindings
-        .iter()
-        .find(|binding| binding.operation.as_str() == operation.as_str())?;
-    let wanted = format!(
-        "{}.{}",
-        operation.as_str(),
-        record_type.record_type.as_str()
-    );
+    let record_type = if project.consultation.is_some() {
+        request_path.split('/').nth(3)?
+    } else {
+        project
+            .bindings
+            .iter()
+            .find(|binding| binding.operation.as_str() == operation.as_str())?
+            .record_type
+            .as_str()
+    };
+    let wanted = if project.consultation.is_some() {
+        registry_adapter::engine::consultation::ConsultationCapability::from_binding_operation(
+            operation.as_str(),
+        )?
+        .operation_id(record_type)
+    } else {
+        format!("{}.{}", operation.as_str(), record_type)
+    };
     compiled["paths"].as_object()?.values().find_map(|item| {
         item.as_object()?.values().find(|operation| {
             operation

@@ -36,7 +36,9 @@ use crate::engine::replay::{
 use crate::engine::exchange::{
     Exchange, CONTINUATION_PROPERTY, FILTERS_PROPERTY, NEXT_CONTINUATION_PROPERTY, PAGE_SIZE_HEADER,
 };
-use crate::engine::load::{compile_authored_with, EndpointCompilation, LoadError};
+use crate::engine::load::{
+    attach_consultation_project, compile_authored_with, EndpointCompilation, LoadError,
+};
 use crate::engine::route::{run_served_route, RouteContext, RouteFailure};
 
 /// The rendered facade result of one actual offline route execution.
@@ -119,12 +121,37 @@ pub async fn run(
     fixture: &AdapterFixture,
     entry_index: usize,
 ) -> Result<ReplayFacade, ReplayRunFailure> {
+    run_with_project_directory(
+        project,
+        profile,
+        pack,
+        pack_directory,
+        pack_directory,
+        fixture,
+        entry_index,
+    )
+    .await
+}
+
+/// Execute one fixture entry when the reusable pack and deployment project
+/// live in different directories. Project-owned scripts and schemas resolve
+/// beside `project.yaml`; pack-owned routes continue resolving beside the
+/// pack document.
+pub async fn run_with_project_directory(
+    project: &AdapterProject,
+    profile: &AdapterProfile,
+    pack: &AdapterPack,
+    pack_directory: &Path,
+    project_directory: &Path,
+    fixture: &AdapterFixture,
+    entry_index: usize,
+) -> Result<ReplayFacade, ReplayRunFailure> {
     let entry = fixture
         .entries
         .get(entry_index)
         .ok_or(ReplayFailure::EntryMissing)?;
     let transcript = Arc::new(ReplayTranscript::new(fixture, entry_index)?);
-    let authored = compile_authored_with(
+    let mut authored = compile_authored_with(
         project,
         profile,
         pack,
@@ -140,6 +167,9 @@ pub async fn run(
                 .map_err(|fault| LoadError::Runtime(fault.to_string()))
         },
     )?;
+    if project.consultation.is_some() {
+        attach_consultation_project(project, pack, project_directory, &mut authored)?;
+    }
     // One profile operation serves one concrete operation per record type
     // it is bound to, so the captured request's record type picks among
     // them.
@@ -261,6 +291,15 @@ pub async fn run(
 
     if !is_write {
         crate::facade::require_declared_filters(
+            operation,
+            &crate::facade::RequestInputs {
+                cursor: request_cursor.clone(),
+                page_size,
+                filters: filters.clone(),
+            },
+        )
+        .map_err(|_| ReplayRunFailure::Request)?;
+        crate::facade::validate_project_inputs(
             operation,
             &crate::facade::RequestInputs {
                 cursor: request_cursor.clone(),

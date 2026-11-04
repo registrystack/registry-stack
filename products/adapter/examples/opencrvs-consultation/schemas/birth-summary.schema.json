@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://registry.example/schemas/birth-summary/1.0.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "registration"
+  ],
+  "properties": {
+    "registration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "eventType",
+        "status"
+      ],
+      "properties": {
+        "eventType": {
+          "type": "string",
+          "const": "birth"
+        },
+        "status": {
+          "type": "string",
+          "const": "REGISTERED"
+        }
+      }
+    },
+    "dateOfEvent": {
+      "type": "string",
+      "format": "date"
+    }
+  }
+}

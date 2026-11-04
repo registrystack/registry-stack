@@ -220,11 +220,83 @@ pub fn compile_with_pack_routes(
                 }
             }
         }
+        let (facts_schema, projection) = if let Some(projection) = &source.projection {
+            let at = source_at.clone().key("projection");
+            let (Some(script), Some(schema)) = (
+                scripts.get(&projection.source),
+                scripts.get(&projection.schema),
+            ) else {
+                findings.push(Finding::new(
+                    at,
+                    "source-projection-asset",
+                    "supply the project-owned projection script and JSON Schema",
+                ));
+                continue;
+            };
+            if script.len() > crate::layout::MAX_DERIVATION_BYTES as usize
+                || schema.len() > 256 * 1024
+            {
+                findings.push(Finding::new(
+                    at,
+                    "source-projection-asset",
+                    "source projection assets exceed their declared byte bounds",
+                ));
+                continue;
+            }
+            if let Err(error) =
+                crate::derivation::validate_projection_function(script, &projection.entrypoint)
+            {
+                let (code, message) = match error {
+                    crate::derivation::ProjectionFunctionError::Compile => (
+                        "source-projection-compile",
+                        "the source projection script must compile as Rhai",
+                    ),
+                    crate::derivation::ProjectionFunctionError::Signature => (
+                        "source-projection-signature",
+                        "the source projection script must expose exactly one named entrypoint with one source argument",
+                    ),
+                };
+                findings.push(Finding::new(at.clone().key("source"), code, message));
+                continue;
+            }
+            let Ok(schema) = serde_json::from_str::<Value>(schema) else {
+                findings.push(Finding::new(
+                    at.key("schema"),
+                    "source-projection-schema",
+                    "the source projection schema must be JSON",
+                ));
+                continue;
+            };
+            if closed_schema_properties(&schema).is_none()
+                || !crate::source_projection::schema_is_admissible(&schema)
+            {
+                findings.push(Finding::new(
+                    at.key("schema"),
+                    "source-projection-schema",
+                    "the source projection schema must be a versioned closed bounded object with local references",
+                ));
+                continue;
+            }
+            let path = format!("derivations/source-projections/{id}.rhai");
+            insert_artifact(
+                &mut artifacts,
+                &path,
+                script.as_bytes().to_vec(),
+                at.clone(),
+            )?;
+            (
+                schema,
+                Some(json!({"script": path, "entrypoint": projection.entrypoint,
+                "digest": sha256_uri(script.as_bytes())})),
+            )
+        } else {
+            (route.facts_schema.clone(), None)
+        };
         let facts_path = format!("schemas/source-facts/{id}.schema.json");
         insert_json_artifact(
             &mut artifacts,
             &facts_path,
-            &route.facts_schema,
+            &facts_schema,
             source_at.clone().key("route"),
         )?;
         let digest_path = route
@@ -256,7 +328,7 @@ pub fn compile_with_pack_routes(
                 source_at.clone().key("pack"),
             )?;
         }
-        let compiled = json!({
+        let mut compiled = json!({
             "pack": {"id":source.pack.id,"version":source.pack.version,"digest":route.digest,"artifactPrefix":artifact_prefix},
             "route": source.route,
             "connection": source.connection,
@@ -264,7 +336,10 @@ pub fn compile_with_pack_routes(
             "posture": source.acquisition_posture,
             "factSchema": facts_path
         });
-        source_facts.insert(id.to_string(), route.facts_schema.clone());
+        if let Some(projection) = projection {
+            compiled["projection"] = projection;
+        }
+        source_facts.insert(id.to_string(), facts_schema);
         sources.insert(id.to_string(), compiled);
     }
     if !findings.is_empty() {

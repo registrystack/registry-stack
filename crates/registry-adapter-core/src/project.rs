@@ -7,6 +7,81 @@
 use registry_platform_yaml::{Digest, ExternalId, LocalId, UniqueIdList, UniqueList};
 use serde::{Deserialize, Serialize};
 
+/// One project-owned Rhai source. The deployment project, rather than the
+/// reusable source pack, owns programme and public-view transformations.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProjectScript {
+    /// The local name transformations use.
+    pub id: LocalId,
+    /// A clean path relative to the project document.
+    pub file: String,
+    /// The exact sha256 digest of the Rhai source bytes.
+    pub digest: Digest,
+}
+
+impl registry_platform_yaml::Identified for ProjectScript {
+    fn id(&self) -> &str {
+        self.id.as_str()
+    }
+}
+
+/// One project-owned public data schema. The schema bytes carry their stable,
+/// versioned HTTPS `$id`; this inventory binds those bytes into the project
+/// closure without duplicating that public identity in YAML.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProjectSchema {
+    /// The local name a Consultation collection uses as `dataSchema`.
+    pub id: LocalId,
+    /// A clean path relative to the project document.
+    pub file: String,
+    /// The exact sha256 digest of the JSON Schema bytes.
+    pub digest: Digest,
+}
+
+impl registry_platform_yaml::Identified for ProjectSchema {
+    fn id(&self) -> &str {
+        self.id.as_str()
+    }
+}
+
+/// The project-owned artifact inventory. Empty inventories preserve existing
+/// generic profile deployments, which keep all route behavior in their pack.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProjectArtifacts {
+    /// Programme and public-view transformation scripts.
+    #[serde(default)]
+    pub scripts: UniqueIdList<ProjectScript>,
+    /// Versioned public JSON Schemas.
+    #[serde(default)]
+    pub schemas: UniqueIdList<ProjectSchema>,
+}
+
+impl ProjectArtifacts {
+    fn is_empty(&self) -> bool {
+        self.scripts.is_empty() && self.schemas.is_empty()
+    }
+}
+
+/// One binding's project-owned transformation. Its output schema is not
+/// repeated here: the binding's record type selects one Consultation
+/// collection/view, and that collection owns the single `dataSchema`
+/// reference.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BindingTransform {
+    /// A [`ProjectScript`] id.
+    pub script: LocalId,
+    /// The one-argument Rhai function invoked as `entrypoint(source)`.
+    pub entrypoint: String,
+}
+
 /// A pinned reference to a profile or pack: plain identifier plus the
 /// version and digest `adapterctl check` verifies (CFG-ID-4,
 /// `products/adapter/CONCEPT.md` section 6).
@@ -197,8 +272,14 @@ pub struct ProjectIdentity {
 pub struct AdapterProject {
     /// The deployment's identity.
     pub project: ProjectIdentity,
-    /// The pinned facade profile.
-    pub profile: PinnedRef,
+    /// The pinned authored facade profile. Exactly one of this member and
+    /// `consultation` selects the deployment's caller-facing protocol.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<PinnedRef>,
+    /// The project metadata for the built-in Consultation facade. Its paths,
+    /// envelopes, problems, and protocol schemas remain maintained Rust.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub consultation: Option<crate::ConsultationFacade>,
     /// The pinned adapter pack.
     pub pack: PinnedRef,
     /// The declared record types and fields.
@@ -212,6 +293,17 @@ pub struct AdapterProject {
     /// The access profiles.
     #[serde(default)]
     pub access_profiles: UniqueIdList<AccessProfile>,
+    /// Digest-pinned deployment-owned scripts and public schemas.
+    #[serde(default, skip_serializing_if = "ProjectArtifacts::is_empty")]
+    pub artifacts: ProjectArtifacts,
+    /// Project-owned transformations keyed by the binding id they follow.
+    /// The map form avoids duplicating the binding or source-route identity.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "crate::model::local_id_map_schema::<BindingTransform>")
+    )]
+    pub binding_transforms: std::collections::BTreeMap<LocalId, BindingTransform>,
     /// The deployment's value for each of the profile's parameterized
     /// parts, keyed by part name. The engine writes each value over the
     /// response-envelope members of that name; every declared part needs
@@ -267,7 +359,8 @@ mod tests {
                 id: LocalId::new("case-deployment").expect("id"),
                 version: "1.0.0".to_string(),
             },
-            profile: pin("case-api"),
+            profile: Some(pin("case-api")),
+            consultation: None,
             pack: pin("case-api-pack"),
             record_types: UniqueIdList::new(vec![record_type()]).expect("unique"),
             templated_routes: UniqueIdList::new(vec![crate::route::TemplatedRoute {
@@ -300,6 +393,8 @@ mod tests {
                     .expect("unique"),
             }])
             .expect("unique"),
+            artifacts: ProjectArtifacts::default(),
+            binding_transforms: Default::default(),
             parameterized_parts: Default::default(),
         };
         let json = serde_json::to_string(&project).expect("serialize");
@@ -308,6 +403,40 @@ mod tests {
             serde_json::from_str::<AdapterProject>(&json).ok(),
             Some(project)
         );
+    }
+
+    #[test]
+    fn project_owned_transform_artifacts_round_trip_without_a_second_schema_reference() {
+        let source = b"fn public_person(source) { #{ name: source.name } }";
+        let schema = br#"{"$id":"https://example.test/schemas/person-public/1.0.0","type":"object","additionalProperties":false,"required":["name"],"properties":{"name":{"type":"string"}}}"#;
+        let mut project = serde_json::from_value::<AdapterProject>(serde_json::json!({
+            "project": {"id": "case-deployment", "version": "1.0.0"},
+            "profile": {"id": "case-api", "version": "1.0.0", "digest": "sha256:678260a56715cba21db1f0687e5a2c5e5efb2ea0b8eea687b5f3ee8723c5f6c9"},
+            "pack": {"id": "case-pack", "version": "1.0.0", "digest": "sha256:678260a56715cba21db1f0687e5a2c5e5efb2ea0b8eea687b5f3ee8723c5f6c9"},
+            "recordTypes": [],
+            "artifacts": {
+                "scripts": [{"id": "person-public", "file": "transform/person-public.rhai", "digest": registry_platform_config::sha256_uri(source)}],
+                "schemas": [{"id": "person-public", "file": "schemas/person-public.schema.json", "digest": registry_platform_config::sha256_uri(schema)}]
+            },
+            "bindingTransforms": {
+                "find-person": {"script": "person-public", "entrypoint": "public_person"}
+            }
+        }))
+        .expect("project reads");
+
+        assert_eq!(project.artifacts.scripts.len(), 1);
+        assert_eq!(project.artifacts.schemas.len(), 1);
+        let transform = project
+            .binding_transforms
+            .remove(&LocalId::new("find-person").expect("id"))
+            .expect("binding transform");
+        assert_eq!(transform.script.as_str(), "person-public");
+        assert_eq!(transform.entrypoint, "public_person");
+        let wire = serde_json::to_value(project).expect("serialize");
+        assert!(wire.get("recordSchemas").is_none());
+        assert!(wire["bindingTransforms"]["find-person"]
+            .get("outputSchema")
+            .is_none());
     }
 
     /// A binding's filter list is unique (CFG-ID-6): a repeated field
@@ -349,11 +478,14 @@ mod tests {
     #[test]
     fn the_project_identity_block_is_required() {
         let project = AdapterProject {
+            consultation: None,
+            artifacts: Default::default(),
+            binding_transforms: Default::default(),
             project: ProjectIdentity {
                 id: LocalId::new("case-deployment").expect("id"),
                 version: "1.0.0".to_string(),
             },
-            profile: pin("case-api"),
+            profile: Some(pin("case-api")),
             pack: pin("case-api-pack"),
             record_types: UniqueIdList::new(vec![record_type()]).expect("unique"),
             templated_routes: UniqueIdList::new(Vec::new()).expect("empty"),

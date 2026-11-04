@@ -9,12 +9,15 @@ use std::sync::Arc;
 
 use base64::Engine as _;
 use jsonschema::{Draft, JSONSchema};
-use registry_adapter_core::{AdapterPack, ADAPTER_PACK_API_VERSION, ADAPTER_PACK_KIND};
-use registry_adapter_engine::artifacts::PackArtifactBytes;
+use registry_adapter_core::{
+    AdapterPack, EvidenceAcquisitionPosture, ADAPTER_PACK_API_VERSION, ADAPTER_PACK_KIND,
+};
+use registry_adapter_engine::artifacts::{PackArtifactBytes, ProjectArtifactBytes};
 use registry_adapter_engine::evidence::{
     check_schema, compile_evidence_pack_with_protocols, EvidenceCompileError, EvidenceLimits,
     EvidenceSchemaKind,
 };
+use registry_adapter_engine::project_transform::{CompiledProjectTransform, ProjectTransformError};
 use registry_platform_config::{
     package::is_envelope_file, require_trusted_runtime_path, sha256_uri, verify_package,
     PackageError, PackageLimits, VerifiedPackage, SUM_FILE,
@@ -33,8 +36,8 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::config::{
-    ArtifactPath, AssuranceProfile, ConceptConfig, ConceptForm, ConfigError, EvidenceConfig,
-    OrderedMap, RequirementConfig, RuntimeConfig, SchemaFault, SelectorField,
+    AcquisitionPosture, ArtifactPath, AssuranceProfile, ConceptConfig, ConceptForm, ConfigError,
+    EvidenceConfig, OrderedMap, RequirementConfig, RuntimeConfig, SchemaFault, SelectorField,
     SourceInputPresenceContract, SourceInputPresenceRequirement, TextLocation,
 };
 
@@ -340,6 +343,7 @@ pub struct SourcePack {
     artifacts: Arc<PackArtifactBytes>,
     artifact_paths: BTreeSet<String>,
     input_presence: SourceInputPresenceContract,
+    projection: Option<Arc<CompiledProjectTransform>>,
 }
 
 impl SourcePack {
@@ -351,6 +355,31 @@ impl SourcePack {
     #[must_use]
     pub fn artifacts(&self) -> Arc<PackArtifactBytes> {
         Arc::clone(&self.artifacts)
+    }
+
+    /// Project only a successfully matched native fact object. Lookup
+    /// classification and the acquisition deadline remain host-owned.
+    pub fn project_lookup(
+        &self,
+        lookup: registry_adapter_engine::evidence::EvidenceLookup,
+        deadline: std::time::Instant,
+    ) -> Result<registry_adapter_engine::evidence::EvidenceLookup, ProjectTransformError> {
+        use registry_adapter_engine::evidence::EvidenceLookup;
+        match (&self.projection, lookup) {
+            (Some(projection), EvidenceLookup::Matched { facts }) => {
+                let maps = Arc::new(
+                    self.pack
+                        .code_maps
+                        .iter()
+                        .map(|map| (map.id.as_str().to_owned(), map.clone()))
+                        .collect(),
+                );
+                projection
+                    .apply(&maps, &facts, deadline)
+                    .map(|facts| EvidenceLookup::Matched { facts })
+            }
+            (_, lookup) => Ok(lookup),
+        }
     }
 }
 
@@ -1327,6 +1356,9 @@ fn validate_file_closure(
     }
     for (source_id, source) in config.sources.iter() {
         expected.insert(source.fact_schema().as_str().to_owned());
+        if let Some(projection) = &source.projection {
+            expected.insert(projection.script.as_str().to_owned());
+        }
         let pack = source_packs
             .get(source_id)
             .ok_or_else(|| invalid_artifact("a configured source pack closure is missing"))?;
@@ -1448,6 +1480,12 @@ fn load_source_pack(
         .evidence
         .as_ref()
         .ok_or_else(|| invalid_artifact("the selected source route has no Evidence contract"))?;
+    if !source_posture_covers_route(source.posture(), evidence.acquisition_posture) {
+        return Err(invalid_artifact(
+            "the source binding claims a stronger acquisition posture than the selected pack route",
+        )
+        .in_artifact(&pack_path));
+    }
 
     let mut references = BTreeMap::new();
     for reference in pack.pinned_files() {
@@ -1509,22 +1547,80 @@ fn load_source_pack(
         invalid_artifact("the source facts schema is not JSON")
             .in_artifact(source.fact_schema().as_str())
     })?;
-    // Both artifacts remain covered by the package digest; the original pack
-    // schema also retains its exact pin. Formatting a generated projection
-    // cannot change which facts the already-checked schema permits.
-    if projected_schema != facts_schema {
-        return Err(invalid_artifact(
-            "the source facts schema does not equal the selected pack route's pinned schema",
-        )
-        .in_artifact(source.fact_schema().as_str()));
-    }
+    // The source schema retains its pack pin. A distinct project facts schema
+    // is admissible only through a compiled, package-owned projection; both
+    // schemas and the projection remain in the governed behavior closure.
+    let projection = if let Some(projection) = &source.projection {
+        let script_bytes = files.get(projection.script.as_str()).ok_or_else(|| {
+            unknown_file(
+                projection.script.as_str(),
+                "the source projection script is missing",
+            )
+        })?;
+        let id = registry_platform_yaml::LocalId::new("source-projection")
+            .expect("fixed local identifier");
+        let script = registry_adapter_core::ProjectScript {
+            id: id.clone(),
+            file: projection.script.as_str().to_owned(),
+            digest: projection.digest.clone(),
+        };
+        let transform = registry_adapter_core::BindingTransform {
+            script: id.clone(),
+            entrypoint: projection.entrypoint.clone(),
+        };
+        let schema = registry_adapter_core::ProjectSchema {
+            id,
+            file: source.fact_schema().as_str().to_owned(),
+            digest: registry_platform_yaml::Digest::new(sha256_uri(projected_facts))
+                .expect("computed schema digest"),
+        };
+        let artifacts = ProjectArtifactBytes::new([
+            (script.file.clone(), script_bytes.clone()),
+            (schema.file.clone(), projected_facts.clone()),
+        ]);
+        Some(Arc::new(
+            CompiledProjectTransform::compile_parts(&script, &transform, &schema, &artifacts)
+                .map_err(|_| {
+                    invalid_artifact("the governed source projection or facts schema is invalid")
+                        .in_artifact(projection.script.as_str())
+                })?,
+        ))
+    } else {
+        if projected_schema != facts_schema {
+            return Err(invalid_artifact(
+                "the source facts schema does not equal the selected pack route's pinned schema",
+            )
+            .in_artifact(source.fact_schema().as_str()));
+        }
+        None
+    };
 
     Ok(SourcePack {
         pack: Arc::new(pack),
         artifacts: Arc::new(PackArtifactBytes::new(artifact_bytes)),
         artifact_paths,
         input_presence,
+        projection,
     })
+}
+
+fn source_posture_covers_route(
+    source: AcquisitionPosture,
+    route: EvidenceAcquisitionPosture,
+) -> bool {
+    matches!(
+        (source, route),
+        (AcquisitionPosture::RecordTransformed, _)
+            | (
+                AcquisitionPosture::FieldProjected,
+                EvidenceAcquisitionPosture::SourceDerived
+                    | EvidenceAcquisitionPosture::FieldProjected
+            )
+            | (
+                AcquisitionPosture::SourceDerived,
+                EvidenceAcquisitionPosture::SourceDerived
+            )
+    )
 }
 
 fn source_input_presence_contract(
@@ -2727,6 +2823,12 @@ fn load_fact_schemas(
         .iter()
         .map(|(_, source)| source.fact_schema().as_str().to_owned())
         .collect::<BTreeSet<_>>();
+    let projected_paths = config
+        .sources
+        .iter()
+        .filter(|(_, source)| source.projection.is_some())
+        .map(|(_, source)| source.fact_schema().as_str().to_owned())
+        .collect::<BTreeSet<_>>();
     let mut paths = source_paths.clone();
     paths.extend(reviewed_schema_paths(all_concepts(config), files)?);
     let mut schemas = BTreeMap::new();
@@ -2737,9 +2839,14 @@ fn load_fact_schemas(
         let schema = if source_paths.contains(&path) {
             let schema: JsonValue = serde_json::from_slice(bytes)
                 .map_err(|_| invalid_artifact("facts schema is not JSON").in_artifact(&path))?;
-            check_schema(EvidenceSchemaKind::Facts, schema.clone()).map_err(|_| {
-                invalid_artifact("facts schema must be a closed JSON Schema 2020-12 object: the root and every object set `additionalProperties: false`, references stay inside the document, and the document stays within its size bounds").in_artifact(&path)
-            })?;
+            if projected_paths.contains(&path) {
+                registry_adapter_engine::public_schema::check_public_schema(schema.clone())
+                    .map_err(|_| invalid_artifact("projected facts require a versioned closed JSON Schema with bounded arrays and local references").in_artifact(&path))?;
+            } else {
+                check_schema(EvidenceSchemaKind::Facts, schema.clone()).map_err(|_| {
+                    invalid_artifact("facts schema must be a closed JSON Schema 2020-12 object: the root and every object set `additionalProperties: false`, references stay inside the document, and the document stays within its size bounds").in_artifact(&path)
+                })?;
+            }
             schema
         } else {
             let schema = Reader::new(path.as_str())
@@ -3587,6 +3694,9 @@ fn requirement_artifact_paths(
             .ok_or_else(|| invalid_artifact("the requirement's source pack closure is missing"))?;
         paths.extend(pack.artifact_paths.iter().cloned());
         paths.insert(source.fact_schema().as_str().to_owned());
+        if let Some(projection) = &source.projection {
+            paths.insert(projection.script.as_str().to_owned());
+        }
     }
     paths.insert(requirement.derivation.script.as_str().to_owned());
     for concept in &requirement.concepts {
@@ -4160,6 +4270,20 @@ mod tests {
         let prefix = source.pack.artifact_prefix.as_str();
         overclaimed.insert(format!("{prefix}/unreviewed.txt"), b"extra".to_vec());
         assert!(load_source_pack(&source, &overclaimed).is_err());
+    }
+
+    #[test]
+    fn captured_pack_refuses_a_stronger_posture_than_the_selected_route() {
+        let (mut source, files) = captured_pack_source();
+        source.posture = AcquisitionPosture::SourceDerived;
+
+        assert_eq!(
+            refusal_cause(
+                load_source_pack(&source, &files)
+                    .expect_err("a record-transformed route cannot be claimed source-derived")
+            ),
+            "the source binding claims a stronger acquisition posture than the selected pack route"
+        );
     }
 
     #[test]
@@ -6920,6 +7044,105 @@ sourceConnections:
             ),
             EXTRACT_CHANGED
         );
+    }
+    fn captured_project_projection() -> (crate::config::SourceConfig, BTreeMap<String, Vec<u8>>) {
+        let (mut source, mut files) = captured_pack_source();
+        let script = b"fn project_facts(source) { #{parentCount: source.parents.len} }".to_vec();
+        let script_path = "derivations/source-projections/family.rhai";
+        source.projection = Some(crate::config::SourceProjectionConfig {
+            script: ArtifactPath::parse(script_path).unwrap(),
+            entrypoint: "project_facts".to_owned(),
+            digest: registry_platform_yaml::Digest::new(sha256_uri(&script)).unwrap(),
+        });
+        files.insert(script_path.to_owned(), script);
+        files.insert(
+            source.fact_schema().as_str().to_owned(),
+            serde_json::to_vec(&serde_json::json!({
+                "$id":"https://registry.example/schemas/family-facts/1.0.0",
+                "type":"object","additionalProperties":false,"required":["parentCount"],
+                "properties":{"parentCount":{"type":"integer","minimum":0,"maximum":16}}
+            }))
+            .unwrap(),
+        );
+        (source, files)
+    }
+
+    #[test]
+    fn project_projection_preserves_pack_bytes_and_discloses_only_its_facts_schema() {
+        use registry_adapter_engine::evidence::EvidenceLookup;
+        let (source, files) = captured_project_projection();
+        let pack_path = format!("{}/pack.yaml", source.pack.artifact_prefix.as_str());
+        let original = files[&pack_path].clone();
+        let closure = load_source_pack(&source, &files).unwrap();
+        assert_eq!(files[&pack_path], original);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        let result = closure.project_lookup(EvidenceLookup::Matched {
+            facts: serde_json::json!({"parents":[{"name":"private-canary","verified":true}]})
+        }, deadline).unwrap();
+        assert_eq!(
+            result,
+            EvidenceLookup::Matched {
+                facts: serde_json::json!({"parentCount":1})
+            }
+        );
+        for outcome in [
+            EvidenceLookup::NoMatch,
+            EvidenceLookup::Ambiguous,
+            EvidenceLookup::Unresolved,
+        ] {
+            assert_eq!(
+                closure.project_lookup(outcome.clone(), deadline).unwrap(),
+                outcome
+            );
+        }
+    }
+
+    #[test]
+    fn project_projection_refuses_changed_scripts_invalid_output_and_expired_budget() {
+        use registry_adapter_engine::evidence::EvidenceLookup;
+        use registry_adapter_engine::project_transform::ProjectTransformError;
+        let (source, mut files) = captured_project_projection();
+        let closure = load_source_pack(&source, &files).unwrap();
+        assert_eq!(
+            closure
+                .project_lookup(
+                    EvidenceLookup::Matched {
+                        facts: serde_json::json!({"parents":[]})
+                    },
+                    std::time::Instant::now() - std::time::Duration::from_secs(1)
+                )
+                .unwrap_err(),
+            ProjectTransformError::Budget
+        );
+        let script_path = source
+            .projection
+            .as_ref()
+            .unwrap()
+            .script
+            .as_str()
+            .to_owned();
+        files.insert(
+            script_path.to_owned(),
+            b"fn project_facts(source) { #{parentCount: \"private-canary\"} }".to_vec(),
+        );
+        assert!(
+            load_source_pack(&source, &files).is_err(),
+            "changed script fails its pin"
+        );
+        let mut repinned = source;
+        repinned.projection.as_mut().unwrap().digest =
+            registry_platform_yaml::Digest::new(sha256_uri(&files[&script_path])).unwrap();
+        let closure = load_source_pack(&repinned, &files).unwrap();
+        let failure = closure
+            .project_lookup(
+                EvidenceLookup::Matched {
+                    facts: serde_json::json!({"parents":[]}),
+                },
+                std::time::Instant::now() + std::time::Duration::from_secs(1),
+            )
+            .unwrap_err();
+        assert_eq!(failure, ProjectTransformError::OutputInvalid);
+        assert!(!failure.to_string().contains("private-canary"));
     }
 }
 

@@ -16,6 +16,11 @@ pub struct PackArtifactBytes {
     files: BTreeMap<String, Vec<u8>>,
 }
 
+/// Project-owned scripts and schemas use the same bounded in-memory byte
+/// source as pack artifacts, but remain a distinct authority and namespace at
+/// the compile boundary.
+pub type ProjectArtifactBytes = PackArtifactBytes;
+
 impl PackArtifactBytes {
     /// Build a supplied artifact set. Repeated paths keep the last supplied
     /// value; the pack digest still decides whether that value is admissible.

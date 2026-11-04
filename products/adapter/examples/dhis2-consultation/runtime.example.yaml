@@ -1,0 +1,34 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/runtime/runtime.v1alpha1.schema.json
+#
+# Example operator bindings for the built-in Consultation project. Secrets are
+# references only; the authored project and pack contain no environment value.
+apiVersion: id.registrystack.org/formats/adapter/runtime/v1alpha1
+kind: AdapterRuntimeConfig
+id: dhis2-consultation-example
+endpoints:
+  - endpoint: tracker
+    baseUrl: https://tracker.example.invalid
+    tlsTrustProfile: dhis2-private-ca
+    credential:
+      type: basic
+      usernameRef: secret:env/DHIS2_USERNAME
+      passwordRef: secret:env/DHIS2_PASSWORD
+outboundTls:
+  trustProfiles:
+    dhis2-private-ca:
+      caBundleFile: /etc/registry-adapter/trust/dhis2-private-ca.pem
+listener:
+  bind: 127.0.0.1:8080
+database:
+  runtimeUrlRef: secret:env/ADAPTER_DB_RUNTIME
+  migrationUrlRef: secret:env/ADAPTER_DB_MIGRATION
+oidc:
+  issuer: https://issuer.example.invalid
+  audience: registry-adapter-example
+allowedClients:
+  - registry-adapter-example-client
+allowedPrivateCidrs:
+  - 10.0.0.0/8
+audit:
+  retentionDays: 90
+cursorKeyRef: secret:env/ADAPTER_CURSOR_KEY

@@ -1211,6 +1211,10 @@ pub enum TemplateParameterType {
 pub struct RouteTemplate {
     /// The template identifier `templatedRoutes` reference.
     pub id: LocalId,
+    /// Source-neutral read semantics every instantiation of this template
+    /// preserves. Public protocol and view names remain project-owned.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_support: Option<crate::SourceReadSupport>,
     /// The typed parameters the template body references.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub parameters: Vec<TemplateParameter>,

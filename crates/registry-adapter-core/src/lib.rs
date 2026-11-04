@@ -32,6 +32,7 @@
 
 mod auth;
 mod checks;
+mod consultation;
 mod diagnostics;
 mod envelope;
 mod fixture;
@@ -49,6 +50,7 @@ mod typed;
 
 pub use auth::*;
 pub use checks::*;
+pub use consultation::*;
 pub use diagnostics::*;
 pub use envelope::*;
 pub use fixture::*;

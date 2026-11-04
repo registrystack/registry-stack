@@ -16,6 +16,7 @@ use registry_adapter_core::{
 };
 use registry_platform_yaml::{Diagnostic, Report};
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::io;
 use std::path::PathBuf;
 
@@ -95,20 +96,27 @@ pub(crate) fn run(args: &CompileArgs) -> Result<CompileRun, CompileFailure> {
         &mut files,
     )
     .map_err(io_failure)?;
-    let profile_path = check::artifact_path(
-        args.profile.as_deref(),
-        &directory,
-        "profile.yaml",
-        "--profile",
-    )
-    .map_err(io_failure)?;
-    let profile = check::read::<AdapterProfile>(
-        &profile_path,
-        &check::PROFILE_FORMAT,
-        &mut report,
-        &mut files,
-    )
-    .map_err(io_failure)?;
+    let built_in_consultation = project.as_ref().is_some_and(|(decoded, _)| {
+        decoded.value.profile.is_none() && decoded.value.consultation.is_some()
+    });
+    let profile = if built_in_consultation {
+        None
+    } else {
+        let profile_path = check::artifact_path(
+            args.profile.as_deref(),
+            &directory,
+            "profile.yaml",
+            "--profile",
+        )
+        .map_err(io_failure)?;
+        check::read::<AdapterProfile>(
+            &profile_path,
+            &check::PROFILE_FORMAT,
+            &mut report,
+            &mut files,
+        )
+        .map_err(io_failure)?
+    };
     let pack_path = check::artifact_path(args.pack.as_deref(), &directory, "pack.yaml", "--pack")
         .map_err(io_failure)?;
     let pack = check::read::<AdapterPack>(&pack_path, &check::PACK_FORMAT, &mut report, &mut files)
@@ -122,11 +130,19 @@ pub(crate) fn run(args: &CompileArgs) -> Result<CompileRun, CompileFailure> {
         });
     }
     let (project_decoded, _) = project.expect("the project decoded");
-    let (profile_decoded, profile_bytes) = profile.expect("the profile decoded");
     let (pack_decoded, pack_bytes) = pack.expect("the pack decoded");
     let project = project_decoded.value;
-    let profile = profile_decoded.value;
+    let (profile, profile_bytes) = match profile {
+        Some((decoded, bytes)) => (decoded.value, bytes),
+        None => (
+            registry_adapter::engine::consultation::built_in_profile(),
+            Vec::new(),
+        ),
+    };
     let pack = pack_decoded.value;
+
+    check::verify_project_artifacts(&project, &project_path, &mut report, &mut files)
+        .map_err(io_failure)?;
 
     for finding in check_project_pins(
         &project,
@@ -152,10 +168,15 @@ pub(crate) fn run(args: &CompileArgs) -> Result<CompileRun, CompileFailure> {
         });
     }
 
-    let compiled =
-        document::assemble(&profile, &project).map_err(|findings| CompileFailure::Refused {
-            diagnostics: findings,
-        })?;
+    let compiled = if project.consultation.is_some() {
+        let schemas = consultation_schemas(&project, &directory)?;
+        document::assemble_consultation(&project, &schemas)
+    } else {
+        document::assemble(&profile, &project)
+    }
+    .map_err(|findings| CompileFailure::Refused {
+        diagnostics: findings,
+    })?;
     let operations = compiled["paths"].as_object().map_or(0, |paths| {
         paths
             .values()
@@ -208,6 +229,66 @@ pub(crate) fn run(args: &CompileArgs) -> Result<CompileRun, CompileFailure> {
         operations,
         check: args.check,
     })
+}
+
+pub(crate) fn consultation_schemas(
+    project: &AdapterProject,
+    directory: &std::path::Path,
+) -> Result<BTreeMap<String, document::ConsultationSchema>, CompileFailure> {
+    let mut schemas = BTreeMap::new();
+    let mut diagnostics = Vec::new();
+    for schema in project.artifacts.schemas.iter() {
+        let path = directory.join(&schema.file);
+        let bytes = std::fs::read(&path).map_err(|source| CompileFailure::Io {
+            path: path.display().to_string(),
+            source,
+        })?;
+        if check::digest_of(&bytes) != schema.digest {
+            diagnostics.push(registry_platform_yaml::Diagnostic::error(
+                "adapter.project.schema-digest-mismatch",
+                format!("/artifacts/schemas/{}", schema.id.as_str()),
+                "the project schema bytes do not match their digest pin",
+                "Run adapterctl project lock after reviewing the schema change.",
+            ));
+            continue;
+        }
+        let value: Value = match serde_json::from_slice(&bytes) {
+            Ok(value) => value,
+            Err(_) => {
+                diagnostics.push(registry_platform_yaml::Diagnostic::error(
+                    "adapter.project.schema-invalid",
+                    format!("/artifacts/schemas/{}", schema.id.as_str()),
+                    "the project schema is not a JSON document",
+                    "Write a reviewed JSON Schema document with a versioned HTTPS $id.",
+                ));
+                continue;
+            }
+        };
+        let checked = match registry_adapter::engine::public_schema::check_public_schema(value) {
+            Ok(checked) => checked,
+            Err(_) => {
+                diagnostics.push(registry_platform_yaml::Diagnostic::error(
+                    "adapter.project.schema-invalid",
+                    format!("/artifacts/schemas/{}", schema.id.as_str()),
+                    "the project schema is not a supported closed public JSON Schema",
+                    "Use a bounded closed object schema with a version-specific HTTPS $id and local references only.",
+                ));
+                continue;
+            }
+        };
+        schemas.insert(
+            schema.id.as_str().to_owned(),
+            document::ConsultationSchema {
+                identity: checked.identity().to_owned(),
+                component: checked.for_component(schema.id.as_str()),
+            },
+        );
+    }
+    if diagnostics.is_empty() {
+        Ok(schemas)
+    } else {
+        Err(CompileFailure::Refused { diagnostics })
+    }
 }
 
 /// One unreadable file, in the compile's own failure type.

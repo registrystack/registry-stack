@@ -142,6 +142,7 @@ fn capture_project_in(project: &Path, temporary_root: &Path) -> Result<ProjectSn
     }
     for (relative, bound) in [
         ("functions", Bound::Refuse(MAX_DERIVATION_BYTES)),
+        ("projections", Bound::Refuse(MAX_DERIVATION_BYTES)),
         (SCHEMAS_DIRECTORY, Bound::Refuse(MAX_SOURCE_ARTIFACT_BYTES)),
         (FIXTURES_DIRECTORY, Bound::Refuse(MAX_SOURCE_ARTIFACT_BYTES)),
         ("adapter-packs", Bound::Refuse(MAX_SOURCE_ARTIFACT_BYTES)),
@@ -708,6 +709,36 @@ mod tests {
                 Path::new("missing")
             );
         }
+    }
+
+    #[test]
+    fn project_snapshot_captures_bounded_source_projections_and_schemas() {
+        let temporary = temporary();
+        let project = temporary.path().join("project");
+        fs::create_dir_all(project.join("projections")).unwrap();
+        fs::create_dir_all(project.join("schemas")).unwrap();
+        put_marker(&project);
+        fs::write(
+            project.join("projections/facts.rhai"),
+            "fn project(x) { x }",
+        )
+        .unwrap();
+        fs::write(project.join("schemas/facts.json"), "{}").unwrap();
+        let snapshot = capture_project_in(&project, temporary.path()).unwrap();
+        assert_eq!(
+            fs::read_to_string(snapshot.root().join("projections/facts.rhai")).unwrap(),
+            "fn project(x) { x }"
+        );
+        assert_eq!(
+            fs::read_to_string(snapshot.root().join("schemas/facts.json")).unwrap(),
+            "{}"
+        );
+        fs::write(
+            project.join("projections/oversized.rhai"),
+            vec![b'x'; usize::try_from(MAX_DERIVATION_BYTES).unwrap() + 1],
+        )
+        .unwrap();
+        assert!(capture_project_in(&project, temporary.path()).is_err());
     }
 
     #[test]
