@@ -63,8 +63,11 @@ that is not an integer or integer string all make the script throw. The
 runtime maps any mapping failure to a refusal of that one item, with no value
 in the message.
 
-To change the mapping, edit the model, regenerate, lock, and check. Run the
-commands from the checkout root:
+To change the mapping, edit the model, regenerate, lock, and check. To map a
+new answer, also add its path to `projection.fields` in each job document; a
+dotted path reaches the mapping as one literal key, which the model quotes
+(`'"household.village"'`). If the Action input changes, update the target
+schema mirror with it. Run the commands from the checkout root:
 
 ```sh
 cargo run --locked -p registry-adapterctl -- mapping generate \
