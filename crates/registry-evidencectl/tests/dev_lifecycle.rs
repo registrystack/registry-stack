@@ -15,6 +15,9 @@ use std::{
     process::{Command, Output},
 };
 
+#[path = "support/executable.rs"]
+mod executable;
+
 #[test]
 #[ignore = "exact gate: starts the pinned stock issuer container and real Evidence binary"]
 fn real_issuer_lifecycle_issues_typed_service_claims_and_stops_cleanly() {
@@ -353,6 +356,7 @@ fn failed_issuer_setup_keeps_redacted_logs_through_start_rollback() {
     )
     .expect("engine stub");
     fs::set_permissions(&engine, fs::Permissions::from_mode(0o700)).unwrap();
+    executable::wait_until_executable(&engine);
     let (evidence_port, issuer_port) = unused_port_pair();
     let output = fixture.dev_start(&evidence, &engine, evidence_port, issuer_port);
     assert!(!output.status.success());
@@ -794,6 +798,7 @@ impl Project {
         let path = self.root.join("never-serves-tool");
         fs::write(&path, "#!/bin/sh\nexit 1\n").expect("test tool");
         fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).expect("test tool mode");
+        executable::wait_until_executable(&path);
         path
     }
 

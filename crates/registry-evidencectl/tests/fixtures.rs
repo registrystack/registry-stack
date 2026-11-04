@@ -9,38 +9,16 @@ use std::{
     os::unix::fs::PermissionsExt as _,
     path::{Path, PathBuf},
     process::{Command, Output},
-    time::{Duration, Instant},
 };
 
 use registry_platform_yaml::Reader;
 
+#[path = "support/executable.rs"]
+mod executable;
+use executable::{output_waiting_for_busy_binary, retry_while_busy, wait_until_executable};
+
 fn evidencectl() -> Command {
     Command::new(env!("CARGO_BIN_EXE_evidencectl"))
-}
-
-/// Run `command`, waiting out Linux ETXTBSY for a binary written moments ago.
-/// A concurrent test's fork can hold the writer descriptor of a freshly copied
-/// binary until its own exec closes it, so the first exec of the copy may be
-/// refused. Nothing else is retried.
-fn output_waiting_for_busy_binary(command: &mut Command) -> std::io::Result<Output> {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    retry_while_busy(|| command.output(), || Instant::now() < deadline)
-}
-
-fn retry_while_busy<T>(
-    mut run: impl FnMut() -> std::io::Result<T>,
-    mut keep_waiting: impl FnMut() -> bool,
-) -> std::io::Result<T> {
-    loop {
-        match run() {
-            Err(error)
-                if error.kind() == std::io::ErrorKind::ExecutableFileBusy && keep_waiting() =>
-            {
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            result => return result,
-        }
-    }
 }
 
 #[test]
@@ -95,7 +73,7 @@ fn a_copy_still_held_open_for_writing_is_waited_for() {
         .open(&ctl)
         .expect("hold the copy open for writing");
     std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(200));
+        std::thread::sleep(std::time::Duration::from_millis(200));
         drop(held);
     });
 
@@ -245,6 +223,7 @@ exit 0
     let mut permissions = fs::metadata(&path).expect("stat stub").permissions();
     permissions.set_mode(0o755);
     fs::set_permissions(&path, permissions).expect("chmod stub");
+    wait_until_executable(&path);
     path
 }
 
