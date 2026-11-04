@@ -2283,7 +2283,13 @@ the shape a CronJob drives, or loops on the job's interval trigger; `status`
 counts the item table's statuses and refusal codes, says whether a pass is
 overdue, and says why the last pass stopped; `inspect` goes from an item
 to its destination reference; and `rescan` runs one pass from the first
-page, in which unchanged items skip by digest and refused items retry. A
+page, in which unchanged items skip by digest and refused items retry.
+A refusal the receiver answers is stored under the destination's own
+prefix, with the receiver's word kept as the last segment:
+`adapter.job.breg.<word>` for a direct BReg answer and
+`adapter.job.coordinator.<word>` for a Coordinator answer, so a status
+count never mixes two destinations that use the same word. Codes the Adapter
+itself owns carry no destination segment. A
 preview pass reads the actual source, delivers nothing, writes nothing, and
 records what a destination would have received. Every output is value-free by
 default; only an explicit preview `--show-values` prints projected values.

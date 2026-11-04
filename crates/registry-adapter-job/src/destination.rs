@@ -50,6 +50,24 @@ pub const DESTINATION_ANSWER_INVALID: &str = "adapter.job.destination-answer-inv
 /// bytes: the item table's own column bound.
 pub const MAXIMUM_ANSWER_BYTES: usize = 256;
 
+/// The closed item code of a BReg problem word: the word rides after the
+/// `adapter.job.breg.` prefix, so an item row never shows a bare product
+/// word and the destination stays readable from the code alone.
+#[must_use]
+pub fn breg_item_code(word: &str) -> String {
+    format!("adapter.job.breg.{word}")
+}
+
+/// The closed item code of a Coordinator problem word or event outcome:
+/// the word rides after the `adapter.job.coordinator.` prefix. A word that
+/// already names Coordinator (`coordinator.event.invalid-answer`) is not
+/// prefixed twice.
+#[must_use]
+pub fn coordinator_item_code(word: &str) -> String {
+    let word = word.strip_prefix("coordinator.").unwrap_or(word);
+    format!("adapter.job.coordinator.{word}")
+}
+
 /// How one hand-off ended. Every code is the destination's own and
 /// value-free: the pass records it and never derives a message from the
 /// item.
@@ -419,6 +437,23 @@ async fn post_json(url: &str, body: &[u8], timeout: Duration) -> Result<FixtureA
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_native_word_rides_after_its_destination_prefix() {
+        assert_eq!(
+            breg_item_code("idempotency.expired"),
+            "adapter.job.breg.idempotency.expired"
+        );
+        assert_eq!(
+            coordinator_item_code("idempotency.key-reused"),
+            "adapter.job.coordinator.idempotency.key-reused"
+        );
+        assert_eq!(
+            coordinator_item_code("coordinator.event.invalid-answer"),
+            "adapter.job.coordinator.event.invalid-answer",
+            "a word that names Coordinator is not prefixed twice"
+        );
+    }
 
     #[test]
     fn the_fixture_destination_refuses_any_non_loopback_receiver() {

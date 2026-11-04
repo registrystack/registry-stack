@@ -177,6 +177,27 @@
 - A `writable-read` binding that no Write Update names as its companion read
   is refused by `adapterctl check` and at load, naming the binding, instead of
   stopping the Adapter.
+- BREAKING: job item and check codes are renamed in one pass, with no alias.
+  A refusal a destination answered is now stored as
+  `adapter.job.breg.<word>` or `adapter.job.coordinator.<word>` (the
+  destination's own word is the last segment), so `holdsByCode` and
+  `adapter-job status` counts no longer mix the two destinations. A stored
+  item row written by an earlier release keeps its old spelling; a script
+  that matches a code must match both spellings until those rows are
+  settled. Folded authoring codes are split so each names its own fault:
+  `adapter.job.trigger-hook-unserved` is retired for
+  `adapter.job.trigger-hook-binding` (a hook trigger with no binding, or a
+  repeated one), `adapter.job.trigger-hook-path` (a missing, malformed or
+  repeated path) and `adapter.job.trigger-member` (a member the trigger kind
+  does not accept, such as `path` on an interval trigger); the Postgres send
+  member faults move to `adapter.job.postgres-send-members` and the missing
+  JSONL key pointer to `adapter.job.poll-key-pointer`. The `adapter-job`
+  host codes `adapter.job.hook-configuration` and
+  `adapter.job.hook-not-compiled` are split by cause:
+  `adapter.job.hook-configuration-trigger`, `-ingress-missing`,
+  `-ingress-unused`, `-binding` and `-path`, and
+  `adapter.job.hook-not-compiled-trigger` and `-ingress`. Each authoring
+  code has a bad-corpus member.
 - BREAKING: `asyncCompletion.mode` is renamed `asyncCompletion.type` in an
   Adapter project binding. There is no alias and the project `apiVersion` is
   unchanged, so a project that still writes `mode` is refused at that key

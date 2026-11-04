@@ -20,7 +20,8 @@ use serde_json::Value;
 use sha2::{Digest as _, Sha256};
 
 use crate::destination::{
-    DeliverableItem, DeliveryFamily, DeliveryIdentity, HandOffOutcome, JobDestination,
+    breg_item_code, DeliverableItem, DeliveryFamily, DeliveryIdentity, HandOffOutcome,
+    JobDestination,
 };
 
 const REVISED_ITEM: &str = "adapter.job.revised-item";
@@ -316,14 +317,16 @@ fn refused_outcome(outcome: SendOutcome) -> HandOffOutcome {
     match outcome.native_problem.as_deref() {
         Some(problems::IDEMPOTENCY_KEY_REUSED | problems::IDEMPOTENCY_EXPIRED) => {
             HandOffOutcome::Held {
-                code: outcome
-                    .native_problem
-                    .expect("the matched problem code is present"),
+                code: breg_item_code(
+                    &outcome
+                        .native_problem
+                        .expect("the matched problem code is present"),
+                ),
                 run_id: outcome.correlation,
             }
         }
         Some(code) => HandOffOutcome::Refused {
-            code: code.to_string(),
+            code: breg_item_code(code),
         },
         None => HandOffOutcome::Refused {
             code: MAPPING_REFUSED.to_string(),
@@ -533,10 +536,25 @@ mod tests {
                     note: None,
                 }),
                 HandOffOutcome::Held {
-                    code: code.to_string(),
+                    code: breg_item_code(code),
                     run_id: Some("proposal-a".to_string()),
                 }
             );
         }
+    }
+
+    #[test]
+    fn a_native_refusal_keeps_its_word_behind_the_breg_prefix() {
+        assert_eq!(
+            refused_outcome(SendOutcome {
+                category: OutcomeCategory::Refused,
+                native_problem: Some("input.invalid".to_string()),
+                correlation: None,
+                note: None,
+            }),
+            HandOffOutcome::Refused {
+                code: "adapter.job.breg.input.invalid".to_string()
+            }
+        );
     }
 }

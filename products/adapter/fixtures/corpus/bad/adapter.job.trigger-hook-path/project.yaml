@@ -1,10 +1,10 @@
 # yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
 #
-# Bad-corpus member adapter.job.trigger-hook-unserved: this artifact set must be refused with
-# exactly adapter.job.trigger-hook-unserved. Clean baseline project; the job's hook has no runtime binding.
+# Bad-corpus member adapter.job.trigger-hook-path: this artifact set must be refused with
+# exactly adapter.job.trigger-hook-path. Clean baseline project; the job's hook path does not start with a slash.
 #
 # Refuse with:
-#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.job.trigger-hook-unserved/project.yaml
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.job.trigger-hook-path/project.yaml
 apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
 kind: AdapterProject
 project:
@@ -13,11 +13,11 @@ project:
 profile:
   id: case-api
   version: "1"
-  digest: sha256:a3e4edf0d8f85587f508e54ae3a5429e26336d651ad0bda0059f6c3434b06082
+  digest: sha256:15cc6d42f83ec98436528961152c5de344b6e23cd55d0b802b4acab04eb5e883
 pack:
   id: case-api-pack
   version: "1"
-  digest: sha256:a5dafe4e4235f5e939a69878803c2fe9dbfb5569e0db0d663047b17c437e6066
+  digest: sha256:5c3c692ac9152f26e1037268b8f7f1623180a535dad1e12964667053f7ebef2f
 recordTypes:
   - name: case
     fields:
