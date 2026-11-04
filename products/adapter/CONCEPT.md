@@ -2011,7 +2011,12 @@ reaches may declare `maximumResponseBytes` up to the platform's 16 MiB
 response-body cap; the runtime binding may lower it, never raise it. The profile also bounds what the facade never sees: the
 page deadline of one route run, the read size and page size of the read
 step, and the row and field limits of the decoders. Every read has a
-count, byte, and deadline bound, tested at the edge.
+count, byte, and deadline bound, tested at the edge. The `read` block
+(`maximumFileBytes`, `maximumRowBytes`, `maximumFieldBytes`,
+`maximumRowsPerPage`) bounds the file and PostgreSQL readers, so a job
+whose source route reaches neither (an HTTP-only route) may omit it, and
+`check` refuses an omitted `read` with `adapter.job.profile-read-required`
+where a `pollEnrich` or a `postgres:` send or enrich is reachable.
 
 The item contract is a core type: `{items: [{key, revision?, value}],
 next}`. `key` is the source's stable identifier for the item inside the

@@ -611,29 +611,33 @@ pub(crate) async fn send(
             )
         },
     )?));
-    let (maximum_rows, bounds) = run.context.job.profile.as_ref().map_or_else(
-        || {
-            (
-                registry_adapter_core::MAXIMUM_JOB_ROWS_PER_PAGE,
-                PostgresReadBounds {
-                    maximum_response_bytes: registry_adapter_core::MAXIMUM_JOB_RESPONSE_BYTES
-                        as usize,
-                    maximum_row_bytes: registry_adapter_core::MAXIMUM_JOB_ROW_BYTES as usize,
-                    maximum_field_bytes: registry_adapter_core::MAXIMUM_JOB_FIELD_BYTES as usize,
-                },
-            )
-        },
-        |profile| {
-            (
-                profile.read.maximum_rows_per_page.get(),
-                PostgresReadBounds {
-                    maximum_response_bytes: profile.maximum_response_bytes.get() as usize,
-                    maximum_row_bytes: profile.read.maximum_row_bytes.get() as usize,
-                    maximum_field_bytes: profile.read.maximum_field_bytes.get() as usize,
-                },
-            )
-        },
-    );
+    // The authoring checks require `profile.read` for a route that reaches
+    // a PostgreSQL send, so a profile without it only occurs outside a job
+    // and takes the platform ceilings like a run with no profile.
+    let declared = run
+        .context
+        .job
+        .profile
+        .as_ref()
+        .and_then(|profile| profile.read.as_ref().map(|read| (profile, read)));
+    let (maximum_rows, bounds) = match declared {
+        Some((profile, read)) => (
+            read.maximum_rows_per_page.get(),
+            PostgresReadBounds {
+                maximum_response_bytes: profile.maximum_response_bytes.get() as usize,
+                maximum_row_bytes: read.maximum_row_bytes.get() as usize,
+                maximum_field_bytes: read.maximum_field_bytes.get() as usize,
+            },
+        ),
+        None => (
+            registry_adapter_core::MAXIMUM_JOB_ROWS_PER_PAGE,
+            PostgresReadBounds {
+                maximum_response_bytes: registry_adapter_core::MAXIMUM_JOB_RESPONSE_BYTES as usize,
+                maximum_row_bytes: registry_adapter_core::MAXIMUM_JOB_ROW_BYTES as usize,
+                maximum_field_bytes: registry_adapter_core::MAXIMUM_JOB_FIELD_BYTES as usize,
+            },
+        ),
+    };
     // The timeout is the endpoint's own declared, bounded attempt
     // timeout, never a value from the page or the pack.
     let bound = plan.attempt.as_millis();

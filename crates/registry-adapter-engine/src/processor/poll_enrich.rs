@@ -153,7 +153,7 @@ pub(crate) async fn run(
         .job
         .profile
         .as_ref()
-        .map(|profile| profile.read.clone())
+        .and_then(|profile| profile.read.clone())
         .unwrap_or_else(crate::job_sources::unused_read_bounds);
     #[cfg(feature = "job-file")]
     let cursor = run.exchange.property(ADAPTER_JOB_CURSOR_PROPERTY).cloned();

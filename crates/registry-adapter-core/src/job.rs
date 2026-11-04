@@ -221,6 +221,7 @@ pub enum JobCode {
     PostgresSendMembers,
     ProfileEndpointBound,
     ProfileInconsistent,
+    ProfileReadRequired,
     ProjectionBound,
     ProjectionShape,
     RouteUnknown,
@@ -268,6 +269,7 @@ impl JobCode {
         Self::PostgresSendMembers,
         Self::ProfileEndpointBound,
         Self::ProfileInconsistent,
+        Self::ProfileReadRequired,
         Self::ProjectionBound,
         Self::ProjectionShape,
         Self::RouteUnknown,
@@ -315,6 +317,7 @@ impl JobCode {
             Self::PostgresSendMembers => "adapter.job.postgres-send-members",
             Self::ProfileEndpointBound => "adapter.job.profile-endpoint-bound",
             Self::ProfileInconsistent => "adapter.job.profile-inconsistent",
+            Self::ProfileReadRequired => "adapter.job.profile-read-required",
             Self::ProjectionBound => "adapter.job.projection-bound",
             Self::ProjectionShape => "adapter.job.projection-shape",
             Self::RouteUnknown => "adapter.job.route-unknown",
@@ -375,6 +378,7 @@ impl JobCode {
             | Self::PageShape
             | Self::ProfileEndpointBound
             | Self::ProfileInconsistent
+            | Self::ProfileReadRequired
             | Self::ProjectionBound
             | Self::ProjectionShape
             | Self::RouteUnknown
@@ -464,8 +468,12 @@ pub struct JobProfile {
     /// binding's `maximumUpstreamCalls` stands on, so one budget shape
     /// covers both modes.
     pub maximum_upstream_calls: registry_platform_yaml::BoundedU64<1, MAXIMUM_JOB_UPSTREAM_CALLS>,
-    /// The bounds of the reads the decoders produce.
-    pub read: ReadBounds,
+    /// The bounds of the reads the decoders produce. Required in effect
+    /// where the source route reads a file or a PostgreSQL row, refused
+    /// under `adapter.job.profile-read-required` when absent there; a
+    /// route that reaches neither may omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read: Option<ReadBounds>,
 }
 
 /// The read bounds of one job profile: what one poll may take in and what
@@ -1279,6 +1287,7 @@ pub fn check_job(job: &AdapterJob, pack: &AdapterPack) -> Vec<Diagnostic> {
         ));
     }
     findings.extend(profile_consistency_checks(&job.profile));
+    findings.extend(profile_read_checks(job, pack));
     findings.extend(profile_endpoint_checks(job, pack));
     findings.extend(destination_checks(&job.destination));
     findings.extend(projection_checks(&job.projection));
@@ -1411,7 +1420,11 @@ fn visible_bounded(value: &str, maximum: usize) -> bool {
 /// the bounds they sit inside.
 fn profile_consistency_checks(profile: &JobProfile) -> Vec<Diagnostic> {
     let mut findings = Vec::new();
-    if profile.read.maximum_rows_per_page.get() > profile.maximum_page_items.get() {
+    if profile
+        .read
+        .as_ref()
+        .is_some_and(|read| read.maximum_rows_per_page.get() > profile.maximum_page_items.get())
+    {
         findings.push(job_finding(
             JobCode::ProfileInconsistent,
             "/profile/read/maximumRowsPerPage",
@@ -1428,6 +1441,94 @@ fn profile_consistency_checks(profile: &JobProfile) -> Vec<Diagnostic> {
         ));
     }
     findings
+}
+
+/// A source route that reads a file or a PostgreSQL row takes its row,
+/// field and file bounds from the profile's `read` block, so the block
+/// cannot be omitted there. A route that reaches neither may omit it.
+fn profile_read_checks(job: &AdapterJob, pack: &AdapterPack) -> Vec<Diagnostic> {
+    if job.profile.read.is_some() {
+        return Vec::new();
+    }
+    let Some(source) = pack.source_routes.get(job.source.route.as_str()) else {
+        return Vec::new();
+    };
+    if !steps_read_pages(source.steps.as_slice(), pack, &mut HashSet::new(), 0) {
+        return Vec::new();
+    }
+    vec![job_finding(
+        JobCode::ProfileReadRequired,
+        "/profile/read",
+        "the source route reads a file or a PostgreSQL row but the profile declares no read bounds",
+        "Declare profile.read with maximumFileBytes, maximumRowBytes, maximumFieldBytes and maximumRowsPerPage.",
+    )]
+}
+
+/// Whether the steps poll a file-like source or send to a PostgreSQL
+/// endpoint, following `direct:` expansion as the endpoint walk does.
+fn steps_read_pages<'a>(
+    steps: &'a [Step],
+    pack: &'a AdapterPack,
+    visiting: &mut HashSet<&'a str>,
+    depth: usize,
+) -> bool {
+    if depth > crate::checks::MAX_DIRECT_DEPTH {
+        return false;
+    }
+    for step in steps {
+        let reads = match step {
+            Step::PollEnrich(_) => true,
+            Step::To(to) => {
+                uri_reads_pages(to.uri.component, to.uri.id.as_str(), pack, visiting, depth)
+            }
+            Step::Enrich(enrich) => uri_reads_pages(
+                enrich.uri.component,
+                enrich.uri.id.as_str(),
+                pack,
+                visiting,
+                depth,
+            ),
+            other => nested_steps(other)
+                .into_iter()
+                .any(|nested| steps_read_pages(nested, pack, visiting, depth)),
+        };
+        if reads {
+            return true;
+        }
+    }
+    false
+}
+
+fn uri_reads_pages<'a>(
+    component: crate::model::SendComponent,
+    id: &'a str,
+    pack: &'a AdapterPack,
+    visiting: &mut HashSet<&'a str>,
+    depth: usize,
+) -> bool {
+    match component {
+        crate::model::SendComponent::Postgres => true,
+        crate::model::SendComponent::Direct => {
+            if !visiting.insert(id) {
+                return false;
+            }
+            let body = pack
+                .routes
+                .iter()
+                .find(|route| route.from.uri.id.as_str() == id)
+                .map(|route| route.steps.as_slice())
+                .or_else(|| {
+                    pack.route_templates
+                        .iter()
+                        .find(|template| template.id.as_str() == id)
+                        .map(|template| template.steps.as_slice())
+                });
+            let reads = body.is_some_and(|body| steps_read_pages(body, pack, visiting, depth + 1));
+            visiting.remove(id);
+            reads
+        }
+        _ => false,
+    }
 }
 
 /// The profile is never tighter than a bound of an endpoint the source
@@ -1912,12 +2013,12 @@ mod tests {
             maximum_page_items: bounded32(1_000),
             maximum_page_bytes: bounded64(1_048_576),
             maximum_upstream_calls: bounded64(16),
-            read: ReadBounds {
+            read: Some(ReadBounds {
                 maximum_file_bytes: bounded64(1_073_741_824),
                 maximum_row_bytes: bounded64(1_048_576),
                 maximum_field_bytes: bounded64(65_536),
                 maximum_rows_per_page: bounded32(1_000),
-            },
+            }),
         }
     }
 
@@ -2225,10 +2326,10 @@ mod tests {
     #[test]
     fn check_job_refuses_an_inconsistent_profile() {
         let rows = JobProfile {
-            read: ReadBounds {
+            read: Some(ReadBounds {
                 maximum_rows_per_page: bounded32(1_001),
-                ..profile().read
-            },
+                ..profile().read.expect("the sample profile reads")
+            }),
             ..profile()
         };
         let findings = check_job(
@@ -2738,6 +2839,83 @@ mod tests {
         assert!(
             findings.is_empty(),
             "a route at the budget passes: {findings:?}"
+        );
+    }
+
+    /// A pack whose source route runs `body` as its steps, over the
+    /// test pack's endpoints plus an HTTP one.
+    fn pack_with_route(body: &str) -> AdapterPack {
+        let mut pinned = pack();
+        let http: Vec<crate::pack::Endpoint> = serde_json::from_str(
+            r#"[ { "id": "cases", "component": "http", "authentication": { "type": "none" },
+                   "attemptTimeoutMilliseconds": 10000, "maximumResponseBytes": 1048576 } ]"#,
+        )
+        .expect("an http endpoint");
+        pinned.endpoints = registry_platform_yaml::UniqueIdList::new(
+            std::mem::take(&mut pinned.endpoints)
+                .into_iter()
+                .chain(http)
+                .collect(),
+        )
+        .expect("distinct endpoint ids");
+        pinned.source_routes = serde_json::from_str(&format!(
+            r#"[ {{ "id": "kobo-submissions", "scan": "ongoing", "nextRecovery": "key-deduplicated",
+                    "edits": "ordered", "steps": {body} }} ]"#
+        ))
+        .expect("source routes");
+        pinned
+    }
+
+    /// `read` bounds what the file and PostgreSQL readers take in, so a
+    /// job whose source route reaches one of them cannot omit it, however
+    /// deep the `direct:` expansion; a route that reads nothing may.
+    #[test]
+    fn check_job_requires_read_bounds_only_where_a_reader_runs() {
+        let readers = [
+            r#"[ { "to": { "uri": "postgres:ledger" } } ]"#,
+            r#"[ { "pollEnrich": { "uri": "file:submissions", "timeoutMilliseconds": 5000,
+                                   "decoder": "csv" } } ]"#,
+            r#"[ { "split": { "expression": { "jsonpath": "$.ids" }, "maximumItems": 3,
+                   "steps": [ { "enrich": { "uri": "postgres:ledger" } } ] } } ]"#,
+        ];
+        for body in readers {
+            let mut without = job("kobo-submissions");
+            without.profile.read = None;
+            let findings = check_job(&without, &pack_with_route(body));
+            let refusal = findings
+                .iter()
+                .find(|finding| finding.code == JobCode::ProfileReadRequired.code())
+                .unwrap_or_else(|| panic!("{body}: {findings:?}"));
+            assert_eq!(refusal.path, "/profile/read");
+            let with = check_job(&job("kobo-submissions"), &pack_with_route(body));
+            assert!(
+                with.iter()
+                    .all(|finding| finding.code != JobCode::ProfileReadRequired.code()),
+                "{body}: {with:?}"
+            );
+        }
+        let http_only = r#"[ { "to": { "uri": "http:cases" } } ]"#;
+        let mut without = job("kobo-submissions");
+        without.profile.read = None;
+        let findings = check_job(&without, &pack_with_route(http_only));
+        assert!(
+            findings.is_empty(),
+            "a route that reads no file or row needs no read bounds: {findings:?}"
+        );
+        let with = check_job(&job("kobo-submissions"), &pack_with_route(http_only));
+        assert!(with.is_empty(), "read bounds stay accepted: {with:?}");
+    }
+
+    /// An omitted `read` stays off the wire and parses back to none.
+    #[test]
+    fn an_omitted_read_block_round_trips_off_the_wire() {
+        let mut without = job("kobo-submissions");
+        without.profile.read = None;
+        let json = serde_json::to_value(&without).expect("serialize");
+        assert!(json["profile"].get("read").is_none(), "{json}");
+        assert_eq!(
+            serde_json::from_value::<AdapterJob>(json).ok(),
+            Some(without)
         );
     }
 
