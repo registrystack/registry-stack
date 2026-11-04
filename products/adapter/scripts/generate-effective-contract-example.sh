@@ -15,7 +15,7 @@ fi
 
 # shellcheck source=scripts/cargo-runtime-library-path.sh
 source "$repo_root/scripts/cargo-runtime-library-path.sh"
-registry_prepare_cargo_runtime "$repo_root" --locked -p registry-adapter \
+registry_cargo_build "$repo_root" --locked -p registry-adapter \
 	--manifest-path "$repo_root/Cargo.toml" --target-dir "$CARGO_TARGET_DIR"
 adapter_bin="${ADAPTER_BIN:-${CARGO_TARGET_DIR}/debug/adapter}"
 if [[ ! -x "$adapter_bin" ]]; then

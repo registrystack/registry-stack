@@ -9,6 +9,7 @@ cd "$repo_root"
 # shellcheck source=products/adapter/scripts/contract-lane-cache.sh
 source "$repo_root/products/adapter/scripts/contract-lane-cache.sh"
 python3 -m unittest discover -s products/adapter/scripts -p 'test_contract_lane_cache.py'
+python3 -m unittest discover -s products/adapter/scripts -p 'test_effective_contract_example.py'
 
 # The dependency-direction gate runs first, before any cargo build: its
 # unittest, then the check against the resolved graph and the engine
