@@ -23,8 +23,8 @@ file is its manifest.
 - Each member carries `profile.yaml`, `pack.yaml`, and `project.yaml`
   (plus `scripts/`, `queries/`, or `fixtures/` where the defect needs
   them, and `runtime.yaml` where the expected code is a runtime or auth
-  code). The twelve `adapter.job` members with a `job.yaml` (the two
-  `profile-*` members, `route-unknown`, and the nine
+  code). The fifteen `adapter.job` members with a `job.yaml` (the three
+  `profile-*` members, `route-unknown`, the two `destination-*` members, and the nine
   `projection-*`, `trigger-*`, and `call-budget` members) carry their
   defect in the job definition, which the job compiler's `check_job`
   refuses over the pinned pack beside it, while the workspace itself
@@ -117,6 +117,7 @@ into the sweep also teaches it the `job.rs` registry.
 | `adapter.job.profile-endpoint-bound` | The job profile is tighter than the HTTP endpoint's declared bound, which its source route reaches | `adapter.job.profile-endpoint-bound` | checks (job) |
 | `adapter.job.projection-shape` | The job declares an empty projection block, so no projected field is named | `adapter.job.projection-shape` | checks (job) |
 | `adapter.job.projection-bound` | The job's single projected path is 130 characters, over the 128-character bound | `adapter.job.projection-bound` | checks (job) |
+| `adapter.job.profile-read-required` | The job omits `profile.read` while its source route polls a file (a route that reaches a file or PostgreSQL reader needs the bounds; one that reads neither may omit them) | `adapter.job.profile-read-required` | checks (job) |
 | `adapter.job.triggers-required` | The job declares an empty trigger list, so no pass would ever start | `adapter.job.triggers-required` | checks (job) |
 | `adapter.job.trigger-kind` | The job's only trigger names `kind: timer`, outside the closed interval-and-hook set | `adapter.job.trigger-kind` | checks (job) |
 | `adapter.job.trigger-bound` | The job's interval trigger declares `delayMilliseconds: 500`, below its 1000 floor | `adapter.job.trigger-bound` | checks (job) |
