@@ -257,9 +257,12 @@
   freezes the BReg deployment, caller, access profile, Action and mode, and
   the mapped operation, and a retry that differs stops the pass before any
   BReg call as `adapter.job.breg-receiver-changed` or
-  `adapter.job.breg-body-changed`. A direct BReg item left pending by an
-  earlier release stops as `adapter.job.breg-identity-unrecorded`; settle it
-  with the previous binary before upgrading.
+  `adapter.job.breg-body-changed`. A direct BReg item left pending by
+  v0.45.0 has no recorded identity, so its first retry under this release
+  adopts the current destination and mapping: settle pending direct BReg
+  items with v0.45.0, or keep the destination and mapping unchanged, before
+  upgrading. A row staged before store schema 103 stops as
+  `adapter.job.breg-identity-unrecorded`.
 - Registry Stack releases publish the `adapter` and `adapterctl` binaries for
   Linux amd64, Linux arm64, and macOS arm64, with an `adapter-<tag>-install.sh`
   installer and an `adapter` component for `rstack install`. `rstack adapter`
