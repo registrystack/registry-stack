@@ -42,6 +42,9 @@ const attention: Promise<CoordinatorOutcome<RunList>> = client.list(
 const followed: Promise<CoordinatorOutcome<RunList>> = client.list(
   'header.payload.signature', 20, null, null, null, '0f8c2a51-6d3e-4b7a-9c10-2e5f7a8b9c0d', 'official',
 )
+const finished: Promise<CoordinatorOutcome<RunList>> = client.list(
+  'header.payload.signature', 20, null, 'finished', null, null, null, 'applied',
+)
 const retried: Promise<CoordinatorOutcome<RetryScheduled>> = client.retrySame(
   'header.payload.signature',
   '0f8c2a51-6d3e-4b7a-9c10-2e5f7a8b9c0d',
@@ -52,7 +55,7 @@ const cancelled: Promise<CoordinatorOutcome<RunStatus>> = client.cancel(
   '0f8c2a51-6d3e-4b7a-9c10-2e5f7a8b9c0d',
   'caller withdrew the request',
 )
-void [started, status, inspected, reconciled, listed, attention, followed, retried, cancelled]
+void [started, status, inspected, reconciled, listed, attention, followed, finished, retried, cancelled]
 
 // @ts-expect-error Coordinator start requires a caller-selected idempotency key.
 client.start('header.payload.signature', { workflow: 'decision-follow-up', "workflowRevision": "sha256:0000000000000000000000000000000000000000000000000000000000000000", input: {} })

@@ -176,6 +176,67 @@ async fn list_forwards_the_proposal_and_turn_filters() {
 }
 
 #[tokio::test]
+async fn list_forwards_the_outcome_filter_and_refuses_a_name_no_workflow_could_declare() {
+    let server = MockServer::start().await;
+    let root = tempfile::tempdir().unwrap();
+    let token = root.path().join("token");
+    fs::write(&token, TOKEN).unwrap();
+    Mock::given(method("GET"))
+        .and(path("/v1/runs"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"runs":[]})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let origin = server.uri();
+    let sent = token.clone();
+    let output = tokio::task::spawn_blocking(move || {
+        Command::new(env!("CARGO_BIN_EXE_coordinatorctl"))
+            .args([
+                "--format",
+                "json",
+                "list",
+                "--state",
+                "finished",
+                "--outcome",
+                "needs_review-2",
+                "--url",
+                &origin,
+                "--token-file",
+            ])
+            .arg(sent)
+            .output()
+            .unwrap()
+    })
+    .await
+    .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(
+        requests[0].url.query(),
+        Some("limit=20&state=finished&outcome=needs_review-2")
+    );
+    for value in ["", "a.b", "has space", &"a".repeat(65)] {
+        let output = Command::new(env!("CARGO_BIN_EXE_coordinatorctl"))
+            .args([
+                "list",
+                "--outcome",
+                value,
+                "--url",
+                &server.uri(),
+                "--token-file",
+            ])
+            .arg(&token)
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "--outcome {value:?}");
+    }
+}
+
+#[tokio::test]
 async fn remote_admission_reports_outages_separately_without_repeating_the_request() {
     let server = MockServer::start().await;
     let root = tempfile::tempdir().unwrap();

@@ -227,12 +227,15 @@ export class CoordinatorClient {
   reconcile(token: string, runId: RunId, reason: string): Promise<CoordinatorOutcome<RunInspection>>
   /**
    * Read one stable page of caller-visible runs. Pass `nextCursor` unchanged
-   * with the same caller, `state`, `attention`, `proposal`, and `turn`
-   * values. `attention: true` selects the effective states `attention` and
-   * `failed`. `proposal` selects runs waiting on that BReg Proposal; `turn`
-   * selects runs whose Proposal wait last showed that turn.
+   * with the same caller, `state`, `attention`, `proposal`, `turn`, and
+   * `outcome` values. `attention: true` selects the effective states
+   * `attention` and `failed`. `proposal` selects runs waiting on that BReg
+   * Proposal; `turn` selects runs whose Proposal wait last showed that turn.
+   * `outcome` selects runs that finished with that workflow outcome, matched
+   * exactly; it is 1 to 64 letters, digits, hyphens or underscores, checked
+   * before sending.
    */
-  list(token: string, limit: SafeInteger, cursor?: string | null, state?: RunListState | null, attention?: boolean | null, proposal?: string | null, turn?: ProposalTurn | null): Promise<CoordinatorOutcome<RunList>>
+  list(token: string, limit: SafeInteger, cursor?: string | null, state?: RunListState | null, attention?: boolean | null, proposal?: string | null, turn?: ProposalTurn | null, outcome?: string | null): Promise<CoordinatorOutcome<RunList>>
   /**
    * Schedule the run's saved command again, unchanged, when its inspection
    * allows a retry. Takes no idempotency key, so it is sent exactly once. `reason` is

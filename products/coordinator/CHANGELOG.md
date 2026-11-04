@@ -64,6 +64,13 @@
   automatically (`submitted`, `turn: nobody`) reads once more about three
   seconds later, so a review-free Proposal settles at once instead of after
   `resultCheckSeconds`.
+- `GET /v1/runs` and `coordinatorctl list` take `outcome=<name>`
+  (`--outcome`) for the runs that finished with that workflow outcome, matched
+  exactly. List cursors carry it; a cursor from a list without it continues
+  unchanged. The Rust client's `RunListQuery` gains `outcome`, and the Node.js
+  and Python `list` take it as a last argument.
+- BREAKING: Rust callers that build `RunListQuery` as a struct literal must
+  set `outcome`.
 
 ## 0.45.0 - 2026-11-03
 
