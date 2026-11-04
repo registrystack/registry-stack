@@ -2339,7 +2339,7 @@ mod tests {
         reason = "support regressions inspect synthetic generated artifacts and stub processes"
     )]
     use super::*;
-    use crate::evidence_binary::retry_busy_stub;
+    use crate::evidence_binary::{retry_busy_stub, wait_until_executable};
     use std::{io::Write as _, os::unix::fs::OpenOptionsExt as _};
 
     #[test]
@@ -3314,6 +3314,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let evidence = root.path().join("evidence-stub");
         write_stub_evidence(&evidence, "#!/bin/sh\nexit 0\n");
+        wait_until_executable(&evidence);
         let stage = root.path().join("candidate");
         create_private_directory(&stage).unwrap();
         let plan = CompilePlan {
@@ -3447,6 +3448,7 @@ mod tests {
         fs::write(&fixture_path, b"fixture: authored\n").unwrap();
         let evidence = root.path().join("evidence-stub");
         write_stub_evidence(&evidence, "#!/bin/sh\nexit 0\n");
+        wait_until_executable(&evidence);
 
         let different_stage = root.path().join("different");
         create_private_directory(&different_stage).unwrap();
