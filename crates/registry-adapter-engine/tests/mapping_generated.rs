@@ -11,7 +11,7 @@ use registry_adapter_core::{
     check_mapping, generate, AdapterMapping, BindingTransform, ProjectSchema, ProjectScript,
 };
 use registry_adapter_engine::artifacts::ProjectArtifactBytes;
-use registry_adapter_engine::project_transform::CompiledProjectTransform;
+use registry_adapter_engine::project_transform::{CompiledProjectTransform, ProjectTransformError};
 use registry_adapter_engine::public_schema::check_public_schema;
 use registry_adapter_engine::scripts::{CodeMaps, SCRIPT_PROFILE};
 use registry_platform_config::sha256_uri;
@@ -121,6 +121,20 @@ fn apply_entrypoint(
     entrypoint: &str,
     source: &Value,
 ) -> Result<Value, String> {
+    compile_transform(script, schema, entrypoint)?
+        .apply(
+            &CodeMaps::default(),
+            source,
+            Instant::now() + Duration::from_secs(5),
+        )
+        .map_err(|error| error.to_string())
+}
+
+fn compile_transform(
+    script: &str,
+    schema: &Value,
+    entrypoint: &str,
+) -> Result<CompiledProjectTransform, String> {
     let schema_bytes = serde_json::to_vec(schema).expect("schema bytes");
     let script_ref: ProjectScript = serde_json::from_value(json!({
         "id": "person-script",
@@ -143,16 +157,8 @@ fn apply_entrypoint(
         ("scripts/person.rhai".to_owned(), script.as_bytes().to_vec()),
         ("schemas/person.schema.json".to_owned(), schema_bytes),
     ]);
-    let compiled =
-        CompiledProjectTransform::compile_parts(&script_ref, &transform, &schema_ref, &artifacts)
-            .map_err(|error| format!("compile: {error}"))?;
-    compiled
-        .apply(
-            &CodeMaps::default(),
-            source,
-            Instant::now() + Duration::from_secs(5),
-        )
-        .map_err(|error| error.to_string())
+    CompiledProjectTransform::compile_parts(&script_ref, &transform, &schema_ref, &artifacts)
+        .map_err(|error| format!("compile: {error}"))
 }
 
 fn base_assignments() -> Vec<Value> {
@@ -671,6 +677,74 @@ fn ingestion_inner_function_goes_through_compile_parts() {
     )
     .unwrap_err();
     assert!(error.contains("failed"), "{error}");
+}
+
+/// Authoring preview sees the innermost string the generated script threw;
+/// the runtime `apply` keeps its categorical, value-free refusal.
+#[test]
+fn preview_apply_returns_the_thrown_mapping_failure() {
+    let schema = schema();
+    let model = mapping(
+        "consultation",
+        None,
+        with(json!([
+            {"target": "household.size", "from": "size", "convert": "integer"},
+            {"target": "dateOfBirth", "from": "attributes[attribute = \"Dob\"].value"}
+        ])),
+    );
+    let script = script_for(&model, &schema);
+    let compiled = compile_transform(&script, &schema, "project_person").unwrap();
+    let deadline = || Instant::now() + Duration::from_secs(5);
+    for (source, thrown) in [
+        (json!({"size": 2}), "mapping.missing: source.id"),
+        (
+            json!({"id": "1", "size": "SECRET"}),
+            "mapping.conversion: household.size",
+        ),
+        (
+            json!({"id": "1", "size": 2, "attributes": [
+                {"attribute": "Dob", "value": "a"}, {"attribute": "Dob", "value": "b"}
+            ]}),
+            "mapping.duplicate: dateOfBirth",
+        ),
+    ] {
+        let refusal = compiled
+            .apply_for_preview(&CodeMaps::default(), &source, deadline())
+            .unwrap_err();
+        assert_eq!(refusal.error, ProjectTransformError::Failed);
+        assert_eq!(refusal.thrown.as_deref(), Some(thrown));
+        assert_eq!(
+            compiled
+                .apply(&CodeMaps::default(), &source, deadline())
+                .unwrap_err(),
+            ProjectTransformError::Failed
+        );
+    }
+    let output = compiled
+        .apply_for_preview(
+            &CodeMaps::default(),
+            &json!({"id": "1", "size": 2, "attributes": [{"attribute": "Dob", "value": "a"}]}),
+            deadline(),
+        )
+        .unwrap();
+    assert_eq!(output["household"]["size"], 2);
+}
+
+/// A refusal that is not a script throw carries no thrown text.
+#[test]
+fn preview_apply_carries_no_thrown_text_for_an_output_refusal() {
+    let schema = schema();
+    let script = "fn project_person(source) { #{ unknown: 1 } }";
+    let compiled = compile_transform(script, &schema, "project_person").unwrap();
+    let refusal = compiled
+        .apply_for_preview(
+            &CodeMaps::default(),
+            &json!({}),
+            Instant::now() + Duration::from_secs(5),
+        )
+        .unwrap_err();
+    assert_eq!(refusal.error, ProjectTransformError::OutputInvalid);
+    assert!(refusal.thrown.is_none());
 }
 
 #[test]

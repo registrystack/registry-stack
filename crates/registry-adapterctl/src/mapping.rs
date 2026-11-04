@@ -16,6 +16,7 @@ use registry_adapter::engine::artifacts::ProjectArtifactBytes;
 use registry_adapter::engine::project_transform::{
     CompiledProjectTransform, ProjectTransformError,
 };
+use registry_adapter::engine::public_schema::{check_public_schema, PublicSchemaError};
 use registry_adapter::engine::scripts::CodeMaps;
 use registry_adapter_core::{
     check_mapping, check_mapping_file, generate, is_clean_mapping_path, model_reference_from,
@@ -74,8 +75,9 @@ pub enum MappingCommand {
     Check(MappingCheckArgs),
     /// Check the model, then write the Rhai script it describes beside it.
     Generate(MappingGenerateArgs),
-    /// Run the generated script over sample inputs and print the validated
-    /// outputs or the categorical refusals; writes nothing.
+    /// Generate the script in memory and run it over sample inputs, printing
+    /// the validated outputs or the categorical refusals; writes nothing, so
+    /// `generate` need not run first.
     Preview(MappingPreviewArgs),
 }
 
@@ -102,10 +104,6 @@ pub struct MappingGenerateArgs {
     /// at the path the model names.
     #[arg(long)]
     pub force: bool,
-
-    /// Exit 1 when a warning is reported.
-    #[arg(long)]
-    pub deny_warnings: bool,
 }
 
 /// The arguments of `mapping preview`.
@@ -382,22 +380,67 @@ fn generate_script(
 
 /// The script a loaded model generates, or `None` with the generator's
 /// findings reported against the model. The caller has checked the model
-/// reads cleanly.
+/// reads cleanly. A target the runtime runs as a project transformation is
+/// also compiled exactly as preview compiles it, so a schema the runtime
+/// refuses is refused here, at the schema.
 fn generated(loaded: &Loaded, model: &Path, report: &mut Report) -> Option<String> {
     let schema = loaded
         .schema
         .as_ref()
         .expect("an error reports an unread schema");
     let (reference, digest) = loaded.header();
-    match generate(&loaded.mapping, schema, &reference, &digest) {
-        Ok(script) => Some(script),
+    let script = match generate(&loaded.mapping, schema, &reference, &digest) {
+        Ok(script) => script,
         Err(findings) => {
             for finding in findings {
                 model_failure(report, model, finding);
             }
-            None
+            return None;
+        }
+    };
+    if loaded.mapping.mapping.target != MappingTarget::SourceRequest {
+        if let Err(error) = compile_preview(loaded, &script) {
+            model_failure(report, model, compile_refusal(loaded, schema, error));
+            return None;
         }
     }
+    Some(script)
+}
+
+/// Why the runtime would not compile the generated script: the public-schema
+/// rule the target schema breaks, or the compile error itself.
+fn compile_refusal(loaded: &Loaded, schema: &Value, error: ProjectTransformError) -> Diagnostic {
+    let Err(rule) = check_public_schema(schema.clone()) else {
+        return Diagnostic::error(
+            "adapterctl.mapping-compile",
+            "/mapping",
+            format!("the generated script does not compile for the runtime: {error}"),
+            "Check the model's entrypoint and target schema, then retry.",
+        );
+    };
+    let action = match rule {
+        PublicSchemaError::Identity => {
+            "Give the schema a public versioned HTTPS $id, such as https://example.org/schemas/<name>/1/schema.json."
+        }
+        PublicSchemaError::RootNotClosed | PublicSchemaError::ObjectNotClosed => {
+            "Make the root and every object schema \"type\": \"object\" with \"additionalProperties\": false."
+        }
+        PublicSchemaError::ArrayNotBounded => "Give every array schema a finite maxItems.",
+        PublicSchemaError::ExternalReference => {
+            "Inline the referenced schema or use a local #/ reference."
+        }
+        PublicSchemaError::Bound => "Split or simplify the schema to fit the bound.",
+        PublicSchemaError::Invalid => "Fix the schema so it is valid JSON Schema 2020-12.",
+    };
+    Diagnostic::error(
+        "adapterctl.mapping-schema-not-public",
+        "/mapping/targetSchema",
+        format!(
+            "the target schema {} is not one the runtime accepts: {rule}",
+            loaded.mapping.mapping.target_schema
+        ),
+        action,
+    )
 }
 
 fn run_generate(args: &MappingGenerateArgs) -> Result<MappingRun, MappingFailure> {
@@ -421,11 +464,10 @@ fn run_generate(args: &MappingGenerateArgs) -> Result<MappingRun, MappingFailure
     }
     let digest = sha256_uri(script.as_bytes());
     let next_step = match loaded.mapping.mapping.target {
-        MappingTarget::Ingestion => format!(
-            "Run adapterctl job lock on the job to set destination.mapping.digest to {digest}, then adapterctl job check."
-        ),
-        _ => "Run adapterctl project lock to pin the script digest, then adapterctl check."
-            .to_owned(),
+        MappingTarget::Ingestion => {
+            "Run adapterctl job lock on the job to pin the script digest, then adapterctl job check."
+        }
+        _ => "Run adapterctl project lock to pin the script digest, then adapterctl check.",
     };
     Ok(MappingRun {
         warnings: report.into_diagnostics(),
@@ -439,7 +481,7 @@ fn run_generate(args: &MappingGenerateArgs) -> Result<MappingRun, MappingFailure
             ("existed", json!(existed)),
             ("nextStep", json!(next_step)),
         ],
-        deny_warnings: args.deny_warnings,
+        deny_warnings: false,
     })
 }
 
@@ -621,18 +663,21 @@ fn run_preview(args: &MappingPreviewArgs) -> Result<MappingRun, MappingFailure> 
         return Err(refusal(report, files));
     };
     let compiled = compile_preview(&loaded, &script).map_err(|error| {
+        let schema = loaded.schema.as_ref().expect("a checked schema");
         model_failure(
             &mut report,
             &args.model,
-            Diagnostic::error(
-                "adapterctl.mapping-preview-compile",
-                "/mapping",
-                format!("the generated script could not be compiled for preview: {error}"),
-                "Check the target schema is a closed public JSON Schema with a versioned HTTPS $id, then retry.",
-            ),
+            compile_refusal(&loaded, schema, error),
         );
         refusal(Report::new(report.diagnostics().to_vec()), files)
     })?;
+    let fields: Vec<&str> = loaded
+        .mapping
+        .assignments
+        .iter()
+        .filter(|assignment| assignment.from.is_some())
+        .map(|assignment| assignment.target.as_str())
+        .collect();
 
     let mut results = Vec::new();
     let (mut accepted, mut refused) = (0usize, 0usize);
@@ -646,7 +691,7 @@ fn run_preview(args: &MappingPreviewArgs) -> Result<MappingRun, MappingFailure> 
                 continue;
             }
         };
-        match compiled.apply(
+        match compiled.apply_for_preview(
             &CodeMaps::default(),
             &value,
             Instant::now() + PREVIEW_DEADLINE,
@@ -659,14 +704,27 @@ fn run_preview(args: &MappingPreviewArgs) -> Result<MappingRun, MappingFailure> 
                     "output": wrap_for_runtime(&loaded, output),
                 }));
             }
-            Err(error) => {
+            Err(refusal) => {
                 refused += 1;
-                results.push(json!({
-                    "input": shown,
-                    "outcome": "refused",
-                    "failure": variant_name(error),
-                    "message": error.to_string(),
-                }));
+                let named = refusal
+                    .thrown
+                    .as_deref()
+                    .and_then(|thrown| named_failure(thrown, &fields));
+                results.push(match named {
+                    Some((failure, message, field)) => json!({
+                        "input": shown,
+                        "outcome": "refused",
+                        "failure": failure,
+                        "field": field,
+                        "message": message,
+                    }),
+                    None => json!({
+                        "input": shown,
+                        "outcome": "refused",
+                        "failure": variant_name(refusal.error),
+                        "message": refusal.error.to_string(),
+                    }),
+                });
             }
         }
     }
@@ -734,6 +792,31 @@ fn wrap_for_runtime(loaded: &Loaded, output: Value) -> Value {
         }
         _ => output,
     }
+}
+
+/// A refusal the generated script raises, as its category, a value-free
+/// message and the target field. Only the exact text the generator throws,
+/// `mapping.<category>: <target>` for a target the model reads from the
+/// source, is recognised; any other text may carry a value and is not shown.
+fn named_failure<'a>(
+    thrown: &str,
+    fields: &[&'a str],
+) -> Option<(&'static str, &'static str, &'a str)> {
+    let (category, field) = thrown.split_once(": ")?;
+    let (failure, message) = match category {
+        "mapping.missing" => ("mapping.missing", "the source has no value for the field"),
+        "mapping.duplicate" => (
+            "mapping.duplicate",
+            "the selector matched more than one source value for the field",
+        ),
+        "mapping.conversion" => (
+            "mapping.conversion",
+            "the source value does not convert to the field's type",
+        ),
+        _ => return None,
+    };
+    let field = fields.iter().find(|known| **known == field)?;
+    Some((failure, message, field))
 }
 
 fn variant_name(error: ProjectTransformError) -> &'static str {
@@ -814,10 +897,10 @@ fn drift_warning(
         SCRIPT_DRIFT_CODE,
         pointer,
         format!(
-            "the generated script {} has drifted from its model{model}: {why}",
+            "the generated script {} no longer matches its model{model}: {why}",
             script.display()
         ),
-        "Run adapterctl mapping generate on the model to regenerate the script, or move the hand edit into the model.",
+        "The model changed since generation or the script was hand-edited; adapterctl mapping generate on the model regenerates the script, so move any hand edit into the model first.",
     );
     diagnostic.source = Some(Source {
         file: script.display().to_string(),
@@ -893,8 +976,34 @@ pub(crate) fn script_drift(
 
 #[cfg(test)]
 mod tests {
-    use super::lexical;
+    use super::{lexical, named_failure};
     use std::path::{Path, PathBuf};
+
+    /// Only the generator's exact text for a known field is named; anything
+    /// else stays a plain `failed` refusal.
+    #[test]
+    fn named_failure_accepts_only_the_generator_text_for_a_known_field() {
+        let fields = ["source.id", "household.size"];
+        assert_eq!(
+            named_failure("mapping.missing: source.id", &fields).map(|(f, _, p)| (f, p)),
+            Some(("mapping.missing", "source.id"))
+        );
+        assert_eq!(
+            named_failure("mapping.duplicate: household.size", &fields).map(|(f, _, p)| (f, p)),
+            Some(("mapping.duplicate", "household.size"))
+        );
+        for thrown in [
+            "mapping.missing: other.field",
+            "mapping.missing: source.id ",
+            "mapping.missing: source.id: SECRET",
+            "mapping.missing:source.id",
+            "mapping.unknown: source.id",
+            "SECRET",
+            "",
+        ] {
+            assert!(named_failure(thrown, &fields).is_none(), "{thrown}");
+        }
+    }
 
     /// A `..` cancels only a named component, never an earlier `..`, so two
     /// different files above the working directory stay different.

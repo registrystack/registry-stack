@@ -52,7 +52,7 @@ use crate::resilience::ResilienceRuntime;
 use crate::route::{
     check_job_servable, is_served_auth, run_job_route, EndpointRuntime, RouteContext, RouteTable,
 };
-use crate::scripts::{CodeMaps, ScriptFailure, ScriptSet};
+use crate::scripts::{CodeMaps, ScriptFailure, ScriptLoadError, ScriptSet};
 
 /// The exchange property carrying the page cursor into the source route.
 /// The name sits under the engine's reserved `Adapter` prefix, so the
@@ -792,11 +792,7 @@ fn compile_job_from_source<S: ArtifactSource + ?Sized, J: ArtifactSource + ?Size
     compile_source_scripts(pack, artifacts, &steps, &mut scripts).map_err(|error| {
         runtime_error(&format!("a source route script could not compile: {error}"))
     })?;
-    compile_destination_script(job_artifacts, &job.destination, &mut scripts).map_err(|error| {
-        runtime_error(&format!(
-            "the destination mapping could not compile: {error}"
-        ))
-    })?;
+    compile_destination_script(job_artifacts, &job.destination, &mut scripts)?;
     ensure_sends_resolve(&endpoints, &steps, &authored.routes)?;
 
     // The resilience state covers the source steps and every internal
@@ -1635,18 +1631,43 @@ fn compile_source_scripts<S: ArtifactSource + ?Sized>(
 /// Add the one destination-owned entrypoint to the compiled script closure.
 /// Signed events have no mapping program; direct BReg never loads one lazily
 /// at hand-off time.
+/// Compile the job-owned destination mapping. A stale digest pin is refused
+/// at the pin, with the command that repins it.
 fn compile_destination_script<S: ArtifactSource + ?Sized>(
     artifacts: &S,
     destination: &JobDestination,
     scripts: &mut ScriptSet,
-) -> Result<(), String> {
+) -> Result<(), JobError> {
+    let compile_error = |reason: &str| {
+        runtime_error(&format!(
+            "the destination mapping could not compile: {reason}"
+        ))
+    };
     if let JobDestination::DirectBreg { mapping, .. } = destination {
         if !clean_job_artifact_path(&mapping.file) {
-            return Err("the mapping path is not a clean job-relative artifact path".to_string());
+            return Err(compile_error(
+                "the mapping path is not a clean job-relative artifact path",
+            ));
         }
-        scripts
-            .add_job_mapping_from(artifacts, mapping)
-            .map_err(|error| error.to_string())?;
+        match scripts.add_job_mapping_from(artifacts, mapping) {
+            Ok(()) => {}
+            Err(ScriptLoadError::DigestMismatch {
+                path,
+                pinned,
+                actual,
+            }) => {
+                return Err(job_error(vec![job_finding(
+                    registry_adapter_core::CheckCode::ProjectPinDigestMismatch.code(),
+                    ADAPTER_JOB_KIND,
+                    "/destination/mapping/digest",
+                    &format!(
+                        "the pinned mapping digest {pinned} does not match {path}, which hashes to {actual}"
+                    ),
+                    "Run adapterctl job lock on the job after reviewing the script change.",
+                )]))
+            }
+            Err(error) => return Err(compile_error(&error.to_string())),
+        }
     }
     Ok(())
 }

@@ -298,25 +298,20 @@ fn job_command(
                 .map(|()| ExitCode::from(exit))
         }
         Ok(run) => {
+            let mut checked = Report::new(run.warnings);
+            checked.set_files_checked(run.files_checked);
             let mut report = json!({
                 "command": command_name,
                 "pack": run.pack,
                 "job": run.job,
                 "runtime": run.runtime,
                 "filesChecked": run.files_checked,
-                "diagnostics": Report::new(run.warnings).to_json_value(),
+                "diagnostics": checked.to_json_value(),
                 "compiled": "validated offline; no send ran and no read executed",
             });
             report["ok"] = json!(true);
             report["status"] = json!("complete");
-            let mut out = Vec::new();
-            report::write(&report, &mut out).map_err(|_| ())?;
-            if format == OutputFormat::Json {
-                let _ = stdout.write_all(&out);
-            } else {
-                let _ = writeln!(stdout, "{}", human_lead(&report));
-            }
-            Ok(ExitCode::SUCCESS)
+            write_success(&report, &checked, format, stdout)
         }
         Err(job::JobCheckFailure::Io { path, source }) => {
             let exit = OPERATIONAL_FAILURE_EXIT;
@@ -766,6 +761,14 @@ fn write_success(
 /// members, and the reader's summary of the files it checked.
 fn render_human(report: &Value, checked: &Report, stdout: &mut dyn io::Write) -> io::Result<()> {
     writeln!(stdout, "{}", human_lead(report))?;
+    let command = report["command"].as_str().unwrap_or_default();
+    // Members a command shows in its own form below, or only in JSON. A
+    // `nextStep` is always the closing `Next:` line.
+    let own: &[&str] = match command {
+        "mapping generate" => &["modelDigest", "scriptDigest", "existed"],
+        "mapping preview" => &["accepted", "refused", "results"],
+        _ => &[],
+    };
     if let Some(fields) = report.as_object() {
         for (key, value) in fields {
             if matches!(
@@ -776,7 +779,9 @@ fn render_human(report: &Value, checked: &Report, stdout: &mut dyn io::Write) ->
                     | "apiVersion"
                     | "kind"
                     | "filesChecked"
-            ) || value.is_null()
+                    | "nextStep"
+            ) || own.contains(&key.as_str())
+                || value.is_null()
             {
                 continue;
             }
@@ -786,6 +791,25 @@ fn render_human(report: &Value, checked: &Report, stdout: &mut dyn io::Write) ->
                 .unwrap_or_else(|| value.to_string());
             writeln!(stdout, "{key}: {rendered}")?;
         }
+    }
+    if command == "mapping preview" {
+        for result in report["results"].as_array().into_iter().flatten() {
+            let mut line = format!(
+                "{}  {}",
+                result["input"].as_str().unwrap_or_default(),
+                result["outcome"].as_str().unwrap_or_default()
+            );
+            if let Some(failure) = result["failure"].as_str() {
+                line.push_str(&format!("  {failure}"));
+            }
+            if let Some(field) = result["field"].as_str() {
+                line.push_str(&format!(" {field}"));
+            }
+            writeln!(stdout, "{line}")?;
+        }
+    }
+    if let Some(next) = report["nextStep"].as_str() {
+        writeln!(stdout, "Next: {next}")?;
     }
     write!(stdout, "{}", checked.render_human())
 }

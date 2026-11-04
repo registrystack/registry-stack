@@ -399,7 +399,9 @@ impl ScriptSet {
 
     /// Run one project-owned transformation over exactly one acquired source
     /// value. Record identity, continuation, route headers and exchange
-    /// properties stay outside this call.
+    /// properties stay outside this call. A failure also carries the
+    /// innermost string the script threw, for authoring preview only: the
+    /// text is script-authored and may carry source values.
     pub(crate) fn call_project_transform(
         &self,
         maps: &CodeMaps,
@@ -407,14 +409,17 @@ impl ScriptSet {
         transform: &BindingTransform,
         source: &Value,
         deadline: Instant,
-    ) -> Result<Value, ScriptFailure> {
-        self.call_with_deadline(
-            maps,
-            &project_transform_key(script.id.as_str()),
-            &transform.entrypoint,
-            source,
-            deadline,
-        )
+    ) -> Result<Value, (ScriptFailure, Option<String>)> {
+        let ast = self
+            .compiled
+            .get(&(
+                project_transform_key(script.id.as_str()),
+                transform.entrypoint.clone(),
+            ))
+            .ok_or((ScriptFailure::Failed, None))?;
+        let argument =
+            rhai::serde::to_dynamic(source).map_err(|_| (ScriptFailure::Failed, None))?;
+        self.invoke_thrown(maps, ast, &transform.entrypoint, (argument,), deadline)
     }
 
     /// Run one entrypoint over `exchange` and return its JSON result.
@@ -504,13 +509,26 @@ impl ScriptSet {
         args: A,
         deadline: Instant,
     ) -> Result<Value, ScriptFailure> {
+        self.invoke_thrown(maps, ast, entrypoint, args, deadline)
+            .map_err(|(failure, _)| failure)
+    }
+
+    /// `invoke` that also returns the innermost string a failed call threw.
+    fn invoke_thrown<A: rhai::FuncArgs>(
+        &self,
+        maps: &CodeMaps,
+        ast: &rhai::AST,
+        entrypoint: &str,
+        args: A,
+        deadline: Instant,
+    ) -> Result<Value, (ScriptFailure, Option<String>)> {
         let deadline = deadline.min(Instant::now() + CALL_DEADLINE);
         let engine = build_engine(&SCRIPT_PROFILE, Some(deadline), |engine| {
             register_code_map(engine, maps);
         });
         let result = call_with_fresh_scope(&engine, ast, entrypoint, args)
-            .map_err(|error| failure(&error))?;
-        rhai::serde::from_dynamic::<Value>(&result).map_err(|_| ScriptFailure::Failed)
+            .map_err(|error| (failure(&error), thrown_text(&error)))?;
+        rhai::serde::from_dynamic::<Value>(&result).map_err(|_| (ScriptFailure::Failed, None))
     }
 
     /// Run a predicate entrypoint. A result that is not a boolean raises
@@ -607,6 +625,24 @@ fn unmapped_message(error: &EvalAltResult) -> Option<String> {
         }
         cursor = match cursor {
             EvalAltResult::ErrorInFunctionCall(_, _, err, _) => err.as_ref(),
+            _ => return None,
+        };
+    }
+}
+
+/// The innermost string payload a script threw, through the
+/// `ErrorInFunctionCall` wrappers Rhai adds for each script function.
+fn thrown_text(error: &EvalAltResult) -> Option<String> {
+    let mut cursor = error;
+    loop {
+        cursor = match cursor {
+            EvalAltResult::ErrorInFunctionCall(_, _, err, _) => err.as_ref(),
+            EvalAltResult::ErrorRuntime(payload, _) => {
+                return payload
+                    .as_immutable_string_ref()
+                    .ok()
+                    .map(|text| text.as_str().to_owned())
+            }
             _ => return None,
         };
     }

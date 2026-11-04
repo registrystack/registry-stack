@@ -110,6 +110,20 @@ fn job_check(root: &tempfile::TempDir, extra: &[&str]) -> (ExitCode, Value) {
     run_json(&arguments)
 }
 
+/// A stale mapping pin is refused at the pin, and the refusal names the
+/// command that repins it.
+#[test]
+fn job_check_of_a_stale_mapping_pin_points_at_job_lock() {
+    let root = workspace();
+    stale_job(&root);
+    let (exit, report) = job_check(&root, &[]);
+    assert_eq!(exit, ExitCode::from(1), "{report}");
+    let finding = &report["diagnostics"][0];
+    assert_eq!(finding["path"], "/destination/mapping/digest", "{report}");
+    let next = finding["suggestedAction"].as_str().unwrap();
+    assert!(next.contains("adapterctl job lock"), "{next}");
+}
+
 #[test]
 fn lock_rewrites_a_stale_mapping_pin_and_the_job_then_checks_clean() {
     let root = workspace();
