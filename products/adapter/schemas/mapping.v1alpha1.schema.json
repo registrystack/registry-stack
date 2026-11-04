@@ -1,0 +1,209 @@
+{
+  "$defs": {
+    "Assignment": {
+      "additionalProperties": false,
+      "description": "One target property and where its value comes from: exactly one of\n`from` and `constant`.",
+      "properties": {
+        "constant": {
+          "$ref": "#/$defs/MappingConstant",
+          "description": "A constant value instead of a selector."
+        },
+        "convert": {
+          "$ref": "#/$defs/Conversion",
+          "description": "The conversion applied to a read value."
+        },
+        "from": {
+          "description": "The selector read from the source root.",
+          "type": "string"
+        },
+        "target": {
+          "description": "The dotted path of the target property.",
+          "type": "string"
+        },
+        "whenMissing": {
+          "$ref": "#/$defs/WhenMissing",
+          "description": "Whether an absent value fails or leaves the property out."
+        }
+      },
+      "required": [
+        "target"
+      ],
+      "type": "object"
+    },
+    "Conversion": {
+      "description": "The value conversion applied after a value is read.",
+      "oneOf": [
+        {
+          "const": "none",
+          "description": "The value is copied as read.",
+          "type": "string"
+        },
+        {
+          "const": "integer",
+          "description": "An integer, or a string of digits, becomes an integer.",
+          "type": "string"
+        },
+        {
+          "const": "text",
+          "description": "A string, or an integer, becomes a string.",
+          "type": "string"
+        },
+        {
+          "const": "date",
+          "description": "A real calendar date written `YYYY-MM-DD` passes unchanged.",
+          "type": "string"
+        }
+      ]
+    },
+    "IngestionMode": {
+      "description": "How an ingestion mapping hands its item to the destination.",
+      "oneOf": [
+        {
+          "const": "proposal",
+          "description": "A Proposal Action start input plus an empty submit body.",
+          "type": "string"
+        },
+        {
+          "const": "immediate",
+          "description": "The bare item.",
+          "type": "string"
+        }
+      ]
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
+    "MappingConstant": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "format": "int64",
+          "maximum": 9223372036854775807,
+          "minimum": -9223372036854775808,
+          "type": "integer"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "description": "A closed scalar constant. It is read by node kind (boolean, integer,\ntext) through a hand-written visitor, never a derived untagged union."
+    },
+    "MappingHeader": {
+      "additionalProperties": false,
+      "description": "The mapping's identity, target, and generated-script location. Every path\nresolves against the model file's directory.",
+      "properties": {
+        "entrypoint": {
+          "description": "The generated entrypoint's Rhai identifier; it must not start with\n`mapping_`.",
+          "type": "string"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The mapping identifier."
+        },
+        "ingestionMode": {
+          "$ref": "#/$defs/IngestionMode",
+          "description": "Required exactly when `target` is `ingestion`."
+        },
+        "script": {
+          "description": "A clean relative path to the generated Rhai script.",
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/MappingTarget",
+          "description": "The kind of value the generated script produces."
+        },
+        "targetSchema": {
+          "description": "A clean relative path to the target JSON Schema.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "target",
+        "targetSchema",
+        "script",
+        "entrypoint"
+      ],
+      "type": "object"
+    },
+    "MappingTarget": {
+      "description": "What a mapping produces, which fixes the entrypoint signature.",
+      "oneOf": [
+        {
+          "const": "consultation",
+          "description": "A Consultation public view: `fn <entrypoint>(source)`.",
+          "type": "string"
+        },
+        {
+          "const": "evidence",
+          "description": "An Evidence projection: `fn <entrypoint>(source)`.",
+          "type": "string"
+        },
+        {
+          "const": "ingestion",
+          "description": "A governed-ingestion item: `fn <entrypoint>_input(source)` plus the\n`fn <entrypoint>(exchange)` wrapper.",
+          "type": "string"
+        },
+        {
+          "const": "source-request",
+          "description": "An upstream request body: `fn <entrypoint>(exchange)`.",
+          "type": "string"
+        }
+      ]
+    },
+    "WhenMissing": {
+      "description": "What happens when the source value is absent.",
+      "oneOf": [
+        {
+          "const": "fail",
+          "description": "The script refuses with `mapping.missing`.",
+          "type": "string"
+        },
+        {
+          "const": "omit",
+          "description": "The target property is left out; only for non-required targets.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/adapter/mapping/mapping.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The authored mapping model.",
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/adapter/mapping/v1alpha1",
+      "description": "The format envelope version.",
+      "type": "string"
+    },
+    "assignments": {
+      "description": "The ordered field assignments.",
+      "items": {
+        "$ref": "#/$defs/Assignment"
+      },
+      "type": "array"
+    },
+    "kind": {
+      "const": "AdapterMapping",
+      "description": "The format kind: `AdapterMapping`.",
+      "type": "string"
+    },
+    "mapping": {
+      "$ref": "#/$defs/MappingHeader",
+      "description": "What the mapping targets and where its generated script lives."
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "mapping",
+    "assignments"
+  ],
+  "title": "Registry Adapter mapping model",
+  "type": "object"
+}

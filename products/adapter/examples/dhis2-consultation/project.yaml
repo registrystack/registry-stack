@@ -1,10 +1,12 @@
 # yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
 #
-# Two public Consultation views over the same source-native DHIS2 acquisition
+# Three public Consultation views over the same source-native DHIS2 acquisition
 # routes. The maintained pack returns captured DHIS2 entities as source items;
 # this project owns the caller-visible transformations and closed schemas.
 # Source attributes can therefore support another authorized projection, but
-# neither maintained view below discloses them.
+# neither of the first two views below discloses them. The third view,
+# person-registration, is generated from person-registration.mapping.yaml and
+# discloses exactly one attribute, the date of birth, selected by its UID.
 apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
 kind: AdapterProject
 project:
@@ -33,6 +35,16 @@ consultation:
       search:
         search: by-org-unit
         inputSchema: org-unit-search
+    - recordType: people-registration
+      registry: https://registry.example/registries/people
+      dataSchema: person-registration
+      transform: {script: person-registration, entrypoint: project_person_registration}
+      lookup:
+        selector: by-record-id
+        inputSchema: record-id
+      search:
+        search: by-org-unit
+        inputSchema: org-unit-search
 pack:
   id: dhis2-tracker
   version: "1"
@@ -45,6 +57,9 @@ artifacts:
     - id: person-summary
       file: scripts/person-summary.rhai
       digest: sha256:5bf4bb3fc5c9b4b4a1512abf03cb0c98fab71791ce1cf8af99a68b88e1a17771
+    - id: person-registration
+      file: scripts/person-registration.rhai
+      digest: sha256:9d9eb23d11dd4475d4f783d45b2ed33e52e970b974b242915a02ac10e12bb72e
   schemas:
     - id: person-public
       file: schemas/person-public.schema.json
@@ -52,6 +67,9 @@ artifacts:
     - id: person-summary
       file: schemas/person-summary.schema.json
       digest: sha256:d6711211303a00bb9317934934e7a50d69c2312917b542cccc941c4256ccf419
+    - id: person-registration
+      file: schemas/person-registration.schema.json
+      digest: sha256:84438462a59f5c13ad50672296f1029405abcd6432281a3510fb01d2d83bc37d
     - id: record-id
       file: schemas/record-id.schema.json
       digest: sha256:424032c763e42a6cc802240b62d448a7dfa409aed6bcb612adb62ec67d5c0c8e
@@ -104,8 +122,24 @@ bindings:
     operation: search
     recordType: people-summary
     route: person-search
+  - id: people-registration-retrieve
+    operation: retrieve
+    recordType: people-registration
+    route: person-read
+  - id: people-registration-lookup
+    operation: lookup
+    recordType: people-registration
+    route: person-read
+  - id: people-registration-list
+    operation: list
+    recordType: people-registration
+    route: person-list
+  - id: people-registration-search
+    operation: search
+    recordType: people-registration
+    route: person-search
 accessProfiles:
   - id: records-reader
     scopes: [records.read]
     operations: [retrieve, lookup, list, search]
-    recordTypes: [people, people-summary]
+    recordTypes: [people, people-summary, people-registration]

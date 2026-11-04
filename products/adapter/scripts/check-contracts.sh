@@ -237,6 +237,20 @@ breg_govstack=products/adapter/examples/breg-govstack
   --pack products/adapter/packs/breg-records/pack.yaml >/dev/null
 printf 'BReg GovStack example check and compile passed\n'
 
+# The authored mapping models behind generated scripts are checked against
+# their target schemas. The project and job checks only warn when a generated
+# script has drifted from its model, so the two examples that carry generated
+# scripts are re-run with --deny-warnings (the job check follows below).
+for mapping_model in \
+  products/adapter/examples/dhis2-consultation/person-registration.mapping.yaml \
+  products/adapter/examples/kobotoolbox-job/mappings/register-household.mapping.yaml \
+  products/adapter/examples/formats/mapping/tracked-entity-request.mapping.yaml; do
+  "$adapterctl_bin" mapping check "$mapping_model" --deny-warnings >/dev/null
+done
+"$adapterctl_bin" check products/adapter/examples/dhis2-consultation/project.yaml \
+  --pack products/adapter/packs/dhis2-tracker/pack.yaml --deny-warnings >/dev/null
+printf 'Mapping model checks passed\n'
+
 # The OpenCRVS birth example is held to the same two commands. Its fixtures
 # are hand-derived from the reviewed Evidence reference and marked documented
 # (each file says so): none is a captured exchange, so this proves the
@@ -330,7 +344,7 @@ export ODK_EMAIL=check-contracts ODK_PASSWORD=check-contracts
   products/adapter/examples/kobotoolbox-job/job.yaml \
   --runtime products/adapter/examples/kobotoolbox-job/job-runtime.example.yaml \
   --profile products/adapter/examples/kobotoolbox-job/profile.yaml \
-  --project products/adapter/examples/kobotoolbox-job/project.yaml >/dev/null
+  --project products/adapter/examples/kobotoolbox-job/project.yaml --deny-warnings >/dev/null
 # The host validates exact hook binding coverage and resolves the hook
 # credentials the way a loop start does, without opening the listener. The
 # gate stands in synthetic owner-only secret files under a throwaway

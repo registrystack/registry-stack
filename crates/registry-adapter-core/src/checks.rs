@@ -5527,7 +5527,7 @@ fn bounded_registry_uri(value: &str) -> bool {
             }))
 }
 
-fn clean_project_artifact_path(path: &str) -> bool {
+pub(crate) fn clean_project_artifact_path(path: &str) -> bool {
     !path.is_empty()
         && path.len() <= 256
         && !path.starts_with('/')

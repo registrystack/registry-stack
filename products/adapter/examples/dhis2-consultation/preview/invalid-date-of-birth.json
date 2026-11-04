@@ -1,0 +1,9 @@
+{
+  "trackedEntity": "SyntheticTe03",
+  "orgUnit": "SyntheticOu01",
+  "updatedAt": "2017-05-26T11:46:22.372",
+  "attributes": [
+    {"attribute": "Priv0000001", "value": "PRIVATE-CANARY"},
+    {"attribute": "Dob00000001", "value": "1990-02-30"}
+  ]
+}

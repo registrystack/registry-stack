@@ -1,0 +1,22 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/mapping/mapping.v1alpha1.schema.json
+#
+# A source-request body, authored as field assignments. The write direction is
+# generated and checked only: `adapterctl mapping generate` writes
+# scripts/tracked-entity-request.rhai, a function of the whole exchange
+# (`headers.recordid`, `body.org_unit`), whose result is the request body sent
+# to the source. `mapping preview` does not run this target.
+apiVersion: id.registrystack.org/formats/adapter/mapping/v1alpha1
+kind: AdapterMapping
+mapping:
+  id: tracked-entity-request
+  target: source-request
+  targetSchema: schemas/tracked-entity-request.schema.json
+  script: scripts/tracked-entity-request.rhai
+  entrypoint: build_tracked_entity_request
+assignments:
+  - target: trackedEntity
+    from: headers.recordid
+  - target: orgUnit
+    from: body.org_unit
+  - target: trackedEntityType
+    from: body.tracked_entity_type

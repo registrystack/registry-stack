@@ -307,6 +307,7 @@ pub(crate) fn run(args: &CheckArgs) -> Result<CheckRun, CheckFailure> {
 
     let pinned = verify_digest_pins(&pack, &pack_path, &mut report, &mut files)?;
     verify_project_artifacts(&project, &project_path, &mut report, &mut files)?;
+    verify_mapping_drift(&project, &project_path, &mut report);
     verify_entrypoints(&pack, &pack_path, &pinned, &mut report);
     verify_query_files(&pack, &pack_path, &pinned, &mut report);
     verify_graphql_operations(&pack, &pack_path, &pinned, &mut report);
@@ -447,6 +448,25 @@ pub(crate) fn verify_project_artifacts(
         }
     }
     Ok(())
+}
+
+/// Warn for each inventoried script that carries a generated header but no
+/// longer matches the mapping model it names. A handwritten script produces
+/// nothing.
+fn verify_mapping_drift(
+    project: &registry_adapter_core::AdapterProject,
+    project_path: &Path,
+    report: &mut Report,
+) {
+    let directory = project_path.parent().unwrap_or_else(|| Path::new(""));
+    for (index, entry) in project.artifacts.scripts.iter().enumerate() {
+        let pointer = format!("/artifacts/scripts/{index}");
+        if let Some(warning) =
+            crate::mapping::script_drift(&directory.join(&entry.file), directory, &pointer)
+        {
+            report.push(warning);
+        }
+    }
 }
 
 /// Compile every selected fixed GovStack transformation from the exact pinned

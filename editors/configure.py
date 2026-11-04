@@ -198,6 +198,7 @@ SCHEMAS = {
         ("products/adapter/schemas/project.v1alpha1.schema.json", "project.yaml"),
         ("products/adapter/schemas/job.v1alpha1.schema.json", "job.yaml"),
         ("products/adapter/schemas/job.v1alpha1.schema.json", "job.*.yaml"),
+        ("products/adapter/schemas/mapping.v1alpha1.schema.json", "*.mapping.yaml"),
         ("products/adapter/schemas/job-runtime.v1alpha1.schema.json", "job-runtime.yaml"),
         ("products/adapter/schemas/job-runtime.v1alpha1.schema.json", "job-runtime.example.yaml"),
         ("products/adapter/schemas/job-runtime.v1alpha1.schema.json", "job-runtime.*.example.yaml"),

@@ -4,8 +4,10 @@
 //!
 //! This crate owns the `adapterctl` binary. Its commands: `check`, the
 //! offline check over authored artifacts (project, profile, pack, fixtures,
-//! and with `--runtime` the runtime config); `project lock`, the pin
-//! rewriter; `schemas`, the generator and drift gate of the Adapter format
+//! and with `--runtime` the runtime config); `job check`, the offline
+//! compile of one ingestion job; `mapping check`, `mapping generate`, and
+//! `mapping preview`, the checks, script generator, and offline preview of
+//! an `AdapterMapping` model; `project lock`, the pin rewriter; `schemas`, the generator and drift gate of the Adapter format
 //! JSON Schemas; `compile`, the per-deployment contract compiler;
 //! `fixtures replay`, the offline replay of a project's fixture suites
 //! against its compiled contract; and `verify --live`, the probe that
@@ -19,6 +21,7 @@ mod compile;
 mod fixtures;
 mod job;
 mod job_runtime;
+mod mapping;
 mod project;
 mod report;
 mod schemas;
@@ -58,6 +61,9 @@ enum Command {
     Check(check::CheckArgs),
     /// Operate one authored ingestion job.
     Job(job::JobArgs),
+    /// Check a mapping model, generate its Rhai script, or preview the
+    /// script over sample inputs.
+    Mapping(mapping::MappingArgs),
     /// Operate one authored adapter project.
     Project(project::ProjectArgs),
     /// Write the generated JSON Schemas of every Adapter format, or
@@ -137,6 +143,7 @@ where
     let command_name = match &command {
         Command::Check(_) => "check",
         Command::Job(_) => "job check",
+        Command::Mapping(mapping) => mapping::command_name(&mapping.command),
         Command::Project(project) => match project.command {
             project::ProjectCommand::Lock(_) => "project lock",
         },
@@ -152,6 +159,7 @@ where
         Command::Job(job) => match job.command {
             job::JobCommand::Check(args) => job_command(args, format, command_name, stdout, stderr),
         },
+        Command::Mapping(args) => mapping_command(args, format, command_name, stdout, stderr),
         Command::Project(args) => project_command(args, format, command_name, stdout, stderr),
         Command::Schemas(args) => schemas_command(args, format, command_name, stdout, stderr),
         Command::Compile(args) => compile_command(args, format, command_name, stdout, stderr),
@@ -332,6 +340,72 @@ fn job_command(
             });
             write_configuration_report(&checked, command_name, format, envelope, stdout, stderr)
                 .map(|()| ExitCode::from(exit))
+        }
+    }
+}
+
+/// Run a `mapping` subcommand and write its verdict: the command's report, a
+/// refusal carrying the findings, or a failure naming the broken environment.
+fn mapping_command(
+    args: mapping::MappingArgs,
+    format: OutputFormat,
+    command_name: &'static str,
+    stdout: &mut dyn io::Write,
+    stderr: &mut dyn io::Write,
+) -> Result<ExitCode, ()> {
+    let refusal =
+        |diagnostics, files_checked, stdout: &mut dyn io::Write, stderr: &mut dyn io::Write| {
+            let mut checked = Report::new(diagnostics);
+            checked.set_files_checked(files_checked);
+            let exit = DOMAIN_REFUSAL_EXIT;
+            let envelope = json!({
+                "ok": false,
+                "command": command_name,
+                "status": failure_status(exit),
+                "diagnostics": checked.to_json_value(),
+                "filesChecked": files_checked,
+            });
+            write_configuration_report(&checked, command_name, format, envelope, stdout, stderr)
+                .map(|()| ExitCode::from(exit))
+        };
+    match mapping::run(&args.command) {
+        Ok(run) if refused(&run.warnings, run.deny_warnings) => {
+            refusal(run.warnings, run.files_checked, stdout, stderr)
+        }
+        Ok(run) => {
+            let mut checked = Report::new(run.warnings);
+            checked.set_files_checked(run.files_checked);
+            let mut envelope = json!({
+                "ok": true,
+                "command": command_name,
+                "status": "complete",
+                "filesChecked": run.files_checked,
+                "diagnostics": checked.to_json_value(),
+            });
+            for (key, value) in run.members {
+                envelope[key] = value;
+            }
+            write_success(&envelope, &checked, format, stdout)
+        }
+        Err(mapping::MappingFailure::Refused {
+            diagnostics,
+            files_checked,
+        }) => refusal(diagnostics, files_checked, stdout, stderr),
+        Err(mapping::MappingFailure::Io { path, source }) => {
+            let exit = OPERATIONAL_FAILURE_EXIT;
+            let report = failure(
+                command_name,
+                exit,
+                vec![json!({
+                    "severity": "error",
+                    "code": "adapterctl.io-failure",
+                    "artifact": "filesystem",
+                    "path": path,
+                    "message": format!("the file could not be read or written: {source}"),
+                    "suggestedAction": "Correct the path or permissions, then retry.",
+                })],
+            );
+            write_failure(&report, format, stdout, stderr).map(|()| ExitCode::from(exit))
         }
     }
 }
@@ -645,6 +719,16 @@ fn render_human(report: &Value, checked: &Report, stdout: &mut dyn io::Write) ->
 
 fn human_lead(report: &Value) -> String {
     match report["command"].as_str().unwrap_or("command") {
+        "mapping check" => "Mapping check passed.".to_owned(),
+        "mapping generate" if report["changed"] == json!(false) => {
+            "The generated script is already current; nothing was written.".to_owned()
+        }
+        "mapping generate" => "Generated script written.".to_owned(),
+        "mapping preview" => format!(
+            "Preview ran offline: {} accepted, {} refused.",
+            report["accepted"].as_u64().unwrap_or_default(),
+            report["refused"].as_u64().unwrap_or_default()
+        ),
         "job check" => "The job compiled offline; nothing ran.".to_owned(),
         "check" => "Authoring check passed.".to_owned(),
         "schemas" if report["check"] == json!(true) => "Schema drift check passed.".to_owned(),

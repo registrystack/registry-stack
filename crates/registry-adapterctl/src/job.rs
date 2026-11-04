@@ -132,17 +132,42 @@ pub(crate) fn run(args: &JobCheckArgs) -> Result<JobCheckRun, JobCheckFailure> {
         }
     };
     match outcome {
-        Ok(program) => Ok(JobCheckRun {
-            pack: args.pack.display().to_string(),
-            job: args.job.display().to_string(),
-            runtime: runtime.display().to_string(),
-            files_checked: files_checked(),
-            warnings: program.warnings,
-        }),
+        Ok(program) => {
+            let mut warnings = program.warnings.clone();
+            warnings.extend(mapping_drift(&program.job, &args.job));
+            Ok(JobCheckRun {
+                pack: args.pack.display().to_string(),
+                job: args.job.display().to_string(),
+                runtime: runtime.display().to_string(),
+                files_checked: files_checked(),
+                warnings,
+            })
+        }
         Err(error) => Err(JobCheckFailure::Refused {
             diagnostics: error.diagnostics,
         }),
     }
+}
+
+/// The drift warning for the job's direct-breg destination mapping script,
+/// when it is a generated script that no longer matches its model. The
+/// mapping file is relative to the job document's directory, and its model
+/// must lie inside that directory.
+fn mapping_drift(
+    job: &registry_adapter_core::AdapterJob,
+    job_path: &std::path::Path,
+) -> Option<registry_platform_yaml::Diagnostic> {
+    let registry_adapter_core::JobDestination::DirectBreg { mapping, .. } = &job.destination else {
+        return None;
+    };
+    let directory = job_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new(""));
+    crate::mapping::script_drift(
+        &directory.join(&mapping.file),
+        directory,
+        "/destination/mapping",
+    )
 }
 
 #[cfg(test)]
