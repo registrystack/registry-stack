@@ -227,7 +227,11 @@ mod tests {
     #[test]
     fn faults_render_fixed_text_and_classes() {
         assert_eq!(
-            AuthError::Plan(AuthPlanFault::KindMismatch).class(),
+            AuthError::Plan(AuthPlanFault::KindMismatch {
+                declared: "basic",
+                bound: None
+            })
+            .class(),
             CREDENTIAL_REJECTED_CLASS,
             "a plan fault is never the caller's validation"
         );
