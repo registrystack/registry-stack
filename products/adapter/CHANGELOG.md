@@ -204,8 +204,8 @@
   stays that one unit on a DHIS2 version whose default mode differs. The pack
   digest changes, and the DHIS2 Evidence reference bundle captures the new
   pack.
-- The maintained Kobo Coordinator workflow gives the unresolved-lookup revision
-  its own finish outcome, `unresolved-reviewed`; it finished as
+- BREAKING: the maintained Kobo Coordinator workflow gives the unresolved-lookup
+  revision its own finish outcome, `unresolved-reviewed`; it finished as
   `revised-reviewed`, the same as a resolved one. Its README lists every
   outcome, notes that a review or Proposal timeout finishes the Run as
   `review-timeout` or `proposal-timeout` rather than raising attention, and a
