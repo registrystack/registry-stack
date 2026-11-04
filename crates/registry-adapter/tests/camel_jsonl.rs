@@ -95,6 +95,7 @@ sources:
     dropbox:
       directory: '{directory}'
       namespace: exports
+      producerAtomicHandover: true
 allowedPrivateCidrs:
   - 10.0.0.0/8
 "#

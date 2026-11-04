@@ -93,6 +93,10 @@ profile:
     )
 }
 
+/// The completion declaration of a source whose test writes each file
+/// whole before the read: the producer's atomic handover.
+const HANDOVER: &str = "\n      producerAtomicHandover: true";
+
 /// The runtime config of a file-source job: no endpoint bindings, one
 /// file source bound to the scratch directory.
 fn runtime_with_sources(directory: &str, namespace: &str, extra: &str) -> String {
@@ -221,7 +225,7 @@ fn write_file(fixture: &Fixture, name: &str, bytes: &[u8]) {
 /// read, and the scan ends when the last file is finished.
 #[tokio::test]
 async fn a_raw_read_orders_the_files_and_ends_the_scan() {
-    let fixture = write_fixture("raw", "", 1_073_741_824, 100);
+    let fixture = write_fixture("raw", HANDOVER, 1_073_741_824, 100);
     write_file(&fixture, "b.bin", b"second");
     write_file(&fixture, "a.bin", b"first");
     let program =
@@ -271,7 +275,7 @@ async fn a_raw_read_orders_the_files_and_ends_the_scan() {
 /// consumer deduplicates by the namespace-plus-digest key.
 #[tokio::test]
 async fn the_noop_divergence_re_reads_a_consumed_file() {
-    let fixture = write_fixture("raw", "", 1_073_741_824, 100);
+    let fixture = write_fixture("raw", HANDOVER, 1_073_741_824, 100);
     write_file(&fixture, "only.bin", b"content");
     let program =
         compile_job(&fixture.pack, &fixture.job, &fixture.runtime).expect("the file job compiles");
@@ -296,7 +300,7 @@ async fn the_noop_divergence_re_reads_a_consumed_file() {
 /// zero under its new content digest, then continues to the following file.
 #[tokio::test]
 async fn a_replaced_file_reads_again_under_its_new_digest() {
-    let fixture = write_fixture("raw", "", 1_073_741_824, 100);
+    let fixture = write_fixture("raw", HANDOVER, 1_073_741_824, 100);
     write_file(&fixture, "a.bin", b"first");
     write_file(&fixture, "b.bin", b"second");
     let program =
@@ -327,8 +331,10 @@ async fn a_replaced_file_reads_again_under_its_new_digest() {
 async fn the_include_glob_selects_candidates() {
     let fixture = write_fixture(
         "raw",
-        r#"
-      include: "*.csv""#,
+        &format!(
+            r#"
+      include: "*.csv"{HANDOVER}"#
+        ),
         1_073_741_824,
         100,
     );
@@ -502,11 +508,40 @@ fn the_compile_holds_the_read_lock_bounds() {
     );
 }
 
+/// A source declaring no way to know a file is complete refuses at the
+/// compile, the refusal located at the source and naming the three
+/// declarations; `readLock: none` is no declaration.
+#[test]
+fn the_compile_refuses_a_source_with_no_completion_declaration() {
+    for extra in ["", "\n      readLock: none"] {
+        let undeclared = write_fixture("raw", extra, 1_073_741_824, 100);
+        let error = compile_job(&undeclared.pack, &undeclared.job, &undeclared.runtime)
+            .expect_err("a source with no completion declaration refuses");
+        let refusal = error
+            .diagnostics
+            .iter()
+            .find(|diagnostic| {
+                diagnostic.code == "platform.runtime-config.refused"
+                    && diagnostic.path == "/sources/file/dropbox"
+            })
+            .unwrap_or_else(|| panic!("a located refusal: {:?}", error.diagnostics));
+        let text = format!("{refusal:?}");
+        for wanted in [
+            "dropbox",
+            "doneFileName",
+            "readLock: changed",
+            "producerAtomicHandover: true",
+        ] {
+            assert!(text.contains(wanted), "{wanted}: {text}");
+        }
+    }
+}
+
 /// A file over the profile's file bound refuses whole, never a partial
 /// read.
 #[tokio::test]
 async fn an_oversized_file_refuses_whole() {
-    let fixture = write_fixture("raw", "", 8, 100);
+    let fixture = write_fixture("raw", HANDOVER, 8, 100);
     write_file(&fixture, "big.bin", b"more than eight bytes");
     let program =
         compile_job(&fixture.pack, &fixture.job, &fixture.runtime).expect("the file job compiles");
@@ -525,7 +560,7 @@ async fn an_oversized_file_refuses_whole() {
 /// nested directory is never a candidate, the non-recursive read.
 #[tokio::test]
 async fn a_symlink_escape_refuses_the_read() {
-    let fixture = write_fixture("raw", "", 1_073_741_824, 100);
+    let fixture = write_fixture("raw", HANDOVER, 1_073_741_824, 100);
     let outside = fixture._directory.path().join("outside.txt");
     std::fs::write(&outside, b"elsewhere").expect("the outside file");
     #[cfg(unix)]
@@ -553,8 +588,10 @@ async fn a_symlink_escape_refuses_the_read() {
 async fn an_unselected_symlink_does_not_refuse_the_read() {
     let fixture = write_fixture(
         "raw",
-        r#"
-      include: "*.csv""#,
+        &format!(
+            r#"
+      include: "*.csv"{HANDOVER}"#
+        ),
         1_073_741_824,
         100,
     );
@@ -576,7 +613,7 @@ async fn an_unselected_symlink_does_not_refuse_the_read() {
 /// other filter, Camel's default posture.
 #[tokio::test]
 async fn a_hidden_file_is_never_a_candidate() {
-    let fixture = write_fixture("raw", "", 1_073_741_824, 100);
+    let fixture = write_fixture("raw", HANDOVER, 1_073_741_824, 100);
     write_file(&fixture, ".hidden.bin", b"lock or backup");
     write_file(&fixture, "a.bin", b"data");
     let program =
@@ -606,7 +643,7 @@ fn a_done_file_convention_with_a_separator_refuses_at_the_reader() {
 /// camel-file's `recursive` is not ported.
 #[tokio::test]
 async fn a_nested_directory_holds_no_candidates() {
-    let fixture = write_fixture("raw", "", 1_073_741_824, 100);
+    let fixture = write_fixture("raw", HANDOVER, 1_073_741_824, 100);
     let nested = fixture.files.join("nested");
     std::fs::create_dir(&nested).expect("the nested directory");
     std::fs::write(nested.join("inner.bin"), b"hidden").expect("the nested file");
@@ -622,7 +659,7 @@ async fn a_nested_directory_holds_no_candidates() {
 /// second read resumes exactly there with stable keys.
 #[tokio::test]
 async fn a_csv_file_pages_across_two_reads() {
-    let fixture = write_fixture("csv", "", 1_073_741_824, 2);
+    let fixture = write_fixture("csv", HANDOVER, 1_073_741_824, 2);
     write_file(
         &fixture,
         "people.csv",
@@ -664,7 +701,7 @@ async fn a_csv_file_pages_across_two_reads() {
 /// edited row as a revision instead of a second registration.
 #[tokio::test]
 async fn a_reordered_replacement_keeps_csv_business_keys() {
-    let fixture = write_fixture("csv", "", 1_073_741_824, 1);
+    let fixture = write_fixture("csv", HANDOVER, 1_073_741_824, 1);
     write_file(&fixture, "people.csv", b"name,age\nalice,007\nbob,3\n");
     let program =
         compile_job(&fixture.pack, &fixture.job, &fixture.runtime).expect("the csv job compiles");
@@ -689,7 +726,7 @@ async fn a_reordered_replacement_keeps_csv_business_keys() {
 /// its file: the resumed read re-encounters the same bytes.
 #[tokio::test]
 async fn a_malformed_csv_record_blocks_its_file() {
-    let fixture = write_fixture("csv", "", 1_073_741_824, 100);
+    let fixture = write_fixture("csv", HANDOVER, 1_073_741_824, 100);
     write_file(
         &fixture,
         "people.csv",
@@ -713,7 +750,7 @@ async fn a_malformed_csv_record_blocks_its_file() {
 /// the count leaves the page through the entry's own result member.
 #[tokio::test]
 async fn a_malformed_jsonl_line_continues_with_a_count() {
-    let fixture = write_fixture("jsonl", "", 1_073_741_824, 100);
+    let fixture = write_fixture("jsonl", HANDOVER, 1_073_741_824, 100);
     write_file(
         &fixture,
         "events.jsonl",
@@ -738,8 +775,10 @@ async fn a_malformed_jsonl_line_continues_with_a_count() {
 async fn max_messages_per_poll_bounds_the_candidates() {
     let fixture = write_fixture(
         "raw",
-        r#"
-      maxMessagesPerPoll: 2"#,
+        &format!(
+            r#"
+      maxMessagesPerPoll: 2{HANDOVER}"#
+        ),
         1_073_741_824,
         100,
     );
@@ -782,8 +821,10 @@ async fn max_messages_per_poll_bounds_the_candidates() {
 async fn a_completed_resume_file_does_not_spend_the_poll_cap() {
     let fixture = write_fixture(
         "raw",
-        r#"
-      maxMessagesPerPoll: 1"#,
+        &format!(
+            r#"
+      maxMessagesPerPoll: 1{HANDOVER}"#
+        ),
         1_073_741_824,
         100,
     );
@@ -811,7 +852,7 @@ async fn a_completed_resume_file_does_not_spend_the_poll_cap() {
 /// bound code, deterministically again on the next read.
 #[tokio::test]
 async fn an_oversized_csv_row_refuses_the_read() {
-    let fixture = write_fixture("csv", "", 1_073_741_824, 100);
+    let fixture = write_fixture("csv", HANDOVER, 1_073_741_824, 100);
     // The job profile carries a 16-byte row bound.
     let job = job_yaml(&sha256_uri(file_pack("csv").as_bytes()), 1_073_741_824, 100)
         .replace("maximumRowBytes: 1048576", "maximumRowBytes: 16");

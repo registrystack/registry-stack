@@ -24,6 +24,12 @@ It always sorts candidates by filename in ascending order.
 There is no authored `sortBy` expression.
 
 `readLock` defaults to `none`.
+A source must declare how it knows a file is complete: a `doneFileName`, `readLock: changed`, or
+`producerAtomicHandover: true` when the producer writes each file elsewhere and renames it into
+the directory (the SFTP source's `completed-name` declaration).
+`adapterctl job check` and startup refuse a source that declares none, because a read could
+otherwise take a file the producer is still writing; `readLock: none` alone is no declaration.
+This differs from Camel, whose file consumer reads with no lock by default.
 For `changed`, `readLockTimeoutMilliseconds` defaults to `10000`, and
 `readLockCheckIntervalMilliseconds` defaults to `1000`.
 The Adapter requires each bound to remain inside its declared finite range.
