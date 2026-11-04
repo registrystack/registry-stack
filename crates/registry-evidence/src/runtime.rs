@@ -3396,7 +3396,8 @@ fn pack_source_diagnosed_failure(error: PackSourceFailure) -> RuntimeFailure {
             | EvidenceHttpDiagnostic::Forbidden
             | EvidenceHttpDiagnostic::RateLimited
             | EvidenceHttpDiagnostic::ServerError
-            | EvidenceHttpDiagnostic::UndeclaredNotFound,
+            | EvidenceHttpDiagnostic::UndeclaredNotFound
+            | EvidenceHttpDiagnostic::OtherClientStatus,
         ) => failure(ProblemCode::DependencyUnavailable, "source-status"),
         Some(
             EvidenceHttpDiagnostic::Verification | EvidenceHttpDiagnostic::DeclaredNotFoundMismatch,

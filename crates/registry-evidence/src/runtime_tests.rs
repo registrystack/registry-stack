@@ -14522,11 +14522,16 @@ async fn current_pack_metrics_preserve_closed_http_status_outcomes_without_sensi
     let metrics =
         crate::observability::Metrics::new(runtime.rate_limiter(), runtime.source_diagnostics());
 
-    for (status, outcome) in [
-        (401, "unauthorized"),
-        (403, "forbidden"),
-        (429, "rate-limited"),
-        (500, "server-error"),
+    // A 409 or 422 is a source answer, not a result-contract fault: it
+    // groups with the other status answers for the operator, and its metric
+    // keeps the existing closed `protocol` label rather than adding one.
+    for (status, outcome, count) in [
+        (401, "unauthorized", 1),
+        (403, "forbidden", 1),
+        (409, "protocol", 1),
+        (422, "protocol", 2),
+        (429, "rate-limited", 1),
+        (500, "server-error", 1),
     ] {
         let body_canary = format!("status-{status}-provider-body-canary");
         Mock::given(method("POST"))
@@ -14545,13 +14550,21 @@ async fn current_pack_metrics_preserve_closed_http_status_outcomes_without_sensi
             .await
             .expect_err("a rejected upstream status releases no Evidence");
         assert_eq!(failure.problem(), ProblemCode::DependencyUnavailable);
+        assert_eq!(failure.category(), "source-status", "status {status}");
 
         let rendered = metrics.render();
-        assert!(rendered.contains(&format!(
-            "evidence_source_requests_total{{source=\"source-b\",outcome=\"{outcome}\"}} 1"
-        )));
+        assert!(
+            rendered.contains(&format!(
+            "evidence_source_requests_total{{source=\"source-b\",outcome=\"{outcome}\"}} {count}"
+        )),
+            "status {status}: {rendered}"
+        );
         assert!(!rendered.contains(&body_canary));
         assert!(!rendered.contains(&operation));
+        assert!(
+            rendered.contains("evidence_source_shape_drift_total{source=\"source-b\"} 0"),
+            "status {status} is a source answer, not shape drift: {rendered}"
+        );
         server.reset().await;
     }
     assert!(!metrics.render().contains("evidence_signer_requests_total{"));
