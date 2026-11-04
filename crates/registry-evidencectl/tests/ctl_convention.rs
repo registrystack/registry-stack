@@ -14,6 +14,9 @@ use std::{
 
 use serde_json::Value;
 
+#[path = "support/executable.rs"]
+mod executable;
+
 const SUCCESS: i32 = 0;
 const DOMAIN_REFUSAL: i32 = 1;
 const USAGE: i32 = 2;
@@ -52,6 +55,7 @@ exit 0
     );
     fs::write(&path, script).expect("write stub evidence");
     fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("chmod stub");
+    executable::wait_until_executable(&path);
     path
 }
 

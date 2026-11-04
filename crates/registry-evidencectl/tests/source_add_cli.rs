@@ -12,6 +12,9 @@ use std::{
 
 use serde_json::Value;
 
+#[path = "support/executable.rs"]
+mod executable;
+
 #[test]
 fn json_source_add_names_the_bregctl_version_mismatch_and_both_versions() {
     let workspace = tempfile::tempdir().expect("tempdir");
@@ -52,6 +55,7 @@ fn script(root: &Path, name: &str, reported: &str) -> std::path::PathBuf {
     let path = root.join(name);
     fs::write(&path, format!("#!/bin/sh\necho '{reported}'\n")).expect("writing a fake bregctl");
     fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).expect("making it executable");
+    executable::wait_until_executable(&path);
     path
 }
 

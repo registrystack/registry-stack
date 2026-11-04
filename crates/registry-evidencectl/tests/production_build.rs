@@ -18,6 +18,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[path = "support/executable.rs"]
+mod executable;
+
 const REVISION: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const LOCAL_URI: &str = "urn:registrystack:evidence:local:forbidden";
 const SECRET_CANARY: &str = "production-build-secret-canary";
@@ -277,6 +280,9 @@ fn installed_evidencectl_prefers_its_sibling_before_path_and_preserves_overrides
             );
             fs::write(path, script).unwrap();
             fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+            // The unset selection log makes the probe's `--version` stop
+            // before it records a selection.
+            executable::wait_until_executable(path);
         };
         if selection != "path" {
             write_runtime(
@@ -311,7 +317,8 @@ fn installed_evidencectl_prefers_its_sibling_before_path_and_preserves_overrides
             write_runtime(&override_binary, "environment", true);
             command.env("EVIDENCE_BIN", override_binary);
         }
-        let output = command.output().expect("installed evidencectl starts");
+        let output = executable::output_waiting_for_busy_binary(&mut command)
+            .expect("installed evidencectl starts");
         if selection == "mismatch" {
             assert_failed(&output, "a mismatched sibling is not bypassed for PATH");
             let message = stderr(&output);
@@ -1803,6 +1810,7 @@ impl Fixture {
         let mut permissions = fs::metadata(&evidence).unwrap().permissions();
         permissions.set_mode(0o700);
         fs::set_permissions(&evidence, permissions).unwrap();
+        executable::wait_until_executable(&evidence);
 
         Self {
             output: root.join("candidate"),
