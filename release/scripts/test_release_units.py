@@ -134,16 +134,16 @@ class ReleaseUnitsTest(TestCase):
                     registry.artifact_owner(name),
                     set(registry.names) | {"distribution"},
                 )
-        for name in candidate._release_payload_inventory("0.45.1"):
+        for name in candidate._release_payload_inventory("0.46.0"):
             with self.subTest(name=name):
                 self.assertIn(
                     registry.artifact_owner(name),
                     set(registry.names) | {"distribution"},
                 )
         for name in (
-            "adapter-v0.45.1-linux-amd64",
-            "adapterctl-v0.45.1-macos-arm64.tar.gz",
-            "adapter-v0.45.1-install.sh",
+            "adapter-v0.46.0-linux-amd64",
+            "adapterctl-v0.46.0-macos-arm64.tar.gz",
+            "adapter-v0.46.0-install.sh",
             "adapter-install.sh",
         ):
             with self.subTest(name=name):
