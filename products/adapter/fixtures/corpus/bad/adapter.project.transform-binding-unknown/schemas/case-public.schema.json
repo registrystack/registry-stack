@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://registry.example/schemas/case-public/1/schema.json",
+  "type": "object",
+  "properties": {
+    "value": { "type": "string", "maxLength": 128 }
+  },
+  "required": ["value"],
+  "additionalProperties": false
+}

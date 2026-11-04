@@ -73,7 +73,7 @@ digest pins and the GraphQL query-file checks). Route findings report
 once at the authored position: `/routeTemplates/N` when the defect sits
 in a template body,
 `/routes/{id}` otherwise, so every member refuses with exactly one
-finding per code. The corpus holds 168 members.
+finding per code. The corpus holds 181 members.
 
 `base-job/` is the clean governed-ingestion control (CONCEPT section 17):
 a pack whose source route polls a bounded `file` endpoint through
@@ -153,6 +153,7 @@ and deployment custody aligned. Each refuses with its directory's exact code.
 | `adapter.profile.problem-data-fields-empty` | A problem declares an empty `dataFields` list | `adapter.profile.problem-data-fields-empty` | checks |
 | `adapter.profile.problem-data-fields-too-many` | A problem declares 17 data fields, one past the bound of 16 | `adapter.profile.problem-data-fields-too-many` | checks |
 | `adapter.profile.problem-data-slot-form` | `problemData` is a required slot instead of one optional whole-value slot | `adapter.profile.problem-data-slot-form` | checks |
+| `adapter.profile.problem-errors-slot-form` | `problemErrors` is a required slot instead of one optional whole-value slot | `adapter.profile.problem-errors-slot-form` | checks |
 | `adapter.profile.problem-data-slot-missing` | A problem declares data fields but the problem envelope carries no `problemData` slot | `adapter.profile.problem-data-slot-missing` | checks |
 | `adapter.profile.problem-data-slot-unused` | The problem envelope carries `problemData` but no problem declares data fields | `adapter.profile.problem-data-slot-unused` | checks |
 | `adapter.profile.invalid-path` | Operation path `v2/cases/...` carries no leading slash | `adapter.profile.invalid-path` | checks |
@@ -176,6 +177,7 @@ and deployment custody aligned. Each refuses with its directory's exact code.
 | `adapter.pack.unknown-script` | A route's `rhai` file is not in the digest-pinned inventory | `adapter.pack.unknown-script` | checks |
 | `adapter.pack.unknown-template-parameter` | Template body references `{{missing-param}}`, no declared parameter provides it | `adapter.pack.unknown-template-parameter` | checks |
 | `adapter.pack.map-parameter-misplaced` | The `map` parameter `{{labels}}` sits inside longer text (`look up {{labels}}`), where an object cannot be rendered | `adapter.pack.map-parameter-misplaced` | checks |
+| `adapter.pack.read-support-invalid` | A `read-one` route declares no native identity input | `adapter.pack.read-support-invalid` | checks |
 | `adapter.pack.digest-pin-required` | Script file's bytes do not hash to its pin (the pin is valid hex, wrong value) | `adapter.pack.digest-pin-required` | tool |
 | `adapter.pack.script-uncompilable` | A pinned script does not parse (missing closing brace; its pin matches the broken bytes) | `adapter.pack.script-uncompilable` | tool |
 | `adapter.pack.entrypoint-parameter` | A pinned script's entrypoint takes `record`, not the `exchange` the slot passes (CONCEPT 8.11.3); the script parses and hashes to its pin | `adapter.pack.entrypoint-parameter` | tool |
@@ -232,6 +234,22 @@ derivation sees, and their sweep expectations list both codes.
 | `adapter.project.unknown-route` | Binding references no declared route (co-fires `adapter.project.template-not-instantiated`, see the note above) | `adapter.project.unknown-route` | checks |
 | `adapter.project.template-not-instantiated` | Binding names the raw template `find-cases`; `templatedRoutes` is empty | `adapter.project.template-not-instantiated` | checks |
 | `adapter.project.upstream-budget-exceeded` | Worst case 2 sends (loop bound 2) against a budget of 1 | `adapter.project.upstream-budget-exceeded` | checks |
+| `adapter.project.artifact-path` | A project script inventory path contains a parent segment | `adapter.project.artifact-path` | checks |
+| `adapter.project.consultation-contract-invalid` | The Consultation contract uses HTTP instead of a versioned HTTPS URI | `adapter.project.consultation-contract-invalid` | checks |
+| `adapter.project.consultation-input-incompatible` | A lookup schema requires a property the selected source route does not support | `adapter.project.consultation-input-incompatible` | tool |
+| `adapter.project.consultation-operation-collision` | Two collection ids collapse to the same public operation-id suffix | `adapter.project.consultation-operation-collision` | checks |
+| `adapter.project.consultation-registry-invalid` | A Consultation Registry identifier carries a query | `adapter.project.consultation-registry-invalid` | checks |
+| `adapter.project.facade-selection` | The project selects both a configurable profile and the built-in Consultation facade | `adapter.project.facade-selection` | checks |
+| `adapter.project.transform-binding-unknown` | A project transformation names an undeclared binding | `adapter.project.transform-binding-unknown` | checks |
+| `adapter.project.transform-entrypoint` | A project transformation entrypoint is not a valid bounded function name | `adapter.project.transform-entrypoint` | checks |
+| `adapter.project.transform-missing` | A Consultation binding has no project transformation | `adapter.project.transform-missing` | checks |
+| `adapter.project.transform-script-unknown` | A project transformation names an uninventoried script | `adapter.project.transform-script-unknown` | checks |
+| `adapter.project.transform-uncompilable` | The selected transformation entrypoint does not exist in the pinned script | `adapter.project.transform-uncompilable` | tool |
+
+The Consultation project members select the built-in Consultation facade, so
+their required sibling `profile.yaml` is intentionally not selected. The
+`adapter.project.facade-selection` member alone selects both forms to exercise
+that refusal.
 
 ### Route members
 

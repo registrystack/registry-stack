@@ -1,0 +1,50 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.project.artifact-path: The script inventory path contains a parent segment.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.project.artifact-path/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: consultation-corpus-base
+  version: "1"
+consultation:
+  contract: https://registry.example/contracts/1.0.0/openapi.yaml
+  collections:
+    - recordType: case
+      registry: urn:registry:case
+      view: public
+      dataSchema: case-public
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:41f0f2cfdd9ff9039e97abb8e3cba8dc9900a0e49085d2d178ab011b3bd019a2
+artifacts:
+  scripts:
+    - id: case-public
+      file: scripts/../scripts/case-public.rhai
+      digest: sha256:a32ad050ae78f7ca8e98e437a7d39dd4880eb1347056a4cb497f0be10bd6d434
+  schemas:
+    - id: case-public
+      file: schemas/case-public.schema.json
+      digest: sha256:60081fff29cdd336fc13179c48ee664625e95198013fb0d41b8be94de10cea5f
+recordTypes:
+  - name: case
+    fields: []
+templatedRoutes:
+  - routeTemplate: find-cases
+    routeId: case-find
+bindings:
+  - id: case-retrieve
+    operation: retrieve
+    recordType: case
+    route: case-find
+    maximumUpstreamCalls: 4
+bindingTransforms:
+  case-retrieve: {script: case-public, entrypoint: project_case_public}
+accessProfiles:
+  - id: case-reader
+    scopes: [cases.read]
+    operations: [retrieve]
+    recordTypes: [case]
