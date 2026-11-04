@@ -22,7 +22,7 @@ cases:
             endpoint: tracker
             method: GET
             path: /api/tracker/trackedEntities
-            query: "fields=trackedEntity%2Cattributes%5Battribute%2Cvalue%5D%2Cenrollments%5Bprogram%2Cstatus%2Cevents%5BprogramStage%2Cstatus%5D%5D&orgUnits=Org00000001&page=1&pageSize=2&program=Prg00000002&totalPages=true&trackedEntities=Tei00000001"
+            query: "fields=trackedEntity%2Cattributes%5Battribute%2Cvalue%5D%2Cenrollments%5Bprogram%2Cstatus%2Cevents%5BprogramStage%2Cstatus%5D%5D&orgUnitMode=SELECTED&orgUnits=Org00000001&page=1&pageSize=2&program=Prg00000002&totalPages=true&trackedEntities=Tei00000001"
             headers:
               accept: application/json
           response:
@@ -74,7 +74,7 @@ cases:
             endpoint: tracker
             method: GET
             path: /api/tracker/trackedEntities
-            query: "fields=trackedEntity%2Cattributes%5Battribute%2Cvalue%5D%2Cenrollments%5Bprogram%2Cstatus%2Cevents%5BprogramStage%2Cstatus%5D%5D&orgUnits=Org00000001&page=1&pageSize=2&program=Prg00000002&totalPages=true&trackedEntities=Tei00000001"
+            query: "fields=trackedEntity%2Cattributes%5Battribute%2Cvalue%5D%2Cenrollments%5Bprogram%2Cstatus%2Cevents%5BprogramStage%2Cstatus%5D%5D&orgUnitMode=SELECTED&orgUnits=Org00000001&page=1&pageSize=2&program=Prg00000002&totalPages=true&trackedEntities=Tei00000001"
             headers:
               accept: application/json
           response:
@@ -124,7 +124,7 @@ cases:
             endpoint: tracker
             method: GET
             path: /api/tracker/trackedEntities
-            query: "fields=trackedEntity%2Cattributes%5Battribute%2Cvalue%5D%2Cenrollments%5Bprogram%2Cstatus%2Cevents%5BprogramStage%2Cstatus%5D%5D&orgUnits=Org00000001&page=1&pageSize=2&program=Prg00000002&totalPages=true&trackedEntities=Tei00000001"
+            query: "fields=trackedEntity%2Cattributes%5Battribute%2Cvalue%5D%2Cenrollments%5Bprogram%2Cstatus%2Cevents%5BprogramStage%2Cstatus%5D%5D&orgUnitMode=SELECTED&orgUnits=Org00000001&page=1&pageSize=2&program=Prg00000002&totalPages=true&trackedEntities=Tei00000001"
             headers:
               accept: application/json
           response:
@@ -172,7 +172,7 @@ cases:
             endpoint: tracker
             method: GET
             path: /api/tracker/trackedEntities
-            query: "fields=trackedEntity%2Cattributes%5Battribute%2Cvalue%5D%2Cenrollments%5Bprogram%2Cstatus%2Cevents%5BprogramStage%2Cstatus%5D%5D&orgUnits=Org00000001&page=1&pageSize=2&program=Prg00000002&totalPages=true&trackedEntities=Tei00000001"
+            query: "fields=trackedEntity%2Cattributes%5Battribute%2Cvalue%5D%2Cenrollments%5Bprogram%2Cstatus%2Cevents%5BprogramStage%2Cstatus%5D%5D&orgUnitMode=SELECTED&orgUnits=Org00000001&page=1&pageSize=2&program=Prg00000002&totalPages=true&trackedEntities=Tei00000001"
             headers:
               accept: application/json
           response:
@@ -217,7 +217,7 @@ cases:
             endpoint: tracker
             method: GET
             path: /api/tracker/trackedEntities
-            query: "fields=trackedEntity%2Cattributes%5Battribute%2Cvalue%5D%2Cenrollments%5Bprogram%2Cstatus%2Cevents%5BprogramStage%2Cstatus%5D%5D&orgUnits=Org00000001&page=1&pageSize=2&program=Prg00000002&totalPages=true&trackedEntities=Tei00000001"
+            query: "fields=trackedEntity%2Cattributes%5Battribute%2Cvalue%5D%2Cenrollments%5Bprogram%2Cstatus%2Cevents%5BprogramStage%2Cstatus%5D%5D&orgUnitMode=SELECTED&orgUnits=Org00000001&page=1&pageSize=2&program=Prg00000002&totalPages=true&trackedEntities=Tei00000001"
             headers:
               accept: application/json
           response:
@@ -263,7 +263,7 @@ cases:
             endpoint: tracker
             method: GET
             path: /api/tracker/trackedEntities
-            query: "fields=trackedEntity%2Cattributes%5Battribute%2Cvalue%5D%2Cenrollments%5Bprogram%2Cstatus%2Cevents%5BprogramStage%2Cstatus%5D%5D&orgUnits=Org00000001&page=1&pageSize=2&program=Prg00000002&totalPages=true&trackedEntities=Tei00000001"
+            query: "fields=trackedEntity%2Cattributes%5Battribute%2Cvalue%5D%2Cenrollments%5Bprogram%2Cstatus%2Cevents%5BprogramStage%2Cstatus%5D%5D&orgUnitMode=SELECTED&orgUnits=Org00000001&page=1&pageSize=2&program=Prg00000002&totalPages=true&trackedEntities=Tei00000001"
             headers:
               accept: application/json
           response:
@@ -310,7 +310,7 @@ cases:
             endpoint: tracker
             method: GET
             path: /api/tracker/trackedEntities
-            query: "fields=trackedEntity%2Cattributes%5Battribute%2Cvalue%5D%2Cenrollments%5Bprogram%2Cstatus%2Cevents%5BprogramStage%2Cstatus%5D%5D&orgUnits=Org00000001&page=1&pageSize=2&program=Prg00000002&totalPages=true&trackedEntities=Tei00000001"
+            query: "fields=trackedEntity%2Cattributes%5Battribute%2Cvalue%5D%2Cenrollments%5Bprogram%2Cstatus%2Cevents%5BprogramStage%2Cstatus%5D%5D&orgUnitMode=SELECTED&orgUnits=Org00000001&page=1&pageSize=2&program=Prg00000002&totalPages=true&trackedEntities=Tei00000001"
             headers:
               accept: application/json
           response:
@@ -348,7 +348,7 @@ cases:
             endpoint: tracker
             method: GET
             path: /api/tracker/trackedEntities
-            query: "fields=trackedEntity%2Cattributes%5Battribute%2Cvalue%5D%2Cenrollments%5Bprogram%2Cstatus%2Cevents%5BprogramStage%2Cstatus%5D%5D&orgUnits=Org00000001&page=1&pageSize=2&program=Prg00000002&totalPages=true&trackedEntities=Tei00000001"
+            query: "fields=trackedEntity%2Cattributes%5Battribute%2Cvalue%5D%2Cenrollments%5Bprogram%2Cstatus%2Cevents%5BprogramStage%2Cstatus%5D%5D&orgUnitMode=SELECTED&orgUnits=Org00000001&page=1&pageSize=2&program=Prg00000002&totalPages=true&trackedEntities=Tei00000001"
             headers:
               accept: application/json
           response:
@@ -376,7 +376,7 @@ cases:
             endpoint: tracker
             method: GET
             path: /api/tracker/trackedEntities
-            query: "fields=trackedEntity%2Cattributes%5Battribute%2Cvalue%5D%2Cenrollments%5Bprogram%2Cstatus%2Cevents%5BprogramStage%2Cstatus%5D%5D&orgUnits=Org00000001&page=1&pageSize=2&program=Prg00000002&totalPages=true&trackedEntities=Tei00000001"
+            query: "fields=trackedEntity%2Cattributes%5Battribute%2Cvalue%5D%2Cenrollments%5Bprogram%2Cstatus%2Cevents%5BprogramStage%2Cstatus%5D%5D&orgUnitMode=SELECTED&orgUnits=Org00000001&page=1&pageSize=2&program=Prg00000002&totalPages=true&trackedEntities=Tei00000001"
             headers:
               accept: application/json
           response:
@@ -416,7 +416,7 @@ cases:
             endpoint: tracker
             method: GET
             path: /api/tracker/trackedEntities
-            query: "fields=trackedEntity%2Cattributes%5Battribute%2Cvalue%5D%2Cenrollments%5Bprogram%2Cstatus%2Cevents%5BprogramStage%2Cstatus%5D%5D&orgUnits=Org00000001&page=1&pageSize=2&program=Prg00000002&totalPages=true&trackedEntities=Tei00000001"
+            query: "fields=trackedEntity%2Cattributes%5Battribute%2Cvalue%5D%2Cenrollments%5Bprogram%2Cstatus%2Cevents%5BprogramStage%2Cstatus%5D%5D&orgUnitMode=SELECTED&orgUnits=Org00000001&page=1&pageSize=2&program=Prg00000002&totalPages=true&trackedEntities=Tei00000001"
             headers:
               accept: application/json
           response:
@@ -456,7 +456,7 @@ cases:
             endpoint: tracker
             method: GET
             path: /api/tracker/trackedEntities
-            query: "fields=trackedEntity%2Cattributes%5Battribute%2Cvalue%5D%2Cenrollments%5Bprogram%2Cstatus%2Cevents%5BprogramStage%2Cstatus%5D%5D&orgUnits=Org00000001&page=1&pageSize=2&program=Prg00000002&totalPages=true&trackedEntities=Tei00000001"
+            query: "fields=trackedEntity%2Cattributes%5Battribute%2Cvalue%5D%2Cenrollments%5Bprogram%2Cstatus%2Cevents%5BprogramStage%2Cstatus%5D%5D&orgUnitMode=SELECTED&orgUnits=Org00000001&page=1&pageSize=2&program=Prg00000002&totalPages=true&trackedEntities=Tei00000001"
             headers:
               accept: application/json
           response:
@@ -494,7 +494,7 @@ cases:
             endpoint: tracker
             method: GET
             path: /api/tracker/trackedEntities
-            query: "fields=trackedEntity%2Cattributes%5Battribute%2Cvalue%5D%2Cenrollments%5Bprogram%2Cstatus%2Cevents%5BprogramStage%2Cstatus%5D%5D&orgUnits=Org00000001&page=1&pageSize=2&program=Prg00000002&totalPages=true&trackedEntities=Tei00000001"
+            query: "fields=trackedEntity%2Cattributes%5Battribute%2Cvalue%5D%2Cenrollments%5Bprogram%2Cstatus%2Cevents%5BprogramStage%2Cstatus%5D%5D&orgUnitMode=SELECTED&orgUnits=Org00000001&page=1&pageSize=2&program=Prg00000002&totalPages=true&trackedEntities=Tei00000001"
             headers:
               accept: application/json
           response:
@@ -525,7 +525,7 @@ cases:
             endpoint: tracker
             method: GET
             path: /api/tracker/trackedEntities
-            query: "fields=trackedEntity%2Cattributes%5Battribute%2Cvalue%5D%2Cenrollments%5Bprogram%2Cstatus%2Cevents%5BprogramStage%2Cstatus%5D%5D&orgUnits=Org00000001&page=1&pageSize=2&program=Prg00000002&totalPages=true&trackedEntities=Tei00000001"
+            query: "fields=trackedEntity%2Cattributes%5Battribute%2Cvalue%5D%2Cenrollments%5Bprogram%2Cstatus%2Cevents%5BprogramStage%2Cstatus%5D%5D&orgUnitMode=SELECTED&orgUnits=Org00000001&page=1&pageSize=2&program=Prg00000002&totalPages=true&trackedEntities=Tei00000001"
             headers:
               accept: application/json
           response:
@@ -564,7 +564,7 @@ cases:
             endpoint: tracker
             method: GET
             path: /api/tracker/trackedEntities
-            query: "fields=trackedEntity%2Cattributes%5Battribute%2Cvalue%5D%2Cenrollments%5Bprogram%2Cstatus%2Cevents%5BprogramStage%2Cstatus%5D%5D&orgUnits=Org00000001&page=1&pageSize=2&program=Prg00000002&totalPages=true&trackedEntities=Tei00000001"
+            query: "fields=trackedEntity%2Cattributes%5Battribute%2Cvalue%5D%2Cenrollments%5Bprogram%2Cstatus%2Cevents%5BprogramStage%2Cstatus%5D%5D&orgUnitMode=SELECTED&orgUnits=Org00000001&page=1&pageSize=2&program=Prg00000002&totalPages=true&trackedEntities=Tei00000001"
             headers:
               accept: application/json
           response:
@@ -612,7 +612,7 @@ cases:
             endpoint: tracker
             method: GET
             path: /api/tracker/trackedEntities
-            query: "fields=trackedEntity%2Cattributes%5Battribute%2Cvalue%5D%2Cenrollments%5Bprogram%2Cstatus%2Cevents%5BprogramStage%2Cstatus%5D%5D&orgUnits=Org00000001&page=1&pageSize=2&program=Prg00000002&totalPages=true&trackedEntities=X%26fields%3D%2A%250D%250AInjected%3Ayes"
+            query: "fields=trackedEntity%2Cattributes%5Battribute%2Cvalue%5D%2Cenrollments%5Bprogram%2Cstatus%2Cevents%5BprogramStage%2Cstatus%5D%5D&orgUnitMode=SELECTED&orgUnits=Org00000001&page=1&pageSize=2&program=Prg00000002&totalPages=true&trackedEntities=X%26fields%3D%2A%250D%250AInjected%3Ayes"
             headers:
               accept: application/json
           response:

@@ -681,7 +681,7 @@ scripts:
   - path: scripts/import-summary.rhai
     digest: sha256:0aceef8cf488ee900de1dccc465d8ed70cbd12bf6cfc8f4139e4e32c87669acd
   - path: scripts/evidence.rhai
-    digest: sha256:26da9d0ff82fceb3cfd00a4598fcd93b73b08fc1b8303a54a7c2f9084b386c76
+    digest: sha256:6aaf454200583dd904f48bfee5585e3f77c3592947e77470e0e46ca745a73dc0
 capabilities:
   components:
     - http
@@ -790,7 +790,12 @@ sourceRoutes:
             operation: tracker-export
             query:
               program: {constant: Prg00000001}
+              # Both Evidence lookups name SELECTED explicitly so the scope
+              # stays the one organisation unit whatever the server's
+              # default mode is; the search route above records why the
+              # documented and observed defaults disagree.
               orgUnits: {constant: Org00000001}
+              orgUnitMode: {constant: SELECTED}
               trackedEntities: {exchangeProperty: dhis2EvidenceRecordReference}
               fields: {constant: "trackedEntity,attributes[attribute,value]"}
               pageSize: {constant: "2"}
@@ -834,6 +839,7 @@ sourceRoutes:
             query:
               program: {constant: Prg00000002}
               orgUnits: {constant: Org00000001}
+              orgUnitMode: {constant: SELECTED}
               trackedEntities: {exchangeProperty: dhis2EvidenceRecordReference}
               fields: {constant: "trackedEntity,attributes[attribute,value],enrollments[program,status,events[programStage,status]]"}
               pageSize: {constant: "2"}

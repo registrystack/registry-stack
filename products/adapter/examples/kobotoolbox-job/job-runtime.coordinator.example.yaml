@@ -10,9 +10,8 @@ endpoints:
   - endpoint: kobo-api
     baseUrl: https://kobo.example.invalid/api/v2/assets/aFixtureUid0000000000000000000001/data
     credential:
-      type: basic
-      usernameRef: secret:env/KOBO_USERNAME
-      passwordRef: secret:env/KOBO_PASSWORD
+      type: static-authorization
+      tokenRef: secret:env/KOBO_TOKEN
 allowedPrivateCidrs:
   - 10.0.0.0/8
 destinations:
