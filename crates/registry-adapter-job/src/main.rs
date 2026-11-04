@@ -676,6 +676,8 @@ fn next_step_for_stop_text(text: &str) -> Option<&'static str> {
         Some("A pending BReg delivery was first attempted under a different job.version, mapping or projection. Restore the previous job definition, run passes until the pending item settles (adapter-job status lists the pending keys), then ship the change.")
     } else if text.contains(registry_adapter_job::pass::BREG_RECEIVER_CHANGED) {
         Some("A pending BReg delivery was first attempted against a different BReg binding, caller, access profile or Action. Restore the original destination configuration and run passes until the pending item settles (adapter-job status lists the pending keys), then ship the change.")
+    } else if text.contains(registry_adapter_job::pass::PROJECTION_FLAT_DOTTED_NAME) {
+        Some("A dotted field in projection.fields (household.size) reads a nested object, but the source row carries it as one flat column of that name. Group the columns into a nested object in the route (a setBody that builds {\"household\": {\"size\": ...}}), or read a source that delivers the nested object, then run the job again. Nothing on the page was delivered.")
     } else if text.contains(PAGE_BYTES_BOUND) {
         Some("The page built was larger than profile.maximumPageBytes and the cursor did not move. Lower profile.read.maximumRowsPerPage (or the file source's maxMessagesPerPoll) so a page fits, or raise profile.maximumPageBytes (at most profile.maximumResponseBytes), then run the job again.")
     } else {
@@ -1339,6 +1341,28 @@ mod tests {
             record: None,
         };
         assert_eq!(stop_next_step(&items), None);
+    }
+
+    #[test]
+    fn a_flat_dotted_projection_stop_names_the_route_grouping_fix() {
+        let stop = StopReason::PageFault {
+            code: registry_adapter_job::pass::PROJECTION_FLAT_DOTTED_NAME.to_owned(),
+            record: None,
+        };
+        let next = stop_next_step(&stop).expect("a flat dotted name stop names its fix");
+        for step in [
+            "projection.fields",
+            "Group the columns",
+            "route",
+            "nested object",
+        ] {
+            assert!(next.contains(step), "missing {step:?}: {next}");
+        }
+        assert_eq!(
+            next_step_for_stop_text("page-fault:adapter.job.projection-flat-dotted-name"),
+            Some(next),
+            "status repeats the same step from the recorded text"
+        );
     }
 
     #[test]

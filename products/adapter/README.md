@@ -296,6 +296,15 @@ operator correct immutable-identity and version handling for legitimate
 later messages. Publishing a new message ID does not clear the old held row or
 acknowledge its delivery; that delivery can continue to block the queue head.
 
+A pass that stops as `adapter.job.projection-flat-dotted-name` read a row
+whose flat member is named like a dotted `projection.fields` entry, such as a
+CSV column headed `household.size`. A dotted field reads a nested object, so
+the projection would hand the destination a `null`; the pass stops before
+staging the page instead, and nothing on it is delivered. Group the columns
+into a nested object in the route (a `setBody` that builds
+`{"household": {"size": ...}}`), or read a source that delivers the nested
+object, then run the job again.
+
 A pass that stops as `adapter.job.identity-migration-required` found stored
 file or SFTP items that predate the job's item-identity binding (store
 schema 103), including a legacy raw decoder whose authored semantics did not
