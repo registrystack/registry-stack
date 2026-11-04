@@ -667,6 +667,12 @@ fn next_step_for_stop_text(text: &str) -> Option<&'static str> {
         Some("A pending signed delivery was staged before store schema 103 recorded its receiver and body identity, so this binary cannot prove a retry is the same event. Restore the pre-upgrade database backup, run passes with the previous binary until adapter-job status lists no pending items, then upgrade and run init-store again.")
     } else if text.contains(registry_adapter_job::pass::COORDINATOR_BODY_CHANGED) {
         Some("A pending delivery was first attempted under a different job.version or projection. Restore the previous job definition, run passes until the pending item settles (adapter-job status lists the pending keys), then ship the change.")
+    } else if text.contains(registry_adapter_job::pass::BREG_IDENTITY_UNRECORDED) {
+        Some("A pending BReg delivery was staged before store schema 103 recorded its receiver and operation identity, so this binary cannot prove a retry is the same write. Restore the pre-upgrade database backup, run passes with the previous binary until adapter-job status lists no pending items, then upgrade and run init-store again.")
+    } else if text.contains(registry_adapter_job::pass::BREG_BODY_CHANGED) {
+        Some("A pending BReg delivery was first attempted under a different job.version, mapping or projection. Restore the previous job definition, run passes until the pending item settles (adapter-job status lists the pending keys), then ship the change.")
+    } else if text.contains(registry_adapter_job::pass::BREG_RECEIVER_CHANGED) {
+        Some("A pending BReg delivery was first attempted against a different BReg binding, caller, access profile or Action. Restore the original destination configuration and run passes until the pending item settles (adapter-job status lists the pending keys), then ship the change.")
     } else {
         None
     }
@@ -1261,6 +1267,41 @@ mod tests {
             next_step_for_stop_text("destination-stop:adapter.job.coordinator-identity-unrecorded"),
             Some(next)
         );
+    }
+
+    #[test]
+    fn a_breg_fence_stop_carries_a_breg_next_step() {
+        let drift = StopReason::DestinationStop {
+            code: registry_adapter_job::pass::BREG_BODY_CHANGED.to_owned(),
+        };
+        let next = stop_next_step(&drift).expect("operation drift names its recovery");
+        for step in ["BReg", "mapping", "Restore the previous job definition"] {
+            assert!(next.contains(step), "missing {step:?}: {next}");
+        }
+        assert_eq!(
+            next_step_for_stop_text("destination-stop:adapter.job.breg-body-changed"),
+            Some(next)
+        );
+        let unrecorded = StopReason::DestinationStop {
+            code: registry_adapter_job::pass::BREG_IDENTITY_UNRECORDED.to_owned(),
+        };
+        let next = stop_next_step(&unrecorded).expect("an unrecorded identity names its recovery");
+        for step in [
+            "BReg",
+            "schema 103",
+            "backup",
+            "previous binary",
+            "init-store",
+        ] {
+            assert!(next.contains(step), "missing {step:?}: {next}");
+        }
+        let receiver = StopReason::DestinationStop {
+            code: registry_adapter_job::pass::BREG_RECEIVER_CHANGED.to_owned(),
+        };
+        let next = stop_next_step(&receiver).expect("receiver drift names its recovery");
+        for step in ["BReg", "original", "binding"] {
+            assert!(next.contains(step), "missing {step:?}: {next}");
+        }
     }
 
     #[test]

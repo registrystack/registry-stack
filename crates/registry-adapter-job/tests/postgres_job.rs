@@ -22,7 +22,8 @@ use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
 use registry_adapter_core::{AdapterJob, JobIdentity};
 use registry_adapter_engine::job::compile_job;
 use registry_adapter_job::destination::{
-    DeliverableItem, DeliveryIdentity, HandOffOutcome, JobDestination, NullDestination,
+    DeliverableItem, DeliveryFamily, DeliveryIdentity, HandOffOutcome, JobDestination,
+    NullDestination,
 };
 use registry_adapter_job::pass::{run_pass, PassOptions, StopReason};
 use registry_adapter_job::store::{self, ItemStatus};
@@ -351,13 +352,23 @@ impl JobDestination for ScriptedDestination {
 
 #[derive(Clone)]
 struct IdentifiedDestination {
+    family: DeliveryFamily,
     identity: [u8; 32],
     scripted: ScriptedDestination,
 }
 
 impl IdentifiedDestination {
     fn script(identity: [u8; 32], outcomes: Vec<HandOffOutcome>) -> Self {
+        Self::script_for(DeliveryFamily::Coordinator, identity, outcomes)
+    }
+
+    fn script_for(
+        family: DeliveryFamily,
+        identity: [u8; 32],
+        outcomes: Vec<HandOffOutcome>,
+    ) -> Self {
         Self {
+            family,
             identity,
             scripted: ScriptedDestination::script(outcomes),
         }
@@ -375,6 +386,7 @@ impl JobDestination for IdentifiedDestination {
         _item: &DeliverableItem,
     ) -> Option<DeliveryIdentity> {
         Some(DeliveryIdentity {
+            family: self.family,
             receiver: self.identity,
             canonical_body: Ok([0x33; 32]),
         })
@@ -749,6 +761,49 @@ async fn a_crash_before_the_answer_replays_identical_bytes() {
     let row = item(&pool, &first.key).await.expect("the settled row");
     assert_eq!(row.status, ItemStatus::Acknowledged);
     assert_eq!(row.run_id.as_deref(), Some("run-recovered"));
+}
+
+/// A pending BReg delivery is fenced the same way, and its stop names BReg:
+/// a different deployment, caller or Action stops before a second BReg call.
+#[tokio::test]
+async fn a_pending_breg_delivery_stops_on_receiver_drift_under_a_breg_code() {
+    let (fixture, pool) = pass_fixture().await;
+    let program = compile(&fixture).await;
+    let original = IdentifiedDestination::script_for(
+        DeliveryFamily::Breg,
+        [0x11; 32],
+        vec![HandOffOutcome::StopPass {
+            code: "adapter.job.breg-outcome-uncertain".to_string(),
+        }],
+    );
+    let first = run_pass(&pool, &program, &original, options(20)).await;
+    assert_eq!(original.delivered().len(), 1);
+    assert!(matches!(
+        first.stopped,
+        Some(StopReason::DestinationStop { .. })
+    ));
+
+    let changed = IdentifiedDestination::script_for(DeliveryFamily::Breg, [0x22; 32], vec![]);
+    let drifted = run_pass(&pool, &program, &changed, options(20)).await;
+    assert_eq!(
+        drifted.stopped,
+        Some(StopReason::DestinationStop {
+            code: registry_adapter_job::pass::BREG_RECEIVER_CHANGED.to_string(),
+        })
+    );
+    assert!(
+        changed.delivered().is_empty(),
+        "receiver drift stops before a second BReg call"
+    );
+    assert!(state(&pool, "case-daily").await.position.is_none());
+
+    let restored = IdentifiedDestination::script_for(
+        DeliveryFamily::Breg,
+        [0x11; 32],
+        vec![acknowledged("run-recovered"), acknowledged("run-b")],
+    );
+    let recovered = run_pass(&pool, &program, &restored, options(20)).await;
+    assert_eq!(recovered.items_redelivered, 1);
 }
 
 /// A maybe-admitted delivery cannot be redirected under the same event id.
