@@ -457,7 +457,11 @@ the retained pinned non-exportable Transit signer and transport guarantees.
 Optional `publication` and `responseFormats` retain their compiled governance
 and runtime ceilings. Optional `sourceAcquisition` supplies finite operational
 limits for data operations, the absolute acquisition deadline and response
-bytes without changing reviewed route or endpoint authority. Governed fields
+bytes without changing reviewed route or endpoint authority. The target's
+author owns these limits: they have no upper bound beyond a positive integer,
+and the
+[deployment configuration reference](../request-adapter/deployment-projects/CONFIG.md)
+suggests values. Governed fields
 are revalidated during bundle and package compilation.
 Process-local paths and secret readiness are validated by `doctor` or process start.
 
