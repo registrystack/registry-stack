@@ -16,5 +16,6 @@ sources:
     submissions:
       directory: /tmp/registry-adapter-corpus
       namespace: submissions
+      readLock: changed
 allowedPrivateCidrs:
   - 10.0.0.0/8

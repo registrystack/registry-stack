@@ -1158,6 +1158,12 @@ pub struct FileSourceConfig {
     /// any read lock but `changed`.
     #[serde(default)]
     pub(crate) read_lock_check_interval_milliseconds: Option<BoundedU64<100, 5_000>>,
+    /// The producer's declaration that a file appears in the directory
+    /// only once it is complete (written elsewhere, then renamed in),
+    /// the SFTP completed-name declaration. Present, it must be `true`.
+    /// A source declares this, a `doneFileName`, or `readLock: changed`.
+    #[serde(default, deserialize_with = "required_true")]
+    pub(crate) producer_atomic_handover: bool,
     /// Camel's `maxMessagesPerPoll`, accepted for Camel parity at a
     /// bounded default (Camel's field default of zero means no limit,
     /// which no bounded option can port; 500 is the recorded
@@ -1203,6 +1209,24 @@ pub enum ReadLockKind {
 
 #[cfg_attr(not(feature = "job-file"), allow(dead_code))]
 impl FileSourceConfig {
+    /// Whether the source declares how it knows a file is complete: a
+    /// `doneFileName`, `readLock: changed`, or
+    /// `producerAtomicHandover: true`. Without one, a read could take a
+    /// file the producer is still writing.
+    ///
+    /// # Errors
+    ///
+    /// A source declaring none of the three.
+    pub fn completion_declared(&self) -> Result<(), String> {
+        if self.done_file_name.is_some()
+            || matches!(self.read_lock, Some(ReadLockName::Changed))
+            || self.producer_atomic_handover
+        {
+            return Ok(());
+        }
+        Err("the source declares no way to know a file is complete; declare one of doneFileName, readLock: changed, or producerAtomicHandover: true".to_owned())
+    }
+
     /// The source's resolved read lock. A lock name outside the closed
     /// pair, or a lock bound beside any lock but `changed`, refuses;
     /// the message names the member, never a value.
@@ -1828,6 +1852,54 @@ mod tests {
             r#"{ "directory": "/var/data", "namespace": "exports", "readLock": "rename" }"#,
         );
         assert!(unknown.is_err(), "rename is not ported");
+    }
+
+    /// A local file source declares how it knows a file is complete: a
+    /// done file, the changed read lock, or the producer's atomic
+    /// handover. A source declaring none refuses, and the refusal names
+    /// all three choices; a false handover refuses at the reader, the
+    /// way the SFTP completed-name declaration does.
+    #[test]
+    fn a_file_source_must_declare_how_it_knows_a_file_is_complete() {
+        let source = |extra: &str| {
+            serde_json::from_str::<FileSourceConfig>(&format!(
+                r#"{{ "directory": "/var/data", "namespace": "exports"{extra} }}"#
+            ))
+        };
+        for undeclared in ["", r#", "readLock": "none""#] {
+            let refusal = source(undeclared)
+                .expect("the reader carries the members")
+                .completion_declared()
+                .expect_err("a source with no completion declaration refuses");
+            for wanted in [
+                "doneFileName",
+                "readLock: changed",
+                "producerAtomicHandover: true",
+            ] {
+                assert!(refusal.contains(wanted), "{wanted}: {refusal}");
+            }
+        }
+        for declared in [
+            r#", "doneFileName": "${file:name}.done""#,
+            r#", "readLock": "changed""#,
+            r#", "producerAtomicHandover": true"#,
+        ] {
+            assert_eq!(
+                source(declared)
+                    .expect("the declaration reads")
+                    .completion_declared(),
+                Ok(()),
+                "{declared}"
+            );
+        }
+        let refused = source(r#", "producerAtomicHandover": false"#)
+            .expect_err("a false handover refuses at the reader");
+        assert!(
+            refused
+                .to_string()
+                .contains("producerAtomicHandover must be true"),
+            "{refused}"
+        );
     }
 
     /// The changed lock's timeout stays inside the pollEnrich step's own

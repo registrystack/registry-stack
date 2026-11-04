@@ -195,7 +195,8 @@ fn runtime_json(source: &Path, component: &str) -> String {
     if component == "file" {
         runtime["sources"] = json!({"file": {"submissions": {
             "directory": source,
-            "namespace": "submissions"
+            "namespace": "submissions",
+            "producerAtomicHandover": true
         }}});
     }
     serde_json::to_string_pretty(&runtime).expect("the runtime config renders")
