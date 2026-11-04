@@ -155,7 +155,6 @@ V2_4_PAYLOAD_TEMPLATES = tuple(sorted((
     *V2_2_PAYLOAD_TEMPLATES,
     "adapter-{tag}-linux-amd64", "adapter-{tag}-linux-arm64", "adapter-{tag}-macos-arm64.tar.gz",
     "adapterctl-{tag}-linux-amd64", "adapterctl-{tag}-linux-arm64", "adapterctl-{tag}-macos-arm64.tar.gz",
-    "adapter-job-{tag}-linux-amd64", "adapter-job-{tag}-linux-arm64", "adapter-job-{tag}-macos-arm64.tar.gz",
 )))
 V2_5_ROSTER_PROFILE = "registry-stack.nightly-roster.v2.5"
 V2_ROSTER_PROFILES = {

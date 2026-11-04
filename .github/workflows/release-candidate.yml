@@ -560,7 +560,7 @@ jobs:
           adapter_in_release="$(python3 release/scripts/release_roster.py \
             adapter-in-release "${{ needs.validate.outputs.version }}")"
           if [[ "${adapter_in_release}" == true ]]; then
-            for adapter_binary in adapter adapterctl adapter-job; do
+            for adapter_binary in adapter adapterctl; do
               test "$("dist/bin/${adapter_binary}-${{ needs.validate.outputs.tag }}-linux-amd64" --version)" = \
                 "${adapter_binary} ${{ needs.validate.outputs.version }}"
             done

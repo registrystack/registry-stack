@@ -462,15 +462,14 @@ class MergeReleaseBinaryShardsTest(unittest.TestCase):
             [
                 "adapter-v0.45.1-linux-amd64",
                 "adapterctl-v0.45.1-linux-amd64",
-                "adapter-job-v0.45.1-linux-amd64",
             ],
-            rosters["core"][-3:],
+            rosters["core"][-2:],
         )
         self.assertFalse(any(name.startswith("adapter") for name, _ in images))
 
     def test_core_recipe_builds_each_adapter_binary_in_its_own_invocation(self) -> None:
-        # Cargo unifies features within one invocation: building the facade
-        # beside adapterctl or adapter-job would compile the job sources into it.
+        # Cargo unifies features within one invocation, so each binary keeps
+        # its own build to retain its product's feature boundary.
         recipe = (ROOT / "release/scripts/build-release-binaries.sh").read_text(
             encoding="utf-8"
         )
@@ -480,7 +479,7 @@ class MergeReleaseBinaryShardsTest(unittest.TestCase):
             " ".join(part.split()).replace("\\ ", "")
             for part in block.split("cargo build")[1:]
         ]
-        self.assertEqual(3, len(invocations))
+        self.assertEqual(2, len(invocations))
         self.assertTrue(
             invocations[0].startswith("--release --locked -p registry-adapter --bin adapter cp ")
         )
@@ -489,12 +488,7 @@ class MergeReleaseBinaryShardsTest(unittest.TestCase):
                 "--release --locked -p registry-adapterctl --bin adapterctl cp "
             )
         )
-        self.assertTrue(
-            invocations[2].startswith(
-                "--release --locked -p registry-adapter-job --bin adapter-job "
-                "--features job-file,job-postgres cp "
-            )
-        )
+        self.assertNotIn("adapter-job", block)
         self.assertNotIn("dist/image-bin", block)
 
     def test_no_shard_carries_the_document_store_while_it_is_held_out(self) -> None:

@@ -2019,7 +2019,7 @@ class MessagingClientWorkflowStructureTest(unittest.TestCase):
                 self.assertIn("adapter-in-release", smoke)
                 adapter = smoke.split("adapter-in-release", 1)[1].split("\nfi\n", 1)[0]
                 self.assertIn('if [[ "${adapter_in_release}" == true ]]; then', adapter)
-                self.assertIn("for adapter_binary in adapter adapterctl adapter-job; do", adapter)
+                self.assertIn("for adapter_binary in adapter adapterctl; do", adapter)
                 self.assertIn("--version", adapter)
                 self.assertIn(
                     "check products/adapter/examples/dhis2-tracker/project.yaml",

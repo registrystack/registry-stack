@@ -12,4 +12,4 @@ status: current
 last_reviewed: 2026-10-28
 unreviewed_binaries:
   [adapter, adapter-job, adapterctl, coordinator, coordinatorctl, documents, documentsctl, evidence-oid4vp, manifest, registry-mcp, rstack]
-source_build_only_binaries: [adapter, adapter-job, adapterctl, evidence-oid4vp, registry-mcp]
+source_build_only_binaries: [adapter-job, evidence-oid4vp, registry-mcp]

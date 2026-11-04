@@ -49,7 +49,7 @@ amd64, Linux arm64, and macOS arm64.
 `registry-stack.nightly-roster.v2.3` adds the Coordinator image to that same
 binary and installer roster when its image release is enabled.
 `registry-stack.nightly-roster.v2.4` and `registry-stack.nightly-roster.v2.5`
-add the `adapter`, `adapterctl`, and `adapter-job` binaries on all three
+add the `adapter` and `adapterctl` binaries on all three
 platforms and the `adapter` installer to v2.2 and v2.3 respectively, from the
 base version that `ADAPTER_FIRST_RELEASE` names. No profile
 carries the Registry Document Store, which stays held out while

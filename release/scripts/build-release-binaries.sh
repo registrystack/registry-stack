@@ -340,8 +340,7 @@ build_payload() {
       fi
     fi
 
-    # One invocation per binary, so the job features adapterctl and
-    # adapter-job enable never unify into the adapter facade.
+    # One invocation per binary keeps each product's feature boundary.
     if [[ "${include_adapter}" -eq 1 ]]; then
       cargo build --release --locked \
         -p registry-adapter --bin adapter
@@ -349,9 +348,6 @@ build_payload() {
       cargo build --release --locked \
         -p registry-adapterctl --bin adapterctl
       cp target/release/adapterctl "dist/bin/adapterctl-${RELEASE_TAG}-linux-amd64"
-      cargo build --release --locked \
-        -p registry-adapter-job --bin adapter-job --features job-file,job-postgres
-      cp target/release/adapter-job "dist/bin/adapter-job-${RELEASE_TAG}-linux-amd64"
     fi
 
   fi
@@ -710,7 +706,6 @@ if [[ "${group}" == all || "${group}" == core ]]; then
     bin_assets+=(
       "adapter-${tag}-linux-amd64"
       "adapterctl-${tag}-linux-amd64"
-      "adapter-job-${tag}-linux-amd64"
     )
   fi
 fi

@@ -161,11 +161,12 @@ class ReleaseCandidateTest(TestCase):
 
     def test_v0_45_1_publishes_the_adapter_binaries_and_installer_without_an_image(self):
         inventory = self.module._release_payload_inventory("0.45.1")
-        for binary in ("adapter", "adapterctl", "adapter-job"):
+        for binary in ("adapter", "adapterctl"):
             for platform in ("linux-amd64", "linux-arm64", "macos-arm64"):
                 suffix = ".tar.gz" if platform == "macos-arm64" else ""
                 with self.subTest(binary=binary, platform=platform):
                     self.assertEqual("binary", inventory.get(f"{binary}-v0.45.1-{platform}{suffix}"))
+        self.assertFalse(any(name.startswith("adapter-job") for name in inventory))
         self.assertEqual("installer", inventory.get("adapter-v0.45.1-install.sh"))
         self.assertEqual("installer", inventory.get("adapter-install.sh"))
         self.assertNotIn("adapter", self.module._candidate_image_names("0.45.1"))

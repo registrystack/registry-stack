@@ -75,7 +75,7 @@ class ComponentManifestTests(unittest.TestCase):
         for platform, supported in adapter["platforms"].items():
             with self.subTest(platform=platform):
                 self.assertEqual(
-                    {"tooling": True, "runtime": True, "adapter-job": True},
+                    {"tooling": True, "runtime": True},
                     supported["capabilities"],
                 )
 
