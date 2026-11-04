@@ -1404,6 +1404,13 @@ class Evidence:
         if not extract.exists():
             self.extract()
         target["extracts"] = {"record-status": {"path": str(extract)}}
+        # `evidencectl target new --local` writes no source connections, and
+        # Evidence refuses a Source whose connection the target does not
+        # declare. Bind the ones `evidencectl init` declared for the project.
+        local_target = self.project / "local-target.yaml"
+        if local_target.exists():
+            declared = load_yaml(local_target).get("connections") or {}
+            target["connections"] = {**declared, **(target.get("connections") or {})}
         return target
 
     def package(self, side: Side, candidate: Path, *, repeat_is_active: bool = False) -> None:
