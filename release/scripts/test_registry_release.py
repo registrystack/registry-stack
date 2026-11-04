@@ -4005,7 +4005,7 @@ class RegistryReleaseTest(TestCase):
         self.assertIn('"messagingctl-${tag}-linux-amd64"', recipe)
         self.assertIn("image_bin_binaries+=(messaging)", recipe)
 
-    def test_adapter_release_surface_begins_at_v0_45_1(self) -> None:
+    def test_adapter_release_surface_begins_at_v0_46_0(self) -> None:
         module = load_registry_release()
         adapter = {"adapter", "adapterctl", "adapter-installer"}
 
@@ -4016,7 +4016,7 @@ class RegistryReleaseTest(TestCase):
             return set(details.split("; ", 1)[0].split(", "))
 
         self.assertEqual(set(), adapter & missing("0.45.0"))
-        self.assertEqual(adapter, adapter & missing("0.45.1"))
+        self.assertEqual(adapter, adapter & missing("0.46.0"))
 
     @mock.patch.object(load_release_roster(), "COORDINATOR_FIRST_RELEASE", (0, 42, 0))
     def test_coordinator_release_surface_begins_at_its_first_release(self) -> None:

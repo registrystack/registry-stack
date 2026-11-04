@@ -947,17 +947,12 @@ not compatibility with an earlier release.
 `v0.45.0` is a migration boundary for the retired Evidence Source form. The
 `v0.44.0` `evidencectl init --transport sqlite-extract` writes a tagged
 `sqlite-extract` Source, and the `v0.45.0` reader refuses it with
-`evidence.project.source-acquisition-retired`, so no upgrade of a `v0.44.0`
-project by re-packaging exists to rehearse. A rehearsal from a release before
-`v0.45.0` to a source at or after it therefore omits the Evidence leg and says
-why in its report and output; naming `--product evidence` for it is refused
-with the same reason. Messaging still runs. Operators migrate an Evidence
+`evidence.project.source-acquisition-retired`. Operators migrate an Evidence
 project by hand, following the
 [migration steps](../products/evidence/reference/authoring-projects/CONFIG.md#migrate-a-retired-source-project),
-and verify a fresh synthetic assertion before cutover. The release notes for
-`v0.45.0` name the boundary and link those steps. Once `FORWARD_PATH_FLOOR`
-reaches `v0.45.0`, delete `EVIDENCE_SOURCE_PACK_BOUNDARY` and its skip from
-`rehearse-upgrade.py`; a unit test fails until then.
+and verify a fresh synthetic assertion before cutover. The floor is now
+`v0.45.0`, so no rehearsal crosses that boundary and every leg runs from the
+floor.
 
 For retained Evidence and Messaging contracts before 1.0, a release reads only
 the state its immediate predecessor wrote and promises a forward state path
@@ -989,12 +984,13 @@ gh workflow run release-upgrade-rehearsal.yml \
 ```
 
 `FORWARD_PATH_FLOOR` in `release/scripts/rehearse-upgrade.py` names the
-earliest release this source reads retained state from, `v0.44.0`, and the script
+earliest release this source reads retained state from, `v0.45.0`, and the script
 refuses to start from any earlier release rather than skipping the check.
 `v0.43.0` continued the forward state path from `v0.42.0`; `v0.44.0` retained
 Evidence and Messaging state while starting the product baselines described
-below. Current source reads the retained state `v0.44.0` wrote, so older state
-must first move through each intervening release.
+below; `v0.45.0` retained Messaging state and moved Evidence projects to Adapter
+packs, described above. Current source reads the retained state `v0.45.0`
+wrote, so older state must first move through each intervening release.
 The retained path started at `v0.42.0` because no product reads `v0.41.0` state:
 BReg and Casework start on a fresh database, Evidence starts at its normalized
 `v0.42.0` baseline, and Messaging and Scheduling each install a fresh schema

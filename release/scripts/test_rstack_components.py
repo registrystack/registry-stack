@@ -62,12 +62,12 @@ class ComponentManifestTests(unittest.TestCase):
             set(rstack_components.PLATFORMS),
         )
 
-    def test_adapter_installs_from_v0_45_1_with_its_job_host_as_a_capability(self) -> None:
+    def test_adapter_installs_from_v0_46_0_with_its_job_host_as_a_capability(self) -> None:
         self.assertNotIn(
             "adapter",
             rstack_components.build_component_manifest("0.45.0", payloads("0.45.0"))["components"],
         )
-        adapter = rstack_components.build_component_manifest("0.45.1", payloads("0.45.1"))[
+        adapter = rstack_components.build_component_manifest("0.46.0", payloads("0.46.0"))[
             "components"
         ]["adapter"]
         self.assertEqual("adapterctl", adapter["entrypoint"])

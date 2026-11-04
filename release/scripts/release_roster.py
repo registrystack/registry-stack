@@ -50,7 +50,7 @@ operator CLI, and installer in v0.44.0. Client facades are governed independentl
 
 ``ADAPTER_FIRST_RELEASE`` decides when the Registry Adapter binaries join the
 Stack train: the ``adapter`` facade, the ``adapterctl`` author tool and their
-installer, on every supported platform, from v0.45.1. The facade has no image
+installer, on every supported platform, from v0.46.0. The facade has no image
 yet. The ``adapter-job`` host stays source-build only until its release build
 enables a destination.
 
@@ -99,7 +99,7 @@ DOCUMENTS_FIRST_RELEASE: tuple[int, int, int] | None = None
 
 COORDINATOR_BINARY_FIRST_RELEASE: tuple[int, int, int] = (0, 44, 0)
 
-ADAPTER_FIRST_RELEASE: tuple[int, int, int] | None = (0, 45, 1)
+ADAPTER_FIRST_RELEASE: tuple[int, int, int] | None = (0, 46, 0)
 
 ALL_PLATFORMS_FIRST_RELEASE = (0, 44, 0)
 

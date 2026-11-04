@@ -1,6 +1,6 @@
 {
   "name": "@registrystack/evidence-client-darwin-arm64",
-  "version": "0.45.1",
+  "version": "0.46.0",
   "cpu": ["arm64"],
   "main": "evidence-client.darwin-arm64.node",
   "files": ["evidence-client.darwin-arm64.node"],

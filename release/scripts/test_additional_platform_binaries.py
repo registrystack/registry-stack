@@ -67,7 +67,7 @@ output.chmod(0o755)
         return result, output
 
     def test_every_binary_is_built_separately_and_smoked(self):
-        for version in ("0.44.0", "0.45.1"):
+        for version in ("0.44.0", "0.46.0"):
             with self.subTest(version=version), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 builds = release_roster.additional_platform_builds(

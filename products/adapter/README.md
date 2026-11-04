@@ -44,14 +44,14 @@ loaded Adapter process exposes to an external gateway.
 
 ## Status
 
-Released from Registry Stack 0.45.1, pre-1.0. The configuration formats are
+Released from Registry Stack 0.46.0, pre-1.0. The configuration formats are
 `v1alpha1` and may change without migration. `CONCEPT.md` section 8.10
 records each ported concept and its evidence. Section 17 owns the ingestion
 contract and its declared limits.
 
 ## Install
 
-From 0.45.1, each Registry Stack release publishes the `adapter` runtime and
+From 0.46.0, each Registry Stack release publishes the `adapter` runtime and
 the `adapterctl` author tool for Linux amd64, Linux arm64, and macOS arm64 on the
 [release page](https://github.com/registrystack/registry-stack/releases),
 checked against the release `SHA256SUMS`. Linux assets are executables named
