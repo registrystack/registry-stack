@@ -248,6 +248,11 @@
   `authorizedClients` is refused as an unknown key. Rename the member in each
   `runtime.yaml`.
 
+- The `evidencectl package --format json` report now carries
+  `requirements[]`, each entry with the requirement `id` and its
+  `configurationRevision`. Read requirement revisions from this report; the
+  field is additive.
+
 ## 0.45.0 - 2026-11-03
 
 - BREAKING: Source acquisition moves into reviewed Adapter packs. Authored
