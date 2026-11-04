@@ -970,7 +970,9 @@ read-only file. Read-only is a correctness requirement rather than hygiene: the
 statement executor opens the file as immutable, and an immutable connection
 over a file that can change is undefined behaviour. Startup digests each file
 without reading it into memory and retains that content digest with the opened
-extract, so replacing an extract requires restart. Startup
+extract, so replacing an extract requires restart. An extract whose
+`publishedAt` is in the future counts as fresh, so keep the publisher's clock
+correct; see [the operator contract](../../../OPERATOR-CONTRACT.md). Startup
 refuses a profile the bundle names and the runtime does not bind, and a profile
 the runtime binds and no source reads, naming the profile in each case.
 
