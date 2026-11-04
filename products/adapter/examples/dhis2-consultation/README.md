@@ -60,7 +60,6 @@ To change the view, edit the model (and the target schema if the output shape
 changes), then regenerate, relock, and check:
 
 ```sh
-cargo run --locked -p registry-adapterctl -- mapping check products/adapter/examples/dhis2-consultation/person-registration.mapping.yaml
 cargo run --locked -p registry-adapterctl -- mapping generate products/adapter/examples/dhis2-consultation/person-registration.mapping.yaml
 cargo run --locked -p registry-adapterctl -- project lock products/adapter/examples/dhis2-consultation/project.yaml \
   --pack products/adapter/packs/dhis2-tracker/pack.yaml

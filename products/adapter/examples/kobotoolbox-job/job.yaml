@@ -45,7 +45,8 @@ destination:
   receiptRetentionDays: 7
 # The projection names members every item value carries: the
 # submission id, a top-level answer, and an answer inside a group (the
-# pack nests Kobo's slash-separated names into objects).
+# pack nests Kobo's slash-separated names into objects; the projection
+# hands each selected path to the mapping as one literal dotted key).
 projection:
   fields:
     - _id
