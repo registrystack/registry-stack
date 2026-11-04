@@ -812,12 +812,12 @@ profile:
                 .collect::<Vec<_>>()
                 .join("\n");
             // The job's own credential check refuses first with a typed
-            // code that names both kinds; the facade compile carries the
-            // endpoint id.
+            // code; the facade compile carries the endpoint id. Both name
+            // the two kinds.
             let expected = match kind {
                 EngineProfileKind::Facade => {
                     "endpoint source authentication was refused: the runtime credential's kind \
-                     does not match the endpoint's declared kind"
+                     (`static-api-key`) does not match the endpoint's declared kind (`none`)"
                 }
                 EngineProfileKind::Job => {
                     "the runtime credential's kind (`static-api-key`) does not match the endpoint's declared kind (`none`)"

@@ -80,7 +80,8 @@ impl AuthKind {
 }
 
 /// Why an endpoint and its binding do not form a usable plan. Every
-/// rendering is fixed text; none carries configuration values.
+/// rendering is fixed text, or fixed text with fixed kind tags; none
+/// carries configuration values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuthPlanFault {
     /// The anonymous-HTTPS acknowledgement is attached to a non-`none`
@@ -90,7 +91,12 @@ pub enum AuthPlanFault {
     AnonymousHttpsRequiresTls,
     /// The runtime credential's kind does not match the endpoint's
     /// declared kind, or a kind that sends a credential has none bound.
-    KindMismatch,
+    KindMismatch {
+        /// The endpoint's declared kind tag.
+        declared: &'static str,
+        /// The bound credential's kind tag, if one is bound.
+        bound: Option<&'static str>,
+    },
     /// A `none` endpoint reaches an origin that is neither numeric
     /// loopback nor `https` with an mTLS client identity.
     NoneNotAdmitted,
@@ -125,9 +131,16 @@ impl fmt::Display for AuthPlanFault {
             Self::AnonymousHttpsRequiresTls => {
                 formatter.write_str("anonymousHttps requires an https source origin")
             }
-            Self::KindMismatch => formatter.write_str(
-                "the runtime credential's kind does not match the endpoint's declared kind",
-            ),
+            Self::KindMismatch { declared, bound } => match bound {
+                Some(bound) => write!(
+                    formatter,
+                    "the runtime credential's kind (`{bound}`) does not match the endpoint's declared kind (`{declared}`)"
+                ),
+                None => write!(
+                    formatter,
+                    "the runtime credential's kind (no credential) does not match the endpoint's declared kind (`{declared}`)"
+                ),
+            },
             Self::NoneNotAdmitted => formatter.write_str(
                 "a none endpoint reaches an origin that is neither numeric loopback nor https \
                  with an mTLS client identity",
@@ -268,6 +281,10 @@ impl AuthPlan {
         endpoint: &EndpointAuthentication,
         binding: &EndpointBinding,
     ) -> Result<Self, AuthPlanFault> {
+        let kind_mismatch = || AuthPlanFault::KindMismatch {
+            declared: endpoint.kind(),
+            bound: binding.credential.as_ref().map(RuntimeCredential::kind),
+        };
         endpoint_authentication_policy(endpoint, binding).map_err(|fault| match fault {
             EndpointAuthenticationPolicyFault::AnonymousHttpsConflict => {
                 AuthPlanFault::AnonymousHttpsConflict
@@ -275,7 +292,7 @@ impl AuthPlan {
             EndpointAuthenticationPolicyFault::AnonymousHttpsRequiresTls => {
                 AuthPlanFault::AnonymousHttpsRequiresTls
             }
-            EndpointAuthenticationPolicyFault::KindMismatch => AuthPlanFault::KindMismatch,
+            EndpointAuthenticationPolicyFault::KindMismatch => kind_mismatch(),
             EndpointAuthenticationPolicyFault::NoneNotAdmitted => AuthPlanFault::NoneNotAdmitted,
         })?;
         match (endpoint, binding.credential.as_ref()) {
@@ -414,7 +431,7 @@ impl AuthPlan {
                     )),
                 })
             }
-            _ => Err(AuthPlanFault::KindMismatch),
+            _ => Err(kind_mismatch()),
         }
     }
 
@@ -481,7 +498,10 @@ impl AuthPlan {
         let plan = self
             .token
             .as_ref()
-            .ok_or(AuthError::Plan(AuthPlanFault::KindMismatch))?;
+            .ok_or(AuthError::Plan(AuthPlanFault::KindMismatch {
+                declared: self.kind.tag(),
+                bound: None,
+            }))?;
         let (token, generation) = acquire_token(
             plan,
             context.budget,
@@ -512,7 +532,10 @@ impl AuthPlan {
         let plan = self
             .token
             .as_ref()
-            .ok_or(AuthError::Plan(AuthPlanFault::KindMismatch))?;
+            .ok_or(AuthError::Plan(AuthPlanFault::KindMismatch {
+                declared: self.kind.tag(),
+                bound: None,
+            }))?;
         let (token, generation) = acquire_token_with_render(
             plan,
             budget,
@@ -835,25 +858,45 @@ mod tests {
     }
 
     /// A credential whose kind does not match, and a kind with no
-    /// credential bound, both refuse.
+    /// credential bound, both refuse, naming the declared and the bound
+    /// kind.
     #[test]
     fn kind_mismatches_refuse() {
         let mismatch = binding(
             "https://cases.example.invalid",
             Some(RuntimeCredential::None {}),
         );
+        let fault = AuthPlan::compile(&EndpointAuthentication::Basic {}, &mismatch).unwrap_err();
         assert_eq!(
-            AuthPlan::compile(&EndpointAuthentication::Basic {}, &mismatch).unwrap_err(),
-            AuthPlanFault::KindMismatch
+            fault,
+            AuthPlanFault::KindMismatch {
+                declared: "basic",
+                bound: Some("none")
+            }
+        );
+        assert_eq!(
+            fault.to_string(),
+            "the runtime credential's kind (`none`) does not match the endpoint's declared kind (`basic`)"
         );
         let missing = binding("https://cases.example.invalid", None);
+        let fault = AuthPlan::compile(&EndpointAuthentication::Basic {}, &missing).unwrap_err();
         assert_eq!(
-            AuthPlan::compile(&EndpointAuthentication::Basic {}, &missing).unwrap_err(),
-            AuthPlanFault::KindMismatch
+            fault,
+            AuthPlanFault::KindMismatch {
+                declared: "basic",
+                bound: None
+            }
+        );
+        assert_eq!(
+            fault.to_string(),
+            "the runtime credential's kind (no credential) does not match the endpoint's declared kind (`basic`)"
         );
         assert_eq!(
             AuthPlan::compile(&EndpointAuthentication::None {}, &missing).unwrap_err(),
-            AuthPlanFault::KindMismatch,
+            AuthPlanFault::KindMismatch {
+                declared: "none",
+                bound: None
+            },
             "none must be explicit in the runtime binding"
         );
     }
@@ -2129,7 +2172,10 @@ mod tests {
         };
         assert_eq!(
             plan.authorize(&mut context).await.unwrap_err(),
-            AuthError::Plan(AuthPlanFault::KindMismatch)
+            AuthError::Plan(AuthPlanFault::KindMismatch {
+                declared: "oauth2-client-credentials",
+                bound: None
+            })
         );
         assert!(events.is_empty(), "the refusal precedes any token event");
     }

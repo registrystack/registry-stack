@@ -177,6 +177,10 @@
 - A `writable-read` binding that no Write Update names as its companion read
   is refused by `adapterctl check` and at load, naming the binding, instead of
   stopping the Adapter.
+- A credential kind mismatch names the bound kind and the endpoint's
+  declared kind, for example ``the runtime credential's kind (`none`) does
+  not match the endpoint's declared kind (`basic`)``, in `adapterctl check`,
+  `adapterctl verify`, and the facade and job startup refusals.
 - A job pass stops as the new `adapter.job.projection-flat-dotted-name`
   when a declared dotted projection field (`household.size`) misses as a
   path but the row carries a flat member of exactly that name, as a CSV
