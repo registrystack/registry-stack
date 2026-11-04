@@ -1033,6 +1033,43 @@ class EvidenceGrammarTest(unittest.TestCase):
             "type": "uri", "uri": "https://127.0.0.1:9443/oauth2/jwks"})
         self.assertEqual(local["assuranceProfile"], "local")
 
+    def deployment_evidence(self, root: Path) -> Any:
+        evidence = MODULE.Evidence.__new__(MODULE.Evidence)
+        evidence.work = root
+        evidence.project = root / "project"
+        evidence.installed = root / "installed"
+        evidence.audit = root / "audit"
+        evidence.port = 8443
+        evidence.ca_file = root / "ca.pem"
+        evidence.transit = unittest.mock.Mock(socket_path=root / "transit.sock")
+        evidence.project.mkdir()
+        (root / "record-status.sqlite").write_text("")
+        return evidence
+
+    @staticmethod
+    def blank_target() -> dict[str, Any]:
+        return {"signer": {}, "package": {}, "listener": {}, "audit": {},
+                "secretProviders": {"file": {}}, "authentication": {"oidc": {}},
+                "connections": {}}
+
+    def test_the_deployment_target_binds_the_source_connections_the_project_declares(self) -> None:
+        # `evidencectl target new --local` writes no connections, while the
+        # project's sources name the connection `evidencectl init` bound in
+        # local-target.yaml; Evidence refuses a source whose connection the
+        # deployment target does not declare.
+        with tempfile.TemporaryDirectory() as directory:
+            evidence = self.deployment_evidence(Path(directory))
+            dump_json(evidence.project / "local-target.yaml",
+                      {"connections": {"starter-source": {"endpoints": {}}}})
+            target = evidence.deployment_target(self.blank_target())
+            self.assertEqual(target["connections"], {"starter-source": {"endpoints": {}}})
+
+    def test_a_project_without_declared_connections_leaves_the_target_unchanged(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            evidence = self.deployment_evidence(Path(directory))
+            target = evidence.deployment_target(self.blank_target())
+            self.assertEqual(target["connections"], {})
+
     @unittest.mock.patch.object(MODULE, "http", return_value=(200, {}, {"answer": True}))
     def test_request_uses_the_normalized_selector_and_declared_audience(self, request) -> None:
         evidence = MODULE.Evidence.__new__(MODULE.Evidence)
