@@ -652,6 +652,9 @@ fn print_pass_report(
     );
 }
 
+/// The page fault code for a page larger than `profile.maximumPageBytes`.
+const PAGE_BYTES_BOUND: &str = registry_adapter_core::ItemPageFault::BytesBound.code();
+
 /// The one step that clears a stop an operator can clear, for the stop
 /// report. Value-free and fixed per code.
 fn stop_next_step(reason: &StopReason) -> Option<&'static str> {
@@ -673,6 +676,8 @@ fn next_step_for_stop_text(text: &str) -> Option<&'static str> {
         Some("A pending BReg delivery was first attempted under a different job.version, mapping or projection. Restore the previous job definition, run passes until the pending item settles (adapter-job status lists the pending keys), then ship the change.")
     } else if text.contains(registry_adapter_job::pass::BREG_RECEIVER_CHANGED) {
         Some("A pending BReg delivery was first attempted against a different BReg binding, caller, access profile or Action. Restore the original destination configuration and run passes until the pending item settles (adapter-job status lists the pending keys), then ship the change.")
+    } else if text.contains(PAGE_BYTES_BOUND) {
+        Some("The page built was larger than profile.maximumPageBytes and the cursor did not move. Lower profile.read.maximumRowsPerPage (or the file source's maxMessagesPerPoll) so a page fits, or raise profile.maximumPageBytes (at most profile.maximumResponseBytes), then run the job again.")
     } else {
         None
     }
@@ -1308,6 +1313,32 @@ mod tests {
         for step in ["BReg", "original", "binding"] {
             assert!(next.contains(step), "missing {step:?}: {next}");
         }
+    }
+
+    #[test]
+    fn a_page_over_the_byte_bound_names_the_profile_members_to_change() {
+        let stop = StopReason::PageFault {
+            code: "adapter.job.page-bytes-bound".to_owned(),
+            record: None,
+        };
+        let next = stop_next_step(&stop).expect("a byte-bound stop names its fix");
+        for step in [
+            "profile.read.maximumRowsPerPage",
+            "profile.maximumPageBytes",
+            "maximumResponseBytes",
+        ] {
+            assert!(next.contains(step), "missing {step:?}: {next}");
+        }
+        assert_eq!(
+            next_step_for_stop_text("page-fault:adapter.job.page-bytes-bound"),
+            Some(next),
+            "status repeats the same step from the recorded text"
+        );
+        let items = StopReason::PageFault {
+            code: "adapter.job.page-items-bound".to_owned(),
+            record: None,
+        };
+        assert_eq!(stop_next_step(&items), None);
     }
 
     #[test]
