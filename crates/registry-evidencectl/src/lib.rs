@@ -34,6 +34,7 @@ mod jwks;
 mod keygen;
 mod normalized;
 mod oid4vci;
+mod pack_lock;
 mod project_snapshot;
 mod report;
 mod request;
@@ -122,6 +123,9 @@ enum Command {
     /// Create and inspect complete deployment targets.
     #[command(subcommand)]
     Target(target::TargetCommand),
+    /// Maintain a reviewed Adapter pack's digest pins.
+    #[command(subcommand)]
+    Pack(pack_lock::PackCommand),
     /// Check one runtime configuration and its startup dependencies.
     Doctor(runtime::DoctorArgs),
     /// Inspect deployment artifact custody.
@@ -338,6 +342,7 @@ const HUMAN_ONLY_COMMANDS: &[&[&str]] = &[
     &["source", "mock", "generate"],
     &["source", "detach"],
     &["target", "new"],
+    &["pack", "lock"],
     &["request", "prepare"],
     &["verify"],
     &["tooling", "language-server"],
@@ -707,6 +712,7 @@ fn run_entry() -> ExitCode {
         }
         Command::Source(command) => source_cli::run(command, format),
         Command::Target(command) => target::run(command, format),
+        Command::Pack(command) => pack_lock::run(command),
         Command::Doctor(args) => safe_command(
             runtime::run(args, format),
             "evidence.doctor.failed",
