@@ -454,14 +454,18 @@ impl EvidenceRuntimeBindings {
             connection_id.to_owned(),
             policy.endpoint.as_str().to_owned(),
         );
+        let refused = |reason| EvidenceCompileError::ConnectionPolicy {
+            endpoint: policy.endpoint.as_str().to_owned(),
+            reason,
+        };
         let mut resources = self
             .inner
             .endpoint_resources
             .lock()
-            .map_err(|_| EvidenceCompileError::ConnectionPolicy)?;
+            .map_err(|_| refused(ConnectionPolicyReason::ResourceUnavailable))?;
         if let Some(resource) = resources.get(&key) {
             if resource.policy != *policy {
-                return Err(EvidenceCompileError::ConnectionPolicy);
+                return Err(refused(ConnectionPolicyReason::ResourceConflict));
             }
             return Ok(Arc::clone(&resource.physical));
         }
@@ -544,8 +548,13 @@ pub enum EvidenceCompileError {
     Sqlite(EvidenceSqliteFault),
     #[error("an Evidence endpoint header policy could not compile: {0}")]
     EndpointHeaders(#[source] crate::component::http::header_filter::AllowlistError),
-    #[error("the runtime binding does not match the reviewed Evidence connection policy")]
-    ConnectionPolicy,
+    #[error(
+        "the runtime binding for endpoint `{endpoint}` does not match the reviewed Evidence connection policy: {reason}"
+    )]
+    ConnectionPolicy {
+        endpoint: String,
+        reason: ConnectionPolicyReason,
+    },
     #[error("an Evidence route artifact could not compile")]
     Artifact,
     #[error(
@@ -558,6 +567,41 @@ pub enum EvidenceCompileError {
     RouteUnsupported(String),
     #[error("an Evidence host protocol could not compile")]
     HostProtocol,
+}
+
+/// The one rule a runtime binding broke against its reviewed Evidence
+/// connection policy. Each reason is a fixed sentence that names the member to
+/// change and never carries an origin, a secret reference or trust bytes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Error)]
+pub enum ConnectionPolicyReason {
+    #[error("the reviewed connection has no policy for this pack endpoint")]
+    PolicyMissing,
+    #[error("the reviewed connection lists this pack endpoint more than once")]
+    PolicyDuplicate,
+    #[error("the runtime binding is for a different connection than the source names")]
+    ConnectionMismatch,
+    #[error("the runtime connection has no entry for this pack endpoint")]
+    EndpointUnbound,
+    #[error("the runtime `baseUrl` differs from the reviewed `baseUrl`")]
+    BaseUrlMismatch,
+    #[error("the runtime `tlsTrustProfile` differs from the reviewed `tlsTrustProfile`")]
+    TlsTrustProfileMismatch,
+    #[error("the reviewed policy requires an `mtlsIdentity` and the runtime binding has none")]
+    ClientIdentityRequired,
+    #[error("the runtime binding sets an `mtlsIdentity` the reviewed policy forbids")]
+    ClientIdentityForbidden,
+    #[error(
+        "the `tlsTrustProfile` CA bundle is not under `outboundTls.trustProfiles`, or is empty or too large"
+    )]
+    TrustMaterialUnavailable,
+    #[error("the runtime credential does not match the reviewed `authentication`")]
+    AuthenticationMismatch,
+    #[error("the runtime credential is not admissible for the pack endpoint's authentication")]
+    AuthenticationInvalid,
+    #[error("another source binds this connection endpoint under a different reviewed policy")]
+    ResourceConflict,
+    #[error("the shared endpoint resource is unavailable")]
+    ResourceUnavailable,
 }
 
 #[derive(Debug, Error)]
@@ -764,19 +808,22 @@ impl EvidencePackProgram {
         }
         let mut endpoint_plans = BTreeMap::new();
         for (id, plan) in &self.endpoint_plans {
+            let refused = |reason| EvidenceCompileError::ConnectionPolicy {
+                endpoint: id.clone(),
+                reason,
+            };
             let mut policies = connection
                 .iter()
                 .filter(|policy| policy.endpoint.as_str() == id);
             let Some(policy) = policies.next() else {
-                return Err(EvidenceCompileError::ConnectionPolicy);
+                return Err(refused(ConnectionPolicyReason::PolicyMissing));
             };
             if policies.next().is_some() {
-                return Err(EvidenceCompileError::ConnectionPolicy);
+                return Err(refused(ConnectionPolicyReason::PolicyDuplicate));
             }
-            let connection_id = connection_id.ok_or(EvidenceCompileError::ConnectionPolicy)?;
-            if connection_id != runtime.bindings().id.as_str() {
-                return Err(EvidenceCompileError::ConnectionPolicy);
-            }
+            let connection_id = connection_id
+                .filter(|connection_id| *connection_id == runtime.bindings().id.as_str())
+                .ok_or_else(|| refused(ConnectionPolicyReason::ConnectionMismatch))?;
             validate_connection_policy(runtime, &plan.declared, policy)?;
             let resource = runtime.endpoint_resource(connection_id, policy)?;
             endpoint_plans.insert(
@@ -1825,15 +1872,30 @@ fn validate_connection_policy(
     endpoint: &registry_adapter_core::Endpoint,
     connection: &EvidenceConnectionPolicy,
 ) -> Result<(), EvidenceCompileError> {
+    let refused = |reason| EvidenceCompileError::ConnectionPolicy {
+        endpoint: connection.endpoint.as_str().to_owned(),
+        reason,
+    };
     let binding = runtime
         .bindings()
         .endpoints
         .get(connection.endpoint.as_str())
-        .ok_or(EvidenceCompileError::ConnectionPolicy)?;
-    let identity_matches = match connection.client_identity {
-        EvidenceClientIdentityPolicy::Forbidden => binding.mtls_identity.is_none(),
-        EvidenceClientIdentityPolicy::Required => binding.mtls_identity.is_some(),
-    };
+        .ok_or_else(|| refused(ConnectionPolicyReason::EndpointUnbound))?;
+    if binding.base_url != connection.base_url {
+        return Err(refused(ConnectionPolicyReason::BaseUrlMismatch));
+    }
+    if binding.tls_trust_profile != connection.tls_trust_profile {
+        return Err(refused(ConnectionPolicyReason::TlsTrustProfileMismatch));
+    }
+    match connection.client_identity {
+        EvidenceClientIdentityPolicy::Forbidden if binding.mtls_identity.is_some() => {
+            return Err(refused(ConnectionPolicyReason::ClientIdentityForbidden));
+        }
+        EvidenceClientIdentityPolicy::Required if binding.mtls_identity.is_none() => {
+            return Err(refused(ConnectionPolicyReason::ClientIdentityRequired));
+        }
+        EvidenceClientIdentityPolicy::Forbidden | EvidenceClientIdentityPolicy::Required => {}
+    }
     let trust_material_matches = match &connection.tls_trust_profile {
         None => true,
         Some(profile) => {
@@ -1849,18 +1911,18 @@ fn validate_connection_policy(
                 })
         }
     };
-    if binding.base_url != connection.base_url
-        || binding.tls_trust_profile != connection.tls_trust_profile
-        || !identity_matches
-        || !trust_material_matches
-        || !authentication_authority_matches(
-            &endpoint.authentication,
-            binding.credential.as_ref(),
-            &connection.authentication,
-        )
-        || AuthPlan::compile(&endpoint.authentication, binding).is_err()
-    {
-        return Err(EvidenceCompileError::ConnectionPolicy);
+    if !trust_material_matches {
+        return Err(refused(ConnectionPolicyReason::TrustMaterialUnavailable));
+    }
+    if !authentication_authority_matches(
+        &endpoint.authentication,
+        binding.credential.as_ref(),
+        &connection.authentication,
+    ) {
+        return Err(refused(ConnectionPolicyReason::AuthenticationMismatch));
+    }
+    if AuthPlan::compile(&endpoint.authentication, binding).is_err() {
+        return Err(refused(ConnectionPolicyReason::AuthenticationInvalid));
     }
     Ok(())
 }
@@ -4550,6 +4612,237 @@ mod tests {
         );
     }
 
+    /// Each connection-policy refusal names the pack endpoint and one closed
+    /// rule, so an operator fixes the binding without diffing it by hand. The
+    /// message never carries the origin, a secret reference or trust bytes.
+    #[test]
+    fn every_connection_policy_refusal_names_its_endpoint_and_rule() {
+        use ConnectionPolicyReason as Reason;
+        let schema_bytes = serde_json::to_vec(&json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {}
+        }))
+        .expect("schema");
+        let pack_with = |authentication: Value| -> AdapterPack {
+            serde_json::from_value(json!({
+                "id": "policy-pack",
+                "version": "1",
+                "testedVersions": [],
+                "endpoints": [{
+                    "id": "register",
+                    "component": "http",
+                    "authentication": authentication,
+                    "attemptTimeoutMilliseconds": 1000,
+                    "maximumResponseBytes": 1024,
+                    "responseHeaders": [],
+                    "requestHeaders": [],
+                    "operations": [],
+                    "testedVersions": []
+                }],
+                "sourceRoutes": [{
+                    "id": "evidence",
+                    "evidence": {
+                        "inputsSchema": {"path": "schema.json", "digest": sha256_uri(&schema_bytes)},
+                        "factsSchema": {"path": "schema.json", "digest": sha256_uri(&schema_bytes)}
+                    },
+                    "steps": [
+                        {"to": {"uri": "http:register", "parameters": {"httpMethod": "GET", "path": "/r"}}}
+                    ]
+                }]
+            }))
+            .expect("pack")
+        };
+        let artifacts = PackArtifactBytes::new([("schema.json".to_owned(), schema_bytes.clone())]);
+        let reviewed = || {
+            json!({
+                "endpoint": "register",
+                "baseUrl": "http://127.0.0.1:8101",
+                "clientIdentity": "forbidden",
+                "authentication": {"type": "none"}
+            })
+        };
+        let bound = || {
+            json!({
+                "endpoint": "register",
+                "baseUrl": "http://127.0.0.1:8101",
+                "credential": {"type": "none"}
+            })
+        };
+        let refusal = |authentication: Value,
+                       binding: Value,
+                       connection_id: Option<&str>,
+                       policies: Vec<Value>| {
+            let pack = pack_with(authentication);
+            let runtime = EvidenceRuntimeBindings::new(
+                serde_json::from_value(json!({
+                    "id": "shared",
+                    "endpoints": [binding],
+                    "allowedPrivateCidrs": ["192.168.0.0/16"]
+                }))
+                .expect("bindings"),
+                SecretResolver::new([SecretProvider::Environment], "").expect("resolver"),
+            );
+            let policies: Vec<EvidenceConnectionPolicy> =
+                serde_json::from_value(Value::Array(policies)).expect("policies");
+            match compile_evidence(&EvidenceCompileInputs {
+                pack: &pack,
+                route: "evidence",
+                runtime: &runtime,
+                connection_id,
+                connection: &policies,
+                pack_artifacts: &artifacts,
+                limits: EvidenceLimits::default(),
+            }) {
+                Err(error @ EvidenceCompileError::ConnectionPolicy { .. }) => {
+                    let message = error.to_string();
+                    for forbidden in ["127.0.0.1", "8101", "8199", "secret:", "env/"] {
+                        assert!(!message.contains(forbidden), "{message}");
+                    }
+                    let EvidenceCompileError::ConnectionPolicy { endpoint, reason } = error else {
+                        unreachable!()
+                    };
+                    assert_eq!(endpoint, "register", "{message}");
+                    assert!(message.contains("endpoint `register`"), "{message}");
+                    assert!(message.contains(&reason.to_string()), "{message}");
+                    reason
+                }
+                Err(other) => panic!("expected a connection-policy refusal, got {other}"),
+                Ok(_) => panic!("expected a connection-policy refusal, got a program"),
+            }
+        };
+        let none = || json!({"type": "none"});
+        let with = |mut value: Value, key: &str, member: Value| {
+            value[key] = member;
+            value
+        };
+
+        assert_eq!(
+            refusal(none(), bound(), Some("shared"), vec![]),
+            Reason::PolicyMissing
+        );
+        assert_eq!(
+            refusal(
+                none(),
+                bound(),
+                Some("shared"),
+                vec![reviewed(), reviewed()]
+            ),
+            Reason::PolicyDuplicate
+        );
+        assert_eq!(
+            refusal(none(), bound(), None, vec![reviewed()]),
+            Reason::ConnectionMismatch
+        );
+        assert_eq!(
+            refusal(none(), bound(), Some("independent"), vec![reviewed()]),
+            Reason::ConnectionMismatch
+        );
+        assert_eq!(
+            refusal(
+                none(),
+                with(bound(), "endpoint", json!("other")),
+                Some("shared"),
+                vec![reviewed()]
+            ),
+            Reason::EndpointUnbound
+        );
+        assert_eq!(
+            refusal(
+                none(),
+                with(bound(), "baseUrl", json!("http://127.0.0.1:8199")),
+                Some("shared"),
+                vec![reviewed()]
+            ),
+            Reason::BaseUrlMismatch
+        );
+        assert_eq!(
+            refusal(
+                none(),
+                bound(),
+                Some("shared"),
+                vec![with(reviewed(), "tlsTrustProfile", json!("pki"))]
+            ),
+            Reason::TlsTrustProfileMismatch
+        );
+        assert_eq!(
+            refusal(
+                none(),
+                bound(),
+                Some("shared"),
+                vec![with(reviewed(), "clientIdentity", json!("required"))]
+            ),
+            Reason::ClientIdentityRequired
+        );
+        assert_eq!(
+            refusal(
+                none(),
+                with(
+                    bound(),
+                    "mtlsIdentity",
+                    json!({"certificateRef": "secret:env/CERT", "keyRef": "secret:env/KEY"})
+                ),
+                Some("shared"),
+                vec![reviewed()]
+            ),
+            Reason::ClientIdentityForbidden
+        );
+        assert_eq!(
+            refusal(
+                none(),
+                with(bound(), "tlsTrustProfile", json!("pki")),
+                Some("shared"),
+                vec![with(reviewed(), "tlsTrustProfile", json!("pki"))]
+            ),
+            Reason::TrustMaterialUnavailable
+        );
+        assert_eq!(
+            refusal(
+                none(),
+                bound(),
+                Some("shared"),
+                vec![with(reviewed(), "authentication", json!({"type": "basic"}))]
+            ),
+            Reason::AuthenticationMismatch
+        );
+        assert_eq!(
+            refusal(
+                none(),
+                with(bound(), "anonymousHttps", json!("operator-approved")),
+                Some("shared"),
+                vec![reviewed()]
+            ),
+            Reason::AuthenticationInvalid
+        );
+
+        // Two programs that share one named endpoint resource must agree on
+        // its reviewed policy; the second disagreeing one is refused.
+        let runtime = EvidenceRuntimeBindings::new(
+            serde_json::from_value(json!({
+                "id": "shared",
+                "endpoints": [bound()],
+                "allowedPrivateCidrs": ["192.168.0.0/16"]
+            }))
+            .expect("bindings"),
+            SecretResolver::new([SecretProvider::Environment], "").expect("resolver"),
+        );
+        let first: EvidenceConnectionPolicy = serde_json::from_value(reviewed()).expect("policy");
+        let second: EvidenceConnectionPolicy =
+            serde_json::from_value(with(reviewed(), "baseUrl", json!("http://127.0.0.1:8199")))
+                .expect("policy");
+        runtime
+            .endpoint_resource("shared", &first)
+            .expect("the first policy claims the resource");
+        match runtime.endpoint_resource("shared", &second) {
+            Err(EvidenceCompileError::ConnectionPolicy { endpoint, reason }) => {
+                assert_eq!(endpoint, "register");
+                assert_eq!(reason, Reason::ResourceConflict);
+            }
+            Err(other) => panic!("expected a resource conflict, got {other}"),
+            Ok(_) => panic!("expected a resource conflict"),
+        }
+    }
+
     #[test]
     fn compile_admits_two_reviewed_endpoints_and_refuses_second_origin_drift() {
         let schema = json!({
@@ -4671,7 +4964,10 @@ mod tests {
                 pack_artifacts: &artifacts,
                 limits: EvidenceLimits::default(),
             }),
-            Err(EvidenceCompileError::ConnectionPolicy)
+            Err(EvidenceCompileError::ConnectionPolicy {
+                reason: ConnectionPolicyReason::ConnectionMismatch,
+                ..
+            })
         ));
 
         let drifted = make_runtime("drifted", "http://127.0.0.1:8199");
@@ -4685,7 +4981,10 @@ mod tests {
                 pack_artifacts: &artifacts,
                 limits: EvidenceLimits::default(),
             }),
-            Err(EvidenceCompileError::ConnectionPolicy)
+            Err(EvidenceCompileError::ConnectionPolicy {
+                reason: ConnectionPolicyReason::BaseUrlMismatch,
+                ..
+            })
         ));
     }
 
@@ -5024,7 +5323,10 @@ mod tests {
         let endpoint = pack.endpoints.get("register").expect("endpoint");
         assert!(matches!(
             validate_connection_policy(&runtime, endpoint, &reviewed),
-            Err(EvidenceCompileError::ConnectionPolicy)
+            Err(EvidenceCompileError::ConnectionPolicy {
+                reason: ConnectionPolicyReason::AuthenticationMismatch,
+                ..
+            })
         ));
     }
 

@@ -15,7 +15,7 @@ use rcgen::{BasicConstraints, CertificateParams, IsCa, Issuer, KeyPair};
 use registry_adapter_core::{AdapterPack, EvidenceConnectionPolicy};
 use registry_adapter_engine::artifacts::PackArtifactBytes;
 use registry_adapter_engine::evidence::{
-    compile_evidence_pack_with_protocols, compile_evidence_with_protocols,
+    compile_evidence_pack_with_protocols, compile_evidence_with_protocols, ConnectionPolicyReason,
     EvidenceAcquisitionIntent, EvidenceCompileInputs, EvidenceHookError, EvidenceHookFuture,
     EvidenceHostHooks, EvidenceLimits, EvidenceLookup, EvidenceProgram, EvidenceRuntimeBindings,
     EvidenceSendIntent,
@@ -23,7 +23,7 @@ use registry_adapter_engine::evidence::{
 use registry_evidence::bundle::{evidence_package_limits, Bundle, BundleError, RuntimeDocument};
 use registry_evidence::config::SourceConfig;
 use registry_evidence::model::LookupResult;
-use registry_evidence::pack_source::{PackSourceError, PackSourceExecutor};
+use registry_evidence::pack_source::{PackSourceError, PackSourceExecutor, SourceBindingReason};
 use registry_platform_config::{SecretProvider, SecretResolver};
 use serde_json::{json, Value};
 use tempfile::TempDir;
@@ -1108,14 +1108,17 @@ async fn one_shared_data_operation_budget_stops_a_multi_endpoint_pack_before_sen
         .iter()
         .map(|endpoint| static_policy(endpoint, &server.uri()))
         .collect::<Vec<_>>();
-    let result = PackSourceExecutor::compile(
+    let result = PackSourceExecutor::compile_diagnosed(
         source,
         bundle.source_pack("survivorship-registers").unwrap(),
         &runtime,
         &policies,
         EvidenceLimits::try_new(1, 5_000, 64 * 1024).unwrap(),
     );
-    assert!(matches!(result, Err(PackSourceError::Plan)));
+    assert_eq!(
+        result.err().map(|error| error.reason()),
+        Some(SourceBindingReason::OperationBudget)
+    );
     assert!(server.received_requests().await.unwrap().is_empty());
 }
 
@@ -1286,16 +1289,19 @@ fn current_private_ca_plan_refuses_unbound_and_missing_captures() {
         Arc::clone(&secrets),
         BTreeMap::from([("private-pki".to_owned(), b"captured-ca".to_vec())]),
     );
-    assert!(matches!(
-        PackSourceExecutor::compile(
-            source,
-            bundle.source_pack("source-c").unwrap(),
-            &unbound,
-            std::slice::from_ref(&policy),
-            EvidenceLimits::default(),
-        ),
-        Err(PackSourceError::Plan)
-    ));
+    let error = PackSourceExecutor::compile_diagnosed(
+        source,
+        bundle.source_pack("source-c").unwrap(),
+        &unbound,
+        std::slice::from_ref(&policy),
+        EvidenceLimits::default(),
+    )
+    .expect_err("a runtime binding without the reviewed trust profile is refused");
+    assert_eq!(error.endpoint(), Some("provider"));
+    assert_eq!(
+        error.reason(),
+        SourceBindingReason::Policy(ConnectionPolicyReason::TlsTrustProfileMismatch)
+    );
 
     let missing_capture = EvidenceRuntimeBindings::from_shared_http(
         serde_json::from_value(json!({
@@ -1316,16 +1322,20 @@ fn current_private_ca_plan_refuses_unbound_and_missing_captures() {
         secrets,
         BTreeMap::new(),
     );
-    assert!(matches!(
-        PackSourceExecutor::compile(
-            source,
-            bundle.source_pack("source-c").unwrap(),
-            &missing_capture,
-            &[policy],
-            EvidenceLimits::default(),
-        ),
-        Err(PackSourceError::Plan)
-    ));
+    let error = PackSourceExecutor::compile_diagnosed(
+        source,
+        bundle.source_pack("source-c").unwrap(),
+        &missing_capture,
+        &[policy],
+        EvidenceLimits::default(),
+    )
+    .expect_err("a trust profile with no captured CA bundle is refused");
+    assert_eq!(error.endpoint(), Some("provider"));
+    assert_eq!(
+        error.reason(),
+        SourceBindingReason::Policy(ConnectionPolicyReason::TrustMaterialUnavailable)
+    );
+    assert!(!error.to_string().contains("private-ca.pem"));
 }
 
 #[cfg(unix)]
@@ -1636,16 +1646,20 @@ fn pack_and_connection_authentication_authority_must_match() {
         "authentication":{"type":"basic"}
     }))
     .unwrap();
-    assert!(matches!(
-        PackSourceExecutor::compile(
-            source,
-            bundle.source_pack("source-a").unwrap(),
-            &runtime,
-            &[policy],
-            EvidenceLimits::default(),
-        ),
-        Err(PackSourceError::Plan)
-    ));
+    let error = PackSourceExecutor::compile_diagnosed(
+        source,
+        bundle.source_pack("source-a").unwrap(),
+        &runtime,
+        &[policy],
+        EvidenceLimits::default(),
+    )
+    .expect_err("a policy whose authentication differs from the pack's is refused");
+    assert_eq!(error.endpoint(), Some("provider"));
+    assert_eq!(
+        error.reason(),
+        SourceBindingReason::Policy(ConnectionPolicyReason::AuthenticationMismatch)
+    );
+    assert!(!error.to_string().contains("secret:"));
 }
 
 #[test]

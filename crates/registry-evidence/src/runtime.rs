@@ -86,8 +86,8 @@ pub enum RuntimeInitializationError {
     Audit(AuditInitializationFault),
     #[error("the Evidence signing boundary could not initialize: {0}")]
     Signing(SigningInitializationFault),
-    #[error("an Evidence source plan could not initialize")]
-    Source,
+    #[error("an Evidence source plan could not initialize: {0}")]
+    Source(crate::pack_source::SourceBindingError),
     /// A Source is on the wrong acquisition channel. The pointer names the
     /// definition member to repair and the cause is a closed text; neither
     /// carries a configured value.
@@ -568,7 +568,7 @@ fn build_sources(
 ) -> Result<BTreeMap<String, PackSourceExecutor>, RuntimeInitializationError> {
     refuse_misassigned_channel_sources(bundle)?;
     let mut sources = crate::pack_source::build_sources(bundle, runtime_document, secrets)
-        .map_err(|_| RuntimeInitializationError::Source)?;
+        .map_err(RuntimeInitializationError::Source)?;
     for (id, source) in &mut sources {
         source.observe(diagnostics.observer(id));
     }
