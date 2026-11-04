@@ -98,6 +98,21 @@ def _iso_date(value: str, field: str) -> dt.date:
         raise RenewalError(f"{field} is not an ISO date (YYYY-MM-DD): {value}") from exc
 
 
+def evaluation_date(today: str | None, now: dt.datetime | None = None) -> dt.date:
+    """The date renewal is evaluated on: `today` if given, else the UTC date.
+
+    Review dates are plain UTC dates (`date -u +%F`), so the default must not
+    follow the workstation's time zone, which would call a correct date future
+    or let a future one through.
+    """
+    if today is not None:
+        return _iso_date(today, "--today")
+    current = dt.datetime.now(dt.timezone.utc) if now is None else now
+    if current.utcoffset() is None:
+        raise RenewalError("the evaluation clock must carry a UTC offset")
+    return current.astimezone(dt.timezone.utc).date()
+
+
 def _evidence_file(path: Path) -> Path:
     if path.is_symlink() or not path.is_file():
         raise RenewalError(f"evidence file is missing or not a regular file: {path}")
@@ -284,6 +299,11 @@ def renew_image(
                     f"{name}: {label}: component evidence is unevaluable: "
                     f"{finding.component_layer_error}"
                 )
+            if reviewed > today:
+                raise RenewalError(
+                    f"{name}: {label}: future-dated exception: --reviewed-at "
+                    f"{reviewed_at} is after the evaluation date {today.isoformat()}"
+                )
             recorded = _iso_date(exception["reviewed_at"], f"{name}: {label} reviewed_at")
             if reviewed < recorded:
                 raise RenewalError(
@@ -444,13 +464,11 @@ def renew(
     if checker.GIT_REVISION_RE.fullmatch(source_revision) is None:
         raise RenewalError("--source-revision must be a full lowercase Git revision")
     _iso_date(reviewed_at, "--reviewed-at")
-    evaluation_date = (
-        dt.date.today() if today is None else _iso_date(today, "--today")
-    )
+    evaluated_on = evaluation_date(today)
     images = load_collection(evidence_dir, version, source_revision)
     renewals = [
         renew_image(
-            repo, evidence_dir, name, digest, source_revision, reviewed_at, evaluation_date
+            repo, evidence_dir, name, digest, source_revision, reviewed_at, evaluated_on
         )
         for name, digest in images
     ]
