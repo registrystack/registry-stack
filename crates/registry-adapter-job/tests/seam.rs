@@ -43,16 +43,11 @@ impl Drop for RestoreEnvironment {
 
 fn kobotoolbox_program() -> JobProgram {
     let _environment = KOBO_ENVIRONMENT.lock().expect("the environment lock holds");
-    let _restore_username = RestoreEnvironment {
-        name: "KOBO_USERNAME",
-        prior: std::env::var_os("KOBO_USERNAME"),
+    let _restore_token = RestoreEnvironment {
+        name: "KOBO_TOKEN",
+        prior: std::env::var_os("KOBO_TOKEN"),
     };
-    let _restore_password = RestoreEnvironment {
-        name: "KOBO_PASSWORD",
-        prior: std::env::var_os("KOBO_PASSWORD"),
-    };
-    std::env::set_var("KOBO_USERNAME", "synthetic-kobo-user");
-    std::env::set_var("KOBO_PASSWORD", "synthetic-kobo-password");
+    std::env::set_var("KOBO_TOKEN", "synthetic-kobo-token");
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let example = root.join("products/adapter/examples/kobotoolbox-job");
     compile_job_with(

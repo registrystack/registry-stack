@@ -356,7 +356,7 @@ printf 'Source-shape contracts and fixture replays hold (%d source shapes, %d fi
 # example credentials are synthetic stand-ins for the check, and the
 # profile and project sit beside the job, the bundle layout the job
 # format's example carries.
-export KOBO_USERNAME=check-contracts KOBO_PASSWORD=check-contracts
+export KOBO_TOKEN=check-contracts
 export ODK_EMAIL=check-contracts ODK_PASSWORD=check-contracts
 "$adapterctl_bin" job check products/adapter/packs/kobotoolbox/pack.yaml \
   products/adapter/examples/kobotoolbox-job/job.yaml \

@@ -177,6 +177,19 @@
 - A `writable-read` binding that no Write Update names as its companion read
   is refused by `adapterctl check` and at load, naming the binding, instead of
   stopping the Adapter.
+- BREAKING: the maintained `kobotoolbox` pack authenticates with the
+  account's API token (`static-authorization`, `scheme: Token`) instead of
+  Basic, so a leaked adapter credential no longer signs in to the Kobo web
+  UI. The pack digest changes. Migration: in the runtime, replace the
+  `kobo-api` credential's `usernameRef` and `passwordRef` with `type:
+  static-authorization` and a `tokenRef` naming the token, and repin the pack
+  digest in `project.yaml` and the job file. A deployment that must keep
+  Basic pins its own copy of the pack with `type: basic`.
+- The maintained `dhis2-tracker` pack's two Evidence lookups send
+  `orgUnitMode=SELECTED` with their organisation unit, so the lookup scope
+  stays that one unit on a DHIS2 version whose default mode differs. The pack
+  digest changes, and the DHIS2 Evidence reference bundle captures the new
+  pack.
 - The maintained Kobo Coordinator workflow gives the unresolved-lookup revision
   its own finish outcome, `unresolved-reviewed`; it finished as
   `revised-reviewed`, the same as a resolved one. Its README lists every

@@ -12,7 +12,7 @@ source:
   pack:
     id: kobotoolbox
     version: "1"
-    digest: sha256:cb1c31044611e3f23464291f6dd2697b00be427da0b9523d0b717fe776e5d667
+    digest: sha256:7b958e8918e706d11211cbf59ae1d8b4e73b5f62376d2017133eed4e266adbcf
   route: kobo-submissions
 destination:
   type: direct-breg

@@ -133,14 +133,11 @@ fn lookup_adult(exchange) {
 
 fn restriction_recorded(enrollment) {
     if !enrollment.contains("events") { return false; }
-    let stage_present = false;
     for event in enrollment.events {
-        if event.programStage == "Rst00000001" {
-            if event.status == "COMPLETED" { return true; }
-            stage_present = true;
+        if event.programStage == "Rst00000001" && event.status == "COMPLETED" {
+            return true;
         }
     }
-    if stage_present { return false; }
     false
 }
 
