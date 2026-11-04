@@ -474,6 +474,58 @@ async fn the_observation_ends_with_the_wait() {
 }
 
 #[tokio::test]
+async fn a_first_read_of_an_automatic_application_reads_once_more_seconds_later() {
+    let h = harness().await;
+    let fake = Fake::new(vec![waiting("nobody"), applied()]);
+    let worker = Worker::new(h.store.clone(), fake.clone());
+    let run = h.admit().await;
+    h.drain(&worker).await;
+    assert_eq!(fake.reads(), 2, "the start read and one follow-up read");
+    assert_eq!(
+        h.status(run).await,
+        ("finished".into(), Some("applied".into()), None),
+        "the run settles without waiting for resultCheckSeconds"
+    );
+}
+
+#[tokio::test]
+async fn the_follow_up_read_is_once_and_only_for_an_automatic_application() {
+    let h = harness().await;
+    let fake = Fake::new(vec![waiting("official")]);
+    let worker = Worker::new(h.store.clone(), fake.clone());
+    let reviewed = h.admit().await;
+    h.drain(&worker).await;
+    assert_eq!(fake.reads(), 1, "a Proposal an official holds is read once");
+
+    let fake = Fake::new(vec![
+        waiting("nobody"),
+        waiting("nobody"),
+        waiting("nobody"),
+    ]);
+    let worker = Worker::new(h.store.clone(), fake.clone());
+    let queued = h
+        .admit_following("1c2d3e4f-5061-4b7c-8d9e-0f1a2b3c4d5e")
+        .await;
+    h.drain(&worker).await;
+    assert_eq!(
+        fake.reads(),
+        2,
+        "one follow-up read, then the scheduled spacing"
+    );
+    assert_eq!(h.status(queued).await.0, "running");
+    let due = h.due_in(queued).await.expect("the next read is scheduled");
+    assert!(
+        due > 60.0,
+        "the next read waits for resultCheckSeconds: {due}"
+    );
+
+    h.make_due(queued).await;
+    h.drain(&worker).await;
+    assert_eq!(fake.reads(), 3, "a later read has no follow-up");
+    assert_eq!(h.status(reviewed).await.0, "running");
+}
+
+#[tokio::test]
 async fn inspection_offers_the_configured_request_link() {
     let h = harness().await;
     let fake = Fake::new(vec![]);
