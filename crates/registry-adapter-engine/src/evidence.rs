@@ -5816,7 +5816,7 @@ mod tests {
 
     #[tokio::test]
     async fn evidence_attempt_defaults_and_overrides_complete_after_ten_seconds() {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::io::AsyncReadExt;
 
         let request_arrived = Arc::new(tokio::sync::Notify::new());
         let release_response = Arc::new(tokio::sync::Notify::new());
@@ -5837,16 +5837,24 @@ mod tests {
             }
             server_request_arrived.notify_one();
             server_release_response.notified().await;
-            let body = br#"{"lookup":"matched","facts":{}}"#;
-            let head = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                body.len()
-            );
+            // The response leaves from a plain thread after a real delay,
+            // as a slow upstream's would, so the lookup waits on the socket
+            // with no timer due before its attempt timeout.
+            let mut stream = stream.into_std().expect("std Evidence stream");
             stream
-                .write_all(head.as_bytes())
-                .await
-                .expect("response head");
-            stream.write_all(body).await.expect("response body");
+                .set_nonblocking(false)
+                .expect("blocking Evidence stream");
+            std::thread::spawn(move || {
+                use std::io::Write;
+                std::thread::sleep(Duration::from_millis(50));
+                let body = br#"{"lookup":"matched","facts":{}}"#;
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                stream.write_all(head.as_bytes()).expect("response head");
+                stream.write_all(body).expect("response body");
+            })
         });
 
         let schema = json!({
@@ -5961,6 +5969,10 @@ mod tests {
         tokio::time::pause();
         let started = tokio::time::Instant::now();
         tokio::time::advance(Duration::from_secs(11)).await;
+        // A paused clock jumps to the next timer whenever the runtime is
+        // idle, which is the attempt timeout while the lookup waits on
+        // the socket. Resume real time so the response decides the lookup.
+        tokio::time::resume();
         release_response.notify_one();
         assert_eq!(
             execute
@@ -5970,6 +5982,10 @@ mod tests {
             EvidenceLookup::Matched { facts: json!({}) }
         );
         assert!(started.elapsed() >= Duration::from_secs(11));
-        server.await.expect("delayed server completed");
+        server
+            .await
+            .expect("delayed server task completed")
+            .join()
+            .expect("delayed response sent");
     }
 }
