@@ -20665,6 +20665,87 @@
           ]
         },
         {
+          "name": "pack",
+          "invocation": "evidencectl pack",
+          "about": "Maintain a reviewed Adapter pack's digest pins",
+          "long_about": null,
+          "usage": "evidencectl pack [OPTIONS] <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format. `junit` is accepted only by `test` and `fixtures run`",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json",
+                "junit"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "lock",
+              "invocation": "evidencectl pack lock",
+              "about": "Recompute the digest pins of a pack's files and write them to pack.yaml",
+              "long_about": null,
+              "usage": "evidencectl pack lock [OPTIONS] <PACK>",
+              "arguments": [
+                {
+                  "display": "<PACK>",
+                  "description": "Pack directory holding pack.yaml, or the pack.yaml file itself. A project keeps its packs at adapter-packs/<id>/. Lock rewrites the digest of every pinned file that exists in the pack directory and changed; it never adds or removes a pin, so declare a new file in pack.yaml first, with any well-formed placeholder digest.",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Select human-readable output; this command provides no JSON report",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help (see a summary with '-h')",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            }
+          ]
+        },
+        {
           "name": "request",
           "invocation": "evidencectl request",
           "about": "Prepare a closed request for the active local project",
