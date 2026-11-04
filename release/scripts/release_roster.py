@@ -49,9 +49,10 @@ is ready. ``COORDINATOR_BINARY_FIRST_RELEASE`` independently adds the runtime,
 operator CLI, and installer in v0.44.0. Client facades are governed independently.
 
 ``ADAPTER_FIRST_RELEASE`` decides when the Registry Adapter binaries join the
-Stack train: the ``adapter`` facade, the ``adapterctl`` author tool, the
-``adapter-job`` host and their installer, on every supported platform, from
-v0.45.1. The facade has no image yet.
+Stack train: the ``adapter`` facade, the ``adapterctl`` author tool and their
+installer, on every supported platform, from v0.45.1. The facade has no image
+yet. The ``adapter-job`` host stays source-build only until its release build
+enables a destination.
 
 ``DOCUMENTS_FIRST_RELEASE`` is the single place that decides which release
 first ships the Registry Document Store binaries, ``documents`` and
@@ -115,14 +116,7 @@ ADDITIONAL_PLATFORM_BUILDS = (
     ("registry-coordinator", "coordinatorctl"),
     ("registry-adapter", "adapter"),
     ("registry-adapterctl", "adapterctl"),
-    ("registry-adapter-job", "adapter-job"),
 )
-
-# Cargo features a binary is built with; each is compiled in its own invocation
-# so these never unify into another binary.
-ADDITIONAL_PLATFORM_FEATURES = {
-    "adapter-job": "job-file,job-postgres",
-}
 
 ADDITIONAL_INSTALLERS = {
     "breg-mcp": ("registry-breg-mcp", "BREG_MCP", ("breg-mcp",)),
@@ -132,7 +126,7 @@ ADDITIONAL_INSTALLERS = {
     "registry-render": ("registry-render", "REGISTRY_RENDER", ("registry-render",)),
     "registry-manifest": ("registry-manifest-cli", "REGISTRY_MANIFEST", ("registry-manifest",)),
     "coordinator": ("registry-coordinator", "COORDINATOR", ("coordinator", "coordinatorctl")),
-    "adapter": ("registry-adapter", "ADAPTER", ("adapter", "adapterctl", "adapter-job")),
+    "adapter": ("registry-adapter", "ADAPTER", ("adapter", "adapterctl")),
 }
 
 
@@ -149,7 +143,6 @@ def additional_platform_builds(version: tuple[int, int, int]):
         "registry-coordinator": coordinator_binaries_in_release(version),
         "registry-adapter": adapter_in_release(version),
         "registry-adapterctl": adapter_in_release(version),
-        "registry-adapter-job": adapter_in_release(version),
     }
     return tuple((crate, binary) for crate, binary in ADDITIONAL_PLATFORM_BUILDS if enabled.get(crate, True))
 
@@ -426,7 +419,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "additional-platform-builds":
         for crate, binary in additional_platform_builds(args.version):
-            print(f"{crate} {binary} {ADDITIONAL_PLATFORM_FEATURES.get(binary, '')}".rstrip())
+            print(crate, binary)
         return 0
     print("true" if args.in_release(args.version) else "false")
     return 0

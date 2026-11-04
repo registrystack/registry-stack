@@ -75,7 +75,7 @@ PRODUCTS = {
     "adapter": {
         "entrypoint": "adapterctl",
         "baseline": ("adapterctl", "adapter"),
-        "optional": ("adapter-job",),
+        "optional": (),
         "runtime": "adapter",
     },
 }

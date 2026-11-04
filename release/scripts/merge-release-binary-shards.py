@@ -141,7 +141,6 @@ def rosters(
             [
                 f"adapter-{tag}-linux-amd64",
                 f"adapterctl-{tag}-linux-amd64",
-                f"adapter-job-{tag}-linux-amd64",
             ]
         )
     core.extend(common)

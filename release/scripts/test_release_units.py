@@ -143,7 +143,6 @@ class ReleaseUnitsTest(TestCase):
         for name in (
             "adapter-v0.45.1-linux-amd64",
             "adapterctl-v0.45.1-macos-arm64.tar.gz",
-            "adapter-job-v0.45.1-linux-arm64",
             "adapter-v0.45.1-install.sh",
             "adapter-install.sh",
         ):

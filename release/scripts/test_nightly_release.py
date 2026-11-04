@@ -73,7 +73,7 @@ class NightlyTest(unittest.TestCase):
         inventory = release_candidate._release_payload_inventory("0.45.1")
         expected = sorted(name.replace("v0.45.1", tag) for name, kind in inventory.items() if kind in {"binary", "notice"})
         self.assertEqual(expected, roster["payloads"])
-        for binary in ("adapter", "adapterctl", "adapter-job"):
+        for binary in ("adapter", "adapterctl"):
             self.assertIn(f"{binary}-{tag}-macos-arm64.tar.gz", roster["payloads"])
         self.assertEqual(roster, nightly.validate_v2_roster(roster, tag))
         before = nightly.current_roster("0.45.0", tag.replace("0.45.1", "0.45.0"))

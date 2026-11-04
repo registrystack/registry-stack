@@ -28,12 +28,11 @@ if [[ "${target}" != aarch64-unknown-linux-gnu ]]; then
 	exit 2
 fi
 mkdir -p "${output}"
-while read -r package binary features; do
+while read -r package binary; do
 	if [[ "${exclude_discovery}" -eq 1 && "${package}" == registry-discovery* ]]; then
 		continue
 	fi
-	"${cargo_bin}" build --release --locked -p "${package}" --bin "${binary}" \
-		${features:+--features "${features}"} --target "${target}"
+	"${cargo_bin}" build --release --locked -p "${package}" --bin "${binary}" --target "${target}"
 	destination="${output}/${binary}-${tag}-linux-arm64"
 	cp "${CARGO_TARGET_DIR:-target}/${target}/release/${binary}" "${destination}"
 	chmod 0755 "${destination}"

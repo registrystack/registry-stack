@@ -83,23 +83,13 @@ output.chmod(0o755)
                     json.loads(line)
                     for line in (root / "calls.jsonl").read_text().splitlines()
                 ]
-                expected = []
-                for crate, binary in builds:
-                    features = release_roster.ADDITIONAL_PLATFORM_FEATURES.get(binary)
-                    expected.append(
-                        ["build", "--release", "--locked", "-p", crate, "--bin", binary]
-                        + (["--features", features] if features else [])
-                        + ["--target", "aarch64-unknown-linux-gnu"]
-                    )
+                expected = [
+                    ["build", "--release", "--locked", "-p", crate, "--bin", binary,
+                     "--target", "aarch64-unknown-linux-gnu"]
+                    for crate, binary in builds
+                ]
                 self.assertEqual(expected, calls)
-        self.assertIn(
-            [
-                "build", "--release", "--locked", "-p", "registry-adapter-job",
-                "--bin", "adapter-job", "--features", "job-file,job-postgres",
-                "--target", "aarch64-unknown-linux-gnu",
-            ],
-            calls,
-        )
+                self.assertFalse(any(path.name.startswith("adapter-job") for path in output.iterdir()))
 
     def test_historical_release_has_no_additional_builds(self):
         with tempfile.TemporaryDirectory() as temporary:
