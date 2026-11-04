@@ -1049,6 +1049,267 @@
                 }
               ],
               "subcommands": []
+            },
+            {
+              "name": "lock",
+              "invocation": "adapterctl job lock",
+              "about": "Compute and write the job's digest pins from the files beside the job document",
+              "long_about": null,
+              "usage": "adapterctl job lock [OPTIONS] <JOB>",
+              "arguments": [
+                {
+                  "display": "<JOB>",
+                  "description": "The job definition whose pins are rewritten",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--pack <FILE>",
+                  "description": "The pack document the job pins; when given, the job's pack digest is rewritten from its bytes too",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            }
+          ]
+        },
+        {
+          "name": "mapping",
+          "invocation": "adapterctl mapping",
+          "about": "Check a mapping model, generate its Rhai script, or preview the script over sample inputs",
+          "long_about": null,
+          "usage": "adapterctl mapping [OPTIONS] <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "check",
+              "invocation": "adapterctl mapping check",
+              "about": "Check a mapping model against the target schema it names",
+              "long_about": null,
+              "usage": "adapterctl mapping check [OPTIONS] <MODEL>",
+              "arguments": [
+                {
+                  "display": "<MODEL>",
+                  "description": "The mapping model (`*.mapping.yaml`)",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--deny-warnings",
+                  "description": "Exit 1 when a warning is reported",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "generate",
+              "invocation": "adapterctl mapping generate",
+              "about": "Check the model, then write the Rhai script it describes beside it",
+              "long_about": null,
+              "usage": "adapterctl mapping generate [OPTIONS] <MODEL>",
+              "arguments": [
+                {
+                  "display": "<MODEL>",
+                  "description": "The mapping model (`*.mapping.yaml`)",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--force",
+                  "description": "Overwrite a handwritten script (one without the generated header) at the path the model names",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--deny-warnings",
+                  "description": "Exit 1 when a warning is reported",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "preview",
+              "invocation": "adapterctl mapping preview",
+              "about": "Run the generated script over sample inputs and print the validated outputs or the categorical refusals; writes nothing",
+              "long_about": null,
+              "usage": "adapterctl mapping preview [OPTIONS] --input <FILE> <MODEL>",
+              "arguments": [
+                {
+                  "display": "<MODEL>",
+                  "description": "The mapping model (`*.mapping.yaml`)",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--input <FILE>",
+                  "description": "A JSON or YAML file holding one source value; repeatable. A YAML input cannot hold `null`; use JSON for that",
+                  "always_required": true,
+                  "repeatable": true,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
             }
           ]
         },

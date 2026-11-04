@@ -269,7 +269,7 @@ fn generate_for_ingestion_points_at_the_job_digest() {
     let (exit, report, _) = run_json(&["mapping", "generate", &path(&root, "ingest.mapping.yaml")]);
     assert_eq!(exit, ExitCode::SUCCESS, "{report}");
     let next = report["nextStep"].as_str().unwrap();
-    assert!(next.contains("destination.mapping.digest"), "{next}");
+    assert!(next.contains("adapterctl job lock"), "{next}");
     assert!(
         next.contains(report["scriptDigest"].as_str().unwrap()),
         "{next}"
@@ -830,10 +830,103 @@ fn check_warns_when_a_valid_model_changes_after_generation() {
         ExitCode::SUCCESS,
         "the edited model is valid: {report}"
     );
+    let warnings = drift_warnings(&report);
+    assert_eq!(
+        warnings.len(),
+        1,
+        "mapping check sees the stale script: {report}"
+    );
+    assert_eq!(warnings[0]["path"], "/mapping/script", "{report}");
+    let (exit, report, _) = run_json(&[
+        "mapping",
+        "check",
+        model.to_str().unwrap(),
+        "--deny-warnings",
+    ]);
+    assert_eq!(exit, ExitCode::from(1), "{report}");
     let (exit, report, _) = run_json(&["check", &project]);
     assert_eq!(exit, ExitCode::SUCCESS, "{report}");
     assert_eq!(drift_warnings(&report).len(), 1, "{report}");
     let _ = root;
+}
+
+// --- mapping check against the script on disk ------------------------------
+
+#[test]
+fn mapping_check_is_silent_for_a_current_script() {
+    let (_root, _project, model) = project_with_generated_script();
+    let (exit, report, _) = run_json(&[
+        "mapping",
+        "check",
+        model.to_str().unwrap(),
+        "--deny-warnings",
+    ]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    assert_eq!(report["diagnostics"], json!([]), "{report}");
+}
+
+#[test]
+fn mapping_check_warns_when_its_script_is_hand_edited() {
+    let (root, _project, model) = project_with_generated_script();
+    let script = root.path().join("scripts/gen.rhai");
+    let text = std::fs::read_to_string(&script).unwrap();
+    std::fs::write(&script, format!("{text}// hand edit\n")).unwrap();
+    let (exit, report, _) = run_json(&["mapping", "check", model.to_str().unwrap()]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    let warnings = drift_warnings(&report);
+    assert_eq!(warnings.len(), 1, "{report}");
+    assert_eq!(warnings[0]["severity"], "warning", "{report}");
+    assert!(
+        warnings[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("gen.rhai"),
+        "{report}"
+    );
+}
+
+#[test]
+fn mapping_check_warns_when_its_script_is_handwritten_or_another_models() {
+    let (root, _project, model) = project_with_generated_script();
+    let script = root.path().join("scripts/gen.rhai");
+    std::fs::write(&script, "fn project_person(source) { #{} }\n").unwrap();
+    let (exit, report, _) = run_json(&["mapping", "check", model.to_str().unwrap()]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    assert_eq!(
+        codes(&report),
+        ["adapterctl.mapping-script-handwritten"],
+        "{report}"
+    );
+    assert_eq!(report["diagnostics"][0]["severity"], "warning", "{report}");
+
+    let other = root.path().join("other.mapping.yaml");
+    std::fs::copy(&model, &other).unwrap();
+    std::fs::remove_file(&script).unwrap();
+    let (exit, report, _) = run_json(&["mapping", "generate", other.to_str().unwrap()]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    let (exit, report, _) = run_json(&["mapping", "check", model.to_str().unwrap()]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    assert_eq!(
+        codes(&report),
+        ["adapterctl.mapping-script-owned"],
+        "{report}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn generate_keeps_the_file_mode_of_the_script_it_replaces() {
+    use std::os::unix::fs::PermissionsExt;
+    let (root, _project, model) = project_with_generated_script();
+    let script = root.path().join("scripts/gen.rhai");
+    let text = std::fs::read_to_string(&script).unwrap();
+    std::fs::write(&script, format!("{text}// hand edit\n")).unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o640)).unwrap();
+    let (exit, report, _) = run_json(&["mapping", "generate", model.to_str().unwrap()]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    assert_eq!(report["changed"], true, "{report}");
+    let mode = std::fs::metadata(&script).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o640);
 }
 
 #[test]
@@ -848,6 +941,91 @@ fn check_refuses_a_script_path_without_the_rhai_extension() {
     .unwrap();
     let (exit, report, _) = run_json(&["mapping", "check", model.to_str().unwrap()]);
     assert_refused(exit, &report, "adapter.mapping.path-invalid");
+}
+
+// --- drift in a pack's scripts ---------------------------------------------
+
+/// A copy of the minimal project whose pack inventories a script generated
+/// from a source-request model that sits inside the pack's directory. The
+/// pack is repinned, so only the drift check can speak.
+fn pack_with_generated_script() -> (tempfile::TempDir, String, PathBuf) {
+    let root = tempfile::tempdir().unwrap();
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/minimal");
+    copy_tree(&source, root.path());
+    std::fs::create_dir_all(root.path().join("schemas")).unwrap();
+    std::fs::write(root.path().join("schemas/person.schema.json"), SCHEMA).unwrap();
+    let model = root.path().join("upstream.mapping.yaml");
+    std::fs::write(
+        &model,
+        model_text(
+            "source-request",
+            None,
+            "scripts/to-upstream.rhai",
+            "to_upstream",
+        ),
+    )
+    .unwrap();
+    let (exit, report, _) = run_json(&["mapping", "generate", model.to_str().unwrap(), "--force"]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    let project = root.path().join("project.yaml");
+    let (exit, report, _) = run_json(&["project", "lock", root.path().to_str().unwrap()]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    (root, project.to_str().unwrap().to_owned(), model)
+}
+
+#[test]
+fn check_raises_no_drift_warning_for_a_current_generated_pack_script() {
+    let (_root, project, _) = pack_with_generated_script();
+    let (exit, report, _) = run_json(&["check", &project, "--deny-warnings"]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    assert!(drift_warnings(&report).is_empty(), "{report}");
+}
+
+#[test]
+fn check_warns_when_a_generated_pack_script_is_hand_edited() {
+    let (root, project, _) = pack_with_generated_script();
+    let script = root.path().join("scripts/to-upstream.rhai");
+    let text = std::fs::read_to_string(&script).unwrap();
+    std::fs::write(&script, format!("{text}// hand edit\n")).unwrap();
+    run_json(&["project", "lock", root.path().to_str().unwrap()]);
+    let (exit, report, _) = run_json(&["check", &project]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    let warnings = drift_warnings(&report);
+    assert_eq!(warnings.len(), 1, "{report}");
+    assert_eq!(warnings[0]["path"], "/scripts/1", "{report}");
+    let message = warnings[0]["message"].as_str().unwrap();
+    assert!(message.contains("to-upstream.rhai"), "{message}");
+    let (exit, report, _) = run_json(&["check", &project, "--deny-warnings"]);
+    assert_eq!(exit, ExitCode::from(1), "{report}");
+}
+
+#[test]
+fn check_raises_no_drift_warning_for_a_handwritten_pack_script() {
+    let (root, project, _) = pack_with_generated_script();
+    std::fs::write(
+        root.path().join("scripts/to-upstream.rhai"),
+        "// handwritten\nfn to_upstream(source) { #{} }\n",
+    )
+    .unwrap();
+    run_json(&["project", "lock", root.path().to_str().unwrap()]);
+    let (_, report, _) = run_json(&["check", &project]);
+    assert!(drift_warnings(&report).is_empty(), "{report}");
+}
+
+#[test]
+fn check_warns_when_a_pack_script_header_names_a_model_outside_the_pack() {
+    let (root, project, _) = pack_with_generated_script();
+    let script = root.path().join("scripts/to-upstream.rhai");
+    let text = std::fs::read_to_string(&script).unwrap();
+    let escaped = text.replace(
+        "model=../upstream.mapping.yaml",
+        "model=../../upstream.mapping.yaml",
+    );
+    assert_ne!(text, escaped);
+    std::fs::write(&script, escaped).unwrap();
+    run_json(&["project", "lock", root.path().to_str().unwrap()]);
+    let (_, report, _) = run_json(&["check", &project]);
+    assert_eq!(drift_warnings(&report).len(), 1, "{report}");
 }
 
 // --- drift in job check ----------------------------------------------------
@@ -924,6 +1102,108 @@ fn job_check_warns_when_the_destination_mapping_drifts_from_its_model() {
     let (exit, report, _) = check(&[]);
     assert_eq!(exit, ExitCode::SUCCESS, "{report}");
     assert_eq!(drift_warnings(&report).len(), 1, "{report}");
+    let (exit, report, _) = check(&["--deny-warnings"]);
+    assert_eq!(exit, ExitCode::from(1), "{report}");
+}
+
+#[test]
+fn job_check_warns_when_a_generated_pack_script_drifts_from_its_model() {
+    std::env::set_var("KOBO_USERNAME", "check-contracts");
+    std::env::set_var("KOBO_PASSWORD", "check-contracts");
+    let products = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/adapter");
+    let root = tempfile::tempdir().unwrap();
+    copy_tree(&products.join("examples/kobotoolbox-job"), root.path());
+    let pack_directory = root.path().join("pack");
+    std::fs::create_dir_all(pack_directory.join("schemas")).unwrap();
+    copy_tree(&products.join("packs/kobotoolbox"), &pack_directory);
+    std::fs::write(pack_directory.join("schemas/person.schema.json"), SCHEMA).unwrap();
+    // A generated script the pack inventories; no route calls it, so only
+    // the drift check reads it.
+    let model = pack_directory.join("request.mapping.yaml");
+    std::fs::write(
+        &model,
+        model_text(
+            "source-request",
+            None,
+            "scripts/request.rhai",
+            "build_request",
+        ),
+    )
+    .unwrap();
+    let (exit, report, _) = run_json(&["mapping", "generate", model.to_str().unwrap()]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    let pack = pack_directory.join("pack.yaml");
+    let text = std::fs::read_to_string(&pack).unwrap();
+    std::fs::write(
+        &pack,
+        text.replace(
+            "capabilities:\n",
+            &format!(
+                "  - path: scripts/request.rhai\n    digest: {}\ncapabilities:\n",
+                report["scriptDigest"].as_str().unwrap()
+            ),
+        ),
+    )
+    .unwrap();
+    let job = root.path().join("job.yaml");
+    let (exit, report, _) = run_json(&[
+        "job",
+        "lock",
+        job.to_str().unwrap(),
+        "--pack",
+        pack.to_str().unwrap(),
+    ]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    assert_eq!(report["pack"], "updated", "{report}");
+    let (exit, report, _) = run_json(&[
+        "project",
+        "lock",
+        root.path().to_str().unwrap(),
+        "--pack",
+        pack.to_str().unwrap(),
+    ]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+
+    let argument = |name: &str| root.path().join(name).to_str().unwrap().to_owned();
+    let check = |extra: &[&str]| {
+        let (pack, job, runtime, profile, project) = (
+            pack.to_str().unwrap().to_owned(),
+            argument("job.yaml"),
+            argument("job-runtime.example.yaml"),
+            argument("profile.yaml"),
+            argument("project.yaml"),
+        );
+        let mut arguments = vec![
+            "job",
+            "check",
+            pack.as_str(),
+            job.as_str(),
+            "--runtime",
+            runtime.as_str(),
+            "--profile",
+            profile.as_str(),
+            "--project",
+            project.as_str(),
+        ];
+        arguments.extend_from_slice(extra);
+        run_json(&arguments)
+    };
+    let (exit, report, _) = check(&["--deny-warnings"]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+
+    // Edit the model only: the pack still pins the script bytes, so only the
+    // drift warning speaks.
+    let text = std::fs::read_to_string(&model).unwrap();
+    std::fs::write(
+        &model,
+        text.replace("constant: person", "constant: individual"),
+    )
+    .unwrap();
+    let (exit, report, _) = check(&[]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    let warnings = drift_warnings(&report);
+    assert_eq!(warnings.len(), 1, "{report}");
+    assert_eq!(warnings[0]["path"], "/scripts/3", "{report}");
     let (exit, report, _) = check(&["--deny-warnings"]);
     assert_eq!(exit, ExitCode::from(1), "{report}");
 }

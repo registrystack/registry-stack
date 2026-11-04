@@ -63,14 +63,16 @@ that is not an integer or integer string all make the script throw. The
 runtime maps any mapping failure to a refusal of that one item, with no value
 in the message.
 
-To change the mapping, edit the model, regenerate, repin, and check. Run the
+To change the mapping, edit the model, regenerate, lock, and check. Run the
 commands from the checkout root:
 
 ```sh
 cargo run --locked -p registry-adapterctl -- mapping generate \
   products/adapter/examples/kobotoolbox-job/mappings/register-household.mapping.yaml
-# copy the printed scriptDigest into destination.mapping.digest of job.yaml
-# and job.hook.yaml
+cargo run --locked -p registry-adapterctl -- job lock \
+  products/adapter/examples/kobotoolbox-job/job.yaml
+cargo run --locked -p registry-adapterctl -- job lock \
+  products/adapter/examples/kobotoolbox-job/job.hook.yaml
 KOBO_USERNAME=check KOBO_PASSWORD=check cargo run --locked -p registry-adapterctl -- job check \
   products/adapter/packs/kobotoolbox/pack.yaml \
   products/adapter/examples/kobotoolbox-job/job.yaml \
@@ -104,7 +106,8 @@ synthetic BReg Proposal Action input and is pinned by the job document.
 
 The direct mapping is deliberately example-specific. Programme Action inputs
 do not belong in the reusable Kobo provider pack, and changing the mapping
-requires updating its digest in `job.yaml`.
+requires updating its digest in the job document, which `adapterctl job lock`
+does in place.
 Review the mapping, Action, access profile, projection, and destination
 binding before a pilot. The BReg half of the direct journey (the `household`
 record type, the `register-household` Action, the `ingestion` access profile

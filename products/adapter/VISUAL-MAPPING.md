@@ -15,7 +15,7 @@ This product owns the mapping format, its checks, the deterministic generator an
 The pure model, checks and generator live in `registry-adapter-core`; `adapterctl` exposes check, generate and preview commands.
 Generation writes the script and reports its digest.
 `adapterctl project lock` updates project pins and binding references.
-Job pins are updated by hand from the reported digest until a job lock command exists; this is current behaviour.
+`adapterctl job lock` updates a job's mapping digest pin (and, with `--pack`, its pack pin) in place.
 There is exactly one generator.
 Registry Studio owns the editor and calls a pinned `adapterctl` for generation, checking and preview, as it already calls a pinned `coordinatorctl`.
 An implementer or an agent without Studio authors the same file and runs the same commands.
@@ -41,7 +41,7 @@ Existing handwritten transformations remain code-authored and are not imported a
 
 The generator produces ordinary Rhai and reports its digest.
 `adapterctl project lock` updates the existing script and schema pins and binding references of a project.
-A job's mapping digest is edited by hand until a job lock command exists.
+`adapterctl job lock` rewrites a job's mapping digest from the generated script's bytes.
 The saved model, source descriptions and field catalogue remain authoring inputs; they do not enter the runtime artifact inventory or continuation digest.
 The generated script, target schema and existing project and pack pins remain the governed executable result.
 Changed authoring inputs trigger revalidation and regeneration; unchanged executable artifacts keep their runtime identity.
@@ -54,6 +54,8 @@ When the script no longer matches its model, `adapterctl check` reports a warnin
 The author then regenerates, which discards the hand edits, or removes the whole generated header and keeps a handwritten script.
 The marker on the header's first line is what makes a script generated, so a script without it is handwritten.
 Generating over a script that another model produced, or over a handwritten script, is refused unless `--force` is passed.
+The check covers the scripts a project inventories, the scripts a pack inventories (the model must then lie inside the pack's directory) and, in `adapterctl job check`, the job's direct destination mapping and its pack's scripts.
+From the model's side, `adapterctl mapping check` warns when the script at `mapping.script` is not what the model generates now, including when that script is handwritten or another model's; a missing script is not a finding.
 This is a warning, not a blocking check: a handwritten script is a supported state, and the warning only makes the divergence visible.
 
 ## Targets
