@@ -417,9 +417,12 @@ async fn private_ca_amqps_succeeds_and_wrong_trust_refuses_before_credentials() 
     let request =
         RabbitMqReadRequest::new(4_096, Duration::from_secs(5)).expect("the AMQPS read is bounded");
     // The TLS container is started without a readiness probe, so allow the
-    // broker a full boot on a loaded runner before calling it unavailable.
-    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    // broker a full boot on a heavily loaded host before calling it
+    // unavailable. Only an unavailable or timed-out read is waited out.
+    let wait = Duration::from_secs(120);
+    let deadline = std::time::Instant::now() + wait;
     let mut ready = false;
+    let mut last_fault = None;
     while std::time::Instant::now() < deadline {
         match source.read(&request).await {
             Ok(None) => {
@@ -427,13 +430,17 @@ async fn private_ca_amqps_succeeds_and_wrong_trust_refuses_before_credentials() 
                 break;
             }
             Ok(Some(message)) => panic!("the fresh AMQPS queue yielded {message:?}"),
-            Err(RabbitMqReadFault::Unavailable | RabbitMqReadFault::Timeout) => {
+            Err(fault @ (RabbitMqReadFault::Unavailable | RabbitMqReadFault::Timeout)) => {
+                last_fault = Some(fault);
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
             Err(fault) => panic!("the AMQPS fixture failed under {fault}"),
         }
     }
-    assert!(ready, "the private CA establishes verified AMQPS");
+    assert!(
+        ready,
+        "the private CA did not establish verified AMQPS within {wait:?}; last read fault: {last_fault:?}"
+    );
     source
         .disconnect_for_test()
         .await
