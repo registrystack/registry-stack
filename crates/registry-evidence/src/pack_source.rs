@@ -345,14 +345,10 @@ impl PackSourceExecutor {
             if let Some(reason) = undeclared_not_found(failure.http_diagnostic()) {
                 observer.undeclared_not_found(reason);
             }
+            // A failure with an HTTP diagnostic is the source answering a
+            // status, or a host protocol refusing it; neither is shape drift.
             if failure.category() == PackSourceError::Protocol
-                && !matches!(
-                    failure.http_diagnostic(),
-                    Some(
-                        EvidenceHttpDiagnostic::Verification
-                            | EvidenceHttpDiagnostic::DeclaredNotFoundMismatch
-                    )
-                )
+                && failure.http_diagnostic().is_none()
             {
                 observer.shape_drift(&[format!(
                     "pack {}@{}; route {}; artifact {}/pack.yaml; result contract violated",
@@ -547,7 +543,8 @@ fn dependency_outcome(failure: &PackSourceFailure) -> DependencyOutcome {
         Some(EvidenceHttpDiagnostic::Verification) => return DependencyOutcome::Verification,
         Some(
             EvidenceHttpDiagnostic::UndeclaredNotFound
-            | EvidenceHttpDiagnostic::DeclaredNotFoundMismatch,
+            | EvidenceHttpDiagnostic::DeclaredNotFoundMismatch
+            | EvidenceHttpDiagnostic::OtherClientStatus,
         )
         | None => {}
     }
@@ -891,6 +888,12 @@ mod outcome_tests {
                 PackSourceError::Dependency,
                 EvidenceHttpDiagnostic::ServerError,
                 "server-error",
+                None,
+            ),
+            (
+                PackSourceError::Protocol,
+                EvidenceHttpDiagnostic::OtherClientStatus,
+                "protocol",
                 None,
             ),
             (

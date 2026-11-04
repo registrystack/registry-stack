@@ -2707,6 +2707,7 @@ fn http_cause_note(
         EvidenceHttpDiagnostic::DeclaredNotFoundMismatch => {
             "answered 404 that is not the declared `unresolvedProblem`; record that exact Problem, or correct the declaration"
         }
+        EvidenceHttpDiagnostic::OtherClientStatus => "answered a 4xx client error",
     };
     format!("endpoint `{endpoint}` {answer}")
 }
