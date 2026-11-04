@@ -286,6 +286,14 @@ stops at the same place until you change the profile. Lower
 a page fits, or raise `profile.maximumPageBytes`, which cannot exceed
 `profile.maximumResponseBytes`. Then run the job again.
 
+`profile.maximumPageBytes` is checked after a page is built, not while it is
+built: a file or PostgreSQL source reads up to `maximumRowsPerPage` rows
+before the check runs, so a page can be larger than the bound in memory before
+the pass stops. The real memory ceiling is therefore
+`maximumRowsPerPage * maximumRowBytes`; size those two members, not only
+`maximumPageBytes`, to the memory you can spare. The stop report prints the
+same fix as its `next` step.
+
 ## Check the product
 
 Every cargo build runs in an explicit target directory outside the source
