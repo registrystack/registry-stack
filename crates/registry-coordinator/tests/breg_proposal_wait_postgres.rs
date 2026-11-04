@@ -764,7 +764,7 @@ async fn a_list_cursor_carries_the_proposal_and_turn_filters() {
         turn: Some(ProposalTurn::Official),
         ..RunListFilter::default()
     };
-    let page = h.page(1, None, filter).await.unwrap();
+    let page = h.page(1, None, filter.clone()).await.unwrap();
     assert_eq!(page.runs[0].run_id, second);
     let cursor = page.next_cursor.expect("another page");
     assert!(
@@ -773,7 +773,7 @@ async fn a_list_cursor_carries_the_proposal_and_turn_filters() {
     );
     let decoded = String::from_utf8(URL_SAFE_NO_PAD.decode(&cursor).unwrap()).unwrap();
     assert!(!decoded.contains(PROPOSAL), "{decoded}");
-    let next = h.page(1, Some(&cursor), filter).await.unwrap();
+    let next = h.page(1, Some(&cursor), filter.clone()).await.unwrap();
     assert_eq!(next.runs[0].run_id, first);
 
     for changed in [
@@ -781,11 +781,11 @@ async fn a_list_cursor_carries_the_proposal_and_turn_filters() {
         on_turn(ProposalTurn::Official),
         RunListFilter {
             proposal: Some(Uuid::parse_str(OTHER_PROPOSAL).unwrap()),
-            ..filter
+            ..filter.clone()
         },
         RunListFilter {
             turn: Some(ProposalTurn::Party),
-            ..filter
+            ..filter.clone()
         },
     ] {
         assert_eq!(
@@ -801,6 +801,74 @@ async fn a_list_cursor_carries_the_proposal_and_turn_filters() {
     assert_eq!(
         h.page(1, Some(&earlier), filter).await.unwrap_err().code,
         "request.invalid"
+    );
+}
+
+fn finished_with(outcome: &str) -> RunListFilter {
+    RunListFilter {
+        outcome: Some(outcome.into()),
+        ..RunListFilter::default()
+    }
+}
+
+#[tokio::test]
+async fn runs_are_listed_by_the_outcome_they_finished_with_and_the_cursor_carries_it() {
+    let h = harness().await;
+    let fake = Fake::new(vec![applied(), applied()]);
+    let worker = Worker::new(h.store.clone(), fake.clone());
+    let first = h.admit().await;
+    h.drain(&worker).await;
+    let second = h.admit().await;
+    h.drain(&worker).await;
+    let waiting_run = h.admit().await;
+    h.drain(&worker).await;
+    assert_eq!(h.status(waiting_run).await.0, "running");
+
+    assert_eq!(h.listed(finished_with("applied")).await, [second, first]);
+    assert!(h.listed(finished_with("rejected")).await.is_empty());
+    assert!(
+        h.listed(finished_with("not-an-outcome-here"))
+            .await
+            .is_empty(),
+        "a well-formed name no run finished with selects nothing"
+    );
+    assert_eq!(
+        h.listed(RunListFilter {
+            state: Some(registry_coordinator::store::RunListState::Running),
+            ..finished_with("applied")
+        })
+        .await,
+        Vec::<Uuid>::new(),
+        "the outcome composes with the other filters"
+    );
+
+    let page = h.page(1, None, finished_with("applied")).await.unwrap();
+    assert_eq!(page.runs[0].run_id, second);
+    let cursor = page.next_cursor.expect("another page");
+    let next = h
+        .page(1, Some(&cursor), finished_with("applied"))
+        .await
+        .unwrap();
+    assert_eq!(next.runs[0].run_id, first);
+    for changed in [RunListFilter::default(), finished_with("rejected")] {
+        assert_eq!(
+            h.page(1, Some(&cursor), changed).await.unwrap_err().code,
+            "request.invalid"
+        );
+    }
+    let unfiltered = h
+        .page(1, None, RunListFilter::default())
+        .await
+        .unwrap()
+        .next_cursor
+        .expect("another page");
+    assert_eq!(
+        h.page(1, Some(&unfiltered), finished_with("applied"))
+            .await
+            .unwrap_err()
+            .code,
+        "request.invalid",
+        "a cursor from an unfiltered list does not continue a filtered one"
     );
 }
 

@@ -190,7 +190,7 @@ impl CoordinatorClient {
     }
 
     /// One stable page of caller-visible runs under optional state,
-    /// attention, Proposal and turn filters. Pass `next_cursor` back unchanged with the same
+    /// attention, Proposal, turn and outcome filters. Pass `next_cursor` back unchanged with the same
     /// filters and caller.
     pub async fn list_page(
         &self,
@@ -202,6 +202,10 @@ impl CoordinatorClient {
                 .cursor
                 .as_deref()
                 .is_some_and(|cursor| !valid_cursor(cursor))
+            || query
+                .outcome
+                .as_deref()
+                .is_some_and(|outcome| !valid_outcome_name(outcome))
         {
             return Err(Error::invalid_request("the run list query is invalid"));
         }
@@ -221,6 +225,9 @@ impl CoordinatorClient {
         if let Some(turn) = query.turn {
             parameters.push(("turn", turn.as_str().to_owned()));
         }
+        if let Some(outcome) = &query.outcome {
+            parameters.push(("outcome", outcome.clone()));
+        }
         let request = self
             .prepare(token, Method::GET, "v1/runs", None, None)?
             .query(&parameters);
@@ -231,6 +238,10 @@ impl CoordinatorClient {
                     || query.attention.is_some_and(|attention| {
                         attention != matches!(run.state.as_str(), "attention" | "failed")
                     })
+                    || query
+                        .outcome
+                        .as_deref()
+                        .is_some_and(|outcome| run.outcome.as_deref() != Some(outcome))
             })
             || value.runs.windows(2).any(|pair| {
                 (pair[0].admitted_at, pair[0].run_id) <= (pair[1].admitted_at, pair[1].run_id)
@@ -494,6 +505,15 @@ fn records_cancellation(run: &RunStatus) -> bool {
             run.state.as_str(),
             "running" | "attention" | "cancel-requested"
         )
+}
+
+/// A workflow outcome name, as a definition declares one.
+fn valid_outcome_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
 }
 
 fn valid_cursor(cursor: &str) -> bool {

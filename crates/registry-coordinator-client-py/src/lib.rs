@@ -391,7 +391,7 @@ impl CoordinatorClient {
         )
     }
 
-    #[pyo3(signature = (token, limit, cursor=None, state=None, attention=None, proposal=None, turn=None))]
+    #[pyo3(signature = (token, limit, cursor=None, state=None, attention=None, proposal=None, turn=None, outcome=None))]
     #[allow(clippy::too_many_arguments)]
     fn list<'py>(
         &self,
@@ -403,6 +403,7 @@ impl CoordinatorClient {
         attention: Option<&Bound<'_, PyAny>>,
         proposal: Option<&str>,
         turn: Option<&str>,
+        outcome: Option<&str>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let token = bearer(py, token)?;
         let limit = list_limit(py, limit)?;
@@ -422,6 +423,8 @@ impl CoordinatorClient {
             .map(|value| Uuid::parse_str(value).map_err(|_| invalid_arguments(py)))
             .transpose()?;
         query.turn = turn.map(|value| list_turn(py, value)).transpose()?;
+        // The client checks the outcome name before sending.
+        query.outcome = outcome.map(str::to_owned);
         complete(
             py,
             py.detach(|| self.runtime.block_on(self.inner.list_page(&token, &query))),

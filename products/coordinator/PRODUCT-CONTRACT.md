@@ -592,7 +592,10 @@ may be another page. `attention=true` selects effective states `attention` and `
 `attention=false` excludes both. `proposal=<id>` selects the runs waiting on that BReg
 Proposal, matched through the wait-key commitment, so no Proposal id is stored in clear.
 `turn=party`, `official` or `nobody` selects runs whose Proposal wait last observed that turn.
-Cursors carry these filters, and a cursor from an earlier version is refused. Continue with the
+`outcome=<name>` selects runs that finished with that workflow outcome, matched exactly. The
+name is 1 to 64 letters, digits, hyphens or underscores, as a definition declares one; another
+value is refused with `request.invalid`, and a well-formed name no run finished with selects
+none. Cursors carry these filters, and a cursor from an earlier version is refused. Continue with the
 same filters and cursor; each page
 reapplies the caller's current authority. Applications use
 the authenticated HTTP API, through the maintained Coordinator client where one

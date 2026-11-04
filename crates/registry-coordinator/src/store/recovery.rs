@@ -357,7 +357,7 @@ impl Store {
         self.audited("list",actor,None, None,async {
             if !(1..=100).contains(&limit){return Err(refused("list-limit-invalid","choose a run list limit between 1 and 100"));}
             let flows=Self::run_list_flows(allowed_flows)?;
-            let anchor=self.run_list_anchor(cursor,actor,&flows,filter)?;
+            let anchor=self.run_list_anchor(cursor,actor,&flows,&filter)?;
             let after_admitted_at=anchor.as_ref().map(|(admitted_at,_)|admitted_at.to_owned());
             let after_run_id=anchor.map(|(_,run_id)|run_id);
             let state_value=filter.state.map(RunListState::as_str);
@@ -366,12 +366,12 @@ impl Store {
             let mut client=self.client().await.map_err(unavailable)?;
             let tx=client.transaction().await.map_err(unavailable)?;
             self.verify_transaction(&tx).await.map_err(unavailable)?;
-            let rows=tx.query(&format!("{} WHERE (r.owner_hash=$1 OR $2) AND r.workflow_id=ANY($3) AND ($4::text IS NULL OR {}=$4) AND ($5::boolean IS NULL OR ({} IN ('attention','failed'))=$5) AND ($6::timestamptz IS NULL OR (r.admitted_at,r.run_id)<($6,$7)) AND ($9::text IS NULL OR EXISTS(SELECT 1 FROM {3}.completion_waits w WHERE w.run_id=r.run_id AND w.follows_proposal AND w.wait_key=$9)) AND ($10::text IS NULL OR EXISTS(SELECT 1 FROM {3}.completion_waits w WHERE w.run_id=r.run_id AND w.last_observation->>'turn'=$10)) ORDER BY r.admitted_at DESC,r.run_id DESC LIMIT $8",self.status_select(),Self::status_state(),Self::status_state(),self.namespace),&[&self.owner(actor)?,&actor.operator,&flows,&state_value,&filter.attention,&after_admitted_at,&after_run_id,&(i64::from(limit)+1),&proposal_key,&turn_value]).await.map_err(unavailable)?;
+            let rows=tx.query(&format!("{} WHERE (r.owner_hash=$1 OR $2) AND r.workflow_id=ANY($3) AND ($4::text IS NULL OR {}=$4) AND ($5::boolean IS NULL OR ({} IN ('attention','failed'))=$5) AND ($6::timestamptz IS NULL OR (r.admitted_at,r.run_id)<($6,$7)) AND ($9::text IS NULL OR EXISTS(SELECT 1 FROM {3}.completion_waits w WHERE w.run_id=r.run_id AND w.follows_proposal AND w.wait_key=$9)) AND ($10::text IS NULL OR EXISTS(SELECT 1 FROM {3}.completion_waits w WHERE w.run_id=r.run_id AND w.last_observation->>'turn'=$10)) AND ($11::text IS NULL OR r.outcome=$11) ORDER BY r.admitted_at DESC,r.run_id DESC LIMIT $8",self.status_select(),Self::status_state(),Self::status_state(),self.namespace),&[&self.owner(actor)?,&actor.operator,&flows,&state_value,&filter.attention,&after_admitted_at,&after_run_id,&(i64::from(limit)+1),&proposal_key,&turn_value,&filter.outcome]).await.map_err(unavailable)?;
             let mut runs=rows.iter().map(|r|self.status_from_row(r)).collect::<Result<Vec<_>>>()?;
             let more=runs.len()>limit as usize;
             runs.truncate(limit as usize);
             let next_cursor=if more {
-                Some(self.run_list_cursor(runs.last().expect("a full nonempty page"),actor,&flows,filter)?)
+                Some(self.run_list_cursor(runs.last().expect("a full nonempty page"),actor,&flows,&filter)?)
             } else {
                 None
             };

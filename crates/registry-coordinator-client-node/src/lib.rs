@@ -150,7 +150,7 @@ impl CoordinatorClient {
     }
 
     #[napi(
-        ts_args_type = "token: string, limit: number, cursor?: string | null, state?: import('./client').RunListState | null, attention?: boolean | null, proposal?: string | null, turn?: import('./client').ProposalTurn | null",
+        ts_args_type = "token: string, limit: number, cursor?: string | null, state?: import('./client').RunListState | null, attention?: boolean | null, proposal?: string | null, turn?: import('./client').ProposalTurn | null, outcome?: string | null",
         ts_return_type = "Promise<import('./client').CoordinatorOutcome<import('./client').RunList>>"
     )]
     #[allow(clippy::too_many_arguments)] // JavaScript callers pass the list filters positionally, as the other bindings do.
@@ -163,6 +163,7 @@ impl CoordinatorClient {
         attention: Option<bool>,
         proposal: Option<String>,
         turn: Option<String>,
+        run_outcome: Option<String>,
     ) -> Result<CoordinatorOutcome> {
         let token = bearer(token)?;
         let limit = list_limit(limit)?;
@@ -173,6 +174,8 @@ impl CoordinatorClient {
         // A Proposal id is a UUID, checked as a run id is.
         query.proposal = proposal.map(run_id_value).transpose()?;
         query.turn = turn.map(|turn| list_turn(&turn)).transpose()?;
+        // The client checks the outcome name before sending.
+        query.outcome = run_outcome;
         outcome(self.inner.list_page(&token, &query).await)
     }
 
