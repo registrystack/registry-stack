@@ -248,6 +248,17 @@
   `authorizedClients` is refused as an unknown key. Rename the member in each
   `runtime.yaml`.
 
+- `evidencectl pack lock <pack-directory>` recomputes the digest pins in a
+  reviewed Adapter pack's `pack.yaml` from the files beside it, rewrites only
+  the stale digests, and reports each as `old -> new`. It refuses a missing
+  file, a symbolic link, or a path outside the pack directory without writing.
+- `evidencectl target new --local` now declares the source connections of the
+  project's `local-target.yaml` in the new target, so a fresh starter packages
+  against it. Previously the target declared none and `package` refused every
+  Source.
+- When `package` refuses because a Source names a connection the target does
+  not declare, the first line of the refusal names the Source, the connection
+  and the fix. The code `evidence.target.publication-invalid` is unchanged.
 - The `evidencectl package --format json` report now carries
   `requirements[]`, each entry with the requirement `id` and its
   `configurationRevision`. Read requirement revisions from this report; the
