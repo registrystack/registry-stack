@@ -137,6 +137,152 @@ endpoints:
     testedVersions:
       - "2.43"
 routeTemplates:
+  # Source-native read routes for maintained hosts. They return the closed
+  # ItemPage acquisition contract and preserve each captured DHIS2 entity as
+  # item.value. Caller-facing names, schemas and field selection belong to
+  # the consuming project, not this reusable pack.
+  - id: read-tracked-entity
+    readSupport:
+      type: read-one
+      inputs: [record-id]
+    parameters:
+      - name: id
+        type: string
+        required: false
+        description: The tracked-entity identifier supplied at read time.
+    steps:
+      - onException:
+          exception: [upstream.timeout, upstream.connection]
+          redeliveryPolicy:
+            maximumRedeliveries: 1
+            retryDelaySeconds: 2
+      - setProperty:
+          name: dhis2SourceRecordId
+          value:
+            jsonpath: "$['record-id']"
+      - to:
+          uri: http:tracker
+          parameters:
+            httpMethod: GET
+            path: /api/tracker/trackedEntities/{{id}}
+            pathParameters:
+              id: {exchangeProperty: dhis2SourceRecordId}
+            operation: tracker-export
+      - choice:
+          when:
+            - rhai:
+                file: scripts/source-identity.rhai
+                entrypoint: source_identity_mismatch
+              steps:
+                - throwException:
+                    exceptionType: upstream.malformed
+                    message: The source answered an exact read with another identity.
+      - setBody:
+          rhai:
+            file: scripts/source-read-one.rhai
+            entrypoint: source_read_one
+  - id: page-tracked-entities
+    readSupport:
+      type: read-page
+      order:
+        - {name: created-at, direction: descending}
+        - {name: tracked-entity, direction: ascending}
+      uniqueTieBreaker: tracked-entity
+    parameters:
+      - name: program
+        type: string
+        required: true
+        description: The DHIS2 program the page is constrained to.
+    steps:
+      - onException:
+          exception: [upstream.timeout, upstream.connection]
+          redeliveryPolicy:
+            maximumRedeliveries: 1
+            retryDelaySeconds: 2
+      - setProperty:
+          name: dhis2Page
+          value:
+            rhai:
+              file: scripts/seed-page.rhai
+              entrypoint: seed_page
+      - to:
+          uri: http:tracker
+          parameters:
+            httpMethod: GET
+            path: /api/tracker/trackedEntities
+            operation: tracker-export
+            query:
+              program: {constant: "{{program}}"}
+              orgUnitMode: {constant: ACCESSIBLE}
+              page: {exchangeProperty: dhis2Page}
+              pageSize: {header: pageSize}
+              totalPages: {constant: "true"}
+              order: {constant: "createdAt:desc,trackedEntity:asc"}
+      - setProperty:
+          name: AdapterNextContinuation
+          value:
+            rhai:
+              file: scripts/next-continuation.rhai
+              entrypoint: next_continuation
+      - setBody:
+          rhai:
+            file: scripts/source-read-page.rhai
+            entrypoint: source_read_page
+  - id: page-tracked-entities-by-org-unit
+    readSupport:
+      type: read-page
+      inputs:
+        - name: org-unit
+          comparisons: [equality]
+      order:
+        - {name: created-at, direction: descending}
+        - {name: tracked-entity, direction: ascending}
+      uniqueTieBreaker: tracked-entity
+    parameters:
+      - name: program
+        type: string
+        required: true
+        description: The DHIS2 program the page is constrained to.
+    steps:
+      - onException:
+          exception: [upstream.timeout, upstream.connection]
+          redeliveryPolicy:
+            maximumRedeliveries: 1
+            retryDelaySeconds: 2
+      - setProperty:
+          name: dhis2PageOrgUnit
+          value:
+            jsonpath: "$['org-unit']"
+      - setProperty:
+          name: dhis2Page
+          value:
+            rhai:
+              file: scripts/seed-page.rhai
+              entrypoint: seed_page
+      - to:
+          uri: http:tracker
+          parameters:
+            httpMethod: GET
+            path: /api/tracker/trackedEntities
+            operation: tracker-export
+            query:
+              program: {constant: "{{program}}"}
+              orgUnits: {exchangeProperty: dhis2PageOrgUnit}
+              orgUnitMode: {constant: SELECTED}
+              page: {exchangeProperty: dhis2Page}
+              pageSize: {header: pageSize}
+              totalPages: {constant: "true"}
+              order: {constant: "createdAt:desc,trackedEntity:asc"}
+      - setProperty:
+          name: AdapterNextContinuation
+          value:
+            rhai:
+              file: scripts/next-continuation.rhai
+              entrypoint: next_continuation
+      - setBody:
+          rhai:
+            file: scripts/source-read-page.rhai
+            entrypoint: source_read_page
   - id: search-tracked-entities
     parameters:
       - name: program
@@ -478,6 +624,14 @@ routeTemplates:
                           file: scripts/accepted-record.rhai
                           entrypoint: accepted_record
 scripts:
+  - path: scripts/evidence-native.rhai
+    digest: sha256:0dc33dd86857fc128ec527a87ef272d2cbd7cee80561d339e71a845c2cd9950e
+  - path: scripts/source-identity.rhai
+    digest: sha256:0ffb2c9f0d62729346a965a2955ea7fa4dfe2c323623d37f29a2be6343796a0d
+  - path: scripts/source-read-one.rhai
+    digest: sha256:250dc0fe3a37715ec55f30f7486f020ae781b63881c5e131e6c26cc2b14da935
+  - path: scripts/source-read-page.rhai
+    digest: sha256:33189e0206a15aeba67e706b113561b2498c707576cf4164fc937d633c15d55b
   - path: scripts/org-unit-filter.rhai
     digest: sha256:046a19140b16378433f8afe999c633ec20a68257dffd60a216fba4ebd038ccc4
   - path: scripts/seed-page.rhai
@@ -523,6 +677,55 @@ capabilities:
     - validate
 
 sourceRoutes:
+  # Reusable exact native entity acquisition for Evidence. It binds no
+  # programme, attribute UID or adopter output schema. The provider reply is
+  # held to the captured 2.43.2.1 native shape before a consuming Evidence
+  # Source applies its own facts projection.
+  - id: evidence-native-entity
+    readSupport:
+      type: read-one
+      inputs: [recordReference]
+    evidence:
+      inputsSchema:
+        path: schemas/evidence-inputs.json
+        digest: sha256:0401dd9f7f1090a688c2d22a1d6c6db90d8184efb0ecf1a4cb27da5ec658da63
+      factsSchema:
+        path: schemas/evidence-native-entity.json
+        digest: sha256:403584b196f1a0d701db204ab61f94f4d099b61b47c40f2cdfd47e845ecd0121
+      acquisitionPosture: source-derived
+    steps:
+      - setProperty:
+          name: dhis2EvidenceRecordReference
+          value:
+            jsonpath: "$.recordReference"
+      - setHeader:
+          name: Accept
+          value:
+            constant: application/json
+      - to:
+          uri: http:tracker
+          parameters:
+            httpMethod: GET
+            path: /api/tracker/trackedEntities/{{id}}
+            pathParameters:
+              id: {exchangeProperty: dhis2EvidenceRecordReference}
+            operation: tracker-export
+      - choice:
+          when:
+            - rhai:
+                file: scripts/source-identity.rhai
+                entrypoint: evidence_identity_mismatch
+              steps:
+                - throwException:
+                    exceptionType: upstream.malformed
+                    message: The source answered an exact read with another identity.
+      - validateSchema:
+          path: schemas/evidence-native-entity.json
+          digest: sha256:403584b196f1a0d701db204ab61f94f4d099b61b47c40f2cdfd47e845ecd0121
+      - setBody:
+          rhai:
+            file: scripts/evidence-native.rhai
+            entrypoint: lookup_native_entity
   - id: evidence-adult-status
     evidence:
       inputsSchema:

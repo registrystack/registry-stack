@@ -1430,6 +1430,10 @@
           },
           "type": "array"
         },
+        "readSupport": {
+          "$ref": "#/$defs/SourceReadSupport",
+          "description": "Source-neutral read semantics every instantiation of this template\npreserves. Public protocol and view names remain project-owned."
+        },
         "steps": {
           "description": "The template body, with `{{name}}` and `{{?name}}` placeholders.",
           "items": {
@@ -1505,6 +1509,122 @@
       ],
       "type": "object"
     },
+    "SourceComparison": {
+      "description": "Closed reusable comparison semantics a source route can implement.",
+      "enum": [
+        "equality",
+        "range",
+        "set-membership",
+        "prefix"
+      ],
+      "type": "string"
+    },
+    "SourceOrderDirection": {
+      "enum": [
+        "ascending",
+        "descending"
+      ],
+      "type": "string"
+    },
+    "SourceOrderTerm": {
+      "additionalProperties": false,
+      "description": "One deterministic source order term. Direction is explicit so a project\nand generated contract never infer it from a provider default.",
+      "properties": {
+        "direction": {
+          "$ref": "#/$defs/SourceOrderDirection"
+        },
+        "name": {
+          "$ref": "#/$defs/ExternalId"
+        }
+      },
+      "required": [
+        "name",
+        "direction"
+      ],
+      "type": "object"
+    },
+    "SourceReadInput": {
+      "additionalProperties": false,
+      "description": "One source-native page input and the comparisons the source route\nimplements for it. Names are pack-local, not public field names.",
+      "properties": {
+        "comparisons": {
+          "items": {
+            "$ref": "#/$defs/SourceComparison"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "name": {
+          "$ref": "#/$defs/ExternalId"
+        }
+      },
+      "required": [
+        "name",
+        "comparisons"
+      ],
+      "type": "object"
+    },
+    "SourceReadSupport": {
+      "description": "Source-neutral read semantics a pack explicitly promises for one route.\nPublic Consultation capability, selector, Search, schema, and view names\nbelong to the project and never enter this reusable source contract.\nThe host never infers guarantees from a route name or a successfully\ndecoded body.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Exact resolution that returns at most one source item for the complete\nnative input key. A project can map this to Retrieve or Lookup.",
+          "properties": {
+            "inputs": {
+              "items": {
+                "$ref": "#/$defs/ExternalId"
+              },
+              "type": "array",
+              "uniqueItems": true
+            },
+            "type": {
+              "const": "read-one",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "inputs"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A bounded page with explicit completion and a deterministic order.\nA project can map supported native inputs to List filters or a named\nSearch without changing this source-owned contract.",
+          "properties": {
+            "inputs": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/SourceReadInput"
+              },
+              "type": "array",
+              "uniqueItems": true
+            },
+            "order": {
+              "items": {
+                "$ref": "#/$defs/SourceOrderTerm"
+              },
+              "type": "array",
+              "uniqueItems": true
+            },
+            "type": {
+              "const": "read-page",
+              "type": "string"
+            },
+            "uniqueTieBreaker": {
+              "$ref": "#/$defs/ExternalId"
+            }
+          },
+          "required": [
+            "type",
+            "order",
+            "uniqueTieBreaker"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "SourceRecovery": {
       "description": "The recovery semantics of a source route's `next` cursor, the closed\nset CONCEPT 17.2 pins.",
       "oneOf": [
@@ -1539,6 +1659,10 @@
         "nextRecovery": {
           "$ref": "#/$defs/SourceRecovery",
           "description": "The recovery semantics of `next`. Mandatory; the checks refuse its\nabsence under `adapter.job.source-recovery-required`."
+        },
+        "readSupport": {
+          "$ref": "#/$defs/SourceReadSupport",
+          "description": "The source-neutral read semantics this route explicitly supports. A\nfacade host maps these native inputs and guarantees to its public\nprotocol; it never infers them from a route id or source brand."
         },
         "rescanDelaySeconds": {
           "description": "The seconds between a `rescan` source route's ordinary passes from\nthe first page, from\n[`MINIMUM_SOURCE_RESCAN_DELAY_SECONDS`] to\n[`MAXIMUM_SOURCE_RESCAN_DELAY_SECONDS`] (one minute to one day).\nMandatory beside `edits: rescan`, refused beside `edits: ordered`,\nand range-checked; the checks police all three under\n`adapter.job.source-rescan-delay`.",

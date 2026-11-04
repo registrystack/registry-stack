@@ -209,6 +209,28 @@ done
   --pack products/adapter/packs/dhis2-tracker/pack.yaml >/dev/null
 printf 'GovStack example check, fixture replay and compile passed\n'
 
+# Built-in Consultation projects own only source bindings, transformations and
+# schemas. Their standard protocol comes from Rust, so no --profile is supplied.
+for example in dhis2-consultation opencrvs-consultation; do
+  project_dir="products/adapter/examples/${example}"
+  case "$example" in
+  dhis2-consultation) pack="products/adapter/packs/dhis2-tracker/pack.yaml" ;;
+  opencrvs-consultation) pack="products/adapter/packs/opencrvs-events/pack.yaml" ;;
+  esac
+  consultation_flags=()
+  for fixture in "${project_dir}"/fixtures/*.yaml; do
+    if [[ ! -f "$fixture" ]]; then
+      printf 'Consultation example has no fixture: %s\n' "$example" >&2
+      exit 2
+    fi
+    consultation_flags+=(--fixtures "$fixture")
+  done
+  "$adapterctl_bin" check "${project_dir}/project.yaml" --pack "$pack" "${consultation_flags[@]}" >/dev/null
+  "$adapterctl_bin" compile --check "${project_dir}/project.yaml" --pack "$pack" >/dev/null
+  "$adapterctl_bin" fixtures replay "${project_dir}/project.yaml" --pack "$pack" "${consultation_flags[@]}" >/dev/null
+  printf 'Built-in Consultation check, compile and replay passed: %s\n' "$example"
+done
+
 # The OpenCRVS birth example is held to the same two commands. Its fixtures
 # are hand-derived from the reviewed Evidence reference and marked synthetic
 # (each file says so): nothing has run against a real OpenCRVS, so this

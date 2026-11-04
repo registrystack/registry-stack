@@ -7,7 +7,8 @@
 //! (`products/adapter/CONCEPT.md` sections 6, 8.1, and 13.3).
 //!
 //! The command reads every file, verifies the digest pins of the pack's
-//! script and query-file inventory (CFG-EMBED-1), verifies the versions
+//! script and query-file inventory and the project's script and schema
+//! inventory (CFG-EMBED-1), verifies the versions
 //! and digests the project pins for its profile and pack against the
 //! artifacts as read (CFG-ID-4), precompiles the pack's Rhai entrypoints,
 //! checks each fixture entry's expected facade response against the schema
@@ -68,6 +69,8 @@ const SCRIPT_PROFILE: RhaiProfile = RhaiProfile {
     allow_anonymous_fn: false,
     maximum_source_bytes: 65_536,
 };
+
+const MAXIMUM_PROJECT_SCHEMA_BYTES: usize = 256 * 1024;
 
 /// The authored project format, derived per CFG-ENV-2 and CFG-ENV-3 from the
 /// core naming constants.
@@ -205,18 +208,25 @@ pub(crate) fn run(args: &CheckArgs) -> Result<CheckRun, CheckFailure> {
         &mut report,
         &mut files,
     )?;
-    let profile_path = artifact_path(
-        args.profile.as_deref(),
-        &directory,
-        "profile.yaml",
-        "--profile",
-    )?;
-    let profile = read::<registry_adapter_core::AdapterProfile>(
-        &profile_path,
-        &PROFILE_FORMAT,
-        &mut report,
-        &mut files,
-    )?;
+    let built_in_consultation = project.as_ref().is_some_and(|(decoded, _)| {
+        decoded.value.profile.is_none() && decoded.value.consultation.is_some()
+    });
+    let profile = if built_in_consultation {
+        None
+    } else {
+        let profile_path = artifact_path(
+            args.profile.as_deref(),
+            &directory,
+            "profile.yaml",
+            "--profile",
+        )?;
+        read::<registry_adapter_core::AdapterProfile>(
+            &profile_path,
+            &PROFILE_FORMAT,
+            &mut report,
+            &mut files,
+        )?
+    };
     let pack_path = artifact_path(args.pack.as_deref(), &directory, "pack.yaml", "--pack")?;
     let pack = read::<registry_adapter_core::AdapterPack>(
         &pack_path,
@@ -284,13 +294,19 @@ pub(crate) fn run(args: &CheckArgs) -> Result<CheckRun, CheckFailure> {
     }
 
     let (project_decoded, _) = project.expect("the project decoded");
-    let (profile_decoded, profile_bytes) = profile.expect("the profile decoded");
     let (pack_decoded, pack_bytes) = pack.expect("the pack decoded");
     let project = project_decoded.value;
-    let profile = profile_decoded.value;
+    let (profile, profile_bytes) = match profile {
+        Some((decoded, bytes)) => (decoded.value, bytes),
+        None => (
+            registry_adapter::engine::consultation::built_in_profile(),
+            Vec::new(),
+        ),
+    };
     let pack = pack_decoded.value;
 
     let pinned = verify_digest_pins(&pack, &pack_path, &mut report, &mut files)?;
+    verify_project_artifacts(&project, &project_path, &mut report, &mut files)?;
     verify_entrypoints(&pack, &pack_path, &pinned, &mut report);
     verify_query_files(&pack, &pack_path, &pinned, &mut report);
     verify_graphql_operations(&pack, &pack_path, &pinned, &mut report);
@@ -315,6 +331,7 @@ pub(crate) fn run(args: &CheckArgs) -> Result<CheckRun, CheckFailure> {
         report.push(diagnostic);
     }
     check_fixture_bodies(&profile, &project, &fixtures, &mut report);
+    check_consultation_fixture_bodies(&project, &directory, &fixtures, &mut report);
 
     Ok(CheckRun {
         diagnostics: report.into_diagnostics(),
@@ -322,6 +339,130 @@ pub(crate) fn run(args: &CheckArgs) -> Result<CheckRun, CheckFailure> {
         fixtures_checked: fixtures.len(),
         project: project_string(&args.project),
     })
+}
+
+/// Verify every project-owned transformation script and public schema against
+/// its digest pin. Schemas also pass the same bounded, closed, local-reference
+/// checker the runtime compiler uses, so `check` cannot accept a public shape
+/// startup would later refuse.
+pub(crate) fn verify_project_artifacts(
+    project: &registry_adapter_core::AdapterProject,
+    project_path: &Path,
+    report: &mut Report,
+    files: &mut usize,
+) -> Result<(), CheckFailure> {
+    let mut counted = BTreeSet::new();
+    for (section, entries, maximum_bytes) in [
+        (
+            "scripts",
+            project
+                .artifacts
+                .scripts
+                .iter()
+                .map(|entry| (entry.file.as_str(), &entry.digest, false))
+                .collect::<Vec<_>>(),
+            SCRIPT_PROFILE.maximum_source_bytes,
+        ),
+        (
+            "schemas",
+            project
+                .artifacts
+                .schemas
+                .iter()
+                .map(|entry| (entry.file.as_str(), &entry.digest, true))
+                .collect::<Vec<_>>(),
+            MAXIMUM_PROJECT_SCHEMA_BYTES,
+        ),
+    ] {
+        for (index, (file, digest, schema)) in entries.into_iter().enumerate() {
+            let path = project_path
+                .parent()
+                .map(|directory| directory.join(file))
+                .unwrap_or_else(|| PathBuf::from(file));
+            let pointer = format!("/artifacts/{section}/{index}");
+            let bytes = match read_bounded_file(&path, maximum_bytes) {
+                Ok(BoundedRead::Bytes(bytes)) => bytes,
+                Ok(BoundedRead::TooLarge) => {
+                    report.push(project_artifact_finding(
+                        project_path,
+                        &pointer,
+                        "the pinned project artifact is over its authoring bound",
+                        "Reduce the reviewed artifact to the supported bound, then run adapterctl project lock.",
+                        file,
+                    ));
+                    continue;
+                }
+                Err(source) if source.kind() == io::ErrorKind::NotFound => {
+                    report.push(project_artifact_finding(
+                        project_path,
+                        &pointer,
+                        "the pinned project artifact is missing",
+                        "Restore the file beside the project document, or remove the inventory entry.",
+                        file,
+                    ));
+                    continue;
+                }
+                Err(source) => {
+                    return Err(CheckFailure::Io {
+                        path: path.display().to_string(),
+                        source,
+                    });
+                }
+            };
+            if counted.insert(path) {
+                *files += 1;
+            }
+            if sha256_uri(&bytes) != digest.as_str() {
+                report.push(project_artifact_finding(
+                    project_path,
+                    &pointer,
+                    "the project artifact does not hash to its digest pin",
+                    "Run adapterctl project lock after reviewing the artifact change, or restore the pinned bytes.",
+                    file,
+                ));
+                continue;
+            }
+            if schema {
+                let valid = serde_json::from_slice(&bytes)
+                    .ok()
+                    .and_then(|value| {
+                        registry_adapter::engine::public_schema::check_public_schema(value).ok()
+                    })
+                    .is_some();
+                if !valid {
+                    report.push(project_artifact_finding(
+                        project_path,
+                        &pointer,
+                        "the project schema is not a supported closed public JSON Schema",
+                        "Use a bounded closed object schema with a versioned HTTPS $id and local references only.",
+                        file,
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn project_artifact_finding(
+    project_path: &Path,
+    pointer: &str,
+    message: &str,
+    action: &str,
+    artifact_path: &str,
+) -> Diagnostic {
+    let mut diagnostic = Diagnostic::error(
+        "adapter.project.digest-pin-required",
+        pointer,
+        message,
+        action,
+    );
+    diagnostic.source = Some(registry_platform_yaml::Source {
+        file: format!("{} ({artifact_path})", project_path.display()),
+        line: None,
+        column: None,
+    });
+    diagnostic
 }
 
 fn project_string(path: &Path) -> String {
@@ -938,6 +1079,9 @@ pub(crate) fn check_fixture_bodies(
     fixtures: &[registry_adapter_core::AdapterFixture],
     report: &mut Report,
 ) {
+    if project.consultation.is_some() {
+        return;
+    }
     // The workspace check derives every envelope once (core's
     // check_envelope_derivation) and reports each derivation fault as a
     // named adapter.profile finding, so the entry check runs only over
@@ -980,6 +1124,140 @@ pub(crate) fn check_fixture_bodies(
             }
         }
     }
+}
+
+/// Validate Consultation fixture results against the selected collection's
+/// exact project-owned data schema and the fixed Record or RecordPage wrapper.
+/// This replaces the legacy flat `recordTypes.fields` projection for the
+/// built-in facade without weakening generic profile fixture checks.
+pub(crate) fn check_consultation_fixture_bodies(
+    project: &registry_adapter_core::AdapterProject,
+    project_directory: &Path,
+    fixtures: &[registry_adapter_core::AdapterFixture],
+    report: &mut Report,
+) {
+    let Some(consultation) = project.consultation.as_ref() else {
+        return;
+    };
+    let mut schemas = BTreeMap::new();
+    for collection in consultation.collections.iter() {
+        if schemas.contains_key(collection.data_schema.as_str()) {
+            continue;
+        }
+        let Some(declared) = project
+            .artifacts
+            .schemas
+            .get(collection.data_schema.as_str())
+        else {
+            continue;
+        };
+        if let Ok(compiled) =
+            registry_adapter::engine::project_transform::compile_project_schema_from_directory(
+                declared,
+                project_directory,
+            )
+        {
+            schemas.insert(collection.data_schema.as_str().to_owned(), compiled);
+        }
+    }
+    for (fixture_index, fixture) in fixtures.iter().enumerate() {
+        for (entry_index, entry) in fixture.entries.iter().enumerate() {
+            let registry_adapter_core::ExpectedFacade::Response {
+                status,
+                body: Some(body),
+                ..
+            } = &entry.expected
+            else {
+                continue;
+            };
+            if !(200..=299).contains(&status.get()) {
+                continue;
+            }
+            let Some(collection_id) = entry
+                .facade_request
+                .path
+                .split('/')
+                .nth(3)
+                .filter(|id| !id.is_empty())
+            else {
+                continue;
+            };
+            let Some(collection) = consultation.collections.get(collection_id) else {
+                continue;
+            };
+            let Some(schema) = schemas.get(collection.data_schema.as_str()) else {
+                continue;
+            };
+            let pointer = format!("/fixtures/{fixture_index}/entries/{entry_index}/expected/body");
+            let capability = registry_adapter::engine::consultation::ConsultationCapability::from_binding_operation(
+                entry.facade_request.operation.as_str(),
+            );
+            let invalid = match capability {
+                Some(
+                    registry_adapter::engine::consultation::ConsultationCapability::Retrieve
+                    | registry_adapter::engine::consultation::ConsultationCapability::Lookup,
+                ) => !valid_consultation_record(body.as_value(), schema),
+                Some(
+                    registry_adapter::engine::consultation::ConsultationCapability::List
+                    | registry_adapter::engine::consultation::ConsultationCapability::Search,
+                ) => !valid_consultation_page(body.as_value(), schema),
+                None => false,
+            };
+            if invalid {
+                report.push(Diagnostic::error(
+                    "adapterctl.fixture-body",
+                    pointer,
+                    "the expected Consultation response does not satisfy its selected public data schema",
+                    "Correct the fixed Record or RecordPage wrapper and its data value, or update and repin the collection schema.",
+                ));
+            }
+        }
+    }
+}
+
+fn valid_consultation_record(
+    value: &Value,
+    schema: &registry_adapter::engine::public_schema::CheckedPublicSchema,
+) -> bool {
+    let Some(record) = value.as_object() else {
+        return false;
+    };
+    record.len() == 2
+        && record
+            .get("recordId")
+            .and_then(Value::as_str)
+            .is_some_and(|id| !id.is_empty())
+        && record
+            .get("data")
+            .is_some_and(|data| schema.validates(data))
+}
+
+fn valid_consultation_page(
+    value: &Value,
+    schema: &registry_adapter::engine::public_schema::CheckedPublicSchema,
+) -> bool {
+    let Some(page) = value.as_object() else {
+        return false;
+    };
+    if page.len() != 2 {
+        return false;
+    }
+    let Some(items) = page.get("items").and_then(Value::as_array) else {
+        return false;
+    };
+    let page_info_valid = page
+        .get("pageInfo")
+        .and_then(Value::as_object)
+        .is_some_and(|info| {
+            info.len() == 1
+                && info.get("nextCursor").is_some_and(|cursor| {
+                    cursor.is_null() || cursor.as_str().is_some_and(|text| !text.is_empty())
+                })
+        });
+    page_info_valid
+        && items
+            .iter()
+            .all(|item| valid_consultation_record(item, schema))
 }
 
 #[cfg(test)]

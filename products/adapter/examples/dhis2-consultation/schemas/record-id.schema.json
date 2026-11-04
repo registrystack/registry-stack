@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://registry.example/schemas/dhis2-record-id/1/schema.json",
+  "title": "DHIS2 tracked entity identity",
+  "type": "object",
+  "properties": {
+    "record-id": { "type": "string", "minLength": 1, "maxLength": 128 }
+  },
+  "required": ["record-id"],
+  "additionalProperties": false
+}

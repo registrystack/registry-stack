@@ -144,6 +144,119 @@
         }
       ]
     },
+    "BindingTransform": {
+      "additionalProperties": false,
+      "description": "One binding's project-owned transformation. Its output schema is not\nrepeated here: the binding's record type selects one Consultation\ncollection/view, and that collection owns the single `dataSchema`\nreference.",
+      "properties": {
+        "entrypoint": {
+          "description": "The one-argument Rhai function invoked as `entrypoint(source)`.",
+          "type": "string"
+        },
+        "script": {
+          "$ref": "#/$defs/LocalId",
+          "description": "A [`ProjectScript`] id."
+        }
+      },
+      "required": [
+        "script",
+        "entrypoint"
+      ],
+      "type": "object"
+    },
+    "ConsultationCollection": {
+      "additionalProperties": false,
+      "description": "Deployment metadata for one project record type and public view.",
+      "properties": {
+        "dataSchema": {
+          "$ref": "#/$defs/LocalId",
+          "description": "Pinned project schema for the public `data` member of this view."
+        },
+        "lookup": {
+          "$ref": "#/$defs/ConsultationLookup",
+          "description": "Exact-selector metadata, required only when Lookup is bound."
+        },
+        "recordType": {
+          "$ref": "#/$defs/LocalId",
+          "description": "Project record type and literal Consultation collection identifier."
+        },
+        "registry": {
+          "description": "Stable identifier of the Registry that owns the Records.",
+          "type": "string"
+        },
+        "search": {
+          "$ref": "#/$defs/ConsultationSearch",
+          "description": "Named-search metadata, required only when Search is bound."
+        },
+        "view": {
+          "$ref": "#/$defs/LocalId",
+          "description": "Public view named by the concrete OpenAPI operation metadata."
+        }
+      },
+      "required": [
+        "recordType",
+        "registry",
+        "view",
+        "dataSchema"
+      ],
+      "type": "object"
+    },
+    "ConsultationFacade": {
+      "additionalProperties": false,
+      "description": "One deployment of the built-in Consultation facade.",
+      "properties": {
+        "collections": {
+          "description": "Collection metadata, unique by the record type that also supplies the\ncollection identifier on the wire.",
+          "items": {
+            "$ref": "#/$defs/ConsultationCollection"
+          },
+          "type": "array"
+        },
+        "contract": {
+          "description": "Version-specific HTTPS OpenAPI contract published for this deployment.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "contract",
+        "collections"
+      ],
+      "type": "object"
+    },
+    "ConsultationLookup": {
+      "additionalProperties": false,
+      "description": "One exact selector and the project schema of its `values` member.",
+      "properties": {
+        "inputSchema": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "selector": {
+          "$ref": "#/$defs/LocalId",
+          "description": "Exact, at-most-one selector promised by the selected source route."
+        }
+      },
+      "required": [
+        "selector",
+        "inputSchema"
+      ],
+      "type": "object"
+    },
+    "ConsultationSearch": {
+      "additionalProperties": false,
+      "description": "One named Search and the project schema of its `criteria` member.",
+      "properties": {
+        "inputSchema": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "search": {
+          "$ref": "#/$defs/LocalId"
+        }
+      },
+      "required": [
+        "search",
+        "inputSchema"
+      ],
+      "type": "object"
+    },
     "Digest": {
       "description": "A SHA-256 digest: `sha256:` followed by 64 lowercase hex digits.",
       "pattern": "^sha256:[0-9a-f]{64}$",
@@ -185,6 +298,29 @@
       ],
       "type": "object"
     },
+    "ProjectArtifacts": {
+      "additionalProperties": false,
+      "description": "The project-owned artifact inventory. Empty inventories preserve existing\ngeneric profile deployments, which keep all route behavior in their pack.",
+      "properties": {
+        "schemas": {
+          "default": [],
+          "description": "Versioned public JSON Schemas.",
+          "items": {
+            "$ref": "#/$defs/ProjectSchema"
+          },
+          "type": "array"
+        },
+        "scripts": {
+          "default": [],
+          "description": "Programme and public-view transformation scripts.",
+          "items": {
+            "$ref": "#/$defs/ProjectScript"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "ProjectIdentity": {
       "additionalProperties": false,
       "description": "The project identity block: the deployment's own name and version\n(`products/adapter/CONCEPT.md` section 10.1). The id is a local\nidentifier (CFG-ID-1); the version is text, the same version-as-text\nrule as profiles and packs.",
@@ -201,6 +337,54 @@
       "required": [
         "id",
         "version"
+      ],
+      "type": "object"
+    },
+    "ProjectSchema": {
+      "additionalProperties": false,
+      "description": "One project-owned public data schema. The schema bytes carry their stable,\nversioned HTTPS `$id`; this inventory binds those bytes into the project\nclosure without duplicating that public identity in YAML.",
+      "properties": {
+        "digest": {
+          "$ref": "#/$defs/Digest",
+          "description": "The exact sha256 digest of the JSON Schema bytes."
+        },
+        "file": {
+          "description": "A clean path relative to the project document.",
+          "type": "string"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The local name a Consultation collection uses as `dataSchema`."
+        }
+      },
+      "required": [
+        "id",
+        "file",
+        "digest"
+      ],
+      "type": "object"
+    },
+    "ProjectScript": {
+      "additionalProperties": false,
+      "description": "One project-owned Rhai source. The deployment project, rather than the\nreusable source pack, owns programme and public-view transformations.",
+      "properties": {
+        "digest": {
+          "$ref": "#/$defs/Digest",
+          "description": "The exact sha256 digest of the Rhai source bytes."
+        },
+        "file": {
+          "description": "A clean path relative to the project document.",
+          "type": "string"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The local name transformations use."
+        }
+      },
+      "required": [
+        "id",
+        "file",
+        "digest"
       ],
       "type": "object"
     },
@@ -307,6 +491,20 @@
       "const": "id.registrystack.org/formats/adapter/project/v1alpha1",
       "type": "string"
     },
+    "artifacts": {
+      "$ref": "#/$defs/ProjectArtifacts",
+      "description": "Digest-pinned deployment-owned scripts and public schemas."
+    },
+    "bindingTransforms": {
+      "additionalProperties": {
+        "$ref": "#/$defs/BindingTransform"
+      },
+      "description": "Project-owned transformations keyed by the binding id they follow.\nThe map form avoids duplicating the binding or source-route identity.",
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
+    },
     "bindings": {
       "default": [],
       "description": "The bindings of contract operations to routes.",
@@ -314,6 +512,10 @@
         "$ref": "#/$defs/Binding"
       },
       "type": "array"
+    },
+    "consultation": {
+      "$ref": "#/$defs/ConsultationFacade",
+      "description": "The project metadata for the built-in Consultation facade. Its paths,\nenvelopes, problems, and protocol schemas remain maintained Rust."
     },
     "kind": {
       "const": "AdapterProject",
@@ -335,7 +537,7 @@
     },
     "profile": {
       "$ref": "#/$defs/PinnedRef",
-      "description": "The pinned facade profile."
+      "description": "The pinned authored facade profile. Exactly one of this member and\n`consultation` selects the deployment's caller-facing protocol."
     },
     "project": {
       "$ref": "#/$defs/ProjectIdentity",
@@ -361,7 +563,6 @@
     "apiVersion",
     "kind",
     "pack",
-    "profile",
     "project",
     "recordTypes"
   ],

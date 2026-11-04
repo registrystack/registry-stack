@@ -9,13 +9,23 @@ reviewed projection either to a BReg Action or to a Coordinator workflow.
 The facade holds no records; the job stores item identity and progress, never
 source payloads. The institution's registry remains the system of record.
 
-All system knowledge lives in configuration. A reviewed, versioned pack
+Source-system knowledge and deployment mappings live in reviewed configuration. A reviewed, versioned pack
 declares a source's endpoints and route templates, with field mapping in
 Rhai scripts beside it; a project binds a pack to a profile's operations; a
 runtime config supplies origins, credentials, and the facade's issuer. The
 engine is a bounded port of Apache Camel's route model, so packs use Camel's
 EIP names and semantics. A new source system is a new pack, not a Rust
 change.
+
+The [Consultation specification](CONSULTATION.md) defines the built-in
+GovStack read target, reusable source-pack boundary, project-owned output
+transformations and schemas, and generated caller capability discovery.
+Its selected draft capabilities do not imply general GovStack conformance.
+Use the [DHIS2 Consultation example](examples/dhis2-consultation/README.md)
+for two public views over the same native source routes, or the
+[OpenCRVS exact-read example](examples/opencrvs-consultation/README.md) for
+schema-bound Retrieve and Lookup. These projects omit `--profile`; the
+Consultation protocol is built in. Source access remains in the reusable pack.
 
 The [product concept](CONCEPT.md) is the contract: artifact model, engine,
 exchange contract, failure semantics, authorization, audit, configuration

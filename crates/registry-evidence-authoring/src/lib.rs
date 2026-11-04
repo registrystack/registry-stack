@@ -32,6 +32,7 @@ pub mod project;
 #[cfg(feature = "schema")]
 pub mod schema;
 pub mod selector;
+mod source_projection;
 pub mod target;
 mod target_binding;
 mod target_value;

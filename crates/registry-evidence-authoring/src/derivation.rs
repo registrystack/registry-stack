@@ -47,6 +47,45 @@ fn parser() -> rhai::Engine {
     engine
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ProjectionFunctionError {
+    Compile,
+    Signature,
+}
+
+/// Check one project-owned source projection without executing it. The named
+/// entry point must be unique and accept exactly the acquired source value.
+pub(crate) fn validate_projection_function(
+    source: &str,
+    entrypoint: &str,
+) -> Result<(), ProjectionFunctionError> {
+    let mut engine = parser();
+    for symbol in ["import", "export", "eval", "print", "debug"] {
+        engine.disable_symbol(symbol);
+    }
+    engine.set_allow_anonymous_fn(false);
+    let ast = engine
+        .compile(source)
+        .map_err(|_| ProjectionFunctionError::Compile)?;
+    let mut names = BTreeSet::new();
+    let mut entry = None;
+    for function in ast.iter_functions() {
+        if !names.insert(function.name) {
+            return Err(ProjectionFunctionError::Signature);
+        }
+        if function.name == entrypoint {
+            entry = Some(function);
+        }
+    }
+    if entry.is_some_and(|function| {
+        function.access == rhai::FnAccess::Public && function.params.as_slice() == ["source"]
+    }) {
+        Ok(())
+    } else {
+        Err(ProjectionFunctionError::Signature)
+    }
+}
+
 /// The validated named entry point arity, without executing its program.
 pub(crate) fn function_arity(
     source: &str,

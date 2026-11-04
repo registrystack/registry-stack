@@ -53,8 +53,9 @@ The house rule the Base Registry Engine set still holds: the runtime has no
 built-in model of any source system. Everything a source system is arrives as
 configuration: a pack of route templates and endpoint declarations, written
 and validated without touching Rust. A new deployment writes a project file
-that instantiates those templates. A new facade contract (a GovStack profile
-later) is a new profile artifact.
+that instantiates those templates. Generic facade contracts use profile
+artifacts; the built-in Consultation target uses the maintained Rust protocol
+definitions described in [Consultation](CONSULTATION.md).
 
 ## 1. Product thesis
 
@@ -95,18 +96,19 @@ deployment writes only a project file.
 - Camel parity for every pattern the engine implements: someone who knows
   Camel reads a pack and predicts its behavior from the Camel documentation,
   except where the port table says otherwise.
-- The exposed API, envelope included, is a profile artifact, never Rust.
-  The first profile, `breg-records` v1, answers in Registry Record v1 shape
-  so consumers of Base Registry Engine output can read adapter output;
-  other target APIs (GovStack, a ministry's own contract) are further
-  profile files served by the same binary.
+- Generic facade contracts use profile artifacts. The built-in GovStack
+  Consultation target uses maintained Rust protocol definitions over the same
+  facade and engine. Projects select their source routes, transformations,
+  schemas and exposed operations; they do not author standard protocol
+  envelopes. [Consultation](CONSULTATION.md) defines its selected read surface.
 - One native binary, PostgreSQL for the audit journal and the idempotency
   store, deployment story identical to the rest of the stack.
 
 ## 4. Non-goals (v1)
 
-- The GovStack Registry Building Block profile (later artifact, plus a
-  conformance mode; section 7).
+- A general GovStack Building Block conformance claim. The selected
+  Consultation draft surface is defined in [Consultation](CONSULTATION.md);
+  source-backed optional guarantees are offered only when implemented.
 - General message-broker routing and streaming engine patterns.
   `[ingestion]` Source-driven ingestion jobs have the limits of section 17:
   one bounded page per read and one pass at a time per job. RabbitMQ is an
@@ -300,8 +302,14 @@ in the runtime config because it is environment.
 
 ## 7. Facade contract and dynamic payloads
 
-The facade contract is an artifact, not engine code, and nothing about any
-one target API is compiled in (D17). A profile declares its operation set
+Generic facade contracts are profile artifacts. The built-in Consultation
+target is the protocol-specific exception: Rust owns its standard wire
+behavior while project artifacts own its source bindings and public data
+views. Its source packs remain reusable by Evidence and ingestion hosts.
+See [Consultation](CONSULTATION.md) for schema ownership and capability
+derivation.
+
+An authored generic profile declares its operation set
 with paths, methods, request and response envelopes, pagination parameters,
 and problem codes, and declares which parts are parameterized by the
 deployment. Facade operation paths are single-brace `{name}` templates,
@@ -329,8 +337,9 @@ the only one: it mirrors the Base Registry Engine's public read surface
 `records-search` and `records-get`) plus write operations
 (`records-create`, `records-update`, `records-patch`), answering in
 Registry Record v1 shape.
-GovStack, or a contract a ministry already publishes, is another profile
-file.
+A contract a ministry already publishes can use another profile file.
+The built-in Consultation target supplies the standard contract without an
+authored profile file.
 
 An envelope is a JSON template in the profile with slots from a closed
 vocabulary the engine fills: `record` (one validated route result),
@@ -352,10 +361,12 @@ shape a caller sees. Section 8.11 is the contract between the three: what
 the facade places on the exchange, what a route hands back, and how errors
 become problems.
 
-This keeps three artifacts independent: a pack knows a source system and
-produces records in the project's declared model; a profile knows a target
-API; a project binds one to the other. The same DHIS2 pack serves a
-`breg-records` deployment and a later GovStack deployment unchanged. The
+Source acquisition, deployment transformation and outward protocol are
+separate responsibilities. A pack knows a source system; project-selected
+transformations map its bounded results into declared schema-bound views or
+facts. A generic profile or built-in target owns the outward wire contract.
+The same source pack can serve the facade and Evidence without a GovStack
+Record becoming an Evidence prerequisite. The
 adapter's only link to BReg is test-time: `registry-record` is a
 dev-dependency whose serialization goldens prove the `breg-records`
 profile's envelope byte-compatible (section 13.6); the adapter never
@@ -399,10 +410,10 @@ order, and the compile output is identical with the feature on or off. One concr
 (profile operation, record type) pair, `operationId`
 `<operation>.<recordType>`. A parameterized part is a deployment value the
 contract cannot know, so the schema types it as a string, never as the
-stand-in literal. When the GovStack profile
-lands it may require its full operation set, served by a conformance mode
-that fails a deployment whose contract is incomplete; that mode arrives with
-the profile, not before.
+stand-in literal. The built-in Consultation target publishes only its enabled
+capabilities; [Consultation](CONSULTATION.md) defines the prerequisite checks
+and caller-filtered discovery. A selected subset is not a full Building Block
+conformance claim.
 
 ## 8. Engine: a bounded Camel core
 
@@ -1811,7 +1822,7 @@ The Adapter lands in increments, each with runnable acceptance commands.
   the steps section 17.7 orders. Every component lands feature-gated and
   unclaimed: it is claimed nowhere until the drill named in section 17.7
   has run it.
-- Later: the GovStack profile and conformance mode; the WASM rung when a
+- Later: broader source-backed Consultation features and external conformance; the WASM rung when a
   real pack needs it.
 
 Definition of done for the program, every item verified by a command,
@@ -1881,8 +1892,9 @@ one that decides a row.
 - P2, closed at every trust boundary: anything crossing a boundary is an
   explicit allowlist and everything else is refused; security beats Camel
   fidelity.
-- P3, the profile owns the outward contract: packs state what happened at the
-  source; only the profile decides what the caller sees.
+- P3, the facade target owns the outward protocol: packs state source
+  behavior; project transformations and policy define the permitted data
+  view; an authored profile or built-in Rust target defines the wire contract.
 - P4, the engine owns sensitive state: it stays in the engine, bounded by time
   and purpose, with a security review note.
 - P5, shared mechanism early, features on need: a generic mechanism with no
@@ -1894,12 +1906,12 @@ one that decides a row.
 
 | ID | Decision | Date, status |
 |---|---|---|
-| D1 | Facade is the `breg-records` v1 profile artifact, parameterized by the declared model; GovStack later as a second profile | 2026-10-30, accepted |
+| D1 | Generic facades use profile artifacts; Consultation is a built-in Rust target with project-selected schema-bound views and operations | 2026-11-04, amended |
 | D2 | Packs and profiles are maintained artifacts under `products/adapter/` | 2026-10-30, accepted |
 | D3 | v1 scope is reads plus DHIS2 writes; OpenCRVS writes follow as their own increment | 2026-10-30, accepted |
 | D4 | Source-native identifiers pass through; no correlation store in v1 | 2026-10-30, accepted |
 | D5 | Product name and token: `Adapter`, `adapter` (`AdapterPack`, `AdapterProject`, `AdapterRuntimeConfig`, `adapter.*` codes) | 2026-10-30, accepted |
-| D6 | The generated OpenAPI contains only bound operations; a conformance mode arrives with the GovStack profile | 2026-10-30, accepted |
+| D6 | Generated OpenAPI contains only enabled operations and their supporting discovery; capability selection does not imply full GovStack conformance | 2026-11-04, amended |
 | D7 | The engine is a bounded port of Camel's route model: authored YAML DSL routes, Camel EIP names, options, defaults, and semantics; it replaces the earlier bespoke call-plan vocabulary (`call`, `map`, `normalize`, `paginate`, `iterate`) | 2026-10-30, accepted (P1) |
 | D8 | Packs are Kamelet-style catalogs of route templates; projects instantiate them with `templatedRoutes`; a deployment writes no routes | 2026-10-30, accepted (P1) |
 | D9 | The facade is Camel's contract-first REST DSL over the generated OpenAPI, with validation always on and `missingOperation` fail only | 2026-10-30, accepted (P1) |
@@ -1910,7 +1922,7 @@ one that decides a row.
 | D14 | Write resume is a host-owned addition for one closed flat sequence under `idempotentConsumer`; it stores only declared bounded identifiers, resumes the first unfinished source-idempotent step, and refuses control flow whose unstored state cannot be reconstructed | 2026-10-30, accepted (P5); closed subset completed 2026-11-03 |
 | D15 | Fixture provenance distinguishes `captured` from `documented`; fixtures are `documented` unless a real instance was run | 2026-10-30, accepted (P6) |
 | D16 | A write the source accepted but has not completed answers a profile-owned 202 status link or a bounded wait, selected by the project binding; section 9 fixes the exact artifact keys, acceptance-anchored expiry, caller and artifact binding, safe polling, and uncertain-effect recovery | 2026-10-30, accepted; contract completed 2026-11-03 |
-| D17 | The exposed API, envelope included, is wholly a profile artifact (envelope templates over a closed slot vocabulary); `breg-records` v1 is the first target, not a built-in; `registry-record` is a dev-dependency for goldens only | 2026-10-30, accepted |
+| D17 | Generic profiles remain artifacts; Consultation protocol behavior is maintained in Rust. Packs own reusable source access; project transformations and schemas own public views. `registry-record` remains a dev-dependency for goldens only | 2026-11-04, amended |
 | D18 | Upstream authentication is a closed list of six kinds with Evidence's `SourceAuthentication` shape and spelling (section 10.2), plus orthogonal mTLS; adapter-local in this program, lifted to the platform later | 2026-10-30, accepted (P2) |
 | D19 | The facade caller's token is never forwarded or exchanged upstream; upstream calls use the deployment's per-source credential, and per-user upstream authority waits for a source that requires it | 2026-10-30, accepted (P2) |
 | D20 | The exchange contract (section 8.11) is part of the format: facade inputs arrive under closed, profile-neutral names; no caller header enters except `Idempotency-Key` on writes; scripts receive a read-only `#{body, headers, properties}` view and return per slot | 2026-10-30, accepted (P2) |
@@ -1928,7 +1940,7 @@ one that decides a row.
 | D32 | No declarative field map until a real source needs one; field mapping stays in routes and scripts. `[ingestion]` KoboToolbox is that source, recorded 2026-10-31. The ingestion mapping stays a script: one pure interface that returns an operation input or a refusal with diagnostics, in Rhai on `registry-platform-script`, run in the job for the direct destination and in a Coordinator Function for events (section 17.3) | 2026-10-30, accepted (P5); ingestion note accepted 2026-11-01 |
 | D33 | The runtime config requires a non-empty `allowedClients` list on the facade, as Messaging does; scopes alone leave the issuer's mint policy as the only client gate | 2026-10-30, accepted |
 | D34 | A verified caller's refused call is a `callRefused` journal row; a 401 is logged only | 2026-10-30, accepted |
-| D35 | After the real proof (P6), the facade contract is authored as a closed subset of OpenAPI with `x-` extensions for slots and problems, as Camel's contract-first REST DSL takes OpenAPI as input; until then `AdapterProfile` stands. Confidence is medium until a real ministry or GovStack specification has been tried | 2026-10-30, accepted |
+| D35 | Generic `AdapterProfile` authoring remains available. The Consultation target generates its concrete OpenAPI from maintained protocol definitions and the validated project; deployments do not author standard envelopes or problem mappings | 2026-11-04, amended |
 | D36 | Plain HTTP to an address inside `allowedPrivateCidrs` is allowed for every authentication kind, including credential-bearing ones; the operator's explicit declaration is the consent, and `adapterctl check` agrees with the runtime load | 2026-10-30, accepted |
 | D37 | Beyond the existing numeric-loopback and HTTPS+mTLS admissions, a configured source may use no application credential when pack and runtime both explicitly say `none` and the fixed HTTPS binding carries `anonymousHttps: operator-approved`; absence keeps that additional path closed, TLS verification and facade authentication remain mandatory, and no failed credential kind falls back to anonymous | 2026-10-31, accepted |
 | D38 `[ingestion]` | Job source components `file`, `sftp`, and read-only `postgres` enter under the explicit two-system exception of section 5.3, job-only and refused in facade routes; `registry-adapter-connectors` alone links a product client, only `registry-breg-client` behind an off-by-default feature, for the direct destination | 2026-10-31, proposed; restated 2026-11-01; open in section 17.6 |

@@ -273,6 +273,16 @@ fn render_source(source: &Value, out: &mut dyn io::Write) -> io::Result<()> {
         "      Posture: {}",
         source["acquisitionPosture"].as_str().unwrap_or("unknown")
     )?;
+    if let Some(projection) = source.get("projection").filter(|value| value.is_object()) {
+        writeln!(
+            out,
+            "      Projection: {}::{}; schema {}; digest {}",
+            projection["source"].as_str().unwrap_or("unknown"),
+            projection["entrypoint"].as_str().unwrap_or("unknown"),
+            projection["schema"].as_str().unwrap_or("unknown"),
+            projection["digest"].as_str().unwrap_or("unknown")
+        )?;
+    }
     writeln!(out, "      Inputs: {}", source_inputs(&source["inputs"]))?;
     writeln!(
         out,

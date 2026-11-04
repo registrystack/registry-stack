@@ -352,6 +352,34 @@ impl Served {
         served
     }
 
+    /// Start over `project` with an explicit endpoint id and runtime
+    /// credential. This keeps source-specific projects on the same real
+    /// serving path while leaving authentication fully enabled.
+    pub async fn start_with_pack_endpoint_and_credential(
+        upstream_url: &str,
+        project: &Path,
+        pack: &Path,
+        endpoint: &str,
+        credential: &str,
+    ) -> Self {
+        let mut served = Self::spawn_config_for_deployment_with_pack(
+            upstream_url,
+            project,
+            Some(pack),
+            endpoint,
+            CURSOR_KEY,
+            &[],
+            "cursorKeyRef: secret:env/TEST_CURSOR_KEY\n",
+            credential,
+            86_400,
+            DEFAULT_RUNTIME_ID,
+            None,
+        )
+        .await;
+        served.wait_until_listening();
+        served
+    }
+
     /// Start over `project` and return the stderr of an adapter that
     /// refuses to start; panics when it starts, or never exits.
     pub async fn refusal_with_project(upstream_url: &str, project: &Path) -> String {
@@ -462,6 +490,36 @@ impl Served {
         runtime_id: &str,
         database: Option<&str>,
     ) -> Self {
+        Self::spawn_config_for_deployment_with_pack(
+            upstream_url,
+            project,
+            None,
+            endpoint,
+            cursor_key,
+            omitted_env,
+            cursor_lines,
+            credential,
+            response_retention_seconds,
+            runtime_id,
+            database,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn spawn_config_for_deployment_with_pack(
+        upstream_url: &str,
+        project: &Path,
+        pack: Option<&Path>,
+        endpoint: &str,
+        cursor_key: &str,
+        omitted_env: &[&str],
+        cursor_lines: &str,
+        credential: &str,
+        response_retention_seconds: u64,
+        runtime_id: &str,
+        database: Option<&str>,
+    ) -> Self {
         let database = match database {
             Some(database) => database.to_owned(),
             None => schema_url().await,
@@ -515,9 +573,17 @@ idempotency:
         // are the maintained artifacts, passed by flag. A project directory
         // that carries its own pair is served from beside the project.
         if !project.join("pack.yaml").exists() {
-            command.arg("--pack").arg(Self::example_pack());
+            command.arg("--pack").arg(
+                pack.map(Path::to_path_buf)
+                    .unwrap_or_else(Self::example_pack),
+            );
         }
-        if !project.join("profile.yaml").exists() {
+        let project_text =
+            std::fs::read_to_string(project.join("project.yaml")).expect("the project is readable");
+        let uses_builtin_consultation = project_text
+            .lines()
+            .any(|line| line.trim_end() == "consultation:");
+        if !uses_builtin_consultation && !project.join("profile.yaml").exists() {
             command.arg("--profile").arg(Self::profile_for(project));
         }
         command
@@ -587,6 +653,12 @@ idempotency:
         let _ = self.child.kill();
         let _ = self.child.wait();
         self.stderr.read_to_end()
+    }
+
+    /// A point-in-time copy of the adapter's captured stderr for an assertion
+    /// message. The drain thread remains active and the process keeps running.
+    pub fn stderr_text(&self) -> String {
+        self.stderr.text.lock().expect("the stderr lock").clone()
     }
 
     /// Run `sql` against the adapter's journal schema.

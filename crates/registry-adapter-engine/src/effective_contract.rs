@@ -320,44 +320,83 @@ fn effective_operation(
         &format!("{{{}}}", served.record_type_parameter),
         &served.record_type,
     );
-    let mut body = served
-        .request_template
+    let consultation_capability = served
+        .project_transform
         .as_ref()
-        .map(|_| derive_operation_request_schema(&loaded.profile, &loaded.project, binding))
-        .transpose()
-        .map_err(ContractError::Schema)?;
-    if let (Some(schema), Some(template)) = (&mut body, profile.request_envelope.as_ref()) {
-        let template = parse_envelope_template(template.text()).map_err(ContractError::Schema)?;
-        apply_exact_array_lengths(schema, &template);
-        if let Some(pagination) = &served.pagination {
-            refine_slot_schema(schema, &template, "pageSize", &|member| {
-                *member = json!({
-                    "type": "integer",
-                    "minimum": pagination.page_size_minimum,
-                    "maximum": pagination.page_size_maximum,
+        .map(|_| {
+            crate::consultation::ConsultationCapability::from_binding_operation(&served.operation)
+                .ok_or_else(|| {
+                    ContractError::Schema(format!(
+                        "the schema-bound binding {} has no Consultation capability",
+                        served.binding
+                    ))
+                })
+        })
+        .transpose()?;
+    let mut body = if let Some(capability) = consultation_capability {
+        consultation_operation_request_schema(loaded, served, capability)?
+    } else {
+        served
+            .request_template
+            .as_ref()
+            .map(|_| derive_operation_request_schema(&loaded.profile, &loaded.project, binding))
+            .transpose()
+            .map_err(ContractError::Schema)?
+    };
+    if consultation_capability.is_none() {
+        if let (Some(schema), Some(template)) = (&mut body, profile.request_envelope.as_ref()) {
+            let template =
+                parse_envelope_template(template.text()).map_err(ContractError::Schema)?;
+            apply_exact_array_lengths(schema, &template);
+            if let Some(pagination) = &served.pagination {
+                refine_slot_schema(schema, &template, "pageSize", &|member| {
+                    *member = json!({
+                        "type": "integer",
+                        "minimum": pagination.page_size_minimum,
+                        "maximum": pagination.page_size_maximum,
+                    });
+                    if let Some(default) = pagination.page_size_default {
+                        member["default"] = json!(default);
+                    }
                 });
-                if let Some(default) = pagination.page_size_default {
-                    member["default"] = json!(default);
+                refine_slot_schema(schema, &template, "cursor", &apply_cursor_contract);
+                if pagination.page_size_default.is_none() {
+                    require_cursor_or_page_size(schema, &template);
                 }
-            });
-            refine_slot_schema(schema, &template, "cursor", &apply_cursor_contract);
-            if pagination.page_size_default.is_none() {
-                require_cursor_or_page_size(schema, &template);
             }
+            refine_slot_schema(schema, &template, "recordId", &apply_path_segment_contract);
+            refine_slot_schema(schema, &template, "filters", &|member| {
+                apply_filter_integer_bounds(member, &served.filters);
+            });
         }
-        refine_slot_schema(schema, &template, "recordId", &apply_path_segment_contract);
-        refine_slot_schema(schema, &template, "filters", &|member| {
-            apply_filter_integer_bounds(member, &served.filters);
-        });
     }
-    let mut output = derive_binding_result_schema(&loaded.profile, &loaded.project, binding)
-        .map_err(ContractError::Schema)?;
-    if let Some(pagination) = &served.pagination {
-        apply_records_array_maximum(
-            &mut output,
-            profile.response_envelope.text(),
-            pagination.page_size_maximum,
-        )?;
+    let mut output = if let Some(capability) = consultation_capability {
+        let transform = served.project_transform.as_ref().ok_or_else(|| {
+            ContractError::Schema(format!(
+                "the Consultation binding {} has no project transformation",
+                served.binding
+            ))
+        })?;
+        consultation_output_schema(
+            capability,
+            transform.schema(),
+            served
+                .pagination
+                .as_ref()
+                .map(|pagination| pagination.page_size_maximum),
+        )?
+    } else {
+        derive_binding_result_schema(&loaded.profile, &loaded.project, binding)
+            .map_err(ContractError::Schema)?
+    };
+    if consultation_capability.is_none() {
+        if let Some(pagination) = &served.pagination {
+            apply_records_array_maximum(
+                &mut output,
+                profile.response_envelope.text(),
+                pagination.page_size_maximum,
+            )?;
+        }
     }
 
     Ok(EffectiveOperation {
@@ -382,6 +421,147 @@ fn effective_operation(
         output,
         access,
     })
+}
+
+fn consultation_operation_request_schema(
+    loaded: &Loaded,
+    served: &ServedOperation,
+    capability: crate::consultation::ConsultationCapability,
+) -> Result<Option<Value>, ContractError> {
+    use crate::consultation::ConsultationCapability;
+
+    if matches!(
+        capability,
+        ConsultationCapability::Retrieve | ConsultationCapability::List
+    ) {
+        return Ok(None);
+    }
+    let facade = loaded.project.consultation.as_ref().ok_or_else(|| {
+        ContractError::Schema("the schema-bound plan has no Consultation metadata".to_owned())
+    })?;
+    let collection = facade.collections.get(&served.record_type).ok_or_else(|| {
+        ContractError::Schema(format!(
+            "the schema-bound binding {} has no Consultation collection",
+            served.binding
+        ))
+    })?;
+    let selected = match capability {
+        ConsultationCapability::Lookup => collection
+            .lookup
+            .as_ref()
+            .map(|lookup| lookup.selector.as_str()),
+        ConsultationCapability::Search => collection
+            .search
+            .as_ref()
+            .map(|search| search.search.as_str()),
+        ConsultationCapability::Retrieve | ConsultationCapability::List => None,
+    }
+    .ok_or_else(|| {
+        ContractError::Schema(format!(
+            "the schema-bound binding {} has no named Consultation input",
+            served.binding
+        ))
+    })?;
+    let input = served.project_input_schema.as_ref().ok_or_else(|| {
+        ContractError::Schema(format!(
+            "the schema-bound binding {} has no checked input schema",
+            served.binding
+        ))
+    })?;
+    consultation_request_schema(capability, selected, input, served.pagination.as_ref())
+}
+
+fn consultation_request_schema(
+    capability: crate::consultation::ConsultationCapability,
+    selected: &str,
+    input: &crate::public_schema::CheckedPublicSchema,
+    pagination: Option<&crate::load::ServedPagination>,
+) -> Result<Option<Value>, ContractError> {
+    use crate::consultation::ConsultationCapability;
+
+    let reference = "#/$defs/projectInput";
+    let mut schema = match capability {
+        ConsultationCapability::Lookup => {
+            crate::consultation::lookup_request_schema(selected, reference)
+        }
+        ConsultationCapability::Search => {
+            let pagination = pagination.ok_or_else(|| {
+                ContractError::Schema(
+                    "the Consultation Search contract has no pagination declaration".to_owned(),
+                )
+            })?;
+            let mut schema = crate::consultation::search_request_schema(selected, reference);
+            schema["properties"]["pageSize"] = json!({
+                "type": "integer",
+                "minimum": pagination.page_size_minimum,
+                "maximum": pagination.page_size_maximum,
+            });
+            if let Some(default) = pagination.page_size_default {
+                schema["properties"]["pageSize"]["default"] = json!(default);
+            } else {
+                append_constraint(
+                    &mut schema,
+                    json!({"anyOf": [
+                        {"required": ["cursor"]},
+                        {"required": ["pageSize"]},
+                    ]}),
+                );
+            }
+            schema["properties"]["cursor"] = cursor_schema();
+            schema
+        }
+        ConsultationCapability::Retrieve | ConsultationCapability::List => return Ok(None),
+    };
+    embed_project_definition(&mut schema, "projectInput", input)?;
+    Ok(Some(schema))
+}
+
+fn consultation_output_schema(
+    capability: crate::consultation::ConsultationCapability,
+    data: &crate::public_schema::CheckedPublicSchema,
+    page_maximum: Option<u64>,
+) -> Result<Value, ContractError> {
+    use crate::consultation::ConsultationCapability;
+
+    let reference = "#/$defs/projectData";
+    let mut schema = match capability {
+        ConsultationCapability::Retrieve | ConsultationCapability::Lookup => {
+            crate::consultation::record_schema(reference)
+        }
+        ConsultationCapability::List | ConsultationCapability::Search => {
+            let maximum = page_maximum.ok_or_else(|| {
+                ContractError::Schema(
+                    "the Consultation page contract has no pagination declaration".to_owned(),
+                )
+            })?;
+            let mut schema = crate::consultation::record_page_schema(reference);
+            schema["properties"]["items"]["maxItems"] = json!(maximum);
+            schema
+        }
+    };
+    embed_project_definition(&mut schema, "projectData", data)?;
+    Ok(schema)
+}
+
+fn embed_project_definition(
+    schema: &mut Value,
+    name: &str,
+    project: &crate::public_schema::CheckedPublicSchema,
+) -> Result<(), ContractError> {
+    let root = schema.as_object_mut().ok_or_else(|| {
+        ContractError::Schema("the fixed Consultation schema is not an object".to_owned())
+    })?;
+    let definitions = root
+        .entry("$defs")
+        .or_insert_with(|| Value::Object(Map::new()))
+        .as_object_mut()
+        .ok_or_else(|| {
+            ContractError::Schema(
+                "the fixed Consultation schema has invalid definitions".to_owned(),
+            )
+        })?;
+    definitions.insert(name.to_owned(), project.for_definition(name));
+    Ok(())
 }
 
 fn operation_id(operation: &str, record_type: &str) -> String {
@@ -904,6 +1084,26 @@ fn protocol_problem_schema(code: &str, status: u16, title: &str) -> Value {
 mod contract_schema_tests {
     use super::*;
 
+    fn project_schema() -> crate::public_schema::CheckedPublicSchema {
+        crate::public_schema::check_public_schema(json!({
+            "$id": "https://registry.example/schemas/person-public/1.0.0",
+            "$schema": JSON_SCHEMA_DIALECT,
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["person"],
+            "properties": {"person": {"$ref": "#/$defs/person"}},
+            "$defs": {
+                "person": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["name"],
+                    "properties": {"name": {"type": "string", "enum": ["Ada"]}}
+                }
+            }
+        }))
+        .expect("project schema")
+    }
+
     #[test]
     fn effect_classification_is_explicit_and_conservative() {
         assert_eq!(operation_effect(HttpMethod::Get, false), "read");
@@ -1050,6 +1250,72 @@ mod contract_schema_tests {
             problems.schema["oneOf"][0]["properties"]["requestId"]["pattern"],
             REQUEST_ID_PATTERN
         );
+    }
+
+    #[test]
+    fn consultation_contract_embeds_schema_bound_inputs_and_outputs() {
+        let project = project_schema();
+        let output = consultation_output_schema(
+            crate::consultation::ConsultationCapability::List,
+            &project,
+            Some(37),
+        )
+        .expect("output schema");
+        assert_eq!(
+            output["properties"]["items"]["items"]["properties"]["data"]["$ref"],
+            "#/$defs/projectData"
+        );
+        assert_eq!(output["properties"]["items"]["maxItems"], 37);
+        assert!(output["$defs"]["projectData"].get("$id").is_none());
+        assert_eq!(
+            output["$defs"]["projectData"]["properties"]["person"]["$ref"],
+            "#/$defs/projectData/$defs/person"
+        );
+        let output_validator = jsonschema::JSONSchema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .compile(&output)
+            .expect("self-contained output schema");
+        assert!(output_validator.is_valid(&json!({
+            "items": [{"recordId": "person-1", "data": {"person": {"name": "Ada"}}}],
+            "pageInfo": {"nextCursor": null}
+        })));
+        assert!(!output_validator.is_valid(&json!({
+            "items": [{
+                "recordId": "person-1",
+                "data": {"person": {"name": "Ada", "privateCanary": true}}
+            }],
+            "pageInfo": {"nextCursor": null}
+        })));
+
+        let input = consultation_request_schema(
+            crate::consultation::ConsultationCapability::Lookup,
+            "by-person-id",
+            &project,
+            None,
+        )
+        .expect("input schema")
+        .expect("Lookup has a body");
+        assert_eq!(input["properties"]["selector"]["const"], "by-person-id");
+        assert_eq!(
+            input["properties"]["values"]["$ref"],
+            "#/$defs/projectInput"
+        );
+        assert_eq!(
+            input["$defs"]["projectInput"]["properties"]["person"]["$ref"],
+            "#/$defs/projectInput/$defs/person"
+        );
+        let input_validator = jsonschema::JSONSchema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .compile(&input)
+            .expect("self-contained input schema");
+        assert!(input_validator.is_valid(&json!({
+            "selector": "by-person-id",
+            "values": {"person": {"name": "Ada"}}
+        })));
+        assert!(!input_validator.is_valid(&json!({
+            "selector": "by-person-id",
+            "values": {"person": {"name": "Mallory"}}
+        })));
     }
 }
 

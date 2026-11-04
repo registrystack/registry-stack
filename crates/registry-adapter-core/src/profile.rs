@@ -110,6 +110,10 @@ pub const MAX_PROBLEM_DATA_FIELDS: usize = 16;
 
 /// The largest serialized problem data object the runtime may release.
 pub const MAX_PROBLEM_DATA_BYTES: usize = 2 * 1024;
+/// The most field-level errors one problem response may disclose.
+pub const MAX_PROBLEM_ERRORS: usize = 16;
+/// The longest JSON Pointer or safe validation message in one problem error.
+pub const MAX_PROBLEM_ERROR_TEXT_BYTES: usize = 512;
 
 /// The closed envelope slot vocabulary the engine fills
 /// (`products/adapter/CONCEPT.md` section 7). A slot outside this set is
@@ -121,6 +125,7 @@ pub const ENVELOPE_SLOTS: &[&str] = &[
     "problemCode",
     "problemData",
     "problemDetail",
+    "problemErrors",
     "problemTitle",
     "record",
     "recordId",
@@ -147,6 +152,8 @@ pub const SLOT_RECORDS: &str = "records";
 pub const SLOT_PROBLEM_CODE: &str = "problemCode";
 /// The optional, closed data object declared by the selected problem.
 pub const SLOT_PROBLEM_DATA: &str = "problemData";
+/// Optional bounded field-level errors owned by the maintained host.
+pub const SLOT_PROBLEM_ERRORS: &str = "problemErrors";
 /// The accepted response's facade-owned relative status link.
 pub const SLOT_STATUS_LINK: &str = "statusLink";
 /// The accepted response's committed recovery expiry.
@@ -936,6 +943,7 @@ mod tests {
             "problemTitle",
             "problemDetail",
             "problemData",
+            "problemErrors",
             "status",
             "statusExpiresAt",
             "statusLink",
@@ -948,7 +956,7 @@ mod tests {
                 "{slot} must stay in the closed vocabulary"
             );
         }
-        assert_eq!(ENVELOPE_SLOTS.len(), 16);
+        assert_eq!(ENVELOPE_SLOTS.len(), 17);
     }
 
     /// Envelope templates answer slot-mention queries in both placeholder

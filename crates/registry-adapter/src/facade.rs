@@ -26,7 +26,7 @@ use registry_adapter_core::{
     decode_slot, fixed_facade_problem_response, parse_envelope_template, problem_data_schema,
     resolve_problem, validate_result_schema, AdapterProfile, AdapterProject, AsyncStatusOutcome,
     BindingAsyncCompletion, ErrorClass, HttpMethod, ProfileAsyncCompletion, SlotForm,
-    MAX_PROBLEM_DATA_BYTES, SLOT_PROBLEM_DATA, SLOT_RECORD,
+    MAX_PROBLEM_DATA_BYTES, SLOT_PROBLEM_DATA, SLOT_PROBLEM_ERRORS, SLOT_RECORD,
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -40,6 +40,11 @@ use crate::custody::{
 use crate::engine::component::http::uri::encode_path_segment;
 use crate::engine::component::rest::continuation::{
     filter_digest, ContinuationCodec, CursorBinding, CursorRefusal,
+};
+use crate::engine::consultation::{
+    validate_capabilities, CallerCapabilities, CapabilityCollection, CapabilityOperation,
+    ConsultationCapability, CAPABILITIES_PATH, PROFILE_ID as CONSULTATION_PROFILE_ID,
+    SERVICE_UNAVAILABLE_PROBLEM_CODE as CONSULTATION_UNAVAILABLE_PROBLEM_CODE,
 };
 use crate::engine::effective_contract::{
     EffectiveContract, RuntimeContractResponse, PIN_HEADER, PIN_PROBLEM_CODE,
@@ -241,6 +246,33 @@ pub fn router(state: Arc<FacadeState>) -> Router {
             )
             .fallback(move || {
                 let shared = Arc::clone(&method_fallback);
+                async move {
+                    let mut response = facade_problem(
+                        shared.loaded.problems(),
+                        ErrorClass::FacadeMethodNotAllowed,
+                        StatusCode::METHOD_NOT_ALLOWED,
+                        "",
+                        &new_id(),
+                    );
+                    response
+                        .headers_mut()
+                        .insert(header::ALLOW, HeaderValue::from_static("GET"));
+                    response
+                }
+            }),
+        );
+    }
+    if state.loaded.project.consultation.is_some() {
+        let capabilities = Arc::clone(&state);
+        let capabilities_method_fallback = Arc::clone(&state);
+        router = router.route(
+            CAPABILITIES_PATH,
+            get(move |headers: HeaderMap| {
+                let shared = Arc::clone(&capabilities);
+                async move { caller_capabilities(shared, headers).await }
+            })
+            .fallback(move || {
+                let shared = Arc::clone(&capabilities_method_fallback);
                 async move {
                     let mut response = facade_problem(
                         shared.loaded.problems(),
@@ -905,6 +937,192 @@ async fn runtime_contract(state: Arc<FacadeState>, headers: HeaderMap) -> Respon
     }
 }
 
+/// Return only the built-in Consultation operations visible under the
+/// authenticated caller's current machine scopes. Discovery remains
+/// advisory: every operation request repeats current authorization.
+async fn caller_capabilities(state: Arc<FacadeState>, headers: HeaderMap) -> Response {
+    let request_id = new_id();
+    let caller = match authenticate(&state, &headers).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal_response(state.loaded.problems(), refusal, &request_id),
+    };
+    if !accepts_json(&headers) {
+        return journal_capability_refusal(
+            &state,
+            &caller,
+            &request_id,
+            ErrorClass::FacadeNotAcceptable,
+            StatusCode::NOT_ACCEPTABLE,
+        )
+        .await;
+    }
+    let journal_ready = match state.journal.get().await {
+        Ok(client) => journal::ready(&client).await.unwrap_or(false),
+        Err(_) => false,
+    };
+    if !journal_ready {
+        tracing::error!("the Consultation capability journal readiness check failed");
+        return consultation_unavailable(&request_id);
+    }
+    let document =
+        match derive_caller_capabilities(&state.loaded.project, &state.loaded.served, &caller) {
+            Ok(document) => document,
+            Err(error) => {
+                tracing::error!(%error, "the caller capability document was refused");
+                return journal_capability_refusal(
+                    &state,
+                    &caller,
+                    &request_id,
+                    ErrorClass::Facade,
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                )
+                .await;
+            }
+        };
+    let completed_at = SystemTime::now();
+    let audit = ["exchangeCreated", "exchangeCompleted"]
+        .into_iter()
+        .map(|event_kind| {
+            (
+                JournalEvent {
+                    event_kind,
+                    exchange_id: request_id.clone(),
+                    operation: "getCallerCapabilities".to_owned(),
+                    caller_ref: caller.reference.clone(),
+                    route_id: "consultation-capabilities".to_owned(),
+                    detail: None,
+                },
+                completed_at,
+            )
+        })
+        .collect();
+    if let Err(fault) = append_all(&state.journal, audit).await {
+        tracing::error!(%fault, "the capability discovery audit row could not commit");
+        return facade_problem(
+            state.loaded.problems(),
+            ErrorClass::Facade,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "",
+            &request_id,
+        );
+    }
+    match serde_json::to_value(document) {
+        Ok(body) => {
+            let mut response = with_request_id(json_response(StatusCode::OK, &body), &request_id);
+            response
+                .headers_mut()
+                .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+            response
+        }
+        Err(error) => {
+            tracing::error!(%error, "the caller capability response could not be serialized");
+            facade_problem(
+                state.loaded.problems(),
+                ErrorClass::Facade,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "",
+                &request_id,
+            )
+        }
+    }
+}
+
+fn derive_caller_capabilities(
+    project: &AdapterProject,
+    served_operations: &[ServedOperation],
+    caller: &Caller,
+) -> Result<CallerCapabilities, crate::engine::consultation::CapabilityError> {
+    let Some(consultation) = project.consultation.as_ref() else {
+        return Ok(CallerCapabilities {
+            collections: Vec::new(),
+        });
+    };
+    let mut collections = Vec::new();
+    for declared in consultation.collections.iter() {
+        let mut operations = Vec::new();
+        for served in served_operations
+            .iter()
+            .filter(|served| served.record_type == declared.record_type.as_str())
+        {
+            let Some(capability) =
+                ConsultationCapability::from_binding_operation(&served.operation)
+            else {
+                continue;
+            };
+            if !admits(project, caller, served) {
+                continue;
+            }
+            let (selectors, searches) = match capability {
+                ConsultationCapability::Lookup => (
+                    declared
+                        .lookup
+                        .as_ref()
+                        .map(|lookup| vec![lookup.selector.as_str().to_owned()])
+                        .unwrap_or_default(),
+                    Vec::new(),
+                ),
+                ConsultationCapability::Search => (
+                    Vec::new(),
+                    declared
+                        .search
+                        .as_ref()
+                        .map(|search| vec![search.search.as_str().to_owned()])
+                        .unwrap_or_default(),
+                ),
+                ConsultationCapability::Retrieve | ConsultationCapability::List => {
+                    (Vec::new(), Vec::new())
+                }
+            };
+            operations.push(CapabilityOperation {
+                operation_id: capability.operation_id(declared.record_type.as_str()),
+                contract: consultation.contract.clone(),
+                capability,
+                view: declared.view.as_str().to_owned(),
+                selectors,
+                searches,
+            });
+        }
+        if !operations.is_empty() {
+            collections.push(CapabilityCollection {
+                collection_id: declared.record_type.as_str().to_owned(),
+                registry: declared.registry.clone(),
+                operations,
+            });
+        }
+    }
+    let document = CallerCapabilities { collections };
+    validate_capabilities(&document)?;
+    Ok(document)
+}
+
+async fn journal_capability_refusal(
+    state: &FacadeState,
+    caller: &Caller,
+    request_id: &str,
+    class: ErrorClass,
+    status: StatusCode,
+) -> Response {
+    let event = JournalEvent {
+        event_kind: "callRefused",
+        exchange_id: request_id.to_owned(),
+        operation: "getCallerCapabilities".to_owned(),
+        caller_ref: caller.reference.clone(),
+        route_id: "consultation-capabilities".to_owned(),
+        detail: Some(json!({"class": class.class(), "status": status.as_u16()}).to_string()),
+    };
+    if let Err(fault) = append_all(&state.journal, vec![(event, SystemTime::now())]).await {
+        tracing::error!(%fault, "the capability discovery refusal could not be journaled");
+        return facade_problem(
+            state.loaded.problems(),
+            ErrorClass::Facade,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "",
+            request_id,
+        );
+    }
+    facade_problem(state.loaded.problems(), class, status, "", request_id)
+}
+
 async fn answer(
     state: &FacadeState,
     index: usize,
@@ -1143,7 +1361,9 @@ async fn answer(
     }
 
     if !is_write {
-        if let Err(refusal) = require_declared_filters(operation, &inputs) {
+        if let Err(refusal) = require_declared_filters(operation, &inputs)
+            .and_then(|()| validate_project_inputs(operation, &inputs))
+        {
             return refuse_request(
                 state,
                 operation,
@@ -3078,6 +3298,26 @@ pub(crate) fn require_declared_filters(
     Ok(())
 }
 
+/// Hold a Consultation Lookup or Search input object against its exact
+/// project-owned schema after capture and before the exchange is journaled or
+/// any source step can run. Filter derivation controls native mapping; it does
+/// not replace full constraints such as lengths and string patterns.
+pub(crate) fn validate_project_inputs(
+    operation: &ServedOperation,
+    inputs: &RequestInputs,
+) -> Result<(), Refusal> {
+    if operation
+        .project_input_schema
+        .as_ref()
+        .is_some_and(|schema| !schema.validates(&Value::Object(inputs.filters.clone())))
+    {
+        return Err(Refusal::invalid_field(
+            "the caller input does not satisfy its declared schema",
+        ));
+    }
+    Ok(())
+}
+
 /// Validate a search's inputs against the operation's declared pagination
 /// and restore the continuation its cursor carries. A cursor carries the
 /// page size of the call that minted it: a call that names no size reuses
@@ -3587,13 +3827,31 @@ async fn refuse_request(
         );
     }
     warn_exchange_failed(refusal.class, refusal.status);
-    facade_problem(
-        profile,
-        refusal.class,
-        refusal.status,
-        record_type,
-        request_id,
-    )
+    if refusal.status == StatusCode::UNPROCESSABLE_ENTITY
+        && profile.profile.id.as_str() == CONSULTATION_PROFILE_ID
+    {
+        let pointer = match operation.operation.as_str() {
+            "lookup" => "/values",
+            "search" => "/criteria",
+            _ => "/request",
+        };
+        facade_validation_problem(
+            profile,
+            refusal.class,
+            refusal.status,
+            record_type,
+            request_id,
+            pointer,
+        )
+    } else {
+        facade_problem(
+            profile,
+            refusal.class,
+            refusal.status,
+            record_type,
+            request_id,
+        )
+    }
 }
 
 /// The rendered success body: the next cursor (when the route set one) and
@@ -3627,10 +3885,13 @@ pub fn route_problem(
 ) -> Response {
     problem_response(
         profile,
-        failure.class,
-        None,
-        failure.message.as_deref(),
-        failure.data.as_ref(),
+        ProblemRender {
+            class: failure.class,
+            status_override: None,
+            detail: failure.message.as_deref(),
+            data: failure.data.as_ref(),
+            validation_pointer: None,
+        },
         record_type,
         request_id,
     )
@@ -3649,13 +3910,40 @@ pub(crate) fn facade_problem(
         .expect("the facade emits only declared fixed class/status pairs");
     problem_response(
         profile,
-        fixed.class,
-        Some(
-            StatusCode::from_u16(fixed.status)
-                .expect("fixed facade statuses are valid HTTP statuses"),
-        ),
-        None,
-        None,
+        ProblemRender {
+            class: fixed.class,
+            status_override: Some(
+                StatusCode::from_u16(fixed.status)
+                    .expect("fixed facade statuses are valid HTTP statuses"),
+            ),
+            detail: None,
+            data: None,
+            validation_pointer: None,
+        },
+        record_type,
+        request_id,
+    )
+}
+
+fn facade_validation_problem(
+    profile: Problems<'_>,
+    class: ErrorClass,
+    status: StatusCode,
+    record_type: &str,
+    request_id: &str,
+    pointer: &str,
+) -> Response {
+    let fixed = fixed_facade_problem_response(class, status.as_u16())
+        .expect("the facade emits only declared fixed class/status pairs");
+    problem_response(
+        profile,
+        ProblemRender {
+            class: fixed.class,
+            status_override: Some(status),
+            detail: None,
+            data: None,
+            validation_pointer: Some(pointer),
+        },
         record_type,
         request_id,
     )
@@ -3685,28 +3973,33 @@ pub struct Problems<'a> {
     pub envelope: &'a CompiledEnvelope,
 }
 
+struct ProblemRender<'a> {
+    class: ErrorClass,
+    status_override: Option<StatusCode>,
+    detail: Option<&'a str>,
+    data: Option<&'a Value>,
+    validation_pointer: Option<&'a str>,
+}
+
 /// The profile's problem for `class`: the declared problem whose class is
 /// the closest ancestor of (or equal to) the raised class. Without a match
 /// the response is a bare 500 with no body detail.
 fn problem_response(
     problems: Problems<'_>,
-    class: ErrorClass,
-    status_override: Option<StatusCode>,
-    detail: Option<&str>,
-    data: Option<&Value>,
+    render: ProblemRender<'_>,
     record_type: &str,
     request_id: &str,
 ) -> Response {
-    let Some(mut problem) = resolve_problem(problems.profile, class) else {
+    let Some(mut problem) = resolve_problem(problems.profile, render.class) else {
         return with_request_id(
             no_store(StatusCode::INTERNAL_SERVER_ERROR.into_response()),
             request_id,
         );
     };
-    let mut detail = detail;
-    let mut data = data;
+    let mut detail = render.detail;
+    let mut data = render.data;
     let valid_data = data.is_none_or(|value| problem_data_is_valid(problem, value));
-    let mut status_override = status_override;
+    let mut status_override = render.status_override;
     if !valid_data {
         let Some(disclosure) = resolve_problem(problems.profile, ErrorClass::DisclosureViolation)
         else {
@@ -3738,6 +4031,17 @@ fn problem_response(
     }
     if let Some(data) = data {
         slots.insert(SLOT_PROBLEM_DATA, data.clone());
+    }
+    if problems.profile.id.as_str() == CONSULTATION_PROFILE_ID
+        && status == StatusCode::UNPROCESSABLE_ENTITY
+    {
+        slots.insert(
+            SLOT_PROBLEM_ERRORS,
+            json!([{
+                "pointer": render.validation_pointer.unwrap_or("/request"),
+                "message": "the field does not satisfy the declared schema"
+            }]),
+        );
     }
     match problems.envelope.render(&slots) {
         Ok(rendered) => {
@@ -3788,6 +4092,23 @@ fn contract_unavailable(request_id: &str) -> Response {
         "Effective contract unavailable",
         request_id,
     )
+}
+
+fn consultation_unavailable(request_id: &str) -> Response {
+    let mut response = json_response(
+        StatusCode::SERVICE_UNAVAILABLE,
+        &json!({
+            "type": CONSULTATION_UNAVAILABLE_PROBLEM_CODE,
+            "title": "the service is unavailable",
+            "status": StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+            "traceId": request_id,
+        }),
+    );
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/problem+json"),
+    );
+    with_request_id(response, request_id)
 }
 
 fn protocol_problem(
@@ -3916,7 +4237,37 @@ mod tests {
             request_maximum_bytes: crate::engine::load::DEFAULT_REQUEST_MAXIMUM_BYTES,
             filters: Vec::new(),
             async_completion: None,
+            project_transform: None,
+            project_input_schema: None,
+            read_support: None,
         }
+    }
+
+    fn consultation_project() -> AdapterProject {
+        let generic = example_project(json!(["records.read"]));
+        let mut value = serde_json::to_value(generic).expect("project JSON");
+        let object = value.as_object_mut().expect("project object");
+        object.remove("profile");
+        object.insert(
+            "consultation".to_owned(),
+            json!({
+                "contract": "https://registry.example/contracts/1.0.0-draft/openapi.yaml",
+                "collections": [{
+                    "recordType": "person",
+                    "registry": "https://registry.example/registries/people",
+                    "view": "person-public",
+                    "dataSchema": "person-public",
+                    "lookup": {"selector": "by-id", "inputSchema": "lookup-id"},
+                    "search": {"search": "by-criteria", "inputSchema": "search-criteria"}
+                }]
+            }),
+        );
+        for profile in value["accessProfiles"].as_array_mut().expect("profiles") {
+            if profile["id"] == "records-reader" {
+                profile["operations"] = json!(["retrieve", "list"]);
+            }
+        }
+        serde_json::from_value(value).expect("consultation project")
     }
 
     #[test]
@@ -3941,6 +4292,89 @@ mod tests {
             "an unbound record type falls to the first operation, which \
              authenticates before it refuses 404"
         );
+    }
+
+    #[test]
+    fn capability_projection_is_filtered_by_current_machine_scopes() {
+        let project = consultation_project();
+        let mut retrieve = served("retrieve", "person");
+        retrieve.route_id = "https://source.internal/private?credential=PRIVATE-CANARY".to_owned();
+        let operations = [
+            retrieve,
+            served("list", "person"),
+            served("search", "person"),
+        ];
+        let caller = Caller {
+            reference: "machine-subject".to_owned(),
+            issuer: "https://issuer.example".to_owned(),
+            client_id: "registry-client".to_owned(),
+            scopes: vec!["records.read".to_owned()],
+        };
+        let document = derive_caller_capabilities(&project, &operations, &caller)
+            .expect("bounded capability document");
+        assert_eq!(document.collections.len(), 1);
+        assert_eq!(document.collections[0].collection_id, "person");
+        let ids = document.collections[0]
+            .operations
+            .iter()
+            .map(|operation| operation.operation_id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, ["retrievePerson", "listPerson"]);
+        assert!(document.collections[0]
+            .operations
+            .iter()
+            .all(|operation| operation.contract
+                == "https://registry.example/contracts/1.0.0-draft/openapi.yaml"));
+        let public = serde_json::to_string(&document).expect("capabilities serialize");
+        assert!(!public.contains("source.internal"), "{public}");
+        assert!(!public.contains("PRIVATE-CANARY"), "{public}");
+        assert!(!public.contains("credential"), "{public}");
+    }
+
+    #[tokio::test]
+    async fn consultation_invalid_field_is_a_bounded_validation_problem() {
+        let profile = crate::engine::consultation::built_in_profile();
+        let envelope = CompiledEnvelope::compile(profile.problem_envelope.text(), &BTreeMap::new())
+            .expect("maintained problem envelope compiles");
+        let response = facade_validation_problem(
+            Problems {
+                profile: &profile,
+                envelope: &envelope,
+            },
+            ErrorClass::FacadeInvalidField,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "people",
+            "0123456789abcdef0123456789abcdef",
+            "/criteria",
+        );
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let bytes = axum::body::to_bytes(response.into_body(), 16 * 1024)
+            .await
+            .expect("bounded problem body");
+        let body: Value = serde_json::from_slice(&bytes).expect("problem JSON");
+        assert_eq!(body["errors"].as_array().map(Vec::len), Some(1));
+        assert_eq!(body["errors"][0]["pointer"], "/criteria");
+        assert!(body["errors"][0]["message"]
+            .as_str()
+            .is_some_and(|message| !message.is_empty()));
+    }
+
+    #[tokio::test]
+    async fn consultation_readiness_failure_uses_its_service_unavailable_problem() {
+        let response = consultation_unavailable("0123456789abcdef0123456789abcdef");
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL),
+            Some(&HeaderValue::from_static("no-store"))
+        );
+        let bytes = axum::body::to_bytes(response.into_body(), 16 * 1024)
+            .await
+            .expect("bounded problem body");
+        let body: Value = serde_json::from_slice(&bytes).expect("problem JSON");
+        assert_eq!(body["type"], CONSULTATION_UNAVAILABLE_PROBLEM_CODE);
+        assert_eq!(body["title"], "the service is unavailable");
+        assert_eq!(body["status"], 503);
+        assert_eq!(body["traceId"], "0123456789abcdef0123456789abcdef");
     }
 
     #[test]

@@ -25,6 +25,309 @@ use std::collections::BTreeMap;
 /// The OpenAPI version every compiled contract declares.
 const OPENAPI_VERSION: &str = "3.1.0";
 
+pub(crate) struct ConsultationSchema {
+    pub identity: String,
+    pub component: Value,
+}
+
+/// Assemble the built-in Consultation contract. The deployment supplies
+/// versioned schema identities and source bindings; fixed paths, envelopes,
+/// operation annotations and capability discovery remain host owned.
+pub(crate) fn assemble_consultation(
+    project: &AdapterProject,
+    schemas: &BTreeMap<String, ConsultationSchema>,
+) -> Result<Value, Vec<Diagnostic>> {
+    let Some(consultation) = project.consultation.as_ref() else {
+        return Err(vec![assembly_refusal(
+            "adapterctl.compile.consultation-missing",
+            "the project does not select the built-in Consultation facade",
+        )]);
+    };
+    let mut findings = Vec::new();
+    let mut paths = Map::new();
+    let mut operation_ids = std::collections::BTreeSet::new();
+    for binding in project.bindings.iter() {
+        let Some(capability) =
+            registry_adapter::engine::consultation::ConsultationCapability::from_binding_operation(
+                binding.operation.as_str(),
+            )
+        else {
+            findings.push(assembly_refusal(
+                "adapterctl.compile.consultation-capability",
+                "a Consultation binding names an unsupported capability",
+            ));
+            continue;
+        };
+        let Some(collection) = consultation.collections.get(binding.record_type.as_str()) else {
+            findings.push(assembly_refusal(
+                "adapterctl.compile.consultation-collection",
+                "a Consultation binding has no collection metadata",
+            ));
+            continue;
+        };
+        let Some(_data_schema) = schemas.get(collection.data_schema.as_str()) else {
+            findings.push(assembly_refusal(
+                "adapterctl.compile.consultation-schema",
+                "a Consultation collection data schema has no loaded versioned identity",
+            ));
+            continue;
+        };
+        let request_schema = match capability {
+            registry_adapter::engine::consultation::ConsultationCapability::Lookup => {
+                collection.lookup.as_ref().and_then(|lookup| {
+                    schemas.get(lookup.input_schema.as_str()).map(|_| {
+                        registry_adapter::engine::consultation::lookup_request_schema(
+                            lookup.selector.as_str(),
+                            &component_reference(lookup.input_schema.as_str()),
+                        )
+                    })
+                })
+            }
+            registry_adapter::engine::consultation::ConsultationCapability::Search => {
+                collection.search.as_ref().and_then(|search| {
+                    schemas.get(search.input_schema.as_str()).map(|_| {
+                        registry_adapter::engine::consultation::search_request_schema(
+                            search.search.as_str(),
+                            &component_reference(search.input_schema.as_str()),
+                        )
+                    })
+                })
+            }
+            _ => None,
+        };
+        if matches!(
+            capability,
+            registry_adapter::engine::consultation::ConsultationCapability::Lookup
+                | registry_adapter::engine::consultation::ConsultationCapability::Search
+        ) && request_schema.is_none()
+        {
+            findings.push(assembly_refusal(
+                "adapterctl.compile.consultation-input-schema",
+                "a named Consultation input has no loaded versioned schema identity",
+            ));
+            continue;
+        }
+        let success_schema = match capability {
+            registry_adapter::engine::consultation::ConsultationCapability::Retrieve
+            | registry_adapter::engine::consultation::ConsultationCapability::Lookup => {
+                registry_adapter::engine::consultation::record_schema(&component_reference(
+                    collection.data_schema.as_str(),
+                ))
+            }
+            registry_adapter::engine::consultation::ConsultationCapability::List
+            | registry_adapter::engine::consultation::ConsultationCapability::Search => {
+                registry_adapter::engine::consultation::record_page_schema(&component_reference(
+                    collection.data_schema.as_str(),
+                ))
+            }
+        };
+        let public_template = capability.path();
+        let path = public_template.replace("{collectionId}", binding.record_type.as_str());
+        let operation_id = capability.operation_id(binding.record_type.as_str());
+        if !operation_ids.insert(operation_id.clone()) {
+            findings.push(assembly_refusal(
+                "adapterctl.compile.consultation-operation-id-collision",
+                "two Consultation collections normalize to the same caller-visible operationId",
+            ));
+            continue;
+        }
+        let method = match capability.method() {
+            HttpMethod::Get => "get",
+            HttpMethod::Post => "post",
+            HttpMethod::Put | HttpMethod::Patch => unreachable!("Consultation is read only"),
+        };
+        let mut operation = json!({
+            "operationId": operation_id,
+            "x-govstack-digital-registries": {
+                "registry": collection.registry,
+                "collection": binding.record_type.as_str(),
+                "capability": capability,
+                "view": collection.view.as_str(),
+            },
+            "responses": {
+                "200": {
+                    "description": SUCCESS_DESCRIPTION,
+                    "content": {"application/json": {"schema": success_schema}}
+                },
+                "400": consultation_problem_response("The request is not valid.", "Problem"),
+                "401": consultation_problem_response("The caller was not authenticated.", "Problem"),
+                "403": consultation_problem_response("The caller is not authorized.", "Problem"),
+                "404": consultation_problem_response("The collection or record is not available.", "Problem"),
+                "406": consultation_problem_response("The response media type is not acceptable.", "Problem"),
+                "413": consultation_problem_response("The request body is too large.", "Problem"),
+                "415": consultation_problem_response("The request media type is not supported.", "Problem"),
+                "422": consultation_problem_response("A request field is not valid.", "ValidationProblem"),
+                "429": consultation_problem_response("The source is throttling requests.", "Problem"),
+                "500": consultation_problem_response("The request could not be served.", "Problem"),
+                "502": consultation_problem_response("The source answered with an error.", "Problem"),
+                "503": consultation_problem_response("The service is unavailable.", "Problem"),
+                "504": consultation_problem_response("The source did not answer in time.", "Problem")
+            },
+            "security": [{"bearerAuth": []}],
+        });
+        match capability {
+            registry_adapter::engine::consultation::ConsultationCapability::Retrieve => {
+                operation["parameters"] = json!([{
+                    "name": "recordId", "in": "path", "required": true,
+                    "schema": {"type": "string", "minLength": 1, "maxLength": 256}
+                }]);
+            }
+            registry_adapter::engine::consultation::ConsultationCapability::List => {
+                operation["parameters"] = json!([
+                    {"name": "pageSize", "in": "query", "required": false,
+                     "schema": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20}},
+                    {"name": "cursor", "in": "query", "required": false,
+                     "schema": {"type": "string", "minLength": 1}}
+                ]);
+            }
+            registry_adapter::engine::consultation::ConsultationCapability::Lookup
+            | registry_adapter::engine::consultation::ConsultationCapability::Search => {}
+        }
+        if let Some(schema) = request_schema {
+            operation["requestBody"] = json!({
+                "required": true,
+                "content": {"application/json": {"schema": schema}}
+            });
+        }
+        paths.entry(path).or_insert_with(|| json!({}))[method] = operation;
+    }
+    paths.insert(
+        registry_adapter::engine::consultation::CAPABILITIES_PATH.to_owned(),
+        json!({"get": {
+            "operationId": "getCallerCapabilities",
+            "responses": {
+                "200": {
+                    "description": "Bounded caller-filtered capability document.",
+                    "headers": {"Cache-Control": {"schema": {"const": "no-store"}}},
+                    "content": {"application/json": {"schema": caller_capabilities_schema()}}
+                },
+                "401": consultation_problem_response("The caller was not authenticated.", "Problem"),
+                "403": consultation_problem_response("The caller is not authorized.", "Problem"),
+                "406": consultation_problem_response("The response media type is not acceptable.", "Problem"),
+                "500": consultation_problem_response("The request could not be served.", "Problem"),
+                "503": consultation_problem_response("The service is unavailable.", "Problem")
+            },
+            "security": [{"bearerAuth": []}]
+        }}),
+    );
+    if !findings.is_empty() {
+        return Err(findings);
+    }
+    let mut component_schemas = Map::new();
+    component_schemas.insert("Problem".to_owned(), consultation_problem_schema(false));
+    component_schemas.insert(
+        "ValidationProblem".to_owned(),
+        consultation_problem_schema(true),
+    );
+    for (id, schema) in schemas {
+        let mut component = schema.component.clone();
+        if let Some(object) = component.as_object_mut() {
+            object.insert(
+                "x-public-schema-id".to_owned(),
+                Value::String(schema.identity.clone()),
+            );
+        }
+        component_schemas.insert(id.clone(), component);
+    }
+    Ok(json!({
+        "openapi": OPENAPI_VERSION,
+        "info": {"title": project.project.id.as_str(), "version": project.project.version},
+        "paths": paths,
+        "components": {
+            "securitySchemes": {"bearerAuth": bearer_scheme()},
+            "schemas": component_schemas
+        },
+    }))
+}
+
+fn component_reference(id: &str) -> String {
+    format!("#/components/schemas/{id}")
+}
+
+fn consultation_problem_response(description: &str, schema: &str) -> Value {
+    json!({
+        "description": description,
+        "content": {"application/problem+json": {"schema": {
+            "$ref": format!("#/components/schemas/{schema}")
+        }}}
+    })
+}
+
+fn consultation_problem_schema(validation: bool) -> Value {
+    let mut schema = json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "title", "status", "traceId"],
+        "properties": {
+            "type": {"type": "string", "format": "uri", "minLength": 1, "maxLength": 512},
+            "title": {"type": "string", "minLength": 1, "maxLength": 512},
+            "status": {"type": "integer", "minimum": 400, "maximum": 599},
+            "detail": {"type": "string", "minLength": 1, "maxLength": 2048},
+            "traceId": {"type": "string", "minLength": 1, "maxLength": 128},
+            "errors": {
+                "type": "array", "minItems": 1, "maxItems": 16,
+                "items": {
+                    "type": "object", "additionalProperties": false,
+                    "required": ["pointer", "message"],
+                    "properties": {
+                        "pointer": {"type": "string", "minLength": 1, "maxLength": 512},
+                        "message": {"type": "string", "minLength": 1, "maxLength": 512}
+                    }
+                }
+            }
+        }
+    });
+    if validation {
+        schema["required"] = json!(["type", "title", "status", "traceId", "errors"]);
+    }
+    schema
+}
+
+fn caller_capabilities_schema() -> Value {
+    let operation = json!({
+        "type": "object", "additionalProperties": false,
+        "required": ["operationId", "contract", "capability", "view"],
+        "properties": {
+            "operationId": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9]*$", "maxLength": 128},
+            "contract": {"type": "string", "format": "uri", "minLength": 1, "maxLength": 2048,
+                "pattern": "^https://\\S+$"},
+            "capability": {"type": "string", "minLength": 1, "maxLength": 128,
+                "pattern": "^[a-z][a-z0-9-]{0,127}$",
+                "x-extensible-enum": ["retrieve", "lookup", "list", "search"]},
+            "view": {"type": "string", "minLength": 1, "maxLength": 128,
+                "pattern": "^[a-z][a-z0-9_-]{0,127}$"},
+            "selectors": named_capability_inputs_schema(),
+            "searches": named_capability_inputs_schema()
+        }
+    });
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["collections"],
+        "properties": {"collections": {
+            "type": "array", "maxItems": 64, "uniqueItems": true,
+            "items": {"type": "object", "additionalProperties": false,
+                "required": ["collectionId", "registry", "operations"],
+                "properties": {
+                    "collectionId": {"type": "string", "minLength": 1, "maxLength": 64},
+                    "registry": {"type": "string", "format": "uri", "minLength": 1, "maxLength": 2048},
+                    "operations": {
+                        "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true,
+                        "items": operation
+                    }
+                }}
+        }}
+    })
+}
+
+fn named_capability_inputs_schema() -> Value {
+    json!({
+        "type": "array", "minItems": 1, "maxItems": 64, "uniqueItems": true,
+        "items": {"type": "string", "minLength": 1, "maxLength": 128,
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,127}$"}
+    })
+}
+
 /// The one security scheme a compiled contract names: a bearer token, the
 /// shape the Base Registry Engine's generated contracts serve. No scopes
 /// are enumerated in v1.
@@ -1442,6 +1745,94 @@ mod tests {
                 })
                 .expect("whole-contract pin header");
             assert_eq!(pin, &contract_pin_parameter());
+        }
+    }
+
+    #[test]
+    fn consultation_contract_embeds_public_schemas_and_every_ref_resolves_locally() {
+        let project: AdapterProject = serde_json::from_value(json!({
+            "project": {"id": "consultation", "version": "1"},
+            "consultation": {
+                "contract": "https://registry.example/contracts/1/openapi.yaml",
+                "collections": [{
+                    "recordType": "people",
+                    "registry": "urn:registry:people",
+                    "view": "public",
+                    "dataSchema": "person"
+                }]
+            },
+            "pack": {
+                "id": "source", "version": "1",
+                "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+            },
+            "recordTypes": [{"name": "people", "fields": []}],
+            "bindings": [{
+                "id": "people-retrieve", "operation": "retrieve",
+                "recordType": "people", "route": "source-read",
+                "maximumUpstreamCalls": 1
+            }],
+            "accessProfiles": [{
+                "id": "reader", "scopes": ["records.read"],
+                "operations": ["retrieve"], "recordTypes": ["people"]
+            }]
+        }))
+        .expect("Consultation project");
+        let checked = registry_adapter::engine::public_schema::check_public_schema(json!({
+            "$id": "https://registry.example/schemas/person/1/schema.json",
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name"],
+            "properties": {"name": {"$ref": "#/$defs/name"}},
+            "$defs": {"name": {"type": "string", "minLength": 1}}
+        }))
+        .expect("checked public schema");
+        let schemas = BTreeMap::from([(
+            "person".to_owned(),
+            ConsultationSchema {
+                identity: checked.identity().to_owned(),
+                component: checked.for_component("person"),
+            },
+        )]);
+        let document = assemble_consultation(&project, &schemas).expect("assembled contract");
+        assert_eq!(
+            document["paths"]["/v1/collections/people/records/{recordId}"]["get"]["responses"]
+                ["200"]["content"]["application/json"]["schema"]["properties"]["data"]["$ref"],
+            "#/components/schemas/person"
+        );
+        assert_eq!(
+            document["components"]["schemas"]["person"]["x-public-schema-id"],
+            "https://registry.example/schemas/person/1/schema.json"
+        );
+        assert_eq!(
+            document["components"]["schemas"]["person"]["properties"]["name"]["$ref"],
+            "#/components/schemas/person/$defs/name"
+        );
+        assert_local_references_resolve(&document, &document);
+    }
+
+    fn assert_local_references_resolve(document: &Value, value: &Value) {
+        match value {
+            Value::Array(items) => {
+                for item in items {
+                    assert_local_references_resolve(document, item);
+                }
+            }
+            Value::Object(object) => {
+                if let Some(reference) = object.get("$ref").and_then(Value::as_str) {
+                    assert!(
+                        reference.starts_with("#/"),
+                        "external reference: {reference}"
+                    );
+                    assert!(
+                        document.pointer(&reference[1..]).is_some(),
+                        "unresolved reference: {reference}"
+                    );
+                }
+                for member in object.values() {
+                    assert_local_references_resolve(document, member);
+                }
+            }
+            Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
         }
     }
 }

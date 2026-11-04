@@ -286,7 +286,11 @@ impl OfflineSourceProgram {
         transcript
             .finish()
             .map_err(|_| KernelError::SourceProtocol)?;
-        crate::pack_source::lookup_result(outcome?).map_err(|_| KernelError::SourceProtocol)
+        let projected = self
+            .closure
+            .project_lookup(outcome?, acquisition.deadline().into_std())
+            .map_err(|_| KernelError::SourceProtocol)?;
+        crate::pack_source::lookup_result(projected).map_err(|_| KernelError::SourceProtocol)
     }
 
     /// Execute against sealed HTTP exchanges and explicit captured SQLite

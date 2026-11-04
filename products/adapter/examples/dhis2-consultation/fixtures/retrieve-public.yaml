@@ -1,0 +1,63 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json
+#
+# Documented derivative of the scrubbed DHIS2 2.43.2.1 get-found capture.
+# The source shape and identifiers remain captured; only the first attribute
+# value is an explicit private synthetic canary used to prove that the
+# project-owned public projection does not disclose source attributes.
+apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
+kind: AdapterFixture
+id: dhis2-consultation-retrieve-public
+pack: dhis2-tracker
+upstreamVersion: "2.43.2.1"
+provenance:
+  type: documented
+  reference: products/adapter/fixtures/dhis2-tracker/get-found.yaml with one synthetic private canary value
+intercepts:
+  - type: endpoint
+    endpoint: tracker
+entries:
+  - facadeRequest:
+      operation: retrieve
+      path: /v1/collections/people/records/EeBJ3Sn9uLg
+    upstream:
+      - request:
+          endpoint: tracker
+          method: GET
+          path: /api/tracker/trackedEntities/EeBJ3Sn9uLg
+        response:
+          status: 200
+          body:
+            trackedEntity: EeBJ3Sn9uLg
+            trackedEntityType: cQWYtUfH6Vx
+            createdAt: "2017-01-20T10:44:02.770"
+            createdAtClient: "2017-01-20T10:44:02.770"
+            updatedAt: "2017-05-26T11:46:22.372"
+            updatedAtClient: "2017-05-26T11:46:22.372"
+            orgUnit: slSrf7H9lMf
+            inactive: false
+            deleted: false
+            potentialDuplicate: false
+            attributes:
+              - attribute: rmeJVy1Rl5V
+                code: SYNTHETIC_CODE_01
+                displayName: Synthetic displayName 01
+                createdAt: "2017-05-26T11:46:22.369"
+                updatedAt: "2017-05-26T11:46:22.369"
+                valueType: TEXT
+                value: PRIVATE-CANARY
+    expected:
+      type: response
+      status: 200
+      headers:
+        cache-control: no-store
+        content-type: application/json
+      body:
+        recordId: EeBJ3Sn9uLg
+        data:
+          source:
+            id: EeBJ3Sn9uLg
+            type: cQWYtUfH6Vx
+          registration:
+            organisationUnit: slSrf7H9lMf
+            createdAt: "2017-01-20T10:44:02.770"
+            updatedAt: "2017-05-26T11:46:22.372"

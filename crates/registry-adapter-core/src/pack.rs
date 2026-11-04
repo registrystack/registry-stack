@@ -490,6 +490,11 @@ pub struct SourceRouteDecl {
     /// listener-free, read-only Evidence entry point.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evidence: Option<EvidenceRouteContract>,
+    /// The source-neutral read semantics this route explicitly supports. A
+    /// facade host maps these native inputs and guarantees to its public
+    /// protocol; it never infers them from a route id or source brand.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_support: Option<crate::SourceReadSupport>,
     /// The ordered steps, as an internal route's body.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub steps: Vec<Step>,
@@ -799,6 +804,7 @@ mod tests {
             tested_versions: vec!["2.7".to_string()],
             endpoints: UniqueIdList::new(vec![endpoint()]).expect("unique"),
             route_templates: UniqueIdList::new(vec![RouteTemplate {
+                read_support: None,
                 id: LocalId::new("paged-fetch").expect("id"),
                 parameters: Vec::new(),
                 steps: Vec::new(),
@@ -844,6 +850,7 @@ mod tests {
                 .expect("digest"),
             }),
             source_routes: UniqueIdList::new(vec![SourceRouteDecl {
+                read_support: None,
                 id: LocalId::new("kobo-submissions").expect("id"),
                 scan: Some(SourceScan::Ongoing),
                 next_recovery: Some(SourceRecovery::KeyDeduplicated),
@@ -930,6 +937,7 @@ mod tests {
         assert!(
             UniqueIdList::new(vec![
                 SourceRouteDecl {
+                    read_support: None,
                     id: LocalId::new("same").expect("id"),
                     scan: None,
                     next_recovery: None,
@@ -939,6 +947,7 @@ mod tests {
                     steps: Vec::new(),
                 },
                 SourceRouteDecl {
+                    read_support: None,
                     id: LocalId::new("same").expect("id"),
                     scan: None,
                     next_recovery: None,

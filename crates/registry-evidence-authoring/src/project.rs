@@ -498,6 +498,20 @@ pub struct Source {
     )]
     pub inputs: BTreeMap<String, SourceInput>,
     pub acquisition_posture: AcquisitionPosture,
+    /// Optional project-owned projection of matched native facts. Acquisition
+    /// and lookup classification remain in the reusable pack.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub projection: Option<SourceProjection>,
+}
+
+/// A reviewed source-facts projection and its versioned output JSON Schema.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SourceProjection {
+    pub source: String,
+    pub entrypoint: String,
+    pub schema: String,
 }
 
 fn external_id_map<'de, D, V>(deserializer: D) -> Result<BTreeMap<String, V>, D::Error>
@@ -1253,6 +1267,41 @@ fn validate_project_without_id_collisions(project: &EvidenceProject) -> Vec<Find
     }
     for (id, source) in &project.sources {
         let at = FieldPath::root().key("sources").map_key(id.to_string());
+        if let Some(projection) = &source.projection {
+            if source.acquisition_posture != AcquisitionPosture::RecordTransformed {
+                push(
+                    at.clone().key("acquisitionPosture"),
+                    "source-projection-posture",
+                    "a project-owned facts projection requires record-transformed posture",
+                );
+            }
+            if !valid_asset(&projection.source, "rhai") || !valid_asset(&projection.schema, "json")
+            {
+                push(
+                    at.clone().key("projection"),
+                    "source-projection-asset",
+                    "name project-relative Rhai and JSON Schema assets without traversal",
+                );
+            }
+            if projection.entrypoint.is_empty()
+                || projection.entrypoint.len() > 128
+                || !projection
+                    .entrypoint
+                    .bytes()
+                    .enumerate()
+                    .all(|(index, byte)| {
+                        byte == b'_'
+                            || byte.is_ascii_alphabetic()
+                            || (index > 0 && byte.is_ascii_digit())
+                    })
+            {
+                push(
+                    at.clone().key("projection").key("entrypoint"),
+                    "source-projection-entrypoint",
+                    "name one bounded Rhai function identifier",
+                );
+            }
+        }
         if source.pack.version.trim().is_empty()
             || source.pack.version.len() > 128
             || source.pack.version.chars().any(char::is_whitespace)

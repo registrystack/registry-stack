@@ -219,6 +219,9 @@ mod tests {
             pagination: None,
             async_completion: None,
             resume: None,
+            project_transform: None,
+            project_input_schema: None,
+            read_support: None,
         }
     }
 

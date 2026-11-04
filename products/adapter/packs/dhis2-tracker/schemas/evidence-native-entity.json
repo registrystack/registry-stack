@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Captured DHIS2 tracked entity facts",
+  "type": "object",
+  "properties": {
+    "trackedEntity": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "trackedEntityType": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "createdAt": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "createdAtClient": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "updatedAt": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "updatedAtClient": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "orgUnit": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "inactive": { "type": "boolean" },
+    "deleted": { "type": "boolean" },
+    "potentialDuplicate": { "type": "boolean" },
+    "attributes": {
+      "type": "array",
+      "maxItems": 1000,
+      "items": {
+        "type": "object",
+        "properties": {
+          "attribute": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "code": { "type": "string", "maxLength": 1024 },
+          "displayName": { "type": "string", "maxLength": 4096 },
+          "createdAt": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "updatedAt": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "valueType": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "value": { "type": "string", "maxLength": 1048576 }
+        },
+        "required": ["attribute", "value"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["trackedEntity", "trackedEntityType", "createdAt", "updatedAt", "orgUnit", "inactive", "deleted", "potentialDuplicate", "attributes"],
+  "additionalProperties": false
+}

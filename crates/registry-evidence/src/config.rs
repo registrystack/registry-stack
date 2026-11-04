@@ -3856,6 +3856,18 @@ pub struct SourceConfig {
     pub inputs: BTreeMap<String, SourceInputConfig>,
     pub posture: AcquisitionPosture,
     pub fact_schema: ArtifactPath,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub projection: Option<SourceProjectionConfig>,
+}
+
+/// Package-owned projection of matched pack facts. It cannot affect source
+/// inputs, lookup classification, credentials or the selected route.
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SourceProjectionConfig {
+    pub script: ArtifactPath,
+    pub entrypoint: String,
+    pub digest: Digest,
 }
 
 impl SourceConfig {
@@ -3869,6 +3881,29 @@ impl SourceConfig {
             return invalid("source pack artifact prefix must match its id and digest");
         }
         require_artifact_prefix(&self.fact_schema, "schemas/")?;
+        if let Some(projection) = &self.projection {
+            if self.posture != AcquisitionPosture::RecordTransformed {
+                return invalid("a source projection requires record-transformed posture");
+            }
+            require_artifact_prefix(&projection.script, "derivations/")?;
+            if !projection.script.as_str().ends_with(".rhai")
+                || projection.entrypoint.is_empty()
+                || projection.entrypoint.len() > 128
+                || !projection
+                    .entrypoint
+                    .bytes()
+                    .enumerate()
+                    .all(|(index, byte)| {
+                        byte == b'_'
+                            || byte.is_ascii_alphabetic()
+                            || (index > 0 && byte.is_ascii_digit())
+                    })
+            {
+                return invalid(
+                    "source projection must name a Rhai script and bounded function identifier",
+                );
+            }
+        }
         Ok(())
     }
 

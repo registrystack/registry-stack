@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! `adapterctl project lock`: rewrite a project's profile and pack digest
-//! pins, and the pack's script and query-file digest pins, from the bytes
-//! of the artifacts beside them (CFG-ID-4), the way `bregctl project
-//! lock` recomputes module digests. An adopter authors or refreshes the
-//! profile, the pack, or a pinned script, runs the lock, and commits with
-//! pins that match the bytes; `adapterctl check` holds every pin against
-//! those same bytes.
+//! `adapterctl project lock`: rewrite a project's optional profile and pack
+//! digest pins, the pack's script and query-file digest pins, and the
+//! project's script and schema digest pins from the bytes of the artifacts
+//! beside them (CFG-ID-4), the way `bregctl project lock` recomputes module
+//! digests. An adopter authors or refreshes a pinned artifact, runs the lock,
+//! and commits with pins that match the bytes; `adapterctl check` holds every
+//! pin against those same bytes.
 
 use clap::{Args, Subcommand};
 use registry_adapter_core::{AdapterPack, AdapterProject};
@@ -28,9 +28,8 @@ pub struct ProjectArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum ProjectCommand {
-    /// Compute and write the profile and pack digest pins in project.yaml,
-    /// and the pack's script and query-file digest pins, from the
-    /// artifacts beside them.
+    /// Compute and write every project, profile, and pack artifact digest
+    /// pin from the artifacts beside the authored documents.
     Lock(ProjectLockArgs),
 }
 
@@ -79,8 +78,8 @@ impl PinStatus {
 pub(crate) struct LockRun {
     pub profile: PinStatus,
     pub pack: PinStatus,
-    /// Whether the pack's script and query-file digest lines were
-    /// rewritten from the files beside the pack document.
+    /// Whether a pack or project artifact inventory digest line was
+    /// rewritten from the file beside its owning document.
     pub inventory: PinStatus,
     pub diagnostics: Vec<Diagnostic>,
     pub files_checked: usize,
@@ -121,19 +120,7 @@ pub(crate) fn run_lock(args: &ProjectLockArgs) -> Result<LockRun, LockFailure> {
     let (project_path, directory) = resolve_project(&args.project);
     let project = read::<AdapterProject>(&project_path, &PROJECT_FORMAT, &mut report, &mut files)
         .map_err(io_failure)?;
-    let profile_path = crate::check::artifact_path(
-        args.profile.as_deref(),
-        &directory,
-        "profile.yaml",
-        "--profile",
-    )
-    .map_err(io_failure)?;
-    let profile_bytes = read_pinned(&profile_path, &mut files)?;
-    let pack_path =
-        crate::check::artifact_path(args.pack.as_deref(), &directory, "pack.yaml", "--pack")
-            .map_err(io_failure)?;
-    let pack_bytes = read_pinned(&pack_path, &mut files)?;
-    let Some((_, project_bytes)) = project else {
+    let Some((decoded_project, project_bytes)) = project else {
         return Ok(LockRun {
             diagnostics: report.into_diagnostics(),
             files_checked: files,
@@ -143,9 +130,26 @@ pub(crate) fn run_lock(args: &ProjectLockArgs) -> Result<LockRun, LockFailure> {
             project: args.project.display().to_string(),
         });
     };
+    let project = decoded_project.value;
+    let profile_bytes = if project.profile.is_some() {
+        let profile_path = crate::check::artifact_path(
+            args.profile.as_deref(),
+            &directory,
+            "profile.yaml",
+            "--profile",
+        )
+        .map_err(io_failure)?;
+        Some(read_pinned(&profile_path, &mut files)?)
+    } else {
+        None
+    };
+    let pack_path =
+        crate::check::artifact_path(args.pack.as_deref(), &directory, "pack.yaml", "--pack")
+            .map_err(io_failure)?;
+    let pack_bytes = read_pinned(&pack_path, &mut files)?;
 
     let decoded_pack = decode_pack_quietly(&pack_bytes, &pack_path, &mut report);
-    let (pack_bytes, inventory_status) = match &decoded_pack {
+    let (pack_bytes, pack_inventory_status) = match &decoded_pack {
         Some(pack) => {
             match repin_pack_inventory(pack, &pack_path, &pack_bytes, &mut report, &mut files)? {
                 InventoryRewrite::Rewritten(bytes) => (bytes, PinStatus::Updated),
@@ -165,14 +169,41 @@ pub(crate) fn run_lock(args: &ProjectLockArgs) -> Result<LockRun, LockFailure> {
         None => (pack_bytes, PinStatus::Unchanged),
     };
 
-    let profile_digest = digest_of(&profile_bytes);
+    let (project_bytes, project_inventory_status) = match repin_project_inventory(
+        &project,
+        &project_path,
+        &project_bytes,
+        &mut report,
+        &mut files,
+    )? {
+        InventoryRewrite::Rewritten(bytes) => (bytes, PinStatus::Updated),
+        InventoryRewrite::Unchanged(bytes) => (bytes, PinStatus::Unchanged),
+        InventoryRewrite::Refused => {
+            return Ok(LockRun {
+                diagnostics: report.into_diagnostics(),
+                files_checked: files,
+                profile: PinStatus::Unchanged,
+                pack: PinStatus::Unchanged,
+                inventory: PinStatus::Unchanged,
+                project: args.project.display().to_string(),
+            });
+        }
+    };
+    let inventory_status = if pack_inventory_status == PinStatus::Updated
+        || project_inventory_status == PinStatus::Updated
+    {
+        PinStatus::Updated
+    } else {
+        PinStatus::Unchanged
+    };
+    let profile_digest = profile_bytes.as_deref().map(digest_of);
     let pack_digest = digest_of(&pack_bytes);
     let project_text = std::str::from_utf8(&project_bytes).map_err(|source| LockFailure::Io {
         path: project_path.display().to_string(),
         source: io::Error::new(io::ErrorKind::InvalidData, source),
     })?;
     let (rewritten, profile_status, pack_status) =
-        match pin_digest_lines(project_text, &profile_digest, &pack_digest) {
+        match pin_digest_lines(project_text, profile_digest.as_ref(), &pack_digest) {
             Ok(rewritten) => rewritten,
             Err(block) => {
                 report.push(layout_finding(block));
@@ -189,13 +220,16 @@ pub(crate) fn run_lock(args: &ProjectLockArgs) -> Result<LockRun, LockFailure> {
     // The pack is written before the project: the project's pack pin
     // digests the pack bytes, so a run stopped between the two writes
     // converges on the next one.
-    if inventory_status == PinStatus::Updated {
+    if pack_inventory_status == PinStatus::Updated {
         std::fs::write(&pack_path, &pack_bytes).map_err(|source| LockFailure::Io {
             path: pack_path.display().to_string(),
             source,
         })?;
     }
-    if profile_status == PinStatus::Updated || pack_status == PinStatus::Updated {
+    if project_inventory_status == PinStatus::Updated
+        || profile_status == PinStatus::Updated
+        || pack_status == PinStatus::Updated
+    {
         std::fs::write(&project_path, rewritten.as_bytes()).map_err(|source| LockFailure::Io {
             path: project_path.display().to_string(),
             source,
@@ -238,6 +272,95 @@ enum InventoryRewrite {
     /// The inventory could not be rewritten; the findings name why, and
     /// nothing is written.
     Refused,
+}
+
+/// Repin project-owned transformation scripts and public schemas from files
+/// resolved beside `project.yaml`. The project is not rewritten until the
+/// pack inventory and every project artifact have been read successfully.
+fn repin_project_inventory(
+    project: &AdapterProject,
+    project_path: &Path,
+    project_bytes: &[u8],
+    report: &mut Report,
+    files: &mut usize,
+) -> Result<InventoryRewrite, LockFailure> {
+    let mut resolved = Vec::new();
+    let mut counted: BTreeSet<PathBuf> = BTreeSet::new();
+    let mut missing = false;
+    for (section, entries) in [
+        (
+            "scripts",
+            project
+                .artifacts
+                .scripts
+                .iter()
+                .map(|entry| entry.file.as_str())
+                .collect::<Vec<_>>(),
+        ),
+        (
+            "schemas",
+            project
+                .artifacts
+                .schemas
+                .iter()
+                .map(|entry| entry.file.as_str())
+                .collect::<Vec<_>>(),
+        ),
+    ] {
+        for (index, file) in entries.into_iter().enumerate() {
+            let path = project_path
+                .parent()
+                .map(|directory| directory.join(file))
+                .unwrap_or_else(|| PathBuf::from(file));
+            let bytes = match std::fs::read(&path) {
+                Ok(bytes) => bytes,
+                Err(source) if source.kind() == io::ErrorKind::NotFound => {
+                    report.push(project_artifact_finding(
+                        project_path,
+                        &format!("/artifacts/{section}/{index}"),
+                        "the pinned project artifact is missing",
+                        "Restore the file beside the project document, or remove the inventory entry.",
+                        file,
+                    ));
+                    missing = true;
+                    continue;
+                }
+                Err(source) => {
+                    return Err(LockFailure::Io {
+                        path: path.display().to_string(),
+                        source,
+                    });
+                }
+            };
+            if counted.insert(path) {
+                *files += 1;
+            }
+            resolved.push((section, index, digest_of(&bytes)));
+        }
+    }
+    if missing {
+        return Ok(InventoryRewrite::Refused);
+    }
+    if resolved.is_empty() {
+        return Ok(InventoryRewrite::Unchanged(project_bytes.to_vec()));
+    }
+    let text = std::str::from_utf8(project_bytes).map_err(|source| LockFailure::Io {
+        path: project_path.display().to_string(),
+        source: io::Error::new(io::ErrorKind::InvalidData, source),
+    })?;
+    let (rewritten, status) = match rewrite_project_inventory_lines(text, &resolved) {
+        Ok(rewritten) => rewritten,
+        Err(faults) => {
+            for pointer in faults {
+                report.push(inventory_layout_finding(&pointer));
+            }
+            return Ok(InventoryRewrite::Refused);
+        }
+    };
+    match status {
+        PinStatus::Updated => Ok(InventoryRewrite::Rewritten(rewritten.into_bytes())),
+        PinStatus::Unchanged => Ok(InventoryRewrite::Unchanged(project_bytes.to_vec())),
+    }
 }
 
 /// Decode the pack bytes the way `check` reads them, without reporting the
@@ -464,15 +587,165 @@ fn rewrite_inventory_lines(
     Ok((rewritten, if updated { Updated } else { Unchanged }))
 }
 
+/// Rewrite digest members under the project's nested `artifacts.scripts`
+/// and `artifacts.schemas` lists while preserving all other authored text.
+fn rewrite_project_inventory_lines(
+    project_text: &str,
+    resolved: &[InventoryPin],
+) -> Result<(String, PinStatus), Vec<String>> {
+    use PinStatus::{Unchanged, Updated};
+
+    let expected: BTreeMap<(&str, usize), &Digest> = resolved
+        .iter()
+        .map(|(section, index, digest)| ((*section, *index), digest))
+        .collect();
+    let mut artifacts_indent = None::<usize>;
+    let mut section = None::<(&str, usize)>;
+    let mut entry = None::<usize>;
+    let mut items: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut seen: BTreeSet<(&str, usize)> = BTreeSet::new();
+    let mut faults = Vec::new();
+    let mut updated = false;
+    let mut lines = Vec::new();
+    for line in project_text.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            lines.push(line.to_owned());
+            continue;
+        }
+        let indent = line.len() - trimmed.len();
+        if artifacts_indent.is_some_and(|artifacts| indent <= artifacts) {
+            artifacts_indent = None;
+            section = None;
+            entry = None;
+        }
+        if artifacts_indent.is_none() {
+            if trimmed == "artifacts:" {
+                artifacts_indent = Some(indent);
+            }
+            lines.push(line.to_owned());
+            continue;
+        }
+
+        if let Some((_, section_indent)) = section {
+            if indent <= section_indent {
+                section = None;
+                entry = None;
+            }
+        }
+        if section.is_none() {
+            if let Some((key, rest)) = trimmed.split_once(':') {
+                if matches!(key, "scripts" | "schemas") && rest.trim().is_empty() {
+                    section = Some((key, indent));
+                }
+            }
+            lines.push(line.to_owned());
+            continue;
+        }
+        let (open_section, section_indent) = section.expect("the section is open");
+        if indent <= section_indent {
+            lines.push(line.to_owned());
+            continue;
+        }
+        if trimmed == "-" || trimmed.starts_with("- ") {
+            let next = items.entry(open_section).or_insert(0);
+            entry = Some(*next);
+            *next += 1;
+            lines.push(line.to_owned());
+            continue;
+        }
+        let Some(rest) = trimmed.strip_prefix("digest:") else {
+            lines.push(line.to_owned());
+            continue;
+        };
+        let Some(index) = entry else {
+            faults.push(format!("/artifacts/{open_section}/0/digest"));
+            lines.push(line.to_owned());
+            continue;
+        };
+        seen.insert((open_section, index));
+        let Some(digest) = expected.get(&(open_section, index)) else {
+            faults.push(format!("/artifacts/{open_section}/{index}/digest"));
+            lines.push(line.to_owned());
+            continue;
+        };
+        let value = rest.trim_start();
+        let (current, comment) = match value.split_once(" #") {
+            Some((value, comment)) => (value, Some(comment)),
+            None => (value, None),
+        };
+        if !is_bare_sha256_uri(current) {
+            faults.push(format!("/artifacts/{open_section}/{index}/digest"));
+            lines.push(line.to_owned());
+            continue;
+        }
+        if current == digest.as_str() {
+            lines.push(line.to_owned());
+            continue;
+        }
+        let mut new_line = format!("{}digest: {}", &line[..indent], digest.as_str());
+        if let Some(comment) = comment {
+            new_line.push_str(" #");
+            new_line.push_str(comment);
+        }
+        updated = true;
+        lines.push(new_line);
+    }
+    for (section, index, _) in resolved {
+        if !seen.contains(&(*section, *index)) {
+            faults.push(format!("/artifacts/{section}/{index}/digest"));
+        }
+    }
+    if !faults.is_empty() {
+        return Err(faults);
+    }
+    let newline = if project_text.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
+    let mut rewritten = lines.join(newline);
+    if project_text.ends_with('\n') {
+        rewritten.push_str(newline);
+    }
+    Ok((rewritten, if updated { Updated } else { Unchanged }))
+}
+
 /// The layout refusal for one inventory pin. Value-free (CFG-SEC-3): the
 /// message names the rule, never the pack's contents.
 fn inventory_layout_finding(pointer: &str) -> Diagnostic {
+    let action = if pointer.starts_with("/artifacts/") {
+        "Write the project's artifact entries as block mappings with one indented digest line each, or pin their digests by hand."
+    } else {
+        "Write the pack's inventory entries as block mappings with one indented digest line each, or pin their digests by hand."
+    };
     Diagnostic::error(
         "adapterctl.project-lock-layout",
         pointer,
         "the digest pin is not in the block form the lock rewrites",
-        "Write the pack's inventory entries as block mappings with one indented digest line each, or pin their digests by hand.",
+        action,
     )
+}
+
+fn project_artifact_finding(
+    project_path: &Path,
+    pointer: &str,
+    message: &str,
+    action: &str,
+    artifact_path: &str,
+) -> Diagnostic {
+    let mut diagnostic = Diagnostic::error(
+        "adapter.project.digest-pin-required",
+        pointer,
+        message,
+        action,
+    );
+    diagnostic.source = Some(Source {
+        file: format!("{} ({artifact_path})", project_path.display()),
+        line: None,
+        column: None,
+    });
+    diagnostic
 }
 
 /// The warning for a pack that does not decode: the lock cannot learn the
@@ -500,7 +773,7 @@ fn pack_not_decoded_warning(pack_path: &Path) -> Diagnostic {
 /// the two digest values, including every comment, is preserved.
 fn pin_digest_lines(
     project_text: &str,
-    profile_digest: &Digest,
+    profile_digest: Option<&Digest>,
     pack_digest: &Digest,
 ) -> Result<(String, PinStatus, PinStatus), PinnedBlock> {
     use PinStatus::{Unchanged, Updated};
@@ -549,7 +822,7 @@ fn pin_digest_lines(
         section = None;
         if let Some((key, rest)) = line.split_once(':') {
             let block = match key {
-                "profile" => Some(PinnedBlock::Profile),
+                "profile" if profile_digest.is_some() => Some(PinnedBlock::Profile),
                 "pack" => Some(PinnedBlock::Pack),
                 _ => None,
             };
@@ -569,7 +842,7 @@ fn pin_digest_lines(
         }
         lines.push(line.to_owned());
     }
-    if !profile_seen {
+    if profile_digest.is_some() && !profile_seen {
         return Err(PinnedBlock::Profile);
     }
     if !pack_seen {
@@ -592,7 +865,7 @@ fn pin_digest_lines(
 fn pinned_digest_line(
     line: &str,
     block: PinnedBlock,
-    profile_digest: &Digest,
+    profile_digest: Option<&Digest>,
     pack_digest: &Digest,
 ) -> Result<Option<String>, PinnedBlock> {
     let member = line.trim_start();
@@ -602,7 +875,7 @@ fn pinned_digest_line(
     let indent = &line[..line.len() - member.len()];
     let value = rest.trim_start();
     let pinned = match block {
-        PinnedBlock::Profile => profile_digest,
+        PinnedBlock::Profile => profile_digest.ok_or(PinnedBlock::Profile)?,
         PinnedBlock::Pack => pack_digest,
     };
     // The digest token must be the whole unquoted value; a trailing

@@ -47,7 +47,7 @@
 //!
 //! **What none of it proves.** Not that this crate performs no input or output.
 //! It proves that no path this configuration names is reachable by name from
-//! this crate's compiled source, that its nine direct normal dependencies are
+//! this crate's compiled source, that its direct normal dependencies are
 //! listed here, that the one rhai engine it builds has given up its module resolver
 //! and both of its printing handlers, and that reading an authored `import`
 //! does not open the file it names. A capability arriving by a route none of
@@ -202,6 +202,9 @@ const FORBIDDEN: &[(&str, &str)] = &[
 /// environment or standard-stream feature.
 const PERMITTED_DEPENDENCIES: &[&str] = &[
     "anyhow",
+    // Workspace defaults disable resolve-http and resolve-file; projection checks
+    // install a refusing resolver even when another consumer unifies features.
+    "jsonschema",
     "registry-platform-yaml",
     "rhai",
     "schemars",

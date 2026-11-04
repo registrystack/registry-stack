@@ -145,6 +145,7 @@ impl std::error::Error for PackSourceFailure {}
 pub struct PackSourceExecutor {
     program: EvidenceProgram,
     source: SourceConfig,
+    closure: SourcePack,
     observer: Option<SourceObserver>,
 }
 
@@ -221,6 +222,7 @@ impl PackSourceExecutor {
         Ok(Self {
             program,
             source: source.clone(),
+            closure: closure.clone(),
             observer: None,
         })
     }
@@ -336,13 +338,23 @@ impl PackSourceExecutor {
             None => self.program.begin_acquisition_at(hooks, observed_at).await,
         }
         .map_err(begin_failure)?;
-        let lookup = lookup_result(
-            self.program
-                .execute(&acquisition, inputs)
-                .await
-                .map_err(execution_failure)?,
-        )
-        .map_err(PackSourceFailure::categorical)?;
+        let native = self
+            .program
+            .execute(&acquisition, inputs)
+            .await
+            .map_err(execution_failure)?;
+        let projected = self
+            .closure
+            .project_lookup(native, acquisition.deadline().into_std())
+            .map_err(|failure| {
+                PackSourceFailure::categorical(match failure {
+                    registry_adapter_engine::project_transform::ProjectTransformError::Budget => {
+                        PackSourceError::Budget
+                    }
+                    _ => PackSourceError::Protocol,
+                })
+            })?;
+        let lookup = lookup_result(projected).map_err(PackSourceFailure::categorical)?;
         let mut valid_until = None;
         for metadata in acquisition.trusted_protocol_metadata().await {
             let expiry = DateTime::parse_from_rfc3339(&metadata.valid_until)

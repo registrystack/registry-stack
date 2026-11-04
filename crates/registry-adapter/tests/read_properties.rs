@@ -259,11 +259,12 @@ fn project(budget: u64) -> AdapterProject {
             id: local("soundness-project"),
             version: "1".to_owned(),
         },
-        profile: PinnedRef {
+        profile: Some(PinnedRef {
             id: local("soundness-profile"),
             version: "1".to_owned(),
             digest: digest(),
-        },
+        }),
+        consultation: None,
         pack: PinnedRef {
             id: local("soundness-pack"),
             version: "1".to_owned(),
@@ -297,6 +298,8 @@ fn project(budget: u64) -> AdapterProject {
             record_types: UniqueList::new(vec![local("person")]).expect("one type"),
         }])
         .expect("one access profile"),
+        artifacts: Default::default(),
+        binding_transforms: BTreeMap::new(),
         parameterized_parts: BTreeMap::new(),
     }
 }

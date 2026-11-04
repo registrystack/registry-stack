@@ -949,6 +949,17 @@
         "pack": {
           "$ref": "#/$defs/PackReference"
         },
+        "projection": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceProjection"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional project-owned projection of matched native facts. Acquisition\nand lookup classification remain in the reusable pack."
+        },
         "route": {
           "$ref": "#/$defs/LocalId"
         }
@@ -990,6 +1001,27 @@
         "role",
         "profile",
         "field"
+      ],
+      "type": "object"
+    },
+    "SourceProjection": {
+      "additionalProperties": false,
+      "description": "A reviewed source-facts projection and its versioned output JSON Schema.",
+      "properties": {
+        "entrypoint": {
+          "type": "string"
+        },
+        "schema": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "entrypoint",
+        "schema"
       ],
       "type": "object"
     },

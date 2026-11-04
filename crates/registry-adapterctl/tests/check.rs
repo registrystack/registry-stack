@@ -844,6 +844,49 @@ fn project_lock_of_a_fresh_project_writes_nothing() {
     );
 }
 
+/// A built-in Consultation project has no authored profile to read or pin.
+/// Its project-owned transformation and schema inventories are still locked
+/// from the files beside `project.yaml` in the same one-command workflow.
+#[test]
+fn project_lock_repins_consultation_artifacts_without_a_profile() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let source = repository.join("products/adapter/examples/dhis2-consultation");
+    let pack = repository.join("products/adapter/packs/dhis2-tracker/pack.yaml");
+    let root = tempfile::tempdir().unwrap();
+    let copy = root.path().join("dhis2-consultation");
+    copy_fs(&source, &copy);
+    let script = copy.join("scripts/person-public.rhai");
+    let contents = std::fs::read_to_string(&script).unwrap();
+    std::fs::write(
+        &script,
+        format!("{contents}\n// reviewed projection edit\n"),
+    )
+    .unwrap();
+    let expected = registry_platform_config::sha256_uri(&std::fs::read(&script).unwrap());
+    edit(
+        &copy.join("project.yaml"),
+        "digest: sha256:01dd14474a575c32abbd207e291741e7f791a2ed3aa8c5255e525b7cb238ca00",
+        "digest: sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    );
+
+    let (exit, report, stderr) = run_json(&[
+        "project",
+        "lock",
+        copy.join("project.yaml").to_str().unwrap(),
+        "--pack",
+        pack.to_str().unwrap(),
+    ]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    assert!(stderr.is_empty(), "{}", String::from_utf8_lossy(&stderr));
+    assert_eq!(report["profile"], "unchanged", "{report}");
+    assert_eq!(report["inventory"], "updated", "{report}");
+    let project = std::fs::read_to_string(copy.join("project.yaml")).unwrap();
+    assert!(
+        project.contains(&format!("digest: {expected}")),
+        "the edited project script must be repinned: {project}"
+    );
+}
+
 /// A pin is a byte digest: the lock pins whatever bytes the artifact
 /// carries, even bytes the reader would refuse, because deciding whether
 /// an artifact is a good one is `check`'s business. The repinned project

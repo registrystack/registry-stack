@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://registry.example/schemas/person-summary/1/schema.json",
+  "title": "Person summary data",
+  "type": "object",
+  "properties": {
+    "organisationUnit": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "lastChangedAt": { "type": "string", "minLength": 1, "maxLength": 128 }
+  },
+  "required": ["organisationUnit", "lastChangedAt"],
+  "additionalProperties": false
+}

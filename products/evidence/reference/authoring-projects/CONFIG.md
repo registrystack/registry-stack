@@ -78,6 +78,29 @@ states whether the provider answer is source-derived, field-projected or
 record-transformed; local projection does not strengthen the acquisition claim.
 The Source contains no provider request program or acquisition Function.
 
+An optional `projection` selects a project-owned Rhai `source`, its one-argument
+`entrypoint`, and a JSON `schema` asset for final facts. For example:
+
+```yaml
+projection:
+  source: projections/person-facts.rhai
+  entrypoint: project_facts
+  schema: schemas/person-facts.json
+```
+
+The function receives one already-matched native facts object and returns one
+object validated against the versioned, closed JSON Schema. Nested objects,
+bounded arrays and local references are supported; remote references are
+refused. The schema carries a versioned HTTPS `$id`. The compiler captures both
+assets in the governed package and includes them in definition revisions.
+Projection requires `record-transformed` acquisition posture, retains the
+acquisition deadline and cannot change source inputs,
+lookup classification, credentials, destinations or authority. A no-match,
+ambiguous or unresolved lookup never runs the projection. A script, budget or
+output-schema failure prevents derivation and never becomes a negative fact.
+The standalone example retains two facts while removing a private canary using
+the same unmodified source pack.
+
 Keep the owned pack at `adapter-packs/<pack-id>/pack.yaml` with its referenced
 scripts and schemas. The compiler captures the reviewed artifact closure,
 checks its declared digests and derives the compiled Source's exact pack digest.
@@ -610,6 +633,10 @@ sources.*.label
 sources.*.pack
 sources.*.pack.id
 sources.*.pack.version
+sources.*.projection
+sources.*.projection.entrypoint
+sources.*.projection.schema
+sources.*.projection.source
 sources.*.route
 ```
 <!-- evidence-authoring-project-key-paths:end -->

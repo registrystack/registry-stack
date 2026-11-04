@@ -1,7 +1,7 @@
 {
   "apiVersion": "id.registrystack.org/formats/adapter/effective-contract/v1alpha1",
   "kind": "AdapterEffectiveContract",
-  "digest": "sha256:eeb61d6264a5ab43e9dc1a68dd8443b635dd5ee017470dcb7dc08958ca08341c",
+  "digest": "sha256:cbf0862e9c94a41b3464a9e75d6358fc08c9ef39f7987a242494d59e067f1dec",
   "contract": {
     "schemaDialect": "https://json-schema.org/draft/2020-12/schema",
     "project": {
@@ -9,7 +9,7 @@
       "version": "1.0.0"
     },
     "profileVersion": "1",
-    "artifactDeploymentDigest": "sha256:e00d31f55422f5eee0829f30ed6499919950d99de1496e900b309124957a05b2",
+    "artifactDeploymentDigest": "sha256:19290df4a1e281da8b22fac7c6d2ef6cf6de7496139a615ebc298dcbfa28d0e9",
     "authentication": {
       "scheme": "bearer",
       "audience": "adapter-example",

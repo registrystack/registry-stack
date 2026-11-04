@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://registry.example/schemas/person-public/1/schema.json",
+  "title": "Public person data",
+  "type": "object",
+  "properties": {
+    "source": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "type": { "type": "string", "minLength": 1, "maxLength": 128 }
+      },
+      "required": ["id", "type"],
+      "additionalProperties": false
+    },
+    "registration": {
+      "type": "object",
+      "properties": {
+        "organisationUnit": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAt": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "updatedAt": { "type": "string", "minLength": 1, "maxLength": 128 }
+      },
+      "required": ["organisationUnit", "createdAt", "updatedAt"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["source", "registration"],
+  "additionalProperties": false
+}
