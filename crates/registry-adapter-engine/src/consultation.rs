@@ -15,8 +15,20 @@ pub const SERVICE_UNAVAILABLE_PROBLEM_CODE: &str =
     "https://govstack.global/problems/digital-registries/service-unavailable";
 pub const MAX_COLLECTIONS: usize = 64;
 pub const MAX_OPERATIONS_PER_COLLECTION: usize = 16;
+const MAXIMUM_RECORD_ID_CHARACTERS: usize = 256;
 pub const PROFILE_ID: &str = "govstack-consultation";
 pub const PROFILE_VERSION: &str = "1.0.0-draft";
+
+/// Whether one source item key can be released as a public Consultation
+/// Record identifier. The source item contract is byte-bounded while JSON
+/// Schema's `maxLength` counts characters, so both limits hold before a host
+/// can wrap the key into the public protocol.
+pub(crate) fn source_key_is_public_record_id(key: &str) -> bool {
+    !key.is_empty()
+        && key.len() <= registry_adapter_core::MAXIMUM_ITEM_KEY_BYTES
+        && key.chars().take(MAXIMUM_RECORD_ID_CHARACTERS + 1).count()
+            <= MAXIMUM_RECORD_ID_CHARACTERS
+}
 
 /// The internal profile used only to reuse the existing facade execution,
 /// admission, problem, cursor and journal machinery. Deployments never pin
@@ -164,7 +176,11 @@ pub fn record_schema(data_schema_reference: &str) -> Value {
         "additionalProperties": false,
         "required": ["recordId", "data"],
         "properties": {
-            "recordId": {"type": "string", "minLength": 1, "maxLength": 256},
+            "recordId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": MAXIMUM_RECORD_ID_CHARACTERS,
+            },
             "data": {"$ref": data_schema_reference},
         },
     })

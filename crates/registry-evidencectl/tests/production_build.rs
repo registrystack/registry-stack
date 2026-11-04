@@ -362,6 +362,50 @@ fn an_evidence_binary_that_does_not_identify_itself_is_refused_before_any_step()
 }
 
 #[test]
+fn package_captures_declared_projection_paths_in_the_governed_bundle() {
+    let fixture = Fixture::new();
+    fs::create_dir_all(fixture.project.join("mappings/nested")).unwrap();
+    let script = "fn project_facts(source) { #{allowed: source.allowed} }\n";
+    fs::write(fixture.project.join("mappings/nested/facts.rhai"), script).unwrap();
+    let mut schema: Value = serde_json::from_slice(&source_facts_schema()).unwrap();
+    schema["$id"] = json!("https://registry.example/schemas/allowed/v1/schema.json");
+    schema["$schema"] = json!("https://json-schema.org/draft/2020-12/schema");
+    write_json(&fixture.project.join("facts.json"), &schema);
+    edit_json(&fixture.project.join("evidence.yaml"), |project| {
+        project["sources"]["registry"]["acquisitionPosture"] = json!("record-transformed");
+        project["sources"]["registry"]["projection"] = json!({"source":"mappings/nested/facts.rhai", "schema":"facts.json", "entrypoint":"project_facts"});
+    });
+    let pack = fixture.project.join("adapter-packs/registry/pack.yaml");
+    let authored = fs::read_to_string(&pack).unwrap();
+    fs::write(
+        pack,
+        authored.replace("field-projected", "record-transformed"),
+    )
+    .unwrap();
+    let output = fixture.package("json");
+    assert_success(&output, "package with declared projection assets");
+    assert_eq!(
+        fs::read_to_string(
+            fixture
+                .output
+                .join("bundle/derivations/source-projections/registry.rhai")
+        )
+        .unwrap(),
+        script
+    );
+    let compiled: Value = serde_json::from_slice(
+        &fs::read(
+            fixture
+                .output
+                .join("bundle/schemas/source-facts/registry.schema.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(compiled, schema);
+}
+
+#[test]
 fn successful_package_excludes_runtime_local_state_and_validation_secrets() {
     let fixture = Fixture::new();
     let local = fixture.project.join(".evidence/dev");

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The authoring commands refuse a Consultation contract whose selected
-//! transformation closure cannot be loaded by the runtime.
+//! transformation or input closure cannot be loaded by the runtime.
 
 use serde_json::Value;
 use std::ffi::OsString;
@@ -41,6 +41,28 @@ fn edit(file: &Path, from: &str, to: &str) {
     let edited = contents.replacen(from, to, 1);
     assert_ne!(contents, edited, "the test mutation must change {file:?}");
     std::fs::write(file, edited).unwrap();
+}
+
+fn mutate_schema(project: &Path, relative: &str, mutate: impl FnOnce(&mut serde_json::Value)) {
+    let schema_path = project.parent().unwrap().join(relative);
+    let mut schema: Value = serde_json::from_slice(&std::fs::read(&schema_path).unwrap()).unwrap();
+    mutate(&mut schema);
+    let mut bytes = serde_json::to_vec_pretty(&schema).unwrap();
+    bytes.push(b'\n');
+    std::fs::write(&schema_path, &bytes).unwrap();
+
+    let mut project_text = std::fs::read_to_string(project).unwrap();
+    let marker = format!("      file: {relative}\n      digest: ");
+    let digest_start = project_text.find(&marker).expect("schema inventory") + marker.len();
+    let digest_end = project_text[digest_start..]
+        .find('\n')
+        .map(|offset| digest_start + offset)
+        .expect("digest line");
+    project_text.replace_range(
+        digest_start..digest_end,
+        &registry_platform_config::sha256_uri(&bytes),
+    );
+    std::fs::write(project, project_text).unwrap();
 }
 
 fn run_json(arguments: &[OsString]) -> (ExitCode, Value, Vec<u8>) {
@@ -143,6 +165,69 @@ fn check_and_compile_refuse_changed_transform_bytes() {
     assert_refused(
         &compile(&project, &output),
         "adapter.project.digest-pin-required",
+    );
+    assert!(!output.exists(), "a refused compile must write no contract");
+}
+
+#[test]
+fn check_and_compile_refuse_a_nullable_lookup_scalar_the_runtime_cannot_capture() {
+    let (root, project) = copied_consultation();
+    mutate_schema(&project, "schemas/record-id.schema.json", |schema| {
+        schema["properties"]["record-id"]["type"] = serde_json::json!(["string", "null"])
+    });
+
+    assert_refused(
+        &check(&project),
+        "adapter.project.consultation-input-incompatible",
+    );
+    let output = root.path().join("refused-openapi.json");
+    assert_refused(
+        &compile(&project, &output),
+        "adapter.project.consultation-input-incompatible",
+    );
+    assert!(!output.exists(), "a refused compile must write no contract");
+}
+
+#[test]
+fn check_and_compile_refuse_an_optional_lookup_input_the_runtime_requires() {
+    let (root, project) = copied_consultation();
+    mutate_schema(&project, "schemas/record-id.schema.json", |schema| {
+        schema["required"] = serde_json::json!([])
+    });
+
+    assert_refused(
+        &check(&project),
+        "adapter.project.consultation-input-incompatible",
+    );
+    let output = root.path().join("refused-openapi.json");
+    assert_refused(
+        &compile(&project, &output),
+        "adapter.project.consultation-input-incompatible",
+    );
+    assert!(!output.exists(), "a refused compile must write no contract");
+}
+
+#[test]
+fn check_and_compile_refuse_input_names_the_source_route_does_not_support() {
+    let (root, project) = copied_consultation();
+    mutate_schema(&project, "schemas/record-id.schema.json", |schema| {
+        let property = schema["properties"]
+            .as_object_mut()
+            .unwrap()
+            .remove("record-id")
+            .unwrap();
+        schema["properties"]["other-id"] = property;
+        schema["required"] = serde_json::json!(["other-id"]);
+    });
+
+    assert_refused(
+        &check(&project),
+        "adapter.project.consultation-input-incompatible",
+    );
+    let output = root.path().join("refused-openapi.json");
+    assert_refused(
+        &compile(&project, &output),
+        "adapter.project.consultation-input-incompatible",
     );
     assert!(!output.exists(), "a refused compile must write no contract");
 }

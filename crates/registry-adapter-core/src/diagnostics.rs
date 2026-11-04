@@ -90,6 +90,7 @@ pub enum CheckCode {
     ProjectArtifactPath,
     ProjectAsyncDeclarationMismatch,
     ProjectConsultationContractInvalid,
+    ProjectConsultationInputIncompatible,
     ProjectDuplicateRouteId,
     ProjectConsultationOperationCollision,
     ProjectConsultationRegistryInvalid,
@@ -238,6 +239,7 @@ impl CheckCode {
         Self::ProjectArtifactPath,
         Self::ProjectAsyncDeclarationMismatch,
         Self::ProjectConsultationContractInvalid,
+        Self::ProjectConsultationInputIncompatible,
         Self::ProjectConsultationOperationCollision,
         Self::ProjectConsultationRegistryInvalid,
         Self::ProjectDuplicateRouteId,
@@ -405,6 +407,9 @@ impl CheckCode {
             Self::ProjectAsyncDeclarationMismatch => "adapter.project.async-declaration-mismatch",
             Self::ProjectConsultationContractInvalid => {
                 "adapter.project.consultation-contract-invalid"
+            }
+            Self::ProjectConsultationInputIncompatible => {
+                "adapter.project.consultation-input-incompatible"
             }
             Self::ProjectDuplicateRouteId => "adapter.project.duplicate-route-id",
             Self::ProjectConsultationOperationCollision => {
@@ -620,6 +625,7 @@ impl CheckCode {
             | Self::ProjectArtifactPath
             | Self::ProjectAsyncDeclarationMismatch
             | Self::ProjectConsultationContractInvalid
+            | Self::ProjectConsultationInputIncompatible
             | Self::ProjectDuplicateRouteId
             | Self::ProjectConsultationOperationCollision
             | Self::ProjectConsultationRegistryInvalid

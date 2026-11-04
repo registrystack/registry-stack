@@ -332,6 +332,7 @@ pub(crate) fn run(args: &CheckArgs) -> Result<CheckRun, CheckFailure> {
     }
     if !report.has_errors() {
         verify_consultation_transforms(&project, &project_path, &mut report);
+        verify_consultation_inputs(&project, &pack, &project_path, &mut report);
     }
     check_fixture_bodies(&profile, &project, &fixtures, &mut report);
     check_consultation_fixture_bodies(&project, &directory, &fixtures, &mut report);
@@ -478,6 +479,80 @@ pub(crate) fn verify_consultation_transforms(
             &format!("/bindingTransforms/{}", binding.id.as_str()),
             "the Consultation binding transformation cannot be compiled from its pinned project closure",
             "Restore the reviewed script and schema bytes, select their inventoried ids, and name an entrypoint with exactly one source parameter.",
+        );
+        diagnostic.source = Some(registry_platform_yaml::Source {
+            file: project_path.display().to_string(),
+            line: None,
+            column: None,
+        });
+        report.push(diagnostic);
+    }
+}
+
+/// Refuse a Lookup or Search input schema unless the runtime can capture its
+/// complete required scalar object and map every name to the selected source
+/// route's declared inputs and comparison support.
+pub(crate) fn verify_consultation_inputs(
+    project: &registry_adapter_core::AdapterProject,
+    pack: &registry_adapter_core::AdapterPack,
+    project_path: &Path,
+    report: &mut Report,
+) {
+    let Some(consultation) = project.consultation.as_ref() else {
+        return;
+    };
+    let directory = project_path.parent().unwrap_or_else(|| Path::new(""));
+    for (index, binding) in project.bindings.iter().enumerate() {
+        let Some(capability) =
+            registry_adapter::engine::consultation::ConsultationCapability::from_binding_operation(
+                binding.operation.as_str(),
+            )
+        else {
+            continue;
+        };
+        let Some(collection) = consultation.collections.get(binding.record_type.as_str()) else {
+            continue;
+        };
+        let schema_id = match capability {
+            registry_adapter::engine::consultation::ConsultationCapability::Lookup => collection
+                .lookup
+                .as_ref()
+                .map(|lookup| &lookup.input_schema),
+            registry_adapter::engine::consultation::ConsultationCapability::Search => collection
+                .search
+                .as_ref()
+                .map(|search| &search.input_schema),
+            registry_adapter::engine::consultation::ConsultationCapability::Retrieve
+            | registry_adapter::engine::consultation::ConsultationCapability::List => None,
+        };
+        let Some(schema_id) = schema_id else {
+            continue;
+        };
+        let Some(templated) = project.templated_routes.get(binding.route.as_str()) else {
+            continue;
+        };
+        let Some(template) = pack.route_templates.get(templated.route_template.as_str()) else {
+            continue;
+        };
+        let Some(support) = template.read_support.as_ref() else {
+            continue;
+        };
+        if registry_adapter::engine::load::compile_consultation_input_filters(
+            project,
+            schema_id.as_str(),
+            capability,
+            support,
+            directory,
+        )
+        .is_ok()
+        {
+            continue;
+        }
+        let mut diagnostic = finding(
+            CheckCode::ProjectConsultationInputIncompatible,
+            &format!("/bindings/{index}"),
+            "the Consultation input schema is incompatible with the selected source route",
+            "Use a non-empty closed object whose properties are all required supported scalar types, and match every property to a source input (Search inputs require equality support).",
         );
         diagnostic.source = Some(registry_platform_yaml::Source {
             file: project_path.display().to_string(),

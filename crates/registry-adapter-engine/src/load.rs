@@ -842,7 +842,7 @@ pub fn attach_consultation_project(
             | crate::consultation::ConsultationCapability::List => (None, None),
         };
         if let Some(input_schema) = input_schema {
-            let (filters, schema) = consultation_input_filters(
+            let (filters, schema) = compile_consultation_input_filters(
                 project,
                 input_schema,
                 capability,
@@ -889,7 +889,18 @@ pub fn attach_consultation_project(
     Ok(())
 }
 
-fn consultation_input_filters(
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ConsultationInputError {
+    Schema,
+    Shape,
+    Scalar,
+    SourceSupport,
+}
+
+/// Compile one selected Lookup or Search input against the exact scalar
+/// capture shape and source support the runtime executes. Authoring commands
+/// call this same function before publishing a contract.
+pub fn compile_consultation_input_filters(
     project: &AdapterProject,
     schema_id: &str,
     capability: crate::consultation::ConsultationCapability,
@@ -900,34 +911,38 @@ fn consultation_input_filters(
         Vec<ServedFilter>,
         Arc<crate::public_schema::CheckedPublicSchema>,
     ),
-    (),
+    ConsultationInputError,
 > {
-    let declared = project.artifacts.schemas.get(schema_id).ok_or(())?;
+    let declared = project
+        .artifacts
+        .schemas
+        .get(schema_id)
+        .ok_or(ConsultationInputError::Schema)?;
     let schema = crate::project_transform::compile_project_schema_from_directory(
         declared,
         project_directory,
     )
-    .map_err(|_| ())?;
+    .map_err(|_| ConsultationInputError::Schema)?;
     let properties = schema
         .as_value()
         .get("properties")
         .and_then(Value::as_object)
         .filter(|properties| !properties.is_empty())
-        .ok_or(())?;
+        .ok_or(ConsultationInputError::Shape)?;
     let required = schema
         .as_value()
         .get("required")
         .and_then(Value::as_array)
-        .ok_or(())?
+        .ok_or(ConsultationInputError::Shape)?
         .iter()
-        .map(|name| name.as_str().ok_or(()))
+        .map(|name| name.as_str().ok_or(ConsultationInputError::Shape))
         .collect::<Result<BTreeSet<_>, _>>()?;
     if required.len() != properties.len()
         || properties
             .keys()
             .any(|name| !required.contains(name.as_str()))
     {
-        return Err(());
+        return Err(ConsultationInputError::Shape);
     }
     let mut filters = Vec::with_capacity(properties.len());
     for (name, property) in properties {
@@ -941,7 +956,9 @@ fn consultation_input_filters(
     Ok((filters, Arc::new(schema)))
 }
 
-fn scalar_filter_type(property: &Value) -> Result<registry_adapter_core::RecordFieldType, ()> {
+fn scalar_filter_type(
+    property: &Value,
+) -> Result<registry_adapter_core::RecordFieldType, ConsultationInputError> {
     match (
         property.get("type").and_then(Value::as_str),
         property.get("format").and_then(Value::as_str),
@@ -952,7 +969,7 @@ fn scalar_filter_type(property: &Value) -> Result<registry_adapter_core::RecordF
         (Some("integer"), None) => Ok(registry_adapter_core::RecordFieldType::Integer),
         (Some("number"), None) => Ok(registry_adapter_core::RecordFieldType::Decimal),
         (Some("boolean"), None) => Ok(registry_adapter_core::RecordFieldType::Boolean),
-        _ => Err(()),
+        _ => Err(ConsultationInputError::Scalar),
     }
 }
 
@@ -960,7 +977,7 @@ fn validate_consultation_filter_support(
     capability: crate::consultation::ConsultationCapability,
     support: &registry_adapter_core::SourceReadSupport,
     filters: &[ServedFilter],
-) -> Result<(), ()> {
+) -> Result<(), ConsultationInputError> {
     let filter_names: BTreeSet<&str> = filters.iter().map(|filter| filter.name.as_str()).collect();
     match (capability, support) {
         (
@@ -968,7 +985,9 @@ fn validate_consultation_filter_support(
             registry_adapter_core::SourceReadSupport::ReadOne { inputs },
         ) => {
             let source_names: BTreeSet<&str> = inputs.iter().map(|input| input.as_str()).collect();
-            (source_names == filter_names).then_some(()).ok_or(())
+            (source_names == filter_names)
+                .then_some(())
+                .ok_or(ConsultationInputError::SourceSupport)
         }
         (
             crate::consultation::ConsultationCapability::Search,
@@ -986,9 +1005,9 @@ fn validate_consultation_filter_support(
                     })
                 }))
             .then_some(())
-            .ok_or(())
+            .ok_or(ConsultationInputError::SourceSupport)
         }
-        _ => Err(()),
+        _ => Err(ConsultationInputError::SourceSupport),
     }
 }
 
