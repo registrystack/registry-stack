@@ -113,3 +113,22 @@ test("template extension changes the record field without altering action input 
   assert.equal(r.match(/id: note/g).length, 1);
   assert.ok(r.indexOf("id: note") < r.indexOf("actions:"));
 });
+
+test("private JSON is read from one validated handle and refuses aliases", async () => {
+  const { privateJson } = await import("./control.mjs");
+  const { mkdtemp, writeFile, link, symlink } =
+    await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const base =
+    process.platform === "darwin"
+      ? "/Volumes/CodexWorktrees/targets"
+      : tmpdir();
+  const dir = await mkdtemp(base + "/wg-private-json-");
+  const path = dir + "/config.json";
+  await writeFile(path, JSON.stringify({ purpose: "demo" }), { mode: 0o600 });
+  assert.deepEqual(await privateJson(path), { purpose: "demo" });
+  await symlink(path, dir + "/symlink.json");
+  await assert.rejects(privateJson(dir + "/symlink.json"), /symlink/);
+  await link(path, dir + "/hardlink.json");
+  await assert.rejects(privateJson(dir + "/hardlink.json"), /single-link/);
+});

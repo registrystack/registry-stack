@@ -8,6 +8,7 @@ import {
   randomBytes,
   sign,
 } from "node:crypto";
+import { constants as fileConstants } from "node:fs";
 import {
   chmod,
   lstat,
@@ -65,35 +66,69 @@ async function ensurePrivateDirectory(path) {
 }
 
 async function readPrivateRegularFile(path) {
-  const metadata = await lstat(path);
-  if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.nlink !== 1) {
-    throw new DemoServerError(
-      "private file is not a regular file",
-      "private-file-invalid",
+  let handle;
+  try {
+    handle = await open(
+      path,
+      fileConstants.O_RDONLY |
+        fileConstants.O_NOFOLLOW |
+        fileConstants.O_NONBLOCK,
     );
-  }
-  if ((metadata.mode & 0o077) !== 0) {
+    const metadata = await handle.stat();
+    if (!metadata.isFile() || metadata.nlink !== 1) {
+      throw new DemoServerError(
+        "private file is not a regular file",
+        "private-file-invalid",
+      );
+    }
+    if ((metadata.mode & 0o077) !== 0) {
+      throw new DemoServerError(
+        "private file is accessible to other users",
+        "private-file-mode",
+      );
+    }
+    if (
+      typeof process.getuid === "function" &&
+      metadata.uid !== process.getuid()
+    ) {
+      throw new DemoServerError(
+        "private file has a different owner",
+        "private-file-owner",
+      );
+    }
+    if (metadata.size > MAX_PRIVATE_FILE_BYTES) {
+      throw new DemoServerError(
+        "private file exceeds the size limit",
+        "private-file-size",
+      );
+    }
+    return await handle.readFile();
+  } catch (error) {
+    if (error instanceof DemoServerError) {
+      throw error;
+    }
+    if (error?.code === "ENOENT") {
+      throw new DemoServerError(
+        "private file is unavailable",
+        "private-file-missing",
+      );
+    }
     throw new DemoServerError(
-      "private file is accessible to other users",
-      "private-file-mode",
+      "private file could not be read",
+      "private-file-read",
     );
+  } finally {
+    if (handle !== undefined) {
+      try {
+        await handle.close();
+      } catch {
+        throw new DemoServerError(
+          "private file could not be closed",
+          "private-file-close",
+        );
+      }
+    }
   }
-  if (
-    typeof process.getuid === "function" &&
-    metadata.uid !== process.getuid()
-  ) {
-    throw new DemoServerError(
-      "private file has a different owner",
-      "private-file-owner",
-    );
-  }
-  if (metadata.size > MAX_PRIVATE_FILE_BYTES) {
-    throw new DemoServerError(
-      "private file exceeds the size limit",
-      "private-file-size",
-    );
-  }
-  return readFile(path);
 }
 
 async function atomicWritePrivate(path, bytes) {
@@ -130,7 +165,7 @@ async function loadOrCreateSigningKey(stateDir) {
   try {
     privatePem = await readPrivateRegularFile(keyPath);
   } catch (error) {
-    if (error?.code !== "ENOENT") {
+    if (error?.code !== "private-file-missing") {
       throw error;
     }
     const generated = generateKeyPairSync("rsa", {
@@ -155,11 +190,16 @@ async function loadOrCreateSigningKey(stateDir) {
     );
   }
   const publicJwk = createPublicKey(privateKey).export({ format: "jwk" });
+  const jwks = {
+    keys: [{ ...publicJwk, kid: KEY_ID, use: "sig", alg: "RS256" }],
+  };
+  await atomicWritePrivate(
+    join(secretsDir, "facade-jwks"),
+    Buffer.from(JSON.stringify(jwks)),
+  );
   return {
     privateKey,
-    jwks: {
-      keys: [{ ...publicJwk, kid: KEY_ID, use: "sig", alg: "RS256" }],
-    },
+    jwks,
   };
 }
 
