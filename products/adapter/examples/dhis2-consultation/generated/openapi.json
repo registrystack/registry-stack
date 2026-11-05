@@ -681,6 +681,17 @@
     "/v1/collections/people-registration/lookup": {
       "post": {
         "operationId": "lookupPeopleRegistration",
+        "parameters": [
+          {
+            "description": "W3C Trace Context. A valid context is propagated; absent or invalid context is replaced.",
+            "in": "header",
+            "name": "traceparent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -728,7 +739,16 @@
                 }
               }
             },
-            "description": "The operation's response envelope for the bound record type."
+            "description": "The operation's response envelope for the bound record type.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "400": {
             "content": {
@@ -738,7 +758,16 @@
                 }
               }
             },
-            "description": "The request is not valid."
+            "description": "The request is not valid.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "401": {
             "content": {
@@ -748,7 +777,22 @@
                 }
               }
             },
-            "description": "The caller was not authenticated."
+            "description": "The caller was not authenticated.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge with no record-specific facts.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -758,7 +802,16 @@
                 }
               }
             },
-            "description": "The caller is not authorized."
+            "description": "The caller is not authorized.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "404": {
             "content": {
@@ -768,7 +821,16 @@
                 }
               }
             },
-            "description": "The collection or record is not available."
+            "description": "The collection or record is not available.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "406": {
             "content": {
@@ -778,7 +840,16 @@
                 }
               }
             },
-            "description": "The response media type is not acceptable."
+            "description": "The response media type is not acceptable.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "413": {
             "content": {
@@ -788,7 +859,16 @@
                 }
               }
             },
-            "description": "The request body is too large."
+            "description": "The request body is too large.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "415": {
             "content": {
@@ -798,7 +878,16 @@
                 }
               }
             },
-            "description": "The request media type is not supported."
+            "description": "The request media type is not supported.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "422": {
             "content": {
@@ -808,7 +897,16 @@
                 }
               }
             },
-            "description": "A request field is not valid."
+            "description": "A request field is not valid.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "429": {
             "content": {
@@ -818,7 +916,22 @@
                 }
               }
             },
-            "description": "The source is throttling requests."
+            "description": "The source is throttling requests.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Optional delay in seconds or HTTP-date before retrying.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "500": {
             "content": {
@@ -828,7 +941,16 @@
                 }
               }
             },
-            "description": "The request could not be served."
+            "description": "The request could not be served.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "502": {
             "content": {
@@ -838,7 +960,16 @@
                 }
               }
             },
-            "description": "The source answered with an error."
+            "description": "The source answered with an error.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "503": {
             "content": {
@@ -848,7 +979,22 @@
                 }
               }
             },
-            "description": "The service is unavailable."
+            "description": "The service is unavailable.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Optional delay in seconds or HTTP-date before retrying.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "504": {
             "content": {
@@ -858,7 +1004,16 @@
                 }
               }
             },
-            "description": "The source did not answer in time."
+            "description": "The source did not answer in time.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -894,7 +1049,19 @@
             "name": "cursor",
             "required": false,
             "schema": {
+              "maxLength": 2796,
               "minLength": 1,
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "type": "string",
+              "x-registry-runtime-validation": "The Adapter verifies authenticated cursor bytes and their caller, operation, deployment, filter, and expiry bindings."
+            }
+          },
+          {
+            "description": "W3C Trace Context. A valid context is propagated; absent or invalid context is replaced.",
+            "in": "header",
+            "name": "traceparent",
+            "required": false,
+            "schema": {
               "type": "string"
             }
           }
@@ -932,9 +1099,17 @@
                       "additionalProperties": false,
                       "properties": {
                         "nextCursor": {
-                          "type": [
-                            "string",
-                            "null"
+                          "anyOf": [
+                            {
+                              "maxLength": 2796,
+                              "minLength": 1,
+                              "pattern": "^[A-Za-z0-9_-]+$",
+                              "type": "string",
+                              "x-registry-runtime-validation": "The Adapter verifies authenticated cursor bytes and their caller, operation, deployment, filter, and expiry bindings."
+                            },
+                            {
+                              "type": "null"
+                            }
                           ]
                         }
                       },
@@ -952,7 +1127,16 @@
                 }
               }
             },
-            "description": "The operation's response envelope for the bound record type."
+            "description": "The operation's response envelope for the bound record type.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "400": {
             "content": {
@@ -962,7 +1146,16 @@
                 }
               }
             },
-            "description": "The request is not valid."
+            "description": "The request is not valid.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "401": {
             "content": {
@@ -972,7 +1165,22 @@
                 }
               }
             },
-            "description": "The caller was not authenticated."
+            "description": "The caller was not authenticated.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge with no record-specific facts.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -982,7 +1190,16 @@
                 }
               }
             },
-            "description": "The caller is not authorized."
+            "description": "The caller is not authorized.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "404": {
             "content": {
@@ -992,7 +1209,16 @@
                 }
               }
             },
-            "description": "The collection or record is not available."
+            "description": "The collection or record is not available.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "406": {
             "content": {
@@ -1002,37 +1228,16 @@
                 }
               }
             },
-            "description": "The response media type is not acceptable."
-          },
-          "413": {
-            "content": {
-              "application/problem+json": {
+            "description": "The response media type is not acceptable.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
                 "schema": {
-                  "$ref": "#/components/schemas/Problem"
+                  "const": "no-store",
+                  "type": "string"
                 }
               }
-            },
-            "description": "The request body is too large."
-          },
-          "415": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The request media type is not supported."
-          },
-          "422": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ValidationProblem"
-                }
-              }
-            },
-            "description": "A request field is not valid."
+            }
           },
           "429": {
             "content": {
@@ -1042,7 +1247,22 @@
                 }
               }
             },
-            "description": "The source is throttling requests."
+            "description": "The source is throttling requests.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Optional delay in seconds or HTTP-date before retrying.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "500": {
             "content": {
@@ -1052,7 +1272,16 @@
                 }
               }
             },
-            "description": "The request could not be served."
+            "description": "The request could not be served.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "502": {
             "content": {
@@ -1062,7 +1291,16 @@
                 }
               }
             },
-            "description": "The source answered with an error."
+            "description": "The source answered with an error.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "503": {
             "content": {
@@ -1072,7 +1310,22 @@
                 }
               }
             },
-            "description": "The service is unavailable."
+            "description": "The service is unavailable.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Optional delay in seconds or HTTP-date before retrying.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "504": {
             "content": {
@@ -1082,7 +1335,16 @@
                 }
               }
             },
-            "description": "The source did not answer in time."
+            "description": "The source did not answer in time.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1111,6 +1373,15 @@
               "minLength": 1,
               "type": "string"
             }
+          },
+          {
+            "description": "W3C Trace Context. A valid context is propagated; absent or invalid context is replaced.",
+            "in": "header",
+            "name": "traceparent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -1137,7 +1408,16 @@
                 }
               }
             },
-            "description": "The operation's response envelope for the bound record type."
+            "description": "The operation's response envelope for the bound record type.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "400": {
             "content": {
@@ -1147,7 +1427,16 @@
                 }
               }
             },
-            "description": "The request is not valid."
+            "description": "The request is not valid.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "401": {
             "content": {
@@ -1157,7 +1446,22 @@
                 }
               }
             },
-            "description": "The caller was not authenticated."
+            "description": "The caller was not authenticated.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge with no record-specific facts.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -1167,7 +1471,16 @@
                 }
               }
             },
-            "description": "The caller is not authorized."
+            "description": "The caller is not authorized.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "404": {
             "content": {
@@ -1177,7 +1490,16 @@
                 }
               }
             },
-            "description": "The collection or record is not available."
+            "description": "The collection or record is not available.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "406": {
             "content": {
@@ -1187,37 +1509,16 @@
                 }
               }
             },
-            "description": "The response media type is not acceptable."
-          },
-          "413": {
-            "content": {
-              "application/problem+json": {
+            "description": "The response media type is not acceptable.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
                 "schema": {
-                  "$ref": "#/components/schemas/Problem"
+                  "const": "no-store",
+                  "type": "string"
                 }
               }
-            },
-            "description": "The request body is too large."
-          },
-          "415": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The request media type is not supported."
-          },
-          "422": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ValidationProblem"
-                }
-              }
-            },
-            "description": "A request field is not valid."
+            }
           },
           "429": {
             "content": {
@@ -1227,7 +1528,22 @@
                 }
               }
             },
-            "description": "The source is throttling requests."
+            "description": "The source is throttling requests.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Optional delay in seconds or HTTP-date before retrying.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "500": {
             "content": {
@@ -1237,7 +1553,16 @@
                 }
               }
             },
-            "description": "The request could not be served."
+            "description": "The request could not be served.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "502": {
             "content": {
@@ -1247,7 +1572,16 @@
                 }
               }
             },
-            "description": "The source answered with an error."
+            "description": "The source answered with an error.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "503": {
             "content": {
@@ -1257,7 +1591,22 @@
                 }
               }
             },
-            "description": "The service is unavailable."
+            "description": "The service is unavailable.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Optional delay in seconds or HTTP-date before retrying.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "504": {
             "content": {
@@ -1267,7 +1616,16 @@
                 }
               }
             },
-            "description": "The source did not answer in time."
+            "description": "The source did not answer in time.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1286,6 +1644,17 @@
     "/v1/collections/people-registration/search": {
       "post": {
         "operationId": "searchPeopleRegistration",
+        "parameters": [
+          {
+            "description": "W3C Trace Context. A valid context is propagated; absent or invalid context is replaced.",
+            "in": "header",
+            "name": "traceparent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -1296,8 +1665,11 @@
                     "$ref": "#/components/schemas/org-unit-search"
                   },
                   "cursor": {
+                    "maxLength": 2796,
                     "minLength": 1,
-                    "type": "string"
+                    "pattern": "^[A-Za-z0-9_-]+$",
+                    "type": "string",
+                    "x-registry-runtime-validation": "The Adapter verifies authenticated cursor bytes and their caller, operation, deployment, filter, and expiry bindings."
                   },
                   "pageSize": {
                     "default": 20,
@@ -1352,9 +1724,17 @@
                       "additionalProperties": false,
                       "properties": {
                         "nextCursor": {
-                          "type": [
-                            "string",
-                            "null"
+                          "anyOf": [
+                            {
+                              "maxLength": 2796,
+                              "minLength": 1,
+                              "pattern": "^[A-Za-z0-9_-]+$",
+                              "type": "string",
+                              "x-registry-runtime-validation": "The Adapter verifies authenticated cursor bytes and their caller, operation, deployment, filter, and expiry bindings."
+                            },
+                            {
+                              "type": "null"
+                            }
                           ]
                         }
                       },
@@ -1372,7 +1752,16 @@
                 }
               }
             },
-            "description": "The operation's response envelope for the bound record type."
+            "description": "The operation's response envelope for the bound record type.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "400": {
             "content": {
@@ -1382,7 +1771,16 @@
                 }
               }
             },
-            "description": "The request is not valid."
+            "description": "The request is not valid.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "401": {
             "content": {
@@ -1392,7 +1790,22 @@
                 }
               }
             },
-            "description": "The caller was not authenticated."
+            "description": "The caller was not authenticated.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge with no record-specific facts.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -1402,7 +1815,16 @@
                 }
               }
             },
-            "description": "The caller is not authorized."
+            "description": "The caller is not authorized.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "404": {
             "content": {
@@ -1412,7 +1834,16 @@
                 }
               }
             },
-            "description": "The collection or record is not available."
+            "description": "The collection or record is not available.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "406": {
             "content": {
@@ -1422,7 +1853,16 @@
                 }
               }
             },
-            "description": "The response media type is not acceptable."
+            "description": "The response media type is not acceptable.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "413": {
             "content": {
@@ -1432,7 +1872,16 @@
                 }
               }
             },
-            "description": "The request body is too large."
+            "description": "The request body is too large.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "415": {
             "content": {
@@ -1442,7 +1891,16 @@
                 }
               }
             },
-            "description": "The request media type is not supported."
+            "description": "The request media type is not supported.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "422": {
             "content": {
@@ -1452,7 +1910,16 @@
                 }
               }
             },
-            "description": "A request field is not valid."
+            "description": "A request field is not valid.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "429": {
             "content": {
@@ -1462,7 +1929,22 @@
                 }
               }
             },
-            "description": "The source is throttling requests."
+            "description": "The source is throttling requests.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Optional delay in seconds or HTTP-date before retrying.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "500": {
             "content": {
@@ -1472,7 +1954,16 @@
                 }
               }
             },
-            "description": "The request could not be served."
+            "description": "The request could not be served.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "502": {
             "content": {
@@ -1482,7 +1973,16 @@
                 }
               }
             },
-            "description": "The source answered with an error."
+            "description": "The source answered with an error.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "503": {
             "content": {
@@ -1492,7 +1992,22 @@
                 }
               }
             },
-            "description": "The service is unavailable."
+            "description": "The service is unavailable.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Optional delay in seconds or HTTP-date before retrying.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "504": {
             "content": {
@@ -1502,7 +2017,16 @@
                 }
               }
             },
-            "description": "The source did not answer in time."
+            "description": "The source did not answer in time.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Protected reads and errors are not stored.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "security": [
