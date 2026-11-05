@@ -118,7 +118,7 @@ fn generated_operation_ids() -> BTreeSet<String> {
 }
 
 #[tokio::test]
-async fn capabilities_expose_only_the_two_schema_bound_views_the_caller_can_read() {
+async fn capabilities_expose_only_the_three_schema_bound_views_the_caller_can_read() {
     let upstream = UpstreamDouble::start();
     let served = Served::start_with_project(&upstream.url(""), &project()).await;
 
@@ -143,7 +143,7 @@ async fn capabilities_expose_only_the_two_schema_bound_views_the_caller_can_read
     let collections = body["collections"]
         .as_array()
         .expect("capabilities carries collections");
-    assert_eq!(collections.len(), 2, "{body}");
+    assert_eq!(collections.len(), 3, "{body}");
     for collection in collections {
         for operation in collection["operations"].as_array().expect("operations") {
             assert!(
@@ -227,6 +227,19 @@ async fn capabilities_expose_only_the_two_schema_bound_views_the_caller_can_read
     );
     for operation in summary_operations.values() {
         assert_eq!(operation["view"], "person-summary");
+    }
+
+    let registration = collections
+        .iter()
+        .find(|collection| collection["collectionId"] == "people-registration")
+        .expect("the generated registration people view");
+    let registration_operations = operations(registration);
+    assert_eq!(
+        registration_operations.keys().copied().collect::<Vec<_>>(),
+        vec!["list", "lookup", "retrieve", "search"]
+    );
+    for operation in registration_operations.values() {
+        assert_eq!(operation["view"], "person-registration");
     }
     assert_eq!(
         upstream.request_count(),
