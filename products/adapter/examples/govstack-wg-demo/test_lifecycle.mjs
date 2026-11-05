@@ -263,3 +263,25 @@ test("malformed private configuration never echoes its secret contents", async (
   assert.ok(!(result.stdout + result.stderr).includes(canary));
   assert.match(result.stderr, /private configuration is not valid JSON/);
 });
+
+test("retained process IDs reused after reboot never signal an unrelated process", async () => {
+  const f = await fixture();
+  await privateFile(join(f.state, "owner.json"), {
+    kind: "govstack-wg-demo",
+    repo,
+  });
+  await privateFile(join(f.state, "processes.json"), {
+    issuer: process.pid,
+    "adapter-dhis2": process.pid,
+    "adapter-breg": process.pid,
+  });
+  await fakeCommands(f, { psCommand: "an-unrelated-process" });
+  const result = await runControl(f, "stop");
+  assert.equal(result.code, 0, result.stderr);
+  assert.doesNotThrow(() => process.kill(process.pid, 0));
+  assert.ok(
+    !(await recordedCalls(f.calls)).some(
+      (c) => c.command === "docker" && c.args[0] === "stop",
+    ),
+  );
+});
