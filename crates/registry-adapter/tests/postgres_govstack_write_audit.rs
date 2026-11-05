@@ -150,6 +150,45 @@ async fn failed_exact_replay_keeps_body_and_journals_canonical_problem_per_attem
     }
 }
 
+#[tokio::test]
+async fn a_bare_idempotency_key_is_refused_with_a_hint_to_quote_it() {
+    let upstream = UpstreamDouble::start();
+    let project = repository_path("products/adapter/examples/breg-govstack");
+    let pack = repository_path("products/adapter/packs/breg-records/pack.yaml");
+    let served = Served::start_with_pack_endpoint_and_credential(
+        &upstream.url(""),
+        &project,
+        &pack,
+        "registry",
+        CREDENTIAL,
+    )
+    .await;
+    let token = served.token("records.write");
+    let body = json!({"data": {"name": "Ada", "email": "ada@example.test"}});
+
+    let refused = post(
+        &served,
+        &token,
+        "8a6e0804-2bd0-4672-b79d-d97027f9071a",
+        "00-33333333333333333333333333333333-3333333333333333-01",
+        &body,
+    );
+
+    assert_eq!(
+        refused.status,
+        400,
+        "{}",
+        String::from_utf8_lossy(&refused.body)
+    );
+    let problem: Value = serde_json::from_slice(&refused.body).expect("problem body is JSON");
+    let detail = problem["detail"].as_str().unwrap_or_default();
+    assert!(
+        detail.contains("quoted") && !detail.contains("8a6e0804"),
+        "the detail tells the caller to quote the key without echoing it: {problem}"
+    );
+    assert_eq!(upstream.request_count(), 0, "a refused key sends nothing");
+}
+
 const CREDENTIAL: &str =
     "      type: static-authorization\n      tokenRef: secret:env/TEST_UPSTREAM_PASSWORD\n";
 
