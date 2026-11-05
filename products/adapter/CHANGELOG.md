@@ -14,6 +14,9 @@
   `Idempotency-Key` carries a pattern for the quoted Structured Field String
   the facade parses. Regenerate committed `generated/openapi.json` files with
   `adapterctl compile`.
+- GovStack Lookup with a selector the Collection does not declare points its
+  422 `invalid-content` at `/selector` instead of `/values`; Search with an
+  undeclared search points at `/search` instead of `/criteria`.
 - GovStack Update: a retry under the same Idempotency-Key and fingerprint
   replays its stored answer even when its If-Match no longer validates (the
   record changed, or a redeploy changed the guard's closure), instead of

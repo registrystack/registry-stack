@@ -385,6 +385,12 @@ async fn a_lookup_refuses_what_its_closed_shape_does_not_name() {
     );
     assert_eq!(status, 422, "{body}");
     contract::assert_problem(&body, 422, "invalid-content");
+    // The pointer names the refused member: the selector, not the values.
+    assert_eq!(
+        body["errors"],
+        json!([{"pointer": "/selector", "message": body["errors"][0]["message"]}]),
+        "{body}"
+    );
 
     // Values that break the selector's closed schema are field faults.
     for shape in [
@@ -394,6 +400,7 @@ async fn a_lookup_refuses_what_its_closed_shape_does_not_name() {
         let (status, _, body) = served.post(LOOKUP_PATH, Some(&token), &shape);
         assert_eq!(status, 422, "{shape}: {body}");
         contract::assert_problem(&body, 422, "invalid-content");
+        assert_eq!(body["errors"][0]["pointer"], "/values", "{shape}: {body}");
     }
 
     // A body that is not the declared shape is a bad request.
@@ -569,14 +576,24 @@ async fn a_search_refuses_undeclared_criteria_and_unknown_searches() {
     let token = served.token("records.read");
 
     // A value the shape names but the filters refuse is a field fault.
-    for shape in [
-        json!({"search": "by-org-unit", "criteria": {"name": "x"}}),
-        json!({"search": "by-org-unit", "criteria": {"org-unit": 5}}),
-        json!({"search": "by-name", "criteria": {"org-unit": "x"}}),
+    for (shape, pointer) in [
+        (
+            json!({"search": "by-org-unit", "criteria": {"name": "x"}}),
+            "/criteria",
+        ),
+        (
+            json!({"search": "by-org-unit", "criteria": {"org-unit": 5}}),
+            "/criteria",
+        ),
+        (
+            json!({"search": "by-name", "criteria": {"org-unit": "x"}}),
+            "/search",
+        ),
     ] {
         let (status, _, body) = served.post(SEARCH_PATH, Some(&token), &shape);
         assert_eq!(status, 422, "{shape}: {body}");
         contract::assert_problem(&body, 422, "invalid-content");
+        assert_eq!(body["errors"][0]["pointer"], pointer, "{shape}: {body}");
     }
 
     // The 422 names where the fault is as a JSON pointer, never the value.

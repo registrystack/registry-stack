@@ -1367,7 +1367,9 @@ async fn answer(
                         &request_id,
                         match refusal {
                             ReadRefusal::Shape(reason) => Refusal::invalid_request(&reason),
-                            ReadRefusal::Field(reason) => Refusal::invalid_field(&reason),
+                            ReadRefusal::Field { reason, pointer } => {
+                                Refusal::invalid_field_at(&reason, vec![pointer])
+                            }
                         },
                     )
                     .await;
@@ -3619,7 +3621,9 @@ pub(crate) struct Refusal {
     reason: String,
     write_problem: Option<&'static str>,
     /// JSON Pointers a GovStack `invalid-content` Problem names; empty
-    /// names the whole `/data` member.
+    /// names the whole `/data` member. A refused Consultation read body
+    /// carries the place its request template refused, which the Problem
+    /// maps to the fixed request member holding it.
     validation_pointers: Vec<String>,
     detail: Option<&'static str>,
 }
@@ -4664,7 +4668,10 @@ async fn refuse_request(
     if refusal.status == StatusCode::UNPROCESSABLE_ENTITY
         && profile.profile.is_govstack_consultation()
     {
-        let pointer = crate::govstack::consultation::validation_pointer(&operation.operation);
+        let pointer = crate::govstack::consultation::validation_pointer(
+            &operation.operation,
+            refusal.validation_pointers.first().map(String::as_str),
+        );
         facade_validation_problem(
             profile,
             refusal.class,

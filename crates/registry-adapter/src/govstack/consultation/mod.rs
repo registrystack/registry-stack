@@ -578,12 +578,22 @@ fn discovered_operation_id(capability: &str, collection: &str) -> Option<String>
         })
 }
 
+/// The JSON Pointer a GovStack `invalid-content` Problem names for one
+/// refused read body. `refused_at` is where the request template refused the
+/// body; the Problem names the fixed request member that holds it (the Lookup
+/// `selector` or the Search `search` when that literal was refused), and
+/// otherwise the member carrying the caller's project-owned input.
 #[must_use]
-pub fn validation_pointer(operation: &str) -> &'static str {
-    match operation {
-        "lookup" => "/values",
-        "search" => "/criteria",
-        "create" | "update" => "/data",
+pub fn validation_pointer(operation: &str, refused_at: Option<&str>) -> &'static str {
+    let member = refused_at
+        .and_then(|pointer| pointer.strip_prefix('/'))
+        .map(|pointer| pointer.split('/').next().unwrap_or_default());
+    match (operation, member) {
+        ("lookup", Some("selector")) => "/selector",
+        ("lookup", _) => "/values",
+        ("search", Some("search")) => "/search",
+        ("search", _) => "/criteria",
+        ("create" | "update", _) => "/data",
         _ => "/request",
     }
 }

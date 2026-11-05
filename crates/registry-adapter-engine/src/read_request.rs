@@ -37,8 +37,10 @@ pub enum ReadRefusal {
     /// The body is not the template's shape: `facade.invalid-request`.
     Shape(String),
     /// The body has the shape, but a value is refused:
-    /// `facade.invalid-field`.
-    Field(String),
+    /// `facade.invalid-field`. `pointer` is the JSON Pointer of the refused
+    /// member within the body; it names a template place, never caller text,
+    /// and is empty when the body root itself is refused.
+    Field { reason: String, pointer: String },
 }
 
 /// What the template's slots captured from one body.
@@ -143,7 +145,10 @@ fn shape(at: &str, fault: &str) -> ReadRefusal {
 }
 
 fn field(at: &str, fault: &str) -> ReadRefusal {
-    ReadRefusal::Field(format!("{fault} at {}", pointer(at)))
+    ReadRefusal::Field {
+        reason: format!("{fault} at {}", pointer(at)),
+        pointer: at.to_owned(),
+    }
 }
 
 fn pointer(at: &str) -> &str {
@@ -385,14 +390,20 @@ mod tests {
 
     #[test]
     fn a_literal_mismatch_or_empty_identifier_is_a_field_fault() {
-        for body in [
-            json!({"selector": "other", "values": {"id": "a"}}),
-            json!({"selector": "byId", "values": {"id": ""}}),
+        for (body, refused_at) in [
+            (
+                json!({"selector": "other", "values": {"id": "a"}}),
+                "/selector",
+            ),
+            (
+                json!({"selector": "byId", "values": {"id": ""}}),
+                "/values/id",
+            ),
         ] {
             assert!(
                 matches!(
                     lookup().capture(&body, &filters()),
-                    Err(ReadRefusal::Field(_))
+                    Err(ReadRefusal::Field { pointer, .. }) if pointer == refused_at
                 ),
                 "{body}"
             );
@@ -417,7 +428,7 @@ mod tests {
             assert!(
                 matches!(
                     search().capture(&body, &filters()),
-                    Err(ReadRefusal::Field(_))
+                    Err(ReadRefusal::Field { .. })
                 ),
                 "{body}"
             );
@@ -450,7 +461,7 @@ mod tests {
 
     #[test]
     fn a_refusal_never_carries_a_caller_value() {
-        let Err(ReadRefusal::Field(reason) | ReadRefusal::Shape(reason)) = search().capture(
+        let Err(ReadRefusal::Field { reason, .. } | ReadRefusal::Shape(reason)) = search().capture(
             &json!({"filters": {"secret-name-xyz": "secret-value-xyz"}}),
             &filters(),
         ) else {

@@ -59,6 +59,7 @@ No credentials, source addresses, private configuration or unsupported pack oper
 Implement Retrieve, exact Lookup, List and named Search where the project binds an eligible source route.
 The initial binding supports one exact identifier selector and one declared scalar-equality Search per Collection; composite selectors, additional comparisons and multiple named operations require corresponding checked source/input bindings before they can be advertised.
 Lookup resolves at most one permitted Record and preserves declared uniqueness and protected-existence outcomes.
+A Lookup naming a selector the Collection does not declare returns 422 `invalid-content` with the pointer `/selector`, and a Search naming an undeclared search returns the pointer `/search`; a refused value points at `/values` or `/criteria`.
 Generated OpenAPI declares the bounds the facade enforces: a `recordId` path parameter is one canonical path segment of at most 256 characters (no `.` or `..`, no `/`, `\`, `?`, `;`, `:`, `%`, control or invisible formatting characters), and `Idempotency-Key` is a quoted Structured Field String of 1 to 200 printable ASCII characters. Lookup values follow the project-owned input schema.
 List and Search require a declared deterministic source order with a unique tie-breaker, bounded pages and explicit completion.
 A cursor is opaque, excludes personal data and binds the operation, Registry, Collection, query, view, page size and applicable caller/access context.
