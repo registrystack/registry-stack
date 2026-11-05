@@ -1004,6 +1004,58 @@ fn generate_through_a_symlink_out_of_the_model_directory_leaves_nothing_behind()
     );
 }
 
+/// A target schema whose path is clean but whose link resolves outside the
+/// model's directory is refused at the member by every command that reads
+/// it, and nothing is written through it (CFG-VAL-8).
+#[cfg(unix)]
+#[test]
+fn a_target_schema_linked_outside_the_model_directory_is_refused() {
+    let root = workspace();
+    let outside = tempfile::tempdir().unwrap();
+    let schema = root.path().join("schemas/person.schema.json");
+    let moved = outside.path().join("person.schema.json");
+    std::fs::rename(&schema, &moved).unwrap();
+    std::os::unix::fs::symlink(&moved, &schema).unwrap();
+    let model = path(&root, "person.mapping.yaml");
+    let input = write_input(&root, "good.json", r#"{"id": "501", "size": "5"}"#);
+    for arguments in [
+        vec!["mapping", "check", model.as_str()],
+        vec!["mapping", "generate", model.as_str()],
+        vec![
+            "mapping",
+            "preview",
+            model.as_str(),
+            "--input",
+            input.as_str(),
+        ],
+    ] {
+        let (exit, report, _) = run_json(&arguments);
+        assert_refused(exit, &report, "adapterctl.mapping-schema-outside");
+        let finding = &report["diagnostics"][0];
+        assert_eq!(finding["path"], "/mapping/targetSchema", "{report}");
+        let message = finding["message"].as_str().unwrap();
+        assert!(
+            !message.contains(outside.path().to_str().unwrap()),
+            "the finding never names the link's target: {message}"
+        );
+    }
+    assert!(!root.path().join("scripts").exists(), "nothing is written");
+}
+
+/// A link that stays inside the model's directory is followed: the same
+/// containment the script write and the drift check apply.
+#[cfg(unix)]
+#[test]
+fn a_target_schema_linked_inside_the_model_directory_is_read() {
+    let root = workspace();
+    std::fs::create_dir_all(root.path().join("shared")).unwrap();
+    let schema = root.path().join("schemas/person.schema.json");
+    std::fs::rename(&schema, root.path().join("shared/person.schema.json")).unwrap();
+    std::os::unix::fs::symlink("../shared/person.schema.json", &schema).unwrap();
+    let (exit, report, _) = run_json(&["mapping", "check", &path(&root, "person.mapping.yaml")]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+}
+
 #[test]
 fn check_reports_a_model_file_name_that_generate_refuses() {
     let root = workspace();
