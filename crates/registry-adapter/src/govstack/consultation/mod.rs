@@ -610,6 +610,12 @@ pub fn target_attachment(
         let capability = match ordinary_capability {
             Some(capability) => capability,
             None if binding.operation.as_str() == "writable-read" => {
+                if !openapi::is_write_update_companion(project, binding.id.as_str()) {
+                    return Err(crate::engine::load::LoadError::Runtime(format!(
+                        "binding {} is a writable-read binding that no Write Update names as its companion read",
+                        binding.id
+                    )));
+                }
                 ConsultationCapability::Retrieve
             }
             None => continue,
@@ -774,7 +780,12 @@ pub fn target_attachment(
         let declared = profile
             .operations
             .get(binding.operation.as_str())
-            .expect("the fixed capability has a fixed profile operation");
+            .ok_or_else(|| {
+                crate::engine::load::LoadError::Runtime(format!(
+                    "binding {} has no GovStack capability",
+                    binding.id
+                ))
+            })?;
         let pagination =
             declared
                 .pagination

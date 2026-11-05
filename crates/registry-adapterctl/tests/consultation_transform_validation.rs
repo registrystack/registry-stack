@@ -121,7 +121,7 @@ fn check_and_compile_refuse_a_consultation_binding_without_a_transform() {
     let (root, project) = copied_consultation();
     edit(
         &project,
-        "  people-retrieve: {script: person-public, entrypoint: project_person_public}\n",
+        "      transform: {script: person-public, entrypoint: project_person_public}\n",
         "",
     );
 

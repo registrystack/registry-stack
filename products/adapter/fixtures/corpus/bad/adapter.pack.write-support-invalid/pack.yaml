@@ -21,8 +21,7 @@ routeTemplates:
   - id: find-cases
     writeSupport:
       type: create-one
-      identity: source-assigned
-      replay: {type: exact-keyed, replayWindowSeconds: 3600}
+      replayWindowSeconds: 3600
     readSupport:
       type: read-one
       inputs: [record-id]

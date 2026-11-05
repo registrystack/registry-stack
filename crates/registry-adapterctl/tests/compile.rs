@@ -755,7 +755,6 @@ fn copied_breg_govstack(write_only: bool) -> (tempfile::TempDir, String, String)
                 "    - recordType: contacts\n      create:",
                 "    - recordType: contacts\n      registry: https://registry.example/registries/contacts\n      view: contact-public\n      readDataSchema: contact-public\n      create:",
             )
-            .replace("companionRead: contacts-retrieve", "companionRead: contacts-writable-read")
             .replace("id: contacts-retrieve\n    operation: retrieve", "id: contacts-writable-read\n    operation: writable-read")
             .replace("contacts-retrieve: {script:", "contacts-writable-read: {script:")
             .replace("operations: [retrieve]", "operations: [writable-read]");
@@ -925,7 +924,7 @@ fn a_valid_write_only_create_project_still_checks_and_compiles() {
     let (_root, project, pack) = copied_breg_govstack(true);
     for (from, to) in [
         (
-            "      update:\n        inputSchema: contact-update\n        companionRead: contacts-writable-read\n",
+            "      update:\n        inputSchema: contact-update\n",
             "",
         ),
         (
@@ -937,11 +936,11 @@ fn a_valid_write_only_create_project_still_checks_and_compiles() {
             "",
         ),
         (
-            "  - id: contacts-writable-read\n    operation: writable-read\n    recordType: contacts\n    route: breg-contact-read\n    maximumUpstreamCalls: 1\n",
+            "  - id: contacts-writable-read\n    operation: writable-read\n    recordType: contacts\n    route: breg-contact-read\n",
             "",
         ),
         (
-            "  - id: contacts-update\n    operation: update\n    recordType: contacts\n    route: breg-contact-update\n    maximumUpstreamCalls: 1\n",
+            "  - id: contacts-update\n    operation: update\n    recordType: contacts\n    route: breg-contact-update\n",
             "",
         ),
         (
@@ -972,6 +971,43 @@ fn a_valid_write_only_create_project_still_checks_and_compiles() {
         document["paths"]["/v1/collections/contacts/records/{recordId}"]
             .get("patch")
             .is_none()
+    );
+}
+
+#[test]
+fn a_writable_read_binding_no_update_names_refuses_check_and_compile() {
+    let (_root, project, pack) = copied_breg_govstack(true);
+    for (from, to) in [
+        (
+            "      update:\n        inputSchema: contact-update\n",
+            "",
+        ),
+        (
+            "  - routeTemplate: update-record\n    routeId: breg-contact-update\n    parameters:\n      record-route: contacts\n      access-profile: directory-editor\n",
+            "",
+        ),
+        (
+            "  - id: contacts-update\n    operation: update\n    recordType: contacts\n    route: breg-contact-update\n",
+            "",
+        ),
+        (
+            "  contacts-update: {script: contact-transform, entrypoint: update_contact}\n",
+            "",
+        ),
+        ("operations: [create, update]", "operations: [create]"),
+    ] {
+        replace_project(&project, from, to);
+    }
+
+    assert_check_compile_refused(&project, &pack, "adapter.project.write-binding-invalid");
+    let (_, report, _) = run_json(&["check", &project, "--pack", &pack]);
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(diagnostic["path"], "/bindings/0", "{report}");
+    assert!(
+        diagnostic["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("`contacts-writable-read`")),
+        "{report}"
     );
 }
 
@@ -1013,5 +1049,121 @@ fn a_write_only_companion_with_extra_source_input_refuses_check_and_compile() {
         &project,
         &pack,
         "adapter.project.consultation-input-incompatible",
+    );
+}
+
+/// Rewrite a maintained example's short form into the explicit form an
+/// implementer could still write: each `(from, to)` must match the stated
+/// number of times, and every binding `route:` line gains the explicit
+/// default budget.
+fn expanded_example(text: &str, replacements: &[(&str, &str, usize)]) -> String {
+    let mut text = text.to_owned();
+    for (from, to, count) in replacements {
+        assert_eq!(text.matches(from).count(), *count, "{from}");
+        text = text.replace(from, to);
+    }
+    let mut budgets = 0;
+    let lines = text
+        .lines()
+        .flat_map(|line| {
+            if line.starts_with("    route: ") {
+                budgets += 1;
+                vec![line.to_owned(), "    maximumUpstreamCalls: 4".to_owned()]
+            } else {
+                vec![line.to_owned()]
+            }
+        })
+        .collect::<Vec<_>>();
+    assert!(budgets > 0, "the example declares bindings");
+    assert!(
+        !text.contains("maximumUpstreamCalls"),
+        "the example is short"
+    );
+    lines.join("\n") + "\n"
+}
+
+/// The short and explicit forms of one maintained example compile to the
+/// same document, byte for byte.
+fn assert_short_form_compiles_as_explicit(
+    example: &str,
+    replacements: &[(&str, &str, usize)],
+    extra: &[&str],
+) {
+    let directory = repo_root().join("products/adapter/examples").join(example);
+    let (_short_root, short) = copied_tree(&directory);
+    let (_explicit_root, explicit) = copied_tree(&directory);
+    let text = std::fs::read_to_string(&short).unwrap();
+    std::fs::write(&explicit, expanded_example(&text, replacements)).unwrap();
+
+    let (_, short_bytes) = compile(&short, extra);
+    let (_, explicit_bytes) = compile(&explicit, extra);
+    assert_eq!(
+        String::from_utf8(short_bytes).unwrap(),
+        String::from_utf8(explicit_bytes).unwrap()
+    );
+}
+
+#[test]
+fn the_short_dhis2_consultation_example_compiles_as_its_explicit_form() {
+    let pack = repo_root()
+        .join("products/adapter/packs/dhis2-tracker/pack.yaml")
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert_short_form_compiles_as_explicit(
+        "dhis2-consultation",
+        &[
+            (
+                "      dataSchema: person-public\n      transform: {script: person-public, entrypoint: project_person_public}\n",
+                "      view: person-public\n      dataSchema: person-public\n",
+                1,
+            ),
+            (
+                "      dataSchema: person-summary\n      transform: {script: person-summary, entrypoint: project_person_summary}\n",
+                "      view: person-summary\n      dataSchema: person-summary\n",
+                1,
+            ),
+            (
+                "templatedRoutes:\n",
+                "recordTypes:\n  - name: people\n    fields: []\n  - name: people-summary\n    fields: []\ntemplatedRoutes:\n",
+                1,
+            ),
+            (
+                "accessProfiles:\n",
+                "bindingTransforms:\n  people-retrieve: {script: person-public, entrypoint: project_person_public}\n  people-lookup: {script: person-public, entrypoint: project_person_public}\n  people-list: {script: person-public, entrypoint: project_person_public}\n  people-search: {script: person-public, entrypoint: project_person_public}\n  people-summary-retrieve: {script: person-summary, entrypoint: project_person_summary}\n  people-summary-lookup: {script: person-summary, entrypoint: project_person_summary}\n  people-summary-list: {script: person-summary, entrypoint: project_person_summary}\n  people-summary-search: {script: person-summary, entrypoint: project_person_summary}\naccessProfiles:\n",
+                1,
+            ),
+        ],
+        &["--pack", &pack],
+    );
+}
+
+#[test]
+fn the_short_breg_govstack_example_compiles_as_its_explicit_form() {
+    let pack = repo_root()
+        .join("products/adapter/packs/breg-records/pack.yaml")
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert_short_form_compiles_as_explicit(
+        "breg-govstack",
+        &[
+            (
+                "      dataSchema: contact-public\n",
+                "      view: contact-public\n      dataSchema: contact-public\n",
+                1,
+            ),
+            (
+                "        inputSchema: contact-update\n",
+                "        inputSchema: contact-update\n        companionRead: contacts-retrieve\n",
+                1,
+            ),
+            (
+                "templatedRoutes:\n",
+                "recordTypes:\n  - name: contacts\n    fields: []\ntemplatedRoutes:\n",
+                1,
+            ),
+        ],
+        &["--pack", &pack],
     );
 }

@@ -6,50 +6,14 @@
 use registry_platform_yaml::{BoundedU64, ExternalId};
 use serde::{Deserialize, Serialize};
 
-/// The source-owned identity behavior a direct Create route guarantees.
-/// The first supported shape is intentionally singular: the source assigns
-/// the durable key returned in [`SourceWriteReceipt`].
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum SourceWriteIdentity {
-    SourceAssigned,
-}
-
-/// The source-owned replay behavior a direct write guarantees.
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum SourceWriteReplayKind {
-    ExactKeyed,
-}
-
-/// Exact source replay semantics and their finite provider-owned window.
-/// The host keeps its own idempotency custody within, never beyond, this
-/// declared source guarantee.
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct SourceWriteReplay {
-    #[serde(rename = "type")]
-    pub kind: SourceWriteReplayKind,
-    /// Seconds for which the source guarantees an exact same-key replay.
-    pub replay_window_seconds: BoundedU64<1, 31_536_000>,
-}
-
-/// The source-owned concurrency behavior an Update route guarantees.
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum SourceWritePrecondition {
-    /// The source compares and commits the supplied native validator in the
-    /// same atomic mutation boundary.
-    StrongAtomicSource,
-}
-
 /// Source-neutral direct-write semantics explicitly promised by one reusable
 /// pack route template. A host never infers these guarantees from an HTTP
 /// method, provider brand, route id, or successful fixture.
+///
+/// Each variant names one fixed guarantee set; the only value a pack chooses
+/// is the finite provider-owned window in which the source guarantees an
+/// exact same-key replay. The host keeps its own idempotency custody within,
+/// never beyond, that declared window.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
@@ -60,15 +24,18 @@ pub enum SourceWritePrecondition {
     deny_unknown_fields
 )]
 pub enum SourceWriteSupport {
-    /// Create exactly one source record and return its source-assigned key.
+    /// Create exactly one source record, replay an exact same-key retry, and
+    /// return the durable key the source assigns in [`SourceWriteReceipt`].
     CreateOne {
-        identity: SourceWriteIdentity,
-        replay: SourceWriteReplay,
+        /// Seconds for which the source guarantees an exact same-key replay.
+        replay_window_seconds: BoundedU64<1, 31_536_000>,
     },
-    /// Update exactly one source record under an atomic source precondition.
+    /// Update exactly one source record, replay an exact same-key retry, and
+    /// compare and commit the supplied native validator in the same atomic
+    /// mutation boundary.
     ConditionalUpdateOne {
-        replay: SourceWriteReplay,
-        precondition: SourceWritePrecondition,
+        /// Seconds for which the source guarantees an exact same-key replay.
+        replay_window_seconds: BoundedU64<1, 31_536_000>,
     },
 }
 
@@ -96,47 +63,41 @@ mod tests {
     use super::*;
 
     #[test]
-    fn source_write_support_requires_closed_explicit_guarantees() {
+    fn source_write_support_names_only_the_variant_and_its_replay_window() {
         let create: SourceWriteSupport = serde_json::from_value(serde_json::json!({
             "type": "create-one",
-            "identity": "source-assigned",
-            "replay": {"type": "exact-keyed", "replayWindowSeconds": 604800}
+            "replayWindowSeconds": 604800
         }))
         .expect("create support");
         assert!(matches!(
             create,
-            SourceWriteSupport::CreateOne {
-                identity: SourceWriteIdentity::SourceAssigned,
-                replay: SourceWriteReplay {
-                    kind: SourceWriteReplayKind::ExactKeyed,
-                    ..
-                }
-            }
+            SourceWriteSupport::CreateOne { replay_window_seconds } if replay_window_seconds.get() == 604800
         ));
 
         let update: SourceWriteSupport = serde_json::from_value(serde_json::json!({
             "type": "conditional-update-one",
-            "replay": {"type": "exact-keyed", "replayWindowSeconds": 604800},
-            "precondition": "strong-atomic-source"
+            "replayWindowSeconds": 600
         }))
         .expect("update support");
         assert!(matches!(
             update,
-            SourceWriteSupport::ConditionalUpdateOne {
-                precondition: SourceWritePrecondition::StrongAtomicSource,
-                ..
-            }
+            SourceWriteSupport::ConditionalUpdateOne { replay_window_seconds } if replay_window_seconds.get() == 600
         ));
 
         for refused in [
-            serde_json::json!({"type": "create-one", "identity": "caller-assigned", "replay": {"type": "exact-keyed", "replayWindowSeconds": 60}}),
-            serde_json::json!({"type": "create-one", "identity": "source-assigned", "replay": {"type": "best-effort", "replayWindowSeconds": 60}}),
-            serde_json::json!({"type": "create-one", "identity": "source-assigned", "replay": {"type": "exact-keyed", "replayWindowSeconds": 0}}),
-            serde_json::json!({"type": "conditional-update-one", "replay": {"type": "exact-keyed", "replayWindowSeconds": 60}}),
-            serde_json::json!({"type": "conditional-update-one", "replay": {"type": "exact-keyed", "replayWindowSeconds": 60}, "precondition": "if-match-header"}),
+            // The single-value members are gone; the closed schema refuses them.
+            serde_json::json!({"type": "create-one", "identity": "source-assigned", "replayWindowSeconds": 60}),
+            serde_json::json!({"type": "create-one", "replay": {"type": "exact-keyed", "replayWindowSeconds": 60}}),
+            serde_json::json!({"type": "conditional-update-one", "replayWindowSeconds": 60, "precondition": "strong-atomic-source"}),
+            serde_json::json!({"type": "create-one", "replayWindowSeconds": 0}),
+            serde_json::json!({"type": "create-one"}),
+            serde_json::json!({"type": "conditional-update-one"}),
             serde_json::json!({"type": "transition"}),
         ] {
-            assert!(serde_json::from_value::<SourceWriteSupport>(refused).is_err());
+            assert!(
+                serde_json::from_value::<SourceWriteSupport>(refused.clone()).is_err(),
+                "{refused}"
+            );
         }
     }
 

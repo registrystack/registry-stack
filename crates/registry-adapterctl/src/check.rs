@@ -484,7 +484,7 @@ pub(crate) fn verify_govstack_transforms(
             collection
                 .update
                 .as_ref()
-                .filter(|update| update.companion_read == binding.id)?;
+                .filter(|update| update.companion_read.as_ref() == Some(&binding.id))?;
             collection.read_data_schema.as_deref().or_else(|| {
                 project
                     .consultation
@@ -621,7 +621,7 @@ pub(crate) fn verify_govstack_inputs(
                     .get(binding.record_type.as_str())?
                     .update
                     .as_ref()
-                    .filter(|update| update.companion_read == binding.id)?;
+                    .filter(|update| update.companion_read.as_ref() == Some(&binding.id))?;
                 Some(registry_adapter::govstack::consultation::ConsultationCapability::Retrieve)
             })
             .flatten();

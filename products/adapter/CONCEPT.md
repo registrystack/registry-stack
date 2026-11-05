@@ -1465,9 +1465,9 @@ admission and responses within the existing facade crate.
 
 A project declares a domain input schema and pinned ingress transformation per
 write binding. The public input and the source's private route input are
-separate. The source template explicitly declares `writeSupport`, including
-source-assigned Create identity or atomic conditional Update, and its exact
-native replay window. These declarations require source-specific proof;
+separate. The source template explicitly declares `writeSupport`: either
+`create-one` (source-assigned Create identity) or `conditional-update-one`
+(atomic conditional Update), each with its exact native replay window. These declarations require source-specific proof;
 neither an HTTP success nor a transformation creates those guarantees.
 
 This target's idempotency key is a bounded quoted Structured Field String. Its

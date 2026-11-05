@@ -76,10 +76,7 @@ routeTemplates:
   - id: create-record
     writeSupport:
       type: create-one
-      identity: source-assigned
-      replay:
-        type: exact-keyed
-        replayWindowSeconds: 604800
+      replayWindowSeconds: 604800
     parameters:
       - name: record-route
         type: string
@@ -150,10 +147,7 @@ routeTemplates:
   - id: update-record
     writeSupport:
       type: conditional-update-one
-      replay:
-        type: exact-keyed
-        replayWindowSeconds: 604800
-      precondition: strong-atomic-source
+      replayWindowSeconds: 604800
     parameters:
       - name: record-route
         type: string

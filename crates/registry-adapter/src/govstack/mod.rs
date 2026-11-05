@@ -36,9 +36,10 @@ pub fn built_in_profile(project: &AdapterProject) -> AdapterProfile {
             .any(|collection| collection.update.is_some());
         let has_writable_companion = write.collections.iter().any(|collection| {
             collection.update.as_ref().is_some_and(|update| {
-                project
-                    .bindings
-                    .get(update.companion_read.as_str())
+                update
+                    .companion_read
+                    .as_deref()
+                    .and_then(|id| project.bindings.get(id))
                     .is_some_and(|binding| {
                         binding.record_type == collection.record_type
                             && binding.operation.as_str() == "writable-read"
@@ -404,6 +405,50 @@ mod tests {
             document["paths"]["/v1/collections/permits/records/{recordId}"]["patch"]
                 ["x-govstack-digital-registries-write"]["companionRead"]["operationId"],
             permits["operationId"]
+        );
+    }
+
+    #[test]
+    fn a_writable_read_binding_no_update_uses_refuses_to_attach_naming_the_binding() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let project_path = root.join("products/adapter/examples/breg-govstack/project.yaml");
+        let pack_path = root.join("products/adapter/packs/breg-records/pack.yaml");
+        let (project, _): (AdapterProject, _) = crate::engine::load::read_artifact(
+            &project_path,
+            registry_adapter_core::ADAPTER_PROJECT_KIND,
+            registry_adapter_core::ADAPTER_PROJECT_API_VERSION,
+        )
+        .expect("the maintained project reads");
+        let (pack, _): (AdapterPack, _) = crate::engine::load::read_artifact(
+            &pack_path,
+            registry_adapter_core::ADAPTER_PACK_KIND,
+            registry_adapter_core::ADAPTER_PACK_API_VERSION,
+        )
+        .expect("the maintained pack reads");
+        let mut value = serde_json::to_value(project).expect("the project serializes");
+        value["write"]["collections"][0]["update"]["companionRead"] = json!("contacts-retrieve");
+        value["bindings"]
+            .as_array_mut()
+            .expect("bindings")
+            .push(json!({
+                "id": "contacts-unused-read",
+                "operation": "writable-read",
+                "recordType": "contacts",
+                "route": "breg-contact-read"
+            }));
+        value["bindingTransforms"]["contacts-unused-read"] =
+            json!({"script": "contact-transform", "entrypoint": "public_contact"});
+        let project: AdapterProject = serde_json::from_value(value).expect("the project parses");
+
+        let refused = target_attachment(
+            &project,
+            &pack,
+            project_path.parent().expect("project directory"),
+        )
+        .expect_err("an unused writable-read binding refuses");
+        assert!(
+            refused.to_string().contains("contacts-unused-read"),
+            "{refused}"
         );
     }
 }

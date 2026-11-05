@@ -175,7 +175,11 @@ pub fn assemble_openapi(
                 .update
                 .as_ref()
                 .expect("the filtered Write collection has Update metadata");
-            let Some(binding) = project.bindings.get(update.companion_read.as_str()) else {
+            let Some(binding) = update
+                .companion_read
+                .as_deref()
+                .and_then(|id| project.bindings.get(id))
+            else {
                 continue;
             };
             if binding.record_type != collection.record_type
@@ -457,13 +461,13 @@ fn traceparent_parameter() -> Value {
     })
 }
 
-fn is_write_update_companion(project: &AdapterProject, binding: &str) -> bool {
+pub(super) fn is_write_update_companion(project: &AdapterProject, binding: &str) -> bool {
     project.write.as_ref().is_some_and(|write| {
         write.collections.iter().any(|collection| {
             collection
                 .update
                 .as_ref()
-                .is_some_and(|update| update.companion_read.as_str() == binding)
+                .is_some_and(|update| update.companion_read.as_deref() == Some(binding))
         })
     })
 }
