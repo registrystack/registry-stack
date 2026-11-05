@@ -34,6 +34,9 @@ const CURSOR_KEY: &str = "synthetic-cursor-key-0123456789!";
 const DEFAULT_RUNTIME_ID: &str = "dhis2-tracker-test";
 /// The subject the default token carries.
 pub const SUBJECT: &str = "synthetic-caller";
+/// A second client the runtime admits, for tests that present one
+/// subject's cursor or key through another acting client.
+pub const SECOND_CLIENT: &str = "synthetic-second-client";
 
 /// The runtime config's endpoint credential lines for the Basic kind the
 /// example pack declares.
@@ -565,6 +568,7 @@ oidc:
     documentRef: secret:env/TEST_JWKS
 allowedClients:
   - synthetic-client
+  - {SECOND_CLIENT}
 allowedPrivateCidrs:
   - 192.168.0.0/16
 audit:

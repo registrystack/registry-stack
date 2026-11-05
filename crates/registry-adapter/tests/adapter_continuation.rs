@@ -3,8 +3,8 @@
 //! The continuation cursor codec of `products/adapter/CONCEPT.md`
 //! section 8.11.2: a search route's `AdapterNextContinuation` value
 //! sealed as the opaque `nextCursor` and opened back, bound to the
-//! concrete operation, the binding id, the caller's issuer and `sub`,
-//! the deployment, the filter digest, and an expiry. Every refusal is the one
+//! concrete operation, the binding id, the caller's issuer, `sub` and
+//! acting client, the deployment, the filter digest, and an expiry. Every refusal is the one
 //! caller-facing `facade.invalid-cursor`; the reason stays
 //! distinguishable here and in the journal, and carries no cursor
 //! content (section 13.7).
@@ -79,6 +79,7 @@ fn binding(filters: FilterDigest) -> CursorBinding<'static> {
         binding_id: "persons-search",
         issuer: "https://issuer.example",
         subject: "caller-1",
+        client: "client-a",
         deployment: DEPLOYMENT,
         filters,
     }
@@ -297,7 +298,8 @@ fn a_clock_before_the_epoch_refuses_to_seal_and_to_open() {
     );
 }
 
-// Binding: caller, operation, binding id, deployment, filters, page size.
+// Binding: caller, client, operation, binding id, deployment, filters,
+// page size.
 
 fn assert_refused_under(other: &CursorBinding<'_>) {
     let codec = codec();
@@ -322,6 +324,29 @@ fn a_cursor_replayed_by_another_subject_is_refused() {
         subject: "caller-2",
         ..binding(digest())
     });
+}
+
+#[test]
+fn a_cursor_replayed_by_the_same_subject_through_another_client_is_refused() {
+    assert_refused_under(&CursorBinding {
+        client: "client-b",
+        ..binding(digest())
+    });
+}
+
+#[test]
+fn an_empty_client_is_one_more_value_never_a_wildcard() {
+    assert_refused_under(&CursorBinding {
+        client: "",
+        ..binding(digest())
+    });
+    assert_shift_refused(
+        &CursorBinding {
+            client: "",
+            ..binding(digest())
+        },
+        &binding(digest()),
+    );
 }
 
 #[test]
@@ -403,6 +428,22 @@ fn field_boundaries_cannot_be_shifted_between_subject_and_deployment() {
         &CursorBinding {
             subject: "caller-1s",
             deployment: "ha256:abc",
+            ..binding(digest())
+        },
+    );
+}
+
+#[test]
+fn field_boundaries_cannot_be_shifted_between_subject_and_client() {
+    assert_shift_refused(
+        &CursorBinding {
+            subject: "caller-1",
+            client: "client-a",
+            ..binding(digest())
+        },
+        &CursorBinding {
+            subject: "caller-1c",
+            client: "lient-a",
             ..binding(digest())
         },
     );

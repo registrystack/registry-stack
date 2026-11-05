@@ -27,7 +27,7 @@ entries:
   - facadeRequest:
       operation: records-search
       path: /v1/records/birth
-      query: limit=2&cursor=AaW8rI1CvWK9y53Ni6oLOJeDjcl5fBVpQyicqzLMqPodcjKcJsY6mPbB0--gjsJEkxENyrX6bQqqqmFk1ag
+      query: limit=2&cursor=AaW8rI1CvWK9y53Ni6oLOJeDjcl5fBVpQyicqzLMqPodcjKcJsY6mPbB0--gjl3Ug9OlPB5DhcNNlQXT9_M
     upstream:
       - request:
           endpoint: events

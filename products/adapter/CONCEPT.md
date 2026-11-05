@@ -1065,8 +1065,8 @@ The route owns the upstream position; the engine owns the caller's cursor.
   serialized. Absent or `null` at the end of the route means the last page.
 - The engine encodes it as the opaque `nextCursor` slot of section 7 with
   authenticated encryption under the runtime secret `cursorKeyRef`, bound
-  to the concrete operation, the binding id, the caller's subject, the
-  deployment the runtime serves (the deployment digest, a SHA-256 over
+  to the concrete operation, the binding id, the caller's subject and
+  acting client, the deployment the runtime serves (the deployment digest, a SHA-256 over
   the project, profile, and pack bytes the runtime loaded, so a redeploy
   that changes route meaning invalidates outstanding cursors), a digest
   of the filters and page size, and an expiry (`cursorTtlSeconds`, default
@@ -1075,11 +1075,14 @@ The route owns the upstream position; the engine owns the caller's cursor.
 - On the next request the engine verifies and decrypts the cursor and
   places the value as `AdapterContinuation`. A cursor that fails
   authentication, has expired, or was minted for another operation,
-  caller, or filter set raises `facade.invalid-cursor` before any route
-  step runs.
+  caller, client, or filter set raises `facade.invalid-cursor` before any
+  route step runs.
 - Details: `cursorKeyRef` resolves to exactly 32 bytes or the runtime
   refuses to start, and `previousCursorKeyRef` only decrypts; the caller's
-  subject is the authenticated issuer and `sub`; the filter digest is
+  subject is the authenticated issuer and `sub`, and its acting client is
+  the verified `azp` or `client_id` the runtime admitted through
+  `allowedClients` (the token instance is not bound, so a refreshed token
+  continues a traversal); the filter digest is
   SHA-256 over the RFC 8785 canonical JSON of the validated facade inputs
   without the cursor, plus the page size; `cursorTtlSeconds` is bounded 60
   to 86400; the cursor is verified after authentication and authorization,

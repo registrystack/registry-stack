@@ -16,11 +16,15 @@
 //!
 //! Every cursor is bound to a [`CursorBinding`]: the concrete operation,
 //! the binding id, the caller's authenticated issuer and `sub`, the
-//! deployment the runtime serves, and the [`FilterDigest`] of the
-//! validated facade inputs and page size, plus an expiry. The binding travels in the AEAD's associated data, never
-//! on the wire, so a cursor presented under any other binding fails
-//! authentication exactly as a tampered one does; there is no field
-//! comparison to get wrong. The expiry is the issue time sealed inside
+//! verified client the caller acts through, the deployment the runtime
+//! serves, and the [`FilterDigest`] of the validated facade inputs and
+//! page size, plus an expiry. The binding travels in the AEAD's
+//! associated data, never on the wire, so a cursor presented under any
+//! other binding fails authentication exactly as a tampered one does;
+//! there is no field comparison to get wrong, and a cursor stays the same
+//! length whatever it is bound to. The token instance is not bound, so a
+//! refreshed token for the same subject and client continues a
+//! traversal. No purpose is bound: Consultation carries none. The expiry is the issue time sealed inside
 //! the ciphertext plus the codec's configured [`CursorTtl`], evaluated
 //! when the cursor is opened, so shortening `cursorTtlSeconds` shortens
 //! the cursors already issued as well.
@@ -47,7 +51,7 @@
 //! `version (1) || nonce (24) || ciphertext || tag (16)`, where the
 //! plaintext is `issued_at (8, big-endian Unix seconds) || value` and
 //! `value` is the compact JSON serialization of the continuation. The
-//! associated data is a fixed domain label, the version byte, the four
+//! associated data is a fixed domain label, the version byte, the six
 //! binding strings each prefixed by its big-endian 64-bit length, and the
 //! 32-byte filter digest, so no field boundary can shift between two
 //! bindings. The token length is bounded by
@@ -326,6 +330,11 @@ pub struct CursorBinding<'a> {
     pub issuer: &'a str,
     /// The authenticated caller's `sub`.
     pub subject: &'a str,
+    /// The verified client the caller acts through (`azp` or
+    /// `client_id`), so one subject's cursor does not continue under
+    /// another client. An empty value is bound as itself, never as a
+    /// wildcard.
+    pub client: &'a str,
     /// An identifier of the loaded project the runtime serves, so a
     /// cursor minted before a redeploy that changes route meaning is
     /// refused; the `rest` consumer supplies the project lock digest.
@@ -341,6 +350,7 @@ impl CursorBinding<'_> {
             self.binding_id,
             self.issuer,
             self.subject,
+            self.client,
             self.deployment,
         ];
         let length = AAD_DOMAIN.len()
@@ -369,6 +379,7 @@ impl fmt::Debug for CursorBinding<'_> {
             .field("binding_id", &self.binding_id)
             .field("issuer", &self.issuer)
             .field("subject", &"<redacted>")
+            .field("client", &self.client)
             .field("deployment", &self.deployment)
             .field("filters", &self.filters)
             .finish()
@@ -391,7 +402,7 @@ pub enum CursorRefusal {
     UnsupportedVersion,
     /// Failed authentication under every accepted key: tampered, sealed
     /// under a key no longer accepted, or minted for another operation,
-    /// binding, caller, filter set, or page size. The associated data
+    /// binding, caller, client, deployment, filter set, or page size. The associated data
     /// carries the binding, so these cases are one by construction.
     Unauthenticated,
     /// At or past its issue time plus the configured TTL.
