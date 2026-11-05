@@ -388,7 +388,7 @@ mod tests {
             );
             assert_eq!(
                 companion["responses"]["200"]["headers"]["ETag"]["schema"]["pattern"],
-                r#"^"[\x21\x23-\x7E]{1,256}"(?![\s\S])"#
+                r#"^"[\x21\x23-\x7E]{1,256}"$"#
             );
         }
         assert_eq!(

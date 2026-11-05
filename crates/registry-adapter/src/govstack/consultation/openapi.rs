@@ -475,7 +475,7 @@ fn strong_etag_schema() -> Value {
         "type": "string",
         "minLength": 3,
         "maxLength": 258,
-        "pattern": r#"^"[\x21\x23-\x7E]{1,256}"(?![\s\S])"#
+        "pattern": r#"^"[\x21\x23-\x7E]{1,256}"$"#
     })
 }
 
@@ -565,7 +565,7 @@ fn idempotency_key_parameter() -> Value {
         "description": "Quoted Structured Field String identifying one exact write request.",
         "schema": {
             "type": "string", "minLength": 3, "maxLength": 202,
-            "pattern": r#"^"(?:[\x20\x21\x23-\x5B\x5D-\x7E]|\\["\\]){1,200}"(?![\s\S])"#
+            "pattern": r#"^"(?:[\x20\x21\x23-\x5B\x5D-\x7E]|\\["\\]){1,200}"$"#
         }
     })
 }
@@ -971,7 +971,7 @@ mod tests {
         assert!(update["responses"].get("204").is_some());
         assert!(update["responses"].get("412").is_some());
         assert!(update["responses"].get("428").is_some());
-        let strong_pattern = r#"^"[\x21\x23-\x7E]{1,256}"(?![\s\S])"#;
+        let strong_pattern = r#"^"[\x21\x23-\x7E]{1,256}"$"#;
         assert_eq!(
             create["responses"]["201"]["content"]["application/json"]["schema"]["properties"]
                 ["etag"]["pattern"],

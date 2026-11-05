@@ -864,7 +864,7 @@ fn the_real_write_only_breg_govstack_project_uses_the_fixed_target() {
     );
     assert_eq!(
         retrieve["responses"]["200"]["headers"]["ETag"]["schema"]["pattern"],
-        r#"^"[\x21\x23-\x7E]{1,256}"(?![\s\S])"#
+        r#"^"[\x21\x23-\x7E]{1,256}"$"#
     );
     assert_eq!(
         retrieve["x-govstack-digital-registries"],
