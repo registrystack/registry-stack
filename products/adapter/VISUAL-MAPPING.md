@@ -97,9 +97,14 @@ The first slice edits the ingestion direct destination, starting with the KoboTo
 Keyed selection from a bounded list is editable in the side panel; the DHIS2 slice adds the reviewed attribute catalogue, so its attributes show by label rather than by UID.
 The write direction stays headless.
 
-To draw the target tree and address findings to a target row without parsing message text, `adapterctl mapping check` reports the target as it reads it and names the target field on findings about one field.
-It also reports why a script drifted from its model, so the read-only notice names the cause: `model-changed` when the header's model digest is not the model's digest now, `script-edited` when the digest matches but the bytes differ.
-The header records only the model's digest, so a changed model does not rule out hand edits as well; Replace hand edits with this mapping always says that hand edits are discarded.
+To draw the target tree and address findings to a target row without parsing message text, `adapterctl mapping check --format json` reports the target as it reads it and names the target field on findings about one field:
+
+- `targetTree` lists the target schema's properties, each with `path`, `key`, `required` and `mappable`, and, when known, `type`, `format`, `const` and `enum`; a leaf lists the `conversions` the checker accepts for it, and an object lists its `children`. The order within a level is unspecified (currently alphabetical by key).
+- `required` means required by the parent object. A required field under an optional object that nothing fills is not left to do; the to-do list is the `adapter.mapping.required-unmapped` findings, read by their `target`.
+- A finding's `target` is the field's canonical path (a quoted `'"householdSize"'` reports as `householdSize`) and joins `targetTree[].path`; for `adapter.mapping.target-unknown` it names a path that is not in the tree. A finding about an assignment's `from`, `convert` or `whenMissing` carries that assignment's target, so `target` names the row the finding belongs on.
+- The `adapter.mapping.script-drift` warning carries `cause`: `model-changed` when the header's model digest is not the model's digest now, `script-differs` when the digest matches but the bytes differ. `script-differs` covers a hand edit, an edited header and a script another adapterctl version generated, so the notice states the difference, not who made it. The header records only the model's digest, so a changed model does not rule out hand edits as well; the replace action always says that hand edits are discarded. A drift warning without `cause` (from `adapterctl check` or `job check`) has an undetermined cause.
+
+Clients ignore members they do not know (CFG-DIAG-1).
 
 The format supports scalar copies and constants, nested target objects, exact keyed selection from a bounded array, explicit string-to-integer and integer-to-string conversion, and canonical `YYYY-MM-DD` date validation.
 The generator emits the corresponding Rhai expressions and checks; conversions do not guess formats.

@@ -737,6 +737,12 @@ project's deliberately authored explanation. These fields identify and
 explain the project decision; diagnostic messages and refusal remedies still
 follow the value-free rule in CFG-SEC-3.
 
+A product may add other optional members to a diagnostic when its own
+contract documents them, such as the field a finding is about. They are
+value-free under CFG-SEC-3, never change the meaning of the members above, and
+a client ignores members it does not know. `adapterctl mapping check` adds
+`target` and `cause`, documented in `products/adapter/VISUAL-MAPPING.md`.
+
 **CFG-DIAG-2 (MUST). Human output puts the position first:**
 
 ```text

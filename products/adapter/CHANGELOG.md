@@ -70,7 +70,10 @@
   member naming it in the format's target syntax; message text is unchanged.
 - The `adapter.mapping.script-drift` warning from `adapterctl mapping check`
   carries `cause`: `model-changed` (the header's model digest is stale) or
-  `script-edited` (the digest matches, or the header itself was edited).
+  `script-differs` (the digest matches, or the header itself was edited, yet
+  the bytes differ; a hand edit or another adapterctl version's generator can
+  cause it). Its message now names the cause. The text output of
+  `mapping check` leaves `targetTree` to `--format json`.
 - The GovStack Write path through the Adapter (direct Create and conditional
   Update) is experimental. `CONSULTATION.md` now lists what a source must
   offer to back it; BReg is the one maintained source that does.

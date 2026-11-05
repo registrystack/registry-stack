@@ -425,12 +425,7 @@ fn run_check(args: &MappingCheckArgs) -> Result<MappingRun, MappingFailure> {
         conflict.severity = Severity::Warning;
         model_failure(&mut report, &args.model, conflict);
     } else if let ExistingScript::Stale(cause) = existing {
-        if let Some(warning) = drift_warning(
-            &path,
-            "/mapping/script",
-            None,
-            "the script bytes differ from what the model generates",
-        ) {
+        if let Some(warning) = drift_warning(&path, "/mapping/script", None, cause.why()) {
             annotations.push(Annotation {
                 index: report.diagnostics().len(),
                 member: "cause",
@@ -615,15 +610,25 @@ enum DriftCause {
     /// The header's model digest is the model's digest now (or the header
     /// itself was edited), yet the bytes differ from what the model
     /// generates: the script was changed outside the model, or a different
-    /// generator version wrote it.
-    ScriptEdited,
+    /// generator version wrote it. The name states what was observed, not
+    /// who changed the bytes.
+    ScriptDiffers,
 }
 
 impl DriftCause {
     fn name(self) -> &'static str {
         match self {
             Self::ModelChanged => "model-changed",
-            Self::ScriptEdited => "script-edited",
+            Self::ScriptDiffers => "script-differs",
+        }
+    }
+
+    fn why(self) -> &'static str {
+        match self {
+            Self::ModelChanged => "the model changed since the script was generated",
+            Self::ScriptDiffers => {
+                "the model's digest still matches the script's header, but the script bytes differ from what the model generates"
+            }
         }
     }
 }
@@ -655,13 +660,13 @@ fn existing_script(
         std::str::from_utf8(&existing).map_or(GeneratedHeaderState::Absent, parse_generated_header);
     Ok(match state {
         GeneratedHeaderState::Absent => ExistingScript::Handwritten,
-        GeneratedHeaderState::Malformed => ExistingScript::Stale(DriftCause::ScriptEdited),
+        GeneratedHeaderState::Malformed => ExistingScript::Stale(DriftCause::ScriptDiffers),
         GeneratedHeaderState::Parsed(header) => {
             let script_directory = path.parent().unwrap_or_else(|| Path::new(""));
             let owner = script_directory.join(&header.model_reference);
             if lexical(&owner) == lexical(model) {
                 ExistingScript::Stale(if header.model_digest == model_digest {
-                    DriftCause::ScriptEdited
+                    DriftCause::ScriptDiffers
                 } else {
                     DriftCause::ModelChanged
                 })
