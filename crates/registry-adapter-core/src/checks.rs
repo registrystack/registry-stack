@@ -5173,19 +5173,6 @@ pub fn check_write_project(project: &AdapterProject, pack: &AdapterPack) -> Vec<
                 .get(collection.record_type.as_str())
         });
 
-        if project
-            .record_types
-            .get(collection.record_type.as_str())
-            .is_none()
-        {
-            findings.push(finding(
-                CheckCode::ProjectWriteCollectionInvalid,
-                &format!("{prefix}/recordType"),
-                "the Write collection names no declared project record type",
-                "Name a record type declared under recordTypes.",
-            ));
-        }
-
         match (collection.registry.as_deref(), consultation) {
             (Some(registry), _) if !bounded_registry_uri(registry) => findings.push(finding(
                 CheckCode::ProjectWriteCollectionInvalid,
