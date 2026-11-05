@@ -5,8 +5,9 @@ The reusable source route resolves one registered event by tracking ID and
 returns its native data; the project script selects the public fields.
 List, Search, revision history and temporal features are unavailable.
 
-All fixtures are documented synthetic exchanges. No live OpenCRVS system has
-verified this pack; its tested-version list remains empty.
+All fixtures are documented synthetic exchanges, not captures. Retrieve and
+lookup were checked live against an OpenCRVS test environment in November 2026;
+the OpenCRVS version could not be read, so the tested-version list remains empty.
 
 From the checkout root, set `CARGO_TARGET_DIR` to an external build directory.
 The commands validate the pinned pack, project scripts and schemas, generate
@@ -41,4 +42,4 @@ and follow that contract for input and payload schemas. The generated OpenAPI
 uses `/govstack/registries` as `servers.url`, with the `/v1/...` operation paths
 relative to that base. Discovery grants no Record access.
 
-The selected Consultation draft surface does not imply full GovStack conformance.
+The selected surface is a profile of an unratified GovStack draft and does not imply full GovStack conformance or certification.

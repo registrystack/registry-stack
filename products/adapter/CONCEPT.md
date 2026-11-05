@@ -109,7 +109,8 @@ deployment writes only a project file.
 
 ## 4. Non-goals (v1)
 
-- A general GovStack Building Block conformance claim. The selected
+- A general GovStack Building Block conformance claim, or any certification
+  against it. The basis is an unratified draft. The selected
   Consultation draft surface is defined in [Consultation](CONSULTATION.md);
   source-backed optional guarantees are offered only when implemented.
 - General message-broker routing and streaming engine patterns.

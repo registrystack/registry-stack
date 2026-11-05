@@ -1,5 +1,7 @@
-# Synthetic documented OpenCRVS exact reads. No live OpenCRVS system has
-# verified this source contract. Only Retrieve and Lookup are enabled.
+# Synthetic documented OpenCRVS exact reads. Retrieve and lookup were checked
+# live against an OpenCRVS test environment in November 2026; the version could
+# not be read, so no tested version is recorded. Only Retrieve and Lookup are
+# enabled.
 apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
 kind: AdapterProject
 project:
@@ -18,7 +20,7 @@ consultation:
 pack:
   id: opencrvs-events
   version: '1'
-  digest: sha256:fb42d925b438ef4f1f0968f378297753685c713ddc53bc514739427a6d32e1b6
+  digest: sha256:41138c64e55b756317778b3a4e95673f10559fc99ded22a699791f7913f52f9a
 artifacts:
   scripts:
   - id: birth-summary

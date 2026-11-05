@@ -42,4 +42,4 @@ and follow that contract for input and payload schemas. The generated OpenAPI
 uses `/govstack/registries` as `servers.url`, with the `/v1/...` operation paths
 relative to that base. Discovery grants no Record access.
 
-The selected Consultation draft surface does not imply full GovStack conformance.
+The selected surface is a profile of an unratified GovStack draft and does not imply full GovStack conformance or certification.

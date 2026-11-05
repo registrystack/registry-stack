@@ -3,7 +3,7 @@
 This local demo combines live, read-only DHIS2 Consultation requests with
 Create and conditional Update against a disposable local BReg registry. It is
 for an authorized Registry WG demonstration, not a production deployment or a
-general GovStack conformance claim.
+general GovStack conformance claim; the GovStack basis is an unratified draft.
 
 ## Requirements
 

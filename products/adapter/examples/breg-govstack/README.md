@@ -13,8 +13,15 @@ the native jurisdiction and omits a native null note.
 The runtime example explicitly enables the file secret provider under
 `secretProviders.file.root`, alongside its environment provider for database
 and cursor references. Omitting `secretProviders` keeps environment secrets
-only. File credentials are re-read for each source request, so an operator can
-atomically replace the private token file without restarting the facade.
+only. A static credential file (such as the bearer token here) is re-read for
+each source request, and an OAuth client secret file is re-read each time the
+facade acquires a token, so an operator can atomically replace either without
+restarting the facade. Everything else resolved from a secret reference is read
+once at startup and needs a restart to change: the mTLS client identity, the
+CA bundle, the database URL, the cursor key and the OIDC keys. A replacement
+file must keep the facade user as owner, mode 0400 or 0600, and a single hard
+link, or the provider refuses it; write it beside the old one and rename it
+into place.
 
 The runtime binds a dedicated BReg bearer token whose access profile grants
 only the selected Record route. Reads and writes use the same BReg principal,
