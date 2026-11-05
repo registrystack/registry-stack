@@ -3,6 +3,7 @@
 import { execFile as execCallback, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { createHash, randomBytes } from "node:crypto";
+import { constants } from "node:fs";
 import {
   access,
   chmod,
@@ -161,20 +162,36 @@ async function privateWrite(path, data) {
     }
   }
 }
-async function privateJson(path) {
-  const m = await lstat(path);
-  if (
-    !m.isFile() ||
-    m.isSymbolicLink() ||
-    m.mode & 0o077 ||
-    m.uid !== process.getuid()
-  )
-    throw Error("private configuration needs an owner-only regular file");
-  const contents = await readFile(path, "utf8");
+export async function privateJson(path) {
+  let handle;
   try {
-    return JSON.parse(contents);
-  } catch {
-    throw Error("private configuration is not valid JSON");
+    handle = await open(
+      path,
+      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+    );
+    const m = await handle.stat();
+    if (
+      !m.isFile() ||
+      m.mode & 0o077 ||
+      m.uid !== process.getuid() ||
+      m.nlink !== 1 ||
+      m.size > 262144
+    )
+      throw Error(
+        "private configuration needs an owner-only single-link regular file",
+      );
+    const contents = await handle.readFile("utf8");
+    try {
+      return JSON.parse(contents);
+    } catch {
+      throw Error("private configuration is not valid JSON");
+    }
+  } catch (e) {
+    if (e.code === "ELOOP")
+      throw Error("private configuration must not be a symlink");
+    throw e;
+  } finally {
+    await handle?.close();
   }
 }
 async function run(binary, args, env = process.env, input) {
@@ -452,23 +469,6 @@ async function main() {
       );
     await privateWrite(selectionPath, json(selection));
     await privateWrite(join(state, "public-source.json"), json(config));
-    console.log("Checking live DHIS2 demo (GET only)...");
-    const sourceResponse = await fetch(`${config.origin}/api/system/info`, {
-      headers: {
-        Authorization:
-          "Basic " +
-          Buffer.from(config.username + ":" + config.password).toString(
-            "base64",
-          ),
-      },
-      signal: AbortSignal.timeout(20000),
-    });
-    if (!sourceResponse.ok)
-      throw Error(
-        `public DHIS2 readiness returned HTTP ${sourceResponse.status}`,
-      );
-    const info = await sourceResponse.json();
-    console.log(`DHIS2 ${info.version} reachable.`);
     for (const [name, value] of [
       ["dhis2-username", config.username],
       ["dhis2-password", config.password],
@@ -718,12 +718,10 @@ async function main() {
       const r = await fetch("http://127.0.0.1:18109/health");
       return r.ok && (await r.json()).status === "ready";
     });
-    const jwks = await fetch("http://127.0.0.1:18109/jwks");
-    if (!jwks.ok) throw Error("demo JWKS unavailable");
-    await privateWrite(
-      join(state, "secrets", "facade-jwks"),
-      await jwks.text(),
-    );
+    if (!(await exists(join(state, "secrets", "facade-jwks"))))
+      throw Error(
+        "demo issuer public key file is unavailable; stop then start to refresh the issuer",
+      );
     for (const kind of ["dhis2", "breg"]) {
       const project = join(state, "projects", kind);
       await launch("adapter-" + kind, bin("adapter"), [
@@ -747,6 +745,29 @@ async function main() {
         async () => !(await alive("adapter-" + kind)),
       );
     }
+    console.log(
+      "Checking live DHIS2 Consultation through Adapter (read only)...",
+    );
+    const tokenResponse = await fetch("http://127.0.0.1:18109/demo/token", {
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!tokenResponse.ok) throw Error("demo caller token unavailable");
+    const accessToken = (await tokenResponse.json()).access_token;
+    const consultation = await fetch(
+      "http://127.0.0.1:18110/govstack/registries/v1/collections/people-summary/records?pageSize=1",
+      {
+        headers: { Authorization: "Bearer " + accessToken },
+        signal: AbortSignal.timeout(30000),
+      },
+    );
+    if (!consultation.ok)
+      throw Error(
+        `live DHIS2 Consultation preflight returned HTTP ${consultation.status}`,
+      );
+    const page = await consultation.json();
+    if (!Array.isArray(page.items) || page.items.length === 0)
+      throw Error("live DHIS2 Consultation returned no demo records");
+    console.log("Live DHIS2 Consultation ready.");
     const cli = join(state, "bruno-cli");
     if (!(await exists(join(cli, "node_modules/@usebruno/cli/bin/bru.js")))) {
       console.log(`Preparing pinned Bruno CLI ${CLI_VERSION}...`);
@@ -799,7 +820,6 @@ async function main() {
         ],
         startedAt: new Date().toISOString(),
         brunoCliVersion: CLI_VERSION,
-        dhis2Version: info.version,
         publicSource: config.origin,
       }),
     );

@@ -43,11 +43,21 @@ async function makeState(root) {
   return stateDir;
 }
 
-async function makeFakeBregctl(root, { fail = false } = {}) {
+async function makeFakeBregctl(
+  root,
+  { fail = false, symlinkHeader = false } = {},
+) {
   const path = join(root, fail ? "failing-bregctl.mjs" : "fake-bregctl.mjs");
+  const headerSetup = symlinkHeader
+    ? `const headerTarget = join(project, "editor.header-target");
+await writeFile(headerTarget, "Authorization: Bearer ${SOURCE_TOKEN}\\n", { mode: 0o600 });
+await chmod(headerTarget, 0o600);
+await symlink(headerTarget, headerFile);`
+    : `await writeFile(headerFile, "Authorization: Bearer ${SOURCE_TOKEN}\\n", { mode: 0o600 });
+await chmod(headerFile, 0o600);`;
   const source = `#!/usr/bin/env node
 import { existsSync } from "node:fs";
-import { chmod, writeFile } from "node:fs/promises";
+import { chmod, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 const project = process.argv.at(-1);
 await writeFile(join(project, "call.json"), JSON.stringify({
@@ -63,8 +73,7 @@ if (existsSync(join(project, "fail-refresh"))) {
   process.exit(8);
 }
 const headerFile = join(project, "editor.header");
-await writeFile(headerFile, "Authorization: Bearer ${SOURCE_TOKEN}\\n", { mode: 0o600 });
-await chmod(headerFile, 0o600);
+${headerSetup}
 process.stdout.write(JSON.stringify({ ok: true, command: "dev token", headerFile }));
 `
 }
@@ -171,6 +180,19 @@ test("serves discovery, signed tokens, health, and only fixed contract paths", a
   const keyMode =
     (await stat(join(stateDir, "secrets", "wg-demo-key.pem"))).mode & 0o777;
   assert.equal(keyMode, 0o600);
+  const exportedJwksPath = join(stateDir, "secrets", "facade-jwks");
+  const exportedJwksText = await readFile(exportedJwksPath, "utf8");
+  const exportedJwks = JSON.parse(exportedJwksText);
+  assert.deepEqual(exportedJwks, jwks);
+  assert.equal((await stat(exportedJwksPath)).mode & 0o777, 0o600);
+  assert.equal(exportedJwksText.includes("PRIVATE KEY"), false);
+  for (const privateMember of ["d", "p", "q", "dp", "dq", "qi", "oth"]) {
+    assert.equal(
+      Object.hasOwn(exportedJwks.keys[0], privateMember),
+      false,
+      `public JWKS must omit ${privateMember}`,
+    );
+  }
   assert.equal((await stat(stateDir)).mode & 0o077, 0);
 
   await server.close();
@@ -239,6 +261,35 @@ test("refreshes the BReg source token through a value-free private file", async 
     }).DYLD_FALLBACK_LIBRARY_PATH,
     "/synthetic/runtime-libraries",
   );
+});
+
+test("refuses a symlinked BReg header without disclosing or persisting its token", async () => {
+  const root = await mkdtemp(join(tmpdir(), "wg-demo-symlink-refresh-"));
+  const stateDir = await makeState(root);
+  const project = join(root, "breg-project");
+  await mkdir(project);
+  const bregctl = await makeFakeBregctl(root, { symlinkHeader: true });
+  const logs = [];
+
+  await assert.rejects(
+    refreshBregSourceToken({
+      stateDir,
+      bregProject: project,
+      bregctl,
+      log: (entry) => logs.push(entry),
+    }),
+    /BReg source token refresh failed/,
+  );
+
+  await assert.rejects(
+    readFile(join(stateDir, "secrets", "breg-source-token")),
+    { code: "ENOENT" },
+  );
+  assert.equal(JSON.stringify(logs).includes(SOURCE_TOKEN), false);
+  assert.deepEqual(logs.at(-1), {
+    event: "source-token-refresh",
+    status: "failed",
+  });
 });
 
 test("fails the initial refresh visibly without disclosing child output", async () => {
