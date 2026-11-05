@@ -669,7 +669,7 @@
     },
     "secretProviders": {
       "$ref": "#/$defs/SecretProvidersConfig",
-      "description": "The secret providers this facade enables. Omission preserves the\noriginal environment-only runtime; file secrets require an explicit\nabsolute `file.root`."
+      "description": "The secret providers this facade enables. Omission enables environment\nsecrets only; file secrets require an explicit\nabsolute `file.root`."
     }
   },
   "required": [
