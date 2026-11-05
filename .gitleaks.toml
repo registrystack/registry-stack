@@ -66,3 +66,10 @@ condition = "AND"
 paths = ["^products/adapter/fixtures/source-shapes/graphql-cursor-source/fixtures/find-first-page\\.yaml$"]
 regexTarget = "line"
 regexes = ['''^\s*pageStateToken: AQGTVIRecXOAHQpErfOzhEknm-j2T4eSa5osZDxhcPxbjL4ZWsi_fwuEmekmwe3pJzk7HzaQ5NkeOQEeCryW2cQXdLeGuRw25_eLYQ$''']
+
+[[allowlists]]
+description = "Allow the derived native idempotency key in the adapterctl GovStack Create replay test; it is the SHA-256 hex the Adapter derives from a synthetic request, not a credential."
+condition = "AND"
+paths = ["^crates/registry-adapterctl/tests/fixtures_replay\\.rs$"]
+regexTarget = "line"
+regexes = ['''^\s*idempotency-key: [0-9a-f]{64}$''']
