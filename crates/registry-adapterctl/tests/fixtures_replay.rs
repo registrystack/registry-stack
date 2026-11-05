@@ -387,3 +387,112 @@ fn a_write_only_govstack_project_replays_without_a_profile_file() {
     assert!(stderr.is_empty(), "{}", String::from_utf8_lossy(&stderr));
     assert_eq!(report["status"], "complete");
 }
+
+/// One Create entry over the maintained BReg pack: the facade request, the
+/// exact native batch it sends (the source key is the replay's fixed claim
+/// generation under the request's key scope), the BReg receipt, and the
+/// 201 the facade renders with its sealed ETag. `{operation}` names the
+/// bound operation the entry claims to exercise.
+const BREG_CREATE_FIXTURE: &str = r#"apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
+kind: AdapterFixture
+id: breg-contact-write
+pack: breg-records
+upstreamVersion: "0.45"
+provenance:
+  type: documented
+  reference: https://example.invalid/breg-records#batch
+intercepts:
+  - type: endpoint
+    endpoint: registry
+entries:
+  - facadeRequest:
+      operation: {operation}
+      path: /v1/collections/contacts/records
+      headers:
+        content-type: application/json
+        idempotency-key: '"replay-create"'
+      body:
+        data:
+          name: Ada
+          email: ada@example.test
+    upstream:
+      - request:
+          endpoint: registry
+          method: POST
+          path: /v1/records/contacts:batch
+          query: accessProfile=directory-editor
+          headers:
+            idempotency-key: c24474db4d0957f85667376f76e4a25cd1d5d71a4e2b206ce8aab12a06137a5a
+          body:
+            items:
+              - operation: create
+                data:
+                  name: Ada
+                  email: ada@example.test
+                  jurisdiction: zone-a
+        response:
+          status: 200
+          body:
+            results:
+              - operation: create
+                recordIdentifier: contact-1
+                etag: '"breg-1"'
+                domainData:
+                  name: Ada
+                  email: ada@example.test
+                  jurisdiction: zone-a
+    expected:
+      type: response
+      status: 201
+      headers:
+        cache-control: no-store
+        content-type: application/json
+        etag: '"w2.AbN1Q5_-XrTglRb9xER6qwJEBeg99kERkGn_ny2NRfrNN3QF-j_G-k6zdkrb0yTxZg"'
+        location: /govstack/registries/v1/collections/contacts/records/contact-1
+      body:
+        collectionId: contacts
+        recordId: contact-1
+        etag: '"w2.AbN1Q5_-XrTglRb9xER6qwJEBeg99kERkGn_ny2NRfrNN3QF-j_G-k6zdkrb0yTxZg"'
+"#;
+
+/// The maintained BReg-backed GovStack example with one Create fixture
+/// entry beside it, naming the given bound operation.
+fn breg_govstack_with_create_entry(operation: &str) -> (tempfile::TempDir, String, String) {
+    let (root, project, pack) = copied_breg_govstack(false);
+    let fixtures = Path::new(&project).with_file_name("fixtures");
+    std::fs::create_dir_all(&fixtures).unwrap();
+    std::fs::write(
+        fixtures.join("create.yaml"),
+        BREG_CREATE_FIXTURE.replace("{operation}", operation),
+    )
+    .unwrap();
+    (root, project, pack)
+}
+
+/// A GovStack Create fixture entry replays through the real BReg route and
+/// is held against the compiled Create operation: its 201, headers and
+/// receipt body are the ones the contract declares.
+#[test]
+fn a_govstack_create_entry_replays_against_its_compiled_operation() {
+    let (_root, project, pack) = breg_govstack_with_create_entry("create");
+    let (exit, report, stderr) = run_json(&["fixtures", "replay", &project, "--pack", &pack]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    assert!(stderr.is_empty(), "{}", String::from_utf8_lossy(&stderr));
+    assert_eq!(report["status"], "complete");
+    assert!(codes(&report).is_empty(), "{report}");
+}
+
+/// The same entry named as the Update binding is held against the compiled
+/// Update operation, which declares no 201, so replay refuses it at the
+/// expectation instead of passing it as a Create.
+#[test]
+fn a_govstack_write_entry_under_the_wrong_operation_is_refused_by_the_contract() {
+    let (_root, project, pack) = breg_govstack_with_create_entry("update");
+    let (exit, report, _) = run_json(&["fixtures", "replay", &project, "--pack", &pack]);
+    assert_eq!(exit, ExitCode::FAILURE, "{report}");
+    assert_eq!(codes(&report), ["adapterctl.fixtures.contract-status"]);
+    assert_eq!(
+        report["diagnostics"][0]["path"],
+        "/fixtures/0/entries/0/expected"
+    );
+}
