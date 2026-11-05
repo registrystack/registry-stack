@@ -1308,7 +1308,8 @@ fn check_required(
 pub struct GeneratedHeader {
     /// The model path relative to the script's directory.
     pub model_reference: String,
-    /// `sha256:` and 64 lowercase hex digits over the model file bytes.
+    /// `sha256:` and 64 lowercase hex digits over the parsed model,
+    /// serialized as JSON, so a layout-only edit to the file keeps it.
     pub model_digest: String,
 }
 
@@ -1640,7 +1641,7 @@ const HELPER_DATE: &str = r#"fn mapping_date(value, path) {
 ///
 /// `model_reference` is the model path relative to the script's directory
 /// (see [`model_reference_from`]); `model_digest` is the `sha256:` digest of
-/// the model file bytes.
+/// the parsed model, serialized as JSON.
 pub fn generate(
     mapping: &AdapterMapping,
     target_schema: &Value,
@@ -1661,7 +1662,7 @@ pub fn generate(
             MappingCode::HeaderInvalid,
             String::new(),
             "the model reference or digest cannot be written into the script header".to_string(),
-            "Pass a path like ../<name>.mapping.yaml and a sha256: digest of the model bytes.",
+            "Pass a path like ../<name>.mapping.yaml and a sha256: digest of the parsed model.",
         ));
     }
     if findings
