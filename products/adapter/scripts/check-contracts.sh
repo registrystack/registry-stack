@@ -229,13 +229,17 @@ for example in dhis2-consultation opencrvs-consultation; do
 done
 
 # The unified BReg-backed GovStack example owns its domain schema and mappings.
-# Native source mutation and recovery run in the PostgreSQL gate.
+# Native source mutation and recovery run in the PostgreSQL gate. The example
+# carries no fixture suite; its replay proves that a read+write project
+# composes the same profile and contract for replay as for check and compile.
 breg_govstack=products/adapter/examples/breg-govstack
 "$adapterctl_bin" check "$breg_govstack/project.yaml" \
   --pack products/adapter/packs/breg-records/pack.yaml >/dev/null
 "$adapterctl_bin" compile --check "$breg_govstack/project.yaml" \
   --pack products/adapter/packs/breg-records/pack.yaml >/dev/null
-printf 'BReg GovStack example check and compile passed\n'
+"$adapterctl_bin" fixtures replay "$breg_govstack/project.yaml" \
+  --pack products/adapter/packs/breg-records/pack.yaml >/dev/null
+printf 'BReg GovStack example check, compile and replay passed\n'
 
 # The authored mapping models behind generated scripts are checked against
 # their target schemas and, under --deny-warnings, against the scripts they

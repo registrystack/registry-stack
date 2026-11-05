@@ -101,10 +101,10 @@ pub(crate) fn run(args: &ReplayArgs) -> Result<ReplayRun, ReplayFailure> {
         &mut files,
     )
     .map_err(io_failure)?;
-    let built_in_consultation = project.as_ref().is_some_and(|(decoded, _)| {
-        decoded.value.profile.is_none() && decoded.value.consultation.is_some()
-    });
-    let profile = if built_in_consultation {
+    let built_in_govstack = project
+        .as_ref()
+        .is_some_and(|(decoded, _)| check::uses_built_in_govstack(&decoded.value));
+    let profile = if built_in_govstack {
         None
     } else {
         let profile_path = check::artifact_path(
@@ -159,7 +159,7 @@ pub(crate) fn run(args: &ReplayArgs) -> Result<ReplayRun, ReplayFailure> {
     let (profile, profile_bytes) = match profile {
         Some((decoded, bytes)) => (decoded.value, bytes),
         None => (
-            registry_adapter::govstack::consultation::built_in_profile(),
+            registry_adapter::govstack::built_in_profile(&project),
             Vec::new(),
         ),
     };
@@ -186,6 +186,11 @@ pub(crate) fn run(args: &ReplayArgs) -> Result<ReplayRun, ReplayFailure> {
     }) {
         report.push(finding);
     }
+    if !report.has_errors() {
+        check::verify_govstack_transforms(&project, &project_path, &mut report);
+        check::verify_govstack_native_replay(&project, &pack, &project_path, &mut report);
+        check::verify_govstack_inputs(&project, &pack, &project_path, &mut report);
+    }
     check::check_fixture_bodies(&profile, &project, &fixtures, &mut report);
     check::check_consultation_fixture_bodies(&project, &directory, &fixtures, &mut report);
     if report.has_errors() {
@@ -197,7 +202,7 @@ pub(crate) fn run(args: &ReplayArgs) -> Result<ReplayRun, ReplayFailure> {
     // The contract half is `compile`'s: the same assembled document the
     // deployment publishes, so the replay holds expectations against what
     // callers actually receive.
-    let compiled = if project.consultation.is_some() {
+    let compiled = if check::uses_built_in_govstack(&project) {
         let schemas =
             compile::consultation_schemas(&project, &directory).map_err(
                 |failure| match failure {
@@ -413,31 +418,36 @@ fn replay_contract(
     }
 }
 
-/// The compiled operation of one bound operation: the document names each
-/// concrete operation `<operation>.<recordType>`, and a binding names the
-/// record type, so the first binding of the operation decides the pair.
+/// The compiled operation of one bound operation: an authored profile's
+/// document names each concrete operation `<operation>.<recordType>`, and a
+/// binding names the record type, so the first binding of the operation
+/// decides the pair. The built-in GovStack document names each operation
+/// after its Consultation or Write capability and the collection in the
+/// request path.
 fn compiled_operation<'a>(
     compiled: &'a Value,
     project: &AdapterProject,
     operation: &registry_platform_yaml::ExternalId,
     request_path: &str,
 ) -> Option<&'a Value> {
-    let record_type = if project.consultation.is_some() {
-        request_path.split('/').nth(3)?
+    let wanted = if check::uses_built_in_govstack(project) {
+        let collection = request_path.split('/').nth(3)?;
+        match registry_adapter::govstack::consultation::ConsultationCapability::from_binding_operation(
+            operation.as_str(),
+        ) {
+            Some(capability) => capability.operation_id(collection),
+            None => registry_adapter::govstack::write::WriteCapability::from_binding_operation(
+                operation.as_str(),
+            )?
+            .operation_id(collection),
+        }
     } else {
-        project
+        let record_type = project
             .bindings
             .iter()
             .find(|binding| binding.operation.as_str() == operation.as_str())?
             .record_type
-            .as_str()
-    };
-    let wanted = if project.consultation.is_some() {
-        registry_adapter::govstack::consultation::ConsultationCapability::from_binding_operation(
-            operation.as_str(),
-        )?
-        .operation_id(record_type)
-    } else {
+            .as_str();
         format!("{}.{}", operation.as_str(), record_type)
     };
     compiled["paths"].as_object()?.values().find_map(|item| {
@@ -492,5 +502,53 @@ pub(crate) fn failure(failure: &ReplayFailure) -> (u8, Vec<Value>) {
                 })
                 .collect(),
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use registry_adapter_core::{ADAPTER_PROJECT_API_VERSION, ADAPTER_PROJECT_KIND};
+    use std::path::Path;
+
+    /// Every operation of the maintained read+write GovStack example finds
+    /// its compiled operation, so a Create or Update fixture entry is held
+    /// against the contract instead of passing unchecked.
+    #[test]
+    fn every_built_in_govstack_capability_finds_its_compiled_operation() {
+        let example = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/adapter/examples/breg-govstack");
+        let (project, _): (AdapterProject, _) = registry_adapter::engine::load::read_artifact(
+            &example.join("project.yaml"),
+            ADAPTER_PROJECT_KIND,
+            ADAPTER_PROJECT_API_VERSION,
+        )
+        .expect("the maintained project reads");
+        let compiled: Value = serde_json::from_slice(
+            &std::fs::read(example.join("generated/openapi.json")).expect("compiled contract"),
+        )
+        .expect("compiled contract is JSON");
+        for (operation, path, expected) in [
+            (
+                "retrieve",
+                "/v1/collections/contacts/records/contact-42",
+                "retrieveContacts",
+            ),
+            (
+                "create",
+                "/v1/collections/contacts/records",
+                "createContacts",
+            ),
+            (
+                "update",
+                "/v1/collections/contacts/records/contact-42",
+                "updateContacts",
+            ),
+        ] {
+            let operation = registry_platform_yaml::ExternalId::new(operation).unwrap();
+            let found = compiled_operation(&compiled, &project, &operation, path)
+                .unwrap_or_else(|| panic!("{operation:?} has a compiled operation"));
+            assert_eq!(found["operationId"], expected);
+        }
     }
 }

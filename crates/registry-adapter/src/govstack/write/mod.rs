@@ -5,6 +5,8 @@
 pub(crate) mod attachment;
 pub(crate) mod metadata;
 
+pub use attachment::WriteCapability;
+
 use crate::engine::component::rest::continuation::ContinuationCodec;
 use registry_platform_canonical_json::canonicalize_json;
 use serde_json::Value;

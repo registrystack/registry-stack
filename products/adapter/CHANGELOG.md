@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- `adapterctl fixtures replay` accepts built-in GovStack projects that serve
+  Write. It detects the built-in target, composes the profile and assembles
+  the contract exactly as `check` and `compile` do, so a read+write project
+  no longer fails with `adapter.project.unknown-operation` on its Create and
+  Update bindings, a Write-only project no longer asks for a `profile.yaml`,
+  and a Create or Update fixture entry is held against its compiled
+  operation.
 - Continuation cursors (GovStack List and Search, and every other paginated
   facade operation) are bound to the verified client the caller acts
   through (`azp` or `client_id`) as well as the issuer and subject, so a

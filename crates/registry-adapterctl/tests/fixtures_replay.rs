@@ -315,3 +315,75 @@ fn replay_refuses_an_unresolved_problem_expectation() {
         "/fixtures/0/entries/1/expected"
     );
 }
+
+/// The maintained BReg-backed GovStack example in a fresh directory, as
+/// authored (Consultation Retrieve beside Write Create and Update) or with
+/// its Consultation section removed so the Write companion read is a
+/// `writable-read` binding. Returns the directory guard, the copied
+/// `project.yaml`, and the maintained BReg pack.
+fn copied_breg_govstack(write_only: bool) -> (tempfile::TempDir, String, String) {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let root = tempfile::tempdir().unwrap();
+    let copy = root.path().join("breg-govstack");
+    copy_fs(
+        &repository.join("products/adapter/examples/breg-govstack"),
+        &copy,
+    );
+    let project = copy.join("project.yaml");
+    if write_only {
+        let mut text = std::fs::read_to_string(&project).unwrap();
+        let start = text.find("consultation:\n").expect("Consultation block");
+        let end = text.find("write:\n").expect("Write block");
+        text.replace_range(start..end, "");
+        text = text
+            .replace(
+                "    - recordType: contacts\n      create:",
+                "    - recordType: contacts\n      registry: https://registry.example/registries/contacts\n      view: contact-public\n      readDataSchema: contact-public\n      create:",
+            )
+            .replace(
+                "id: contacts-retrieve\n    operation: retrieve",
+                "id: contacts-writable-read\n    operation: writable-read",
+            )
+            .replace(
+                "contacts-retrieve: {script:",
+                "contacts-writable-read: {script:",
+            )
+            .replace("operations: [retrieve]", "operations: [writable-read]");
+        std::fs::write(&project, text).unwrap();
+    }
+    let pack = repository.join("products/adapter/packs/breg-records/pack.yaml");
+    (
+        root,
+        project.to_str().unwrap().to_owned(),
+        pack.to_str().unwrap().to_owned(),
+    )
+}
+
+/// A built-in GovStack project that serves Write operations replays
+/// through the same composed profile and contract `check` and `compile`
+/// use: its Create and Update bindings are operations of that profile,
+/// not unknown ones.
+#[test]
+fn a_read_write_govstack_project_replays_with_the_composed_profile() {
+    let (_root, project, pack) = copied_breg_govstack(false);
+    let (exit, report, stderr) = run_json(&["fixtures", "replay", &project, "--pack", &pack]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    assert!(stderr.is_empty(), "{}", String::from_utf8_lossy(&stderr));
+    assert!(
+        !codes(&report).contains(&"adapter.project.unknown-operation"),
+        "{report}"
+    );
+    assert_eq!(report["command"], "fixtures replay");
+    assert_eq!(report["status"], "complete");
+}
+
+/// A Write-only GovStack project has no authored profile: replay reads no
+/// `profile.yaml` for it, exactly as `check` and `compile` do.
+#[test]
+fn a_write_only_govstack_project_replays_without_a_profile_file() {
+    let (_root, project, pack) = copied_breg_govstack(true);
+    let (exit, report, stderr) = run_json(&["fixtures", "replay", &project, "--pack", &pack]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    assert!(stderr.is_empty(), "{}", String::from_utf8_lossy(&stderr));
+    assert_eq!(report["status"], "complete");
+}
