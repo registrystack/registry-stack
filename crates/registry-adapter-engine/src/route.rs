@@ -1628,20 +1628,18 @@ fn classify_source_write_failure(
     }
 }
 
+/// `source_status` is the typed status the resumable send received, never
+/// the `CamelHttpResponseCode` header a route step can rewrite.
 async fn mark_normalized_source_rejection(
     exchange: &Exchange,
     resume_plan: Option<&crate::resume::ServedResumeOperation>,
+    source_status: Option<u16>,
     result: &Result<Flow, RouteFailure>,
 ) -> Result<(), RouteFailure> {
     let (Some(plan), Err(failure)) = (resume_plan, result) else {
         return Ok(());
     };
-    let status = exchange
-        .message
-        .header("CamelHttpResponseCode")
-        .and_then(Value::as_u64)
-        .and_then(|status| u16::try_from(status).ok());
-    if plan.is_definitive_source_rejection(status, failure.class) {
+    if plan.is_definitive_source_rejection(source_status, failure.class) {
         exchange.mark_definitive_source_rejection().await?;
     }
     Ok(())
@@ -2063,6 +2061,7 @@ async fn run_route_within_profile<'a>(
         async_source_acceptance: None,
         resume_plan,
         resume: None,
+        resume_source_status: None,
     };
     let body = run.run_route_body(steps);
     let mut result = tokio::time::timeout_at(absolute_deadline, body)
@@ -2081,8 +2080,13 @@ async fn run_route_within_profile<'a>(
         result = Ok(Flow::Stop);
         run.deferred_write_completion = None;
     }
-    if let Err(failure) =
-        mark_normalized_source_rejection(&run.exchange, run.resume_plan, &result).await
+    if let Err(failure) = mark_normalized_source_rejection(
+        &run.exchange,
+        run.resume_plan,
+        run.resume_source_status,
+        &result,
+    )
+    .await
     {
         result = Err(failure);
     }
@@ -2178,6 +2182,9 @@ pub(crate) struct Run<'a, 'c> {
     async_source_acceptance: Option<AsyncSourceAcceptance>,
     resume_plan: Option<&'a crate::resume::ServedResumeOperation>,
     resume: Option<ResumeRun>,
+    /// The typed status the last resumable send received, the only
+    /// evidence a definitive source rejection is decided from.
+    resume_source_status: Option<u16>,
 }
 
 struct ResumeRun {
@@ -3519,6 +3526,9 @@ impl Run<'_, '_> {
             }
             let elapsed = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
             let status = reply.status();
+            if matches!(resume_send, ResumeSend::Execute { .. }) {
+                self.resume_source_status = status;
+            }
             let mut action = match status {
                 Some(status) => {
                     endpoint
@@ -4197,13 +4207,16 @@ mod served_tests {
         )));
         let mut exchange = Exchange::new("terminal-rejection".to_owned());
         exchange.install_write(marked.clone());
+        // The route may rewrite the status header; the typed send status
+        // alone decides.
         exchange
             .message
-            .set_header("CamelHttpResponseCode", json!(422));
+            .set_header("CamelHttpResponseCode", json!(503));
 
         mark_normalized_source_rejection(
             &exchange,
             Some(&plan),
+            Some(422),
             &Err(RouteFailure::of(ErrorClass::OutcomeInvalidRequest)),
         )
         .await
@@ -4218,14 +4231,18 @@ mod served_tests {
             (None, ErrorClass::OutcomeInvalidRequest),
         ] {
             let mut exchange = Exchange::new("non-terminal-source-failure".to_owned());
-            if let Some(status) = status {
-                exchange
-                    .message
-                    .set_header("CamelHttpResponseCode", json!(status));
-            }
-            mark_normalized_source_rejection(&exchange, Some(&plan), &Err(RouteFailure::of(class)))
-                .await
-                .expect("an unproved failure remains resumable without custody access");
+            // A route-authored header never stands in for the send's status.
+            exchange
+                .message
+                .set_header("CamelHttpResponseCode", json!(422));
+            mark_normalized_source_rejection(
+                &exchange,
+                Some(&plan),
+                status,
+                &Err(RouteFailure::of(class)),
+            )
+            .await
+            .expect("an unproved failure remains resumable without custody access");
         }
     }
 
