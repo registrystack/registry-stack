@@ -85,7 +85,7 @@ These transformations receive only validated domain data and produce the native 
 A matching Consultation collection supplies Registry, view and read data schema once. A Write-only Update supplies those facts and a `writable-read` binding explicitly.
 Both arrangements expose one companion Retrieve path, not a second writable-record resource.
 That read must acquire its body and native validator under the same authoritative source evaluation and source access context used by the mutation.
-The facade seals the native validator as authenticated opaque state, bound to Registry, Collection, Record, view and the deployment/source/access closure.
+The facade seals the native validator as authenticated opaque state, bound to Registry, Collection, Record, view and a closure of the served record shape (record schema, item projection, output transformation, response shape) and the configured source endpoints. Access, listener, audit and retention settings stay outside it, so admitting a client or rotating OIDC configuration keeps outstanding ETags valid.
 Fixed Write deployments supply the existing 32-byte `cursorKeyRef`; a separately derived key and nonce domain protect guards, and previous-key opening supports rotation. The public tag reveals equality, not encoded native values. Native conditions may be opaque revision tokens rather than HTTP ETags; their strength comes from the source compare-and-commit guarantee. The pack validates any source-specific syntax. A native condition over 128 bytes is outside this initial bounded profile.
 The receipt and a later companion GET share an ETag only while the source guard state, read currency and effective context remain identical.
 
