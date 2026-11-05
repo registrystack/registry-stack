@@ -71,9 +71,11 @@
   422 `invalid-content` and one `errors` pointer per such member, even when
   the project input schema admits it.
 - `adapterctl mapping check` reports the target schema as `targetTree`: each
-  property's path, key, type, required flag, format, const, enum, children and,
-  for a leaf, the `convert` values the checker accepts. It is also present on a
-  refusal whenever the schema root is supported.
+  property's path, key, type, required flag, `mappable` flag (a scalar leaf
+  whose path the target-path grammar can express; never an object), format,
+  const, enum, children and, for a mappable leaf, the `convert` values the
+  checker accepts. It is also present on a refusal, including one raised by
+  `--deny-warnings`, whenever the schema root is supported.
 - `adapterctl mapping check` findings about one target field carry a `target`
   member naming it in the format's target syntax; message text is unchanged.
 - The `adapter.mapping.script-drift` warning from `adapterctl mapping check`

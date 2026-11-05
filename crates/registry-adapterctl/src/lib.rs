@@ -453,7 +453,7 @@ fn mapping_command(
         Ok(run) if refused(&run.warnings, run.deny_warnings) => refusal(
             run.warnings,
             run.files_checked,
-            Vec::new(),
+            run.members,
             &run.annotations,
             stdout,
             stderr,

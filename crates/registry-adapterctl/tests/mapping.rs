@@ -186,12 +186,12 @@ fn check_reports_the_target_tree_the_checker_reads() {
         report["targetTree"],
         json!([
             {"path": "household", "key": "household", "type": "object", "required": false,
-             "mappable": true, "children": [
+             "mappable": false, "children": [
                 {"path": "household.size", "key": "size", "type": "integer", "required": true,
                  "mappable": true, "conversions": ["none", "integer"]}
              ]},
             {"path": "source", "key": "source", "type": "object", "required": true,
-             "mappable": true, "children": [
+             "mappable": false, "children": [
                 {"path": "source.id", "key": "id", "type": "string", "required": true,
                  "mappable": true, "conversions": ["none", "text", "date"]},
                 {"path": "source.kind", "key": "kind", "type": "string", "required": true,
@@ -903,6 +903,23 @@ fn check_warns_when_the_model_changes_after_generation() {
     // changed and an invalid model warn.
     assert_eq!(drift_warnings(&report).len(), 1, "{report}");
     let _ = root;
+}
+
+#[test]
+fn mapping_check_deny_warnings_keeps_the_report_members() {
+    let (_root, _, model) = project_with_generated_script();
+    let text = std::fs::read_to_string(&model).unwrap();
+    std::fs::write(&model, text.replace("constant: person", "constant: human")).unwrap();
+    let (exit, report, _) = run_json(&[
+        "mapping",
+        "check",
+        model.to_str().unwrap(),
+        "--deny-warnings",
+    ]);
+    assert_eq!(exit, ExitCode::from(1), "{report}");
+    assert_eq!(report["ok"], false, "{report}");
+    assert!(!drift_warnings(&report).is_empty(), "{report}");
+    assert!(report["targetTree"].is_array(), "{report}");
 }
 
 /// `mapping check` names why a generated script drifted: the model's digest
