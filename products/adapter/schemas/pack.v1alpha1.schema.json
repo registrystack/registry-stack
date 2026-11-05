@@ -1704,63 +1704,19 @@
         }
       ]
     },
-    "SourceWriteIdentity": {
-      "description": "The source-owned identity behavior a direct Create route guarantees.\nThe first supported shape is intentionally singular: the source assigns\nthe durable key returned in [`SourceWriteReceipt`].",
-      "enum": [
-        "source-assigned"
-      ],
-      "type": "string"
-    },
-    "SourceWritePrecondition": {
-      "description": "The source-owned concurrency behavior an Update route guarantees.",
-      "oneOf": [
-        {
-          "const": "strong-atomic-source",
-          "description": "The source compares and commits the supplied native validator in the\nsame atomic mutation boundary.",
-          "type": "string"
-        }
-      ]
-    },
-    "SourceWriteReplay": {
-      "additionalProperties": false,
-      "description": "Exact source replay semantics and their finite provider-owned window.\nThe host keeps its own idempotency custody within, never beyond, this\ndeclared source guarantee.",
-      "properties": {
-        "replayWindowSeconds": {
-          "description": "Seconds for which the source guarantees an exact same-key replay.",
-          "format": "uint64",
-          "maximum": 31536000,
-          "minimum": 1,
-          "type": "integer"
-        },
-        "type": {
-          "$ref": "#/$defs/SourceWriteReplayKind"
-        }
-      },
-      "required": [
-        "type",
-        "replayWindowSeconds"
-      ],
-      "type": "object"
-    },
-    "SourceWriteReplayKind": {
-      "description": "The source-owned replay behavior a direct write guarantees.",
-      "enum": [
-        "exact-keyed"
-      ],
-      "type": "string"
-    },
     "SourceWriteSupport": {
-      "description": "Source-neutral direct-write semantics explicitly promised by one reusable\npack route template. A host never infers these guarantees from an HTTP\nmethod, provider brand, route id, or successful fixture.",
+      "description": "Source-neutral direct-write semantics explicitly promised by one reusable\npack route template. A host never infers these guarantees from an HTTP\nmethod, provider brand, route id, or successful fixture.\n\nEach variant names one fixed guarantee set; the only value a pack chooses\nis the finite provider-owned window in which the source guarantees an\nexact same-key replay. The host keeps its own idempotency custody within,\nnever beyond, that declared window.",
       "oneOf": [
         {
           "additionalProperties": false,
-          "description": "Create exactly one source record and return its source-assigned key.",
+          "description": "Create exactly one source record, replay an exact same-key retry, and\nreturn the durable key the source assigns in [`SourceWriteReceipt`].",
           "properties": {
-            "identity": {
-              "$ref": "#/$defs/SourceWriteIdentity"
-            },
-            "replay": {
-              "$ref": "#/$defs/SourceWriteReplay"
+            "replayWindowSeconds": {
+              "description": "Seconds for which the source guarantees an exact same-key replay.",
+              "format": "uint64",
+              "maximum": 31536000,
+              "minimum": 1,
+              "type": "integer"
             },
             "type": {
               "const": "create-one",
@@ -1769,20 +1725,20 @@
           },
           "required": [
             "type",
-            "identity",
-            "replay"
+            "replayWindowSeconds"
           ],
           "type": "object"
         },
         {
           "additionalProperties": false,
-          "description": "Update exactly one source record under an atomic source precondition.",
+          "description": "Update exactly one source record, replay an exact same-key retry, and\ncompare and commit the supplied native validator in the same atomic\nmutation boundary.",
           "properties": {
-            "precondition": {
-              "$ref": "#/$defs/SourceWritePrecondition"
-            },
-            "replay": {
-              "$ref": "#/$defs/SourceWriteReplay"
+            "replayWindowSeconds": {
+              "description": "Seconds for which the source guarantees an exact same-key replay.",
+              "format": "uint64",
+              "maximum": 31536000,
+              "minimum": 1,
+              "type": "integer"
             },
             "type": {
               "const": "conditional-update-one",
@@ -1791,8 +1747,7 @@
           },
           "required": [
             "type",
-            "replay",
-            "precondition"
+            "replayWindowSeconds"
           ],
           "type": "object"
         }

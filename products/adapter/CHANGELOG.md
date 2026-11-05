@@ -35,6 +35,20 @@
   that uses them and re-lock the project.
 - Remove the `range`, `set-membership` and `prefix` source comparisons, which
   no pack used. Only `equality` remains.
+- A pack route's `writeSupport` is flat: `type` is `create-one` or
+  `conditional-update-one`, with `replayWindowSeconds`. The single-value
+  `identity`, `replay` and `precondition` members are removed.
+- An Adapter project needs less configuration. A Consultation collection's
+  `view` defaults to its `dataSchema`; its `transform` applies to every
+  Retrieve, Lookup, List and Search binding of that record type unless
+  `bindingTransforms` names one for the binding. `recordTypes` entries with no
+  fields are derived from the collections. `maximumUpstreamCalls` defaults to
+  4. A Write Update's `companionRead` is inferred when exactly one Retrieve or
+  `writable-read` binding serves the record type, and is required when the
+  choice is ambiguous. The explicit forms stay valid.
+- A `writable-read` binding that no Write Update names as its companion read
+  is refused by `adapterctl check` and at load, naming the binding, instead of
+  stopping the Adapter.
 - BREAKING: `asyncCompletion.mode` is renamed `asyncCompletion.type` in an
   Adapter project binding. There is no alias and the project `apiVersion` is
   unchanged, so a project that still writes `mode` is refused at that key

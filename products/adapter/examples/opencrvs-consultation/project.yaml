@@ -12,8 +12,10 @@ consultation:
   collections:
   - recordType: birth-registrations
     registry: https://registry.example/registries/civil
-    view: birth-summary
     dataSchema: birth-summary
+    transform:
+      script: birth-summary
+      entrypoint: birth_summary
     lookup:
       selector: by-tracking-id
       inputSchema: tracking-id
@@ -33,9 +35,6 @@ artifacts:
   - id: tracking-id
     file: schemas/tracking-id.schema.json
     digest: sha256:c339514f4d60e5fdc750157824479dd232576edd5e0338076a8034775da27ac6
-recordTypes:
-- name: birth-registrations
-  fields: []
 templatedRoutes:
 - routeTemplate: read-registered-event
   routeId: birth-read
@@ -46,19 +45,10 @@ bindings:
   operation: retrieve
   recordType: birth-registrations
   route: birth-read
-  maximumUpstreamCalls: 4
 - id: birth-lookup
   operation: lookup
   recordType: birth-registrations
   route: birth-read
-  maximumUpstreamCalls: 4
-bindingTransforms:
-  birth-retrieve:
-    script: birth-summary
-    entrypoint: birth_summary
-  birth-lookup:
-    script: birth-summary
-    entrypoint: birth_summary
 accessProfiles:
 - id: birth-reader
   scopes:

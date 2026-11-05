@@ -21,23 +21,61 @@ pub struct ConsultationFacade {
 
 /// Deployment metadata for one project record type and public view.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConsultationCollection {
     /// Project record type and literal Consultation collection identifier.
     pub record_type: LocalId,
     /// Stable identifier of the Registry that owns the Records.
     pub registry: String,
-    /// Public view named by the concrete OpenAPI operation metadata.
+    /// Public view named by the concrete OpenAPI operation metadata. When
+    /// omitted, the view is named after `dataSchema`.
+    #[cfg_attr(feature = "schema", schemars(with = "Option<LocalId>"))]
     pub view: LocalId,
     /// Pinned project schema for the public `data` member of this view.
     pub data_schema: LocalId,
+    /// The transformation every `retrieve`, `lookup`, `list`, and `search`
+    /// binding of this record type follows unless `bindingTransforms` names
+    /// one for that binding.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transform: Option<crate::project::BindingTransform>,
     /// Exact-selector metadata, required only when Lookup is bound.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lookup: Option<ConsultationLookup>,
     /// Named-search metadata, required only when Search is bound.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub search: Option<ConsultationSearch>,
+}
+
+impl<'de> Deserialize<'de> for ConsultationCollection {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct Wire {
+            record_type: LocalId,
+            registry: String,
+            #[serde(default)]
+            view: Option<LocalId>,
+            data_schema: LocalId,
+            #[serde(default)]
+            transform: Option<crate::project::BindingTransform>,
+            #[serde(default)]
+            lookup: Option<ConsultationLookup>,
+            #[serde(default)]
+            search: Option<ConsultationSearch>,
+        }
+
+        let wire = Wire::deserialize(deserializer)?;
+        Ok(Self {
+            record_type: wire.record_type,
+            registry: wire.registry,
+            view: wire.view.unwrap_or_else(|| wire.data_schema.clone()),
+            data_schema: wire.data_schema,
+            transform: wire.transform,
+            lookup: wire.lookup,
+            search: wire.search,
+        })
+    }
 }
 
 impl registry_platform_yaml::Identified for ConsultationCollection {

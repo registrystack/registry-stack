@@ -1072,18 +1072,10 @@ mod tests {
             "testedVersions": ["1.0"],
             "routeTemplates": [{
                 "id": "create-record",
-                "writeSupport": {
-                    "type": "create-one",
-                    "identity": "source-assigned",
-                    "replay": {"type": "exact-keyed", "replayWindowSeconds": 604800}
-                }
+                "writeSupport": {"type": "create-one", "replayWindowSeconds": 604800}
             }, {
                 "id": "update-record",
-                "writeSupport": {
-                    "type": "conditional-update-one",
-                    "replay": {"type": "exact-keyed", "replayWindowSeconds": 604800},
-                    "precondition": "strong-atomic-source"
-                }
+                "writeSupport": {"type": "conditional-update-one", "replayWindowSeconds": 604800}
             }]
         }))
         .expect("pack");

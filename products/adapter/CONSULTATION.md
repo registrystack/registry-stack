@@ -33,6 +33,7 @@ No-match, ambiguous and unresolved outcomes are preserved, and projection failur
 ## Schemas and capabilities
 
 Each Consultation collection selects its public data schema once through `dataSchema`, referencing the project artifact inventory.
+Its `view` defaults to the `dataSchema` identifier. A collection `transform` names the script every Retrieve, Lookup, List and Search binding of that record type follows; a `bindingTransforms` entry overrides it for one binding.
 The schema is JSON Schema with a stable versioned identity and an exact artifact digest.
 Nested objects, bounded arrays and local schema definitions are supported.
 Schemas are self-contained reviewed artifacts; `$ref` references stay inside the selected document.
@@ -82,16 +83,17 @@ One strong If-Match is required: missing returns 428, malformed returns 400, and
 The source must compare and commit atomically. A preliminary read and timestamp comparison is insufficient.
 A synchronous commit returns bodyless 204, no Content-Type, and a new strong ETag.
 
-The project selects `write.collections`, a Create input schema, an Update input schema, and a `bindingTransforms` entry for each enabled write binding.
+The project selects `write.collections`, a Create input schema, an Update input schema, and a `bindingTransforms` entry for each enabled write binding; a collection `transform` does not cover write bindings.
 These transformations receive only validated domain data and produce the native route input; they are not inferred by reversing the read projection.
-A matching Consultation collection supplies Registry, view and read data schema once. A Write-only Update supplies those facts and a `writable-read` binding explicitly.
+A matching Consultation collection supplies Registry, view and read data schema once. A Write-only Update supplies those facts and a `writable-read` binding.
+`companionRead` is inferred when exactly one Retrieve or `writable-read` binding serves the record type, and is required only when that choice is ambiguous. A `writable-read` binding that no Update names is refused by check and at load.
 Both arrangements expose one companion Retrieve path, not a second writable-record resource.
 That read must acquire its body and native validator under the same authoritative source evaluation and source access context used by the mutation.
 The facade seals the native validator as authenticated opaque state, bound to Registry, Collection, Record, view and a closure of the served record shape (record schema, item projection, output transformation, response shape) and the configured source endpoints. Access, listener, audit and retention settings stay outside it, so admitting a client or rotating OIDC configuration keeps outstanding ETags valid.
 Fixed Write deployments supply the existing 32-byte `cursorKeyRef`; a separately derived key and nonce domain protect guards, and previous-key opening supports rotation. The public tag reveals equality, not encoded native values. Native conditions may be opaque revision tokens rather than HTTP ETags; their strength comes from the source compare-and-commit guarantee. The pack validates any source-specific syntax. A native condition over 128 bytes is outside this initial bounded profile.
 The receipt and a later companion GET share an ETag only while the source guard state, read currency and effective context remain identical.
 
-The reusable source route declares `writeSupport`: source-assigned Create or strong atomic conditional Update, plus an exact keyed replay window.
+The reusable source route declares `writeSupport`: `create-one` for source-assigned Create or `conditional-update-one` for strong atomic conditional Update, each with its exact keyed `replayWindowSeconds`.
 This explicit declaration is a source-author obligation; it is not established merely by parsing the pack.
 The initial execution plan admits deterministic preparation and one source-idempotent HTTP POST inside an idempotent consumer.
 A source pack can normalize a known native rejection through a pure, terminal `onException` predicate and a typed outcome. Not-found maps to404, invalid domain input to422, and a source rejection of the generated request to502; these settle without reissuing a mutation. Unknown delivery or unclassified source outcomes remain recoverable.

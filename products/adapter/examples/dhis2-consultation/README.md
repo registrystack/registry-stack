@@ -29,8 +29,8 @@ cargo run --locked -p registry-adapterctl -- fixtures replay products/adapter/ex
 
 The project selects the built-in protocol through `consultation`. Each
 collection references one `dataSchema` in the pinned `artifacts.schemas`
-inventory. `bindingTransforms` selects a project script for each enabled
-operation. Use `adapterctl project lock` after reviewing changes to these
+inventory. The collection `transform` selects the project script its
+enabled operations follow; `bindingTransforms` overrides it for one binding. Use `adapterctl project lock` after reviewing changes to these
 artifacts, then repeat check and replay. Standard paths and envelopes require
 no authored profile file.
 

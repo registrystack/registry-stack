@@ -3915,7 +3915,7 @@ fn is_companion_read(state: &FacadeState, operation: &ServedOperation) -> bool {
         .as_ref()
         .and_then(|write| write.collections.get(&operation.record_type))
         .and_then(|collection| collection.update.as_ref())
-        .is_some_and(|update| update.companion_read.as_str() == operation.binding)
+        .is_some_and(|update| update.companion_read.as_deref() == Some(operation.binding.as_str()))
 }
 
 fn govstack_write_success(
@@ -3964,7 +3964,7 @@ fn govstack_write_success(
             .loaded
             .served
             .iter()
-            .find(|served| served.binding == update.companion_read.as_str())
+            .find(|served| Some(served.binding.as_str()) == update.companion_read.as_deref())
     });
     if let Some(companion) = companion {
         companion

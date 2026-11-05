@@ -5131,6 +5131,27 @@ pub fn check_project_transform_artifacts(project: &AdapterProject) -> Vec<Diagno
 #[must_use]
 pub fn check_write_project(project: &AdapterProject, pack: &AdapterPack) -> Vec<Diagnostic> {
     let mut findings = Vec::new();
+    if project.profile.is_none() {
+        let companions = project
+            .write
+            .iter()
+            .flat_map(|write| write.collections.iter())
+            .filter_map(|collection| collection.update.as_ref()?.companion_read.as_ref())
+            .collect::<Vec<_>>();
+        for (index, binding) in project.bindings.iter().enumerate() {
+            if binding.operation.as_str() == "writable-read" && !companions.contains(&&binding.id) {
+                findings.push(finding(
+                    CheckCode::ProjectWriteBindingInvalid,
+                    &format!("/bindings/{index}"),
+                    &format!(
+                        "the writable-read binding `{}` is the companion read of no Write Update",
+                        binding.id
+                    ),
+                    "Remove the binding, or name it in the update.companionRead of its Write collection.",
+                ));
+            }
+        }
+    }
     let Some(write) = &project.write else {
         return findings;
     };
@@ -5268,7 +5289,41 @@ pub fn check_write_project(project: &AdapterProject, pack: &AdapterPack) -> Vec<
                 &mut findings,
             );
 
-            let companion = project.bindings.get(update.companion_read.as_str());
+            let Some(companion_read) = &update.companion_read else {
+                let candidates = project
+                    .bindings
+                    .iter()
+                    .filter(|binding| {
+                        binding.record_type == collection.record_type
+                            && matches!(binding.operation.as_str(), "retrieve" | "writable-read")
+                    })
+                    .count();
+                let (message, action) = if candidates > 1 {
+                    (
+                        format!(
+                            "the Write collection `{}` has more than one same-recordType read binding, so its Update companion read is ambiguous",
+                            collection.record_type
+                        ),
+                        "Name one in update.companionRead: the matching Consultation retrieve binding when present, otherwise a writable-read binding.",
+                    )
+                } else {
+                    (
+                        format!(
+                            "the Write collection `{}` has no same-recordType read binding to serve as its Update companion read",
+                            collection.record_type
+                        ),
+                        "Bind a retrieve or writable-read operation for this record type.",
+                    )
+                };
+                findings.push(finding(
+                    CheckCode::ProjectWriteBindingInvalid,
+                    &format!("{prefix}/update/companionRead"),
+                    &message,
+                    action,
+                ));
+                continue;
+            };
+            let companion = project.bindings.get(companion_read.as_str());
             let consultation_retrieve = consultation.and_then(|_| {
                 project.bindings.iter().find(|binding| {
                     binding.record_type == collection.record_type
@@ -5283,8 +5338,7 @@ pub fn check_write_project(project: &AdapterProject, pack: &AdapterPack) -> Vec<
             if companion.is_none_or(|binding| {
                 binding.record_type != collection.record_type
                     || binding.operation.as_str() != expected_operation
-            }) || consultation_retrieve
-                .is_some_and(|retrieve| retrieve.id != update.companion_read)
+            }) || consultation_retrieve.is_some_and(|retrieve| &retrieve.id != companion_read)
             {
                 findings.push(finding(
                     CheckCode::ProjectWriteBindingInvalid,
@@ -7743,6 +7797,99 @@ mod tests {
         let findings = check_write_project(&project, &pack);
         assert_has(&findings, CheckCode::ProjectWriteCollectionInvalid);
         assert_has(&findings, CheckCode::ProjectWriteBindingInvalid);
+    }
+
+    fn read_binding(binding: &str, operation: &str) -> Binding {
+        Binding {
+            id: local(binding),
+            operation: id(operation),
+            record_type: local("case"),
+            route: id("read-case"),
+            filters: UniqueList::new(Vec::new()).expect("filters"),
+            maximum_upstream_calls: BoundedU64::new(1).expect("bound"),
+            async_completion: None,
+        }
+    }
+
+    #[test]
+    fn an_ambiguous_companion_read_is_refused_naming_its_collection() {
+        let pack = pack_builder(Vec::new(), Vec::new());
+        let mut project = project_builder(&pack);
+        project.profile = None;
+        project.write = Some(
+            serde_json::from_value(serde_json::json!({
+                "contract": "https://registry.example/contracts/write/1.0.0/openapi.yaml",
+                "collections": [{
+                    "recordType": "case",
+                    "registry": "urn:registry:cases",
+                    "view": "case-public",
+                    "readDataSchema": "case-readable",
+                    "update": {"inputSchema": "case-update"}
+                }]
+            }))
+            .expect("write"),
+        );
+        project.bindings = UniqueIdList::new(vec![
+            read_binding("case-read", "writable-read"),
+            read_binding("case-read-again", "writable-read"),
+        ])
+        .expect("bindings");
+
+        let findings = check_write_project(&project, &pack);
+        let ambiguous = findings
+            .iter()
+            .find(|finding| finding.path == "/write/collections/0/update/companionRead")
+            .expect("companion finding");
+        assert_eq!(ambiguous.code, CheckCode::ProjectWriteBindingInvalid.code());
+        assert!(
+            ambiguous.message.contains("`case`") && ambiguous.message.contains("more than one"),
+            "{}",
+            ambiguous.message
+        );
+
+        project.bindings =
+            UniqueIdList::new(vec![read_binding("case-read", "writable-read")]).expect("bindings");
+        let write = project.write.take().expect("write");
+        let mut value = serde_json::to_value(write).expect("write");
+        value["collections"][0]["update"]["companionRead"] = serde_json::json!("case-read");
+        project.write = Some(serde_json::from_value(value).expect("named write"));
+        assert!(
+            !check_write_project(&project, &pack)
+                .iter()
+                .any(
+                    |finding| finding.path == "/write/collections/0/update/companionRead"
+                        && finding.message.contains("more than one")
+                ),
+            "an explicit companion read resolves the ambiguity"
+        );
+    }
+
+    #[test]
+    fn a_writable_read_binding_no_update_uses_is_refused_naming_the_binding() {
+        let pack = pack_builder(Vec::new(), Vec::new());
+        let mut project = project_builder(&pack);
+        project.profile = None;
+        project.write = Some(
+            serde_json::from_value(serde_json::json!({
+                "contract": "https://registry.example/contracts/write/1.0.0/openapi.yaml",
+                "collections": [{
+                    "recordType": "case",
+                    "registry": "urn:registry:cases",
+                    "create": {"inputSchema": "case-create"}
+                }]
+            }))
+            .expect("write"),
+        );
+        project.bindings =
+            UniqueIdList::new(vec![read_binding("case-read", "writable-read")]).expect("bindings");
+
+        let findings = check_write_project(&project, &pack);
+        let orphan = findings
+            .iter()
+            .find(|finding| finding.path == "/bindings/0")
+            .expect("orphan writable-read finding");
+        assert_eq!(orphan.code, CheckCode::ProjectWriteBindingInvalid.code());
+        assert!(orphan.message.contains("`case-read`"), "{}", orphan.message);
     }
 
     #[test]

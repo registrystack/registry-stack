@@ -11,7 +11,6 @@ consultation:
   collections:
     - recordType: contacts
       registry: https://registry.example/registries/contacts
-      view: contact-public
       dataSchema: contact-public
 write:
   contract: https://registry.example/contracts/1.0.0-draft/openapi.yaml
@@ -21,11 +20,10 @@ write:
         inputSchema: contact-create
       update:
         inputSchema: contact-update
-        companionRead: contacts-retrieve
 pack:
   id: breg-records
   version: "1"
-  digest: sha256:2fd2a439113a14b9e21d5d93b73ee6922dacd31d057d72d3f7b70e9376999553
+  digest: sha256:dcd8e0fedd7aa4e8905e7a2473dd869b37a3677bc76c74d02fe97185aa69d151
 artifacts:
   scripts:
     - id: contact-transform
@@ -41,9 +39,6 @@ artifacts:
     - id: contact-update
       file: schemas/contact-update.schema.json
       digest: sha256:7e6c44498cdddc0caa252c1f91d27841a3504f15da2fa8fd3d650f7d9ebcacf5
-recordTypes:
-  - name: contacts
-    fields: []
 templatedRoutes:
   - routeTemplate: read-record
     routeId: breg-contact-read
@@ -65,17 +60,14 @@ bindings:
     operation: retrieve
     recordType: contacts
     route: breg-contact-read
-    maximumUpstreamCalls: 1
   - id: contacts-create
     operation: create
     recordType: contacts
     route: breg-contact-create
-    maximumUpstreamCalls: 1
   - id: contacts-update
     operation: update
     recordType: contacts
     route: breg-contact-update
-    maximumUpstreamCalls: 1
 bindingTransforms:
   contacts-retrieve: {script: contact-transform, entrypoint: public_contact}
   contacts-create: {script: contact-transform, entrypoint: create_contact}

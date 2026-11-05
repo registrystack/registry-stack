@@ -526,10 +526,12 @@ fn retention_cadence(retention: Duration) -> Duration {
 
 fn source_replay_window_seconds(support: &registry_adapter_core::SourceWriteSupport) -> u64 {
     match support {
-        registry_adapter_core::SourceWriteSupport::CreateOne { replay, .. }
-        | registry_adapter_core::SourceWriteSupport::ConditionalUpdateOne { replay, .. } => {
-            replay.replay_window_seconds.get()
+        registry_adapter_core::SourceWriteSupport::CreateOne {
+            replay_window_seconds,
         }
+        | registry_adapter_core::SourceWriteSupport::ConditionalUpdateOne {
+            replay_window_seconds,
+        } => replay_window_seconds.get(),
     }
 }
 
@@ -1045,17 +1047,11 @@ mod tests {
     fn source_replay_window_is_read_from_both_fixed_write_guarantees() {
         for (support, expected) in [
             (
-                serde_json::json!({
-                    "type": "create-one", "identity": "source-assigned",
-                    "replay": {"type": "exact-keyed", "replayWindowSeconds": 300}
-                }),
+                serde_json::json!({"type": "create-one", "replayWindowSeconds": 300}),
                 300,
             ),
             (
-                serde_json::json!({
-                    "type": "conditional-update-one", "precondition": "strong-atomic-source",
-                    "replay": {"type": "exact-keyed", "replayWindowSeconds": 600}
-                }),
+                serde_json::json!({"type": "conditional-update-one", "replayWindowSeconds": 600}),
                 600,
             ),
         ] {

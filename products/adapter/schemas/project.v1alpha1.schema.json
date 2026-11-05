@@ -62,7 +62,8 @@
           "description": "The binding identifier."
         },
         "maximumUpstreamCalls": {
-          "description": "The declared budget of upstream sends per exchange; the static\nworst-case count must stay within it.",
+          "default": 4,
+          "description": "The declared budget of upstream sends per exchange; the static\nworst-case count must stay within it. Defaults to 4.",
           "format": "uint64",
           "maximum": 100000,
           "minimum": 1,
@@ -85,8 +86,7 @@
         "id",
         "operation",
         "recordType",
-        "route",
-        "maximumUpstreamCalls"
+        "route"
       ],
       "type": "object"
     },
@@ -187,15 +187,18 @@
           "$ref": "#/$defs/ConsultationSearch",
           "description": "Named-search metadata, required only when Search is bound."
         },
+        "transform": {
+          "$ref": "#/$defs/BindingTransform",
+          "description": "The transformation every `retrieve`, `lookup`, `list`, and `search`\nbinding of this record type follows unless `bindingTransforms` names\none for that binding."
+        },
         "view": {
           "$ref": "#/$defs/LocalId",
-          "description": "Public view named by the concrete OpenAPI operation metadata."
+          "description": "Public view named by the concrete OpenAPI operation metadata. When\nomitted, the view is named after `dataSchema`."
         }
       },
       "required": [
         "recordType",
         "registry",
-        "view",
         "dataSchema"
       ],
       "type": "object"
@@ -547,7 +550,7 @@
       "properties": {
         "companionRead": {
           "$ref": "#/$defs/LocalId",
-          "description": "Existing same-collection read binding used by the one supporting GET."
+          "description": "Existing same-collection read binding used by the one supporting GET.\nWhen omitted, the one `retrieve` or `writable-read` binding of the\nrecord type fills it; a record type with more than one such binding\nmust name it."
         },
         "inputSchema": {
           "$ref": "#/$defs/LocalId",
@@ -555,8 +558,7 @@
         }
       },
       "required": [
-        "inputSchema",
-        "companionRead"
+        "inputSchema"
       ],
       "type": "object"
     }
@@ -564,7 +566,7 @@
   "$id": "https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "The adapter project artifact (`AdapterProject`): the declared record\nmodel, the pinned profile and pack references, the template\ninstantiations, the bindings, and the access profiles.",
+  "description": "The adapter project artifact (`AdapterProject`): the declared record\nmodel, the pinned profile and pack references, the template\ninstantiations, the bindings, and the access profiles. Reading a project\nderives the members its short form leaves out; an explicit member always\nwins.",
   "properties": {
     "accessProfiles": {
       "default": [],
@@ -631,7 +633,8 @@
       "description": "The deployment's identity."
     },
     "recordTypes": {
-      "description": "The declared record types and fields.",
+      "default": [],
+      "description": "The declared record types and fields. A Consultation or Write\nrecord type left out is declared with no fields.",
       "items": {
         "$ref": "#/$defs/RecordType"
       },
@@ -654,8 +657,7 @@
     "apiVersion",
     "kind",
     "pack",
-    "project",
-    "recordTypes"
+    "project"
   ],
   "title": "Registry Adapter project",
   "type": "object"

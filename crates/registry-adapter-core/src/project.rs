@@ -113,7 +113,11 @@ pub struct WriteUpdate {
     /// Project-owned domain merge-patch schema for `UpdateInput.data`.
     pub input_schema: LocalId,
     /// Existing same-collection read binding used by the one supporting GET.
-    pub companion_read: LocalId,
+    /// When omitted, the one `retrieve` or `writable-read` binding of the
+    /// record type fills it; a record type with more than one such binding
+    /// must name it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub companion_read: Option<LocalId>,
 }
 
 /// Direct-write selection for one project record type. At least one of
@@ -309,12 +313,22 @@ pub struct Binding {
     #[serde(default, skip_serializing_if = "filters_empty")]
     pub filters: registry_platform_yaml::UniqueList<LocalId>,
     /// The declared budget of upstream sends per exchange; the static
-    /// worst-case count must stay within it.
+    /// worst-case count must stay within it. Defaults to 4.
+    #[serde(default = "default_maximum_upstream_calls")]
     pub maximum_upstream_calls: registry_platform_yaml::BoundedU64<1, 100_000>,
     /// The asynchronous response policy, absent for every synchronous
     /// binding.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub async_completion: Option<BindingAsyncCompletion>,
+}
+
+/// The upstream-call budget of a binding that declares none; the value the
+/// Binding schema documents as its default.
+pub const DEFAULT_MAXIMUM_UPSTREAM_CALLS: u64 = 4;
+
+fn default_maximum_upstream_calls() -> registry_platform_yaml::BoundedU64<1, 100_000> {
+    registry_platform_yaml::BoundedU64::new(DEFAULT_MAXIMUM_UPSTREAM_CALLS)
+        .expect("the default budget is within its bounds")
 }
 
 /// A filter list is omitted from the wire when empty, the shape `Vec`'s
@@ -368,10 +382,12 @@ pub struct ProjectIdentity {
 
 /// The adapter project artifact (`AdapterProject`): the declared record
 /// model, the pinned profile and pack references, the template
-/// instantiations, the bindings, and the access profiles.
+/// instantiations, the bindings, and the access profiles. Reading a project
+/// derives the members its short form leaves out; an explicit member always
+/// wins.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(remote = "Self", rename_all = "camelCase", deny_unknown_fields)]
 pub struct AdapterProject {
     /// The deployment's identity.
     pub project: ProjectIdentity,
@@ -390,7 +406,9 @@ pub struct AdapterProject {
     pub write: Option<WriteFacade>,
     /// The pinned adapter pack.
     pub pack: PinnedRef,
-    /// The declared record types and fields.
+    /// The declared record types and fields. A Consultation or Write
+    /// record type left out is declared with no fields.
+    #[serde(default)]
     pub record_types: UniqueIdList<RecordType>,
     /// The pack template instantiations, Camel's `templatedRoute`.
     #[serde(default)]
@@ -422,6 +440,100 @@ pub struct AdapterProject {
         schemars(schema_with = "crate::model::external_id_map_schema::<String>")
     )]
     pub parameterized_parts: std::collections::BTreeMap<ExternalId, String>,
+}
+
+impl<'de> Deserialize<'de> for AdapterProject {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let mut project = AdapterProject::deserialize(deserializer)?;
+        project.derive_defaults();
+        Ok(project)
+    }
+}
+
+impl Serialize for AdapterProject {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        AdapterProject::serialize(self, serializer)
+    }
+}
+
+impl AdapterProject {
+    /// Fill what the short project form derives from the rest of the
+    /// document; an explicit member always wins:
+    ///
+    /// - a Consultation or Write record type with no `recordTypes` entry is
+    ///   declared with no fields;
+    /// - a Consultation collection's `transform` follows every
+    ///   `retrieve`, `lookup`, `list`, and `search` binding of its record
+    ///   type that `bindingTransforms` leaves out;
+    /// - an Update without `companionRead` takes the one `retrieve` or
+    ///   `writable-read` binding of its record type. With none or more
+    ///   than one it stays empty, and the project checks refuse it naming
+    ///   the collection.
+    fn derive_defaults(&mut self) {
+        let consultation = self
+            .consultation
+            .iter()
+            .flat_map(|consultation| consultation.collections.iter());
+        let written = self
+            .write
+            .iter()
+            .flat_map(|write| write.collections.iter())
+            .map(|collection| &collection.record_type);
+        let mut record_types = std::mem::take(&mut self.record_types).into_vec();
+        for name in consultation
+            .clone()
+            .map(|collection| &collection.record_type)
+            .chain(written)
+        {
+            if !record_types.iter().any(|declared| &declared.name == name) {
+                record_types.push(RecordType {
+                    name: name.clone(),
+                    fields: UniqueList::new(Vec::new()).expect("an empty list is unique"),
+                });
+            }
+        }
+        self.record_types =
+            UniqueIdList::new(record_types).expect("a derived record type is not yet declared");
+
+        for collection in consultation {
+            let Some(transform) = &collection.transform else {
+                continue;
+            };
+            for binding in self.bindings.iter().filter(|binding| {
+                binding.record_type == collection.record_type
+                    && matches!(
+                        binding.operation.as_str(),
+                        "retrieve" | "lookup" | "list" | "search"
+                    )
+            }) {
+                self.binding_transforms
+                    .entry(binding.id.clone())
+                    .or_insert_with(|| transform.clone());
+            }
+        }
+
+        let Some(write) = &mut self.write else {
+            return;
+        };
+        let mut collections = std::mem::take(&mut write.collections).into_vec();
+        for collection in &mut collections {
+            let Some(update) = &mut collection.update else {
+                continue;
+            };
+            if update.companion_read.is_some() {
+                continue;
+            }
+            let mut reads = self.bindings.iter().filter(|binding| {
+                binding.record_type == collection.record_type
+                    && matches!(binding.operation.as_str(), "retrieve" | "writable-read")
+            });
+            if let (Some(only), None) = (reads.next(), reads.next()) {
+                update.companion_read = Some(only.id.clone());
+            }
+        }
+        write.collections =
+            UniqueIdList::new(collections).expect("filling a member keeps ids unique");
+    }
 }
 
 #[cfg(test)]
@@ -548,6 +660,147 @@ mod tests {
             .is_none());
     }
 
+    /// One GovStack read/write deployment in its explicit and its short
+    /// form. The short form omits the view that equals `dataSchema`, the
+    /// stub record type, the default upstream budget, the companion read
+    /// that only one binding can fill, and the read transform repeated on
+    /// every binding of the collection.
+    fn govstack_project(short: bool) -> serde_json::Value {
+        let digest = "sha256:678260a56715cba21db1f0687e5a2c5e5efb2ea0b8eea687b5f3ee8723c5f6c9";
+        let budget = |binding: serde_json::Value| {
+            let mut binding = binding;
+            if !short {
+                binding["maximumUpstreamCalls"] = serde_json::json!(4);
+            }
+            binding
+        };
+        let mut collection = serde_json::json!({
+            "recordType": "people",
+            "registry": "https://registry.example/registries/people",
+            "dataSchema": "person-public"
+        });
+        let mut update = serde_json::json!({"inputSchema": "person-update"});
+        let mut transforms = serde_json::json!({
+            "people-create": {"script": "person", "entrypoint": "create_person"},
+            "people-update": {"script": "person", "entrypoint": "update_person"}
+        });
+        if short {
+            collection["transform"] =
+                serde_json::json!({"script": "person", "entrypoint": "public_person"});
+        } else {
+            collection["view"] = serde_json::json!("person-public");
+            update["companionRead"] = serde_json::json!("people-retrieve");
+            for binding in ["people-retrieve", "people-list"] {
+                transforms[binding] =
+                    serde_json::json!({"script": "person", "entrypoint": "public_person"});
+            }
+        }
+        let mut project = serde_json::json!({
+            "project": {"id": "people-deployment", "version": "1.0.0"},
+            "consultation": {
+                "contract": "https://registry.example/contracts/1.0.0-draft/openapi.yaml",
+                "collections": [collection]
+            },
+            "write": {
+                "contract": "https://registry.example/contracts/1.0.0-draft/openapi.yaml",
+                "collections": [{
+                    "recordType": "people",
+                    "create": {"inputSchema": "person-create"},
+                    "update": update
+                }]
+            },
+            "pack": {"id": "people-pack", "version": "1", "digest": digest},
+            "bindings": [
+                budget(serde_json::json!({"id": "people-retrieve", "operation": "retrieve", "recordType": "people", "route": "read"})),
+                budget(serde_json::json!({"id": "people-list", "operation": "list", "recordType": "people", "route": "page"})),
+                budget(serde_json::json!({"id": "people-create", "operation": "create", "recordType": "people", "route": "create"})),
+                budget(serde_json::json!({"id": "people-update", "operation": "update", "recordType": "people", "route": "update"}))
+            ],
+            "bindingTransforms": transforms
+        });
+        if !short {
+            project["recordTypes"] = serde_json::json!([{"name": "people", "fields": []}]);
+        }
+        project
+    }
+
+    #[test]
+    fn the_short_project_form_reads_as_its_explicit_form() {
+        let explicit: AdapterProject =
+            serde_json::from_value(govstack_project(false)).expect("explicit project");
+        let short: AdapterProject =
+            serde_json::from_value(govstack_project(true)).expect("short project");
+
+        assert_eq!(short.record_types, explicit.record_types);
+        assert_eq!(short.bindings, explicit.bindings);
+        assert_eq!(short.binding_transforms, explicit.binding_transforms);
+        assert_eq!(short.write, explicit.write);
+        let view = |project: &AdapterProject| {
+            project
+                .consultation
+                .as_ref()
+                .and_then(|consultation| consultation.collections.get("people"))
+                .map(|collection| collection.view.clone())
+        };
+        assert_eq!(view(&short), view(&explicit));
+        assert_eq!(
+            short.bindings[0].maximum_upstream_calls.get(),
+            DEFAULT_MAXIMUM_UPSTREAM_CALLS
+        );
+    }
+
+    #[test]
+    fn an_explicit_member_overrides_its_short_form_default() {
+        let mut value = govstack_project(true);
+        value["consultation"]["collections"][0]["view"] = serde_json::json!("person-summary");
+        value["bindings"][0]["maximumUpstreamCalls"] = serde_json::json!(1);
+        value["bindingTransforms"]["people-list"] =
+            serde_json::json!({"script": "person", "entrypoint": "list_person"});
+        value["recordTypes"] = serde_json::json!([{
+            "name": "people",
+            "fields": [{"name": "region", "type": "string"}]
+        }]);
+        let project: AdapterProject = serde_json::from_value(value).expect("project");
+
+        let collection = project
+            .consultation
+            .as_ref()
+            .and_then(|consultation| consultation.collections.get("people"))
+            .expect("collection");
+        assert_eq!(collection.view.as_str(), "person-summary");
+        assert_eq!(project.bindings[0].maximum_upstream_calls.get(), 1);
+        let entrypoint = |binding: &str| {
+            project
+                .binding_transforms
+                .get(&LocalId::new(binding).expect("id"))
+                .map(|transform| transform.entrypoint.as_str())
+        };
+        assert_eq!(entrypoint("people-list"), Some("list_person"));
+        assert_eq!(entrypoint("people-retrieve"), Some("public_person"));
+        assert_eq!(project.record_types.len(), 1);
+        assert_eq!(project.record_types[0].fields.len(), 1);
+    }
+
+    #[test]
+    fn an_ambiguous_companion_read_is_left_for_the_named_check() {
+        let mut value = govstack_project(true);
+        value["bindings"]
+            .as_array_mut()
+            .expect("bindings")
+            .push(serde_json::json!({
+                "id": "people-writable-read", "operation": "writable-read",
+                "recordType": "people", "route": "read"
+            }));
+        let project: AdapterProject = serde_json::from_value(value).expect("project");
+        let update = project
+            .write
+            .as_ref()
+            .and_then(|write| write.collections.get("people"))
+            .and_then(|collection| collection.update.as_ref())
+            .expect("update");
+        assert_eq!(update.companion_read, None);
+    }
+
     #[test]
     fn direct_write_metadata_round_trips_without_authored_protocol_envelopes() {
         let write: WriteFacade = serde_json::from_value(serde_json::json!({
@@ -571,8 +824,9 @@ mod tests {
                 .as_ref()
                 .expect("update")
                 .companion_read
-                .as_str(),
-            "people-writable-read"
+                .as_ref()
+                .map(LocalId::as_str),
+            Some("people-writable-read")
         );
         let encoded = serde_json::to_value(write).expect("serialize");
         assert!(encoded.get("paths").is_none());

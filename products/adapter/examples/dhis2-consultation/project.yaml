@@ -15,8 +15,8 @@ consultation:
   collections:
     - recordType: people
       registry: https://registry.example/registries/people
-      view: person-public
       dataSchema: person-public
+      transform: {script: person-public, entrypoint: project_person_public}
       lookup:
         selector: by-record-id
         inputSchema: record-id
@@ -25,8 +25,8 @@ consultation:
         inputSchema: org-unit-search
     - recordType: people-summary
       registry: https://registry.example/registries/people
-      view: person-summary
       dataSchema: person-summary
+      transform: {script: person-summary, entrypoint: project_person_summary}
       lookup:
         selector: by-record-id
         inputSchema: record-id
@@ -58,11 +58,6 @@ artifacts:
     - id: org-unit-search
       file: schemas/org-unit-search.schema.json
       digest: sha256:376a510cfd70ed79f070156cc72d7ef4a152d63b89bc178c1337337c3070d2bc
-recordTypes:
-  - name: people
-    fields: []
-  - name: people-summary
-    fields: []
 templatedRoutes:
   - routeTemplate: read-tracked-entity
     routeId: person-read
@@ -81,51 +76,34 @@ bindings:
     operation: retrieve
     recordType: people
     route: person-read
-    maximumUpstreamCalls: 4
   - id: people-lookup
     operation: lookup
     recordType: people
     route: person-read
-    maximumUpstreamCalls: 4
   - id: people-list
     operation: list
     recordType: people
     route: person-list
-    maximumUpstreamCalls: 4
   - id: people-search
     operation: search
     recordType: people
     route: person-search
-    maximumUpstreamCalls: 4
   - id: people-summary-retrieve
     operation: retrieve
     recordType: people-summary
     route: person-read
-    maximumUpstreamCalls: 4
   - id: people-summary-lookup
     operation: lookup
     recordType: people-summary
     route: person-read
-    maximumUpstreamCalls: 4
   - id: people-summary-list
     operation: list
     recordType: people-summary
     route: person-list
-    maximumUpstreamCalls: 4
   - id: people-summary-search
     operation: search
     recordType: people-summary
     route: person-search
-    maximumUpstreamCalls: 4
-bindingTransforms:
-  people-retrieve: {script: person-public, entrypoint: project_person_public}
-  people-lookup: {script: person-public, entrypoint: project_person_public}
-  people-list: {script: person-public, entrypoint: project_person_public}
-  people-search: {script: person-public, entrypoint: project_person_public}
-  people-summary-retrieve: {script: person-summary, entrypoint: project_person_summary}
-  people-summary-lookup: {script: person-summary, entrypoint: project_person_summary}
-  people-summary-list: {script: person-summary, entrypoint: project_person_summary}
-  people-summary-search: {script: person-summary, entrypoint: project_person_summary}
 accessProfiles:
   - id: records-reader
     scopes: [records.read]

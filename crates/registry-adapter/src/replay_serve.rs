@@ -727,7 +727,7 @@ fn replay_companion_read<'a>(
         .get(collection)?
         .update
         .as_ref()
-        .map(|update| update.companion_read.as_str());
+        .and_then(|update| update.companion_read.as_deref());
     match selected {
         Some(binding) => served_operations
             .iter()

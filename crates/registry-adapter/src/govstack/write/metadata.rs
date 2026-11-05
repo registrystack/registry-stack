@@ -153,7 +153,7 @@ fn selected_companion_read<'a>(
     let selected_binding = write_collection
         .update
         .as_ref()
-        .map(|update| update.companion_read.as_str());
+        .and_then(|update| update.companion_read.as_deref());
     let companion = if let Some(binding) = selected_binding {
         loaded
             .served
