@@ -180,7 +180,7 @@ impl CompiledProjectInputTransform {
                 domain_value,
                 deadline,
             )
-            .map_err(script_failure)?;
+            .map_err(|(failure, _)| script_failure(failure))?;
         if Instant::now() > deadline {
             return Err(ProjectInputTransformError::Budget);
         }
