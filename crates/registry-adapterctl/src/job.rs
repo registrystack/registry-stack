@@ -488,7 +488,12 @@ fn rewrite_pins(
             _ => None,
         };
         let Some((slot, pointer, digest)) = target else {
-            if rest.trim().is_empty() {
+            // A key with no value opens a nested block, and so does one
+            // whose value is only a comment (`mapping: # note`, CFG-YAML-7).
+            let value = rest.trim_start();
+            let opens_block =
+                value.is_empty() || (value.starts_with('#') && value.len() < rest.len());
+            if opens_block {
                 stack.push((indent, key));
             }
             out.push_str(raw);

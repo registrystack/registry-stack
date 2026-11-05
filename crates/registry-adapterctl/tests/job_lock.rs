@@ -181,6 +181,44 @@ fn lock_of_a_bare_job_file_name_writes_the_pin() {
     );
 }
 
+/// A section header followed only by a comment opens its section like a
+/// bare one (CFG-YAML-7), and the comment survives the rewrite.
+#[test]
+fn lock_reaches_pins_under_commented_section_headers() {
+    let root = workspace();
+    let job = stale_job(&root);
+    let text = std::fs::read_to_string(&job).unwrap();
+    std::fs::write(&job, text.replace(SHIPPED_PACK_PIN, STALE)).unwrap();
+    let text = std::fs::read_to_string(&job).unwrap();
+    let mut commented = text.clone();
+    for header in [
+        "\nsource:\n",
+        "\n  pack:\n",
+        "\ndestination:\n",
+        "\n  mapping:\n",
+    ] {
+        assert!(commented.contains(header), "{header:?}: {text}");
+        let name = header.trim().trim_end_matches(':');
+        let with_comment = format!("{} # the {name} section\n", header.trim_end());
+        commented = commented.replacen(header, &with_comment, 1);
+    }
+    std::fs::write(&job, &commented).unwrap();
+    let pack = path(&root, "pack/pack.yaml");
+    let (exit, report) = run_json(&["job", "lock", &job, "--pack", &pack]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    assert_eq!(report["mapping"], "updated", "{report}");
+    assert_eq!(report["pack"], "updated", "{report}");
+    // The source section comes first in the example, so the first stale
+    // digest is the pack's and the second the mapping's.
+    assert_eq!(
+        std::fs::read_to_string(&job).unwrap(),
+        commented
+            .replacen(STALE, SHIPPED_PACK_PIN, 1)
+            .replacen(STALE, SHIPPED_MAPPING_PIN, 1),
+        "only the digests change; every comment stays"
+    );
+}
+
 #[test]
 fn lock_of_a_current_job_changes_nothing() {
     let root = workspace();
