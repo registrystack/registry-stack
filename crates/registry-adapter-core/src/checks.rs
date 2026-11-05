@@ -13624,6 +13624,7 @@ mod tests {
         AdapterRuntimeConfig {
             id: local("case-deployment"),
             endpoints: UniqueIdList::new(endpoints).expect("unique"),
+            secret_providers: None,
             outbound_tls: None,
             allowed_private_cidrs: UniqueList::new(Vec::new()).expect("empty"),
             listener: serde_json::from_str(r#"{ "bind": "127.0.0.1:8080" }"#).expect("listener"),

@@ -10,6 +10,12 @@ the BReg-only `jurisdiction` field. Update is a closed, nonempty flat JSON Merge
 Patch. A null `note` removes the public member. The read projection excludes
 the native jurisdiction and omits a native null note.
 
+The runtime example explicitly enables the file secret provider under
+`secretProviders.file.root`, alongside its environment provider for database
+and cursor references. Omitting `secretProviders` keeps environment secrets
+only. File credentials are re-read for each source request, so an operator can
+atomically replace the private token file without restarting the facade.
+
 The runtime binds a dedicated BReg bearer token whose access profile grants
 only the selected Record route. Reads and writes use the same BReg principal,
 access profile, and readable-field projection so the companion GET ETag is the

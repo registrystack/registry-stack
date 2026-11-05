@@ -1,0 +1,31 @@
+meta {
+  name: 08 Verify stale update did not commit
+  type: http
+  seq: 8
+}
+
+get {
+  url: {{breg_base}}/v1/collections/contacts/records/{{recordId}}
+  body: none
+  auth: none
+}
+
+headers {
+  Accept: application/json
+  Authorization: Bearer {{access_token}}
+}
+
+tests {
+  test("the refused stale write preserved the updated record", function() {
+    const runId = bru.getVar("runId");
+    expect(res.getStatus()).to.equal(200);
+    expect(res.getHeader("etag")).to.equal(bru.getVar("newEtag"));
+    expect(res.body).to.deep.equal({
+      recordId: bru.getVar("recordId"),
+      data: {
+        name: `Registry WG updated ${runId}`,
+        email: `wg-${runId}@example.test`
+      }
+    });
+  });
+}

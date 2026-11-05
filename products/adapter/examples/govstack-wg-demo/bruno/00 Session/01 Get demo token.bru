@@ -1,0 +1,41 @@
+meta {
+  name: 01 Get demo token
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{issuer_base}}/demo/token
+  body: none
+  auth: none
+}
+
+script:pre-request {
+  bru.deleteAllVars();
+  const timestamp = Date.now().toString(36);
+  const nonce = Math.random().toString(36).slice(2, 10);
+  bru.setVar("runId", `${timestamp}-${nonce}`);
+}
+
+script:post-response {
+  if (res.getStatus() === 200 && typeof res.body.access_token === "string") {
+    bru.setVar("access_token", res.body.access_token);
+  }
+}
+
+tests {
+  test("demo issuer returns a bearer token", function() {
+    expect(res.getStatus()).to.equal(200);
+    expect(res.body).to.be.an("object");
+    expect(res.body.access_token).to.be.a("string").and.not.be.empty;
+  });
+
+  test("this collection run has a unique identifier", function() {
+    expect(bru.getVar("runId")).to.match(/^[a-z0-9]+-[a-z0-9]+$/);
+  });
+}
+
+docs {
+  Fetch the synthetic local machine-client token used by both Adapter facades.
+  The token is a runtime variable and is never written to the environment file.
+}

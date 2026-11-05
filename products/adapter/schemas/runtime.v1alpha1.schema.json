@@ -132,12 +132,32 @@
       ],
       "type": "object"
     },
+    "EnvironmentSecretProviderConfig": {
+      "additionalProperties": false,
+      "description": "The environment secret provider. It takes no settings.",
+      "type": "object"
+    },
     "ExternalId": {
       "description": "An identifier another system issues, written exactly as its issuer gives it.",
       "maxLength": 512,
       "minLength": 1,
       "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
       "type": "string"
+    },
+    "FileSecretProviderConfig": {
+      "additionalProperties": false,
+      "description": "The file secret provider.",
+      "properties": {
+        "root": {
+          "description": "Absolute directory holding one file per secret. Each file must be a\nregular file owned by the runtime user, mode 0400 or 0600, with exactly\none hard link.",
+          "pattern": "^/",
+          "type": "string"
+        }
+      },
+      "required": [
+        "root"
+      ],
+      "type": "object"
     },
     "IdempotencyRetention": {
       "additionalProperties": false,
@@ -502,6 +522,43 @@
         }
       ]
     },
+    "SecretProvidersConfig": {
+      "additionalProperties": false,
+      "anyOf": [
+        {
+          "properties": {
+            "file": {
+              "$ref": "#/$defs/FileSecretProviderConfig"
+            }
+          },
+          "required": [
+            "file"
+          ]
+        },
+        {
+          "properties": {
+            "environment": {
+              "$ref": "#/$defs/EnvironmentSecretProviderConfig"
+            }
+          },
+          "required": [
+            "environment"
+          ]
+        }
+      ],
+      "description": "The secret providers a runtime enables. A reference is resolved only by a\nprovider declared here: `secret:file/name` under `file.root`, and\n`secret:env/NAME` only when `environment: {}` is present.",
+      "properties": {
+        "environment": {
+          "$ref": "#/$defs/EnvironmentSecretProviderConfig",
+          "description": "Enables `secret:env/NAME` references, read from the process\nenvironment. Declared as an empty mapping: `environment: {}`."
+        },
+        "file": {
+          "$ref": "#/$defs/FileSecretProviderConfig",
+          "description": "Enables `secret:file/name` references, read from files under `root`."
+        }
+      },
+      "type": "object"
+    },
     "SecretReference": {
       "description": "An exact secret reference: secret:file/name, resolved under secretProviders.file.root, or secret:env/NAME, resolved only when secretProviders.environment is declared.",
       "pattern": "^(?:secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
@@ -609,6 +666,10 @@
     "previousCursorKeyRef": {
       "$ref": "#/$defs/SecretReference",
       "description": "The retiring key, still accepted when opening a cursor or fixed\nWrite guard so one key rotation does not strand active clients."
+    },
+    "secretProviders": {
+      "$ref": "#/$defs/SecretProvidersConfig",
+      "description": "The secret providers this facade enables. Omission preserves the\noriginal environment-only runtime; file secrets require an explicit\nabsolute `file.root`."
     }
   },
   "required": [

@@ -1,0 +1,33 @@
+meta {
+  name: Registry WG Demo
+  type: collection
+  seq: 1
+}
+
+docs {
+  # Registry WG demo
+
+  This authorized local journey shows one standard registry interface over two
+  different sources. The DHIS2-backed Adapter reads live public-demo data only.
+  Create and conditional Update go only to the retained local BReg registry.
+  The loopback issuer and its bearer token are synthetic demo infrastructure.
+
+  Run all 13 requests in their saved order with the `LocalExample` environment:
+
+  1. obtain a runtime-only demo token;
+  2. List a live DHIS2 page and select its record and organisation unit;
+  3. Retrieve the public `people` view, then Lookup and Search `people-summary`;
+  4. Create a local BReg contact and prove exact Create replay;
+  5. read its ETag, apply and replay a conditional merge patch that removes
+     `note`, then read the resulting state;
+  6. prove a stale `If-Match` returns 412 and leaves that state unchanged.
+
+  Deployment-specific local contracts:
+
+  - [DHIS2 Consultation](https://127.0.0.1:19443/contracts/dhis2/1.0.0/openapi.json)
+  - [BReg Consultation and Write](https://127.0.0.1:19443/contracts/breg/1.0.0/openapi.json)
+
+  The contract endpoint uses a demo-scoped self-signed certificate. This
+  collection makes no DHIS2 Write, production-suitability, or general GovStack
+  conformance claim. It stores no authentication configuration or token.
+}

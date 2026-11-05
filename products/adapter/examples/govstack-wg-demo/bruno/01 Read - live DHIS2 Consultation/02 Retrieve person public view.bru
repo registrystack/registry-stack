@@ -1,0 +1,33 @@
+meta {
+  name: 02 Retrieve person public view
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{dhis2_base}}/v1/collections/people/records/{{dhis2RecordId}}
+  body: none
+  auth: none
+}
+
+headers {
+  Accept: application/json
+  Authorization: Bearer {{access_token}}
+}
+
+tests {
+  test("Retrieve returns the dynamically selected record", function() {
+    expect(res.getStatus()).to.equal(200);
+    expect(res.body.recordId).to.equal(bru.getVar("dhis2RecordId"));
+  });
+
+  test("the people view follows its declared public schema", function() {
+    expect(res.body.data).to.have.all.keys("source", "registration");
+    expect(res.body.data.source).to.have.all.keys("id", "type");
+    expect(res.body.data.registration).to.have.all.keys(
+      "organisationUnit",
+      "createdAt",
+      "updatedAt"
+    );
+  });
+}
