@@ -364,6 +364,34 @@ impl Served {
         served
     }
 
+    /// Start over an explicit pack, sharing an existing test schema with
+    /// an earlier deployment of the same runtime id.
+    pub async fn start_with_pack_endpoint_credential_and_database(
+        upstream_url: &str,
+        project: &Path,
+        pack: &Path,
+        endpoint: &str,
+        credential: &str,
+        database: &str,
+    ) -> Self {
+        let mut served = Self::spawn_config_for_deployment_with_pack(
+            upstream_url,
+            project,
+            Some(pack),
+            endpoint,
+            CURSOR_KEY,
+            &[],
+            "cursorKeyRef: secret:env/TEST_CURSOR_KEY\n",
+            credential,
+            86_400,
+            DEFAULT_RUNTIME_ID,
+            Some(database),
+        )
+        .await;
+        served.wait_until_listening();
+        served
+    }
+
     /// Start over `project` and return the stderr of an adapter that
     /// refuses to start; panics when it starts, or never exits.
     pub async fn refusal_with_project(upstream_url: &str, project: &Path) -> String {

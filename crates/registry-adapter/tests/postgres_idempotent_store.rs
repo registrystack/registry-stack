@@ -310,17 +310,29 @@ fn status_lookup<'a>(
     }
 }
 
+const SOURCE_DIGEST: [u8; 32] = [0x5a; 32];
+
 fn resume_context(artifact_byte: u8, deadline: SystemTime) -> ResumeClaimContext {
     ResumeClaimContext {
         artifact_digest: [artifact_byte; 32],
+        source_digest: SOURCE_DIGEST,
         effect_deadline: deadline,
         step_count: 2,
     }
 }
 
 fn single_resume_context(artifact_byte: u8, deadline: SystemTime) -> ResumeClaimContext {
+    single_resume_context_from(artifact_byte, SOURCE_DIGEST, deadline)
+}
+
+fn single_resume_context_from(
+    artifact_byte: u8,
+    source_digest: [u8; 32],
+    deadline: SystemTime,
+) -> ResumeClaimContext {
     ResumeClaimContext {
         artifact_digest: [artifact_byte; 32],
+        source_digest,
         effect_deadline: deadline,
         step_count: 1,
     }
@@ -329,6 +341,7 @@ fn single_resume_context(artifact_byte: u8, deadline: SystemTime) -> ResumeClaim
 fn single_resume_write_context(artifact_byte: u8, deadline: SystemTime) -> ResumeWriteContext {
     ResumeWriteContext {
         artifact_digest: [artifact_byte; 32],
+        source_digest: SOURCE_DIGEST,
         effect_deadline: deadline,
         step_count: 1,
     }
@@ -696,6 +709,179 @@ async fn single_effect_resume_expiry_erases_recovery_but_never_reopens_an_attemp
 }
 
 #[tokio::test]
+async fn an_interrupted_single_write_never_blocks_activating_a_changed_artifact() {
+    let isolated = isolated().await;
+    let store = isolated.store(Duration::from_secs(60)).await;
+    let caller = caller("single-interrupted-redeploy");
+    let start = UNIX_EPOCH + Duration::from_secs(3_990_000);
+    let mut interrupted = match store
+        .claim_resume(
+            request(&caller, "records-create.person", "interrupted-key", 71),
+            single_resume_context(41, start + Duration::from_secs(10)),
+            start,
+        )
+        .await
+        .expect("claim the single write")
+    {
+        Claim::Execute(execution) => execution,
+        other => panic!("a fresh single write executes: {other:?}"),
+    };
+    store
+        .mark_resume_step_attempted(&mut interrupted, 0, start + Duration::from_secs(1))
+        .await
+        .expect("premark the only physical POST");
+
+    // The process stops here: no terminal response and no lease release.
+    store
+        .ensure_async_artifact_compatible("deployment-a", [42; 32], start + Duration::from_secs(2))
+        .await
+        .expect("an interrupted single write never blocks activation");
+    assert!(matches!(
+        store
+            .claim_resume(
+                request(&caller, "records-create.person", "another-key", 72),
+                single_resume_context(42, start + Duration::from_secs(12)),
+                start + Duration::from_secs(2),
+            )
+            .await
+            .expect("claim fresh work under the activated artifact"),
+        Claim::Execute(_)
+    ));
+    for now in [
+        start + Duration::from_secs(2),
+        start + Duration::from_secs(11),
+    ] {
+        assert!(
+            matches!(
+                store
+                    .claim_resume(
+                        request(&caller, "records-create.person", "interrupted-key", 71),
+                        single_resume_context(42, now + Duration::from_secs(10)),
+                        now,
+                    )
+                    .await
+                    .expect("resolve the retry under the changed artifact"),
+                Claim::EffectUnknown { .. }
+            ),
+            "a retry across the change never resends the possibly sent POST"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_retry_after_the_source_origin_changes_is_effect_unknown_and_never_resends() {
+    let isolated = isolated().await;
+    let store = isolated.store(Duration::from_secs(60)).await;
+    let caller = caller("single-source-pin");
+    let start = UNIX_EPOCH + Duration::from_secs(3_992_000);
+    let other_source = [0xa5; 32];
+    let mut first = match store
+        .claim_resume(
+            request(&caller, "records-create.person", "source-pin-key", 73),
+            single_resume_context(43, start + Duration::from_secs(10)),
+            start,
+        )
+        .await
+        .expect("claim the single write")
+    {
+        Claim::Execute(execution) => execution,
+        other => panic!("a fresh single write executes: {other:?}"),
+    };
+    store
+        .mark_resume_step_attempted(&mut first, 0, start + Duration::from_secs(1))
+        .await
+        .expect("premark the only physical POST");
+    store
+        .release_resume_lease(&first, start + Duration::from_secs(2))
+        .await
+        .expect("release the failed attempt's lease");
+
+    assert!(matches!(
+        store
+            .claim_resume(
+                request(&caller, "records-create.person", "source-pin-key", 73),
+                single_resume_context_from(43, other_source, start + Duration::from_secs(12)),
+                start + Duration::from_secs(2),
+            )
+            .await
+            .expect("resolve the retry against another source origin"),
+        Claim::EffectUnknown { .. }
+    ));
+    assert!(matches!(
+        store
+            .claim_resume(
+                request(&caller, "records-create.person", "source-pin-key", 73),
+                single_resume_context(43, start + Duration::from_secs(12)),
+                start + Duration::from_secs(2),
+            )
+            .await
+            .expect("resolve the retry against the pinned source origin"),
+        Claim::Resume { next_step: 0, .. }
+    ));
+}
+
+#[tokio::test]
+async fn a_single_write_that_never_sent_is_reclaimable_after_its_lease_under_a_changed_artifact() {
+    let isolated = isolated().await;
+    let store = isolated.store(Duration::from_secs(60)).await;
+    let caller = caller("single-never-sent");
+    let start = UNIX_EPOCH + Duration::from_secs(3_994_000);
+    let mut crashed = match store
+        .claim_resume(
+            request(&caller, "records-create.person", "never-sent-key", 74),
+            single_resume_context(44, start + Duration::from_secs(10)),
+            start,
+        )
+        .await
+        .expect("claim the single write")
+    {
+        Claim::Execute(execution) => execution,
+        other => panic!("a fresh single write executes: {other:?}"),
+    };
+
+    // The process stops before the send: nothing is marked or released.
+    store
+        .ensure_async_artifact_compatible("deployment-a", [45; 32], start + Duration::from_secs(1))
+        .await
+        .expect("a never-sent single write never blocks activation");
+    assert!(matches!(
+        store
+            .claim_resume(
+                request(&caller, "records-create.person", "never-sent-key", 74),
+                single_resume_context(45, start + Duration::from_secs(15)),
+                start + Duration::from_secs(5),
+            )
+            .await
+            .expect("resolve the retry while the old lease is live"),
+        Claim::InFlight
+    ));
+    let mut reclaimed = match store
+        .claim_resume(
+            request(&caller, "records-create.person", "never-sent-key", 74),
+            single_resume_context(45, start + Duration::from_secs(21)),
+            start + Duration::from_secs(11),
+        )
+        .await
+        .expect("reclaim the never-sent write after its lease")
+    {
+        Claim::Resume {
+            execution,
+            next_step: 0,
+            bindings,
+        } if bindings.is_empty() => execution,
+        other => panic!("a never-sent write is reclaimable after its lease: {other:?}"),
+    };
+    assert!(store
+        .mark_resume_step_attempted(&mut crashed, 0, start + Duration::from_secs(12))
+        .await
+        .is_err());
+    store
+        .mark_resume_step_attempted(&mut reclaimed, 0, start + Duration::from_secs(12))
+        .await
+        .expect("the reclaiming attempt alone may send");
+}
+
+#[tokio::test]
 async fn source_native_single_resume_refuses_zero_steps() {
     let isolated = isolated().await;
     let store = isolated.store(Duration::from_secs(60)).await;
@@ -707,6 +893,7 @@ async fn source_native_single_resume_refuses_zero_steps() {
                 request(&caller, "records-create.person", "zero-step-key", 68),
                 ResumeClaimContext {
                     artifact_digest: [38; 32],
+                    source_digest: SOURCE_DIGEST,
                     effect_deadline: start + Duration::from_secs(10),
                     step_count: 0,
                 },
@@ -756,7 +943,7 @@ async fn v0600_additively_admits_one_step_without_rewriting_v0500_rows() {
         .expect("upgrade v0500 to the additive single-step constraint");
     assert_eq!(
         migration_versions(&client).await,
-        vec![100, 200, 300, 400, 500, 600, 700]
+        vec![100, 200, 300, 400, 500, 600, 700, 800]
     );
     assert_eq!(
         client
@@ -816,7 +1003,7 @@ async fn v0700_adds_optional_semantic_headers_without_rewriting_v0600_custody() 
         .expect("upgrade v0600 response custody to semantic headers");
     assert_eq!(
         migration_versions(&client).await,
-        vec![100, 200, 300, 400, 500, 600, 700]
+        vec![100, 200, 300, 400, 500, 600, 700, 800]
     );
     let row = client
         .query_one(
@@ -1319,7 +1506,7 @@ async fn an_interrupted_migration_commits_neither_its_schema_nor_its_ledger_row(
         .into_iter()
         .map(|row| row.get::<_, i64>(0))
         .collect::<Vec<_>>();
-    assert_eq!(versions, [100, 200, 300, 400, 500, 600, 700]);
+    assert_eq!(versions, [100, 200, 300, 400, 500, 600, 700, 800]);
 }
 
 #[tokio::test]
@@ -1358,7 +1545,7 @@ async fn migration_owns_a_separate_idempotency_ledger_and_is_idempotent() {
     );
     assert_eq!(
         migration_versions(&client).await,
-        vec![100, 200, 300, 400, 500, 600, 700]
+        vec![100, 200, 300, 400, 500, 600, 700, 800]
     );
 }
 
@@ -1402,7 +1589,7 @@ async fn logical_deployment_migration_accepts_an_empty_v0100_ledger() {
         .expect("an empty v0100 ledger can adopt the logical deployment namespace");
     assert_eq!(
         migration_versions(&client).await,
-        vec![100, 200, 300, 400, 500, 600, 700]
+        vec![100, 200, 300, 400, 500, 600, 700, 800]
     );
 }
 
@@ -1474,7 +1661,7 @@ async fn response_identity_migration_accepts_and_preserves_expired_v0200_tombsto
         .expect("an expired tombstone has no response identity to recover");
     assert_eq!(
         migration_versions(&client).await,
-        vec![100, 200, 300, 400, 500, 600, 700]
+        vec![100, 200, 300, 400, 500, 600, 700, 800]
     );
     let row = client
         .query_one(
@@ -1503,7 +1690,7 @@ async fn current_rows_do_not_block_a_subsequent_startup() {
         .expect("the applied semantic migration does not inspect current rows again");
     assert_eq!(
         migration_versions(&client).await,
-        vec![100, 200, 300, 400, 500, 600, 700]
+        vec![100, 200, 300, 400, 500, 600, 700, 800]
     );
     assert_eq!(
         client
@@ -1547,7 +1734,7 @@ async fn current_cached_response_ids_do_not_block_a_subsequent_startup() {
         .expect("an already-applied response-id migration accepts current custody");
     assert_eq!(
         migration_versions(&client).await,
-        vec![100, 200, 300, 400, 500, 600, 700]
+        vec![100, 200, 300, 400, 500, 600, 700, 800]
     );
     assert_eq!(
         client
@@ -2296,7 +2483,7 @@ async fn v0400_preserves_v0300_terminal_and_spent_rows_without_inventing_async_a
 
     assert_eq!(
         migration_versions(&client).await,
-        vec![100, 200, 300, 400, 500, 600, 700]
+        vec![100, 200, 300, 400, 500, 600, 700, 800]
     );
     let rows = client
         .query(

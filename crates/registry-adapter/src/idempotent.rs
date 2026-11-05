@@ -98,7 +98,7 @@ const ASYNC_BINDING_DIGEST_DOMAIN: &[u8] = b"registry-adapter:async-binding:v1\0
 
 const LOGICAL_DEPLOYMENT_IDENTITY_MIGRATION: i64 = 200;
 const RESPONSE_REQUEST_ID_MIGRATION: i64 = 300;
-const MIGRATIONS: [(i64, &str); 7] = [
+const MIGRATIONS: [(i64, &str); 8] = [
     (
         100,
         include_str!("idempotent/migrations/0100_idempotency_store.sql"),
@@ -126,6 +126,10 @@ const MIGRATIONS: [(i64, &str); 7] = [
     (
         700,
         include_str!("idempotent/migrations/0700_semantic_response_headers.sql"),
+    ),
+    (
+        800,
+        include_str!("idempotent/migrations/0800_resume_source_pin.sql"),
     ),
 ];
 const SUPPORTED_SCHEMA_VERSION: i64 = MIGRATIONS[MIGRATIONS.len() - 1].0;
@@ -220,6 +224,9 @@ pub struct AsyncEffectAttempt<'a> {
 pub struct ResumeClaimContext {
     /// Digest of the exact active artifact closure that defines step order.
     pub artifact_digest: [u8; 32],
+    /// Digest of the source origins the write's sends reach. A resend under
+    /// another source digest is refused as effect-unknown.
+    pub source_digest: [u8; 32],
     /// Actual finite route deadline used as the execution lease ceiling.
     pub effect_deadline: SystemTime,
     /// Number of non-safe sends in the compiled flat route.
@@ -1019,8 +1026,8 @@ impl PostgresIdempotencyStore {
                 .execute(
                     "INSERT INTO adapter_idempotency_resumes \
                      (scope_digest, request_digest, deployment_digest, artifact_digest, \
-                      next_step, step_count, expires_at, lease_id, lease_until) \
-                     VALUES ($1, $2, $3, $4, 0, $5, $6, $7, $8)",
+                      next_step, step_count, expires_at, lease_id, lease_until, source_digest) \
+                     VALUES ($1, $2, $3, $4, 0, $5, $6, $7, $8, $9)",
                     &[
                         &scope_digest.as_slice(),
                         &request.request_digest.as_slice(),
@@ -1034,6 +1041,7 @@ impl PostgresIdempotencyStore {
                         &expires_at,
                         &lease_id.as_slice(),
                         &lease_until,
+                        &context.source_digest.as_slice(),
                     ],
                 )
                 .await?;
@@ -1068,12 +1076,20 @@ impl PostgresIdempotencyStore {
             transaction.commit().await?;
             return Ok(Claim::Mismatch);
         }
+        // A lapsed lease resumes only under the artifact and source origins
+        // the row is pinned to. A row that never started a step sent
+        // nothing, so it is re-pinned to the current artifact and origins.
+        // Any other mismatch falls through to the entry state: a started
+        // step is effect-unknown and is never resent.
         let Some(resume) = transaction
             .query_opt(
                 "UPDATE adapter_idempotency_resumes \
-                 SET lease_id = $4, lease_until = LEAST($5, expires_at) \
+                 SET lease_id = $4, lease_until = LEAST($5, expires_at), \
+                     artifact_digest = $3, source_digest = $7 \
                  WHERE scope_digest = $1 AND request_digest = $2 \
-                   AND artifact_digest = $3 AND expires_at > $6 AND lease_until <= $6 \
+                   AND expires_at > $6 AND lease_until <= $6 \
+                   AND ((artifact_digest = $3 AND COALESCE(source_digest, $7) = $7) \
+                        OR (next_step = 0 AND NOT step_started)) \
                  RETURNING deployment_digest, artifact_digest, next_step, step_count, \
                            expires_at, lease_until",
                 &[
@@ -1083,6 +1099,7 @@ impl PostgresIdempotencyStore {
                     &lease_id.as_slice(),
                     &lease_until,
                     &now,
+                    &context.source_digest.as_slice(),
                 ],
             )
             .await?
@@ -1091,12 +1108,14 @@ impl PostgresIdempotencyStore {
                 .query_opt(
                     "SELECT 1 FROM adapter_idempotency_resumes \
                      WHERE scope_digest = $1 AND request_digest = $2 \
-                       AND artifact_digest = $3 AND expires_at > $4",
+                       AND artifact_digest = $3 AND COALESCE(source_digest, $5) = $5 \
+                       AND expires_at > $4",
                     &[
                         &scope_digest.as_slice(),
                         &request.request_digest.as_slice(),
                         &context.artifact_digest.as_slice(),
                         &now,
+                        &context.source_digest.as_slice(),
                     ],
                 )
                 .await?
@@ -2435,9 +2454,11 @@ async fn lock_async_artifact_fence(
         return Err(IdempotencyError::AsyncArtifactInUse);
     }
     // Only unfinished work carries recovery authority: an attempted or
-    // accepted async effect, or an unexpired resume. A terminal row keeps its
-    // binding for status replay, which is bound to its own artifact digest,
-    // so it never blocks a hotfix or rollback.
+    // accepted async effect, or an unexpired multi-step resume. A terminal
+    // row keeps its binding for status replay, which is bound to its own
+    // artifact digest, so it never blocks a hotfix or rollback. A single-step
+    // resume never blocks either: a retry under another artifact is answered
+    // as effect-unknown, or re-pinned when its one step never started.
     let incompatible = client
         .query_one(
             "SELECT count(*), max(expires_at) FROM ( \
@@ -2447,7 +2468,7 @@ async fn lock_async_artifact_fence(
                    AND state IN ('effect_started', 'accepted') AND async_expires_at > $3 \
                  UNION ALL \
                  SELECT artifact_digest, expires_at FROM adapter_idempotency_resumes \
-                 WHERE deployment_digest = $1 AND expires_at > $3 \
+                 WHERE deployment_digest = $1 AND step_count > 1 AND expires_at > $3 \
              ) AS live WHERE artifact_digest <> $2",
             &[
                 &deployment_digest.as_slice(),
