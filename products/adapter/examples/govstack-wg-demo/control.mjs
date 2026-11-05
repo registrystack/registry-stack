@@ -346,8 +346,8 @@ async function main() {
       throw e;
     }
     const cmd = await run("ps", ["-p", String(pid), "-o", "command="], env);
-    if (!cmd.includes(state))
-      throw Error(`${name} PID was reused; refusing to signal it`);
+    // A retained PID may belong to another process after a reboot. It is not ours.
+    if (!cmd.includes(state)) return false;
     return true;
   }
   async function launch(name, binary, args) {
