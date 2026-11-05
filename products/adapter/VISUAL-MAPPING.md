@@ -49,7 +49,7 @@ Layout rule: the model sits inside the directory tree of the document that owns 
 The generated header names the model relative to the script, so a model may sit beside its script in a subdirectory.
 
 Each generated script begins with a header naming its model file and the model's digest.
-When the script no longer matches its model, `adapterctl check` reports a warning naming both files, and Studio shows the mapping read-only with a notice and one action, Replace hand edits with this mapping.
+When the script no longer matches its model, `adapterctl check` reports a warning naming both files, and Studio shows the mapping read-only with a notice and one action, Replace the script with this mapping, which says that any hand edits to the script are lost.
 The author then regenerates, which discards the hand edits, or removes the whole generated header and keeps a handwritten script; keeping a handwritten script is a command-line choice that Studio does not offer.
 The marker on the header's first line is what makes a script generated, so a script without it is handwritten.
 Generating over a script that another model produced, or over a handwritten script, is refused unless `--force` is passed.
