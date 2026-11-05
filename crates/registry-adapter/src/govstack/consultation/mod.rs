@@ -68,7 +68,7 @@ pub fn built_in_profile() -> AdapterProfile {
             {"code":"https://govstack.global/problems/digital-registries/not-acceptable","status":406,"title":"the reply cannot be given in an accepted media type","classes":["facade.not-acceptable"]},
             {"code":"https://govstack.global/problems/digital-registries/content-too-large","status":413,"title":"the request body is too large","classes":["facade.payload-too-large"]},
             {"code":"https://govstack.global/problems/digital-registries/unsupported-media-type","status":415,"title":"the request body is not in a supported media type","classes":["facade.unsupported-media-type"]},
-            {"code":"https://govstack.global/problems/digital-registries/invalid-field","status":422,"title":"a request field is not valid","classes":["outcome","outcome.invalid-request","facade.invalid-field"]},
+            {"code":"https://govstack.global/problems/digital-registries/invalid-content","status":422,"title":"a request field is not valid","classes":["outcome","outcome.invalid-request","facade.invalid-field"]},
             {"code":"https://govstack.global/problems/digital-registries/invalid-cursor","status":400,"title":"the cursor is not valid","classes":["facade.invalid-cursor"]},
             {"code":"https://govstack.global/problems/digital-registries/too-many-requests","status":429,"title":"the source is throttling requests","classes":["throttle.rejected"]},
             {"code":"https://govstack.global/problems/digital-registries/internal-error","status":500,"title":"the request could not be served","classes":["facade","loop.maximum-iterations-reached","validation","conversion.unmapped","aggregation.duplicate","script","script.budget-exceeded","budget.exhausted","credential.rejected","disclosure.violation","egress.refused"]},
@@ -307,7 +307,11 @@ pub enum CapabilityFamily {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiscoveredWriteMetadata {
-    pub companion_read: CompanionReadIdentity,
+    /// Seconds a reused `Idempotency-Key` still replays; the deployment's
+    /// response retention.
+    pub idempotency_replay_window: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub companion_read: Option<CompanionReadIdentity>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -369,11 +373,19 @@ pub fn validate_capabilities(document: &CallerCapabilities) -> Result<(), Capabi
                     operation.view.as_deref().is_some_and(valid_view_id)
                         && operation.write.is_none()
                 }
-                CapabilityFamily::Write if operation.capability == "update" => operation
-                    .write
-                    .as_ref()
-                    .is_some_and(|write| valid_view_id(&write.companion_read.view)),
-                CapabilityFamily::Write => operation.view.is_none() && operation.write.is_none(),
+                CapabilityFamily::Write => {
+                    operation.view.is_none()
+                        && operation.write.as_ref().is_some_and(|write| {
+                            write.idempotency_replay_window >= 1
+                                && match &write.companion_read {
+                                    Some(companion) => {
+                                        operation.capability == "update"
+                                            && valid_view_id(&companion.view)
+                                    }
+                                    None => operation.capability != "update",
+                                }
+                        })
+                }
             };
             if !named_input_is_consistent || !annotations_are_consistent {
                 return Err(CapabilityError::Contradictory);
@@ -389,6 +401,7 @@ pub fn validate_capabilities(document: &CallerCapabilities) -> Result<(), Capabi
 pub fn caller_capabilities(
     project: &AdapterProject,
     served_operations: &[crate::engine::load::ServedOperation],
+    idempotency_replay_window: Option<u64>,
     mut admitted: impl FnMut(&crate::engine::load::ServedOperation) -> bool,
 ) -> Result<CallerCapabilities, CapabilityError> {
     if project.consultation.is_none() && project.write.is_none() {
@@ -498,22 +511,24 @@ pub fn caller_capabilities(
             if !selected {
                 continue;
             }
-            let write_metadata = if capability
-                == crate::govstack::write::attachment::WriteCapability::Update
-            {
-                let view = resolved
-                    .as_ref()
-                    .and_then(|metadata| metadata.view)
-                    .ok_or(CapabilityError::Contradictory)?;
-                Some(DiscoveredWriteMetadata {
-                    companion_read: CompanionReadIdentity {
+            let companion_read =
+                if capability == crate::govstack::write::attachment::WriteCapability::Update {
+                    let view = resolved
+                        .as_ref()
+                        .and_then(|metadata| metadata.view)
+                        .ok_or(CapabilityError::Contradictory)?;
+                    Some(CompanionReadIdentity {
                         operation_id: ConsultationCapability::Retrieve.operation_id(record_type),
                         view: view.to_owned(),
-                    },
-                })
-            } else {
-                None
-            };
+                    })
+                } else {
+                    None
+                };
+            let write_metadata = Some(DiscoveredWriteMetadata {
+                idempotency_replay_window: idempotency_replay_window
+                    .ok_or(CapabilityError::Contradictory)?,
+                companion_read,
+            });
             operations.push(CapabilityOperation {
                 operation_id: capability.operation_id(record_type),
                 contract: resolved
@@ -1245,10 +1260,11 @@ mod tests {
             capability: "update".to_owned(),
             view: None,
             write: Some(DiscoveredWriteMetadata {
-                companion_read: CompanionReadIdentity {
+                idempotency_replay_window: 86_400,
+                companion_read: Some(CompanionReadIdentity {
                     operation_id: "retrievePeople".to_owned(),
                     view: "person-public".to_owned(),
-                },
+                }),
             }),
             selectors: Vec::new(),
             searches: Vec::new(),
@@ -1269,9 +1285,49 @@ mod tests {
                 "contract": "https://registry.example/contracts/1/openapi.yaml",
                 "family": "write",
                 "capability": "update",
-                "write": {"companionRead": {"operationId": "retrievePeople", "view": "person-public"}}
+                "write": {"idempotencyReplayWindow": 86400, "companionRead": {"operationId": "retrievePeople", "view": "person-public"}}
             })
         );
+    }
+
+    #[test]
+    fn every_write_entry_carries_the_replay_window_and_only_update_names_a_companion_read() {
+        let create = |window: Option<u64>| CapabilityOperation {
+            operation_id: "createPeople".to_owned(),
+            contract: "https://registry.example/contracts/1/openapi.yaml".to_owned(),
+            family: CapabilityFamily::Write,
+            capability: "create".to_owned(),
+            view: None,
+            write: window.map(|idempotency_replay_window| DiscoveredWriteMetadata {
+                idempotency_replay_window,
+                companion_read: None,
+            }),
+            selectors: Vec::new(),
+            searches: Vec::new(),
+        };
+        let document = |operation| CallerCapabilities {
+            collections: vec![CapabilityCollection {
+                collection_id: "people".to_owned(),
+                registry: "https://registry.example/people".to_owned(),
+                operations: vec![operation],
+            }],
+            operations: Vec::new(),
+        };
+        assert_eq!(
+            validate_capabilities(&document(create(Some(86_400)))),
+            Ok(())
+        );
+        assert_eq!(
+            serde_json::to_value(document(create(Some(86_400)))).unwrap()["collections"][0]
+                ["operations"][0]["write"],
+            json!({"idempotencyReplayWindow": 86400})
+        );
+        for refused in [create(None), create(Some(0))] {
+            assert_eq!(
+                validate_capabilities(&document(refused)),
+                Err(CapabilityError::Contradictory)
+            );
+        }
     }
 
     #[test]
@@ -1285,10 +1341,11 @@ mod tests {
             capability: "update".to_owned(),
             view: None,
             write: Some(DiscoveredWriteMetadata {
-                companion_read: CompanionReadIdentity {
+                idempotency_replay_window: 86_400,
+                companion_read: Some(CompanionReadIdentity {
                     operation_id: "retrievePeople".to_owned(),
                     view: "person-public".to_owned(),
-                },
+                }),
             }),
             selectors: Vec::new(),
             searches: Vec::new(),
@@ -1311,6 +1368,8 @@ mod tests {
             .as_mut()
             .expect("Write metadata")
             .companion_read
+            .as_mut()
+            .expect("companion read")
             .view = "person_public".to_owned();
         assert_eq!(
             validate_capabilities(&document(update)),

@@ -384,7 +384,7 @@ async fn a_lookup_refuses_what_its_closed_shape_does_not_name() {
         &json!({"selector": "by-national-id", "values": {"record-id": "x"}}),
     );
     assert_eq!(status, 422, "{body}");
-    contract::assert_problem(&body, 422, "invalid-field");
+    contract::assert_problem(&body, 422, "invalid-content");
 
     // Values that break the selector's closed schema are field faults.
     for shape in [
@@ -393,7 +393,7 @@ async fn a_lookup_refuses_what_its_closed_shape_does_not_name() {
     ] {
         let (status, _, body) = served.post(LOOKUP_PATH, Some(&token), &shape);
         assert_eq!(status, 422, "{shape}: {body}");
-        contract::assert_problem(&body, 422, "invalid-field");
+        contract::assert_problem(&body, 422, "invalid-content");
     }
 
     // A body that is not the declared shape is a bad request.
@@ -426,7 +426,7 @@ async fn a_lookup_identifier_over_the_schema_bound_is_invalid_before_any_send() 
             &json!({"selector": "by-record-id", "values": {"record-id": long}}),
         );
         assert_eq!(status, 422, "{body}");
-        contract::assert_problem(&body, 422, "invalid-field");
+        contract::assert_problem(&body, 422, "invalid-content");
     }
     assert_eq!(upstream.request_count(), 0);
     let kinds = served.journal_kinds().await;
@@ -483,6 +483,26 @@ async fn a_retrieve_identifier_that_cannot_be_one_path_segment_is_not_found_befo
     ] {
         let (status, _, body) = served.get(&format!("{LIST_PATH}/{spelling}"), Some(&token));
         assert_eq!(status, 404, "{spelling}: {body}");
+        contract::assert_problem(&body, 404, "record-not-available");
+    }
+    assert_eq!(upstream.request_count(), 0);
+}
+
+#[tokio::test]
+async fn a_lookup_identifier_that_cannot_be_one_path_segment_is_not_found_before_any_upstream_call()
+{
+    let upstream = UpstreamDouble::start();
+    upstream.respond_with(vec![found()]);
+    let served = start(&upstream).await;
+    let token = served.token("records.read");
+
+    for identifier in [".", "..", "a/b", "a\\b", "a?b", "a\u{1}b"] {
+        let (status, _, body) = served.post(
+            LOOKUP_PATH,
+            Some(&token),
+            &json!({"selector": "by-record-id", "values": {"record-id": identifier}}),
+        );
+        assert_eq!(status, 404, "{identifier:?}: {body}");
         contract::assert_problem(&body, 404, "record-not-available");
     }
     assert_eq!(upstream.request_count(), 0);
@@ -556,8 +576,27 @@ async fn a_search_refuses_undeclared_criteria_and_unknown_searches() {
     ] {
         let (status, _, body) = served.post(SEARCH_PATH, Some(&token), &shape);
         assert_eq!(status, 422, "{shape}: {body}");
-        contract::assert_problem(&body, 422, "invalid-field");
+        contract::assert_problem(&body, 422, "invalid-content");
     }
+
+    // The 422 names where the fault is as a JSON pointer, never the value.
+    let (status, _, body) = served.post(
+        SEARCH_PATH,
+        Some(&token),
+        &json!({"search": "by-org-unit", "criteria": {"unknown-field": "SUBMITTED-VALUE-CANARY"}}),
+    );
+    assert_eq!(status, 422, "{body}");
+    contract::assert_problem(&body, 422, "invalid-content");
+    assert!(
+        body["errors"][0]["pointer"]
+            .as_str()
+            .is_some_and(|pointer| pointer.starts_with('/')),
+        "a JSON pointer: {body}"
+    );
+    assert!(
+        !body.to_string().contains("SUBMITTED-VALUE-CANARY"),
+        "the submitted value is not echoed: {body}"
+    );
     // A body that is not the declared shape is a bad request.
     for shape in [
         json!({"criteria": {"org-unit": "x"}}),
@@ -759,7 +798,7 @@ async fn a_search_without_its_declared_filter_is_an_invalid_field_before_any_cal
     );
 
     assert_eq!(status, 422, "{body}");
-    contract::assert_problem(&body, 422, "invalid-field");
+    contract::assert_problem(&body, 422, "invalid-content");
     assert_eq!(upstream.request_count(), 0);
 }
 

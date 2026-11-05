@@ -996,6 +996,12 @@ async fn caller_capabilities(
     let document = match crate::govstack::consultation::caller_capabilities(
         &state.loaded.project,
         &state.loaded.served,
+        state
+            .loaded
+            .runtime
+            .idempotency
+            .as_ref()
+            .map(|policy| policy.response_retention_seconds.get()),
         |served| admits(&state.loaded.project, &caller, served),
     ) {
         Ok(document) => document,
@@ -1044,7 +1050,7 @@ async fn caller_capabilities(
             response
                 .headers_mut()
                 .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-            with_write_replay_window(&state, response)
+            response
         }
         Err(error) => {
             tracing::error!(%error, "the caller capability response could not be serialized");
@@ -2007,6 +2013,20 @@ async fn answer(
                 }
             }
             Err(failure) => {
+                // A Lookup identifier that cannot be one path segment of the
+                // source link is refused while the link is rendered, before
+                // any send. Like a Retrieve identifier of that shape it names
+                // no record, so the answer is the same not-found.
+                let failure = if operation.operation == "lookup"
+                    && failure.class == ErrorClass::Validation
+                    && events
+                        .iter()
+                        .all(|(event, _)| event.event_kind != "exchangeSending")
+                {
+                    RouteFailure::of(ErrorClass::OutcomeNotFound)
+                } else {
+                    failure
+                };
                 let failure = enforce_problem_data(profile.profile, failure);
                 let mut detail = exchange_failure_detail(profile, failure.class);
                 if let Some(auth) = &failure.auth {
@@ -2324,27 +2344,6 @@ async fn answer(
             &record_type,
             &request_id,
         );
-    }
-    if govstack_write {
-        with_write_replay_window(state, response)
-    } else {
-        response
-    }
-}
-
-fn with_replay_window_seconds(mut response: Response, seconds: u64) -> Response {
-    response.headers_mut().insert(
-        "x-registry-idempotency-replay-window-seconds",
-        HeaderValue::from_str(&seconds.to_string()).expect("bounded decimal replay window"),
-    );
-    response
-}
-
-fn with_write_replay_window(state: &FacadeState, response: Response) -> Response {
-    if state.loaded.project.write.is_some() && state.idempotency.is_some() {
-        if let Some(policy) = state.loaded.runtime.idempotency.as_ref() {
-            return with_replay_window_seconds(response, policy.response_retention_seconds.get());
-        }
     }
     response
 }
@@ -5004,26 +5003,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn replay_window_header_publishes_decimal_seconds_without_changing_the_body() {
-        let response = with_replay_window_seconds(
-            json_response(StatusCode::OK, &json!({"collections": []})),
-            86400,
-        );
-        assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(
-            response
-                .headers()
-                .get("x-registry-idempotency-replay-window-seconds")
-                .unwrap(),
-            "86400"
-        );
-        assert_eq!(
-            response.headers().get(header::CACHE_CONTROL).unwrap(),
-            "no-store"
-        );
-    }
-
     #[tokio::test]
     async fn custodied_write_problem_keeps_original_trace_body_on_a_new_attempt() {
         let first = RequestCorrelation::server_created();
@@ -5162,11 +5141,13 @@ mod tests {
             client_id: "registry-client".to_owned(),
             scopes: vec!["records.read".to_owned()],
         };
-        let document =
-            crate::govstack::consultation::caller_capabilities(&project, &operations, |served| {
-                admits(&project, &caller, served)
-            })
-            .expect("bounded capability document");
+        let document = crate::govstack::consultation::caller_capabilities(
+            &project,
+            &operations,
+            None,
+            |served| admits(&project, &caller, served),
+        )
+        .expect("bounded capability document");
         assert_eq!(document.collections.len(), 1);
         assert_eq!(document.collections[0].collection_id, "person");
         let ids = document.collections[0]

@@ -233,7 +233,7 @@ fn response_schema(capability: WriteCapability) -> Value {
             "additionalProperties": false,
             "required": ["collectionId", "recordId", "etag"],
             "properties": {
-                "collectionId": {"type": "string", "minLength": 1, "maxLength": 64},
+                "collectionId": {"type": "string", "minLength": 1, "maxLength": 128},
                 "recordId": {"type": "string", "minLength": 1, "maxLength": MAXIMUM_RECORD_ID_CHARACTERS},
                 "etag": {"type": "string", "minLength": 3, "maxLength": 258}
             }
@@ -246,6 +246,15 @@ fn response_schema(capability: WriteCapability) -> Value {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn the_create_receipt_allows_every_collection_id_the_contract_allows() {
+        let schema = response_schema(WriteCapability::Create);
+        assert_eq!(schema["properties"]["collectionId"]["maxLength"], 128);
+        let longest = format!("a{}", "b".repeat(127));
+        assert!(crate::govstack::consultation::valid_collection_id(&longest));
+        assert_eq!(longest.chars().count(), 128);
+    }
 
     #[test]
     fn write_request_schemas_wrap_only_domain_data() {
