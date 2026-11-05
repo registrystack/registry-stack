@@ -59,7 +59,7 @@ artifacts:
       digest: sha256:5bf4bb3fc5c9b4b4a1512abf03cb0c98fab71791ce1cf8af99a68b88e1a17771
     - id: person-registration
       file: scripts/person-registration.rhai
-      digest: sha256:9d9eb23d11dd4475d4f783d45b2ed33e52e970b974b242915a02ac10e12bb72e
+      digest: sha256:3ab4f22bd7ee2df6f9a24b48e59b001e5e367dd243b9e8aeeaaf69d69c4f4d89
   schemas:
     - id: person-public
       file: schemas/person-public.schema.json

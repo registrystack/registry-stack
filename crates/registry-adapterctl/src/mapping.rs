@@ -168,7 +168,6 @@ pub(crate) fn run(command: &MappingCommand) -> Result<MappingRun, MappingFailure
 /// A model read with the target schema it names.
 pub(crate) struct Loaded {
     pub mapping: AdapterMapping,
-    pub bytes: Vec<u8>,
     /// The target schema, `None` when it could not be read (a finding says
     /// why) or its path is not clean (the model check says so).
     pub schema: Option<Value>,
@@ -177,8 +176,14 @@ pub(crate) struct Loaded {
 }
 
 impl Loaded {
+    /// The digest of the model's meaning: its parsed value, serialized. A
+    /// layout-only edit (comments, a byte order mark, line endings, document
+    /// markers) keeps it, so the generated script stays current; any change
+    /// to what the model says changes it.
     fn digest(&self) -> String {
-        sha256_uri(&self.bytes)
+        let value =
+            serde_json::to_vec(&self.mapping).expect("a parsed mapping model serializes to JSON");
+        sha256_uri(&value)
     }
 
     /// The model reference and digest the generated header carries.
@@ -210,7 +215,7 @@ pub(crate) fn load(
     report: &mut Report,
     files: &mut usize,
 ) -> Result<Option<Loaded>, CheckFailure> {
-    let Some((decoded, bytes)) = read::<AdapterMapping>(model, &MAPPING_FORMAT, report, files)?
+    let Some((decoded, _bytes)) = read::<AdapterMapping>(model, &MAPPING_FORMAT, report, files)?
     else {
         return Ok(None);
     };
@@ -233,7 +238,6 @@ pub(crate) fn load(
     };
     Ok(Some(Loaded {
         mapping,
-        bytes,
         schema,
         directory,
         file_name,

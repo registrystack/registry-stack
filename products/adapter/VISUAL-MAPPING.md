@@ -43,7 +43,7 @@ The generator produces ordinary Rhai and reports its digest.
 `adapterctl job lock` rewrites a job's mapping digest from the generated script's bytes.
 The saved model, source descriptions and field catalogue remain authoring inputs; they do not enter the runtime artifact inventory.
 The generated script, target schema and existing project and pack pins remain the governed executable result.
-The script's header records the model's digest, so any change to the model's bytes, a comment included, changes the script and its pin.
+The script's header records the digest of the model's parsed content, so any change to what the model says changes the script and its pin; a layout-only edit (comments, a byte order mark, line endings, document markers) does not.
 Generation conflicts and invalid exports preserve existing files rather than overwriting them.
 Layout rule: the model sits inside the directory tree of the document that owns the script, and paths in the model (`targetSchema`, `script`) resolve against the model file.
 The generated header names the model relative to the script, so a model may sit beside its script in a subdirectory.

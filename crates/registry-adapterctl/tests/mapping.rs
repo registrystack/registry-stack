@@ -802,6 +802,25 @@ fn check_warns_when_the_model_changes_after_generation() {
     let _ = root;
 }
 
+/// The header pins the model's meaning, not its layout: a byte order mark,
+/// CRLF line endings, comments and document markers leave the script current.
+#[test]
+fn check_raises_no_drift_warning_when_only_the_model_layout_changes() {
+    let (_root, project, model) = project_with_generated_script();
+    let text = std::fs::read_to_string(&model).unwrap();
+    let relaid = format!(
+        "\u{feff}---\r\n# a reviewer's note\r\n{}...\r\n",
+        text.replace('\n', "\r\n")
+    );
+    std::fs::write(&model, relaid).unwrap();
+    let (exit, report, _) = run_json(&["mapping", "check", model.to_str().unwrap()]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    assert!(drift_warnings(&report).is_empty(), "{report}");
+    let (exit, report, _) = run_json(&["check", &project, "--deny-warnings"]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    assert!(drift_warnings(&report).is_empty(), "{report}");
+}
+
 #[test]
 fn check_warns_when_the_model_is_missing() {
     let (_root, project, model) = project_with_generated_script();
@@ -1268,7 +1287,7 @@ fn job_check_warns_when_the_destination_mapping_drifts_from_its_model() {
     assert_eq!(exit, ExitCode::SUCCESS, "{report}");
     let job = root.path().join("job.yaml");
     let text = std::fs::read_to_string(&job).unwrap();
-    let old = "sha256:2c7fc6f8827a68158686d4e22180c316232f1516a7ca72a22427afcd8b3f4bdb";
+    let old = "sha256:6b7f1cbbccd57459e15f5ece6282b3ca96946f0525759adcf6acbcc925496da6";
     assert!(text.contains(old));
     std::fs::write(
         &job,
