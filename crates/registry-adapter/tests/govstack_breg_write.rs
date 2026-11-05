@@ -240,7 +240,6 @@ async fn real_breg_and_adapter_preserve_write_receipts_conditions_and_exact_reco
     let editor = adapter.token("records.read records.write");
     let reader = adapter.token("records.read");
     let collection = "/govstack/registries/v1/collections/contacts/records";
-    let replay_window_header = "x-registry-idempotency-replay-window-seconds";
     let capabilities = adapter.request(
         "GET",
         "/govstack/registries/v1/capabilities",
@@ -249,7 +248,6 @@ async fn real_breg_and_adapter_preserve_write_receipts_conditions_and_exact_reco
         &[],
     );
     assert_eq!(capabilities.status, 200, "{capabilities:?}");
-    assert_eq!(capabilities.header(replay_window_header), "86400");
     let capabilities = capabilities.json();
     let contact_operations = capabilities["collections"]
         .as_array()
@@ -271,6 +269,21 @@ async fn real_breg_and_adapter_preserve_write_receipts_conditions_and_exact_reco
             }),
             "capabilities publish {family}/{capability}: {capabilities}"
         );
+    }
+    for operation in contact_operations
+        .iter()
+        .filter(|operation| operation["family"] == "write")
+    {
+        assert_eq!(
+            operation["write"]["idempotencyReplayWindow"], 86400,
+            "every write entry carries the replay window: {operation}"
+        );
+    }
+    for operation in contact_operations
+        .iter()
+        .filter(|operation| operation["family"] == "consultation")
+    {
+        assert!(operation.get("write").is_none(), "{operation}");
     }
     let reader_capabilities = adapter.request(
         "GET",
@@ -319,7 +332,6 @@ async fn real_breg_and_adapter_preserve_write_receipts_conditions_and_exact_reco
         .expect("create receipt recordId")
         .to_owned();
     assert_eq!(receipt["collectionId"], "contacts");
-    assert_eq!(created.header(replay_window_header), "86400");
     let created_etag = created.header("etag").to_owned();
     assert_eq!(receipt["etag"], created_etag);
     assert_eq!(
@@ -418,7 +430,6 @@ async fn real_breg_and_adapter_preserve_write_receipts_conditions_and_exact_reco
         "{patched:?}\nsource request: {patch_source:?}\n{}",
         adapter.stderr()
     );
-    assert_eq!(patched.header(replay_window_header), "86400");
     assert!(patched.body.is_empty(), "PATCH has no response body");
     let patched_etag = patched.header("etag").to_owned();
     assert_ne!(patched_etag, created_etag);

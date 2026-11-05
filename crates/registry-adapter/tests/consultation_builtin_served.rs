@@ -134,11 +134,24 @@ async fn capabilities_expose_only_the_two_schema_bound_views_the_caller_can_read
     let (status, head, body) = served.get("/govstack/registries/v1/capabilities", Some(&token));
     assert_eq!(status, 200, "{body}");
     assert_eq!(header(&head, "cache-control"), Some("no-store"));
+    assert_eq!(
+        header(&head, "x-registry-idempotency-replay-window-seconds"),
+        None,
+        "no replay-window header exists"
+    );
 
     let collections = body["collections"]
         .as_array()
         .expect("capabilities carries collections");
     assert_eq!(collections.len(), 2, "{body}");
+    for collection in collections {
+        for operation in collection["operations"].as_array().expect("operations") {
+            assert!(
+                operation.get("write").is_none(),
+                "a read-only deployment publishes no replay window: {operation}"
+            );
+        }
+    }
     let generated = generated_operation_ids();
     for collection in collections {
         for operation in collection["operations"].as_array().expect("operations") {
@@ -354,7 +367,7 @@ async fn lookup_list_and_search_use_native_inputs_and_the_stable_source_order() 
     assert!(
         requests[1]
             .target
-            .contains("order=createdAt%3Adesc%2CtrackedEntity%3Aasc"),
+            .contains("order=createdAt%3Adesc%2ClZGmxYbs97q%3Aasc"),
         "{}",
         requests[1].target
     );
@@ -362,7 +375,7 @@ async fn lookup_list_and_search_use_native_inputs_and_the_stable_source_order() 
     assert!(
         requests[2]
             .target
-            .contains("order=createdAt%3Adesc%2CtrackedEntity%3Aasc"),
+            .contains("order=createdAt%3Adesc%2ClZGmxYbs97q%3Aasc"),
         "{}",
         requests[2].target
     );

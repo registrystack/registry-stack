@@ -417,10 +417,16 @@
                                         "view"
                                       ],
                                       "type": "object"
+                                    },
+                                    "idempotencyReplayWindow": {
+                                      "description": "Seconds a reused Idempotency-Key still replays its exact terminal response; the deployment's response retention.",
+                                      "maximum": 31536000,
+                                      "minimum": 1,
+                                      "type": "integer"
                                     }
                                   },
                                   "required": [
-                                    "companionRead"
+                                    "idempotencyReplayWindow"
                                   ],
                                   "type": "object"
                                 }
@@ -476,14 +482,6 @@
                 "schema": {
                   "const": "no-store",
                   "type": "string"
-                }
-              },
-              "x-registry-idempotency-replay-window-seconds": {
-                "description": "Registry Stack operational extension publishing the deployment's idempotencyReplayWindow in seconds. During this window an identical key replays its exact terminal response; after it expires the key remains spent.",
-                "schema": {
-                  "maximum": 31536000,
-                  "minimum": 1,
-                  "type": "integer"
                 }
               }
             }
@@ -709,14 +707,6 @@
                   "minLength": 1,
                   "type": "string"
                 }
-              },
-              "x-registry-idempotency-replay-window-seconds": {
-                "description": "Registry Stack operational extension publishing the deployment's idempotencyReplayWindow in seconds. During this window an identical key replays its exact terminal response; after it expires the key remains spent.",
-                "schema": {
-                  "maximum": 31536000,
-                  "minimum": 1,
-                  "type": "integer"
-                }
               }
             }
           },
@@ -735,14 +725,6 @@
                 "schema": {
                   "const": "no-store",
                   "type": "string"
-                }
-              },
-              "x-registry-idempotency-replay-window-seconds": {
-                "description": "Registry Stack operational extension publishing the deployment's idempotencyReplayWindow in seconds. During this window an identical key replays its exact terminal response; after it expires the key remains spent.",
-                "schema": {
-                  "maximum": 31536000,
-                  "minimum": 1,
-                  "type": "integer"
                 }
               }
             }
@@ -769,14 +751,6 @@
                 "schema": {
                   "type": "string"
                 }
-              },
-              "x-registry-idempotency-replay-window-seconds": {
-                "description": "Registry Stack operational extension publishing the deployment's idempotencyReplayWindow in seconds. During this window an identical key replays its exact terminal response; after it expires the key remains spent.",
-                "schema": {
-                  "maximum": 31536000,
-                  "minimum": 1,
-                  "type": "integer"
-                }
               }
             }
           },
@@ -795,14 +769,6 @@
                 "schema": {
                   "const": "no-store",
                   "type": "string"
-                }
-              },
-              "x-registry-idempotency-replay-window-seconds": {
-                "description": "Registry Stack operational extension publishing the deployment's idempotencyReplayWindow in seconds. During this window an identical key replays its exact terminal response; after it expires the key remains spent.",
-                "schema": {
-                  "maximum": 31536000,
-                  "minimum": 1,
-                  "type": "integer"
                 }
               }
             }
@@ -823,14 +789,6 @@
                   "const": "no-store",
                   "type": "string"
                 }
-              },
-              "x-registry-idempotency-replay-window-seconds": {
-                "description": "Registry Stack operational extension publishing the deployment's idempotencyReplayWindow in seconds. During this window an identical key replays its exact terminal response; after it expires the key remains spent.",
-                "schema": {
-                  "maximum": 31536000,
-                  "minimum": 1,
-                  "type": "integer"
-                }
               }
             }
           },
@@ -849,14 +807,6 @@
                 "schema": {
                   "const": "no-store",
                   "type": "string"
-                }
-              },
-              "x-registry-idempotency-replay-window-seconds": {
-                "description": "Registry Stack operational extension publishing the deployment's idempotencyReplayWindow in seconds. During this window an identical key replays its exact terminal response; after it expires the key remains spent.",
-                "schema": {
-                  "maximum": 31536000,
-                  "minimum": 1,
-                  "type": "integer"
                 }
               }
             }
@@ -877,14 +827,6 @@
                   "const": "no-store",
                   "type": "string"
                 }
-              },
-              "x-registry-idempotency-replay-window-seconds": {
-                "description": "Registry Stack operational extension publishing the deployment's idempotencyReplayWindow in seconds. During this window an identical key replays its exact terminal response; after it expires the key remains spent.",
-                "schema": {
-                  "maximum": 31536000,
-                  "minimum": 1,
-                  "type": "integer"
-                }
               }
             }
           },
@@ -903,14 +845,6 @@
                 "schema": {
                   "const": "no-store",
                   "type": "string"
-                }
-              },
-              "x-registry-idempotency-replay-window-seconds": {
-                "description": "Registry Stack operational extension publishing the deployment's idempotencyReplayWindow in seconds. During this window an identical key replays its exact terminal response; after it expires the key remains spent.",
-                "schema": {
-                  "maximum": 31536000,
-                  "minimum": 1,
-                  "type": "integer"
                 }
               }
             }
@@ -937,14 +871,6 @@
                 "schema": {
                   "type": "string"
                 }
-              },
-              "x-registry-idempotency-replay-window-seconds": {
-                "description": "Registry Stack operational extension publishing the deployment's idempotencyReplayWindow in seconds. During this window an identical key replays its exact terminal response; after it expires the key remains spent.",
-                "schema": {
-                  "maximum": 31536000,
-                  "minimum": 1,
-                  "type": "integer"
-                }
               }
             }
           },
@@ -964,14 +890,6 @@
                   "const": "no-store",
                   "type": "string"
                 }
-              },
-              "x-registry-idempotency-replay-window-seconds": {
-                "description": "Registry Stack operational extension publishing the deployment's idempotencyReplayWindow in seconds. During this window an identical key replays its exact terminal response; after it expires the key remains spent.",
-                "schema": {
-                  "maximum": 31536000,
-                  "minimum": 1,
-                  "type": "integer"
-                }
               }
             }
           },
@@ -990,14 +908,6 @@
                 "schema": {
                   "const": "no-store",
                   "type": "string"
-                }
-              },
-              "x-registry-idempotency-replay-window-seconds": {
-                "description": "Registry Stack operational extension publishing the deployment's idempotencyReplayWindow in seconds. During this window an identical key replays its exact terminal response; after it expires the key remains spent.",
-                "schema": {
-                  "maximum": 31536000,
-                  "minimum": 1,
-                  "type": "integer"
                 }
               }
             }
@@ -1023,14 +933,6 @@
                 "description": "Optional delay in seconds or HTTP-date before retrying.",
                 "schema": {
                   "type": "string"
-                }
-              },
-              "x-registry-idempotency-replay-window-seconds": {
-                "description": "Registry Stack operational extension publishing the deployment's idempotencyReplayWindow in seconds. During this window an identical key replays its exact terminal response; after it expires the key remains spent.",
-                "schema": {
-                  "maximum": 31536000,
-                  "minimum": 1,
-                  "type": "integer"
                 }
               }
             }
@@ -1424,14 +1326,6 @@
                   "pattern": "^\"[\\x21\\x23-\\x7E]{1,256}\"(?![\\s\\S])",
                   "type": "string"
                 }
-              },
-              "x-registry-idempotency-replay-window-seconds": {
-                "description": "Registry Stack operational extension publishing the deployment's idempotencyReplayWindow in seconds. During this window an identical key replays its exact terminal response; after it expires the key remains spent.",
-                "schema": {
-                  "maximum": 31536000,
-                  "minimum": 1,
-                  "type": "integer"
-                }
               }
             }
           },
@@ -1450,14 +1344,6 @@
                 "schema": {
                   "const": "no-store",
                   "type": "string"
-                }
-              },
-              "x-registry-idempotency-replay-window-seconds": {
-                "description": "Registry Stack operational extension publishing the deployment's idempotencyReplayWindow in seconds. During this window an identical key replays its exact terminal response; after it expires the key remains spent.",
-                "schema": {
-                  "maximum": 31536000,
-                  "minimum": 1,
-                  "type": "integer"
                 }
               }
             }
@@ -1484,14 +1370,6 @@
                 "schema": {
                   "type": "string"
                 }
-              },
-              "x-registry-idempotency-replay-window-seconds": {
-                "description": "Registry Stack operational extension publishing the deployment's idempotencyReplayWindow in seconds. During this window an identical key replays its exact terminal response; after it expires the key remains spent.",
-                "schema": {
-                  "maximum": 31536000,
-                  "minimum": 1,
-                  "type": "integer"
-                }
               }
             }
           },
@@ -1510,14 +1388,6 @@
                 "schema": {
                   "const": "no-store",
                   "type": "string"
-                }
-              },
-              "x-registry-idempotency-replay-window-seconds": {
-                "description": "Registry Stack operational extension publishing the deployment's idempotencyReplayWindow in seconds. During this window an identical key replays its exact terminal response; after it expires the key remains spent.",
-                "schema": {
-                  "maximum": 31536000,
-                  "minimum": 1,
-                  "type": "integer"
                 }
               }
             }
@@ -1538,14 +1408,6 @@
                   "const": "no-store",
                   "type": "string"
                 }
-              },
-              "x-registry-idempotency-replay-window-seconds": {
-                "description": "Registry Stack operational extension publishing the deployment's idempotencyReplayWindow in seconds. During this window an identical key replays its exact terminal response; after it expires the key remains spent.",
-                "schema": {
-                  "maximum": 31536000,
-                  "minimum": 1,
-                  "type": "integer"
-                }
               }
             }
           },
@@ -1564,14 +1426,6 @@
                 "schema": {
                   "const": "no-store",
                   "type": "string"
-                }
-              },
-              "x-registry-idempotency-replay-window-seconds": {
-                "description": "Registry Stack operational extension publishing the deployment's idempotencyReplayWindow in seconds. During this window an identical key replays its exact terminal response; after it expires the key remains spent.",
-                "schema": {
-                  "maximum": 31536000,
-                  "minimum": 1,
-                  "type": "integer"
                 }
               }
             }
@@ -1592,14 +1446,6 @@
                   "const": "no-store",
                   "type": "string"
                 }
-              },
-              "x-registry-idempotency-replay-window-seconds": {
-                "description": "Registry Stack operational extension publishing the deployment's idempotencyReplayWindow in seconds. During this window an identical key replays its exact terminal response; after it expires the key remains spent.",
-                "schema": {
-                  "maximum": 31536000,
-                  "minimum": 1,
-                  "type": "integer"
-                }
               }
             }
           },
@@ -1618,14 +1464,6 @@
                 "schema": {
                   "const": "no-store",
                   "type": "string"
-                }
-              },
-              "x-registry-idempotency-replay-window-seconds": {
-                "description": "Registry Stack operational extension publishing the deployment's idempotencyReplayWindow in seconds. During this window an identical key replays its exact terminal response; after it expires the key remains spent.",
-                "schema": {
-                  "maximum": 31536000,
-                  "minimum": 1,
-                  "type": "integer"
                 }
               }
             }
@@ -1646,14 +1484,6 @@
                   "const": "no-store",
                   "type": "string"
                 }
-              },
-              "x-registry-idempotency-replay-window-seconds": {
-                "description": "Registry Stack operational extension publishing the deployment's idempotencyReplayWindow in seconds. During this window an identical key replays its exact terminal response; after it expires the key remains spent.",
-                "schema": {
-                  "maximum": 31536000,
-                  "minimum": 1,
-                  "type": "integer"
-                }
               }
             }
           },
@@ -1672,14 +1502,6 @@
                 "schema": {
                   "const": "no-store",
                   "type": "string"
-                }
-              },
-              "x-registry-idempotency-replay-window-seconds": {
-                "description": "Registry Stack operational extension publishing the deployment's idempotencyReplayWindow in seconds. During this window an identical key replays its exact terminal response; after it expires the key remains spent.",
-                "schema": {
-                  "maximum": 31536000,
-                  "minimum": 1,
-                  "type": "integer"
                 }
               }
             }
@@ -1706,14 +1528,6 @@
                 "schema": {
                   "type": "string"
                 }
-              },
-              "x-registry-idempotency-replay-window-seconds": {
-                "description": "Registry Stack operational extension publishing the deployment's idempotencyReplayWindow in seconds. During this window an identical key replays its exact terminal response; after it expires the key remains spent.",
-                "schema": {
-                  "maximum": 31536000,
-                  "minimum": 1,
-                  "type": "integer"
-                }
               }
             }
           },
@@ -1733,14 +1547,6 @@
                   "const": "no-store",
                   "type": "string"
                 }
-              },
-              "x-registry-idempotency-replay-window-seconds": {
-                "description": "Registry Stack operational extension publishing the deployment's idempotencyReplayWindow in seconds. During this window an identical key replays its exact terminal response; after it expires the key remains spent.",
-                "schema": {
-                  "maximum": 31536000,
-                  "minimum": 1,
-                  "type": "integer"
-                }
               }
             }
           },
@@ -1759,14 +1565,6 @@
                 "schema": {
                   "const": "no-store",
                   "type": "string"
-                }
-              },
-              "x-registry-idempotency-replay-window-seconds": {
-                "description": "Registry Stack operational extension publishing the deployment's idempotencyReplayWindow in seconds. During this window an identical key replays its exact terminal response; after it expires the key remains spent.",
-                "schema": {
-                  "maximum": 31536000,
-                  "minimum": 1,
-                  "type": "integer"
                 }
               }
             }
@@ -1792,14 +1590,6 @@
                 "description": "Optional delay in seconds or HTTP-date before retrying.",
                 "schema": {
                   "type": "string"
-                }
-              },
-              "x-registry-idempotency-replay-window-seconds": {
-                "description": "Registry Stack operational extension publishing the deployment's idempotencyReplayWindow in seconds. During this window an identical key replays its exact terminal response; after it expires the key remains spent.",
-                "schema": {
-                  "maximum": 31536000,
-                  "minimum": 1,
-                  "type": "integer"
                 }
               }
             }

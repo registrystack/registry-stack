@@ -507,19 +507,6 @@ fn response_headers(status: &str) -> Value {
     headers
 }
 
-fn idempotency_replay_window_header() -> Value {
-    json!({
-        "description": "Registry Stack operational extension publishing the deployment's idempotencyReplayWindow in seconds. During this window an identical key replays its exact terminal response; after it expires the key remains spent.",
-        "schema": {"type": "integer", "minimum": 1, "maximum": 31_536_000},
-    })
-}
-
-fn write_response_headers(status: &str) -> Value {
-    let mut headers = response_headers(status);
-    headers["x-registry-idempotency-replay-window-seconds"] = idempotency_replay_window_header();
-    headers
-}
-
 fn problem_response(status: &str, description: &str, schema: &str) -> Value {
     json!({"description": description, "headers": response_headers(status), "content": {"application/problem+json": {"schema": {"$ref": format!("#/components/schemas/{schema}")}}}})
 }
@@ -555,8 +542,7 @@ fn problem_responses(capability: ConsultationCapability) -> Value {
 }
 
 fn capabilities_operation() -> Value {
-    let mut headers = response_headers("200");
-    headers["x-registry-idempotency-replay-window-seconds"] = idempotency_replay_window_header();
+    let headers = response_headers("200");
     json!({"get": {"operationId": "getCallerCapabilities", "responses": {
         "200": {"description": "Bounded caller-filtered capability document.", "headers": headers, "content": {"application/json": {"schema": capabilities_schema()}}},
         "401": problem_response("401", "The caller was not authenticated.", "Problem"),
@@ -609,7 +595,7 @@ fn write_result_schema() -> Value {
 }
 
 fn write_success_headers(create: bool) -> Value {
-    let mut headers = write_response_headers("200");
+    let mut headers = response_headers("200");
     headers["ETag"] = strong_etag_header();
     if create {
         headers["Location"] = json!({
@@ -655,7 +641,7 @@ fn write_problem_responses(
 fn write_problem_response(status: &str, description: &str, schema: &str) -> Value {
     json!({
         "description": description,
-        "headers": write_response_headers(status),
+        "headers": response_headers(status),
         "content": {"application/problem+json": {"schema": {"$ref": format!("#/components/schemas/{schema}")}}},
     })
 }
@@ -720,7 +706,8 @@ fn capabilities_schema() -> Value {
             "family": {"type": "string", "enum": ["consultation", "write"]},
             "capability": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-z][a-z0-9-]{0,127}$", "x-extensible-enum": ["retrieve", "lookup", "list", "search", "create", "update"]},
             "view": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-z][a-z0-9-]{0,127}$"},
-            "write": {"type": "object", "additionalProperties": false, "required": ["companionRead"], "properties": {
+            "write": {"type": "object", "additionalProperties": false, "required": ["idempotencyReplayWindow"], "properties": {
+                "idempotencyReplayWindow": {"type": "integer", "minimum": 1, "maximum": 31_536_000, "description": "Seconds a reused Idempotency-Key still replays its exact terminal response; the deployment's response retention."},
                 "companionRead": {"type": "object", "additionalProperties": false, "required": ["operationId", "view"], "properties": {
                     "operationId": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9]*$", "maxLength": 128},
                     "view": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-z][a-z0-9-]{0,127}$"}
@@ -1034,16 +1021,22 @@ mod tests {
                 .expect("Write response catalogue")
                 .values()
             {
-                assert_eq!(
-                    response["headers"]["x-registry-idempotency-replay-window-seconds"]["schema"]
-                        ["type"],
-                    "integer"
+                assert!(
+                    response["headers"]
+                        .as_object()
+                        .expect("response headers")
+                        .keys()
+                        .all(|name| !name.to_ascii_lowercase().contains("replay-window")),
+                    "the replay window is published in capabilities, not as a header"
                 );
             }
         }
+        let write_member = &contract["paths"][CAPABILITIES_PATH]["get"]["responses"]["200"]
+            ["content"]["application/json"]["schema"]["properties"]["collections"]["items"]
+            ["properties"]["operations"]["items"]["properties"]["write"];
+        assert_eq!(write_member["required"], json!(["idempotencyReplayWindow"]));
         assert_eq!(
-            contract["paths"][CAPABILITIES_PATH]["get"]["responses"]["200"]["headers"]
-                ["x-registry-idempotency-replay-window-seconds"]["schema"]["maximum"],
+            write_member["properties"]["idempotencyReplayWindow"]["maximum"],
             31_536_000
         );
         for collection_id in [
