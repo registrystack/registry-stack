@@ -1056,6 +1056,32 @@ fn a_target_schema_linked_inside_the_model_directory_is_read() {
     assert_eq!(exit, ExitCode::SUCCESS, "{report}");
 }
 
+/// The model and its script named without a directory, from the model's own
+/// directory, write the script beside the model. The child process runs in
+/// that directory, so the test never moves this process's working directory.
+#[test]
+fn generate_of_a_bare_model_file_name_writes_the_script_beside_it() {
+    let root = workspace();
+    let model = root.path().join("person.mapping.yaml");
+    let text = std::fs::read_to_string(&model).unwrap();
+    std::fs::write(&model, text.replace("scripts/person.rhai", "person.rhai")).unwrap();
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_adapterctl"))
+        .current_dir(root.path())
+        .args([
+            "--format=json",
+            "mapping",
+            "generate",
+            "person.mapping.yaml",
+        ])
+        .output()
+        .unwrap();
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap_or(Value::Null);
+    assert!(output.status.success(), "{report}");
+    assert_eq!(report["changed"], true, "{report}");
+    let script = std::fs::read_to_string(root.path().join("person.rhai")).unwrap();
+    assert!(script.contains("person.mapping.yaml"), "{script}");
+}
+
 #[test]
 fn check_reports_a_model_file_name_that_generate_refuses() {
     let root = workspace();
