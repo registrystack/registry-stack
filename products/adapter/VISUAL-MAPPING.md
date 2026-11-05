@@ -98,7 +98,8 @@ Keyed selection from a bounded list is editable in the side panel; the DHIS2 sli
 The write direction stays headless.
 
 To draw the target tree and address findings to a target row without parsing message text, `adapterctl mapping check` reports the target as it reads it and names the target field on findings about one field.
-It also reports why a script drifted from its model (the model changed, or the script was edited), so the read-only notice names the right cause.
+It also reports why a script drifted from its model, so the read-only notice names the cause: `model-changed` when the header's model digest is not the model's digest now, `script-edited` when the digest matches but the bytes differ.
+The header records only the model's digest, so a changed model does not rule out hand edits as well; Replace hand edits with this mapping always says that hand edits are discarded.
 
 The format supports scalar copies and constants, nested target objects, exact keyed selection from a bounded array, explicit string-to-integer and integer-to-string conversion, and canonical `YYYY-MM-DD` date validation.
 The generator emits the corresponding Rhai expressions and checks; conversions do not guess formats.
