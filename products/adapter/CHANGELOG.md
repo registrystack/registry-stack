@@ -13,12 +13,11 @@
   facade operation) are bound to the verified client the caller acts
   through (`azp` or `client_id`) as well as the issuer and subject, so a
   cursor issued to one client is refused with `invalid-cursor` when the
-  same subject presents it through another. A
-  refreshed token for the same subject and client still continues. The
-  cursor length and the published cursor `maxLength` are unchanged. Cursors
-  issued before the upgrade are refused after it; a caller restarts the
-  traversal from its first page. Committed fixtures that pin sealed cursor
-  bytes carry the new values.
+  same subject presents it through another. A refreshed token for the same
+  subject and client still continues. The cursor length and the published
+  cursor `maxLength` are unchanged. Cursors issued before the upgrade are
+  refused after it; a caller restarts the traversal from its first page.
+  Committed fixtures that pin sealed cursor bytes carry the new values.
 - GovStack Update: the ETag validator closure also binds the companion
   read's route (its steps, the direct routes they call and the pinned
   digests of their scripts) and the pack's code maps, so changing a mapping
@@ -35,16 +34,17 @@
   422 `invalid-content` at `/selector` instead of `/values`; Search with an
   undeclared search points at `/search` instead of `/criteria`.
 - GovStack Update: a retry under the same Idempotency-Key and fingerprint
-  replays its stored answer even when its If-Match no longer validates (the
-  record changed, or a redeploy changed the guard's closure), instead of
-  returning 412. Authentication and authorization still run first.
+  replays its stored answer even when its If-Match can no longer be opened,
+  after a redeploy changed the guard's closure or its sealing key was rotated
+  out, instead of returning 412. A retry while the first attempt still runs
+  gets 409 `idempotency-in-flight` with `Retry-After`, as it would under a
+  guard that opens. Authentication and authorization still run first.
 - GovStack Update no longer returns 406 for an `Accept` that admits neither
   JSON form; its success has no body and its Problems are always
   `application/problem+json`. Create and reads keep the 406.
 - GovStack Update refuses a merge-patch member whose value is an object with
   422 `invalid-content` and one `errors` pointer per such member, even when
   the project input schema admits it.
-
 - The GovStack Write path through the Adapter (direct Create and conditional
   Update) is experimental. `CONSULTATION.md` now lists what a source must
   offer to back it; BReg is the one maintained source that does.
