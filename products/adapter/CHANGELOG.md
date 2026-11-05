@@ -62,6 +62,15 @@
 - GovStack Update refuses a merge-patch member whose value is an object with
   422 `invalid-content` and one `errors` pointer per such member, even when
   the project input schema admits it.
+- `adapterctl mapping check` reports the target schema as `targetTree`: each
+  property's path, key, type, required flag, format, const, enum, children and,
+  for a leaf, the `convert` values the checker accepts. It is also present on a
+  refusal whenever the schema root is supported.
+- `adapterctl mapping check` findings about one target field carry a `target`
+  member naming it in the format's target syntax; message text is unchanged.
+- The `adapter.mapping.script-drift` warning from `adapterctl mapping check`
+  carries `cause`: `model-changed` (the header's model digest is stale) or
+  `script-edited` (the digest matches, or the header itself was edited).
 - The GovStack Write path through the Adapter (direct Create and conditional
   Update) is experimental. `CONSULTATION.md` now lists what a source must
   offer to back it; BReg is the one maintained source that does.

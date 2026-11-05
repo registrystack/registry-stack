@@ -178,6 +178,107 @@ fn check_accepts_a_valid_model() {
 }
 
 #[test]
+fn check_reports_the_target_tree_the_checker_reads() {
+    let root = workspace();
+    let (exit, report, _) = run_json(&["mapping", "check", &path(&root, "person.mapping.yaml")]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    assert_eq!(
+        report["targetTree"],
+        json!([
+            {"path": "household", "key": "household", "type": "object", "required": false,
+             "mappable": true, "children": [
+                {"path": "household.size", "key": "size", "type": "integer", "required": true,
+                 "mappable": true, "conversions": ["none", "integer"]}
+             ]},
+            {"path": "source", "key": "source", "type": "object", "required": true,
+             "mappable": true, "children": [
+                {"path": "source.id", "key": "id", "type": "string", "required": true,
+                 "mappable": true, "conversions": ["none", "text", "date"]},
+                {"path": "source.kind", "key": "kind", "type": "string", "required": true,
+                 "mappable": true, "conversions": ["none", "text", "date"]}
+             ]}
+        ]),
+        "{report}"
+    );
+}
+
+#[test]
+fn check_names_the_target_field_on_findings_about_one_field() {
+    let root = workspace();
+    let model = path(&root, "person.mapping.yaml");
+    let text = std::fs::read_to_string(&model).unwrap();
+    // Leave source.kind unmapped and give household.size a conversion its
+    // integer target refuses.
+    let text = text
+        .replace("  - target: source.kind\n    constant: person\n", "")
+        .replace("convert: integer", "convert: date");
+    std::fs::write(&model, text).unwrap();
+    let (exit, report, _) = run_json(&["mapping", "check", &model]);
+    assert_eq!(exit, ExitCode::from(1), "{report}");
+    let target_of = |code: &str| {
+        let found: Vec<&Value> = report["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|d| d["code"] == code)
+            .collect();
+        assert_eq!(found.len(), 1, "{code}: {report}");
+        found[0]["target"].clone()
+    };
+    assert_eq!(
+        target_of("adapter.mapping.required-unmapped"),
+        json!("source.kind")
+    );
+    assert_eq!(
+        target_of("adapter.mapping.conversion-target-mismatch"),
+        json!("household.size")
+    );
+    // The message text is unchanged and the tree is still reported.
+    let unmapped = report["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["code"] == "adapter.mapping.required-unmapped")
+        .unwrap();
+    assert_eq!(unmapped["path"], "/assignments", "{report}");
+    assert!(unmapped["message"]
+        .as_str()
+        .unwrap()
+        .contains("source.kind"));
+    assert!(report["targetTree"].is_array(), "{report}");
+}
+
+#[test]
+fn check_names_no_target_on_findings_about_the_model_as_a_whole() {
+    let root = workspace();
+    let model = path(&root, "person.mapping.yaml");
+    let text = std::fs::read_to_string(&model).unwrap();
+    std::fs::write(
+        &model,
+        text.replace("scripts/person.rhai", "scripts/person.txt"),
+    )
+    .unwrap();
+    let (exit, report, _) = run_json(&["mapping", "check", &model]);
+    assert_refused(exit, &report, "adapter.mapping.path-invalid");
+    for diagnostic in report["diagnostics"].as_array().unwrap() {
+        assert!(diagnostic.get("target").is_none(), "{diagnostic}");
+    }
+}
+
+#[test]
+fn check_reports_no_target_tree_when_the_schema_root_is_unsupported() {
+    let root = workspace();
+    std::fs::write(
+        root.path().join("schemas/person.schema.json"),
+        r#"{"type": "array"}"#,
+    )
+    .unwrap();
+    let (exit, report, _) = run_json(&["mapping", "check", &path(&root, "person.mapping.yaml")]);
+    assert_refused(exit, &report, "adapter.mapping.schema-unsupported");
+    assert!(report.get("targetTree").is_none(), "{report}");
+}
+
+#[test]
 fn check_human_output_names_the_verdict() {
     let root = workspace();
     let (exit, text) = run_human(&["mapping", "check", &path(&root, "person.mapping.yaml")]);
@@ -800,6 +901,45 @@ fn check_warns_when_the_model_changes_after_generation() {
     // changed and an invalid model warn.
     assert_eq!(drift_warnings(&report).len(), 1, "{report}");
     let _ = root;
+}
+
+/// `mapping check` names why a generated script drifted: the model's digest
+/// no longer matches the header, or the script differs from a model whose
+/// digest still matches.
+fn mapping_check_drift(model: &Path) -> Value {
+    let (exit, report, _) = run_json(&["mapping", "check", model.to_str().unwrap()]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    let warnings = drift_warnings(&report);
+    assert_eq!(warnings.len(), 1, "{report}");
+    warnings[0].clone()
+}
+
+#[test]
+fn mapping_check_names_a_hand_edited_script_as_the_cause() {
+    let (root, _, model) = project_with_generated_script();
+    let script = root.path().join("scripts/gen.rhai");
+    let text = std::fs::read_to_string(&script).unwrap();
+    std::fs::write(&script, format!("{text}// hand edit\n")).unwrap();
+    assert_eq!(mapping_check_drift(&model)["cause"], "script-edited");
+}
+
+#[test]
+fn mapping_check_names_an_edited_header_as_a_script_edit() {
+    let (root, _, model) = project_with_generated_script();
+    let script = root.path().join("scripts/gen.rhai");
+    let text = std::fs::read_to_string(&script).unwrap();
+    let lines: Vec<&str> = text.split('\n').collect();
+    let edited = [&lines[..1], &["// edited header line"], &lines[2..]].concat();
+    std::fs::write(&script, edited.join("\n")).unwrap();
+    assert_eq!(mapping_check_drift(&model)["cause"], "script-edited");
+}
+
+#[test]
+fn mapping_check_names_a_changed_model_as_the_cause() {
+    let (_root, _, model) = project_with_generated_script();
+    let text = std::fs::read_to_string(&model).unwrap();
+    std::fs::write(&model, text.replace("constant: person", "constant: human")).unwrap();
+    assert_eq!(mapping_check_drift(&model)["cause"], "model-changed");
 }
 
 /// The header pins the model's meaning, not its layout: a byte order mark,
