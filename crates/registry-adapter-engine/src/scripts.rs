@@ -133,9 +133,18 @@ impl ScriptFailure {
 pub struct ScriptSet {
     compiled: BTreeMap<(String, String), AST>,
     provider_schemas: BTreeMap<(String, String), crate::component::schema::ProviderSchema>,
+    /// The pinned digest of every pack script file compiled into the set.
+    pinned: BTreeMap<String, String>,
 }
 
 impl ScriptSet {
+    /// The pinned digest of one pack script file this set compiled, so a
+    /// host can bind an identity to the exact script bytes a route runs.
+    #[must_use]
+    pub fn pinned_digest(&self, file: &str) -> Option<&str> {
+        self.pinned.get(file).map(String::as_str)
+    }
+
     /// Compile one digest-pinned provider schema into the same immutable
     /// route artifact set as scripts. It is never read or compiled lazily.
     pub(crate) fn add_provider_schema_from<S: ArtifactSource + ?Sized>(
@@ -345,7 +354,10 @@ impl ScriptSet {
                 actual,
             });
         }
-        self.compile_bytes_into(file.to_owned(), file, entrypoint, &bytes, parameters, pair)
+        self.compile_bytes_into(file.to_owned(), file, entrypoint, &bytes, parameters, pair)?;
+        self.pinned
+            .insert(file.to_owned(), pinned.digest.as_str().to_owned());
+        Ok(())
     }
 
     fn compile_bytes_into(
@@ -679,6 +691,25 @@ mod tests {
             scripts.add(&pack, directory.path(), "probe.rhai", "probe"),
             Err(ScriptLoadError::TooLarge(path)) if path == "probe.rhai"
         ));
+    }
+
+    #[test]
+    fn a_compiled_script_reports_its_pinned_digest() {
+        let source = b"fn probe(exchange) { 1 }";
+        let directory = tempfile::tempdir().expect("a scratch directory");
+        std::fs::write(directory.path().join("probe.rhai"), source).expect("the script is written");
+        let pack = pack_for_script(source);
+        let mut scripts = ScriptSet::default();
+        assert_eq!(scripts.pinned_digest("probe.rhai"), None);
+        scripts
+            .add(&pack, directory.path(), "probe.rhai", "probe")
+            .expect("the script compiles");
+
+        assert_eq!(
+            scripts.pinned_digest("probe.rhai"),
+            Some(sha256_uri(source).as_str())
+        );
+        assert_eq!(scripts.pinned_digest("absent.rhai"), None);
     }
 
     #[test]

@@ -23,9 +23,10 @@ pub(crate) struct RuntimeWriteMetadata<'a> {
     pub registry: &'a str,
     pub collection: &'a str,
     pub view: Option<&'a str>,
-    /// Validators bind to the record shape the companion read serves and the
-    /// configured source endpoints, rather than trusting a source or route
-    /// name as evidence of equivalence.
+    /// Validators bind to the record shape the companion read serves, the
+    /// route and code maps that produce it, and the configured source
+    /// endpoints, rather than trusting a source or route name as evidence of
+    /// equivalence.
     pub closure: String,
     pub companion_read: Option<&'a ServedOperation>,
 }
@@ -102,9 +103,14 @@ pub(crate) fn resolve_runtime_write<'a>(
 }
 
 /// Derive the closure a sealed validator is bound to: what shapes the
-/// record a client sees and the source it came from. Access, listener,
-/// audit and retention settings are left out, so admitting a client or
-/// rotating OIDC configuration keeps outstanding ETags valid.
+/// record a client sees and the source it came from. That is the companion
+/// read's record schema, projection, output transform and effective
+/// response, the route it runs (its steps, every `direct:` route they reach
+/// and the pinned digest of every pack script those steps name), and the
+/// deployment's code maps, which a conversion step or any script's
+/// `code_map` helper may read. Access, listener, audit and retention
+/// settings are left out, so admitting a client or rotating OIDC
+/// configuration keeps outstanding ETags valid.
 pub(crate) fn validator_closure(
     loaded: &Loaded,
     record_type: &str,
@@ -116,6 +122,7 @@ pub(crate) fn validator_closure(
             "itemProjection": served.item_projection.as_ref(),
             "outputTransformClosure": served.project_transform.as_ref().map(|transform| transform.closure_digest()),
             "effectiveResponse": served.target_contract.as_ref().map(|contract| &contract.response_body),
+            "route": route_closure(loaded, &served.steps),
         })
     });
     // The configured base URL of every endpoint the companion read and the
@@ -130,14 +137,58 @@ pub(crate) fn validator_closure(
         sources.extend(crate::custody::source_endpoint_bases(loaded, &served.steps));
     }
     let value = serde_json::json!({
-        "domain": "registry-adapter:govstack-validator-closure:v2",
+        "domain": "registry-adapter:govstack-validator-closure:v3",
         "recordType": record_type,
         "companionRead": companion,
+        "codeMaps": &*loaded.code_maps,
         "sources": sources,
     });
     let canonical = registry_platform_canonical_json::canonicalize_json(&value)
         .map_err(|_| MetadataError::Closure)?;
     Ok(registry_platform_config::sha256_uri(&canonical))
+}
+
+/// The steps one route runs, the body of every `direct:` route they reach,
+/// and the pinned digest of every pack script any of those bodies names.
+fn route_closure(loaded: &Loaded, root: &[registry_adapter_core::Step]) -> serde_json::Value {
+    use registry_adapter_core::{SendComponent, Step};
+
+    let mut direct = std::collections::BTreeMap::new();
+    let mut queue = std::collections::VecDeque::from([root]);
+    while let Some(steps) = queue.pop_front() {
+        registry_adapter_core::walk_steps(steps, &mut |step, _| {
+            let uri = match step {
+                Step::To(to) => &to.uri,
+                Step::Enrich(enrich) => &enrich.uri,
+                _ => return,
+            };
+            if uri.component != SendComponent::Direct || direct.contains_key(uri.id.as_str()) {
+                return;
+            }
+            if let Some((name, body)) = loaded.routes.get_key_value(uri.id.as_str()) {
+                direct.insert(name.as_str(), body.as_slice());
+                queue.push_back(body.as_slice());
+            }
+        });
+    }
+    let steps = serde_json::json!({"steps": root, "directRoutes": direct});
+    // A step names a script by its file path; every string the bodies carry
+    // that is a compiled pack script's path binds that script's digest.
+    let mut scripts = std::collections::BTreeMap::new();
+    let mut values = vec![&steps];
+    while let Some(value) = values.pop() {
+        match value {
+            serde_json::Value::String(text) => {
+                if let Some(digest) = loaded.scripts.pinned_digest(text) {
+                    scripts.insert(text.as_str(), digest);
+                }
+            }
+            serde_json::Value::Array(items) => values.extend(items),
+            serde_json::Value::Object(members) => values.extend(members.values()),
+            _ => {}
+        }
+    }
+    serde_json::json!({"steps": steps, "scripts": scripts})
 }
 
 fn selected_companion_read<'a>(
@@ -196,6 +247,36 @@ mod tests {
         }
     }
 
+    fn sha256_pin(bytes: &[u8]) -> String {
+        use sha2::{Digest as _, Sha256};
+
+        let hex: String = Sha256::digest(bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        format!("sha256:{hex}")
+    }
+
+    /// Rewrite one file and the digest pin `pinning` holds for it.
+    fn rewrite_pinned(path: &Path, pinning: &Path, from: &str, to: &str) {
+        let before = std::fs::read_to_string(path).expect("read the artifact");
+        assert!(before.contains(from), "{} contains {from}", path.display());
+        let after = before.replacen(from, to, 1);
+        std::fs::write(path, &after).expect("write the artifact");
+        let document = std::fs::read_to_string(pinning).expect("read the pinning document");
+        let pin = sha256_pin(before.as_bytes());
+        assert!(
+            document.contains(&pin),
+            "{} pins the artifact",
+            pinning.display()
+        );
+        std::fs::write(
+            pinning,
+            document.replace(&pin, &sha256_pin(after.as_bytes())),
+        )
+        .expect("re-pin the artifact");
+    }
+
     /// One copy of the maintained BReg GovStack example with an owner-only
     /// source token, so a test can vary the project or the runtime.
     struct Deployment {
@@ -211,6 +292,10 @@ mod tests {
                 &repository_path("products/adapter/examples/breg-govstack"),
                 &root.path().join("project"),
             );
+            copy_tree(
+                &repository_path("products/adapter/packs/breg-records"),
+                &root.path().join("pack"),
+            );
             let secrets = root.path().join("secrets");
             std::fs::create_dir(&secrets).expect("secret root");
             let token = secrets.join("breg-access-token");
@@ -224,30 +309,54 @@ mod tests {
             self.root.path().join("project")
         }
 
+        fn pack(&self) -> PathBuf {
+            self.root.path().join("pack")
+        }
+
         /// Rewrite one pinned project artifact and its digest pin.
         fn rewrite_artifact(&self, relative: &str, from: &str, to: &str) {
-            use sha2::{Digest as _, Sha256};
+            rewrite_pinned(
+                &self.project().join(relative),
+                &self.project().join("project.yaml"),
+                from,
+                to,
+            );
+        }
 
-            let hex = |bytes: &[u8]| -> String {
-                Sha256::digest(bytes)
-                    .iter()
-                    .map(|byte| format!("{byte:02x}"))
-                    .collect()
-            };
-            let path = self.project().join(relative);
-            let before = std::fs::read_to_string(&path).expect("read the artifact");
-            assert!(before.contains(from), "{relative} contains {from}");
-            let after = before.replacen(from, to, 1);
-            std::fs::write(&path, &after).expect("write the artifact");
+        /// Rewrite the project document itself, which nothing pins.
+        fn rewrite_project(&self, from: &str, to: &str) {
+            let path = self.project().join("project.yaml");
+            let before = std::fs::read_to_string(&path).expect("read the project");
+            assert!(before.contains(from), "the project contains {from}");
+            std::fs::write(&path, before.replacen(from, to, 1)).expect("write the project");
+        }
+
+        /// Rewrite the pack document and its digest pin in the project.
+        fn rewrite_pack(&self, from: &str, to: &str) {
+            rewrite_pinned(
+                &self.pack().join("pack.yaml"),
+                &self.project().join("project.yaml"),
+                from,
+                to,
+            );
+        }
+
+        /// Rewrite one pack script, its pin in the pack, and the pack's pin
+        /// in the project.
+        fn rewrite_pack_script(&self, relative: &str, from: &str, to: &str) {
+            let pack = self.pack().join("pack.yaml");
+            let before = std::fs::read_to_string(&pack).expect("read the pack");
+            rewrite_pinned(&self.pack().join(relative), &pack, from, to);
+            let after = std::fs::read_to_string(&pack).expect("read the re-pinned pack");
             let manifest = self.project().join("project.yaml");
             let project = std::fs::read_to_string(&manifest).expect("read the project");
-            let pin = format!("sha256:{}", hex(before.as_bytes()));
-            assert!(project.contains(&pin), "the project pins {relative}");
+            let pin = sha256_pin(before.as_bytes());
+            assert!(project.contains(&pin), "the project pins the pack");
             std::fs::write(
                 &manifest,
-                project.replace(&pin, &format!("sha256:{}", hex(after.as_bytes()))),
+                project.replace(&pin, &sha256_pin(after.as_bytes())),
             )
-            .expect("re-pin the artifact");
+            .expect("re-pin the pack");
         }
 
         fn closure(&self, base_url: &str, allowed_clients: &str, issuer: &str) -> String {
@@ -292,9 +401,7 @@ cursorKeyRef: secret:env/CLOSURE_TEST_CURSOR_KEY
             let loaded = crate::engine::load::load_with_target(
                 &self.project(),
                 None,
-                Some(&repository_path(
-                    "products/adapter/packs/breg-records/pack.yaml",
-                )),
+                Some(&self.pack().join("pack.yaml")),
                 &runtime,
                 crate::govstack::target_attachment,
             )
@@ -349,6 +456,76 @@ cursorKeyRef: secret:env/CLOSURE_TEST_CURSOR_KEY
             baseline,
             transform_changed.closure(SOURCE, "client-a", ISSUER),
             "an output transform change invalidates outstanding ETags"
+        );
+    }
+
+    #[test]
+    fn validator_closure_binds_code_maps_and_the_companion_route() {
+        const SOURCE: &str = "https://breg.example.invalid";
+        const ISSUER: &str = "https://issuer.example.invalid";
+        const CODE_MAP: &str =
+            "codeMaps:\n  - id: contact-kind\n    entries:\n      P: person\nscripts:\n";
+        // The companion read converts one property through the code map.
+        const CONVERSION: &str = "      - setProperty:\n          name: contactKind\n          value: {constant: P}\n      - convertPropertyTo:\n          type: codeMap:contact-kind\n          name: contactKind\n      - to:\n          uri: http:registry\n          parameters:\n            httpMethod: GET\n";
+        let with_code_map = || {
+            let deployment = Deployment::new();
+            deployment.rewrite_pack("scripts:\n", CODE_MAP);
+            deployment.rewrite_pack(
+                "      - to:\n          uri: http:registry\n          parameters:\n            httpMethod: GET\n",
+                CONVERSION,
+            );
+            deployment.rewrite_pack("  eips:\n", "  eips:\n    - convertPropertyTo\n");
+            deployment
+        };
+        let baseline_deployment = with_code_map();
+        let baseline = baseline_deployment.closure(SOURCE, "client-a", ISSUER);
+        assert_eq!(
+            baseline,
+            baseline_deployment.closure(SOURCE, "client-a, client-b", ISSUER),
+            "admitting another client keeps outstanding ETags valid"
+        );
+
+        let code_map_changed = with_code_map();
+        code_map_changed.rewrite_pack("      P: person\n", "      P: organisation\n");
+        assert_ne!(
+            baseline,
+            code_map_changed.closure(SOURCE, "client-a", ISSUER),
+            "a code map entry change invalidates outstanding ETags"
+        );
+
+        let route_changed = with_code_map();
+        route_changed.rewrite_project(
+            "    routeId: breg-contact-read\n    parameters:\n      record-route: contacts\n      access-profile: directory-editor\n",
+            "    routeId: breg-contact-read\n    parameters:\n      record-route: contacts\n      access-profile: directory-public\n",
+        );
+        assert_ne!(
+            baseline,
+            route_changed.closure(SOURCE, "client-a", ISSUER),
+            "a companion read route step change invalidates outstanding ETags"
+        );
+
+        let route_script_changed = with_code_map();
+        route_script_changed.rewrite_pack_script(
+            "scripts/source-read-one.rhai",
+            "throw \"the record response is malformed\";",
+            "throw \"the record response is not a record\";",
+        );
+        assert_ne!(
+            baseline,
+            route_script_changed.closure(SOURCE, "client-a", ISSUER),
+            "a companion read route script change invalidates outstanding ETags"
+        );
+
+        let write_script_changed = with_code_map();
+        write_script_changed.rewrite_pack_script(
+            "scripts/batch-request.rhai",
+            "fn ",
+            "// A comment the companion read never runs.\nfn ",
+        );
+        assert_eq!(
+            baseline,
+            write_script_changed.closure(SOURCE, "client-a", ISSUER),
+            "a script only the writes run leaves outstanding ETags valid"
         );
     }
 
