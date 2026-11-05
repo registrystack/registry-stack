@@ -71,8 +71,9 @@ fn source_key(method: &str, target: &str, caller_key: &str) -> String {
     ));
     let mut framed = Vec::new();
     for member in [
-        b"registry-adapter:source-write-key:v1".as_slice(),
+        b"registry-adapter:source-write-key:v2".as_slice(),
         scope.as_bytes(),
+        b"00000000000000000000000000000000".as_slice(),
     ] {
         framed.extend_from_slice(&(member.len() as u64).to_be_bytes());
         framed.extend_from_slice(member);

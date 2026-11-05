@@ -93,7 +93,7 @@ The reusable source route declares `writeSupport`: source-assigned Create or str
 This explicit declaration is a source-author obligation; it is not established merely by parsing the pack.
 The initial execution plan admits deterministic preparation and one source-idempotent HTTP POST inside an idempotent consumer.
 A source pack can normalize a known native rejection through a pure, terminal `onException` predicate and a typed outcome. Not-found maps to404, invalid domain input to422, and a source rejection of the generated request to502; these settle without reissuing a mutation. Unknown delivery or unclassified source outcomes remain recoverable.
-Native source keys include the trusted caller, logical deployment, method and target, so clients sharing a source service credential cannot collide on a raw key.
+Native source keys include the trusted caller, logical deployment, method and target, so clients sharing a source service credential cannot collide on a raw key. They also include a random generation drawn when the claim is inserted: every resend of one claim repeats its native key, and a key reused after the replay window is processed as a new request under a new native key.
 The host retains status, exact body, optional Content-Type, Location and ETag together with the terminal audit transaction.
 A retry rechecks current facade authorization; canonical JSON, method, URI, media type and If-Match determine request equality.
 It preserves the original Problem body while generating per-attempt trace headers.

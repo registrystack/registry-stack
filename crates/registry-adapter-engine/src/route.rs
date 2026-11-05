@@ -1663,7 +1663,7 @@ fn prepare_project_source_input(
             write_support,
             registry_adapter_core::SourceWriteSupport::ConditionalUpdateOne { .. }
         );
-        if exchange.source_idempotency_key(0).is_none()
+        if !exchange.has_source_write_inputs()
             || needs_condition != exchange.source_condition().is_some()
         {
             return Err(RouteFailure::of(ErrorClass::Facade));
@@ -3268,7 +3268,7 @@ impl Run<'_, '_> {
                 let ordinal =
                     u32::try_from(ordinal).map_err(|_| RouteFailure::of(ErrorClass::Facade))?;
                 self.exchange
-                    .source_idempotency_key(ordinal)
+                    .source_idempotency_key(ordinal)?
                     .map(|key| HeaderValue::from_bytes(key.as_bytes()))
                     .transpose()
                     .map_err(|_| RouteFailure::of(ErrorClass::Facade))?

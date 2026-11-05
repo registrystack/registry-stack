@@ -69,6 +69,8 @@ pub const MAX_ASYNC_IDENTIFIER_BYTES: usize = 256;
 pub const ASYNC_RECOVERY_ID_BYTES: usize = 64;
 /// Random bytes in a non-cloneable per-row recovery lease.
 pub const RECOVERY_LEASE_ID_BYTES: usize = 16;
+/// Bytes of the random per-claim generation in a derived source key.
+const KEY_GENERATION_BYTES: usize = 16;
 
 /// The table grants a runtime role needs when its deployment serves any
 /// write: claim, effect marking, terminal custody and the expiry sweep.
@@ -678,9 +680,29 @@ struct ResumeExecutionState {
     deployment_digest: [u8; 32],
     artifact_digest: [u8; 32],
     lease_id: [u8; RECOVERY_LEASE_ID_BYTES],
+    key_generation: Option<[u8; KEY_GENERATION_BYTES]>,
     next_step: u32,
     step_count: u32,
     expires_at: SystemTime,
+}
+
+impl Execution {
+    /// The claim's source key generation in lowercase hex. Every resend of
+    /// one claim returns the same value; a claim inserted after the key's
+    /// replay window draws a new one. Plain claims and resume rows written
+    /// before generations existed have none.
+    #[must_use]
+    pub fn source_key_generation(&self) -> Option<String> {
+        self.resume
+            .as_ref()
+            .and_then(|resume| resume.key_generation)
+            .map(|generation| {
+                generation
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect()
+            })
+    }
 }
 
 impl fmt::Debug for Execution {
@@ -995,6 +1017,7 @@ impl PostgresIdempotencyStore {
         let scope_digest = scope_digest(&request);
         let deployment_digest = async_deployment_digest(request.deployment);
         let lease_id = new_lease_id()?;
+        let key_generation = new_key_generation()?;
         let mut client = self.pool.get().await?;
         let transaction = client.transaction().await?;
         lock_async_artifact_fence(
@@ -1008,6 +1031,15 @@ impl PostgresIdempotencyStore {
         // Expire first, so a key freed by an expired write that sent
         // nothing is claimed fresh below.
         expire_resume_with_client(&transaction, &scope_digest, now).await?;
+        if context.step_count == 1 {
+            reopen_single_write_after_window(
+                &transaction,
+                &scope_digest,
+                now,
+                self.response_retention,
+            )
+            .await?;
+        }
         let inserted = transaction
             .query_opt(
                 "INSERT INTO adapter_idempotency_entries \
@@ -1026,8 +1058,9 @@ impl PostgresIdempotencyStore {
                 .execute(
                     "INSERT INTO adapter_idempotency_resumes \
                      (scope_digest, request_digest, deployment_digest, artifact_digest, \
-                      next_step, step_count, expires_at, lease_id, lease_until, source_digest) \
-                     VALUES ($1, $2, $3, $4, 0, $5, $6, $7, $8, $9)",
+                      next_step, step_count, expires_at, lease_id, lease_until, source_digest, \
+                      key_generation) \
+                     VALUES ($1, $2, $3, $4, 0, $5, $6, $7, $8, $9, $10)",
                     &[
                         &scope_digest.as_slice(),
                         &request.request_digest.as_slice(),
@@ -1042,6 +1075,7 @@ impl PostgresIdempotencyStore {
                         &lease_id.as_slice(),
                         &lease_until,
                         &context.source_digest.as_slice(),
+                        &key_generation.as_slice(),
                     ],
                 )
                 .await?;
@@ -1055,6 +1089,7 @@ impl PostgresIdempotencyStore {
                     deployment_digest,
                     artifact_digest: context.artifact_digest,
                     lease_id,
+                    key_generation: Some(key_generation),
                     next_step: 0,
                     step_count: context.step_count,
                     expires_at,
@@ -1091,7 +1126,7 @@ impl PostgresIdempotencyStore {
                    AND ((artifact_digest = $3 AND COALESCE(source_digest, $7) = $7) \
                         OR (next_step = 0 AND NOT step_started)) \
                  RETURNING deployment_digest, artifact_digest, next_step, step_count, \
-                           expires_at, lease_until",
+                           expires_at, lease_until, key_generation",
                 &[
                     &scope_digest.as_slice(),
                     &request.request_digest.as_slice(),
@@ -1160,6 +1195,13 @@ impl PostgresIdempotencyStore {
                 deployment_digest: fixed_digest(&resume, "deployment_digest")?,
                 artifact_digest: fixed_digest(&resume, "artifact_digest")?,
                 lease_id,
+                key_generation: resume
+                    .get::<_, Option<Vec<u8>>>("key_generation")
+                    .map(|generation| {
+                        <[u8; KEY_GENERATION_BYTES]>::try_from(generation.as_slice())
+                            .map_err(|_| IdempotencyError::StoredDataInvalid)
+                    })
+                    .transpose()?,
                 next_step,
                 step_count,
                 expires_at: resume.get("expires_at"),
@@ -2113,7 +2155,9 @@ impl PostgresIdempotencyStore {
     /// Erase expired exact responses in one bounded, lock-skipping batch.
     ///
     /// Only response custody is erased. Scope and request digests remain as a
-    /// spent tombstone, so a completed or uncertain effect is never reopened.
+    /// spent tombstone, so a completed or uncertain effect is never reopened
+    /// here; only a source-native single write's claim reopens a tombstone,
+    /// once its key is reused after the replay window.
     /// An expired resume write that never marked a step attempted sent
     /// nothing, so its entry is removed and the key is free again.
     pub async fn sweep_expired(
@@ -2404,6 +2448,14 @@ fn bounded_recovery_deadline(
         });
     }
     Ok(lease_until)
+}
+
+fn new_key_generation() -> Result<[u8; KEY_GENERATION_BYTES], IdempotencyError> {
+    let mut generation = [0_u8; KEY_GENERATION_BYTES];
+    getrandom::fill(&mut generation).map_err(|_| IdempotencyError::InvalidInput {
+        field: "source key generation randomness",
+    })?;
+    Ok(generation)
 }
 
 fn new_lease_id() -> Result<[u8; RECOVERY_LEASE_ID_BYTES], IdempotencyError> {
@@ -2727,6 +2779,37 @@ async fn expire_resume_with_client(
             "DELETE FROM adapter_idempotency_resumes \
              WHERE scope_digest = $1 AND expires_at <= $2",
             &[&scope_digest.as_slice(), &now],
+        )
+        .await?;
+    Ok(())
+}
+
+/// A source-native single write publishes its replay window: once it has
+/// passed, a reused key is processed as a new request. The spent entry is
+/// removed so the claim below inserts a fresh row under a new key generation,
+/// and the source never sees the earlier derived key again. A live resume row
+/// keeps the key, and an async entry is never reopened here.
+async fn reopen_single_write_after_window(
+    client: &impl GenericClient,
+    scope_digest: &[u8; 32],
+    now: SystemTime,
+    response_retention: Duration,
+) -> Result<(), IdempotencyError> {
+    let window_start =
+        now.checked_sub(response_retention)
+            .ok_or(IdempotencyError::InvalidInput {
+                field: "response retention instant",
+            })?;
+    client
+        .execute(
+            "DELETE FROM adapter_idempotency_entries AS entries \
+             WHERE scope_digest = $1 AND async_binding_digest IS NULL \
+               AND NOT EXISTS (SELECT 1 FROM adapter_idempotency_resumes AS resumes \
+                               WHERE resumes.scope_digest = entries.scope_digest) \
+               AND ((state IN ('completed', 'failed', 'completed_expired', 'failed_expired') \
+                     AND expires_at <= $2) \
+                    OR (state = 'effect_started' AND effect_started_at <= $3))",
+            &[&scope_digest.as_slice(), &now, &window_start],
         )
         .await?;
     Ok(())

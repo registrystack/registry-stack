@@ -540,3 +540,83 @@ async fn real_breg_and_adapter_preserve_write_receipts_conditions_and_exact_reco
         }})
     );
 }
+
+#[cfg(feature = "postgres-test")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_key_reused_after_the_replay_window_is_a_new_write_at_the_source() {
+    use native::{batch_requests, json_body, AdapterProcess, BregDev, DropProxy};
+    use serde_json::json;
+
+    let breg = BregDev::start();
+    let proxy = DropProxy::start(&breg.origin);
+    let project = repository_path("products/adapter/examples/breg-govstack");
+    let pack = repository_path("products/adapter/packs/breg-records/pack.yaml");
+    let retention_seconds = 2;
+    let adapter = AdapterProcess::start_with_retention(
+        &proxy.origin(),
+        &breg.source_token,
+        &project,
+        &pack,
+        retention_seconds,
+    )
+    .await;
+    let editor = adapter.token("records.read records.write");
+    let collection = "/govstack/registries/v1/collections/contacts/records";
+    let headers = [
+        ("Content-Type", "application/json"),
+        ("Idempotency-Key", r#""reused-contact-key""#),
+    ];
+    let first_body = json_body(json!({"data": {
+        "name": "Ada Lovelace",
+        "email": "ada@example.test"
+    }}));
+    let second_body = json_body(json!({"data": {
+        "name": "Grace Hopper",
+        "email": "grace@example.test"
+    }}));
+
+    let first = adapter.request("POST", collection, &editor, &headers, &first_body);
+    assert_eq!(first.status, 201, "{first:?}\n{}", adapter.stderr());
+    let inside = adapter.request("POST", collection, &editor, &headers, &second_body);
+    assert_eq!(
+        inside.status, 422,
+        "inside the window another body under the key is a fingerprint mismatch: {inside:?}"
+    );
+
+    std::thread::sleep(std::time::Duration::from_secs(retention_seconds + 1));
+    let reused = adapter.request("POST", collection, &editor, &headers, &second_body);
+    assert_eq!(
+        reused.status,
+        201,
+        "a key past the window is processed as new: {reused:?}\n{}",
+        adapter.stderr()
+    );
+    let first_id = first.json()["recordId"]
+        .as_str()
+        .expect("first receipt recordId")
+        .to_owned();
+    let reused_id = reused.json()["recordId"]
+        .as_str()
+        .expect("reused receipt recordId")
+        .to_owned();
+    assert_ne!(first_id, reused_id, "the source made a second record");
+
+    let requests = proxy.requests();
+    let batches = batch_requests(&requests);
+    assert_eq!(batches.len(), 2, "one source write per processed request");
+    assert_derived_source_key(batches[0], headers[1].1);
+    assert_derived_source_key(batches[1], headers[1].1);
+    assert_ne!(
+        batches[0].idempotency_key, batches[1].idempotency_key,
+        "a reused caller key reaches the source under a fresh native key"
+    );
+    let read = adapter.request(
+        "GET",
+        &format!("{collection}/{reused_id}"),
+        &editor,
+        &[],
+        &[],
+    );
+    assert_eq!(read.status, 200, "{read:?}");
+    assert_eq!(read.json()["data"]["name"], "Grace Hopper");
+}

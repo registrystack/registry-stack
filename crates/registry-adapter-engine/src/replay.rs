@@ -44,6 +44,9 @@ pub const REPLAY_CURSOR_ISSUER: &str = "https://fixture-replay.invalid";
 pub const REPLAY_CURSOR_SUBJECT: &str = "synthetic-fixture-caller";
 pub const REPLAY_CURSOR_CLOCK_SECONDS: u64 = 1_700_000_000;
 pub const REPLAY_CURSOR_KEY_BYTE: u8 = 0x52;
+/// The fixed source key generation of every replayed write, so a fixture can
+/// pin the derived source key byte-for-byte.
+pub const REPLAY_SOURCE_KEY_GENERATION: &str = "00000000000000000000000000000000";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ReplayWriteState {
@@ -121,6 +124,10 @@ impl crate::exchange::WriteCustody for ReplayWriteContext {
     ) -> Pin<Box<dyn std::future::Future<Output = Result<(), RouteFailure>> + std::marker::Send + 'a>>
     {
         Box::pin(async move { ReplayWriteContext::mark_definitive_source_rejection(self).await })
+    }
+
+    fn source_key_generation(&self) -> Option<String> {
+        Some(REPLAY_SOURCE_KEY_GENERATION.to_owned())
     }
 
     fn mark_unsupported_incomplete<'a>(
