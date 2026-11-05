@@ -1656,6 +1656,7 @@ async fn answer(
     };
     let mut search_binding: Option<SearchBinding> = None;
     let mut requested_page_size: Option<u64> = None;
+    let mut lookup_names_no_record = false;
     if let Some(pagination) = &operation.pagination {
         match open_search(state, operation, pagination, &caller, &record_type, inputs) {
             Ok(search) => {
@@ -1682,6 +1683,11 @@ async fn answer(
             }
         }
     } else if !inputs.filters.is_empty() {
+        lookup_names_no_record = lookup_value_names_no_record(
+            state.loaded.profile.is_govstack_consultation(),
+            &operation.operation,
+            &inputs.filters,
+        );
         exchange.set_property(FILTERS_PROPERTY, Value::Object(inputs.filters));
     }
     exchange
@@ -2017,7 +2023,7 @@ async fn answer(
                 // source link is refused while the link is rendered, before
                 // any send. Like a Retrieve identifier of that shape it names
                 // no record, so the answer is the same not-found.
-                let failure = if operation.operation == "lookup"
+                let failure = if lookup_names_no_record
                     && failure.class == ErrorClass::Validation
                     && events
                         .iter()
@@ -3530,6 +3536,26 @@ fn is_path_segment_value(record_id: &str) -> bool {
     encode_path_segment(record_id).is_some()
 }
 
+/// Whether a Lookup on the built-in GovStack profile carries a value that
+/// cannot stand as one path segment of the source link. Such a value names
+/// no record, so its refusal before any send answers not-found, as a
+/// Retrieve identifier of that shape does. Configured profiles keep the
+/// route's own failure class.
+fn lookup_value_names_no_record(
+    built_in_govstack: bool,
+    operation: &str,
+    filters: &serde_json::Map<String, Value>,
+) -> bool {
+    fn names_no_segment(value: &Value) -> bool {
+        match value {
+            Value::String(text) => !is_path_segment_value(text),
+            Value::Object(members) => members.values().any(names_no_segment),
+            _ => false,
+        }
+    }
+    built_in_govstack && operation == "lookup" && filters.values().any(names_no_segment)
+}
+
 /// The inputs of one read as the caller supplied them, from the query
 /// string of a GET or the body of a read over POST.
 #[derive(Default)]
@@ -4848,6 +4874,42 @@ mod generated_properties;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn lookup_filters(value: &str) -> serde_json::Map<String, Value> {
+        json!({"selector": "by-record-id", "values": {"record-id": value}})
+            .as_object()
+            .expect("an object")
+            .clone()
+    }
+
+    #[test]
+    fn only_a_built_in_lookup_value_that_cannot_be_a_path_segment_names_no_record() {
+        assert!(lookup_value_names_no_record(
+            true,
+            "lookup",
+            &lookup_filters(".")
+        ));
+        assert!(lookup_value_names_no_record(
+            true,
+            "lookup",
+            &lookup_filters("a/b")
+        ));
+        assert!(!lookup_value_names_no_record(
+            true,
+            "lookup",
+            &lookup_filters("abc")
+        ));
+        assert!(!lookup_value_names_no_record(
+            false,
+            "lookup",
+            &lookup_filters(".")
+        ));
+        assert!(!lookup_value_names_no_record(
+            true,
+            "retrieve",
+            &lookup_filters(".")
+        ));
+    }
 
     fn example_project(scopes: Value) -> AdapterProject {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
