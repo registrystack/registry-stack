@@ -163,7 +163,7 @@ impl SplitRoles {
             migration_url,
             runtime_url,
             &Served::govstack_project(),
-            &Served::govstack_profile(),
+            None,
             "tracker",
         )
     }
@@ -175,7 +175,7 @@ impl SplitRoles {
         migration_url: &str,
         runtime_url: &str,
         project: &Path,
-        profile: &Path,
+        profile: Option<&Path>,
         endpoint: &str,
     ) -> Self {
         let key = access_token_test_key(jsonwebtoken::Algorithm::ES256);
@@ -235,7 +235,7 @@ cursorKeyRef: secret:env/TEST_CURSOR_KEY
         if !project.join("pack.yaml").exists() {
             command.arg("--pack").arg(Served::example_pack());
         }
-        if !project.join("profile.yaml").exists() {
+        if let Some(profile) = profile.filter(|_| !project.join("profile.yaml").exists()) {
             command.arg("--profile").arg(profile);
         }
         let child = command
@@ -403,7 +403,7 @@ async fn a_write_runtime_role_without_idempotency_grants_is_refused_by_name() {
             &database,
             &runtime_url,
             &Served::example_project(),
-            &Served::example_profile(),
+            Some(&Served::example_profile()),
             "tracker",
         )
     };
@@ -449,7 +449,7 @@ async fn a_resumable_write_runtime_role_needs_the_recovery_grants_and_serves_on_
             &database,
             &runtime_url,
             &project,
-            &Served::example_profile(),
+            Some(&Served::example_profile()),
             "reference",
         )
     };

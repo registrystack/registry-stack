@@ -36,7 +36,7 @@ consultation:
 pack:
   id: dhis2-tracker
   version: "1"
-  digest: sha256:a1248a11e8d801d89914a2c7b9ab3cbbe357629ce5f73dbe4094aef70eda94e9
+  digest: sha256:41df7eef899ee01b4af9f5b70c306ab04005e3c4dde21613118a720f8e482aa9
 artifacts:
   scripts:
     - id: person-public
@@ -70,10 +70,12 @@ templatedRoutes:
     routeId: person-list
     parameters:
       program: qyVpUaAYv2A
+      tie_breaker_attribute: lZGmxYbs97q
   - routeTemplate: page-tracked-entities-by-org-unit
     routeId: person-search
     parameters:
       program: qyVpUaAYv2A
+      tie_breaker_attribute: lZGmxYbs97q
 bindings:
   - id: people-retrieve
     operation: retrieve

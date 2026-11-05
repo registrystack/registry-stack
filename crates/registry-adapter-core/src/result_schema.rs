@@ -994,6 +994,7 @@ mod tests {
             .expect("unique"),
             problem_envelope: EnvelopeTemplate(r#"{"code": "{{problemCode}}"}"#.to_string()),
             parameterized_parts: UniqueList::new(Vec::new()).expect("empty"),
+            origin: Default::default(),
         }
     }
 

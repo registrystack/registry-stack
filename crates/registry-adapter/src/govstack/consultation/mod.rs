@@ -4,8 +4,9 @@
 //! Consultation facade. Deployment projects supply Registry, collection,
 //! view, schemas and source bindings; these definitions own the wire names.
 
+use super::target_identity;
 use registry_adapter_core::{
-    AdapterPack, AdapterProfile, AdapterProject, HttpMethod, SourceReadSupport,
+    AdapterPack, AdapterProfile, AdapterProject, HttpMethod, ProfileOrigin, SourceReadSupport,
     MAXIMUM_ITEM_KEY_BYTES,
 };
 use serde::Serialize;
@@ -49,7 +50,7 @@ pub(crate) fn valid_view_id(value: &str) -> bool {
 /// or author these standard paths and envelopes.
 #[must_use]
 pub fn built_in_profile() -> AdapterProfile {
-    serde_json::from_value(json!({
+    let mut profile: AdapterProfile = serde_json::from_value(json!({
         "id": PROFILE_ID,
         "version": PROFILE_VERSION,
         "operations": [
@@ -78,7 +79,9 @@ pub fn built_in_profile() -> AdapterProfile {
         "problemEnvelope": r#"{"type":"{{problemCode}}","title":"{{problemTitle}}","status":{{status}},"detail":"{{?problemDetail}}","traceId":"{{requestId}}","errors":{{?problemErrors}}}"#,
         "parameterizedParts": []
     }))
-    .expect("the maintained Consultation profile is valid")
+    .expect("the maintained Consultation profile is valid");
+    profile.origin = ProfileOrigin::BuiltInGovStack;
+    profile
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -842,46 +845,6 @@ pub fn target_attachment(
     })
 }
 
-fn target_identity(
-    profile: &AdapterProfile,
-    operations: &BTreeMap<String, crate::engine::target::TargetOperation>,
-) -> Result<Vec<u8>, crate::engine::load::LoadError> {
-    let mut identity_operations = Vec::with_capacity(operations.len());
-    for (binding, operation) in operations {
-        let crate::engine::target::TargetOperation::Read(operation) = operation else {
-            return Err(crate::engine::load::LoadError::Runtime(
-                "the Consultation target identity accepts read operations only".to_owned(),
-            ));
-        };
-        identity_operations.push(json!({
-            "binding": binding,
-            "sourceInput": operation.source_input,
-            "itemProjection": operation.item_projection,
-            "readSupport": operation.read_support,
-            "inputSchema": operation
-                .project_input_schema
-                .as_ref()
-                .map(|schema| schema.as_value()),
-            "outputSchema": operation.project_transform.schema().as_value(),
-            "effectivePath": operation.effective_contract.path,
-            "effectivePathParameters": operation.effective_contract.path_parameters,
-            "effectiveRequest": operation.effective_contract.request_body,
-            "effectiveResponse": operation.effective_contract.response_body,
-        }));
-    }
-    let identity_value = json!({
-        "domain": "registry-adapter:host-target:v1",
-        "mount": MOUNT_PATH,
-        "profile": profile,
-        "operations": identity_operations,
-    });
-    registry_platform_canonical_json::canonicalize_json(&identity_value).map_err(|_| {
-        crate::engine::load::LoadError::Runtime(
-            "the fixed target identity could not be serialized".to_owned(),
-        )
-    })
-}
-
 #[must_use]
 pub fn source_input(
     capability: ConsultationCapability,
@@ -1124,6 +1087,18 @@ mod tests {
             );
         }
         assert!(profile.operations.get("revision-list").is_none());
+    }
+
+    #[test]
+    fn only_the_built_in_profile_is_marked_govstack_consultation() {
+        assert!(built_in_profile().is_govstack_consultation());
+        // A configured profile can name itself anything, including the
+        // built-in id, and still reads back unmarked.
+        let configured: AdapterProfile =
+            serde_json::from_value(serde_json::to_value(built_in_profile()).expect("serializes"))
+                .expect("a configured profile with the built-in id parses");
+        assert_eq!(configured.id.as_str(), PROFILE_ID);
+        assert!(!configured.is_govstack_consultation());
     }
 
     #[test]
@@ -1476,71 +1451,6 @@ mod tests {
         let path =
             target_identity(&attachment.profile, &attachment.operations).expect("path identity");
         assert_ne!(baseline, path);
-    }
-
-    #[test]
-    fn consultation_identity_refuses_write_operations_without_values() {
-        let mut attachment = maintained_attachment();
-        let operation = attachment
-            .operations
-            .remove("people-search")
-            .expect("Search attachment");
-        let crate::engine::target::TargetOperation::Read(operation) = operation else {
-            panic!("the Consultation Search attachment is a read");
-        };
-        let source = br#"fn prepare(source) { #{person: #{name: source.name}} }"#;
-        let script = registry_adapter_core::ProjectScript {
-            id: registry_platform_yaml::LocalId::new("write-input").expect("script id"),
-            file: "scripts/write-input.rhai".to_owned(),
-            digest: registry_platform_yaml::Digest::new(registry_platform_config::sha256_uri(
-                source,
-            ))
-            .expect("script digest"),
-        };
-        let transform = registry_adapter_core::BindingTransform {
-            script: script.id.clone(),
-            entrypoint: "prepare".to_owned(),
-        };
-        let artifacts = crate::engine::artifacts::ProjectArtifactBytes::new([(
-            script.file.clone(),
-            source.to_vec(),
-        )]);
-        let input_transform =
-            crate::engine::inbound_transform::CompiledProjectInputTransform::compile_parts(
-                "write-identity",
-                &script,
-                &transform,
-                &artifacts,
-            )
-            .expect("input transform compiles");
-        let write_support = serde_json::from_value(json!({
-            "type": "create-one",
-            "identity": "source-assigned",
-            "replay": {"type": "exact-keyed", "replayWindowSeconds": 300}
-        }))
-        .expect("write support");
-        attachment.operations.insert(
-            "people-search".to_owned(),
-            crate::engine::target::TargetOperation::Write(
-                crate::engine::target::TargetWriteOperation {
-                    project_input_schema: operation
-                        .project_input_schema
-                        .expect("Search has an input schema"),
-                    project_input_transform: std::sync::Arc::new(input_transform),
-                    write_support,
-                    native_replay:
-                        crate::engine::target::SourceNativeReplayPlan::ExactKeyedSinglePost,
-                    effective_contract: operation.effective_contract,
-                },
-            ),
-        );
-
-        let error = target_identity(&attachment.profile, &attachment.operations)
-            .expect_err("Consultation identity is read-only");
-        assert_eq!(
-            error.to_string(),
-            "the Consultation target identity accepts read operations only"
-        );
     }
 
     #[test]

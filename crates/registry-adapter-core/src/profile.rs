@@ -568,6 +568,30 @@ pub struct AdapterProfile {
     /// The parts of the profile a deployment declares at bind time.
     #[serde(default)]
     pub parameterized_parts: registry_platform_yaml::UniqueList<ParameterizedPart>,
+    /// Whether the host built this profile in. Never read from a profile
+    /// file, so a configured profile cannot select built-in behavior by
+    /// naming itself like one.
+    #[serde(skip)]
+    pub origin: ProfileOrigin,
+}
+
+/// Where a loaded profile came from.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ProfileOrigin {
+    /// Parsed from a profile file a deployment authored.
+    #[default]
+    Configured,
+    /// The GovStack Consultation profile the host composes itself.
+    BuiltInGovStack,
+}
+
+impl AdapterProfile {
+    /// Whether this is the host's own GovStack profile, which alone gets
+    /// GovStack problem types and correlation.
+    #[must_use]
+    pub fn is_govstack_consultation(&self) -> bool {
+        self.origin == ProfileOrigin::BuiltInGovStack
+    }
 }
 
 /// A path-parameter list is omitted from the wire when empty, the shape
@@ -781,6 +805,7 @@ mod tests {
                 r#"{"code": "{{problemCode}}", "title": "{{problemTitle}}"}"#.to_string(),
             ),
             parameterized_parts: Default::default(),
+            origin: Default::default(),
         };
         let json = serde_json::to_string(&profile).expect("serialize");
         assert!(json.contains("\"problems\""));
@@ -865,6 +890,7 @@ mod tests {
             problems: UniqueIdList::new(vec![root, exact]).expect("unique"),
             problem_envelope: EnvelopeTemplate(r#"{"code":"{{problemCode}}"}"#.to_string()),
             parameterized_parts: UniqueList::new(Vec::new()).expect("empty"),
+            origin: Default::default(),
         };
         assert_eq!(
             resolve_problem(&profile, crate::model::ErrorClass::OutcomeConflict)

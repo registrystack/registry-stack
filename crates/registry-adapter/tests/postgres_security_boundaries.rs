@@ -18,7 +18,7 @@ use served_harness::{copy_example_project, fixture, replace_pack_text, Served};
 const RECORD_MARKER: &str = "served-record-canary-451cc7";
 const ERROR_MARKER: &str = "served-error-canary-a80e93";
 const WRONG_AUDIENCE_MARKER: &str = "served-wrong-audience-canary-713f44";
-const SEARCH_PATH: &str = "/v1/collections/persons/search";
+const SEARCH_PATH: &str = "/govstack/registries/v1/collections/people/search";
 const INVALID_CURSOR_PROBLEM: &str =
     "https://govstack.global/problems/digital-registries/invalid-cursor";
 
@@ -205,11 +205,11 @@ async fn a_continuation_replayed_with_other_filters_never_runs_the_route() {
     upstream.respond_with(vec![first_search_page()]);
     let served = Served::start_with_project(&upstream.url(""), &Served::govstack_project()).await;
     let token = served.token("records.read");
-    let original_filter = json!({"org_unit": "slSrf7H9lMf"});
+    let original_filter = json!({"org-unit": "slSrf7H9lMf"});
     let (status, _, first) = served.post(
         SEARCH_PATH,
         Some(&token),
-        &json!({"search": "byCriteria", "criteria": original_filter, "pageSize": 5}),
+        &json!({"search": "by-org-unit", "criteria": original_filter, "pageSize": 5}),
     );
     assert_eq!(status, 200, "{first}");
     let cursor = first["pageInfo"]["nextCursor"]
@@ -227,8 +227,8 @@ async fn a_continuation_replayed_with_other_filters_never_runs_the_route() {
         SEARCH_PATH,
         Some(&token),
         &json!({
-            "search": "byCriteria",
-            "criteria": {"org_unit": RECORD_MARKER},
+            "search": "by-org-unit",
+            "criteria": {"org-unit": RECORD_MARKER},
             "cursor": cursor
         }),
     );

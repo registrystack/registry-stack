@@ -303,6 +303,7 @@ fn profile_with_problem_mapping(
         problems: UniqueIdList::new(problems).expect("problem codes are unique"),
         problem_envelope: EnvelopeTemplate(r#"{"code": "{{problemCode}}"}"#.to_owned()),
         parameterized_parts: UniqueList::new(Vec::new()).expect("no parameterized parts"),
+        origin: Default::default(),
     }
 }
 

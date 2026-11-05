@@ -1,0 +1,83 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json
+#
+# Documented derivative of the scrubbed DHIS2 2.43.2.1 search-page capture,
+# cut to a single page. The upstream request pins the page order: DHIS2 2.43
+# refuses `trackedEntity` as a sort key (409 E7145), so the route breaks ties on
+# the program's unique attribute that the project configures.
+apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
+kind: AdapterFixture
+id: dhis2-consultation-list-page
+pack: dhis2-tracker
+upstreamVersion: "2.43.2.1"
+provenance:
+  type: documented
+  reference: products/adapter/fixtures/dhis2-tracker/search-page.yaml cut to one page
+intercepts:
+  - type: endpoint
+    endpoint: tracker
+entries:
+  - facadeRequest:
+      operation: list
+      path: /v1/collections/people/records
+      query: pageSize=2
+    upstream:
+      - request:
+          endpoint: tracker
+          method: GET
+          path: /api/tracker/trackedEntities
+          query: order=createdAt%3Adesc%2ClZGmxYbs97q%3Aasc&orgUnitMode=ACCESSIBLE&page=1&pageSize=2&program=qyVpUaAYv2A&totalPages=true
+        response:
+          status: 200
+          body:
+            pager:
+              page: 1
+              pageSize: 2
+              total: 2
+              pageCount: 1
+            trackedEntities:
+              - trackedEntity: EeBJ3Sn9uLg
+                trackedEntityType: cQWYtUfH6Vx
+                createdAt: "2017-01-20T10:44:02.770"
+                updatedAt: "2017-05-26T11:46:22.372"
+                orgUnit: slSrf7H9lMf
+                attributes:
+                  - attribute: lZGmxYbs97q
+                    valueType: TEXT
+                    value: SYNTHETIC-UNIQUE-01
+              - trackedEntity: NdDm4A3gVXz
+                trackedEntityType: cQWYtUfH6Vx
+                createdAt: "2017-01-20T10:40:31.623"
+                updatedAt: "2017-01-20T10:40:31.913"
+                orgUnit: slSrf7H9lMf
+                attributes:
+                  - attribute: lZGmxYbs97q
+                    valueType: TEXT
+                    value: SYNTHETIC-UNIQUE-02
+    expected:
+      type: response
+      status: 200
+      headers:
+        cache-control: no-store
+        content-type: application/json
+      body:
+        items:
+          - recordId: EeBJ3Sn9uLg
+            data:
+              source:
+                id: EeBJ3Sn9uLg
+                type: cQWYtUfH6Vx
+              registration:
+                organisationUnit: slSrf7H9lMf
+                createdAt: "2017-01-20T10:44:02.770"
+                updatedAt: "2017-05-26T11:46:22.372"
+          - recordId: NdDm4A3gVXz
+            data:
+              source:
+                id: NdDm4A3gVXz
+                type: cQWYtUfH6Vx
+              registration:
+                organisationUnit: slSrf7H9lMf
+                createdAt: "2017-01-20T10:40:31.623"
+                updatedAt: "2017-01-20T10:40:31.913"
+        pageInfo:
+          nextCursor: null

@@ -214,6 +214,7 @@ fn profile() -> AdapterProfile {
     AdapterProfile {
         id: local("soundness-profile"),
         version: "1".to_owned(),
+        origin: Default::default(),
         operations: UniqueIdList::new(vec![ProfileOperation {
             async_completion: None,
             id: local("records-find"),

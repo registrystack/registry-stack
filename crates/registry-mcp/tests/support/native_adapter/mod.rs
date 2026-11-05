@@ -55,10 +55,12 @@ impl Project {
     }
 
     fn profile(self, root: &Path) -> PathBuf {
-        root.join(match self {
-            Self::GovStackFacilities => "profiles/govstack-consultation/profile.yaml",
-            Self::BregFacilities | Self::BregWriteExample => "profiles/breg-records/profile.yaml",
-        })
+        match self {
+            Self::GovStackFacilities => self.project_directory(root).join("profile.yaml"),
+            Self::BregFacilities | Self::BregWriteExample => {
+                root.join("profiles/breg-records/profile.yaml")
+            }
+        }
     }
 
     fn operations(self) -> [(&'static str, &'static str, &'static str); 2] {
@@ -232,7 +234,7 @@ impl NativeStack {
         let adapter_root = required_absolute_path("ADAPTER_FIXTURES_ROOT");
         assert!(
             adapter_root
-                .join("profiles/govstack-consultation/profile.yaml")
+                .join("profiles/breg-records/profile.yaml")
                 .is_file(),
             "ADAPTER_FIXTURES_ROOT must name the matching Adapter products/adapter tree"
         );

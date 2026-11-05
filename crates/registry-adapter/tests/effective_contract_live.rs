@@ -19,8 +19,8 @@ use registry_platform_testing::{access_token_test_key, jwks_from_private_jwk};
 use serde_json::{json, Value};
 use served_harness::upstream::{Response, UpstreamDouble};
 use served_harness::{
-    capture, copy_example_project, copy_govstack_project, replace_pack_script,
-    replace_profile_text, Served, AUDIENCE, ISSUER, PASSWORD, USERNAME,
+    capture, copy_example_project, replace_profile_text, Served, AUDIENCE, ISSUER, PASSWORD,
+    USERNAME,
 };
 
 const CONTRACT_HEADER: &str = "x-registry-adapter-contract";
@@ -413,111 +413,5 @@ async fn a_valid_concrete_collision_is_unserved_before_router_construction() {
         upstream.request_count(),
         0,
         "the built-in protected route wins without source I/O"
-    );
-}
-
-fn non_paginated_filter_project() -> tempfile::TempDir {
-    let directory = tempfile::tempdir().expect("a copied GovStack Adapter project");
-    copy_govstack_project(directory.path());
-    replace_pack_script(
-        directory.path(),
-        "scripts/org-unit-filter.rhai",
-        r#"fn org_unit_filter(exchange) {
-    let filters = exchange.properties.AdapterFilters;
-    if filters == () || filters.region == () {
-        throw "the read carries no region filter";
-    }
-    filters.region
-}
-"#,
-    );
-    replace_profile_text(
-        directory.path(),
-        r#"    requestEnvelope: '{"selector": "byRecordId", "values": {"recordId": "{{recordId}}"}}'"#,
-        r#"    requestEnvelope: '{"selector": "byRecordId", "values": {"recordId": "{{recordId}}"}, "criteria": {{filters}}}'"#,
-    );
-    let path = directory.path().join("project.yaml");
-    let project = std::fs::read_to_string(&path).expect("the copied project is readable");
-    let project = project.replace(
-        "      - name: tracked_entity_type\n        type: string\n        required: true",
-        "      - name: tracked_entity_type\n        type: string\n        required: true\n      - name: region\n        type: boolean\n        required: true",
-    );
-    let project = project.replace(
-        "  - id: person-get\n    operation: records-get\n    recordType: persons\n    route: person-fetch\n    maximumUpstreamCalls: 4",
-        "  - id: person-get\n    operation: records-get\n    recordType: persons\n    route: person-search\n    filters:\n      - region\n    maximumUpstreamCalls: 4",
-    );
-    let project = project.replace(
-        "  - id: person-lookup\n    operation: records-lookup\n    recordType: persons\n    route: person-fetch\n    maximumUpstreamCalls: 4",
-        "  - id: person-lookup\n    operation: records-lookup\n    recordType: persons\n    route: person-search\n    filters:\n      - region\n    maximumUpstreamCalls: 4",
-    );
-    std::fs::write(path, project).expect("write the filtered non-paginated project");
-    directory
-}
-
-#[tokio::test]
-async fn non_paginated_get_and_post_reads_require_and_install_typed_filters() {
-    let upstream = UpstreamDouble::start();
-    let directory = non_paginated_filter_project();
-    let served = Served::start_with_project(&upstream.url(""), directory.path()).await;
-    let token = served.token("records.read");
-    let get_path = "/v1/collections/persons/records/EeBJ3Sn9uLg";
-    let post_path = "/v1/collections/persons/lookup";
-
-    let missing = served.get(get_path, Some(&token));
-    assert_eq!(missing.0, 422, "{}", missing.2);
-    let unknown = served.get(&format!("{get_path}?other=true"), Some(&token));
-    assert_eq!(unknown.0, 400, "{}", unknown.2);
-    let repeated = served.get(
-        &format!("{get_path}?region=true&region=false"),
-        Some(&token),
-    );
-    assert_eq!(repeated.0, 400, "{}", repeated.2);
-    let invalid = served.get(&format!("{get_path}?region=not-a-boolean"), Some(&token));
-    assert_eq!(invalid.0, 422, "{}", invalid.2);
-    assert_eq!(
-        upstream.request_count(),
-        0,
-        "invalid GET filters never reach the source"
-    );
-
-    let (status, body) = capture("search-page");
-    upstream.respond_with(vec![Response::json(status, &body)]);
-    let _get = served.get(&format!("{get_path}?region=true"), Some(&token));
-    assert_eq!(upstream.request_count(), 1, "the valid GET makes one call");
-    assert!(
-        upstream.requests()[0].target.contains("orgUnits=true"),
-        "the typed GET filter reaches AdapterFilters and the source: {}",
-        upstream.requests()[0].target
-    );
-
-    let missing = served.post(
-        post_path,
-        Some(&token),
-        &json!({"selector": "byRecordId", "values": {"recordId": "EeBJ3Sn9uLg"}, "criteria": {}}),
-    );
-    assert_eq!(missing.0, 422, "{}", missing.2);
-    let invalid = served.post(
-        post_path,
-        Some(&token),
-        &json!({"selector": "byRecordId", "values": {"recordId": "EeBJ3Sn9uLg"}, "criteria": {"region": "not-a-boolean"}}),
-    );
-    assert_eq!(invalid.0, 422, "{}", invalid.2);
-    assert_eq!(
-        upstream.request_count(),
-        1,
-        "invalid POST filters never reach the source"
-    );
-
-    upstream.respond_with(vec![Response::json(status, &body)]);
-    let _post = served.post(
-        post_path,
-        Some(&token),
-        &json!({"selector": "byRecordId", "values": {"recordId": "EeBJ3Sn9uLg"}, "criteria": {"region": true}}),
-    );
-    assert_eq!(upstream.request_count(), 2, "the valid POST makes one call");
-    assert!(
-        upstream.requests()[1].target.contains("orgUnits=true"),
-        "the typed POST filter reaches AdapterFilters and the source: {}",
-        upstream.requests()[1].target
     );
 }

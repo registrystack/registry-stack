@@ -7492,6 +7492,7 @@ mod tests {
             problems: total_problems(),
             problem_envelope: EnvelopeTemplate(r#"{"code": "{{problemCode}}"}"#.to_string()),
             parameterized_parts: UniqueList::<ParameterizedPart>::new(Vec::new()).expect("empty"),
+            origin: Default::default(),
         }
     }
 

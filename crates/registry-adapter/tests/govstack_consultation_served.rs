@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The GovStack Consultation facade, end to end: the built `adapter` binary
-//! serves the dhis2-govstack example (the govstack-consultation profile over
-//! the dhis2-tracker pack) against a loopback upstream that replays the
+//! serves the dhis2-consultation example (the built-in GovStack Consultation
+//! facade over the dhis2-tracker pack) against a loopback upstream that replays the
 //! committed captures. Every test names a call a relying party makes and
 //! the reply it gets: the record and page shapes, the problem codes, the
 //! refusals before any upstream call, and what the journal holds. Needs
@@ -18,10 +18,10 @@ use served_harness::upstream::{Response, UpstreamDouble};
 use served_harness::{capture, fixture, Served};
 
 const PROBLEMS: &str = "https://govstack.global/problems/digital-registries/";
-const GET_PATH: &str = "/v1/collections/persons/records/EeBJ3Sn9uLg";
-const LIST_PATH: &str = "/v1/collections/persons/records";
-const LOOKUP_PATH: &str = "/v1/collections/persons/lookup";
-const SEARCH_PATH: &str = "/v1/collections/persons/search";
+const GET_PATH: &str = "/govstack/registries/v1/collections/people/records/EeBJ3Sn9uLg";
+const LIST_PATH: &str = "/govstack/registries/v1/collections/people/records";
+const LOOKUP_PATH: &str = "/govstack/registries/v1/collections/people/lookup";
+const SEARCH_PATH: &str = "/govstack/registries/v1/collections/people/search";
 
 async fn start(upstream: &UpstreamDouble) -> Served {
     Served::start_with_project(&upstream.url(""), &Served::govstack_project()).await
@@ -61,8 +61,10 @@ mod contract {
             assert!(object.contains_key(member), "{member} is required: {body}");
         }
         assert!(
-            object.keys().all(|key| ["type", "title", "status", "detail", "traceId"]
-                .contains(&key.as_str())),
+            object.keys().all(
+                |key| ["type", "title", "status", "detail", "traceId", "errors"]
+                    .contains(&key.as_str())
+            ),
             "no member beyond the Problem's: {body}"
         );
         assert_eq!(body["status"], status, "{body}");
@@ -121,10 +123,12 @@ async fn one_record_comes_back_as_a_record() {
         json!({
             "recordId": "EeBJ3Sn9uLg",
             "data": {
-                "tracked_entity_type": "cQWYtUfH6Vx",
-                "org_unit": "slSrf7H9lMf",
-                "created_at": "2017-01-20T10:44:02.770",
-                "updated_at": "2017-05-26T11:46:22.372"
+                "source": {"id": "EeBJ3Sn9uLg", "type": "cQWYtUfH6Vx"},
+                "registration": {
+                    "organisationUnit": "slSrf7H9lMf",
+                    "createdAt": "2017-01-20T10:44:02.770",
+                    "updatedAt": "2017-05-26T11:46:22.372"
+                }
             }
         })
     );
@@ -145,8 +149,10 @@ async fn a_missing_record_is_the_record_not_available_problem() {
     let served = start(&upstream).await;
     let token = served.token("records.read");
 
-    let (status, head, body) =
-        served.get("/v1/collections/persons/records/TV7SRzsjKQi", Some(&token));
+    let (status, head, body) = served.get(
+        "/govstack/registries/v1/collections/people/records/TV7SRzsjKQi",
+        Some(&token),
+    );
 
     assert_eq!(status, 404, "{body}");
     contract::assert_problem(&body, 404, "record-not-available");
@@ -164,17 +170,17 @@ async fn an_unknown_collection_is_the_collection_not_available_problem() {
     let token = served.token("records.read");
 
     for path in [
-        "/v1/collections/animals/records/EeBJ3Sn9uLg",
-        "/v1/collections/animals/records",
+        "/govstack/registries/v1/collections/animals/records/EeBJ3Sn9uLg",
+        "/govstack/registries/v1/collections/animals/records",
     ] {
         let (status, _, body) = served.get(path, Some(&token));
         assert_eq!(status, 404, "{path}: {body}");
         contract::assert_problem(&body, 404, "collection-not-available");
     }
     let (status, _, body) = served.post(
-        "/v1/collections/animals/lookup",
+        "/govstack/registries/v1/collections/animals/lookup",
         Some(&token),
-        &json!({"selector": "byRecordId", "values": {"recordId": "x"}}),
+        &json!({"selector": "by-record-id", "values": {"record-id": "x"}}),
     );
     assert_eq!(status, 404, "{body}");
     contract::assert_problem(&body, 404, "collection-not-available");
@@ -198,7 +204,7 @@ async fn an_unauthenticated_or_unscoped_call_is_refused_with_its_problem() {
     let (status, _, body) = served.post(
         SEARCH_PATH,
         Some(&unscoped),
-        &json!({"search": "byCriteria", "criteria": {"org_unit": "slSrf7H9lMf"}}),
+        &json!({"search": "by-org-unit", "criteria": {"org-unit": "slSrf7H9lMf"}}),
     );
     assert_eq!(status, 403, "{body}");
     contract::assert_problem(&body, 403, "forbidden");
@@ -321,7 +327,7 @@ async fn a_page_size_outside_the_bounds_is_a_bad_request_from_the_query_or_the_b
     let (status, _, body) = served.post(
         SEARCH_PATH,
         Some(&token),
-        &json!({"search": "byCriteria", "criteria": {"org_unit": "slSrf7H9lMf"}, "pageSize": 101}),
+        &json!({"search": "by-org-unit", "criteria": {"org-unit": "slSrf7H9lMf"}, "pageSize": 101}),
     );
     assert_eq!(status, 400, "{body}");
     contract::assert_problem(&body, 400, "bad-request");
@@ -352,7 +358,7 @@ async fn a_lookup_resolves_one_record_by_its_selector() {
     let (status, head, body) = served.post(
         LOOKUP_PATH,
         Some(&token),
-        &json!({"selector": "byRecordId", "values": {"recordId": "EeBJ3Sn9uLg"}}),
+        &json!({"selector": "by-record-id", "values": {"record-id": "EeBJ3Sn9uLg"}}),
     );
 
     assert_eq!(status, 200, "{body}");
@@ -375,18 +381,23 @@ async fn a_lookup_refuses_what_its_closed_shape_does_not_name() {
     let (status, _, body) = served.post(
         LOOKUP_PATH,
         Some(&token),
-        &json!({"selector": "byNationalId", "values": {"recordId": "x"}}),
+        &json!({"selector": "by-national-id", "values": {"record-id": "x"}}),
     );
     assert_eq!(status, 422, "{body}");
     contract::assert_problem(&body, 422, "invalid-field");
 
-    // A body that is not the declared shape is a bad request.
+    // Values that break the selector's closed schema are field faults.
     for shape in [
-        json!({"selector": "byRecordId"}),
-        json!({"selector": "byRecordId", "values": {"recordId": "x", "extra": 1}}),
-        json!({"selector": "byRecordId", "values": {"recordId": 7}}),
-        json!([1]),
+        json!({"selector": "by-record-id", "values": {"record-id": "x", "extra": 1}}),
+        json!({"selector": "by-record-id", "values": {"record-id": 7}}),
     ] {
+        let (status, _, body) = served.post(LOOKUP_PATH, Some(&token), &shape);
+        assert_eq!(status, 422, "{shape}: {body}");
+        contract::assert_problem(&body, 422, "invalid-field");
+    }
+
+    // A body that is not the declared shape is a bad request.
+    for shape in [json!({"selector": "by-record-id"}), json!([1])] {
         let (status, _, body) = served.post(LOOKUP_PATH, Some(&token), &shape);
         assert_eq!(status, 400, "{shape}: {body}");
         contract::assert_problem(&body, 400, "bad-request");
@@ -394,47 +405,14 @@ async fn a_lookup_refuses_what_its_closed_shape_does_not_name() {
     let (status, _, body) = served.post(
         LOOKUP_PATH,
         Some(&token),
-        &json!({"selector": "byRecordId", "values": {"recordId": ""}}),
+        &json!({"selector": "by-record-id", "values": {"record-id": ""}}),
     );
     assert_eq!(status, 422, "an empty identifier: {body}");
     assert_eq!(upstream.request_count(), 0);
 }
 
 #[tokio::test]
-async fn a_lookup_identifier_that_cannot_be_one_path_segment_is_not_found_before_any_upstream_call()
-{
-    let upstream = UpstreamDouble::start();
-    upstream.respond_with(vec![found()]);
-    let served = start(&upstream).await;
-    let token = served.token("records.read");
-
-    for hostile in [
-        ".",
-        "..",
-        "a/b",
-        "a%2Fb",
-        "a\\b",
-        "a?b",
-        "a;b",
-        "a:b",
-        "a\u{1}b",
-        "a\u{200b}b",
-        "a%b",
-    ] {
-        let (status, _, body) = served.post(
-            LOOKUP_PATH,
-            Some(&token),
-            &json!({"selector": "byRecordId", "values": {"recordId": hostile}}),
-        );
-        assert_eq!(status, 404, "{hostile:?}: {body}");
-        // The collection exists; no record can carry this identifier.
-        contract::assert_problem(&body, 404, "record-not-available");
-    }
-    assert_eq!(upstream.request_count(), 0);
-}
-
-#[tokio::test]
-async fn a_lookup_identifier_too_long_for_the_destination_url_is_not_found_before_any_send() {
+async fn a_lookup_identifier_over_the_schema_bound_is_invalid_before_any_send() {
     let upstream = UpstreamDouble::start();
     upstream.respond_with(vec![found()]);
     let served = start(&upstream).await;
@@ -445,10 +423,10 @@ async fn a_lookup_identifier_too_long_for_the_destination_url_is_not_found_befor
         let (status, _, body) = served.post(
             LOOKUP_PATH,
             Some(&token),
-            &json!({"selector": "byRecordId", "values": {"recordId": long}}),
+            &json!({"selector": "by-record-id", "values": {"record-id": long}}),
         );
-        assert_eq!(status, 404, "{body}");
-        contract::assert_problem(&body, 404, "record-not-available");
+        assert_eq!(status, 422, "{body}");
+        contract::assert_problem(&body, 422, "invalid-field");
     }
     assert_eq!(upstream.request_count(), 0);
     let kinds = served.journal_kinds().await;
@@ -467,7 +445,7 @@ async fn a_retrieve_identifier_too_long_for_the_destination_url_is_not_found_bef
 
     for long in ["a".repeat(2_100), "%C3%A9".repeat(350)] {
         let (status, _, body) = served.get(
-            &format!("/v1/collections/persons/records/{long}"),
+            &format!("/govstack/registries/v1/collections/people/records/{long}"),
             Some(&token),
         );
         assert_eq!(status, 404, "{body}");
@@ -520,7 +498,7 @@ async fn a_search_narrows_to_the_organisation_unit_and_pages() {
     let (status, _, body) = served.post(
         SEARCH_PATH,
         Some(&token),
-        &json!({"search": "byCriteria", "criteria": {"org_unit": "slSrf7H9lMf"}, "pageSize": 5}),
+        &json!({"search": "by-org-unit", "criteria": {"org-unit": "slSrf7H9lMf"}, "pageSize": 5}),
     );
 
     assert_eq!(status, 200, "{body}");
@@ -538,18 +516,18 @@ async fn a_search_resumes_from_the_cursor_in_its_body() {
     upstream.respond_with(vec![page_of(1, 2), page_of(2, 2)]);
     let served = start(&upstream).await;
     let token = served.token("records.read");
-    let criteria = json!({"org_unit": "slSrf7H9lMf"});
+    let criteria = json!({"org-unit": "slSrf7H9lMf"});
     let (_, _, first) = served.post(
         SEARCH_PATH,
         Some(&token),
-        &json!({"search": "byCriteria", "criteria": criteria, "pageSize": 5}),
+        &json!({"search": "by-org-unit", "criteria": criteria, "pageSize": 5}),
     );
     let cursor = first["pageInfo"]["nextCursor"].as_str().expect("a cursor");
 
     let (status, _, second) = served.post(
         SEARCH_PATH,
         Some(&token),
-        &json!({"search": "byCriteria", "criteria": criteria, "cursor": cursor}),
+        &json!({"search": "by-org-unit", "criteria": criteria, "cursor": cursor}),
     );
     assert_eq!(status, 200, "{second}");
     assert_eq!(second["pageInfo"], json!({"nextCursor": null}));
@@ -558,7 +536,7 @@ async fn a_search_resumes_from_the_cursor_in_its_body() {
     let (status, _, body) = served.post(
         SEARCH_PATH,
         Some(&token),
-        &json!({"search": "byCriteria", "criteria": {"org_unit": "CXQG7JjTr0o"}, "cursor": cursor}),
+        &json!({"search": "by-org-unit", "criteria": {"org-unit": "CXQG7JjTr0o"}, "cursor": cursor}),
     );
     assert_eq!(status, 400, "{body}");
     contract::assert_problem(&body, 400, "invalid-cursor");
@@ -572,9 +550,9 @@ async fn a_search_refuses_undeclared_criteria_and_unknown_searches() {
 
     // A value the shape names but the filters refuse is a field fault.
     for shape in [
-        json!({"search": "byCriteria", "criteria": {"name": "x"}}),
-        json!({"search": "byCriteria", "criteria": {"org_unit": 5}}),
-        json!({"search": "byName", "criteria": {"org_unit": "x"}}),
+        json!({"search": "by-org-unit", "criteria": {"name": "x"}}),
+        json!({"search": "by-org-unit", "criteria": {"org-unit": 5}}),
+        json!({"search": "by-name", "criteria": {"org-unit": "x"}}),
     ] {
         let (status, _, body) = served.post(SEARCH_PATH, Some(&token), &shape);
         assert_eq!(status, 422, "{shape}: {body}");
@@ -582,8 +560,8 @@ async fn a_search_refuses_undeclared_criteria_and_unknown_searches() {
     }
     // A body that is not the declared shape is a bad request.
     for shape in [
-        json!({"criteria": {"org_unit": "x"}}),
-        json!({"search": "byCriteria", "criteria": {"org_unit": "x"}, "sort": "a"}),
+        json!({"criteria": {"org-unit": "x"}}),
+        json!({"search": "by-org-unit", "criteria": {"org-unit": "x"}, "sort": "a"}),
     ] {
         let (status, _, body) = served.post(SEARCH_PATH, Some(&token), &shape);
         assert_eq!(status, 400, "{shape}: {body}");
@@ -597,7 +575,7 @@ async fn a_post_read_refuses_a_wrong_media_type_a_query_string_and_a_large_body(
     let upstream = UpstreamDouble::start();
     let served = start(&upstream).await;
     let token = served.token("records.read");
-    let body = json!({"search": "byCriteria", "criteria": {"org_unit": "x"}}).to_string();
+    let body = json!({"search": "by-org-unit", "criteria": {"org-unit": "x"}}).to_string();
 
     let (status, _, reply) = served.request(
         "POST",
@@ -630,7 +608,7 @@ async fn a_post_read_refuses_a_wrong_media_type_a_query_string_and_a_large_body(
     contract::assert_problem(&reply, 400, "bad-request");
 
     let large = format!(
-        "{{\"search\":\"byCriteria\",\"criteria\":{{\"org_unit\":\"{}\"}}}}",
+        "{{\"search\":\"by-org-unit\",\"criteria\":{{\"org-unit\":\"{}\"}}}}",
         "a".repeat(20_000)
     );
     let (status, _, reply) = served.request(
@@ -682,13 +660,13 @@ async fn a_search_body_never_reaches_the_journal_in_the_clear() {
     let (status, _, body) = served.post(
         SEARCH_PATH,
         Some(&token),
-        &json!({"search": "byCriteria", "criteria": {"org_unit": marker}}),
+        &json!({"search": "by-org-unit", "criteria": {"org-unit": marker}}),
     );
     assert_eq!(status, 200, "{body}");
     let (status, _, _) = served.post(
         LOOKUP_PATH,
         Some(&token),
-        &json!({"selector": "byRecordId", "values": {"recordId": marker}}),
+        &json!({"selector": "by-record-id", "values": {"record-id": marker}}),
     );
     assert_eq!(status, 502, "the one scripted upstream reply is spent");
 
@@ -777,50 +755,12 @@ async fn a_search_without_its_declared_filter_is_an_invalid_field_before_any_cal
     let (status, _, body) = served.post(
         SEARCH_PATH,
         Some(&token),
-        &json!({"search": "byCriteria", "criteria": {}}),
+        &json!({"search": "by-org-unit", "criteria": {}}),
     );
 
     assert_eq!(status, 422, "{body}");
     contract::assert_problem(&body, 422, "invalid-field");
     assert_eq!(upstream.request_count(), 0);
-}
-
-/// A copy of the example whose list binding filters on the org unit, so a
-/// GET carries a declared filter in its query string.
-fn filtered_list_project() -> tempfile::TempDir {
-    let directory = tempfile::tempdir().expect("a scratch directory");
-    served_harness::copy_govstack_project(directory.path());
-    let path = directory.path().join("project.yaml");
-    let text = std::fs::read_to_string(&path).expect("the project is readable");
-    let edited = text.replace(
-        "    route: person-list\n    maximumUpstreamCalls: 4",
-        "    route: person-search\n    filters:\n      - org_unit\n    maximumUpstreamCalls: 4",
-    );
-    assert_ne!(text, edited, "the list binding was found");
-    std::fs::write(&path, edited).expect("the project is written");
-    directory
-}
-
-#[tokio::test]
-async fn a_get_filter_reaches_the_source_and_a_missing_one_is_an_invalid_field() {
-    let upstream = UpstreamDouble::start();
-    upstream.respond_with(vec![page_of(1, 3)]);
-    let directory = filtered_list_project();
-    let served = Served::start_with_project(&upstream.url(""), directory.path()).await;
-    let token = served.token("records.read");
-
-    let (status, _, body) = served.get(&format!("{LIST_PATH}?org_unit=slSrf7H9lMf"), Some(&token));
-
-    assert_eq!(status, 200, "{body}");
-    contract::assert_page(&body);
-    let target = &upstream.requests()[0].target;
-    assert!(target.contains("orgUnits=slSrf7H9lMf"), "{target}");
-    assert!(target.contains("orgUnitMode=SELECTED"), "{target}");
-
-    let (status, _, body) = served.get(LIST_PATH, Some(&token));
-    assert_eq!(status, 422, "{body}");
-    contract::assert_problem(&body, 422, "invalid-field");
-    assert_eq!(upstream.request_count(), 1, "the refusal made no call");
 }
 
 /// The upstream request targets a call sent since `before` requests.
@@ -858,7 +798,7 @@ async fn hostile_filter_values_arrive_as_one_encoded_value_each() {
         let (status, _, body) = served.post(
             SEARCH_PATH,
             Some(&token),
-            &json!({"search": "byCriteria", "criteria": {"org_unit": value}}),
+            &json!({"search": "by-org-unit", "criteria": {"org-unit": value}}),
         );
 
         assert_eq!(status, 200, "{value:?}: {body}");
@@ -894,12 +834,16 @@ async fn hostile_lookup_values_are_encoded_into_one_path_segment_or_refused() {
         ("{{recordId}}", "%7B%7BrecordId%7D%7D"),
         ("a b", "a%20b"),
     ] {
-        upstream.respond_with(vec![found()]);
+        let (status, entity) = capture("get-found");
+        let mut entity: serde_json::Value =
+            serde_json::from_str(&entity).expect("the capture is JSON");
+        entity["trackedEntity"] = json!(value);
+        upstream.respond_with(vec![Response::json(status, &entity.to_string())]);
         let before = upstream.request_count();
         let (status, _, body) = served.post(
             LOOKUP_PATH,
             Some(&token),
-            &json!({"selector": "byRecordId", "values": {"recordId": value}}),
+            &json!({"selector": "by-record-id", "values": {"record-id": value}}),
         );
         assert_eq!(status, 200, "{value:?}: {body}");
         assert_eq!(
@@ -917,7 +861,7 @@ async fn hostile_lookup_values_are_encoded_into_one_path_segment_or_refused() {
         let (status, _, body) = served.post(
             LOOKUP_PATH,
             Some(&token),
-            &json!({"selector": "byRecordId", "values": {"recordId": value}}),
+            &json!({"selector": "by-record-id", "values": {"record-id": value}}),
         );
         assert!(status >= 400, "{value:?}: {status} {body}");
         assert!(
@@ -928,7 +872,7 @@ async fn hostile_lookup_values_are_encoded_into_one_path_segment_or_refused() {
 }
 
 #[tokio::test]
-async fn a_source_refusal_of_the_criteria_is_an_invalid_field() {
+async fn a_source_refusal_of_the_criteria_is_a_bad_gateway() {
     let upstream = UpstreamDouble::start();
     upstream.respond_with(vec![Response::json(
         400,
@@ -940,11 +884,11 @@ async fn a_source_refusal_of_the_criteria_is_an_invalid_field() {
     let (status, _, body) = served.post(
         SEARCH_PATH,
         Some(&token),
-        &json!({"search": "byCriteria", "criteria": {"org_unit": "x&orgUnitMode=ALL"}}),
+        &json!({"search": "by-org-unit", "criteria": {"org-unit": "x&orgUnitMode=ALL"}}),
     );
 
-    assert_eq!(status, 422, "{body}");
-    contract::assert_problem(&body, 422, "invalid-field");
+    assert_eq!(status, 502, "{body}");
+    contract::assert_problem(&body, 502, "bad-gateway");
     let target = &upstream.requests()[0].target;
     assert!(
         target.contains("orgUnits=x%26orgUnitMode%3DALL&")
@@ -958,7 +902,7 @@ async fn an_unauthenticated_post_declaring_an_oversize_body_is_refused_without_r
     let upstream = UpstreamDouble::start();
     let served = start(&upstream).await;
     let declared = 64 * 1024 * 1024;
-    let sent = b"{\"search\":\"byCriteria\"";
+    let sent = b"{\"search\":\"by-org-unit\"";
 
     // The request promises 64 MiB and sends 23 bytes. An answer arrives
     // anyway: the refusal does not wait for, or buffer, the body.
@@ -983,8 +927,8 @@ async fn a_path_parameter_that_is_not_utf8_is_a_bad_request_problem() {
     let token = served.token("records.read");
 
     for path in [
-        "/v1/collections/persons/records/%ff",
-        "/v1/collections/%ff/records",
+        "/govstack/registries/v1/collections/people/records/%ff",
+        "/govstack/registries/v1/collections/%ff/records",
     ] {
         let (status, head, body) = served.get(path, Some(&token));
 

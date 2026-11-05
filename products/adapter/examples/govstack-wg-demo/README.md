@@ -79,13 +79,13 @@ Adapter. The committed Bruno environment contains loopback origins and
 synthetic selectors, never credentials or bearer tokens.
 
 The maintained DHIS2 example uses program `qyVpUaAYv2A`, which returns 404 on
-the current 2.43.2.1 public demo, and that server returns 409 for its
-`trackedEntity` sort. During retained-state bootstrap, the controller copies
-the authored project and pack, selects live program `WSGAb5XwJ3Y`, and re-pins
-the required unique order to `createdAt:desc,lZGmxYbs97q:asc`. The attribute is
-a required unique program attribute on that deployment. This is a
-demo-specific compatibility variant over reviewed configuration. The ordering
-change belongs to the project and pack; it enables no DHIS2 write capability.
+the current 2.43.2.1 public demo. During retained-state bootstrap, the
+controller copies the authored project, selects live program `WSGAb5XwJ3Y`, and
+sets the project's `tie_breaker_attribute` parameter to `lZGmxYbs97q`, a
+required unique program attribute on that deployment (DHIS2 2.43 refuses
+`trackedEntity` as a sort key). The shipped pack is used unchanged; the paging
+order is `createdAt:desc,<attribute>:asc`. This enables no DHIS2 write
+capability.
 
 `stop` preserves state and local BReg data. A fresh state directory is not
 required between public rehearsals: every Bruno run creates a unique run ID

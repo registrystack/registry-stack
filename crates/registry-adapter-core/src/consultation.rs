@@ -113,9 +113,6 @@ pub struct SourceReadInput {
 #[serde(rename_all = "kebab-case")]
 pub enum SourceComparison {
     Equality,
-    Range,
-    SetMembership,
-    Prefix,
 }
 
 /// One deterministic source order term. Direction is explicit so a project

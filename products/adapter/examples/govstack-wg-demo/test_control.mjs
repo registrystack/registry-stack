@@ -2,68 +2,30 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   configureProject,
-  configurePack,
   extendNativeProject,
   runtimeConfig,
   redact,
 } from "./control.mjs";
 
-test("live DHIS2 variant keeps reusable acquisition and declares its real unique order", () => {
-  const pack = {
-    routeTemplates: [
-      {
-        id: "page-tracked-entities",
-        readSupport: {
-          order: [{ name: "tracked-entity" }],
-          uniqueTieBreaker: "tracked-entity",
-        },
-        steps: [
-          {
-            to: {
-              parameters: {
-                query: {
-                  order: { constant: "createdAt:desc,trackedEntity:asc" },
-                },
-              },
-            },
-          },
-        ],
-      },
-      { id: "tracker-import", steps: [] },
-    ],
-  };
-  const result = configurePack(pack, "lZGmxYbs97q");
-  assert.deepEqual(result.routeTemplates[0].readSupport.order, [
-    { name: "created-at", direction: "descending" },
-    { name: "unique-attribute", direction: "ascending" },
-  ]);
-  assert.equal(
-    result.routeTemplates[0].readSupport.uniqueTieBreaker,
-    "unique-attribute",
-  );
-  assert.equal(
-    result.routeTemplates[0].steps[0].to.parameters.query.order.constant,
-    "createdAt:desc,lZGmxYbs97q:asc",
-  );
-  assert.equal(
-    pack.routeTemplates[0].readSupport.uniqueTieBreaker,
-    "tracked-entity",
-  );
-  assert.throws(() => configurePack(pack, "../bad"));
-});
-
 test("project owns program and versioned contract; Write is not enabled on DHIS2", () => {
   const p = {
     consultation: { contract: "old" },
     pack: { digest: "old" },
-    templatedRoutes: [{ parameters: { program: "old" } }],
+    templatedRoutes: [
+      { parameters: { program: "old", tie_breaker_attribute: "old" } },
+    ],
   };
-  const r = configureProject(p, "dhis2", "WSGAb5XwJ3Y");
+  const r = configureProject(p, "dhis2", "WSGAb5XwJ3Y", "lZGmxYbs97q");
   assert.equal(
     r.consultation.contract,
     "https://127.0.0.1:19443/contracts/dhis2/1.0.0/openapi.json",
   );
   assert.equal(r.templatedRoutes[0].parameters.program, "WSGAb5XwJ3Y");
+  assert.equal(
+    r.templatedRoutes[0].parameters.tie_breaker_attribute,
+    "lZGmxYbs97q",
+  );
+  assert.throws(() => configureProject(p, "dhis2", "WSGAb5XwJ3Y", "../bad"));
   assert.equal(r.write, undefined);
   assert.equal(p.consultation.contract, "old");
 });
