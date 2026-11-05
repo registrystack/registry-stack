@@ -1,17 +1,17 @@
 # yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/pack/pack.v1alpha1.schema.json
 #
 # The opencrvs-events pack: OpenCRVS v2 birth-registration reads through
-# `POST /events/search`, DRAFT. Verified state, stated plainly: no real
-# OpenCRVS system has been reached. The deployment credentials available to
-# this program were rejected, so nothing here was captured. The wire shape
-# comes from the reviewed Evidence reference that already encodes it
+# `POST /events/search`, DRAFT. Verified state, stated plainly: retrieve and
+# lookup were checked live against an OpenCRVS test environment in November
+# 2026, but that check captured no exchange. The wire shape comes from the reviewed Evidence reference that already encodes it
 # (products/evidence/source-recipes/opencrvs-event-search/ and
 # products/evidence/reference/request-adapter/opencrvs-event-search/, with
 # the live-source check in crates/registry-evidence/tests/live_sources.rs),
 # and every fixture beside the example is synthetic and `documented`, never
-# `captured`. `testedVersions` is therefore empty on purpose: it lists
-# versions a pack was exercised against, and none was. A reader who needs a
-# claim about an OpenCRVS version must obtain a capture first.
+# `captured`. `testedVersions` is empty on purpose: it lists versions a pack
+# was exercised against, and the live check could not read the OpenCRVS
+# version. A reader who needs a claim about an OpenCRVS version must read the
+# version and record it first.
 #
 # What the pack does: the same breg-records facade a caller already uses for
 # DHIS2 (`GET /v1/records/{type}/{record_id}` and
