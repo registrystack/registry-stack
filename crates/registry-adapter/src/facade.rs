@@ -4501,8 +4501,7 @@ async fn refuse_contract_pin(
     )
 }
 
-/// Answer a refused request as the class and status of its [`Refusal`],
-/// journaling the refusal first with its value-free reason.
+/// The validated GovStack Update a stale strong guard leaves to custody.
 struct StaleConditionRequest<'a> {
     operation: &'a ServedOperation,
     caller: &'a Caller,
@@ -4605,6 +4604,8 @@ async fn answer_stale_condition(
     response
 }
 
+/// Answer a refused request as the class and status of its [`Refusal`],
+/// journaling the refusal first with its value-free reason.
 async fn refuse_request(
     state: &FacadeState,
     operation: &ServedOperation,
