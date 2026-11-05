@@ -288,11 +288,13 @@ fn job_command(
             let mut checked = Report::new(run.warnings);
             checked.set_files_checked(run.files_checked);
             let exit = DOMAIN_REFUSAL_EXIT;
+            let mut diagnostics = checked.to_json_value();
+            mapping::annotate(&mut diagnostics, &run.annotations);
             let envelope = json!({
                 "ok": false,
                 "command": command_name,
                 "status": failure_status(exit),
-                "diagnostics": checked.to_json_value(),
+                "diagnostics": diagnostics,
             });
             write_configuration_report(&checked, command_name, format, envelope, stdout, stderr)
                 .map(|()| ExitCode::from(exit))
@@ -300,13 +302,15 @@ fn job_command(
         Ok(run) => {
             let mut checked = Report::new(run.warnings);
             checked.set_files_checked(run.files_checked);
+            let mut diagnostics = checked.to_json_value();
+            mapping::annotate(&mut diagnostics, &run.annotations);
             let mut report = json!({
                 "command": command_name,
                 "pack": run.pack,
                 "job": run.job,
                 "runtime": run.runtime,
                 "filesChecked": run.files_checked,
-                "diagnostics": checked.to_json_value(),
+                "diagnostics": diagnostics,
                 "compiled": "validated offline; no send ran and no read executed",
             });
             report["ok"] = json!(true);

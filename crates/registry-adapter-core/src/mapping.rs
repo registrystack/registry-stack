@@ -462,6 +462,13 @@ pub fn parse_target_path(text: &str) -> Result<Vec<String>, PathError> {
     Ok(segments.into_iter().map(|segment| segment.name).collect())
 }
 
+/// A target path in the form findings name it (dotted names, a name that
+/// holds a dot quoted), or `None` when the text is outside the grammar.
+#[must_use]
+pub fn canonical_target_path(text: &str) -> Option<String> {
+    parse_target_path(text).ok().map(|path| render_path(&path))
+}
+
 struct Parser {
     characters: Vec<char>,
     position: usize,

@@ -91,6 +91,8 @@ pub(crate) struct JobCheckRun {
     pub(crate) files_checked: usize,
     /// The reader's warnings over the authored artifacts.
     pub(crate) warnings: Vec<registry_platform_yaml::Diagnostic>,
+    /// Report members added to some of the warnings, by position.
+    pub(crate) annotations: Vec<crate::mapping::Annotation>,
 }
 
 /// Why the job check could not run to a verdict.
@@ -159,6 +161,15 @@ pub(crate) fn run(args: &JobCheckArgs) -> Result<JobCheckRun, JobCheckFailure> {
         Ok(program) => {
             let mut warnings = program.warnings.clone();
             warnings.extend(mapping_drift(&program.job, &args.job));
+            let mut annotations = Vec::new();
+            for (warning, target) in mapping_unprojected(&program.job, &args.job) {
+                annotations.push(crate::mapping::Annotation {
+                    index: warnings.len(),
+                    member: "target",
+                    value: serde_json::json!(target),
+                });
+                warnings.push(warning);
+            }
             warnings.extend(pack_mapping_drift(&args.pack)?);
             Ok(JobCheckRun {
                 pack: args.pack.display().to_string(),
@@ -166,6 +177,7 @@ pub(crate) fn run(args: &JobCheckArgs) -> Result<JobCheckRun, JobCheckFailure> {
                 runtime: runtime.display().to_string(),
                 files_checked: files_checked(),
                 warnings,
+                annotations,
             })
         }
         Err(error) => Err(JobCheckFailure::Refused {
@@ -192,6 +204,25 @@ fn mapping_drift(
         &directory.join(&mapping.file),
         directory,
         "/destination/mapping",
+    )
+}
+
+/// The warnings for the source keys the destination mapping reads that the
+/// job's projection does not hand over, each with its assignment's target.
+fn mapping_unprojected(
+    job: &registry_adapter_core::AdapterJob,
+    job_path: &std::path::Path,
+) -> Vec<(Diagnostic, String)> {
+    let registry_adapter_core::JobDestination::DirectBreg { mapping, .. } = &job.destination else {
+        return Vec::new();
+    };
+    let directory = job_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new(""));
+    crate::mapping::unprojected_sources(
+        &directory.join(&mapping.file),
+        directory,
+        &job.projection.fields,
     )
 }
 
