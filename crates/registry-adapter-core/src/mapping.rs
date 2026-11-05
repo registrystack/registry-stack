@@ -1440,9 +1440,10 @@ pub struct TargetNode {
     pub schema_type: Option<String>,
     /// Whether the parent object requires the property.
     pub required: bool,
-    /// Whether an assignment can address the node: a scalar leaf, or an
-    /// object holding properties. An array or a node using a reference,
-    /// composition or conditional keyword cannot be addressed.
+    /// Whether an assignment can target the node: a scalar leaf whose path
+    /// the target-path grammar can express. An object is never mappable (its
+    /// children are); neither is an array, a node using a reference,
+    /// composition or conditional keyword, or a path the grammar refuses.
     pub mappable: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub format: Option<String>,
@@ -1481,7 +1482,8 @@ fn target_children(root: &Value, node: &Value, prefix: &mut Vec<String>) -> Vec<
             Resolution::NotALeaf => (false, true),
             Resolution::Unknown | Resolution::Unsupported(_) => (false, false),
         };
-        let mappable = is_leaf || is_object;
+        let path = render_path(prefix);
+        let is_leaf = is_leaf && parse_target_path(&path).is_ok();
         let types = type_names(child);
         let schema_type = if is_object {
             Some("object".to_string())
@@ -1489,11 +1491,11 @@ fn target_children(root: &Value, node: &Value, prefix: &mut Vec<String>) -> Vec<
             schema_type(child).map(str::to_string)
         };
         nodes.push(TargetNode {
-            path: render_path(prefix),
+            path,
             key: name.clone(),
             schema_type,
             required: required.contains(&name.as_str()),
-            mappable,
+            mappable: is_leaf,
             format: child
                 .get("format")
                 .and_then(Value::as_str)
@@ -3269,7 +3271,7 @@ mod tests {
                 {"path": "dateOfBirth", "key": "dateOfBirth", "type": "string", "required": true,
                  "mappable": true, "conversions": ["none", "text", "date"]},
                 {"path": "household", "key": "household", "type": "object", "required": false,
-                 "mappable": true, "children": [
+                 "mappable": false, "children": [
                     {"path": "household.head", "key": "head", "type": "string", "required": false,
                      "mappable": true, "conversions": ["none", "text", "date"]},
                     {"path": "household.size", "key": "size", "type": "integer", "required": true,
@@ -3278,7 +3280,7 @@ mod tests {
                 {"path": "nickname", "key": "nickname", "type": "string", "required": false,
                  "mappable": true, "conversions": ["none", "text", "date"]},
                 {"path": "source", "key": "source", "type": "object", "required": true,
-                 "mappable": true, "children": [
+                 "mappable": false, "children": [
                     {"path": "source.id", "key": "id", "type": "string", "required": true,
                      "mappable": true, "conversions": ["none", "text", "date"]},
                     {"path": "source.kind", "key": "kind", "type": "string", "required": true,
@@ -3328,6 +3330,69 @@ mod tests {
             by_key("quoted.name")["conversions"],
             json!(["none", "integer"])
         );
+    }
+
+    #[test]
+    fn an_object_node_is_never_mappable_and_still_lists_its_children() {
+        let tree = serde_json::to_value(target_tree(&schema()).unwrap()).unwrap();
+        for node in tree.as_array().unwrap() {
+            if node["type"] == "object" {
+                assert_eq!(node["mappable"], false, "{node}");
+                assert!(node["children"].as_array().is_some_and(|c| !c.is_empty()));
+                assert!(node.get("conversions").is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn a_leaf_whose_path_the_grammar_cannot_express_is_not_mappable() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "caf\u{e9}": {"type": "string"},
+                "say \"hi\"": {"type": "string"},
+                "back\\slash": {"type": "string"},
+                "fine": {"type": "string"}
+            }
+        });
+        let tree = serde_json::to_value(target_tree(&schema).unwrap()).unwrap();
+        for node in tree.as_array().unwrap() {
+            let expressible = node["key"] == "fine";
+            assert_eq!(node["mappable"], expressible, "{node}");
+            assert_eq!(node.get("conversions").is_some(), expressible, "{node}");
+        }
+    }
+
+    #[test]
+    fn a_path_past_the_length_limits_is_not_mappable_but_its_group_lists_children() {
+        // Seventeen levels: the deepest leaf has more segments than allowed.
+        let mut deep = json!({"type": "string"});
+        for _ in 0..=MAXIMUM_MAPPING_PATH_SEGMENTS {
+            deep = json!({"type": "object", "properties": {"n": deep}});
+        }
+        let tree = serde_json::to_value(target_tree(&deep).unwrap()).unwrap();
+        let mut node = &tree[0];
+        for _ in 0..MAXIMUM_MAPPING_PATH_SEGMENTS {
+            assert_eq!(node["mappable"], false, "{node}");
+            node = &node["children"][0];
+        }
+        assert_eq!(node["mappable"], false, "{node}");
+        assert!(node.get("conversions").is_none(), "{node}");
+        // A leaf whose rendered path passes the character limit.
+        let long = "k".repeat(MAXIMUM_MAPPING_PATH_CHARACTERS + 1);
+        let schema = json!({"type": "object", "properties": {
+            long.clone(): {"type": "string"}, "ok": {"type": "string"}}});
+        let tree = serde_json::to_value(target_tree(&schema).unwrap()).unwrap();
+        let by_key = |key: &str| {
+            tree.as_array()
+                .unwrap()
+                .iter()
+                .find(|n| n["key"] == key)
+                .unwrap()
+                .clone()
+        };
+        assert_eq!(by_key(&long)["mappable"], false);
+        assert_eq!(by_key("ok")["mappable"], true);
     }
 
     /// The tree offers a conversion exactly when the checker accepts it for
