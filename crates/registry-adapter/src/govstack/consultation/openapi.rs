@@ -138,7 +138,7 @@ pub fn assemble_openapi(
         let mut parameters = vec![traceparent_parameter()];
         match capability {
             ConsultationCapability::Retrieve => {
-                parameters.insert(0, json!({"name": "recordId", "in": "path", "required": true, "schema": {"type": "string", "minLength": 1, "maxLength": 256}}));
+                parameters.insert(0, record_id_parameter());
             }
             ConsultationCapability::List => {
                 parameters.splice(
@@ -259,9 +259,7 @@ pub fn assemble_openapi(
                     "view": view
                 },
                 "parameters": [
-                    {"name": "recordId", "in": "path", "required": true, "schema": {
-                        "type": "string", "minLength": 1, "maxLength": 256
-                    }},
+                    record_id_parameter(),
                     traceparent_parameter()
                 ],
                 "responses": responses,
@@ -558,16 +556,17 @@ fn capabilities_operation() -> Value {
 }
 
 fn record_id_parameter() -> Value {
-    json!({"name": "recordId", "in": "path", "required": true, "schema": {
-        "type": "string", "minLength": 1, "maxLength": 256
-    }})
+    json!({"name": "recordId", "in": "path", "required": true, "schema": super::record_id_path_schema()})
 }
 
 fn idempotency_key_parameter() -> Value {
     json!({
         "name": "Idempotency-Key", "in": "header", "required": true,
         "description": "Quoted Structured Field String identifying one exact write request.",
-        "schema": {"type": "string", "minLength": 3, "maxLength": 202}
+        "schema": {
+            "type": "string", "minLength": 3, "maxLength": 202,
+            "pattern": r#"^"(?:[\x20\x21\x23-\x5B\x5D-\x7E]|\\["\\]){1,200}"(?![\s\S])"#
+        }
     })
 }
 
@@ -1052,6 +1051,93 @@ mod tests {
         ] {
             assert_eq!(collection_id["maxLength"], 128);
             assert_eq!(collection_id["pattern"], "^[a-z][a-z0-9-]{0,127}$");
+        }
+    }
+
+    fn admits(schema: &Value, value: &str) -> bool {
+        jsonschema::JSONSchema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .compile(schema)
+            .expect("generated parameter schema compiles")
+            .is_valid(&json!(value))
+    }
+
+    #[test]
+    fn generated_identifier_parameters_admit_exactly_what_the_runtime_admits() {
+        let consultation = generated_contract();
+        let write = generated_write_contract();
+        let record_path = "/v1/collections/people/records/{recordId}";
+        let record_ids = [
+            parameter(operation(&consultation, record_path, "get"), "recordId"),
+            parameter(operation(&write, record_path, "get"), "recordId"),
+            parameter(operation(&write, record_path, "patch"), "recordId"),
+        ];
+        let longest = "a".repeat(super::super::MAXIMUM_RECORD_ID_CHARACTERS);
+        let longest_wide = "é".repeat(super::super::MAXIMUM_RECORD_ID_CHARACTERS);
+        let too_long = "a".repeat(super::super::MAXIMUM_RECORD_ID_CHARACTERS + 1);
+        for record_id in record_ids {
+            assert_eq!(record_id["in"], "path");
+            for value in [
+                "a",
+                "person-1",
+                "a b",
+                "é",
+                "",
+                ".",
+                "..",
+                "a/b",
+                "a%2Fb",
+                "a?b",
+                "a;b",
+                "a:b",
+                "a\\b",
+                "a\u{200b}b",
+                "a\u{7f}b",
+                longest.as_str(),
+                longest_wide.as_str(),
+                too_long.as_str(),
+            ] {
+                let runtime = crate::govstack::write::record_location("people", value).is_ok();
+                assert_eq!(
+                    admits(&record_id["schema"], value),
+                    runtime,
+                    "recordId {value:?}: the generated bound disagrees with the runtime"
+                );
+            }
+        }
+        let longest_key = format!("\"{}\"", "a".repeat(200));
+        let oversized_key = format!("\"{}\"", "a".repeat(201));
+        let escaped_key = format!("\"{}\"", "\\\\".repeat(100));
+        let escaped_oversized = format!("\"{}\"", "\\\\".repeat(101));
+        for (path, method) in [
+            ("/v1/collections/people/records", "post"),
+            (record_path, "patch"),
+        ] {
+            let key = parameter(operation(&write, path, method), "Idempotency-Key");
+            for value in [
+                r#""a""#,
+                r#""a b""#,
+                r#""a\"b\\c""#,
+                longest_key.as_str(),
+                escaped_key.as_str(),
+                "a",
+                "\"\"",
+                "\"é\"",
+                "\"a\\nb\"",
+                "\"a\" trailing",
+                "\"a\n\"",
+                "\"a\"\n",
+                "\"a\\\"",
+                oversized_key.as_str(),
+                escaped_oversized.as_str(),
+            ] {
+                let runtime = crate::govstack::write::parse_idempotency_key(value).is_ok();
+                assert_eq!(
+                    admits(&key["schema"], value),
+                    runtime,
+                    "{method} {path} Idempotency-Key {value:?}: the generated bound disagrees with the runtime"
+                );
+            }
         }
     }
 
