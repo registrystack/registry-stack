@@ -167,14 +167,21 @@ pub(crate) fn render_receipt(
 }
 
 /// The `/data` member pointers of an Update merge patch whose value is an
-/// object, in member order. The selected Update is a flat merge patch: a
-/// source maps each member to one whole-member add or remove, so an object
-/// value would replace the stored member rather than merge into it as
-/// RFC 7396 requires. Arrays are not listed; RFC 7396 replaces them whole.
+/// object, sorted by member name whatever order the map iterates in. The
+/// selected Update is a flat merge patch: a source maps each member to one
+/// whole-member add or remove, so an object value would replace the stored
+/// member rather than merge into it as RFC 7396 requires. Arrays are not
+/// listed; RFC 7396 replaces them whole.
 pub(crate) fn nested_merge_patch_members(data: &serde_json::Map<String, Value>) -> Vec<String> {
-    data.iter()
+    let mut names: Vec<&String> = data
+        .iter()
         .filter(|(_, value)| value.is_object())
-        .map(|(name, _)| format!("/data/{}", name.replace('~', "~0").replace('/', "~1")))
+        .map(|(name, _)| name)
+        .collect();
+    names.sort_unstable();
+    names
+        .into_iter()
+        .map(|name| format!("/data/{}", name.replace('~', "~0").replace('/', "~1")))
         .collect()
 }
 
@@ -267,6 +274,20 @@ mod tests {
             view: "person-summary",
             closure: "sha256:example-closure".to_owned(),
         }
+    }
+
+    #[test]
+    fn nested_merge_patch_members_are_sorted_by_member_name() {
+        let mut data = serde_json::Map::new();
+        data.insert("zeta".to_owned(), json!({"x": 1}));
+        data.insert("name".to_owned(), json!("Ada"));
+        data.insert("a/b".to_owned(), json!({}));
+        data.insert("tags".to_owned(), json!([{"x": 1}]));
+        data.insert("alpha~".to_owned(), json!({"y": 2}));
+        assert_eq!(
+            nested_merge_patch_members(&data),
+            ["/data/a~1b", "/data/alpha~0", "/data/zeta"]
+        );
     }
 
     #[test]
