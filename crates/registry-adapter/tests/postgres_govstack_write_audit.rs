@@ -263,6 +263,9 @@ async fn a_redeploy_activates_past_an_interrupted_write_and_never_resends_it() {
     )
     .await;
     let token = second.token("records.write");
+    // The database is shared with the first instance, so count only the
+    // conflicts this retry adds.
+    let conflicts_before = conflict_failures(&second).await;
 
     let retry = post(
         &second,
@@ -296,12 +299,18 @@ async fn a_redeploy_activates_past_an_interrupted_write_and_never_resends_it() {
         String::from_utf8_lossy(&fresh.body)
     );
     assert_eq!(second_source.request_count(), 1);
-    assert!(
-        second
-            .journal_details("exchangeFailed")
-            .await
-            .iter()
-            .any(|failure| failure["class"] == "facade.conflict"),
-        "the effect-unknown answer is journaled"
+    assert_eq!(
+        conflict_failures(&second).await,
+        conflicts_before + 1,
+        "the retry's effect-unknown answer is journaled once"
     );
+}
+
+async fn conflict_failures(served: &Served) -> usize {
+    served
+        .journal_details("exchangeFailed")
+        .await
+        .iter()
+        .filter(|failure| failure["class"] == "facade.conflict")
+        .count()
 }
