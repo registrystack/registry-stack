@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  writeFile,
+} from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { test } from "node:test";
@@ -10,8 +17,8 @@ import { fileURLToPath } from "node:url";
 const here = dirname(fileURLToPath(import.meta.url));
 const control = join(here, "control.mjs");
 const repo = resolve(here, "../../../..");
-const scratchRoot =
-  process.platform === "darwin" ? "/Volumes/CodexWorktrees/targets" : tmpdir();
+// Resolved, because macOS reaches the temporary directory through a symlink.
+const scratchRoot = await realpath(tmpdir());
 
 async function privateFile(path, value) {
   await writeFile(
@@ -115,6 +122,28 @@ async function recordedCalls(path) {
     throw error;
   }
 }
+
+test("the controller refuses to run without a named Cargo target directory", async () => {
+  const f = await fixture();
+  const result = await new Promise((complete, reject) => {
+    const child = spawn(
+      process.execPath,
+      [control, "status", "--state", f.state, "--repo", repo],
+      {
+        env: { HOME: f.root, PATH: f.fakeBin, LANG: "C" },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    let stderr = "";
+    child.stderr.on("data", (chunk) => (stderr += chunk));
+    child.once("error", reject);
+    child.once("close", (code) => complete({ code, stderr }));
+  });
+
+  assert.notEqual(result.code, 0);
+  assert.match(result.stderr, /set CARGO_TARGET_DIR or pass --target/);
+  assert.deepEqual(await recordedCalls(f.calls), []);
+});
 
 test("start refuses an existing state directory without its owner marker", async () => {
   const f = await fixture();
