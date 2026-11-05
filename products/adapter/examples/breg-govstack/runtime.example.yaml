@@ -3,6 +3,10 @@
 apiVersion: id.registrystack.org/formats/adapter/runtime/v1alpha1
 kind: AdapterRuntimeConfig
 id: breg-govstack-example
+secretProviders:
+  environment: {}
+  file:
+    root: /run/secrets/registry-adapter
 endpoints:
   - endpoint: registry
     baseUrl: https://breg.example.invalid

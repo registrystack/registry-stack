@@ -1,0 +1,55 @@
+meta {
+  name: 01 Create contact
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{breg_base}}/v1/collections/contacts/records
+  body: json
+  auth: none
+}
+
+headers {
+  Accept: application/json
+  Content-Type: application/json
+  Authorization: Bearer {{access_token}}
+  Idempotency-Key: "wg-create-{{runId}}"
+}
+
+body:json {
+  {
+    "data": {
+      "name": "Registry WG {{runId}}",
+      "email": "wg-{{runId}}@example.test",
+      "note": "created by Registry WG demo {{runId}}"
+    }
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201) {
+    bru.setVar("recordId", res.body.recordId);
+    bru.setVar("etag", res.getHeader("etag"));
+    bru.setVar("createLocation", res.getHeader("location"));
+    bru.setVar("createReceiptJson", JSON.stringify(res.body));
+  }
+}
+
+tests {
+  test("Create returns the generated 201 receipt", function() {
+    expect(res.getStatus()).to.equal(201);
+    expect(res.body.collectionId).to.equal("contacts");
+    expect(res.body.recordId).to.be.a("string").and.not.be.empty;
+  });
+
+  test("receipt, ETag, and Location identify the same record", function() {
+    const etag = res.getHeader("etag");
+    const recordPath = `/v1/collections/contacts/records/${res.body.recordId}`;
+    expect(etag).to.match(/^"[\x21\x23-\x7e]{1,256}"$/);
+    expect(res.body.etag).to.equal(etag);
+    expect(res.getHeader("location")).to.equal(
+      `/govstack/registries${recordPath}`
+    );
+  });
+}

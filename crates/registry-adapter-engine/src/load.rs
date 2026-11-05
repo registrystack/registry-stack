@@ -22,7 +22,7 @@ use registry_adapter_core::{
 };
 use registry_platform_config::{
     sha256_uri, AuthoredExpressions, RuntimeConfigLoader, RuntimeEnvelope, SecretError,
-    SecretProvider, SecretResolver,
+    SecretProvider, SecretProvidersConfig, SecretResolver,
 };
 use registry_platform_yaml::{
     ApiVersion, Digest, EnvelopeRule, Expect, FormatSpec, Reader, Severity,
@@ -521,6 +521,21 @@ fn secret_refusal_fix(error: &SecretError) -> &'static str {
     }
 }
 
+fn facade_secret_resolver(
+    providers: Option<&SecretProvidersConfig>,
+) -> Result<SecretResolver, LoadError> {
+    match providers {
+        Some(providers) => providers.resolver(),
+        None => SecretResolver::new([SecretProvider::Environment], ""),
+    }
+    .map_err(|error| {
+        LoadError::Runtime(format!(
+            "secretProviders was refused: {error}; next: {}",
+            secret_refusal_fix(&error)
+        ))
+    })
+}
+
 /// Refuse credentials whose local material cannot support the endpoint
 /// before the deployment serves callers. Static credentials retain their
 /// existing resolution check; private-key JWT additionally resolves and
@@ -700,8 +715,7 @@ fn load_inner(
         return Err(LoadError::Workspace(findings.join("; ")));
     }
 
-    let resolver = SecretResolver::new([SecretProvider::Environment], "")
-        .map_err(|_| LoadError::Runtime("the secret resolver could not start".to_owned()))?;
+    let resolver = facade_secret_resolver(runtime.secret_providers.as_ref())?;
 
     let deployment = sha256_uri(
         &[project_bytes.as_slice(), &profile_bytes, &pack_bytes]
@@ -1870,6 +1884,44 @@ pub(crate) fn two_record_types_inputs() -> (AdapterProfile, AdapterPack, Adapter
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[cfg(unix)]
+    #[test]
+    fn facade_file_provider_resolves_an_owner_only_secret() {
+        use registry_platform_config::{FileSecretProviderConfig, SecretProvidersConfig};
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = tempfile::tempdir().expect("secret root");
+        let token = root.path().join("source-token");
+        std::fs::write(&token, "FILE-PROVIDER-CANARY").expect("secret");
+        std::fs::set_permissions(&token, std::fs::Permissions::from_mode(0o600))
+            .expect("private mode");
+        let providers = SecretProvidersConfig {
+            file: Some(FileSecretProviderConfig {
+                root: root.path().to_path_buf(),
+            }),
+            environment: None,
+        };
+
+        let resolver = facade_secret_resolver(Some(&providers)).expect("file resolver");
+        let resolved = resolver
+            .resolve("secret:file/source-token")
+            .expect("private file resolves");
+        assert_eq!(resolved.expose_secret(), b"FILE-PROVIDER-CANARY");
+        assert_eq!(
+            resolver.resolve("secret:env/SOURCE_TOKEN").unwrap_err(),
+            SecretError::ProviderDisabled
+        );
+    }
+
+    #[test]
+    fn facade_secret_provider_omission_preserves_environment_only() {
+        let resolver = facade_secret_resolver(None).expect("legacy resolver");
+        assert_eq!(
+            resolver.resolve("secret:file/source-token").unwrap_err(),
+            SecretError::ProviderDisabled
+        );
+    }
 
     const PREFLIGHT_KEY: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"did:web:issuer.test#key-1"}"#;
 

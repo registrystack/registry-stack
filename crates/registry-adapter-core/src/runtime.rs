@@ -5,9 +5,10 @@
 //! environment bindings of one deployment (`products/adapter/CONCEPT.md`
 //! sections 6, 10.2, 12, and 17): endpoint base URLs and TLS, credential
 //! secret references, and the private-CIDR allowlist. The facade's
-//! configuration carries those bindings beside its own members (listener,
-//! database, OIDC issuer, admitted clients, audit, idempotency, cursor
-//! custody); a job's runtime document (`AdapterJobRuntimeConfig`) carries
+//! configuration carries those bindings beside its own members (secret
+//! providers, listener, database, OIDC issuer, admitted clients, audit,
+//! idempotency, cursor custody); a job's runtime document
+//! (`AdapterJobRuntimeConfig`) carries
 //! the bindings beside its own `sources`, `store`, `destinations`,
 //! `secretProviders`, and `hookIngress` members.
 //! Authored artifacts carry no environment values; substitution and
@@ -15,7 +16,9 @@
 
 use crate::auth::{CredentialPlacement, MtlsIdentity, RuntimeCredential};
 use crate::job::MAXIMUM_JOB_RESPONSE_BYTES;
-use registry_platform_config::{DatabaseConfig, ListenerConfig, OidcIssuerConfig, RemovedKey};
+use registry_platform_config::{
+    DatabaseConfig, ListenerConfig, OidcIssuerConfig, RemovedKey, SecretProvidersConfig,
+};
 use registry_platform_yaml::{
     BoundedU64, ExternalId, LocalId, SecretReference, UniqueIdList, UniqueList, Url,
 };
@@ -311,8 +314,8 @@ pub struct IdempotencyRetention {
 /// states these members beside its own `sources`, `store`,
 /// `destinations`, `secretProviders`, and `hookIngress` members; the
 /// facade's document states them beside the facade-only members
-/// (`listener`, `database`, `oidc`, `allowedClients`, `audit`,
-/// `idempotency`, and the cursor custody), which
+/// (`secretProviders`, `listener`, `database`, `oidc`, `allowedClients`,
+/// `audit`, `idempotency`, and the cursor custody), which
 /// [`AdapterRuntimeConfig::endpoint_bindings`] sets aside.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
@@ -342,6 +345,15 @@ pub struct AdapterRuntimeConfig {
     pub id: LocalId,
     /// One binding per configured endpoint.
     pub endpoints: UniqueIdList<EndpointBinding>,
+    /// The secret providers this facade enables. Omission enables environment
+    /// secrets only; file secrets require an explicit
+    /// absolute `file.root`.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "checked_secret_providers"
+    )]
+    pub secret_providers: Option<SecretProvidersConfig>,
     /// The private CAs endpoints may trust beside the system roots;
     /// absent, every endpoint trusts the system roots alone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -386,6 +398,19 @@ pub struct AdapterRuntimeConfig {
     /// 900.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor_ttl_seconds: Option<BoundedU64<60, 86_400>>,
+}
+
+fn checked_secret_providers<'de, D>(
+    deserializer: D,
+) -> Result<Option<SecretProvidersConfig>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let providers = Option::<SecretProvidersConfig>::deserialize(deserializer)?;
+    if let Some(providers) = &providers {
+        providers.check().map_err(serde::de::Error::custom)?;
+    }
+    Ok(providers)
 }
 
 impl AdapterRuntimeConfig {
@@ -596,6 +621,12 @@ mod tests {
         let config = AdapterRuntimeConfig {
             id: LocalId::new("case-deployment").expect("id"),
             endpoints: UniqueIdList::new(vec![binding()]).expect("unique"),
+            secret_providers: Some(SecretProvidersConfig {
+                file: Some(registry_platform_config::FileSecretProviderConfig {
+                    root: "/run/secrets/adapter".into(),
+                }),
+                environment: None,
+            }),
             outbound_tls: Some(OutboundTls {
                 trust_profiles: BTreeMap::from([(
                     "private-ca".to_owned(),
@@ -646,6 +677,9 @@ mod tests {
             r#"{{
                 "id": "case-deployment",
                 "endpoints": [{}],
+                "secretProviders": {{
+                    "file": {{ "root": "/run/secrets/adapter" }}
+                }},
                 "outboundTls": {{
                     "trustProfiles": {{
                         "private-ca": {{
@@ -671,6 +705,7 @@ mod tests {
         );
         let read = serde_json::from_str::<AdapterRuntimeConfig>(&json).expect("read");
         assert_eq!(read.id, config.id);
+        assert_eq!(read.secret_providers, config.secret_providers);
         assert_eq!(read.endpoints.into_vec(), vec![binding()]);
         assert_eq!(read.outbound_tls, config.outbound_tls);
         assert_eq!(
@@ -679,6 +714,40 @@ mod tests {
         );
         assert_eq!(read.audit, config.audit);
         assert_eq!(read.idempotency, config.idempotency);
+    }
+
+    #[test]
+    fn facade_secret_providers_are_closed_and_require_an_absolute_file_root() {
+        let base = serde_json::json!({
+            "id": "case-deployment",
+            "endpoints": [],
+            "allowedPrivateCidrs": ["10.0.0.0/8"],
+            "listener": { "bind": "127.0.0.1:8080" },
+            "database": {
+                "runtimeUrlRef": "secret:env/DB_RUNTIME",
+                "migrationUrlRef": "secret:env/DB_MIGRATION"
+            },
+            "oidc": {
+                "issuer": "https://issuer.example.invalid",
+                "audience": "case-api"
+            },
+            "allowedClients": ["case-portal"],
+            "audit": { "retentionDays": 90 }
+        });
+
+        let omitted: AdapterRuntimeConfig =
+            serde_json::from_value(base.clone()).expect("legacy environment default");
+        assert!(omitted.secret_providers.is_none());
+
+        for refused in [
+            serde_json::json!({}),
+            serde_json::json!({"file": {"root": "relative/secrets"}}),
+            serde_json::json!({"environment": {"unexpected": true}}),
+        ] {
+            let mut candidate = base.clone();
+            candidate["secretProviders"] = refused;
+            assert!(serde_json::from_value::<AdapterRuntimeConfig>(candidate).is_err());
+        }
     }
 
     #[test]

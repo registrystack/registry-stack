@@ -1,0 +1,38 @@
+meta {
+  name: 07 Refuse stale If-Match
+  type: http
+  seq: 7
+}
+
+patch {
+  url: {{breg_base}}/v1/collections/contacts/records/{{recordId}}
+  body: json
+  auth: none
+}
+
+headers {
+  Accept: application/json, application/problem+json
+  Content-Type: application/merge-patch+json
+  Authorization: Bearer {{access_token}}
+  Idempotency-Key: "wg-stale-{{runId}}"
+  If-Match: {{etag}}
+}
+
+body:json {
+  {
+    "data": {
+      "name": "this stale update must not commit"
+    }
+  }
+}
+
+tests {
+  test("the stale original validator is refused", function() {
+    expect(res.getStatus()).to.equal(412);
+    expect(res.getHeader("content-type")).to.contain("application/problem+json");
+    expect(res.body.status).to.equal(412);
+    expect(res.body.type).to.match(/^https:\/\/govstack\.global\/problems\//);
+    expect(res.body.title).to.be.a("string").and.not.be.empty;
+    expect(res.body.traceId).to.match(/^(?!0{32}$)[0-9a-f]{32}$/);
+  });
+}

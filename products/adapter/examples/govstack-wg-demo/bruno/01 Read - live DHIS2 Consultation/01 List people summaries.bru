@@ -1,0 +1,69 @@
+meta {
+  name: 01 List people summaries
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{dhis2_base}}/v1/collections/people-summary/records
+  body: none
+  auth: none
+}
+
+params:query {
+  pageSize: 5
+}
+
+headers {
+  Accept: application/json
+  Authorization: Bearer {{access_token}}
+}
+
+script:post-response {
+  if (res.getStatus() === 200 && Array.isArray(res.body.items)) {
+    const first = res.body.items[0];
+    const configuredRecordId = bru.getEnvVar("dhis2_record_id");
+    const configuredOrgUnit = bru.getEnvVar("dhis2_org_unit");
+    const recordId = configuredRecordId && configuredRecordId !== "auto"
+      ? configuredRecordId
+      : first && first.recordId;
+    const orgUnit = configuredOrgUnit && configuredOrgUnit !== "auto"
+      ? configuredOrgUnit
+      : first && first.data && first.data.organisationUnit;
+
+    if (typeof recordId === "string" && recordId.length > 0) {
+      bru.setVar("dhis2RecordId", recordId);
+    }
+    if (typeof orgUnit === "string" && orgUnit.length > 0) {
+      bru.setVar("dhis2OrgUnit", orgUnit);
+    }
+  }
+}
+
+tests {
+  test("List follows the generated Consultation envelope", function() {
+    expect(res.getStatus()).to.equal(200);
+    expect(res.body.items).to.be.an("array");
+    expect(res.body.pageInfo).to.be.an("object");
+    expect(res.body.pageInfo).to.have.property("nextCursor");
+  });
+
+  test("returned summaries use only the declared public shape", function() {
+    for (const item of res.body.items) {
+      expect(item.recordId).to.be.a("string").and.not.be.empty;
+      expect(item.data).to.have.all.keys("organisationUnit", "lastChangedAt");
+      expect(item.data.organisationUnit).to.be.a("string").and.not.be.empty;
+      expect(item.data.lastChangedAt).to.be.a("string").and.not.be.empty;
+    }
+  });
+
+  test("the run has selectors for subsequent requests", function() {
+    expect(bru.getVar("dhis2RecordId")).to.be.a("string").and.not.be.empty;
+    expect(bru.getVar("dhis2OrgUnit")).to.be.a("string").and.not.be.empty;
+  });
+}
+
+docs {
+  The first live List response supplies the default record ID and organisation
+  unit for later requests. LocalExample selectors can override either value.
+}

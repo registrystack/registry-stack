@@ -1,0 +1,34 @@
+meta {
+  name: 06 Read updated contact
+  type: http
+  seq: 6
+}
+
+get {
+  url: {{breg_base}}/v1/collections/contacts/records/{{recordId}}
+  body: none
+  auth: none
+}
+
+headers {
+  Accept: application/json
+  Authorization: Bearer {{access_token}}
+}
+
+tests {
+  test("Retrieve shows the update and note removal", function() {
+    const runId = bru.getVar("runId");
+    expect(res.getStatus()).to.equal(200);
+    expect(res.body).to.deep.equal({
+      recordId: bru.getVar("recordId"),
+      data: {
+        name: `Registry WG updated ${runId}`,
+        email: `wg-${runId}@example.test`
+      }
+    });
+  });
+
+  test("Retrieve correlates with the Update validator", function() {
+    expect(res.getHeader("etag")).to.equal(bru.getVar("newEtag"));
+  });
+}

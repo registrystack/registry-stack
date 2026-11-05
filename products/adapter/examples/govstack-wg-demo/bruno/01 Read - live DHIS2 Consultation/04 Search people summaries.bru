@@ -1,0 +1,41 @@
+meta {
+  name: 04 Search people summaries
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{dhis2_base}}/v1/collections/people-summary/search
+  body: json
+  auth: none
+}
+
+headers {
+  Accept: application/json
+  Content-Type: application/json
+  Authorization: Bearer {{access_token}}
+}
+
+body:json {
+  {
+    "search": "by-org-unit",
+    "criteria": {
+      "org-unit": "{{dhis2OrgUnit}}"
+    },
+    "pageSize": 5
+  }
+}
+
+tests {
+  test("Search follows the generated Consultation envelope", function() {
+    expect(res.getStatus()).to.equal(200);
+    expect(res.body.items).to.be.an("array");
+    expect(res.body.pageInfo).to.have.property("nextCursor");
+  });
+
+  test("every returned summary matches the requested organisation unit", function() {
+    for (const item of res.body.items) {
+      expect(item.data.organisationUnit).to.equal(bru.getVar("dhis2OrgUnit"));
+    }
+  });
+}

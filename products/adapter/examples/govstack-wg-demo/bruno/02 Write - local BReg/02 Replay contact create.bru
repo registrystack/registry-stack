@@ -1,0 +1,37 @@
+meta {
+  name: 02 Replay contact create
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{breg_base}}/v1/collections/contacts/records
+  body: json
+  auth: none
+}
+
+headers {
+  Accept: application/json
+  Content-Type: application/json
+  Authorization: Bearer {{access_token}}
+  Idempotency-Key: "wg-create-{{runId}}"
+}
+
+body:json {
+  {
+    "data": {
+      "name": "Registry WG {{runId}}",
+      "email": "wg-{{runId}}@example.test",
+      "note": "created by Registry WG demo {{runId}}"
+    }
+  }
+}
+
+tests {
+  test("same key and body replay the exact Create response", function() {
+    expect(res.getStatus()).to.equal(201);
+    expect(JSON.stringify(res.body)).to.equal(bru.getVar("createReceiptJson"));
+    expect(res.getHeader("etag")).to.equal(bru.getVar("etag"));
+    expect(res.getHeader("location")).to.equal(bru.getVar("createLocation"));
+  });
+}

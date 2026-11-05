@@ -1,0 +1,35 @@
+meta {
+  name: 03 Read created contact
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{breg_base}}/v1/collections/contacts/records/{{recordId}}
+  body: none
+  auth: none
+}
+
+headers {
+  Accept: application/json
+  Authorization: Bearer {{access_token}}
+}
+
+tests {
+  test("companion Retrieve returns the created public contact", function() {
+    const runId = bru.getVar("runId");
+    expect(res.getStatus()).to.equal(200);
+    expect(res.body).to.deep.equal({
+      recordId: bru.getVar("recordId"),
+      data: {
+        name: `Registry WG ${runId}`,
+        email: `wg-${runId}@example.test`,
+        note: `created by Registry WG demo ${runId}`
+      }
+    });
+  });
+
+  test("companion Retrieve returns the Create validator", function() {
+    expect(res.getHeader("etag")).to.equal(bru.getVar("etag"));
+  });
+}

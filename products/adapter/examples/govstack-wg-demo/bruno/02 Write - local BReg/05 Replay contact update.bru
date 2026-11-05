@@ -1,0 +1,36 @@
+meta {
+  name: 05 Replay contact update
+  type: http
+  seq: 5
+}
+
+patch {
+  url: {{breg_base}}/v1/collections/contacts/records/{{recordId}}
+  body: json
+  auth: none
+}
+
+headers {
+  Accept: application/json
+  Content-Type: application/merge-patch+json
+  Authorization: Bearer {{access_token}}
+  Idempotency-Key: "wg-update-{{runId}}"
+  If-Match: {{etag}}
+}
+
+body:json {
+  {
+    "data": {
+      "name": "Registry WG updated {{runId}}",
+      "note": null
+    }
+  }
+}
+
+tests {
+  test("same key, body, and condition replay the exact Update response", function() {
+    expect(res.getStatus()).to.equal(204);
+    expect(res.getHeader("etag")).to.equal(bru.getVar("newEtag"));
+    expect(res.body === "" || res.body == null).to.equal(true);
+  });
+}
