@@ -284,6 +284,8 @@ fn check_human_output_names_the_verdict() {
     let (exit, text) = run_human(&["mapping", "check", &path(&root, "person.mapping.yaml")]);
     assert_eq!(exit, ExitCode::SUCCESS, "{text}");
     assert!(text.contains("Mapping check passed."), "{text}");
+    // The target tree is for tools; the text form leaves it to `--format json`.
+    assert!(!text.contains("targetTree"), "{text}");
 }
 
 #[test]
@@ -915,23 +917,29 @@ fn mapping_check_drift(model: &Path) -> Value {
 }
 
 #[test]
-fn mapping_check_names_a_hand_edited_script_as_the_cause() {
+fn mapping_check_names_a_hand_edited_script_as_differing_bytes() {
     let (root, _, model) = project_with_generated_script();
     let script = root.path().join("scripts/gen.rhai");
     let text = std::fs::read_to_string(&script).unwrap();
     std::fs::write(&script, format!("{text}// hand edit\n")).unwrap();
-    assert_eq!(mapping_check_drift(&model)["cause"], "script-edited");
+    let warning = mapping_check_drift(&model);
+    assert_eq!(warning["cause"], "script-differs");
+    let message = warning["message"].as_str().unwrap();
+    assert!(
+        message.contains("the model's digest still matches"),
+        "{message}"
+    );
 }
 
 #[test]
-fn mapping_check_names_an_edited_header_as_a_script_edit() {
+fn mapping_check_names_an_edited_header_as_differing_bytes() {
     let (root, _, model) = project_with_generated_script();
     let script = root.path().join("scripts/gen.rhai");
     let text = std::fs::read_to_string(&script).unwrap();
     let lines: Vec<&str> = text.split('\n').collect();
     let edited = [&lines[..1], &["// edited header line"], &lines[2..]].concat();
     std::fs::write(&script, edited.join("\n")).unwrap();
-    assert_eq!(mapping_check_drift(&model)["cause"], "script-edited");
+    assert_eq!(mapping_check_drift(&model)["cause"], "script-differs");
 }
 
 #[test]
@@ -939,7 +947,10 @@ fn mapping_check_names_a_changed_model_as_the_cause() {
     let (_root, _, model) = project_with_generated_script();
     let text = std::fs::read_to_string(&model).unwrap();
     std::fs::write(&model, text.replace("constant: person", "constant: human")).unwrap();
-    assert_eq!(mapping_check_drift(&model)["cause"], "model-changed");
+    let warning = mapping_check_drift(&model);
+    assert_eq!(warning["cause"], "model-changed");
+    let message = warning["message"].as_str().unwrap();
+    assert!(message.contains("the model changed since"), "{message}");
 }
 
 /// The header pins the model's meaning, not its layout: a byte order mark,

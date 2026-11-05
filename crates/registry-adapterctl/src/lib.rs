@@ -790,6 +790,7 @@ fn render_human(report: &Value, checked: &Report, stdout: &mut dyn io::Write) ->
     // Members a command shows in its own form below, or only in JSON. A
     // `nextStep` is always the closing `Next:` line.
     let own: &[&str] = match command {
+        "mapping check" => &["targetTree"],
         "mapping generate" => &["modelDigest", "scriptDigest", "existed"],
         "mapping preview" => &["accepted", "refused", "results"],
         _ => &[],
