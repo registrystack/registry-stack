@@ -164,6 +164,18 @@ pub(crate) fn render_receipt(
     })
 }
 
+/// The `/data` member pointers of an Update merge patch whose value is an
+/// object, in member order. The selected Update is a flat merge patch: a
+/// source maps each member to one whole-member add or remove, so an object
+/// value would replace the stored member rather than merge into it as
+/// RFC 7396 requires. Arrays are not listed; RFC 7396 replaces them whole.
+pub(crate) fn nested_merge_patch_members(data: &serde_json::Map<String, Value>) -> Vec<String> {
+    data.iter()
+        .filter(|(_, value)| value.is_object())
+        .map(|(name, _)| format!("/data/{}", name.replace('~', "~0").replace('/', "~1")))
+        .collect()
+}
+
 pub(crate) fn request_fingerprint(
     method: &str,
     target: &str,

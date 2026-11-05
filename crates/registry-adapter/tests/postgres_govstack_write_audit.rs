@@ -2,8 +2,10 @@
 
 //! PostgreSQL proofs for the fixed GovStack Write over the BReg pack: a
 //! failed replay keeps exact response custody while journaling the canonical
-//! Problem identity for every attempt, and a redeploy never resends an
-//! interrupted write.
+//! Problem identity for every attempt, a redeploy never resends an
+//! interrupted write, a completed Update replays ahead of its guard, a
+//! bodyless Update does not negotiate `Accept`, and an Update stays a flat
+//! merge patch whatever its input schema admits.
 #![cfg(feature = "postgres-test")]
 
 #[allow(dead_code)]
@@ -313,4 +315,284 @@ async fn conflict_failures(served: &Served) -> usize {
         .iter()
         .filter(|failure| failure["class"] == "facade.conflict")
         .count()
+}
+
+const RECORD_ID: &str = "00000000-0000-4000-8000-000000000001";
+
+/// One successful one-item BReg batch answer for `operation`.
+fn batch_receipt(operation: &str, etag: &str) -> Response {
+    Response::json(
+        200,
+        &json!({"results": [{
+            "operation": operation,
+            "recordIdentifier": RECORD_ID,
+            "etag": etag,
+            "domainData": {"name": "Ada", "email": "ada@example.test", "jurisdiction": "zone-a"}
+        }]})
+        .to_string(),
+    )
+}
+
+fn header<'a>(head: &'a str, name: &str) -> Option<&'a str> {
+    head.lines().skip(1).find_map(|line| {
+        let (field, value) = line.split_once(':')?;
+        field.eq_ignore_ascii_case(name).then(|| value.trim())
+    })
+}
+
+fn record_path() -> String {
+    format!("{CREATE_PATH}/{RECORD_ID}")
+}
+
+/// Create the synthetic contact and return its public ETag.
+fn create_contact(served: &Served, token: &str, key: &str) -> String {
+    let (status, head, body) = served.request(
+        "POST",
+        CREATE_PATH,
+        Some(token),
+        &[
+            ("Content-Type", "application/json"),
+            ("Idempotency-Key", key),
+        ],
+        json!({"data": {"name": "Ada", "email": "ada@example.test"}})
+            .to_string()
+            .as_bytes(),
+    );
+    assert_eq!(status, 201, "{body}\n{}", served.stderr_text());
+    header(&head, "etag")
+        .expect("a created record carries its ETag")
+        .to_owned()
+}
+
+fn patch(
+    served: &Served,
+    token: &str,
+    key: &str,
+    if_match: &str,
+    extra: &[(&str, &str)],
+    data: &Value,
+) -> (u16, String, Value) {
+    let mut headers = vec![
+        ("Content-Type", "application/merge-patch+json"),
+        ("Idempotency-Key", key),
+        ("If-Match", if_match),
+    ];
+    headers.extend_from_slice(extra);
+    served.request(
+        "PATCH",
+        &record_path(),
+        Some(token),
+        &headers,
+        json!({"data": data}).to_string().as_bytes(),
+    )
+}
+
+#[tokio::test]
+async fn a_completed_update_replays_after_its_validator_closure_changes() {
+    let pack = repository_path("products/adapter/packs/breg-records/pack.yaml");
+    let project = repository_path("products/adapter/examples/breg-govstack");
+    let first_source = UpstreamDouble::start();
+    first_source.respond_with(vec![
+        batch_receipt("create", "\"breg-1\""),
+        batch_receipt("patch", "\"breg-2\""),
+    ]);
+    let first = Served::start_with_pack_endpoint_and_credential(
+        &first_source.url(""),
+        &project,
+        &pack,
+        "registry",
+        CREDENTIAL,
+    )
+    .await;
+    let token = first.token("records.write");
+    let created = create_contact(&first, &token, r#""closure-create""#);
+    let key = r#""closure-update""#;
+    let data = json!({"name": "Augusta Ada King"});
+    let (status, head, body) = patch(&first, &token, key, &created, &[], &data);
+    assert_eq!(status, 204, "{body}\n{}", first.stderr_text());
+    let updated = header(&head, "etag")
+        .expect("the update carries its new ETag")
+        .to_owned();
+    assert_eq!(first_source.request_count(), 2);
+    let database = first.database.clone();
+    drop(first);
+
+    // The configured source origin is part of the validator closure, so the
+    // redeployed facade can no longer open the guard the client sent.
+    let second_source = UpstreamDouble::start();
+    let second = Served::start_with_pack_endpoint_credential_and_database(
+        &second_source.url(""),
+        &project,
+        &pack,
+        "registry",
+        CREDENTIAL,
+        &database,
+    )
+    .await;
+    let token = second.token("records.write");
+
+    let (status, head, body) = patch(&second, &token, key, &created, &[], &data);
+    assert_eq!(
+        status,
+        204,
+        "the completed Update replays before its guard is evaluated: {body}\n{}",
+        second.stderr_text()
+    );
+    assert_eq!(header(&head, "etag"), Some(updated.as_str()));
+    assert_eq!(second_source.request_count(), 0, "a replay sends nothing");
+
+    let (status, _, problem) = patch(
+        &second,
+        &token,
+        r#""closure-update-fresh""#,
+        &created,
+        &[],
+        &data,
+    );
+    assert_eq!(status, 412, "{problem}");
+    assert_eq!(
+        problem["type"],
+        "https://govstack.global/problems/digital-registries/precondition-failed"
+    );
+    let (status, _, problem) = patch(
+        &second,
+        &token,
+        key,
+        &created,
+        &[],
+        &json!({"name": "Changed"}),
+    );
+    assert_eq!(
+        status, 412,
+        "only an identical completed request replays ahead of its guard: {problem}"
+    );
+    assert_eq!(second_source.request_count(), 0);
+}
+
+#[tokio::test]
+async fn a_bodyless_update_does_not_negotiate_accept_but_create_still_does() {
+    let pack = repository_path("products/adapter/packs/breg-records/pack.yaml");
+    let project = repository_path("products/adapter/examples/breg-govstack");
+    let source = UpstreamDouble::start();
+    source.respond_with(vec![
+        batch_receipt("create", "\"breg-1\""),
+        batch_receipt("patch", "\"breg-2\""),
+        batch_receipt("patch", "\"breg-3\""),
+    ]);
+    let served = Served::start_with_pack_endpoint_and_credential(
+        &source.url(""),
+        &project,
+        &pack,
+        "registry",
+        CREDENTIAL,
+    )
+    .await;
+    let token = served.token("records.write");
+
+    let (status, _, body) = served.request(
+        "POST",
+        CREATE_PATH,
+        Some(&token),
+        &[
+            ("Content-Type", "application/json"),
+            ("Accept", "application/problem+json"),
+            ("Idempotency-Key", r#""accept-create-refused""#),
+        ],
+        json!({"data": {"name": "Ada", "email": "ada@example.test"}})
+            .to_string()
+            .as_bytes(),
+    );
+    assert_eq!(status, 406, "a Create receipt is JSON: {body}");
+    assert_eq!(source.request_count(), 0);
+
+    let created = create_contact(&served, &token, r#""accept-create""#);
+    let (status, head, body) = patch(
+        &served,
+        &token,
+        r#""accept-update-problem""#,
+        &created,
+        &[("Accept", "application/problem+json")],
+        &json!({"name": "Augusta Ada King"}),
+    );
+    assert_eq!(status, 204, "{body}\n{}", served.stderr_text());
+    let updated = header(&head, "etag").expect("new ETag").to_owned();
+
+    let (status, _, body) = patch(
+        &served,
+        &token,
+        r#""accept-update-other""#,
+        &updated,
+        &[("Accept", "text/html")],
+        &json!({"name": "Ada King"}),
+    );
+    assert_eq!(status, 204, "an Update never fails on Accept alone: {body}");
+    assert_eq!(source.request_count(), 3);
+}
+
+#[tokio::test]
+async fn an_update_refuses_a_nested_object_member_even_when_its_schema_admits_one() {
+    let pack = repository_path("products/adapter/packs/breg-records/pack.yaml");
+    let original = repository_path("products/adapter/examples/breg-govstack");
+    let changed = tempfile::tempdir().expect("a project copy");
+    copy_tree(&original, changed.path());
+    // Widen the Update input schema to admit an object member.
+    let schema_path = changed.path().join("schemas/contact-update.schema.json");
+    let old_schema = std::fs::read(&schema_path).expect("read the update schema");
+    let mut schema: Value = serde_json::from_slice(&old_schema).expect("schema JSON");
+    schema["properties"]["address"] = json!({
+        "type": "object", "additionalProperties": false,
+        "properties": {"city": {"type": "string"}}
+    });
+    let new_schema = serde_json::to_vec_pretty(&schema).expect("schema bytes");
+    std::fs::write(&schema_path, &new_schema).expect("write the widened schema");
+    let project_path = changed.path().join("project.yaml");
+    let project_text = std::fs::read_to_string(&project_path).expect("read the project");
+    let old_pin = served_harness::digest_of(&old_schema);
+    assert!(
+        project_text.contains(&old_pin),
+        "the project pins the schema"
+    );
+    std::fs::write(
+        &project_path,
+        project_text.replace(&old_pin, &served_harness::digest_of(&new_schema)),
+    )
+    .expect("re-pin the widened schema");
+
+    let source = UpstreamDouble::start();
+    source.respond_with(vec![batch_receipt("create", "\"breg-1\"")]);
+    let served = Served::start_with_pack_endpoint_and_credential(
+        &source.url(""),
+        changed.path(),
+        &pack,
+        "registry",
+        CREDENTIAL,
+    )
+    .await;
+    let token = served.token("records.write");
+    let created = create_contact(&served, &token, r#""nested-create""#);
+
+    let (status, _, problem) = patch(
+        &served,
+        &token,
+        r#""nested-update""#,
+        &created,
+        &[],
+        &json!({"name": "Ada", "address": {"city": "London"}}),
+    );
+    assert_eq!(status, 422, "{problem}\n{}", served.stderr_text());
+    assert_eq!(problem["type"], INVALID_CONTENT);
+    assert_eq!(
+        problem["errors"][0]["pointer"], "/data/address",
+        "{problem}"
+    );
+    assert_eq!(
+        problem["errors"].as_array().map(Vec::len),
+        Some(1),
+        "{problem}"
+    );
+    assert_eq!(
+        source.request_count(),
+        1,
+        "the refused Update sends nothing"
+    );
 }

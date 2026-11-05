@@ -982,6 +982,44 @@ impl PostgresIdempotencyStore {
         claim_from_row(row, request.request_digest)
     }
 
+    /// Read the exact terminal response bound to this namespace and request
+    /// digest while it is still in custody. This never claims, extends, or
+    /// erases a row: a request whose own guard no longer holds uses it to
+    /// replay what its earlier attempt already answered.
+    pub async fn completed_replay(
+        &self,
+        request: ClaimRequest<'_>,
+        now: SystemTime,
+    ) -> Result<Option<(TerminalOutcome, StoredResponse)>, IdempotencyError> {
+        validate_claim_request(&request)?;
+        let scope_digest = scope_digest(&request);
+        let client = self.pool.get().await?;
+        let Some(row) = client
+            .query_opt(
+                "SELECT state, response_status, \
+                        response_content_type, response_location, response_etag, \
+                        response_body, response_request_id \
+                 FROM adapter_idempotency_entries \
+                 WHERE scope_digest = $1 AND request_digest = $2 \
+                   AND state IN ('completed', 'failed') AND expires_at > $3",
+                &[
+                    &scope_digest.as_slice(),
+                    &request.request_digest.as_slice(),
+                    &now,
+                ],
+            )
+            .await?
+        else {
+            return Ok(None);
+        };
+        let outcome = if row.get::<_, String>("state") == "completed" {
+            TerminalOutcome::Completed
+        } else {
+            TerminalOutcome::Failed
+        };
+        Ok(Some((outcome, response_from_row(&row)?)))
+    }
+
     /// Claim or resume one closed linear multi-effect write. The initial
     /// expiry is anchored here and never slides; every execution lease is
     /// bounded by both the physical route deadline and that expiry.
