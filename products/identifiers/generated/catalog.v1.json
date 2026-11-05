@@ -4258,7 +4258,7 @@
       },
       "artifact": {
         "path": "products/adapter/schemas/pack.v1alpha1.schema.json",
-        "sha256": "d5cb74b4ce1d524e0a68213949a45fc28c899d570da31dc6521e3dcbc2ed520e",
+        "sha256": "b799254a0972b343e0366009422c58968813e356d76f5d4d9e66ef5ce3656761",
         "mediaType": "application/schema+json"
       }
     },
@@ -4294,7 +4294,7 @@
       },
       "artifact": {
         "path": "products/adapter/schemas/project.v1alpha1.schema.json",
-        "sha256": "f0c9eee1e929f34a44e9a230f3ffaeb9b32f9e62d1975f5151fb4752e5d39e01",
+        "sha256": "5660a447be61398747639c2e0ecde3b0e355c29d4ff454209d3041cd02f5d1a5",
         "mediaType": "application/schema+json"
       }
     },
