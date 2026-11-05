@@ -67,8 +67,8 @@ sources:
     pack:
       id: opencrvs-events
       version: "1"
-      digest: sha256:fb42d925b438ef4f1f0968f378297753685c713ddc53bc514739427a6d32e1b6
-      artifactPrefix: adapter-packs/opencrvs-events/fb42d925b438ef4f1f0968f378297753685c713ddc53bc514739427a6d32e1b6
+      digest: sha256:41138c64e55b756317778b3a4e95673f10559fc99ded22a699791f7913f52f9a
+      artifactPrefix: adapter-packs/opencrvs-events/41138c64e55b756317778b3a4e95673f10559fc99ded22a699791f7913f52f9a
     route: evidence-birth-date
     connection: opencrvs
     inputs:
@@ -83,8 +83,8 @@ sources:
     pack:
       id: opencrvs-events
       version: "1"
-      digest: sha256:fb42d925b438ef4f1f0968f378297753685c713ddc53bc514739427a6d32e1b6
-      artifactPrefix: adapter-packs/opencrvs-events/fb42d925b438ef4f1f0968f378297753685c713ddc53bc514739427a6d32e1b6
+      digest: sha256:41138c64e55b756317778b3a4e95673f10559fc99ded22a699791f7913f52f9a
+      artifactPrefix: adapter-packs/opencrvs-events/41138c64e55b756317778b3a4e95673f10559fc99ded22a699791f7913f52f9a
     route: evidence-birth-parents
     connection: opencrvs
     inputs:

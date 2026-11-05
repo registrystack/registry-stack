@@ -196,13 +196,21 @@ routeTemplates:
       type: read-page
       order:
         - {name: created-at, direction: descending}
-        - {name: tracked-entity, direction: ascending}
-      uniqueTieBreaker: tracked-entity
+        - {name: unique-attribute, direction: ascending}
+      uniqueTieBreaker: unique-attribute
     parameters:
       - name: program
         type: string
         required: true
         description: The DHIS2 program the page is constrained to.
+      - name: tie_breaker_attribute
+        type: string
+        required: true
+        description: >-
+          UID of a unique tracked-entity attribute of the program. It breaks
+          ties between entities created at the same time, which keeps paging
+          stable. DHIS2 2.43 refuses trackedEntity as a sort key (409 E7145),
+          so a program attribute is the only portable tie-breaker.
     steps:
       - onException:
           exception: [upstream.timeout, upstream.connection]
@@ -227,7 +235,7 @@ routeTemplates:
               page: {exchangeProperty: dhis2Page}
               pageSize: {header: pageSize}
               totalPages: {constant: "true"}
-              order: {constant: "createdAt:desc,trackedEntity:asc"}
+              order: {constant: "createdAt:desc,{{tie_breaker_attribute}}:asc"}
       - setProperty:
           name: AdapterNextContinuation
           value:
@@ -246,13 +254,21 @@ routeTemplates:
           comparisons: [equality]
       order:
         - {name: created-at, direction: descending}
-        - {name: tracked-entity, direction: ascending}
-      uniqueTieBreaker: tracked-entity
+        - {name: unique-attribute, direction: ascending}
+      uniqueTieBreaker: unique-attribute
     parameters:
       - name: program
         type: string
         required: true
         description: The DHIS2 program the page is constrained to.
+      - name: tie_breaker_attribute
+        type: string
+        required: true
+        description: >-
+          UID of a unique tracked-entity attribute of the program. It breaks
+          ties between entities created at the same time, which keeps paging
+          stable. DHIS2 2.43 refuses trackedEntity as a sort key (409 E7145),
+          so a program attribute is the only portable tie-breaker.
     steps:
       - onException:
           exception: [upstream.timeout, upstream.connection]
@@ -282,7 +298,7 @@ routeTemplates:
               page: {exchangeProperty: dhis2Page}
               pageSize: {header: pageSize}
               totalPages: {constant: "true"}
-              order: {constant: "createdAt:desc,trackedEntity:asc"}
+              order: {constant: "createdAt:desc,{{tie_breaker_attribute}}:asc"}
       - setProperty:
           name: AdapterNextContinuation
           value:
