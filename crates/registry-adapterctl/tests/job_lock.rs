@@ -159,6 +159,28 @@ fn lock_keeps_the_file_mode_of_the_job() {
     assert_eq!(mode, 0o600);
 }
 
+/// A job named without a directory, from the job's own directory, is locked
+/// in place. The child process runs in that directory, so the test never
+/// moves this process's working directory.
+#[test]
+fn lock_of_a_bare_job_file_name_writes_the_pin() {
+    let root = workspace();
+    let job = stale_job(&root);
+    let before = std::fs::read_to_string(&job).unwrap();
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_adapterctl"))
+        .current_dir(root.path())
+        .args(["--format=json", "job", "lock", "job.yaml"])
+        .output()
+        .unwrap();
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap_or(Value::Null);
+    assert!(output.status.success(), "{report}");
+    assert_eq!(report["mapping"], "updated", "{report}");
+    assert_eq!(
+        std::fs::read_to_string(&job).unwrap(),
+        before.replace(STALE, SHIPPED_MAPPING_PIN)
+    );
+}
+
 #[test]
 fn lock_of_a_current_job_changes_nothing() {
     let root = workspace();

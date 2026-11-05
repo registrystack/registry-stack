@@ -617,7 +617,11 @@ pub(crate) fn write_atomically(
         path: target.display().to_string(),
         source,
     };
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    // A bare file name has an empty parent: the current directory.
+    let parent = match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    };
     let root_directory = if model_directory.as_os_str().is_empty() {
         Path::new(".")
     } else {
