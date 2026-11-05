@@ -1442,7 +1442,7 @@ pub struct TargetNode {
     pub required: bool,
     /// Whether an assignment can target the node: a scalar leaf whose path
     /// the target-path grammar can express. An object is never mappable (its
-    /// children are); neither is an array, a node using a reference,
+    /// children may be); neither is an array, a node using a reference,
     /// composition or conditional keyword, or a path the grammar refuses.
     pub mappable: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
