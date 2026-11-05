@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- GovStack Update: the ETag validator closure also binds the companion
+  read's route (its steps, the direct routes they call and the pinned
+  digests of their scripts) and the pack's code maps, so changing a mapping
+  the read applies invalidates outstanding ETags. Client, OIDC and deployment
+  identity stay outside it. The closure domain is now `v3`; ETags issued
+  before the upgrade return 412 and need a fresh companion read.
 - GovStack Update: a retry under the same Idempotency-Key and fingerprint
   replays its stored answer even when its If-Match no longer validates (the
   record changed, or a redeploy changed the guard's closure), instead of
