@@ -1615,6 +1615,7 @@ async fn answer(
                 digest,
                 ResumeWriteContext {
                     artifact_digest: state.artifact_digest,
+                    source_digest: crate::custody::source_digest(&state.loaded, &operation.steps),
                     effect_deadline,
                     step_count,
                 },

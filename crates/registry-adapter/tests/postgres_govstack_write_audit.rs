@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! PostgreSQL proof that a fixed GovStack failed replay keeps exact response
-//! custody while journaling the canonical Problem identity for every attempt.
+//! PostgreSQL proofs for the fixed GovStack Write over the BReg pack: a
+//! failed replay keeps exact response custody while journaling the canonical
+//! Problem identity for every attempt, and a redeploy never resends an
+//! interrupted write.
 #![cfg(feature = "postgres-test")]
 
 #[allow(dead_code)]
@@ -146,4 +148,121 @@ async fn failed_exact_replay_keeps_body_and_journals_canonical_problem_per_attem
         assert_eq!(failure["problemCode"], INVALID_CONTENT, "{failure}");
         assert_eq!(failure["status"], 422, "{failure}");
     }
+}
+
+const CREDENTIAL: &str =
+    "      type: static-authorization\n      tokenRef: secret:env/TEST_UPSTREAM_PASSWORD\n";
+
+fn copy_tree(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).expect("create the project copy");
+    for entry in std::fs::read_dir(from).expect("read the project tree") {
+        let entry = entry.expect("a project entry");
+        let target = to.join(entry.file_name());
+        if entry.file_type().expect("entry type").is_dir() {
+            copy_tree(&entry.path(), &target);
+        } else {
+            std::fs::copy(entry.path(), target).expect("copy a project file");
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_redeploy_activates_past_an_interrupted_write_and_never_resends_it() {
+    let pack = repository_path("products/adapter/packs/breg-records/pack.yaml");
+    let project = repository_path("products/adapter/examples/breg-govstack");
+    let first_source = UpstreamDouble::start();
+    first_source.respond_with(vec![Response::json(503, "{}")]);
+    let first = Served::start_with_pack_endpoint_and_credential(
+        &first_source.url(""),
+        &project,
+        &pack,
+        "registry",
+        CREDENTIAL,
+    )
+    .await;
+    let token = first.token("records.write");
+    let key = r#""interrupted-create""#;
+    let body = json!({"data": {"name": "Ada", "email": "ada@example.test"}});
+    let interrupted = post(
+        &first,
+        &token,
+        key,
+        "00-33333333333333333333333333333333-3333333333333333-01",
+        &body,
+    );
+    // An ambiguous source failure leaves the single write resumable.
+    assert_eq!(
+        interrupted.status,
+        409,
+        "{}",
+        String::from_utf8_lossy(&interrupted.body)
+    );
+    assert_eq!(first_source.request_count(), 1);
+    let database = first.database.clone();
+    drop(first);
+
+    // A changed project is a changed artifact, and the changed endpoint
+    // base is a changed source origin the artifact digest does not cover.
+    let changed = tempfile::tempdir().expect("a project copy");
+    copy_tree(&project, changed.path());
+    let project_path = changed.path().join("project.yaml");
+    let mut changed_project = std::fs::read_to_string(&project_path).expect("read the project");
+    changed_project.push_str("# a redeployed artifact\n");
+    std::fs::write(&project_path, changed_project).expect("write the changed project");
+    let second_source = UpstreamDouble::start();
+    second_source.respond_with(vec![Response::json(
+        422,
+        &json!({"status": 422, "code": "action.refused"}).to_string(),
+    )]);
+    let second = Served::start_with_pack_endpoint_credential_and_database(
+        &second_source.url(""),
+        changed.path(),
+        &pack,
+        "registry",
+        CREDENTIAL,
+        &database,
+    )
+    .await;
+    let token = second.token("records.write");
+
+    let retry = post(
+        &second,
+        &token,
+        key,
+        "00-44444444444444444444444444444444-4444444444444444-01",
+        &body,
+    );
+    assert_eq!(
+        retry.status,
+        409,
+        "{}",
+        String::from_utf8_lossy(&retry.body)
+    );
+    assert_eq!(
+        second_source.request_count(),
+        0,
+        "a possibly sent write is never resent across a redeploy"
+    );
+    let fresh = post(
+        &second,
+        &token,
+        r#""fresh-create""#,
+        "00-55555555555555555555555555555555-5555555555555555-01",
+        &body,
+    );
+    assert_eq!(
+        fresh.status,
+        422,
+        "{}",
+        String::from_utf8_lossy(&fresh.body)
+    );
+    assert_eq!(second_source.request_count(), 1);
+    assert!(
+        second
+            .journal_details("exchangeFailed")
+            .await
+            .iter()
+            .any(|failure| failure["class"] == "facade.conflict"),
+        "the effect-unknown answer is journaled"
+    );
 }

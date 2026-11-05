@@ -1442,8 +1442,12 @@ process (draft, declare), several `to` steps in sequence.
   older artifact cannot start a fresh effect once a successor has activated.
   Activation is refused only while another artifact still holds unfinished
   work for that deployment: an attempted or accepted async write, or an
-  unexpired resume. Terminal rows never block, so a hotfix or a rollback
-  starts once the older artifact's unfinished work has finished or expired.
+  unexpired resume of two or more steps. An interrupted single-step write
+  never blocks: a retry under another artifact or another source origin
+  answers effect-unknown and never resends, and one whose step never started
+  is reclaimed once its lease lapses. Terminal rows never block, so a hotfix
+  or a rollback starts once the older artifact's unfinished work has
+  finished or expired.
   The refusal names the count and the instant the last of that work expires;
   the operator either redeploys the previous artifact bytes so the work can
   finish under them, or waits until that instant. A synchronous or read-only

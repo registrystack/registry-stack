@@ -8,6 +8,7 @@
 //! the facade installs the concrete arc on each served write's exchange
 //! and consults it for the terminal response.
 
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
@@ -17,6 +18,7 @@ use std::time::SystemTime;
 
 use deadpool_postgres::GenericClient;
 use registry_adapter_core::ErrorClass;
+use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
 
 use crate::engine::exchange::{WriteClaim, WriteCustody};
@@ -41,8 +43,51 @@ pub struct AsyncWriteContext {
 /// Active-artifact and finite-deadline authority for a compiled linear write.
 pub struct ResumeWriteContext {
     pub artifact_digest: [u8; 32],
+    /// Digest of [`source_endpoint_bases`] for the write's route: the
+    /// artifact digest covers no runtime file, so the source origin a resend
+    /// would reach is pinned separately.
+    pub source_digest: [u8; 32],
     pub effect_deadline: SystemTime,
     pub step_count: u32,
+}
+
+/// The configured base URL of every endpoint `steps` reaches, following
+/// `direct:` calls, keyed by endpoint id. An endpoint without a served
+/// HTTP base, such as a database component, maps to `None`. This is the
+/// source identity a resumable write and a sealed validator are bound to.
+pub(crate) fn source_endpoint_bases<'a>(
+    loaded: &'a crate::engine::load::Loaded,
+    steps: &[registry_adapter_core::Step],
+) -> BTreeMap<String, Option<&'a str>> {
+    let bodies: HashMap<&str, &[registry_adapter_core::Step]> = loaded
+        .routes
+        .iter()
+        .map(|(name, steps)| (name.as_str(), steps.as_slice()))
+        .collect();
+    let mut ids = HashSet::new();
+    registry_adapter_core::collect_source_endpoint_ids(steps, &bodies, &mut ids);
+    ids.into_iter()
+        .map(|id| {
+            let base = loaded
+                .endpoints
+                .get(&id)
+                .map(|endpoint| endpoint.base.as_str());
+            (id, base)
+        })
+        .collect()
+}
+
+/// The digest a resumable write pins as its source origin.
+pub(crate) fn source_digest(
+    loaded: &crate::engine::load::Loaded,
+    steps: &[registry_adapter_core::Step],
+) -> [u8; 32] {
+    let bases = serde_json::to_vec(&source_endpoint_bases(loaded, steps))
+        .expect("a map of strings serializes");
+    let mut digest = Sha256::new();
+    digest.update(b"registry-adapter:resume-source:v1\0");
+    digest.update(bases);
+    digest.finalize().into()
 }
 
 /// The facade-visible result of running the idempotency processor.
@@ -411,6 +456,7 @@ impl WriteCustody for WriteExecutionContext {
                             request,
                             ResumeClaimContext {
                                 artifact_digest: resume.artifact_digest,
+                                source_digest: resume.source_digest,
                                 effect_deadline: resume.effect_deadline,
                                 step_count: resume.step_count,
                             },

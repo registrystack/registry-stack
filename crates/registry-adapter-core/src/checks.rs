@@ -2873,7 +2873,7 @@ fn evidence_only_endpoint_ids(pack: &AdapterPack) -> HashSet<String> {
 /// Collect every endpoint a source can reach through bounded, acyclic
 /// `direct:` expansion. Route graph diagnostics report a cycle or excessive
 /// depth separately; this policy walk stops revisiting a named body.
-fn collect_source_endpoint_ids(
+pub fn collect_source_endpoint_ids(
     root: &[Step],
     bodies: &HashMap<&str, &[Step]>,
     endpoints: &mut HashSet<String>,
