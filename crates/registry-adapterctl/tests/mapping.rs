@@ -1056,6 +1056,62 @@ fn a_target_schema_linked_inside_the_model_directory_is_read() {
     assert_eq!(exit, ExitCode::SUCCESS, "{report}");
 }
 
+/// An integer constant beside an enum member it only rounds to is refused by
+/// check and by preview alike, before any script runs; an integral float
+/// member the integer equals exactly is accepted by check and by the
+/// runtime validation preview runs.
+#[test]
+fn check_and_preview_agree_on_integer_enum_members() {
+    let root = workspace();
+    let model = root.path().join("person.mapping.yaml");
+    let text = std::fs::read_to_string(&model).unwrap();
+    let mapped = "  - target: household.size\n    from: size\n    convert: integer\n";
+    assert!(text.contains(mapped), "{text}");
+    let schema = root.path().join("schemas/person.schema.json");
+    let leaf = r#""size": {"type": "integer"}"#;
+    assert!(SCHEMA.contains(leaf));
+    let input = write_input(&root, "good.json", r#"{"id": "501"}"#);
+    let model = path(&root, "person.mapping.yaml");
+
+    std::fs::write(
+        root.path().join("person.mapping.yaml"),
+        text.replace(
+            mapped,
+            "  - target: household.size\n    constant: 9007199254740993\n",
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        &schema,
+        SCHEMA.replace(
+            leaf,
+            r#""size": {"type": "integer", "enum": [9007199254740992]}"#,
+        ),
+    )
+    .unwrap();
+    let (exit, report, _) = run_json(&["mapping", "check", &model]);
+    assert_refused(exit, &report, "adapter.mapping.conversion-target-mismatch");
+    let (exit, report, _) = run_json(&["mapping", "preview", &model, "--input", &input]);
+    assert_refused(exit, &report, "adapter.mapping.conversion-target-mismatch");
+
+    std::fs::write(
+        root.path().join("person.mapping.yaml"),
+        text.replace(mapped, "  - target: household.size\n    constant: 1\n"),
+    )
+    .unwrap();
+    std::fs::write(
+        &schema,
+        SCHEMA.replace(leaf, r#""size": {"type": "number", "enum": [1.0]}"#),
+    )
+    .unwrap();
+    let (exit, report, _) = run_json(&["mapping", "check", &model]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    let (exit, report, _) = run_json(&["mapping", "preview", &model, "--input", &input]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    assert_eq!(report["accepted"], 1, "{report}");
+    assert_eq!(report["results"][0]["output"]["household"]["size"], 1);
+}
+
 /// The model and its script named without a directory, from the model's own
 /// directory, write the script beside the model. The child process runs in
 /// that directory, so the test never moves this process's working directory.

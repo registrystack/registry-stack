@@ -450,6 +450,47 @@ mod tests {
         assert_ne!(public.closure_digest(), eligibility.closure_digest());
     }
 
+    /// The runtime compares an output integer with enum members exactly, the
+    /// rule `adapterctl mapping check` applies to a constant: no rounding
+    /// through a float, and an integral float member equals its integer.
+    #[test]
+    fn output_integers_match_enum_members_exactly() {
+        let apply = |script: &[u8], member: &str| {
+            let schema = format!(
+                r#"{{"$id":"https://registry.example/schemas/size/1.0.0","type":"object","additionalProperties":false,"required":["size"],"properties":{{"size":{{"type":"number","enum":[{member}]}}}}}}"#
+            );
+            let (mut project, artifacts) = project(
+                vec![("size-view", "transforms/size.rhai", script)],
+                vec![("size-schema", "schemas/size.json", schema.as_bytes())],
+            );
+            project.binding_transforms.insert(
+                LocalId::new("size-binding").unwrap(),
+                BindingTransform {
+                    script: LocalId::new("size-view").unwrap(),
+                    entrypoint: "project".to_owned(),
+                },
+            );
+            CompiledProjectTransform::compile(&project, "size-binding", "size-schema", &artifacts)
+                .expect("compile")
+                .apply(
+                    &Arc::new(BTreeMap::new()),
+                    &json!({}),
+                    Instant::now() + Duration::from_secs(1),
+                )
+        };
+        assert_eq!(
+            apply(
+                b"fn project(source) { #{size: 9007199254740993} }",
+                "9007199254740992"
+            ),
+            Err(ProjectTransformError::OutputInvalid)
+        );
+        assert_eq!(
+            apply(b"fn project(source) { #{size: 1} }", "1.0"),
+            Ok(json!({"size": 1}))
+        );
+    }
+
     #[test]
     fn digest_mismatch_undeclared_output_and_expired_shared_deadline_refuse() {
         let script = b"fn project(source) { #{name: source.name, canary: source.privateCanary} }";

@@ -12,7 +12,7 @@
 
 use registry_platform_yaml::{Diagnostic, LocalId, Severity};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Number, Value};
 
 use crate::checks::clean_project_artifact_path;
 use crate::naming::{ADAPTER_MAPPING_API_VERSION, ADAPTER_MAPPING_KIND};
@@ -734,9 +734,39 @@ fn type_names(node: &Value) -> Option<Vec<&str>> {
     }
 }
 
-/// JSON equality where `5` and `5.0` are the same number.
+/// JSON equality where `5` and `5.0` are the same number. Numbers compare
+/// exactly, as the runtime's schema validation does: an integer never equals
+/// a float it only rounds to, nor another integer the same float rounds to.
 fn json_equal(left: &Value, right: &Value) -> bool {
-    left == right || (left.is_number() && right.is_number() && left.as_f64() == right.as_f64())
+    match (left, right) {
+        (Value::Number(left), Value::Number(right)) => number_equal(left, right),
+        _ => left == right,
+    }
+}
+
+fn number_equal(left: &Number, right: &Number) -> bool {
+    let integer = |number: &Number| {
+        number
+            .as_i64()
+            .map(i128::from)
+            .or_else(|| number.as_u64().map(i128::from))
+    };
+    match (integer(left), integer(right)) {
+        (Some(left), Some(right)) => left == right,
+        (Some(integer), None) => right.as_f64().is_some_and(|float| float_is(float, integer)),
+        (None, Some(integer)) => left.as_f64().is_some_and(|float| float_is(float, integer)),
+        (None, None) => left.as_f64() == right.as_f64(),
+    }
+}
+
+/// Whether `float` is exactly `integer`. Every `i64` and `u64` lies inside
+/// the open range of plus or minus 2^127, where an integral float converts to
+/// `i128` without loss.
+fn float_is(float: f64, integer: i128) -> bool {
+    float.is_finite()
+        && float.fract() == 0.0
+        && float.abs() < 2f64.powi(127)
+        && float as i128 == integer
 }
 
 fn uses_unsupported_keyword(node: &Value) -> bool {
@@ -2778,6 +2808,65 @@ mod tests {
             leaf_findings(json!({}), json!({"target": "leaf", "constant": true})),
             vec![]
         );
+    }
+
+    /// An integer constant is compared with enum and const members exactly,
+    /// as the runtime's output validation compares them: no rounding through
+    /// a float, while an integral float member still equals the integer.
+    #[test]
+    fn integer_constants_match_enum_and_const_members_exactly() {
+        let integer = |c: i64| json!({"target": "leaf", "constant": c});
+        let refused = |leaf: Value, constant: i64| {
+            has(
+                &leaf_findings(leaf, integer(constant)),
+                MappingCode::ConversionTargetMismatch,
+                "/assignments/0/constant",
+            )
+        };
+        // Beyond 2^53 two integers share one f64.
+        assert!(refused(
+            json!({"type": "integer", "enum": [9_007_199_254_740_992_u64]}),
+            9_007_199_254_740_993
+        ));
+        assert!(refused(
+            json!({"type": "integer", "const": 9_007_199_254_740_992_u64}),
+            9_007_199_254_740_993
+        ));
+        assert!(refused(
+            json!({"type": "integer", "enum": [-9_007_199_254_740_992_i64]}),
+            -9_007_199_254_740_993
+        ));
+        // A float member equals only the integer it is exactly.
+        assert!(refused(
+            json!({"type": "integer", "enum": [9_007_199_254_740_992.0]}),
+            9_007_199_254_740_993
+        ));
+        assert!(refused(
+            json!({"type": "integer", "enum": [9_223_372_036_854_775_807.0]}),
+            i64::MAX
+        ));
+        assert!(refused(json!({"type": "number", "enum": [1.5]}), 1));
+        // Exact matches, including an integral float member.
+        for (leaf, constant) in [
+            (
+                json!({"type": "integer", "enum": [9_007_199_254_740_993_u64]}),
+                9_007_199_254_740_993,
+            ),
+            (json!({"type": "integer", "enum": [i64::MAX]}), i64::MAX),
+            (json!({"type": "integer", "enum": [i64::MIN]}), i64::MIN),
+            (json!({"type": "number", "enum": [1.0]}), 1),
+            (json!({"type": "number", "const": -2.0}), -2),
+            (
+                json!({"type": "integer", "enum": [9_007_199_254_740_992.0]}),
+                9_007_199_254_740_992,
+            ),
+        ] {
+            assert_eq!(
+                leaf_findings(leaf.clone(), integer(constant)),
+                vec![],
+                "{leaf} {constant}"
+            );
+        }
     }
 
     #[test]
