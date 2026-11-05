@@ -226,12 +226,22 @@ pub(crate) fn load(
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_default();
     let schema = if is_clean_mapping_path(&mapping.mapping.target_schema) {
-        read_schema(
-            &directory.join(&mapping.mapping.target_schema),
-            model,
-            report,
-            files,
-        )?
+        match contained_schema(&directory, &mapping.mapping.target_schema)? {
+            Some(path) => read_schema(&path, model, report, files)?,
+            None => {
+                model_failure(
+                    report,
+                    model,
+                    Diagnostic::error(
+                        "adapterctl.mapping-schema-outside",
+                        "/mapping/targetSchema",
+                        "the target schema file resolves, through a symbolic link, outside the model's directory",
+                        "Place the JSON Schema inside the model's directory, or point mapping.targetSchema at a file there.",
+                    ),
+                );
+                None
+            }
+        }
     } else {
         // The model check reports the unclean path; nothing is read for it.
         Some(Value::Null)
@@ -242,6 +252,34 @@ pub(crate) fn load(
         directory,
         file_name,
     }))
+}
+
+/// The target schema path to read, or `None` when the file, after following
+/// links, lies outside the model's directory (CFG-VAL-8). Links that stay
+/// inside are followed, as the script write does. A missing file is left
+/// for `read_schema` to report.
+fn contained_schema(
+    directory: &Path,
+    target_schema: &str,
+) -> Result<Option<PathBuf>, CheckFailure> {
+    let path = directory.join(target_schema);
+    let io_failure = |path: &Path, source: io::Error| CheckFailure::Io {
+        path: path.display().to_string(),
+        source,
+    };
+    let root_directory = if directory.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        directory
+    };
+    let root = std::fs::canonicalize(root_directory)
+        .map_err(|source| io_failure(root_directory, source))?;
+    match std::fs::canonicalize(&path) {
+        Ok(resolved) if resolved.starts_with(&root) => Ok(Some(resolved)),
+        Ok(_) => Ok(None),
+        Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(Some(path)),
+        Err(source) => Err(io_failure(&path, source)),
+    }
 }
 
 fn read_schema(
