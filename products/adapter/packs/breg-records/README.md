@@ -25,5 +25,7 @@ reconcile every pending write; the Adapter cannot prove principal continuity
 from secret-reference strings.
 
 The Update mapper converts a flat JSON Merge Patch object to BReg JSON Patch:
-non-null members use `add` and null members use `remove`. Nested objects and
-arrays are deliberately left to the project input schema to refuse.
+non-null members use `add` and null members use `remove`. The facade refuses
+a member whose value is an object with 422 before this mapper runs, so a
+widened input schema cannot turn a nested change into a whole-member
+replacement. An array value replaces the whole member, as RFC 7396 specifies.

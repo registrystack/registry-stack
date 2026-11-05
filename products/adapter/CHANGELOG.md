@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- GovStack Update: a retry under the same Idempotency-Key and fingerprint
+  replays its stored answer even when its If-Match no longer validates (the
+  record changed, or a redeploy changed the guard's closure), instead of
+  returning 412. Authentication and authorization still run first.
+- GovStack Update no longer returns 406 for an `Accept` that admits neither
+  JSON form; its success has no body and its Problems are always
+  `application/problem+json`. Create and reads keep the 406.
+- GovStack Update refuses a merge-patch member whose value is an object with
+  422 `invalid-content` and one `errors` pointer per such member, even when
+  the project input schema admits it.
+
 - The GovStack Write path through the Adapter (direct Create and conditional
   Update) is experimental. `CONSULTATION.md` now lists what a source must
   offer to back it; BReg is the one maintained source that does.

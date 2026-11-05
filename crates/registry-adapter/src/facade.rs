@@ -60,8 +60,8 @@ use crate::engine::route::{
 use crate::govstack::consultation::{CAPABILITIES_PATH, MOUNT_PATH};
 use crate::govstack::correlation::RequestCorrelation;
 use crate::idempotent::{
-    PostgresIdempotencyStore, RecoveryLease, StatusLookup, StatusLookupRequest, StoredResponse,
-    TerminalOutcome, VerifiedCallerIdentity, MAX_STORED_RESPONSE_BYTES,
+    ClaimRequest, PostgresIdempotencyStore, RecoveryLease, StatusLookup, StatusLookupRequest,
+    StoredResponse, TerminalOutcome, VerifiedCallerIdentity, MAX_STORED_RESPONSE_BYTES,
 };
 use crate::journal::{self, JournalEvent};
 use crate::serve::{Authenticator, Caller, CallerRefusal};
@@ -1128,7 +1128,13 @@ async fn answer(
         Ok(caller) => caller,
         Err(refusal) => return refusal_response(profile, refusal, &request_id),
     };
-    if !accepts_json(headers) {
+    // A GovStack Update never negotiates Accept. Its success carries no
+    // representation and every Problem it returns is application/problem+json,
+    // so an Accept that admits neither JSON form is disregarded (RFC 9110
+    // section 12.5.1) rather than refused before a write the caller asked for.
+    let bodyless_update =
+        operation.write_support.is_some() && operation.method == HttpMethod::Patch;
+    if !bodyless_update && !accepts_json(headers) {
         return refuse_call(
             state,
             operation,
@@ -1171,6 +1177,10 @@ async fn answer(
     let govstack_write = operation.write_support.is_some();
     let mut native_condition = None;
     let mut semantic_condition = None;
+    // A strong guard this deployment no longer recognises. Its 412 waits for
+    // the request to be validated and fingerprinted, so a retry of an Update
+    // that already completed replays that answer instead.
+    let mut stale_condition = false;
     if govstack_write && operation.method == HttpMethod::Patch {
         let values: Vec<_> = headers.get_all(header::IF_MATCH).iter().collect();
         let refusal = if values.is_empty() {
@@ -1194,10 +1204,10 @@ async fn answer(
                 None if !crate::govstack::write::is_strong_etag(value) => {
                     Some(Refusal::invalid_request("one strong If-Match is required"))
                 }
-                None => Some(Refusal::write(
-                    "precondition-failed",
-                    StatusCode::PRECONDITION_FAILED,
-                )),
+                None => {
+                    stale_condition = true;
+                    None
+                }
             }
         } else {
             Some(Refusal::invalid_request("one strong If-Match is required"))
@@ -1564,6 +1574,27 @@ async fn answer(
                 )
                 .await;
             };
+            if stale_condition {
+                return answer_stale_condition(
+                    state,
+                    StaleConditionRequest {
+                        operation,
+                        caller: &caller,
+                        record_type: &record_type,
+                        request_id: &request_id,
+                        correlation,
+                        store: &store,
+                        claim: ClaimRequest {
+                            caller: &caller_identity,
+                            deployment: state.loaded.runtime.id.as_str(),
+                            concrete_operation: &concrete_operation,
+                            key,
+                            request_digest: digest,
+                        },
+                    },
+                )
+                .await;
+            }
             let scope = crate::govstack::write::source_key_scope(
                 &caller.issuer,
                 &caller.reference,
@@ -3587,7 +3618,9 @@ pub(crate) struct Refusal {
     status: StatusCode,
     reason: String,
     write_problem: Option<&'static str>,
-    validation_pointer: Option<&'static str>,
+    /// JSON Pointers a GovStack `invalid-content` Problem names; empty
+    /// names the whole `/data` member.
+    validation_pointers: Vec<String>,
     detail: Option<&'static str>,
 }
 
@@ -3615,9 +3648,9 @@ impl Refusal {
         }
     }
 
-    fn invalid_field_at(reason: &str, pointer: &'static str) -> Self {
+    fn invalid_field_at(reason: &str, pointers: Vec<String>) -> Self {
         Self {
-            validation_pointer: Some(pointer),
+            validation_pointers: pointers,
             ..Self::invalid_field(reason)
         }
     }
@@ -3628,7 +3661,7 @@ impl Refusal {
             status,
             reason: code.to_owned(),
             write_problem: Some(code),
-            validation_pointer: None,
+            validation_pointers: Vec::new(),
             detail: None,
         }
     }
@@ -3639,7 +3672,7 @@ impl Refusal {
             status: StatusCode::BAD_REQUEST,
             reason: reason.to_owned(),
             write_problem: None,
-            validation_pointer: None,
+            validation_pointers: Vec::new(),
             detail: None,
         }
     }
@@ -3650,7 +3683,7 @@ impl Refusal {
             status: StatusCode::UNPROCESSABLE_ENTITY,
             reason: reason.to_owned(),
             write_problem: None,
-            validation_pointer: None,
+            validation_pointers: Vec::new(),
             detail: None,
         }
     }
@@ -3661,7 +3694,7 @@ impl Refusal {
             status: StatusCode::BAD_REQUEST,
             reason: reason.to_owned(),
             write_problem: None,
-            validation_pointer: None,
+            validation_pointers: Vec::new(),
             detail: None,
         }
     }
@@ -3884,7 +3917,7 @@ pub(crate) fn capture_govstack_write(
     if object.contains_key("source") {
         return Err(Refusal::invalid_field_at(
             "this source does not support source references",
-            "/source",
+            vec!["/source".to_owned()],
         ));
     }
     if object.len() != 1 || !object.contains_key("data") {
@@ -3908,6 +3941,16 @@ pub(crate) fn capture_govstack_write(
         return Err(Refusal::invalid_field(
             "the domain input does not match its selected schema",
         ));
+    }
+    // The flat Update profile holds whatever the project schema admits.
+    if operation.method == HttpMethod::Patch {
+        let nested = crate::govstack::write::nested_merge_patch_members(data);
+        if !nested.is_empty() {
+            return Err(Refusal::invalid_field_at(
+                "an Update member value is an object; the merge patch is flat",
+                nested,
+            ));
+        }
     }
     Ok(CapturedWriteRequest {
         record: object["data"].clone(),
@@ -4008,20 +4051,29 @@ fn govstack_write_success(
 }
 
 pub(crate) fn govstack_problem(code: &str, status: StatusCode, request_id: &str) -> Response {
-    govstack_problem_at(code, status, request_id, "/data")
+    govstack_problem_at(code, status, request_id, &[])
 }
 
+/// One GovStack Problem. An `invalid-content` Problem lists one error per
+/// pointer, or one for the whole `/data` member when `pointers` is empty.
 fn govstack_problem_at(
     code: &str,
     status: StatusCode,
     request_id: &str,
-    pointer: &str,
+    pointers: &[String],
 ) -> Response {
     let mut body = json!({"type": format!("https://govstack.global/problems/digital-registries/{code}"),
         "title": code.replace('-', " "), "status": status.as_u16(), "traceId": request_id});
     if code == "invalid-content" {
-        body["errors"] =
-            json!([{"pointer": pointer, "message": "the submitted field is not valid"}]);
+        let errors: Vec<Value> = if pointers.is_empty() {
+            vec![json!({"pointer": "/data", "message": "the submitted field is not valid"})]
+        } else {
+            pointers
+                .iter()
+                .map(|pointer| json!({"pointer": pointer, "message": "the submitted field is not valid"}))
+                .collect()
+        };
+        body["errors"] = Value::Array(errors);
     }
     let mut response = json_response(status, &body);
     response.headers_mut().insert(
@@ -4446,6 +4498,108 @@ async fn refuse_contract_pin(
 
 /// Answer a refused request as the class and status of its [`Refusal`],
 /// journaling the refusal first with its value-free reason.
+struct StaleConditionRequest<'a> {
+    operation: &'a ServedOperation,
+    caller: &'a Caller,
+    record_type: &'a str,
+    request_id: &'a str,
+    correlation: Option<&'a RequestCorrelation>,
+    store: &'a PostgresIdempotencyStore,
+    claim: ClaimRequest<'a>,
+}
+
+/// Answer a GovStack Update whose strong guard no longer validates here.
+/// The caller is already authenticated and authorized and the request fully
+/// validated. A terminal answer stored for the same key and fingerprint is
+/// replayed exactly; anything else is the generic 412 without a mutation. A
+/// changed fingerprint finds no stored answer, so it stays a 412.
+async fn answer_stale_condition(
+    state: &FacadeState,
+    request: StaleConditionRequest<'_>,
+) -> Response {
+    let StaleConditionRequest {
+        operation,
+        caller,
+        record_type,
+        request_id,
+        correlation,
+        store,
+        claim,
+    } = request;
+    let profile = state.loaded.problems();
+    let replay = match store.completed_replay(claim, SystemTime::now()).await {
+        Ok(replay) => replay,
+        Err(error) => {
+            tracing::error!(%error, "the idempotency store could not be read for a stale guard");
+            return govstack_problem(
+                "internal-error",
+                StatusCode::INTERNAL_SERVER_ERROR,
+                request_id,
+            );
+        }
+    };
+    let Some((outcome, stored)) = replay else {
+        return refuse_request(
+            state,
+            operation,
+            caller,
+            record_type,
+            request_id,
+            Refusal::write("precondition-failed", StatusCode::PRECONDITION_FAILED),
+        )
+        .await;
+    };
+    let event = |kind: &'static str| {
+        (
+            JournalEvent {
+                event_kind: kind,
+                exchange_id: request_id.to_owned(),
+                operation: operation.operation.clone(),
+                caller_ref: caller.reference.clone(),
+                route_id: operation.route_id.clone(),
+                detail: None,
+            },
+            SystemTime::now(),
+        )
+    };
+    let mut response = match outcome {
+        TerminalOutcome::Completed => replay_response(stored),
+        TerminalOutcome::Failed => match replay_govstack_failed_response(stored) {
+            Ok(response) => response,
+            Err(()) => {
+                tracing::error!("custodied GovStack failure has no canonical Problem identity");
+                govstack_problem(
+                    "internal-error",
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    request_id,
+                )
+            }
+        },
+    };
+    let mut events = vec![
+        event("exchangeCreated"),
+        event(match outcome {
+            TerminalOutcome::Completed => "exchangeCompleted",
+            TerminalOutcome::Failed => "exchangeFailed",
+        }),
+    ];
+    stamp_terminal_problem(&mut events, &response);
+    if let Some(correlation) = correlation {
+        response = correlation.finish(response);
+    }
+    if let Err(fault) = append_all(&state.journal, events).await {
+        tracing::error!(%fault, "the audit journal could not record the replay");
+        return facade_problem(
+            profile,
+            ErrorClass::Facade,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            record_type,
+            request_id,
+        );
+    }
+    response
+}
+
 async fn refuse_request(
     state: &FacadeState,
     operation: &ServedOperation,
@@ -4504,7 +4658,7 @@ async fn refuse_request(
             "invalid-content",
             refusal.status,
             request_id,
-            refusal.validation_pointer.unwrap_or("/data"),
+            &refusal.validation_pointers,
         );
     }
     if refusal.status == StatusCode::UNPROCESSABLE_ENTITY
@@ -5175,7 +5329,7 @@ mod tests {
         assert_eq!(captured.record, json!({"note": null}));
         let source = capture_govstack_write(&operation, &json!({"data": {"name": "Ada"}, "source": {"system": "https://source.example", "revision": "r1"}}))
             .err().expect("unsupported source evidence is explicit");
-        assert_eq!(source.validation_pointer, Some("/source"));
+        assert_eq!(source.validation_pointers, ["/source"]);
         for body in [
             json!({"data": {}}),
             json!({"data": []}),
@@ -5185,6 +5339,79 @@ mod tests {
         ] {
             assert!(capture_govstack_write(&operation, &body).is_err());
         }
+    }
+
+    #[test]
+    fn govstack_update_is_a_flat_merge_patch_whatever_its_schema_admits() {
+        let schema = || {
+            Arc::new(
+                crate::engine::public_schema::check_public_schema(json!({
+                    "$id": "https://registry.example/schemas/1/person-patch.json",
+                    "type": "object", "additionalProperties": false,
+                    "properties": {
+                        "name": {"type": "string"},
+                        "note": {"type": ["string", "null"]},
+                        "tags": {"type": "array", "maxItems": 4, "items": {"type": "string"}},
+                        "address": {
+                            "type": "object", "additionalProperties": false,
+                            "properties": {"city": {"type": "string"}}
+                        },
+                        "a/b~c": {"type": "object", "additionalProperties": false, "properties": {}}
+                    }
+                }))
+                .expect("input schema"),
+            )
+        };
+        let mut operation = served("update", "person");
+        operation.method = HttpMethod::Patch;
+        operation.project_input_schema = Some(schema());
+        let refused = capture_govstack_write(
+            &operation,
+            &json!({"data": {"name": "Ada", "address": {"city": "London"}, "a/b~c": {}}}),
+        )
+        .err()
+        .expect("an object member would replace the whole member at the source");
+        assert_eq!(refused.status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            refused.validation_pointers,
+            ["/data/a~1b~0c", "/data/address"]
+        );
+        let captured = capture_govstack_write(
+            &operation,
+            &json!({"data": {"name": "Ada", "note": null, "tags": ["a"]}}),
+        )
+        .expect("scalars, null and whole-array replacement stay flat");
+        assert_eq!(
+            captured.record,
+            json!({"name": "Ada", "note": null, "tags": ["a"]})
+        );
+
+        let mut create = served("create", "person");
+        create.method = HttpMethod::Post;
+        create.project_input_schema = Some(schema());
+        capture_govstack_write(&create, &json!({"data": {"address": {"city": "London"}}}))
+            .expect("a Create carries the whole nested record");
+    }
+
+    #[tokio::test]
+    async fn govstack_invalid_content_names_every_refused_pointer() {
+        let response = govstack_problem_at(
+            "invalid-content",
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "0123456789abcdef0123456789abcdef",
+            &["/data/address".to_owned(), "/data/office".to_owned()],
+        );
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let problem: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            problem["errors"],
+            json!([
+                {"pointer": "/data/address", "message": "the submitted field is not valid"},
+                {"pointer": "/data/office", "message": "the submitted field is not valid"}
+            ])
+        );
     }
 
     #[test]
