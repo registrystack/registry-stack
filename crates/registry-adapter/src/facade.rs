@@ -1469,6 +1469,10 @@ async fn answer(
                 &request_id,
                 if govstack_write {
                     Refusal::invalid_request("the Idempotency-Key header is absent or invalid")
+                        .with_detail(
+                            "send one Idempotency-Key header whose value is a quoted string, \
+                             such as Idempotency-Key: \"0b7d4c2e-1f3a-4e5b-9c6d-7e8f9a0b1c2d\"",
+                        )
                 } else {
                     Refusal::invalid_field("the Idempotency-Key header is absent or invalid")
                 },
@@ -3550,7 +3554,8 @@ struct SearchBinding {
 }
 
 /// Why a request was refused: the class and status the caller sees, and a
-/// value-free reason for the journal.
+/// value-free reason for the journal. A fixed `detail` tells the caller how
+/// to correct the request.
 #[derive(Debug)]
 pub(crate) struct Refusal {
     class: ErrorClass,
@@ -3558,6 +3563,7 @@ pub(crate) struct Refusal {
     reason: String,
     write_problem: Option<&'static str>,
     validation_pointer: Option<&'static str>,
+    detail: Option<&'static str>,
 }
 
 trait LoadedProblems {
@@ -3577,6 +3583,13 @@ impl LoadedProblems for crate::engine::load::Loaded {
 }
 
 impl Refusal {
+    fn with_detail(self, detail: &'static str) -> Self {
+        Self {
+            detail: Some(detail),
+            ..self
+        }
+    }
+
     fn invalid_field_at(reason: &str, pointer: &'static str) -> Self {
         Self {
             validation_pointer: Some(pointer),
@@ -3591,6 +3604,7 @@ impl Refusal {
             reason: code.to_owned(),
             write_problem: Some(code),
             validation_pointer: None,
+            detail: None,
         }
     }
 
@@ -3601,6 +3615,7 @@ impl Refusal {
             reason: reason.to_owned(),
             write_problem: None,
             validation_pointer: None,
+            detail: None,
         }
     }
 
@@ -3611,6 +3626,7 @@ impl Refusal {
             reason: reason.to_owned(),
             write_problem: None,
             validation_pointer: None,
+            detail: None,
         }
     }
 
@@ -3621,6 +3637,7 @@ impl Refusal {
             reason: reason.to_owned(),
             write_problem: None,
             validation_pointer: None,
+            detail: None,
         }
     }
 }
@@ -4478,12 +4495,13 @@ async fn refuse_request(
             pointer,
         )
     } else {
-        facade_problem(
+        facade_problem_with_detail(
             profile,
             refusal.class,
             refusal.status,
             record_type,
             request_id,
+            refusal.detail,
         )
     }
 }
@@ -4540,6 +4558,17 @@ pub(crate) fn facade_problem(
     record_type: &str,
     request_id: &str,
 ) -> Response {
+    facade_problem_with_detail(profile, class, status, record_type, request_id, None)
+}
+
+fn facade_problem_with_detail(
+    profile: Problems<'_>,
+    class: ErrorClass,
+    status: StatusCode,
+    record_type: &str,
+    request_id: &str,
+    detail: Option<&str>,
+) -> Response {
     let fixed = fixed_facade_problem_response(class, status.as_u16())
         .expect("the facade emits only declared fixed class/status pairs");
     problem_response(
@@ -4550,7 +4579,7 @@ pub(crate) fn facade_problem(
                 StatusCode::from_u16(fixed.status)
                     .expect("fixed facade statuses are valid HTTP statuses"),
             ),
-            detail: None,
+            detail,
             data: None,
             validation_pointer: None,
         },
