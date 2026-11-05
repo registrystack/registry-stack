@@ -1,4 +1,5 @@
-# Documented synthetic OpenCRVS exchanges; no live verification.
+# Documented synthetic OpenCRVS exchanges, not captured. Retrieve and lookup
+# were checked live against an OpenCRVS test environment in November 2026.
 apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
 kind: AdapterFixture
 id: opencrvs-consultation-exact-reads

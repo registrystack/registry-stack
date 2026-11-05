@@ -238,9 +238,9 @@ breg_govstack=products/adapter/examples/breg-govstack
 printf 'BReg GovStack example check and compile passed\n'
 
 # The OpenCRVS birth example is held to the same two commands. Its fixtures
-# are hand-derived from the reviewed Evidence reference and marked synthetic
-# (each file says so): nothing has run against a real OpenCRVS, so this
-# proves the contract shape, not the live upstream.
+# are hand-derived from the reviewed Evidence reference and marked documented
+# (each file says so): none is a captured exchange, so this proves the
+# contract shape, not the live upstream.
 ocrvs_flags=()
 for fixture in products/adapter/fixtures/opencrvs-events/*.yaml; do
   ocrvs_flags+=(--fixtures "$fixture")

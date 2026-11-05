@@ -23,7 +23,9 @@ input/output transformations and schemas, and caller capability discovery.
 The built-in target is mounted at `/govstack/registries`; its generated
 OpenAPI contract uses that mount as `servers.url` and keeps `/v1/...` paths
 relative to it.
-Its selected draft capabilities do not imply general GovStack conformance.
+It implements a profile of the unratified GovStack Digital Registries draft;
+its selected capabilities do not imply general GovStack conformance or
+certification.
 Use the [DHIS2 Consultation example](examples/dhis2-consultation/README.md)
 for two public views over the same native source routes, or the
 [OpenCRVS exact-read example](examples/opencrvs-consultation/README.md) for
@@ -109,6 +111,11 @@ job examples use `adapterctl job check` instead; `kobotoolbox-job`,
 `job.yaml` header.
 
 ## Grant the runtime database role
+
+Serving needs TLS to PostgreSQL, even on loopback: `database.testOnlyPlaintext`
+is refused outside test builds. Without a configured root the system roots
+verify the server; when the certificate comes from a private CA, name that CA
+with `database.trustedRootCertificateRef`.
 
 `adapter serve` migrates through `database.migrationUrlRef` and serves through
 `database.runtimeUrlRef`. The migration role owns the tables. Give the runtime

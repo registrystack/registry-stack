@@ -2,10 +2,10 @@
 
 ## Purpose
 
-Expose selected GovStack Digital Registries Read and direct Write operations through maintained Rust protocol behavior over the shared Adapter engine.
+Expose a profile of the unratified GovStack Digital Registries draft (selected Read and direct Write operations) through maintained Rust protocol behavior over the shared Adapter engine.
 Keep source access reusable by the facade, Evidence and ingestion hosts.
 Deployments own their schema-bound transformations and the public views they expose.
-This contract selects bounded reads plus synchronous direct Create and conditional Update. It makes no general GovStack conformance claim.
+This contract selects bounded reads plus synchronous direct Create and conditional Update. It makes no general GovStack conformance claim: the basis is a draft that no body has ratified, and nothing here is a certification against it.
 The API basis is the [unified draft contract](https://jeremi.github.io/bb-digital-registries/api/openapi.yaml); its `write.openapi.yaml` URL is an alias for that document.
 
 ## Boundaries
@@ -48,7 +48,7 @@ Host-provided features do not require an upstream feature of the same name.
 Unsupported capabilities and feature declarations fail explicitly instead of being advertised or silently ignored.
 
 The facade serves caller-filtered `GET /govstack/registries/v1/capabilities` with `Cache-Control: no-store`.
-Entries reference stable operation identifiers in a version-specific HTTPS OpenAPI contract and identify their Registry and Collection. Read entries select a view; Write entries use `family: write`, and Update identifies its companion Retrieve operation and view.
+Entries reference stable operation identifiers in a version-specific HTTPS OpenAPI contract and identify their Registry and Collection. Read entries select a view; Write entries use `family: write`. Every Create and Update entry carries `write.idempotencyReplayWindow` (integer seconds), and Update also identifies its companion Retrieve operation and view. A deployment with no Write entries publishes no replay window.
 The contract supplies input and output schemas and the selected features.
 Discovery does not grant access to any Record or replace authorization at invocation.
 No credentials, source addresses, private configuration or unsupported pack operations enter this response.
@@ -64,12 +64,14 @@ Every page applies current authorization.
 An empty advancing page is permitted; an unavailable source guarantee is never reported as completion.
 
 The maintained DHIS2 example exercises the selected baseline reads with an explicit unique order.
-The maintained OpenCRVS example exercises exact reads through documented synthetic fixtures; it does not claim live-source verification.
+The maintained OpenCRVS example exercises exact reads through documented synthetic fixtures. Retrieve and Lookup were also checked live against an OpenCRVS test environment in November 2026; the OpenCRVS version could not be read, so no tested version is recorded.
 Neither example advertises retained revisions, recorded-time, effective-time, complete traversal or snapshot traversal without source-backed implementation and evidence.
 Unsupported optional features are rejected in authoring and requests.
 A generated frontend can discover operations and schemas; it does not infer domain workflows or field meanings.
 
 ## Selected direct Write surface
+
+The GovStack Write path through the Adapter is experimental: its behavior and configuration may change before release.
 
 `POST /govstack/registries/v1/collections/{collectionId}/records` accepts a closed `{"data": ...}` input and returns 201 with Location, a strong ETag and a receipt containing collectionId, recordId and the same ETag.
 The source assigns the durable Record identifier. An upsert with a client-selected identifier is not this Create guarantee.
@@ -99,13 +101,31 @@ A retry rechecks current facade authorization; canonical JSON, method, URI, medi
 It preserves the original Problem body while generating per-attempt trace headers.
 A matching in-flight request returns 409 and a changed fingerprint returns 422.
 The configured facade response-retention window cannot exceed the declared native replay window.
-Successful capability discovery and admitted Write results publish that configured `idempotencyReplayWindow` as decimal seconds in `x-registry-idempotency-replay-window-seconds`, a Registry Stack operational extension. The header is computed from runtime policy, not repeated in the project.
+Capability discovery publishes the deployment's response retention as `write.idempotencyReplayWindow` (integer seconds) on every Create and Update entry; the generated OpenAPI describes the member in the capability schema. The value is computed from runtime policy, not repeated in the project. After the window a reused key is processed as a new request.
 The separate external-gateway effective contract retains its read-only scope; GovStack Write discovery comes from the canonical capability endpoint and generated OpenAPI.
 No domain request payload is persisted to recover an uncertain source send; the client must resubmit the same request so the source can return its original receipt.
 
 The [BReg HTTP example](examples/breg-govstack/README.md) supplies explicit schemas and transformations for a flat contact payload, using native server identifiers, batch receipts and atomic source preconditions.
 The source pack stays ordinary HTTP and introduces no BReg runtime or client dependency into the Adapter engine or facade.
 DHIS2 Write is unavailable in this profile: the maintained tracker import is an upsert and does not demonstrate the required atomic precondition or authoritative write receipt.
+
+### What a source must offer to back GovStack Write
+
+A source can back Create and Update only if it offers all of the following; the pack declares them in `writeSupport` and the route shape admitted for the resend (one POST with a fixed URI, no query parameters and no endpoint request headers) exists to protect them.
+
+- Replay safety: a repeated request carrying the same derived key (key-based replay) or the same identity (identity-based replay) returns the original outcome and never a second effect, for at least the deployment's response retention.
+- An atomic conditional update: the source compares a bounded validator (at most 128 bytes) and commits in one step. A read followed by a timestamp comparison does not qualify.
+- A receipt: the source returns the assigned identifier and the new validator for the write it just performed, so the facade can answer 201 or 204 without a second read.
+
+BReg is the one maintained source that meets all three, which is why `breg-records` is the only Write pack.
+
+DHIS2 does not, for three reasons:
+
+- Update has no atomic compare-and-commit; the tracker import is an upsert with no precondition.
+- Replay safety needs a client-supplied UID, and canonical Create forbids a client-selected identifier.
+- It offers no readback receipt for the write just made.
+
+Follow-up idea, not planned work: derive the DHIS2 UID from the derived native key, so a retry of Create upserts the same object. That would address the replay gap only; Update and the receipt remain open.
 SourceReference is explicitly refused until a selected source implements its evidence validation.
 Named transitions, governed Change Requests and asynchronous Write are not selected in this increment.
 

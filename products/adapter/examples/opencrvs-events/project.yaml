@@ -4,10 +4,10 @@
 # profile bound to the opencrvs-events pack over one declared record type,
 # birth, read only. A caller reads OpenCRVS birth registrations through the
 # same two operations it uses for the dhis2-tracker example
-# (records-get and records-search); only the pack differs. No real OpenCRVS
-# system has been reached (the available credentials were rejected), so
-# every fixture beside this project is synthetic and `documented`; see the
-# pack header for the verified state.
+# (records-get and records-search); only the pack differs. Retrieve and
+# lookup were checked live against an OpenCRVS test environment in November
+# 2026, but every fixture beside this project is documented, not captured; see
+# the pack header for the verified state.
 #
 # Declaration mapping is this project's decision, because OpenCRVS
 # declarations are configured per deployment. The `declaration_fields`
@@ -38,8 +38,8 @@
 #     --pack products/adapter/packs/opencrvs-events/pack.yaml
 #
 # The fixtures live in products/adapter/fixtures/opencrvs-events/. They are
-# hand-derived from OpenCRVS documentation, marked synthetic, and nothing has
-# run against a real OpenCRVS:
+# hand-derived from OpenCRVS documentation, marked documented, and none is a
+# captured exchange:
 #   target/debug/adapterctl fixtures replay \
 #     products/adapter/examples/opencrvs-events/project.yaml \
 #     --profile products/adapter/profiles/breg-records/profile.yaml \
@@ -58,7 +58,7 @@ profile:
 pack:
   id: opencrvs-events
   version: "1"
-  digest: sha256:fb42d925b438ef4f1f0968f378297753685c713ddc53bc514739427a6d32e1b6
+  digest: sha256:41138c64e55b756317778b3a4e95673f10559fc99ded22a699791f7913f52f9a
 recordTypes:
   - name: birth
     fields:

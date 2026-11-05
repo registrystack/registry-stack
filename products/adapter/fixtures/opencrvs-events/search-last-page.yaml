@@ -1,10 +1,9 @@
 # yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json
 #
-# Synthetic fixture (NOT captured, and NOT from a real OpenCRVS system):
+# Documented fixture (hand-derived, NOT a captured exchange):
 # last search page: the deterministic replay cursor opens to offset 2, one
 # result remains of total 3, so there is no next cursor.
-# No OpenCRVS server was contacted; the available credentials were
-# rejected. The upstream shapes are derived from the reviewed Evidence
+# No exchange was recorded to produce this file. The upstream shapes are derived from the reviewed Evidence
 # reference (products/evidence/reference/request-adapter/
 # opencrvs-event-search/, response-match.json and
 # expected-request-parts.json) and every value is a made-up stand-in. The
