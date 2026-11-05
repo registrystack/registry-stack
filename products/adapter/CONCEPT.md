@@ -1476,8 +1476,12 @@ Public mutation guards reuse `cursorKeyRef` through a separately derived
 authenticated opaque codec. They bind the source/read/access context and never
 expose the native validator as reversible plain encoding.
 Caller identity and logical deployment remain in the key namespace. The
-upstream key is independently derived from that trusted namespace and the
-source step ordinal, so a shared service credential cannot collapse callers.
+upstream key is independently derived from that trusted namespace, a random
+generation drawn when the claim is inserted and the source step ordinal, so a
+shared service credential cannot collapse callers. Every resend of one claim
+repeats its upstream key; once the replay window has passed, a reused key is
+processed as a new request under a new generation, so the source never
+replays or refuses it under an earlier claim.
 
 The target explicitly opts one deterministic, source-idempotent POST into the
 existing resumable custody plan; ordinary generic one-send routes retain their

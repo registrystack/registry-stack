@@ -13,7 +13,7 @@ use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::SystemTime;
 
 use deadpool_postgres::GenericClient;
@@ -162,6 +162,9 @@ pub struct WriteExecutionContext {
     async_write: Option<AsyncWriteContext>,
     resume_write: Option<ResumeWriteContext>,
     async_effect_committed: AtomicBool,
+    /// The claimed row's source key generation, set once by the claim that
+    /// executes or resumes it.
+    key_generation: OnceLock<String>,
     state: Mutex<WriteState>,
 }
 
@@ -257,6 +260,7 @@ impl WriteExecutionContext {
             async_write,
             resume_write,
             async_effect_committed: AtomicBool::new(false),
+            key_generation: OnceLock::new(),
             state: Mutex::new(WriteState::Ready),
         })
     }
@@ -467,6 +471,13 @@ impl WriteCustody for WriteExecutionContext {
                 None => self.store.claim(request, now).await,
             }
             .map_err(idempotency_failure)?;
+            if let Claim::Execute(execution) | Claim::Resume { execution, .. } = &claimed {
+                if let Some(generation) = execution.source_key_generation() {
+                    if self.key_generation.set(generation).is_err() {
+                        return Err(RouteFailure::of(ErrorClass::Facade));
+                    }
+                }
+            }
             match claimed {
                 Claim::Execute(execution) => {
                     *state = WriteState::Executing {
@@ -691,6 +702,10 @@ impl WriteCustody for WriteExecutionContext {
             *effect_marked = false;
             Ok(())
         })
+    }
+
+    fn source_key_generation(&self) -> Option<String> {
+        self.key_generation.get().cloned()
     }
 
     fn source_recovery_id(&self) -> Option<String> {

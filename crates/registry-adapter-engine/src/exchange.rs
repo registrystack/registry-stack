@@ -175,14 +175,19 @@ impl SourceWriteInputs {
         })
     }
 
-    /// Derive the opaque source key for one resume ordinal. Framing and a
-    /// fixed domain keep callers, operations, and steps disjoint while the
-    /// same host scope repeats byte-for-byte across retries.
+    /// Derive the opaque source key for one claim generation and resume
+    /// ordinal. Framing and a fixed domain keep callers, operations, claims
+    /// and steps disjoint, while one claim's resends repeat byte-for-byte.
     #[must_use]
-    pub(crate) fn native_idempotency_key(&self, ordinal: u32) -> String {
-        let domain = b"registry-adapter:source-write-key:v1";
-        let mut framed = Vec::with_capacity(domain.len() + self.key_scope_digest.len() + 20);
-        for member in [domain.as_slice(), self.key_scope_digest.as_bytes()] {
+    pub(crate) fn native_idempotency_key(&self, generation: &str, ordinal: u32) -> String {
+        let domain = b"registry-adapter:source-write-key:v2";
+        let mut framed =
+            Vec::with_capacity(domain.len() + self.key_scope_digest.len() + generation.len() + 28);
+        for member in [
+            domain.as_slice(),
+            self.key_scope_digest.as_bytes(),
+            generation.as_bytes(),
+        ] {
             framed.extend_from_slice(&(member.len() as u64).to_be_bytes());
             framed.extend_from_slice(member);
         }
@@ -256,6 +261,13 @@ pub trait WriteCustody: std::fmt::Debug + Send + Sync {
     /// persisted by `before_effect` before the engine may read it. Ordinary
     /// writes and offline replay expose none.
     fn source_recovery_id(&self) -> Option<String> {
+        None
+    }
+    /// The claimed row's random source key generation in lowercase hex,
+    /// available once `claim` has executed or resumed it. Every resend of one
+    /// claim returns the same value. Hosts without source write keys expose
+    /// none.
+    fn source_key_generation(&self) -> Option<String> {
         None
     }
     /// Mark a possible source effect irreversible; the bool answers
@@ -372,10 +384,26 @@ impl Exchange {
     }
 
     #[must_use]
-    pub(crate) fn source_idempotency_key(&self, ordinal: u32) -> Option<String> {
-        self.source_write_inputs
-            .as_ref()
-            .map(|inputs| inputs.native_idempotency_key(ordinal))
+    pub(crate) fn has_source_write_inputs(&self) -> bool {
+        self.source_write_inputs.is_some()
+    }
+
+    /// Derive the source key for one ordinal of the claimed write. Host
+    /// inputs without a claimed generation refuse, so a source key never
+    /// outlives the claim that owns it.
+    pub(crate) fn source_idempotency_key(
+        &self,
+        ordinal: u32,
+    ) -> Result<Option<String>, RouteFailure> {
+        let Some(inputs) = self.source_write_inputs.as_ref() else {
+            return Ok(None);
+        };
+        let generation = match (&self.write_execution, &self.replay_write) {
+            (Some(context), None) | (None, Some(context)) => context.source_key_generation(),
+            _ => None,
+        }
+        .ok_or_else(|| RouteFailure::of(ErrorClass::Facade))?;
+        Ok(Some(inputs.native_idempotency_key(&generation, ordinal)))
     }
 
     pub(crate) fn set_final_source_result(
@@ -824,9 +852,10 @@ mod tests {
         )
         .expect("host-scoped digest and condition");
 
-        let first = inputs.native_idempotency_key(0);
-        assert_eq!(first, inputs.native_idempotency_key(0));
-        assert_ne!(first, inputs.native_idempotency_key(1));
+        let generation = "00112233445566778899aabbccddeeff";
+        let first = inputs.native_idempotency_key(generation, 0);
+        assert_eq!(first, inputs.native_idempotency_key(generation, 0));
+        assert_ne!(first, inputs.native_idempotency_key(generation, 1));
         assert_eq!(first.len(), 64);
         assert!(first.bytes().all(|byte| byte.is_ascii_hexdigit()));
         assert!(!first.contains("revision-17"));
@@ -835,7 +864,42 @@ mod tests {
             Some("revision-17"),
         )
         .expect("other caller scope");
-        assert_ne!(first, other_caller.native_idempotency_key(0));
+        assert_ne!(first, other_caller.native_idempotency_key(generation, 0));
+        assert_ne!(
+            first,
+            inputs.native_idempotency_key("ffeeddccbbaa99887766554433221100", 0),
+            "a later claim of the same caller key derives another source key"
+        );
+    }
+
+    #[test]
+    fn a_source_key_needs_the_claim_generation() {
+        let mut exchange = Exchange::new("source-write".to_owned());
+        exchange
+            .install_source_write_inputs(
+                SourceWriteInputs::try_new(
+                    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                    None,
+                )
+                .expect("inputs"),
+            )
+            .expect("one install");
+
+        assert!(exchange.has_source_write_inputs());
+        assert!(
+            matches!(
+                exchange.source_idempotency_key(0),
+                Err(RouteFailure {
+                    class: ErrorClass::Facade,
+                    ..
+                })
+            ),
+            "a host key scope without a claimed generation never derives a key"
+        );
+        assert!(matches!(
+            Exchange::new("ordinary".to_owned()).source_idempotency_key(0),
+            Ok(None)
+        ));
     }
 
     #[test]

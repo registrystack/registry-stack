@@ -669,12 +669,14 @@ async fn single_effect_resume_reacquires_exactly_one_post_and_cleans_up_on_termi
 }
 
 #[tokio::test]
-async fn single_effect_resume_expiry_erases_recovery_but_never_reopens_an_attempted_post() {
+async fn a_single_write_key_reused_after_retention_is_claimed_fresh_under_a_new_generation() {
     let isolated = isolated().await;
     let store = isolated.store(Duration::from_secs(60)).await;
     let caller = caller("single-resume-expiry");
     let start = UNIX_EPOCH + Duration::from_secs(3_950_000);
-    let mut execution = match store
+
+    // An attempted POST whose outcome stayed unknown, and a completed one.
+    let mut unknown = match store
         .claim_resume(
             request(&caller, "records-create.person", "single-expiry-key", 69),
             single_resume_context(39, start + Duration::from_secs(10)),
@@ -686,26 +688,141 @@ async fn single_effect_resume_expiry_erases_recovery_but_never_reopens_an_attemp
         Claim::Execute(execution) => execution,
         other => panic!("a fresh single write executes: {other:?}"),
     };
+    let unknown_generation = unknown
+        .source_key_generation()
+        .expect("a single write carries its key generation");
     store
-        .mark_resume_step_attempted(&mut execution, 0, start + Duration::from_secs(1))
+        .mark_resume_step_attempted(&mut unknown, 0, start + Duration::from_secs(1))
         .await
         .expect("premark the only physical POST");
-    let after_expiry = start + Duration::from_secs(61);
+    let mut completed = match store
+        .claim_resume(
+            request(&caller, "records-create.person", "single-completed-key", 70),
+            single_resume_context(39, start + Duration::from_secs(10)),
+            start,
+        )
+        .await
+        .expect("claim the second single write")
+    {
+        Claim::Execute(execution) => execution,
+        other => panic!("a fresh single write executes: {other:?}"),
+    };
+    let completed_generation = completed
+        .source_key_generation()
+        .expect("a single write carries its key generation");
+    assert_ne!(unknown_generation, completed_generation);
+    store
+        .mark_resume_step_attempted(&mut completed, 0, start + Duration::from_secs(1))
+        .await
+        .expect("premark the second POST");
+    store
+        .finish(
+            completed,
+            TerminalOutcome::Completed,
+            response(201, b"application/json", br#"{"record":"done"}"#),
+            start + Duration::from_secs(2),
+        )
+        .await
+        .expect("commit the terminal response");
+
+    // Inside the window both keys stay spent, even for another body.
+    let inside = start + Duration::from_secs(59);
+    for key in ["single-expiry-key", "single-completed-key"] {
+        assert!(matches!(
+            store
+                .claim_resume(
+                    request(&caller, "records-create.person", key, 79),
+                    single_resume_context(39, inside + Duration::from_secs(10)),
+                    inside,
+                )
+                .await
+                .expect("resolve the spent key inside the window"),
+            Claim::Mismatch
+        ));
+    }
+
+    let after_expiry = start + Duration::from_secs(63);
     store
         .sweep_expired(after_expiry, 100)
         .await
         .expect("erase expired single-step recovery authority");
-    assert!(matches!(
-        store
+    for (key, previous) in [
+        ("single-expiry-key", unknown_generation),
+        ("single-completed-key", completed_generation),
+    ] {
+        match store
             .claim_resume(
-                request(&caller, "records-create.person", "single-expiry-key", 69),
+                request(&caller, "records-create.person", key, 80),
                 single_resume_context(39, after_expiry + Duration::from_secs(10)),
                 after_expiry,
             )
             .await
-            .expect("resolve the spent key after recovery expiry"),
-        Claim::EffectUnknown { .. }
-    ));
+            .expect("claim the reused key after the window")
+        {
+            Claim::Execute(execution) => assert_ne!(
+                execution
+                    .source_key_generation()
+                    .expect("the fresh claim carries a key generation"),
+                previous,
+                "a reused key never reuses the previous source key generation"
+            ),
+            other => panic!("a key past its window is processed as new: {other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn every_resend_of_a_live_single_write_reuses_its_key_generation() {
+    let isolated = isolated().await;
+    let store = isolated.store(Duration::from_secs(600)).await;
+    let caller = caller("single-resume-generation");
+    let start = UNIX_EPOCH + Duration::from_secs(3_960_000);
+    let mut first = match store
+        .claim_resume(
+            request(&caller, "records-create.person", "generation-key", 73),
+            single_resume_context(43, start + Duration::from_secs(10)),
+            start,
+        )
+        .await
+        .expect("claim the single write")
+    {
+        Claim::Execute(execution) => execution,
+        other => panic!("a fresh single write executes: {other:?}"),
+    };
+    let generation = first
+        .source_key_generation()
+        .expect("a single write carries its key generation");
+    assert_eq!(
+        generation.len(),
+        32,
+        "one 16-byte generation in lowercase hex"
+    );
+    assert!(generation
+        .bytes()
+        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)));
+    store
+        .mark_resume_step_attempted(&mut first, 0, start + Duration::from_secs(1))
+        .await
+        .expect("premark the only physical POST");
+
+    // The lease lapses with the outcome unknown; the same artifact resends.
+    let resumed_at = start + Duration::from_secs(11);
+    match store
+        .claim_resume(
+            request(&caller, "records-create.person", "generation-key", 73),
+            single_resume_context(43, resumed_at + Duration::from_secs(10)),
+            resumed_at,
+        )
+        .await
+        .expect("resume the single write")
+    {
+        Claim::Resume { execution, .. } => assert_eq!(
+            execution.source_key_generation(),
+            Some(generation),
+            "a resend presents the same source key"
+        ),
+        other => panic!("a lapsed lease resumes the same claim: {other:?}"),
+    }
 }
 
 #[tokio::test]

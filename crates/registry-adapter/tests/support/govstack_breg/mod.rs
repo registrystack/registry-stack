@@ -414,6 +414,16 @@ impl AdapterProcess {
         project: &Path,
         pack: &Path,
     ) -> Self {
+        Self::start_with_retention(source_origin, source_token, project, pack, 86_400).await
+    }
+
+    pub async fn start_with_retention(
+        source_origin: &str,
+        source_token: &str,
+        project: &Path,
+        pack: &Path,
+        response_retention_seconds: u64,
+    ) -> Self {
         let database = isolated_adapter_database().await;
         let key = access_token_test_key(jsonwebtoken::Algorithm::ES256);
         let jwks = jwks_from_private_jwk(&key).to_string();
@@ -449,7 +459,7 @@ allowedPrivateCidrs: [192.168.0.0/16]
 audit:
   retentionDays: 90
 idempotency:
-  responseRetentionSeconds: 86400
+  responseRetentionSeconds: {response_retention_seconds}
 cursorKeyRef: secret:env/TEST_ADAPTER_CURSOR_KEY
 "#
             ),
