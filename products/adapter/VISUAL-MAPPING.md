@@ -76,20 +76,29 @@ The format must express it; editor support follows the first slice.
 
 ## First editor slice
 
-The editor is a table of the target's fields, one row per field: the field, where its value comes from, and its rule.
-Required fields that are not set yet are what is left to do.
-A row changes in Studio's side panel: the source (an answer seen in the samples or already mapped, or a fixed value), the rule (As is, Text, Whole number, Date) and, for optional fields only, whether a missing answer refuses the item or leaves the field out.
-The rule defaults from the target field's type.
-The screen shows field names, not selector text; selectors, the entrypoint and digests sit under Technical details.
-Below the fields, a Samples table lists the preview inputs beside the model with their result, Accepted or Refused with the field that refused, and Add sample adds one JSON item.
-These are existing Studio parts (data table, side panel, notice, Technical details); the editor needs no new UI part.
+The editor shows the source and the target as two trees side by side, joined by a line for each filled target field.
+The source tree lists the answers the samples carry and the model already selects; the target tree is the target schema, with its required fields marked.
+An author maps a field by dragging a source field onto a target field, or by choosing one and then the other; either way the editor sends the same change it would send from a form.
+Each filled target row shows its source and its rule (As is, Text, Whole number, Date) and can change the rule or clear the field in place.
+A side panel opened from a row or a line holds the choices that need more than one value: a fixed value instead of an answer, the item to pick from a list (a keyed selection, such as the member whose relationship is head), and, for optional fields only, whether a missing answer refuses the item or leaves the field out.
+The rule defaults from the target field's type and from how the samples hold the answer.
+Required fields that are not filled yet are what is left to do, and the target tree can be filtered to them.
+The screen shows source keys and target field names, since mapping them is the task; selector text, the entrypoint and digests sit under Technical details.
+Under the trees, one line summarises the preview over the samples (how many were accepted and refused) and links to a Samples tab.
+That tab lists the job's preview inputs, one projected item per file in the job's `preview/` directory, with their result: Accepted, or Refused with the field that refused.
+Add sample adds one JSON item there.
+A YAML tab shows the model file.
 
-The editor has no connector lines, two-tree layout, drag and drop or free-form assignment text; developers and agents edit the YAML model.
-What it borrows from Kaoto's DataMapper is the split between a saved model and the artifact generated from it, whose generated XSLT step plays the role our generated Rhai plays; Kaoto's code is not embedded.
+The two trees are the one way to read and edit a mapping in Studio; there is no second table or text version of the same mapping beside them.
+Developers and agents edit the YAML model directly, which is also the accessible path.
+What the editor borrows from Kaoto's DataMapper is the two-tree layout with connector lines and the split between a saved model and the artifact generated from it, whose generated XSLT step plays the role our generated Rhai plays; Kaoto's code is not embedded.
 
 The first slice edits the ingestion direct destination, starting with the KoboToolbox job; Consultation follows, then Evidence.
-Keyed selections, such as DHIS2 attributes, show read-only until a DHIS2 slice brings the reviewed attribute catalogue.
+Keyed selection from a bounded list is editable in the side panel; the DHIS2 slice adds the reviewed attribute catalogue, so its attributes show by label rather than by UID.
 The write direction stays headless.
+
+To draw the target tree and address findings to a target row without parsing message text, `adapterctl mapping check` reports the target as it reads it and names the target field on findings about one field.
+It also reports why a script drifted from its model (the model changed, or the script was edited), so the read-only notice names the right cause.
 
 The format supports scalar copies and constants, nested target objects, exact keyed selection from a bounded array, explicit string-to-integer and integer-to-string conversion, and canonical `YYYY-MM-DD` date validation.
 The generator emits the corresponding Rhai expressions and checks; conversions do not guess formats.
@@ -99,7 +108,7 @@ Required unmapped fields, conflicting assignments, invalid selectors and unsuppo
 
 ## Source descriptions and examples
 
-The editor lists source fields from the sample items beside the model and from the model's existing selectors; it reads no source schema and infers nothing at generation time.
+The editor lists source fields from the sample items (for an ingestion job, the files in its `preview/` directory) and from the model's existing selectors; it reads no source schema and infers nothing at generation time.
 A new answer appears once a sample carries it.
 For an ingestion job, the job's `projection.fields` must also name the answer, and a dotted path reaches the mapping as one literal key, which the model quotes (`'"household.village"'`).
 A field catalogue derived from fixtures or form definitions, and a reviewed DHIS2 catalogue of attribute UIDs, labels and types, are later work; the DHIS2 slice displays “Date of birth [Dob00000001]” but persists the UID and exact keyed-array selector.
@@ -139,7 +148,7 @@ General loops, general conditions, arbitrary code nodes, XML/XSLT, handwritten-R
 
 1. `AdapterMapping` is registered with a generated, drift-checked schema; the model, checks and generator run headlessly through `adapterctl` and emit artifacts accepted by the existing Rust API without new runtime formats.
 2. Studio generates and previews only through the pinned `adapterctl`; no second generator exists.
-3. Browser tests cover setting, changing and clearing a field's source and rule from the keyboard, save and reopen, a refused sample that names its field, and the read-only state of a hand-edited script.
+3. Browser tests cover setting a field by dragging and by choosing source then target, changing its rule and clearing it, a keyed selection and a fixed value in the side panel, save and reopen, a refused sample that names its field, and the read-only state of a hand-edited script.
 4. The DHIS2 read example previews through Rust and proves nested targets, configured attribute selection and private-canary exclusion.
 5. The KoboToolbox ingestion example regenerates its mapping from a model, produces the destination input for accepted items, and refuses the missing-value item as an item-scoped refusal.
 6. Tests cover missing and duplicate matches, invalid dates, conversions, required-field gaps and extra output, with static errors or the named preview refusals as appropriate.
