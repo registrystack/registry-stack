@@ -1753,6 +1753,172 @@ fn job_check_warns_when_a_generated_pack_script_drifts_from_its_model() {
     assert_eq!(exit, ExitCode::from(1), "{report}");
 }
 
+// --- unprojected sources in job check --------------------------------------
+
+/// The KoboToolbox job example with a generated destination mapping whose
+/// assignments are `assignments` (YAML lines under `assignments:`), the job
+/// pinned to the generated script.
+fn unprojected_workspace(assignments: &str) -> tempfile::TempDir {
+    std::env::set_var("KOBO_USERNAME", "check-contracts");
+    std::env::set_var("KOBO_PASSWORD", "check-contracts");
+    let products = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/adapter");
+    let root = tempfile::tempdir().unwrap();
+    copy_tree(&products.join("examples/kobotoolbox-job"), root.path());
+    std::fs::create_dir_all(root.path().join("schemas")).unwrap();
+    std::fs::write(root.path().join("schemas/person.schema.json"), SCHEMA).unwrap();
+    let model = root.path().join("register.mapping.yaml");
+    let header = model_text(
+        "ingestion",
+        Some("proposal"),
+        "mappings/register-household.rhai",
+        "map_submission",
+    );
+    let header = header.split("assignments:").next().unwrap().to_owned();
+    std::fs::write(&model, format!("{header}assignments:\n{assignments}")).unwrap();
+    let (exit, report, _) = run_json(&["mapping", "generate", model.to_str().unwrap(), "--force"]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    let job = root.path().join("job.yaml");
+    let text = std::fs::read_to_string(&job).unwrap();
+    let old = "sha256:6b7f1cbbccd57459e15f5ece6282b3ca96946f0525759adcf6acbcc925496da6";
+    assert!(text.contains(old));
+    std::fs::write(
+        &job,
+        text.replace(old, report["scriptDigest"].as_str().unwrap()),
+    )
+    .unwrap();
+    root
+}
+
+fn job_check_in(root: &tempfile::TempDir, extra: &[&str]) -> (ExitCode, Value, Vec<u8>) {
+    let products = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/adapter");
+    let pack = products.join("packs/kobotoolbox/pack.yaml");
+    let argument = |name: &str| root.path().join(name).to_str().unwrap().to_owned();
+    let (pack, job, runtime, profile, project) = (
+        pack.to_str().unwrap().to_owned(),
+        argument("job.yaml"),
+        argument("job-runtime.example.yaml"),
+        argument("profile.yaml"),
+        argument("project.yaml"),
+    );
+    let mut arguments = vec![
+        "job",
+        "check",
+        pack.as_str(),
+        job.as_str(),
+        "--runtime",
+        runtime.as_str(),
+        "--profile",
+        profile.as_str(),
+        "--project",
+        project.as_str(),
+    ];
+    arguments.extend_from_slice(extra);
+    run_json(&arguments)
+}
+
+fn unprojected_warnings(report: &Value) -> Vec<&Value> {
+    report["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|d| d["code"] == "adapter.job.mapping-unprojected")
+        .collect()
+}
+
+const PROJECTED_ASSIGNMENTS: &str = "  - target: source.id\n    from: _id\n  \
+     - target: source.kind\n    constant: person\n  \
+     - target: household.size\n    from: '\"household.household_size\"'\n    convert: integer\n";
+
+#[test]
+fn job_check_is_quiet_when_every_source_key_is_projected() {
+    let root = unprojected_workspace(PROJECTED_ASSIGNMENTS);
+    let (exit, report, _) = job_check_in(&root, &["--deny-warnings"]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    assert!(unprojected_warnings(&report).is_empty(), "{report}");
+}
+
+#[test]
+fn job_check_warns_once_for_an_unprojected_top_level_key() {
+    let root = unprojected_workspace(
+        "  - target: source.id\n    from: _id\n  \
+         - target: source.kind\n    from: village\n  \
+         - target: household.size\n    from: '\"household.household_size\"'\n    convert: integer\n",
+    );
+    let (exit, report, _) = job_check_in(&root, &[]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    let warnings = unprojected_warnings(&report);
+    assert_eq!(warnings.len(), 1, "{report}");
+    let warning = warnings[0];
+    assert_eq!(warning["severity"], "warning", "{report}");
+    assert_eq!(warning["path"], "/assignments/1/from", "{report}");
+    assert_eq!(warning["target"], "source.kind", "{report}");
+    assert!(
+        warning["source"]["file"]
+            .as_str()
+            .unwrap()
+            .ends_with("register.mapping.yaml"),
+        "{report}"
+    );
+    let message = warning["message"].as_str().unwrap();
+    assert!(message.contains("village"), "{message}");
+    assert!(warning["suggestedAction"]
+        .as_str()
+        .unwrap()
+        .contains("projection.fields"));
+
+    let (exit, report, _) = job_check_in(&root, &["--deny-warnings"]);
+    assert_eq!(exit, ExitCode::from(1), "{report}");
+    assert_eq!(unprojected_warnings(&report).len(), 1, "{report}");
+}
+
+#[test]
+fn job_check_warns_for_a_keyed_selection_whose_root_is_not_projected() {
+    let root = unprojected_workspace(
+        "  - target: source.id\n    from: _id\n  \
+         - target: source.kind\n    from: 'members[relationship = \"head\"].phone'\n  \
+         - target: household.size\n    from: '\"household.household_size\"'\n    convert: integer\n",
+    );
+    let (exit, report, _) = job_check_in(&root, &[]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    let warnings = unprojected_warnings(&report);
+    assert_eq!(warnings.len(), 1, "{report}");
+    assert_eq!(warnings[0]["path"], "/assignments/1/from", "{report}");
+    assert!(
+        warnings[0]["message"].as_str().unwrap().contains("members"),
+        "{report}"
+    );
+    assert!(
+        !warnings[0]["message"].as_str().unwrap().contains("head"),
+        "{report}"
+    );
+}
+
+#[test]
+fn job_check_addresses_the_assignment_that_reads_the_unprojected_key() {
+    let root = unprojected_workspace(
+        "  - target: source.id\n    from: _id\n  \
+         - target: source.kind\n    constant: person\n  \
+         - target: household.size\n    from: size\n    convert: integer\n",
+    );
+    let (_, report, _) = job_check_in(&root, &[]);
+    let warnings = unprojected_warnings(&report);
+    assert_eq!(warnings.len(), 1, "{report}");
+    assert_eq!(warnings[0]["target"], "household.size", "{report}");
+    assert_eq!(warnings[0]["path"], "/assignments/2/from", "{report}");
+}
+
+#[test]
+fn job_check_says_nothing_new_when_the_script_has_drifted() {
+    let root = unprojected_workspace(PROJECTED_ASSIGNMENTS);
+    let model = root.path().join("register.mapping.yaml");
+    let text = std::fs::read_to_string(&model).unwrap();
+    std::fs::write(&model, text.replace("from: _id", "from: village")).unwrap();
+    let (exit, report, _) = job_check_in(&root, &[]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    assert_eq!(drift_warnings(&report).len(), 1, "{report}");
+    assert!(unprojected_warnings(&report).is_empty(), "{report}");
+}
+
 // --- the maintained examples -----------------------------------------------
 
 fn example(name: &str) -> PathBuf {

@@ -19,10 +19,11 @@ use registry_adapter::engine::project_transform::{
 use registry_adapter::engine::public_schema::{check_public_schema, PublicSchemaError};
 use registry_adapter::engine::scripts::CodeMaps;
 use registry_adapter_core::{
-    check_mapping_file, check_mapping_findings, generate, is_clean_mapping_path,
-    model_reference_from, parse_generated_header, target_tree, AdapterMapping, BindingTransform,
-    GeneratedHeaderState, IngestionMode, MappingTarget, ProjectSchema, ProjectScript,
-    ADAPTER_MAPPING_API_VERSION, ADAPTER_MAPPING_KIND, MAXIMUM_GENERATED_SCRIPT_BYTES,
+    canonical_target_path, check_mapping_file, check_mapping_findings, generate,
+    is_clean_mapping_path, model_reference_from, parse_generated_header, parse_selector,
+    target_tree, AdapterMapping, BindingTransform, GeneratedHeaderState, IngestionMode,
+    MappingTarget, ProjectSchema, ProjectScript, ADAPTER_MAPPING_API_VERSION, ADAPTER_MAPPING_KIND,
+    MAXIMUM_GENERATED_SCRIPT_BYTES,
 };
 use registry_platform_config::{sha256_uri, AuthoredExpressions};
 use registry_platform_yaml::{
@@ -56,6 +57,10 @@ const INPUT_FORMAT: FormatSpec<'static> = FormatSpec {
 
 /// The warning code for a generated script that no longer matches its model.
 pub(crate) const SCRIPT_DRIFT_CODE: &str = "adapter.mapping.script-drift";
+
+/// The job-check warning for a mapping assignment that reads a source key the
+/// job's projection does not hand over.
+pub(crate) const UNPROJECTED_CODE: &str = "adapter.job.mapping-unprojected";
 
 const MAXIMUM_SCHEMA_BYTES: u64 = 256 * 1024;
 const MAXIMUM_INPUT_BYTES: u64 = 1024 * 1024;
@@ -1116,6 +1121,77 @@ pub(crate) fn script_drift(
         Ok(_) => drift("the script bytes differ from what the model generates"),
         Err(_) => drift("the model no longer generates a script"),
     }
+}
+
+/// One warning per assignment of a current generated script's model whose
+/// source key (the first segment of `from`) is not in `projected`, each with
+/// the assignment's canonical target. A script that is handwritten, has
+/// drifted from its model, or whose model does not check cleanly yields
+/// nothing: the drift warning already speaks for those.
+pub(crate) fn unprojected_sources(
+    script: &Path,
+    owner_directory: &Path,
+    projected: &[String],
+) -> Vec<(Diagnostic, String)> {
+    let Ok(text) = std::fs::read_to_string(script) else {
+        return Vec::new();
+    };
+    let GeneratedHeaderState::Parsed(header) = parse_generated_header(&text) else {
+        return Vec::new();
+    };
+    if script_drift(script, owner_directory, "/destination/mapping").is_some() {
+        return Vec::new();
+    }
+    let model = script
+        .parent()
+        .unwrap_or_else(|| Path::new(""))
+        .join(&header.model_reference);
+    let mut scratch = Report::new(Vec::new());
+    let mut files = 0usize;
+    let loaded = match load(&model, &mut scratch, &mut files) {
+        Ok(Some(loaded)) if !scratch.has_errors() => loaded,
+        _ => return Vec::new(),
+    };
+    let Some(schema) = loaded.schema.as_ref() else {
+        return Vec::new();
+    };
+    if !check_mapping_findings(&loaded.mapping, schema).is_empty() {
+        return Vec::new();
+    }
+    let mut warnings = Vec::new();
+    for (index, assignment) in loaded.mapping.assignments.iter().enumerate() {
+        let Some(from) = &assignment.from else {
+            continue;
+        };
+        let Some(root) = parse_selector(from)
+            .ok()
+            .and_then(|segments| segments.into_iter().next())
+            .map(|segment| segment.name)
+        else {
+            continue;
+        };
+        let Some(target) = canonical_target_path(&assignment.target) else {
+            continue;
+        };
+        if projected.contains(&root) {
+            continue;
+        }
+        let mut warning = Diagnostic::warning(
+            UNPROJECTED_CODE,
+            format!("/assignments/{index}/from"),
+            format!(
+                "the mapping reads the source key `{root}` for `{target}`, but the job's projection.fields does not list it, so every live item reaches the mapping without it"
+            ),
+            "Add the key to projection.fields in the job, or map a field the projection already lists.",
+        );
+        warning.source = Some(Source {
+            file: model.display().to_string(),
+            line: None,
+            column: None,
+        });
+        warnings.push((warning, target));
+    }
+    warnings
 }
 
 #[cfg(test)]

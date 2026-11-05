@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- `adapterctl job check` warns with `adapter.job.mapping-unprojected` when a
+  generated `direct-breg` destination mapping reads a source key that the
+  job's `projection.fields` does not list, once per assignment, at the
+  assignment's `from` in the model and with the assignment's `target`. Such a
+  mapping previews cleanly over a sample but refuses every live item, or
+  always omits the field under `whenMissing: omit`. `--deny-warnings` makes it
+  a refusal; a missing, invalid or drifted model adds nothing beyond the
+  existing drift warning.
 - `adapterctl mapping check`, `generate` and `preview` refuse a
   `mapping.targetSchema` that resolves, through a symbolic link, outside the
   model's directory, with `adapterctl.mapping-schema-outside` at
