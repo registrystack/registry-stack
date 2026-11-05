@@ -3,9 +3,11 @@
 //! PostgreSQL proofs for the fixed GovStack Write over the BReg pack: a
 //! failed replay keeps exact response custody while journaling the canonical
 //! Problem identity for every attempt, a redeploy never resends an
-//! interrupted write, a completed Update replays ahead of its guard, a
-//! bodyless Update does not negotiate `Accept`, and an Update stays a flat
-//! merge patch whatever its input schema admits.
+//! interrupted write, a completed Update replays ahead of its guard only to
+//! the caller that earned it, a retry under a guard that no longer opens is
+//! answered in flight while its first attempt runs, a bodyless Update does
+//! not negotiate `Accept`, and an Update stays a flat merge patch whatever
+//! its input schema admits.
 #![cfg(feature = "postgres-test")]
 
 #[allow(dead_code)]
@@ -19,7 +21,7 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 use served_harness::upstream::{Response, UpstreamDouble};
-use served_harness::Served;
+use served_harness::{Served, SECOND_CLIENT, SUBJECT};
 
 const CREATE_PATH: &str = "/govstack/registries/v1/collections/contacts/records";
 const INVALID_CONTENT: &str = "https://govstack.global/problems/digital-registries/invalid-content";
@@ -430,6 +432,9 @@ async fn a_completed_update_replays_after_its_validator_closure_changes() {
     )
     .await;
     let token = second.token("records.write");
+    // The database is shared with the first instance, so count only the
+    // rows the replay adds.
+    let kinds_before = second.journal_kinds().await;
 
     let (status, head, body) = patch(&second, &token, key, &created, &[], &data);
     assert_eq!(
@@ -440,6 +445,40 @@ async fn a_completed_update_replays_after_its_validator_closure_changes() {
     );
     assert_eq!(header(&head, "etag"), Some(updated.as_str()));
     assert_eq!(second_source.request_count(), 0, "a replay sends nothing");
+    let kinds_after = second.journal_kinds().await;
+    for kind in ["exchangeCreated", "exchangeCompleted"] {
+        assert_eq!(
+            kind_count(&kinds_after, kind),
+            kind_count(&kinds_before, kind) + 1,
+            "the replay journals one {kind}: {kinds_after:?}"
+        );
+    }
+    assert_eq!(
+        kind_count(&kinds_after, "exchangeFailed"),
+        kind_count(&kinds_before, "exchangeFailed"),
+        "{kinds_after:?}"
+    );
+
+    // The stored answer belongs to the caller namespace that earned it: the
+    // same key, body and guard from another client or subject finds nothing.
+    let other_client = second.token_with(
+        SUBJECT,
+        "records.write",
+        json!({"client_id": SECOND_CLIENT}),
+    );
+    let other_subject = second.token_for("synthetic-other-caller", "records.write");
+    for (who, token) in [("client", &other_client), ("subject", &other_subject)] {
+        let (status, _, problem) = patch(&second, token, key, &created, &[], &data);
+        assert_eq!(
+            status, 412,
+            "another {who} gets no replay of this caller's answer: {problem}"
+        );
+        assert_eq!(
+            problem["type"],
+            "https://govstack.global/problems/digital-registries/precondition-failed"
+        );
+    }
+    assert_eq!(second_source.request_count(), 0);
 
     let (status, _, problem) = patch(
         &second,
@@ -467,6 +506,139 @@ async fn a_completed_update_replays_after_its_validator_closure_changes() {
         "only an identical completed request replays ahead of its guard: {problem}"
     );
     assert_eq!(second_source.request_count(), 0);
+}
+
+fn kind_count(kinds: &[String], kind: &str) -> usize {
+    kinds.iter().filter(|seen| *seen == kind).count()
+}
+
+const IN_FLIGHT: &str = "https://govstack.global/problems/digital-registries/idempotency-in-flight";
+
+#[tokio::test]
+async fn a_retry_under_a_stale_guard_is_answered_in_flight_while_its_update_runs() {
+    let pack = repository_path("products/adapter/packs/breg-records/pack.yaml");
+    let project = repository_path("products/adapter/examples/breg-govstack");
+    let first_source = UpstreamDouble::start();
+    first_source.respond_with(vec![
+        batch_receipt("create", "\"breg-1\""),
+        batch_receipt("patch", "\"breg-2\""),
+    ]);
+    let first = Served::start_with_pack_endpoint_and_credential(
+        &first_source.url(""),
+        &project,
+        &pack,
+        "registry",
+        CREDENTIAL,
+    )
+    .await;
+    let token = first.token("records.write");
+    let created = create_contact(&first, &token, r#""in-flight-create""#);
+    // A second instance on the same database with another source origin
+    // cannot open the guard the first instance minted.
+    let second_source = UpstreamDouble::start();
+    let second = Served::start_with_pack_endpoint_credential_and_database(
+        &second_source.url(""),
+        &project,
+        &pack,
+        "registry",
+        CREDENTIAL,
+        &first.database,
+    )
+    .await;
+    let second_token = second.token("records.write");
+    let key = r#""in-flight-update""#;
+    let data = json!({"name": "Augusta Ada King"});
+    first_source.delay_answers(Duration::from_secs(4));
+
+    std::thread::scope(|scope| {
+        let running = scope.spawn(|| patch(&first, &token, key, &created, &[], &data));
+        let started = std::time::Instant::now();
+        while first_source.request_count() < 2 {
+            assert!(
+                started.elapsed() < Duration::from_secs(20),
+                "the first Update never reached its source"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+
+        let (status, head, problem) = patch(&second, &second_token, key, &created, &[], &data);
+        assert_eq!(
+            status,
+            409,
+            "the normal path's in-flight answer: {problem}\n{}",
+            second.stderr_text()
+        );
+        assert_eq!(problem["type"], IN_FLIGHT, "{problem}");
+        assert_eq!(header(&head, "retry-after"), Some("5"));
+
+        let (status, _, body) = running.join().expect("the first Update");
+        assert_eq!(status, 204, "{body}\n{}", first.stderr_text());
+    });
+    assert_eq!(
+        second_source.request_count(),
+        0,
+        "the stale retry sends nothing"
+    );
+    let in_flight: Vec<_> = second
+        .journal_details("exchangeFailed")
+        .await
+        .into_iter()
+        .filter(|failure| failure["problemCode"] == IN_FLIGHT)
+        .collect();
+    assert_eq!(in_flight.len(), 1, "{in_flight:?}");
+    assert_eq!(in_flight[0]["class"], "facade.conflict");
+    assert_eq!(in_flight[0]["status"], 409);
+
+    // Once the first attempt settles, the same retry replays its answer.
+    let (status, _, body) = patch(&second, &second_token, key, &created, &[], &data);
+    assert_eq!(status, 204, "{body}\n{}", second.stderr_text());
+    assert_eq!(second_source.request_count(), 0);
+}
+
+#[tokio::test]
+async fn a_stale_guard_whose_custody_cannot_be_read_is_journaled_as_internal() {
+    let pack = repository_path("products/adapter/packs/breg-records/pack.yaml");
+    let project = repository_path("products/adapter/examples/breg-govstack");
+    let source = UpstreamDouble::start();
+    let served = Served::start_with_pack_endpoint_and_credential(
+        &source.url(""),
+        &project,
+        &pack,
+        "registry",
+        CREDENTIAL,
+    )
+    .await;
+    let token = served.token("records.write");
+    // A strong validator this deployment never sealed takes the stale-guard
+    // path. The test role is a superuser, so the custody table is moved
+    // aside rather than withdrawn to make the lookup fail.
+    served
+        .execute_sql("ALTER TABLE adapter_idempotency_entries RENAME TO unreadable_custody")
+        .await;
+
+    let (status, _, problem) = patch(
+        &served,
+        &token,
+        r#""unreadable-custody""#,
+        "\"never-sealed\"",
+        &[],
+        &json!({"name": "Ada"}),
+    );
+    served
+        .execute_sql("ALTER TABLE unreadable_custody RENAME TO adapter_idempotency_entries")
+        .await;
+
+    assert_eq!(status, 500, "{problem}\n{}", served.stderr_text());
+    let internal = "https://govstack.global/problems/digital-registries/internal-error";
+    assert_eq!(problem["type"], internal, "{problem}");
+    let kinds = served.journal_kinds().await;
+    assert_eq!(kind_count(&kinds, "exchangeCreated"), 1, "{kinds:?}");
+    let failures = served.journal_details("exchangeFailed").await;
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert_eq!(failures[0]["class"], "facade", "{failures:?}");
+    assert_eq!(failures[0]["problemCode"], internal, "{failures:?}");
+    assert_eq!(failures[0]["status"], 500, "{failures:?}");
+    assert_eq!(source.request_count(), 0);
 }
 
 #[tokio::test]
