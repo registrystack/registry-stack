@@ -65,4 +65,4 @@ description = "Allow the reconstructed GraphQL page-state token in the Adapter G
 condition = "AND"
 paths = ["^products/adapter/fixtures/source-shapes/graphql-cursor-source/fixtures/find-first-page\\.yaml$"]
 regexTarget = "line"
-regexes = ['''^\s*pageStateToken: AQGTVIRecXOAHQpErfOzhEknm-j2T4eSa5osZDxhcPxbjL4ZWsi_fwuEmekmwe3pJzk7HzaQ5NkeOQEeGBtmPJ2tSNzFv1vbYu21rA$''']
+regexes = ['''^\s*pageStateToken: AQGTVIRecXOAHQpErfOzhEknm-j2T4eSa5osZDxhcPxbjL4ZWsi_fwuEmekmwe3pJzk7HzaQ5NkeOQEeCryW2cQXdLeGuRw25_eLYQ$''']

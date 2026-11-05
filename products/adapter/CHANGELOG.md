@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Continuation cursors (GovStack List and Search, and every other paginated
+  facade operation) are bound to the verified client the caller acts
+  through (`azp` or `client_id`) as well as the issuer and subject, so a
+  cursor issued to one client is refused with `invalid-cursor` when the
+  same subject presents it through another. A
+  refreshed token for the same subject and client still continues. The
+  cursor length and the published cursor `maxLength` are unchanged. Cursors
+  issued before the upgrade are refused after it; a caller restarts the
+  traversal from its first page. Committed fixtures that pin sealed cursor
+  bytes carry the new values.
 - GovStack Update: the ETag validator closure also binds the companion
   read's route (its steps, the direct routes they call and the pinned
   digests of their scripts) and the pack's code maps, so changing a mapping

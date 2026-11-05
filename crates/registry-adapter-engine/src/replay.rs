@@ -42,6 +42,7 @@ impl ReplayCursorNonce {
 pub const REPLAY_DEPLOYMENT: &str = "fixture-replay-v1";
 pub const REPLAY_CURSOR_ISSUER: &str = "https://fixture-replay.invalid";
 pub const REPLAY_CURSOR_SUBJECT: &str = "synthetic-fixture-caller";
+pub const REPLAY_CURSOR_CLIENT: &str = "fixture-replay-client";
 pub const REPLAY_CURSOR_CLOCK_SECONDS: u64 = 1_700_000_000;
 pub const REPLAY_CURSOR_KEY_BYTE: u8 = 0x52;
 /// The fixed source key generation of every replayed write, so a fixture can

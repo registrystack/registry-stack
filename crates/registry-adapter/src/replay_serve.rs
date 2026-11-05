@@ -28,7 +28,7 @@ use crate::engine::component::rest::continuation::{
     filter_digest, ContinuationCodec, CursorBinding, CursorKey, CursorTtl,
 };
 use crate::engine::replay::{
-    ReplayCursorNonce, ReplayFailure, ReplayTranscript, ReplayWriteContext,
+    ReplayCursorNonce, ReplayFailure, ReplayTranscript, ReplayWriteContext, REPLAY_CURSOR_CLIENT,
     REPLAY_CURSOR_CLOCK_SECONDS, REPLAY_CURSOR_ISSUER, REPLAY_CURSOR_KEY_BYTE,
     REPLAY_CURSOR_SUBJECT, REPLAY_DEPLOYMENT,
 };
@@ -430,7 +430,7 @@ pub async fn run_with_project_directory(
             let scope = crate::govstack::write::source_key_scope(
                 REPLAY_CURSOR_ISSUER,
                 REPLAY_CURSOR_SUBJECT,
-                "fixture-replay-client",
+                REPLAY_CURSOR_CLIENT,
                 REPLAY_DEPLOYMENT,
                 match operation.method {
                     HttpMethod::Post => "POST",
@@ -820,6 +820,7 @@ fn replay_cursor_binding<'a>(
         binding_id: &operation.binding,
         issuer: REPLAY_CURSOR_ISSUER,
         subject: REPLAY_CURSOR_SUBJECT,
+        client: REPLAY_CURSOR_CLIENT,
         deployment: REPLAY_DEPLOYMENT,
         filters,
     }
@@ -1290,6 +1291,7 @@ mod tests {
             binding_id: "search-person",
             issuer: "https://fixture-replay.invalid",
             subject: "synthetic-fixture-caller",
+            client: "fixture-replay-client",
             deployment: "fixture-replay-v1",
             filters,
         };
@@ -1301,7 +1303,7 @@ mod tests {
             .expect("a continuation produces a token");
         assert_eq!(
             token,
-            "AaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpcuXcsXmdcdWb2JVdLvZyzRGLUO0Vm6bQvkUiwrZPocm-Vj2rDA"
+            "AaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpcuXcsXmdcdWb2JVdLvZyzRGLUO0Vjz4llRYjA9Mgn6v9v5xj24"
         );
         assert_eq!(
             codec
@@ -1328,6 +1330,7 @@ mod tests {
                 binding_id,
                 issuer: REPLAY_CURSOR_ISSUER,
                 subject: REPLAY_CURSOR_SUBJECT,
+                client: REPLAY_CURSOR_CLIENT,
                 deployment: REPLAY_DEPLOYMENT,
                 filters,
             };
@@ -1372,6 +1375,7 @@ mod tests {
                     binding_id: "benefit-case-find",
                     issuer: REPLAY_CURSOR_ISSUER,
                     subject: REPLAY_CURSOR_SUBJECT,
+                    client: REPLAY_CURSOR_CLIENT,
                     deployment: REPLAY_DEPLOYMENT,
                     filters,
                 };
@@ -1392,9 +1396,9 @@ mod tests {
         assert_eq!(
             actual,
             [
-                "AZ-QW0He7xnlzHwsY_MoY3HaOSJkEzSnOof3k1fkUIdttZLapuyZGtNI5kAyIbnII4JOiV4s8Vy3tCHfbuY",
-                "AaW8rI1CvWK9y53Ni6oLOJeDjcl5fBVpQyicqzLMqPodcjKcJsY6mPbB0--gjsJEkxENyrX6bQqqqmFk1ag",
-                "AQGTVIRecXOAHQpErfOzhEknm-j2T4eSa5osZDxhcPxbjL4ZWsi_fwuEmekmwe3pJzk7HzaQ5NkeOQEeGBtmPJ2tSNzFv1vbYu21rA",
+                "AZ-QW0He7xnlzHwsY_MoY3HaOSJkEzSnOof3k1fkUIdttZLapuyZGtNI5kAyIdKfRTrIRt-gvKFpw19bV08",
+                "AaW8rI1CvWK9y53Ni6oLOJeDjcl5fBVpQyicqzLMqPodcjKcJsY6mPbB0--gjl3Ug9OlPB5DhcNNlQXT9_M",
+                "AQGTVIRecXOAHQpErfOzhEknm-j2T4eSa5osZDxhcPxbjL4ZWsi_fwuEmekmwe3pJzk7HzaQ5NkeOQEeCryW2cQXdLeGuRw25_eLYQ",
             ]
         );
     }

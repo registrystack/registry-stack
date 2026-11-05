@@ -103,7 +103,7 @@ entries:
               mother_reference: PERSON-SYNTHETIC-A
               father_reference: PERSON-SYNTHETIC-B
         pageInfo:
-          nextCursor: AaW8rI1CvWK9y53Ni6oLOJeDjcl5fBVpQyicqzLMqPodcjKcJsY6mPbB0--gjsJEkxENyrX6bQqqqmFk1ag
+          nextCursor: AaW8rI1CvWK9y53Ni6oLOJeDjcl5fBVpQyicqzLMqPodcjKcJsY6mPbB0--gjl3Ug9OlPB5DhcNNlQXT9_M
         meta:
           registryIdentifier: opencrvs-events-registry
           datasetIdentifier: births

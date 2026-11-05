@@ -294,6 +294,43 @@ async fn a_cursor_refuses_a_different_page_size_and_a_forged_text() {
 }
 
 #[tokio::test]
+async fn a_cursor_is_bound_to_its_client_and_survives_a_refreshed_token() {
+    let upstream = UpstreamDouble::start();
+    upstream.respond_with(vec![page_of(1, 9), page_of(2, 9)]);
+    let served = start(&upstream).await;
+    let token = served.token("records.read");
+    let (_, _, first) = served.get(&format!("{LIST_PATH}?pageSize=5"), Some(&token));
+    let cursor = first["pageInfo"]["nextCursor"].as_str().expect("a cursor");
+
+    // The same person acting through another admitted client is refused
+    // with the problem any other binding mismatch gets, naming nothing.
+    let other_client = served.token_with(
+        served_harness::SUBJECT,
+        "records.read",
+        json!({"client_id": served_harness::SECOND_CLIENT}),
+    );
+    let (status, _, body) =
+        served.get(&format!("{LIST_PATH}?cursor={cursor}"), Some(&other_client));
+    assert_eq!(status, 400, "{body}");
+    contract::assert_problem(&body, 400, "invalid-cursor");
+    let (_, _, forged) = served.get(&format!("{LIST_PATH}?cursor=forged"), Some(&token));
+    assert_eq!(body["title"], forged["title"]);
+    assert_eq!(body.get("detail"), forged.get("detail"));
+    assert_eq!(
+        upstream.request_count(),
+        1,
+        "the refusal reached no upstream"
+    );
+
+    // A refreshed token for the same subject and client continues.
+    let refreshed = served.token("records.read");
+    assert_ne!(refreshed, token);
+    let (status, _, second) = served.get(&format!("{LIST_PATH}?cursor={cursor}"), Some(&refreshed));
+    assert_eq!(status, 200, "{second}");
+    contract::assert_page(&second);
+}
+
+#[tokio::test]
 async fn a_default_page_size_cursor_resumes_without_a_size() {
     let upstream = UpstreamDouble::start();
     upstream.respond_with(vec![page_of(1, 9), page_of(2, 9)]);

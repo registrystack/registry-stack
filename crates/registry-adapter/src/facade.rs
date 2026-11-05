@@ -4391,6 +4391,7 @@ fn cursor_binding<'a>(
         binding_id: &operation.binding,
         issuer: state.loaded.runtime.oidc.issuer.as_str(),
         subject: &caller.reference,
+        client: &caller.client_id,
         deployment: &state.loaded.deployment,
         filters,
     }

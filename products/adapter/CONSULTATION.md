@@ -63,6 +63,8 @@ A Lookup naming a selector the Collection does not declare returns 422 `invalid-
 Generated OpenAPI declares the bounds the facade enforces: a `recordId` path parameter is one canonical path segment of at most 256 characters (no `.` or `..`, no `/`, `\`, `?`, `;`, `:`, `%`, control or invisible formatting characters), and `Idempotency-Key` is a quoted Structured Field String of 1 to 200 printable ASCII characters. Lookup values follow the project-owned input schema.
 List and Search require a declared deterministic source order with a unique tie-breaker, bounded pages and explicit completion.
 A cursor is opaque, excludes personal data and binds the operation, Registry, Collection, query, view, page size and applicable caller/access context.
+The caller context is the verified issuer, the subject and the verified client the caller acts through (`azp` or `client_id`), so a cursor issued to one client is refused when the same subject presents it through another, with the same `invalid-cursor` problem as any other mismatch.
+The token instance is not bound, so a refreshed token for the same subject and client continues a traversal; no purpose is bound, because Consultation carries none.
 Every page applies current authorization.
 An empty advancing page is permitted; an unavailable source guarantee is never reported as completion.
 
