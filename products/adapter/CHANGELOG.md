@@ -8,6 +8,12 @@
   the read applies invalidates outstanding ETags. Client, OIDC and deployment
   identity stay outside it. The closure domain is now `v3`; ETags issued
   before the upgrade return 412 and need a fresh companion read.
+- GovStack generated OpenAPI declares the runtime bounds of its identifiers:
+  `recordId` path parameters carry the same single-path-segment restriction
+  the facade enforces and the effective contract already declared, and
+  `Idempotency-Key` carries a pattern for the quoted Structured Field String
+  the facade parses. Regenerate committed `generated/openapi.json` files with
+  `adapterctl compile`.
 - GovStack Update: a retry under the same Idempotency-Key and fingerprint
   replays its stored answer even when its If-Match no longer validates (the
   record changed, or a redeploy changed the guard's closure), instead of

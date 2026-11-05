@@ -185,6 +185,16 @@ pub fn request_envelope(
     }
 }
 
+/// The record identifier a caller may place in a record path: one canonical
+/// path segment of at most [`MAXIMUM_RECORD_ID_CHARACTERS`] characters, the
+/// same grammar the facade admits at runtime.
+#[must_use]
+pub fn record_id_path_schema() -> Value {
+    let mut record_id = crate::engine::effective_contract::path_segment_schema();
+    record_id["maxLength"] = json!(MAXIMUM_RECORD_ID_CHARACTERS);
+    record_id
+}
+
 /// Fixed GovStack Record schema around one project-owned data schema.
 #[must_use]
 pub fn record_schema(data_schema_reference: &str) -> Value {
@@ -814,11 +824,9 @@ pub fn target_attachment(
         );
         let path_parameters = match capability {
             ConsultationCapability::Retrieve => {
-                let mut record_id = crate::engine::effective_contract::path_segment_schema();
-                record_id["maxLength"] = json!(MAXIMUM_RECORD_ID_CHARACTERS);
                 json!({
                     "type": "object",
-                    "properties": {"recordId": record_id},
+                    "properties": {"recordId": record_id_path_schema()},
                     "required": ["recordId"],
                     "additionalProperties": false
                 })

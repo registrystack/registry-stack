@@ -59,6 +59,7 @@ No credentials, source addresses, private configuration or unsupported pack oper
 Implement Retrieve, exact Lookup, List and named Search where the project binds an eligible source route.
 The initial binding supports one exact identifier selector and one declared scalar-equality Search per Collection; composite selectors, additional comparisons and multiple named operations require corresponding checked source/input bindings before they can be advertised.
 Lookup resolves at most one permitted Record and preserves declared uniqueness and protected-existence outcomes.
+Generated OpenAPI declares the bounds the facade enforces: a `recordId` path parameter is one canonical path segment of at most 256 characters (no `.` or `..`, no `/`, `\`, `?`, `;`, `:`, `%`, control or invisible formatting characters), and `Idempotency-Key` is a quoted Structured Field String of 1 to 200 printable ASCII characters. Lookup values follow the project-owned input schema.
 List and Search require a declared deterministic source order with a unique tie-breaker, bounded pages and explicit completion.
 A cursor is opaque, excludes personal data and binds the operation, Registry, Collection, query, view, page size and applicable caller/access context.
 Every page applies current authorization.
@@ -106,7 +107,7 @@ A retry rechecks current facade authorization; canonical JSON, method, URI, medi
 It preserves the original Problem body while generating per-attempt trace headers.
 A matching in-flight request returns 409 and a changed fingerprint returns 422.
 The configured facade response-retention window cannot exceed the declared native replay window.
-Capability discovery publishes the deployment's response retention as `write.idempotencyReplayWindow` (integer seconds) on every Create and Update entry; the generated OpenAPI describes the member in the capability schema. The value is computed from runtime policy, not repeated in the project. After the window a reused key is processed as a new request.
+Capability discovery publishes the deployment's response retention as `write.idempotencyReplayWindow` (integer seconds) on every Create and Update entry; the generated OpenAPI describes the member in the capability schema. The value is computed from runtime policy, not repeated in the project or in the generated OpenAPI, which compiles from the authored project alone. After the window a reused key is processed as a new request.
 The separate external-gateway effective contract retains its read-only scope; GovStack Write discovery comes from the canonical capability endpoint and generated OpenAPI.
 No domain request payload is persisted to recover an uncertain source send; the client must resubmit the same request so the source can return its original receipt.
 
