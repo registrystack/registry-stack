@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- `adapterctl mapping check`, `generate` and `preview` refuse a
+  `mapping.targetSchema` that resolves, through a symbolic link, outside the
+  model's directory, with `adapterctl.mapping-schema-outside` at
+  `/mapping/targetSchema`, and write nothing. A link that stays inside the
+  directory is still followed.
+- `adapterctl job lock job.yaml` and `adapterctl mapping generate` on a model
+  named without a directory write in the current directory instead of
+  failing with `adapterctl.io-failure`.
+- `adapterctl mapping check` compares an integer constant with the target's
+  `enum` and `const` members exactly, as the runtime does: a constant above
+  2^53 no longer matches a member it only rounds to, and `1` still matches
+  `1.0`. A model that passed the check with such a constant and then failed
+  every record at runtime is now refused by `check`, `generate` and
+  `preview`.
+- `adapterctl job lock` rewrites a pin under a section header that carries a
+  comment, such as `mapping: # note` or `source: # note`, instead of refusing
+  with `adapterctl.job-lock-layout`. The comment is kept.
 - `adapterctl fixtures replay` accepts built-in GovStack projects that serve
   Write. It detects the built-in target, composes the profile and assembles
   the contract exactly as `check` and `compile` do, so a read+write project
