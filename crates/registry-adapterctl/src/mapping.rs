@@ -19,10 +19,10 @@ use registry_adapter::engine::project_transform::{
 use registry_adapter::engine::public_schema::{check_public_schema, PublicSchemaError};
 use registry_adapter::engine::scripts::CodeMaps;
 use registry_adapter_core::{
-    check_mapping, check_mapping_file, generate, is_clean_mapping_path, model_reference_from,
-    parse_generated_header, AdapterMapping, BindingTransform, GeneratedHeaderState, IngestionMode,
-    MappingTarget, ProjectSchema, ProjectScript, ADAPTER_MAPPING_API_VERSION, ADAPTER_MAPPING_KIND,
-    MAXIMUM_GENERATED_SCRIPT_BYTES,
+    check_mapping_file, check_mapping_findings, generate, is_clean_mapping_path,
+    model_reference_from, parse_generated_header, target_tree, AdapterMapping, BindingTransform,
+    GeneratedHeaderState, IngestionMode, MappingTarget, ProjectSchema, ProjectScript,
+    ADAPTER_MAPPING_API_VERSION, ADAPTER_MAPPING_KIND, MAXIMUM_GENERATED_SCRIPT_BYTES,
 };
 use registry_platform_config::{sha256_uri, AuthoredExpressions};
 use registry_platform_yaml::{
@@ -128,7 +128,26 @@ pub(crate) enum MappingFailure {
     Refused {
         diagnostics: Vec<Diagnostic>,
         files_checked: usize,
+        /// The command's own report members, when the refusal still has some.
+        members: Vec<(&'static str, Value)>,
+        annotations: Vec<Annotation>,
     },
+}
+
+/// A report member added to one diagnostic, addressed by its position in the
+/// report's diagnostics. The shared diagnostic type has no member for these
+/// mapping facts, so the report adds them where it renders the diagnostics.
+pub(crate) struct Annotation {
+    pub index: usize,
+    pub member: &'static str,
+    pub value: Value,
+}
+
+/// Add each annotation's member to the diagnostic it addresses.
+pub(crate) fn annotate(diagnostics: &mut Value, annotations: &[Annotation]) {
+    for annotation in annotations {
+        diagnostics[annotation.index][annotation.member] = annotation.value.clone();
+    }
 }
 
 impl From<CheckFailure> for MappingFailure {
@@ -144,6 +163,7 @@ pub(crate) struct MappingRun {
     pub warnings: Vec<Diagnostic>,
     pub files_checked: usize,
     pub members: Vec<(&'static str, Value)>,
+    pub annotations: Vec<Annotation>,
     pub deny_warnings: bool,
 }
 
@@ -332,22 +352,43 @@ fn read_schema(
 }
 
 /// Run the pure model checks and attach the model file to each finding.
-fn model_findings(loaded: &Loaded, model: &Path, report: &mut Report) {
+/// A finding about one target field comes back as an annotation naming it.
+fn model_findings(loaded: &Loaded, model: &Path, report: &mut Report) -> Vec<Annotation> {
     let Some(schema) = &loaded.schema else {
-        return;
+        return Vec::new();
     };
-    for diagnostic in check_mapping(&loaded.mapping, schema)
-        .into_iter()
-        .chain(check_mapping_file(&loaded.mapping, &loaded.file_name))
-    {
+    let mut annotations = Vec::new();
+    for finding in check_mapping_findings(&loaded.mapping, schema) {
+        if let Some(target) = finding.target {
+            annotations.push(Annotation {
+                index: report.diagnostics().len(),
+                member: "target",
+                value: json!(target),
+            });
+        }
+        model_failure(report, model, finding.diagnostic);
+    }
+    for diagnostic in check_mapping_file(&loaded.mapping, &loaded.file_name) {
         model_failure(report, model, diagnostic);
     }
+    annotations
 }
 
 fn refusal(report: Report, files_checked: usize) -> MappingFailure {
+    refusal_with(report, files_checked, Vec::new(), Vec::new())
+}
+
+fn refusal_with(
+    report: Report,
+    files_checked: usize,
+    members: Vec<(&'static str, Value)>,
+    annotations: Vec<Annotation>,
+) -> MappingFailure {
     MappingFailure::Refused {
         diagnostics: report.into_diagnostics(),
         files_checked,
+        members,
+        annotations,
     }
 }
 
@@ -355,43 +396,62 @@ fn run_check(args: &MappingCheckArgs) -> Result<MappingRun, MappingFailure> {
     let mut report = Report::new(Vec::new());
     let mut files = 0usize;
     let loaded = load(&args.model, &mut report, &mut files)?;
+    let mut annotations = Vec::new();
+    // The target as the checker reads it, whenever the schema was readable
+    // and its root supported: a refusal still carries it, since the refused
+    // findings are about its fields.
+    let mut tree_members = Vec::new();
     if let Some(loaded) = &loaded {
-        model_findings(loaded, &args.model, &mut report);
+        annotations = model_findings(loaded, &args.model, &mut report);
+        if let Some(tree) = loaded.schema.as_ref().and_then(target_tree) {
+            tree_members.push((
+                "targetTree",
+                serde_json::to_value(tree).expect("a target tree serializes to JSON"),
+            ));
+        }
     }
     if report.has_errors() {
-        return Err(refusal(report, files));
+        return Err(refusal_with(report, files, tree_members, annotations));
     }
     let loaded = loaded.expect("the model decoded");
     let Some(script) = generated(&loaded, &args.model, &mut report) else {
-        return Err(refusal(report, files));
+        return Err(refusal_with(report, files, tree_members, annotations));
     };
     // The script on disk is judged as generate would judge it: a missing
     // script is fine (generate writes it), any other difference warns.
     let path = loaded.script_path();
-    let existing = existing_script(&path, &args.model, &script)?;
+    let existing = existing_script(&path, &args.model, &script, &loaded.digest())?;
     if let Some(mut conflict) = script_conflict(&existing, &args.model) {
         conflict.severity = Severity::Warning;
         model_failure(&mut report, &args.model, conflict);
-    } else if existing == ExistingScript::Stale {
+    } else if let ExistingScript::Stale(cause) = existing {
         if let Some(warning) = drift_warning(
             &path,
             "/mapping/script",
             None,
             "the script bytes differ from what the model generates",
         ) {
+            annotations.push(Annotation {
+                index: report.diagnostics().len(),
+                member: "cause",
+                value: json!(cause.name()),
+            });
             report.push(warning);
         }
     }
     let header = &loaded.mapping.mapping;
+    let mut members = vec![
+        ("model", json!(args.model.display().to_string())),
+        ("target", json!(target_name(header.target))),
+        ("script", json!(header.script)),
+        ("assignments", json!(loaded.mapping.assignments.len())),
+    ];
+    members.extend(tree_members);
     Ok(MappingRun {
         warnings: report.into_diagnostics(),
         files_checked: files,
-        members: vec![
-            ("model", json!(args.model.display().to_string())),
-            ("target", json!(target_name(header.target))),
-            ("script", json!(header.script)),
-            ("assignments", json!(loaded.mapping.assignments.len())),
-        ],
+        members,
+        annotations,
         deny_warnings: args.deny_warnings,
     })
 }
@@ -492,7 +552,7 @@ fn run_generate(args: &MappingGenerateArgs) -> Result<MappingRun, MappingFailure
         return Err(refusal(report, files));
     };
     let path = loaded.script_path();
-    let existing = existing_script(&path, &args.model, &script)?;
+    let existing = existing_script(&path, &args.model, &script, &loaded.digest())?;
     if !args.force {
         if let Some(conflict) = script_conflict(&existing, &args.model) {
             model_failure(&mut report, &args.model, conflict);
@@ -523,6 +583,7 @@ fn run_generate(args: &MappingGenerateArgs) -> Result<MappingRun, MappingFailure
             ("existed", json!(existed)),
             ("nextStep", json!(next_step)),
         ],
+        annotations: Vec::new(),
         deny_warnings: false,
     })
 }
@@ -536,17 +597,44 @@ enum ExistingScript {
     Current,
     /// Generated from this model, or opening with the generated marker
     /// under an edited header, but the bytes differ: ours to regenerate.
-    Stale,
+    Stale(DriftCause),
     /// Generated from another model, named by its path.
     Owned(PathBuf),
     /// No generated header: a person wrote it.
     Handwritten,
 }
 
+/// Why a script generated from a model no longer matches it, as far as the
+/// script's header lets the check tell.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DriftCause {
+    /// The header's model digest is not the model's digest now: the model
+    /// changed after generation. The script may carry hand edits too; the
+    /// header cannot say.
+    ModelChanged,
+    /// The header's model digest is the model's digest now (or the header
+    /// itself was edited), yet the bytes differ from what the model
+    /// generates: the script was changed outside the model, or a different
+    /// generator version wrote it.
+    ScriptEdited,
+}
+
+impl DriftCause {
+    fn name(self) -> &'static str {
+        match self {
+            Self::ModelChanged => "model-changed",
+            Self::ScriptEdited => "script-edited",
+        }
+    }
+}
+
+/// What stands at `path`, judged against `script`, the text `model` generates
+/// now, whose digest is `model_digest`.
 fn existing_script(
     path: &Path,
     model: &Path,
     script: &str,
+    model_digest: &str,
 ) -> Result<ExistingScript, MappingFailure> {
     let existing = match std::fs::read(path) {
         Ok(existing) => existing,
@@ -567,12 +655,16 @@ fn existing_script(
         std::str::from_utf8(&existing).map_or(GeneratedHeaderState::Absent, parse_generated_header);
     Ok(match state {
         GeneratedHeaderState::Absent => ExistingScript::Handwritten,
-        GeneratedHeaderState::Malformed => ExistingScript::Stale,
+        GeneratedHeaderState::Malformed => ExistingScript::Stale(DriftCause::ScriptEdited),
         GeneratedHeaderState::Parsed(header) => {
             let script_directory = path.parent().unwrap_or_else(|| Path::new(""));
             let owner = script_directory.join(&header.model_reference);
             if lexical(&owner) == lexical(model) {
-                ExistingScript::Stale
+                ExistingScript::Stale(if header.model_digest == model_digest {
+                    DriftCause::ScriptEdited
+                } else {
+                    DriftCause::ModelChanged
+                })
             } else {
                 ExistingScript::Owned(owner)
             }
@@ -600,7 +692,7 @@ fn script_conflict(existing: &ExistingScript, model: &Path) -> Option<Diagnostic
             "the script at mapping.script exists and carries no generated header, so it is handwritten; generate would overwrite it",
             "Point mapping.script at a new path, move the handwritten script away, or pass --force to replace it.",
         )),
-        ExistingScript::Missing | ExistingScript::Current | ExistingScript::Stale => None,
+        ExistingScript::Missing | ExistingScript::Current | ExistingScript::Stale(_) => None,
     }
 }
 
@@ -784,6 +876,7 @@ fn run_preview(args: &MappingPreviewArgs) -> Result<MappingRun, MappingFailure> 
             ("refused", json!(refused)),
             ("results", Value::Array(results)),
         ],
+        annotations: Vec::new(),
         deny_warnings: false,
     })
 }

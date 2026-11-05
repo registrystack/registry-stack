@@ -241,8 +241,40 @@ pub enum Conversion {
 }
 
 impl Conversion {
+    /// Every conversion, in the order the target tree lists them.
+    pub const ALL: [Self; 4] = [Self::None, Self::Text, Self::Date, Self::Integer];
+
+    /// The name the model writes in `convert`.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Integer => "integer",
+            Self::Text => "text",
+            Self::Date => "date",
+        }
+    }
+
     fn is_none(&self) -> bool {
         matches!(self, Self::None)
+    }
+
+    /// The target types the conversion can fill; `None` fits any target.
+    const fn target_types(self) -> Option<&'static [&'static str]> {
+        match self {
+            Self::None => None,
+            Self::Integer => Some(&["integer", "number"]),
+            Self::Text | Self::Date => Some(&["string"]),
+        }
+    }
+
+    /// Whether a target declaring `types` (`None` when it declares no
+    /// `type`) accepts this conversion. The one rule `check_mapping` refuses
+    /// by and the target tree offers by.
+    fn fits(self, types: Option<&[&str]>) -> bool {
+        self.target_types().is_none_or(|needed| {
+            types.is_some_and(|types| types.iter().any(|name| needed.contains(name)))
+        })
     }
 }
 
@@ -895,11 +927,64 @@ fn is_prefix_of(shorter: &[String], longer: &[String]) -> bool {
     longer.len() >= shorter.len() && longer[..shorter.len()] == *shorter
 }
 
+/// One static finding and, when it concerns one target field, that field's
+/// path in the format's own target syntax (dotted names, a name that holds a
+/// dot quoted), so a caller can address the field without reading the message.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MappingFinding {
+    pub diagnostic: Diagnostic,
+    pub target: Option<String>,
+}
+
+/// The findings of one check run, in the order found.
+#[derive(Default)]
+struct Findings(Vec<MappingFinding>);
+
+impl Findings {
+    fn push(&mut self, diagnostic: Diagnostic) {
+        self.0.push(MappingFinding {
+            diagnostic,
+            target: None,
+        });
+    }
+
+    fn push_for(&mut self, diagnostic: Diagnostic, target: &[String]) {
+        self.0.push(MappingFinding {
+            diagnostic,
+            target: Some(render_path(target)),
+        });
+    }
+
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Name `target` on every finding from index `start` on.
+    fn name_target_from(&mut self, start: usize, target: &[String]) {
+        for finding in &mut self.0[start..] {
+            finding.target = Some(render_path(target));
+        }
+    }
+}
+
 /// Run every static check of `mapping` against its target schema. Findings
 /// are errors addressed to a JSON pointer into the model, value-free.
 #[must_use]
 pub fn check_mapping(mapping: &AdapterMapping, target_schema: &Value) -> Vec<Diagnostic> {
-    let mut findings = Vec::new();
+    check_mapping_findings(mapping, target_schema)
+        .into_iter()
+        .map(|finding| finding.diagnostic)
+        .collect()
+}
+
+/// [`check_mapping`] with each finding that concerns one target field naming
+/// that field.
+#[must_use]
+pub fn check_mapping_findings(
+    mapping: &AdapterMapping,
+    target_schema: &Value,
+) -> Vec<MappingFinding> {
+    let mut findings = Findings::default();
     check_header(&mapping.mapping, &mut findings);
 
     let root_ok = match root_fault(target_schema) {
@@ -941,7 +1026,7 @@ pub fn check_mapping(mapping: &AdapterMapping, target_schema: &Value) -> Vec<Dia
         let targets: Vec<&[String]> = parsed.iter().flatten().map(Vec::as_slice).collect();
         check_required(target_schema, &mut Vec::new(), &targets, &mut findings);
     }
-    findings
+    findings.0
 }
 
 /// The checks that need the model's own file name: the generated script must
@@ -972,7 +1057,7 @@ pub fn check_mapping_file(mapping: &AdapterMapping, model_file_name: &str) -> Ve
     findings
 }
 
-fn check_header(header: &MappingHeader, findings: &mut Vec<Diagnostic>) {
+fn check_header(header: &MappingHeader, findings: &mut Findings) {
     for (member, path) in [
         ("targetSchema", &header.target_schema),
         ("script", &header.script),
@@ -1038,8 +1123,9 @@ fn check_assignment(
     schema: &Value,
     schema_file: &str,
     root_ok: bool,
-    findings: &mut Vec<Diagnostic>,
+    findings: &mut Findings,
 ) -> Option<Vec<String>> {
+    let first_finding = findings.len();
     let at = |member: &str| {
         if member.is_empty() {
             format!("/assignments/{index}")
@@ -1122,6 +1208,7 @@ fn check_assignment(
     if root_ok {
         check_against_schema(index, assignment, &target, schema, schema_file, findings);
     }
+    findings.name_target_from(first_finding, &target);
     Some(target)
 }
 
@@ -1131,7 +1218,7 @@ fn check_against_schema(
     target: &[String],
     schema: &Value,
     schema_file: &str,
-    findings: &mut Vec<Diagnostic>,
+    findings: &mut Findings,
 ) {
     let at = |member: &str| format!("/assignments/{index}/{member}");
     let leaf = match resolve_target(schema, target) {
@@ -1169,26 +1256,17 @@ fn check_against_schema(
     };
     let leaf_types = type_names(leaf);
 
-    let needed: Option<&[&str]> = match assignment.convert {
-        Conversion::None => None,
-        Conversion::Integer => Some(&["integer", "number"]),
-        Conversion::Text | Conversion::Date => Some(&["string"]),
-    };
-    if let Some(needed) = needed {
-        let fits = leaf_types
-            .as_ref()
-            .is_some_and(|types| types.iter().any(|name| needed.contains(name)));
-        if !fits {
-            findings.push(finding(
-                MappingCode::ConversionTargetMismatch,
-                at("convert"),
-                format!(
-                    "this conversion needs a target of type {}",
-                    needed.join(" or ")
-                ),
-                "Change the conversion, or the target schema's type.",
-            ));
-        }
+    if !assignment.convert.fits(leaf_types.as_deref()) {
+        let needed = assignment.convert.target_types().unwrap_or_default();
+        findings.push(finding(
+            MappingCode::ConversionTargetMismatch,
+            at("convert"),
+            format!(
+                "this conversion needs a target of type {}",
+                needed.join(" or ")
+            ),
+            "Change the conversion, or the target schema's type.",
+        ));
     }
     if let Some(constant) = &assignment.constant {
         let (kind, accepted, value): (&str, &[&str], Value) = match constant {
@@ -1250,7 +1328,7 @@ fn is_required_path(schema: &Value, target: &[String]) -> bool {
     required_of(node).contains(&last.as_str())
 }
 
-fn check_conflicts(parsed: &[Option<Vec<String>>], findings: &mut Vec<Diagnostic>) {
+fn check_conflicts(parsed: &[Option<Vec<String>>], findings: &mut Findings) {
     for (index, target) in parsed.iter().enumerate() {
         let Some(target) = target else { continue };
         let earlier = parsed[..index].iter().position(|other| {
@@ -1259,15 +1337,18 @@ fn check_conflicts(parsed: &[Option<Vec<String>>], findings: &mut Vec<Diagnostic
                 .is_some_and(|other| is_prefix_of(other, target) || is_prefix_of(target, other))
         });
         if let Some(earlier) = earlier {
-            findings.push(finding(
-                MappingCode::TargetConflict,
-                format!("/assignments/{index}/target"),
-                format!(
-                    "this target is the same as, or contains or lies inside, the target of \
-                     /assignments/{earlier}"
+            findings.push_for(
+                finding(
+                    MappingCode::TargetConflict,
+                    format!("/assignments/{index}/target"),
+                    format!(
+                        "this target is the same as, or contains or lies inside, the target of \
+                         /assignments/{earlier}"
+                    ),
+                    "Assign each target property once.",
                 ),
-                "Assign each target property once.",
-            ));
+                target,
+            );
         }
     }
 }
@@ -1276,20 +1357,23 @@ fn check_required(
     node: &Value,
     prefix: &mut Vec<String>,
     targets: &[&[String]],
-    findings: &mut Vec<Diagnostic>,
+    findings: &mut Findings,
 ) {
     for name in required_of(node) {
         prefix.push(name.to_string());
         if properties_of(node).is_some_and(|properties| !properties.contains_key(name)) {
-            findings.push(finding(
-                MappingCode::SchemaUnsupported,
-                "/mapping/targetSchema".to_string(),
-                format!(
-                    "the target schema requires {} but does not declare it in properties",
-                    render_path(prefix)
+            findings.push_for(
+                finding(
+                    MappingCode::SchemaUnsupported,
+                    "/mapping/targetSchema".to_string(),
+                    format!(
+                        "the target schema requires {} but does not declare it in properties",
+                        render_path(prefix)
+                    ),
+                    "Declare the property in the schema, or remove it from the required list.",
                 ),
-                "Declare the property in the schema, or remove it from the required list.",
-            ));
+                prefix,
+            );
             prefix.pop();
             continue;
         }
@@ -1298,15 +1382,18 @@ fn check_required(
             .iter()
             .any(|target| target.len() > prefix.len() && is_prefix_of(prefix, target));
         if !exact && !below {
-            findings.push(finding(
-                MappingCode::RequiredUnmapped,
-                "/assignments".to_string(),
-                format!(
-                    "the required target property {} has no assignment at or below it",
-                    render_path(prefix)
+            findings.push_for(
+                finding(
+                    MappingCode::RequiredUnmapped,
+                    "/assignments".to_string(),
+                    format!(
+                        "the required target property {} has no assignment at or below it",
+                        render_path(prefix)
+                    ),
+                    "Add an assignment for it, or remove it from the schema's required list.",
                 ),
-                "Add an assignment for it, or remove it from the schema's required list.",
-            ));
+                prefix,
+            );
         }
         prefix.pop();
     }
@@ -1327,6 +1414,97 @@ fn check_required(
         }
         prefix.pop();
     }
+}
+
+// ---------------------------------------------------------------------------
+// Target tree
+// ---------------------------------------------------------------------------
+
+/// One node of the target as the checker reads it.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TargetNode {
+    /// The node's target path, as an assignment's `target` writes it.
+    pub path: String,
+    /// The property name, unquoted.
+    pub key: String,
+    /// The declared type; absent when the node declares none or several.
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub schema_type: Option<String>,
+    /// Whether the parent object requires the property.
+    pub required: bool,
+    /// Whether an assignment can address the node: a scalar leaf, or an
+    /// object holding properties. An array or a node using a reference,
+    /// composition or conditional keyword cannot be addressed.
+    pub mappable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub format: Option<String>,
+    #[serde(rename = "const", skip_serializing_if = "Option::is_none")]
+    pub constant: Option<Value>,
+    #[serde(rename = "enum", skip_serializing_if = "Option::is_none")]
+    pub allowed: Option<Value>,
+    /// For a mappable leaf, the `convert` values the checker accepts for it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conversions: Option<Vec<&'static str>>,
+    /// For an object, its properties.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub children: Option<Vec<TargetNode>>,
+}
+
+/// The target as the checker reads it, or `None` when the schema root is
+/// outside the supported subset (the `schema-unsupported` finding says why).
+#[must_use]
+pub fn target_tree(schema: &Value) -> Option<Vec<TargetNode>> {
+    if root_fault(schema).is_some() {
+        return None;
+    }
+    Some(target_children(schema, schema, &mut Vec::new()))
+}
+
+fn target_children(root: &Value, node: &Value, prefix: &mut Vec<String>) -> Vec<TargetNode> {
+    let required = required_of(node);
+    let Some(properties) = properties_of(node) else {
+        return Vec::new();
+    };
+    let mut nodes = Vec::with_capacity(properties.len());
+    for (name, child) in properties {
+        prefix.push(name.clone());
+        let (is_leaf, is_object) = match resolve_target(root, prefix) {
+            Resolution::Leaf(_) => (true, false),
+            Resolution::NotALeaf => (false, true),
+            Resolution::Unknown | Resolution::Unsupported(_) => (false, false),
+        };
+        let mappable = is_leaf || is_object;
+        let types = type_names(child);
+        let schema_type = if is_object {
+            Some("object".to_string())
+        } else {
+            schema_type(child).map(str::to_string)
+        };
+        nodes.push(TargetNode {
+            path: render_path(prefix),
+            key: name.clone(),
+            schema_type,
+            required: required.contains(&name.as_str()),
+            mappable,
+            format: child
+                .get("format")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            constant: child.get("const").cloned(),
+            allowed: child.get("enum").cloned(),
+            conversions: is_leaf.then(|| {
+                Conversion::ALL
+                    .into_iter()
+                    .filter(|conversion| conversion.fits(types.as_deref()))
+                    .map(Conversion::name)
+                    .collect()
+            }),
+            children: is_object.then(|| target_children(root, child, prefix)),
+        });
+        prefix.pop();
+    }
+    nodes
 }
 
 // ---------------------------------------------------------------------------
@@ -2981,5 +3159,215 @@ mod tests {
         sorted.sort_unstable();
         sorted.dedup();
         assert_eq!(codes, sorted);
+    }
+
+    // --- target names on findings ---------------------------------------
+
+    fn target_of(findings: &[MappingFinding], code: MappingCode) -> Vec<Option<&str>> {
+        findings
+            .iter()
+            .filter(|finding| finding.diagnostic.code == code.code())
+            .map(|finding| finding.target.as_deref())
+            .collect()
+    }
+
+    #[test]
+    fn findings_about_one_target_field_name_it() {
+        // Two required fields left unmapped.
+        let mut m = model(json!([]));
+        m.assignments.remove(2);
+        m.assignments.remove(1);
+        let findings = check_mapping_findings(&m, &schema());
+        let mut named = target_of(&findings, MappingCode::RequiredUnmapped);
+        named.sort_unstable();
+        assert_eq!(named, vec![Some("dateOfBirth"), Some("source.kind")]);
+
+        // A conversion that does not fit, an omit on a required field, an
+        // unknown target and a repeated target.
+        let m = model(json!([
+            {"target": "household.size", "from": "a", "convert": "text"},
+            {"target": "nickname", "from": "b", "whenMissing": "omit", "convert": "integer"},
+            {"target": "source.kind", "from": "c", "whenMissing": "omit"},
+            {"target": "missing.field", "from": "d"},
+        ]));
+        let findings = check_mapping_findings(&m, &schema());
+        assert_eq!(
+            target_of(&findings, MappingCode::ConversionTargetMismatch),
+            vec![Some("household.size"), Some("nickname")]
+        );
+        assert_eq!(
+            target_of(&findings, MappingCode::OmitRequired),
+            vec![Some("source.kind")]
+        );
+        assert_eq!(
+            target_of(&findings, MappingCode::TargetUnknown),
+            vec![Some("missing.field")]
+        );
+        assert_eq!(
+            target_of(&findings, MappingCode::TargetConflict),
+            vec![Some("source.kind")]
+        );
+    }
+
+    #[test]
+    fn a_quoted_target_is_named_in_the_formats_own_syntax() {
+        let schema = json!({
+            "type": "object",
+            "properties": {"a.b": {"type": "string"}},
+            "required": ["a.b"]
+        });
+        let mut m = model(json!([]));
+        m.assignments.clear();
+        let findings = check_mapping_findings(&m, &schema);
+        assert_eq!(
+            target_of(&findings, MappingCode::RequiredUnmapped),
+            vec![Some("\"a.b\"")]
+        );
+    }
+
+    #[test]
+    fn findings_about_the_model_as_a_whole_name_no_target() {
+        let mut m = model(json!([]));
+        m.mapping.script = "../x.rhai".to_string();
+        let findings = check_mapping_findings(&m, &schema());
+        assert!(!findings.is_empty());
+        assert!(findings.iter().all(|finding| finding.target.is_none()));
+        // An unparseable target names no field.
+        let m = model(json!([{"target": "a..b", "from": "x"}]));
+        let findings = check_mapping_findings(&m, &schema());
+        assert_eq!(target_of(&findings, MappingCode::TargetInvalid), vec![None]);
+    }
+
+    #[test]
+    fn check_mapping_and_its_targeted_form_report_the_same_diagnostics() {
+        let m = model(json!([{"target": "missing", "from": "x"}]));
+        let plain = check_mapping(&m, &schema());
+        let targeted: Vec<Diagnostic> = check_mapping_findings(&m, &schema())
+            .into_iter()
+            .map(|finding| finding.diagnostic)
+            .collect();
+        assert_eq!(plain, targeted);
+    }
+
+    // --- target tree ----------------------------------------------------
+
+    #[test]
+    fn the_target_tree_reads_the_schema_as_the_checker_does() {
+        let tree = target_tree(&schema()).expect("a supported root");
+        assert_eq!(
+            serde_json::to_value(&tree).unwrap(),
+            json!([
+                {"path": "active", "key": "active", "type": "boolean", "required": false,
+                 "mappable": true, "conversions": ["none"]},
+                {"path": "dateOfBirth", "key": "dateOfBirth", "type": "string", "required": true,
+                 "mappable": true, "conversions": ["none", "text", "date"]},
+                {"path": "household", "key": "household", "type": "object", "required": false,
+                 "mappable": true, "children": [
+                    {"path": "household.head", "key": "head", "type": "string", "required": false,
+                     "mappable": true, "conversions": ["none", "text", "date"]},
+                    {"path": "household.size", "key": "size", "type": "integer", "required": true,
+                     "mappable": true, "conversions": ["none", "integer"]}
+                 ]},
+                {"path": "nickname", "key": "nickname", "type": "string", "required": false,
+                 "mappable": true, "conversions": ["none", "text", "date"]},
+                {"path": "source", "key": "source", "type": "object", "required": true,
+                 "mappable": true, "children": [
+                    {"path": "source.id", "key": "id", "type": "string", "required": true,
+                     "mappable": true, "conversions": ["none", "text", "date"]},
+                    {"path": "source.kind", "key": "kind", "type": "string", "required": true,
+                     "mappable": true, "conversions": ["none", "text", "date"]}
+                 ]}
+            ])
+        );
+    }
+
+    #[test]
+    fn the_target_tree_carries_format_const_and_enum_and_marks_unmappable_nodes() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "born": {"type": "string", "format": "date"},
+                "kind": {"type": "string", "const": "person"},
+                "sex": {"type": ["string", "null"], "enum": ["f", "m"]},
+                "tags": {"type": "array", "items": {"type": "string"}, "maxItems": 3},
+                "either": {"oneOf": [{"type": "string"}, {"type": "integer"}]},
+                "quoted.name": {"type": "number"}
+            }
+        });
+        let tree = serde_json::to_value(target_tree(&schema).unwrap()).unwrap();
+        let by_key = |key: &str| {
+            tree.as_array()
+                .unwrap()
+                .iter()
+                .find(|node| node["key"] == key)
+                .unwrap()
+                .clone()
+        };
+        assert_eq!(by_key("born")["format"], "date");
+        assert_eq!(by_key("kind")["const"], "person");
+        assert_eq!(by_key("sex")["enum"], json!(["f", "m"]));
+        assert_eq!(by_key("sex")["type"], "string");
+        assert_eq!(
+            by_key("sex")["conversions"],
+            json!(["none", "text", "date"])
+        );
+        assert_eq!(by_key("tags")["type"], "array");
+        assert_eq!(by_key("tags")["mappable"], false);
+        assert!(by_key("tags").get("conversions").is_none());
+        assert_eq!(by_key("either")["mappable"], false);
+        assert!(by_key("either").get("type").is_none());
+        assert_eq!(by_key("quoted.name")["path"], "\"quoted.name\"");
+        assert_eq!(
+            by_key("quoted.name")["conversions"],
+            json!(["none", "integer"])
+        );
+    }
+
+    /// The tree offers a conversion exactly when the checker accepts it for
+    /// that leaf, whatever the leaf's declared types.
+    #[test]
+    fn offered_conversions_are_the_ones_the_checker_accepts() {
+        for leaf in [
+            json!({"type": "string"}),
+            json!({"type": "integer"}),
+            json!({"type": "number"}),
+            json!({"type": "boolean"}),
+            json!({"type": ["integer", "null"]}),
+            json!({"type": ["string", "integer"]}),
+            json!({"type": "null"}),
+            json!({}),
+            json!({"enum": ["a"]}),
+        ] {
+            let schema = leaf_schema(leaf.clone());
+            let tree = serde_json::to_value(target_tree(&schema).unwrap()).unwrap();
+            let offered: Vec<String> = tree[0]["conversions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|name| name.as_str().unwrap().to_string())
+                .collect();
+            for conversion in Conversion::ALL {
+                let findings = leaf_findings(
+                    leaf.clone(),
+                    json!({"target": "leaf", "from": "x", "convert": conversion.name()}),
+                );
+                let accepted = !findings
+                    .iter()
+                    .any(|d| d.code == MappingCode::ConversionTargetMismatch.code());
+                assert_eq!(
+                    offered.iter().any(|name| name == conversion.name()),
+                    accepted,
+                    "{leaf} {}",
+                    conversion.name()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn no_target_tree_when_the_root_is_unsupported() {
+        assert!(target_tree(&json!({"type": "array"})).is_none());
+        assert!(target_tree(&json!({"type": "object"})).is_none());
+        assert!(target_tree(&json!({"oneOf": []})).is_none());
     }
 }

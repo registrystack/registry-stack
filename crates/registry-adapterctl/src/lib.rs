@@ -421,34 +421,50 @@ fn mapping_command(
     stdout: &mut dyn io::Write,
     stderr: &mut dyn io::Write,
 ) -> Result<ExitCode, ()> {
-    let refusal =
-        |diagnostics, files_checked, stdout: &mut dyn io::Write, stderr: &mut dyn io::Write| {
-            let mut checked = Report::new(diagnostics);
-            checked.set_files_checked(files_checked);
-            let exit = DOMAIN_REFUSAL_EXIT;
-            let envelope = json!({
-                "ok": false,
-                "command": command_name,
-                "status": failure_status(exit),
-                "diagnostics": checked.to_json_value(),
-                "filesChecked": files_checked,
-            });
-            write_configuration_report(&checked, command_name, format, envelope, stdout, stderr)
-                .map(|()| ExitCode::from(exit))
-        };
-    match mapping::run(&args.command) {
-        Ok(run) if refused(&run.warnings, run.deny_warnings) => {
-            refusal(run.warnings, run.files_checked, stdout, stderr)
+    let refusal = |diagnostics,
+                   files_checked,
+                   members: Vec<(&'static str, Value)>,
+                   annotations: &[mapping::Annotation],
+                   stdout: &mut dyn io::Write,
+                   stderr: &mut dyn io::Write| {
+        let mut checked = Report::new(diagnostics);
+        checked.set_files_checked(files_checked);
+        let exit = DOMAIN_REFUSAL_EXIT;
+        let mut diagnostics = checked.to_json_value();
+        mapping::annotate(&mut diagnostics, annotations);
+        let mut envelope = json!({
+            "ok": false,
+            "command": command_name,
+            "status": failure_status(exit),
+            "diagnostics": diagnostics,
+            "filesChecked": files_checked,
+        });
+        for (key, value) in members {
+            envelope[key] = value;
         }
+        write_configuration_report(&checked, command_name, format, envelope, stdout, stderr)
+            .map(|()| ExitCode::from(exit))
+    };
+    match mapping::run(&args.command) {
+        Ok(run) if refused(&run.warnings, run.deny_warnings) => refusal(
+            run.warnings,
+            run.files_checked,
+            Vec::new(),
+            &run.annotations,
+            stdout,
+            stderr,
+        ),
         Ok(run) => {
             let mut checked = Report::new(run.warnings);
             checked.set_files_checked(run.files_checked);
+            let mut diagnostics = checked.to_json_value();
+            mapping::annotate(&mut diagnostics, &run.annotations);
             let mut envelope = json!({
                 "ok": true,
                 "command": command_name,
                 "status": "complete",
                 "filesChecked": run.files_checked,
-                "diagnostics": checked.to_json_value(),
+                "diagnostics": diagnostics,
             });
             for (key, value) in run.members {
                 envelope[key] = value;
@@ -458,7 +474,16 @@ fn mapping_command(
         Err(mapping::MappingFailure::Refused {
             diagnostics,
             files_checked,
-        }) => refusal(diagnostics, files_checked, stdout, stderr),
+            members,
+            annotations,
+        }) => refusal(
+            diagnostics,
+            files_checked,
+            members,
+            &annotations,
+            stdout,
+            stderr,
+        ),
         Err(mapping::MappingFailure::Io { path, source }) => {
             let exit = OPERATIONAL_FAILURE_EXIT;
             let report = failure(
