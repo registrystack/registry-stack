@@ -19,6 +19,7 @@ import {
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer } from "node:net";
+import { homedir } from "node:os";
 const exec = promisify(execCallback);
 const here = dirname(fileURLToPath(import.meta.url));
 const IMAGE =
@@ -254,12 +255,19 @@ async function main() {
     opts[argv[i].slice(2)] = resolve(argv[i + 1]);
   }
   const repo = opts.repo || resolve(here, "../../../..");
-  const target =
-    opts.target || "/Volumes/CodexWorktrees/targets/adapter-consultation";
+  const target = opts.target || process.env.CARGO_TARGET_DIR;
+  if (!target)
+    throw Error(
+      "set CARGO_TARGET_DIR or pass --target with an existing Cargo target directory",
+    );
   const state =
     opts.state ||
     process.env.WG_DEMO_STATE ||
-    "/Volumes/CodexWorktrees/targets/govstack-wg-demo-state";
+    join(
+      process.env.XDG_STATE_HOME || join(homedir(), ".local", "state"),
+      "registry-adapter",
+      "govstack-wg-demo",
+    );
   if (
     !isAbsolute(state) ||
     state === "/" ||

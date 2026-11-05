@@ -7,8 +7,8 @@ if [[ "$script_path" != /* ]]; then
 fi
 script_dir="${script_path%/*}"
 repo_root="$script_dir/../../../.."
-target_dir="${CARGO_TARGET_DIR:-/Volumes/CodexWorktrees/targets/adapter-consultation}"
-state_dir="${WG_DEMO_STATE:-/Volumes/CodexWorktrees/targets/govstack-wg-demo-state}"
+target_dir="${CARGO_TARGET_DIR:-}"
+state_dir="${WG_DEMO_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/registry-adapter/govstack-wg-demo}"
 controller="$script_dir/control.mjs"
 
 usage() {
@@ -30,6 +30,11 @@ start | status | test | stop) ;;
 	exit 2
 	;;
 esac
+
+if [[ -z "$target_dir" ]]; then
+	printf 'Set CARGO_TARGET_DIR to an existing Cargo target directory outside the checkout.\n' >&2
+	exit 2
+fi
 
 if [[ ! -d "$target_dir" ]]; then
 	printf 'Cargo target directory does not exist: %s\n' "$target_dir" >&2

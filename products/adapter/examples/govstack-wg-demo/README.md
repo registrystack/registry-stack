@@ -18,20 +18,21 @@ general GovStack conformance claim; the GovStack basis is an unratified draft.
 From the repository root, start the demo with:
 
 ```sh
-./products/adapter/examples/govstack-wg-demo/run.sh start
+CARGO_TARGET_DIR=/path/to/cargo-target \
+  ./products/adapter/examples/govstack-wg-demo/run.sh start
 ```
 
 The launcher builds the four required Rust binaries into the existing Cargo
-target directory, then starts the local services. It explicitly enables the
-Adapter `postgres-test` feature for its loopback-only plaintext test database;
-the public DHIS2 connection still validates HTTPS certificates normally. `CARGO_TARGET_DIR` may select
-another existing target directory. Runtime state is retained outside the
-repository at `/Volumes/CodexWorktrees/targets/govstack-wg-demo-state`; set
+target directory named by `CARGO_TARGET_DIR`, which must be set, then starts
+the local services. It explicitly enables the Adapter `postgres-test` feature
+for its loopback-only plaintext test database; the public DHIS2 connection
+still validates HTTPS certificates normally. Runtime state is retained outside
+the repository, by default in
+`${XDG_STATE_HOME:-$HOME/.local/state}/registry-adapter/govstack-wg-demo`; set
 `WG_DEMO_STATE` to use another state directory.
 
-The default retained state is already configured for Jeremi's rehearsal. A
-normal restart therefore needs only the command above. On the first start of a
-new state directory, supply one of these inputs:
+A restart against retained state needs only the command above. On the first
+start of a new state directory, supply one of these inputs:
 
 - `WG_DHIS2_SOURCE_CONFIG`, pointing to an owner-only JSON file with `origin`,
   `program`, `tieBreakerAttribute`, `username`, and `password`; or
