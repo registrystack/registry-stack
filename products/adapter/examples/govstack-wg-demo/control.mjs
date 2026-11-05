@@ -33,36 +33,19 @@ export const redact = (s) =>
       "[REDACTED JWT]",
     );
 const json = (x) => JSON.stringify(x, null, 2) + "\n";
-export function configureProject(original, kind, program) {
+export function configureProject(original, kind, program, attribute) {
   const p = structuredClone(original);
   const contract = `https://127.0.0.1:19443/contracts/${kind}/1.0.0/openapi.json`;
   p.consultation.contract = contract;
   if (p.write) p.write.contract = contract;
   if (kind === "dhis2") {
-    for (const route of p.templatedRoutes)
+    if (!/^[A-Za-z][A-Za-z0-9]{10}$/.test(attribute))
+      throw Error("invalid DHIS2 unique attribute UID");
+    for (const route of p.templatedRoutes) {
       if (route.parameters?.program) route.parameters.program = program;
-  }
-  return p;
-}
-export function configurePack(original, attribute) {
-  if (!/^[A-Za-z][A-Za-z0-9]{10}$/.test(attribute))
-    throw Error("invalid DHIS2 unique attribute UID");
-  const p = structuredClone(original);
-  for (const route of p.routeTemplates) {
-    if (
-      !["page-tracked-entities", "page-tracked-entities-by-org-unit"].includes(
-        route.id,
-      )
-    )
-      continue;
-    route.readSupport.order = [
-      { name: "created-at", direction: "descending" },
-      { name: "unique-attribute", direction: "ascending" },
-    ];
-    route.readSupport.uniqueTieBreaker = "unique-attribute";
-    for (const step of route.steps)
-      if (step.to?.parameters?.query?.order)
-        step.to.parameters.query.order.constant = `createdAt:desc,${attribute}:asc`;
+      if (route.parameters?.tie_breaker_attribute)
+        route.parameters.tie_breaker_attribute = attribute;
+    }
   }
   return p;
 }
@@ -617,7 +600,9 @@ async function main() {
         );
         await privateWrite(
           join(project, "project.yaml"),
-          json(configureProject(p, kind, config.program)),
+          json(
+            configureProject(p, kind, config.program, config.tieBreakerAttribute),
+          ),
         );
         const packSource = join(
           repo,
@@ -626,15 +611,6 @@ async function main() {
         );
         const packDir = join(project, "source-pack");
         await cp(packSource, packDir, { recursive: true });
-        if (kind === "dhis2") {
-          const pack = JSON.parse(
-            await run("yq", ["-o=json", ".", join(packDir, "pack.yaml")], env),
-          );
-          await privateWrite(
-            join(packDir, "pack.yaml"),
-            json(configurePack(pack, config.tieBreakerAttribute)),
-          );
-        }
       }
       const pack = join(project, "source-pack/pack.yaml");
       // The authoring reader accepts JSON, but the lock tool rewrites block YAML.

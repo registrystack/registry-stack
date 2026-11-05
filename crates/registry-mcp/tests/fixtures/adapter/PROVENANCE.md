@@ -3,8 +3,9 @@
 The golden effective contract was emitted by the real `adapter effective-contract`
 command, built from this repository's `crates/registry-adapter`.
 It used this directory's `runtime.yaml` and `govstack-facilities/project.yaml`
-with the `govstack-consultation` profile and `dhis2-tracker` pack from
-`products/adapter`, at the profile and pack digests that project file pins.
+with the profile in `govstack-facilities/profile.yaml` and the `dhis2-tracker`
+pack from `products/adapter`, at the profile and pack digests that project file
+pins.
 The pinned bytes are the producer revision: a changed pack or profile changes
 `artifactDeploymentDigest` and with it the contract digest.
 
@@ -26,7 +27,7 @@ ADAPTER_FIXTURE_USERNAME=synthetic-reader \
   "$CARGO_TARGET_DIR/debug/adapter" effective-contract \
   --runtime-config "$fixtures/runtime.yaml" \
   --project "$fixtures/govstack-facilities" \
-  --profile products/adapter/profiles/govstack-consultation/profile.yaml \
+  --profile "$fixtures/govstack-facilities/profile.yaml" \
   --pack products/adapter/packs/dhis2-tracker/pack.yaml \
   >"$fixtures/govstack-facilities/effective-contract.json"
 ```

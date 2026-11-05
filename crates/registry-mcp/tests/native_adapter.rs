@@ -76,7 +76,7 @@ async fn facility_get_and_read_only_post_use_the_live_effective_contract() {
     )
     .await;
     let found = fixture_response(&stack.adapter_root, "get-found");
-    let page = fixture_response(&stack.adapter_root, "list-page");
+    let page = fixture_response(&stack.adapter_root, "search-page");
     stack
         .source
         .respond_with([Reply::Json(found), Reply::Json(page)]);

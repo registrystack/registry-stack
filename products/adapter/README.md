@@ -63,7 +63,7 @@ owns the ingestion contract and its declared limits.
 | Path | Holds |
 |---|---|
 | `schemas/` | Generated JSON Schemas for eight formats (profile, pack, project, runtime, job, job runtime, fixture, effective contract) |
-| `profiles/` | Facade profiles: `breg-records`, plus `case-api` and `govstack-consultation`, which prove the exposed API is configuration |
+| `profiles/` | Facade profiles: `breg-records`, plus `case-api`, which proves the exposed API is configuration. The GovStack Consultation and Write protocol is built in and needs no profile file |
 | `packs/` | Maintained facade and ingestion packs: `dhis2-tracker`, `opencrvs-events`, `breg-records`, `kobotoolbox` and `odk-central` |
 | `examples/` | Example projects that bind the packs to profiles, and the registered format examples |
 | `fixtures/` | Recorded or documented upstream exchanges for the maintained packs, the bad-authoring `corpus/`, and `source-shapes/` |
@@ -101,7 +101,7 @@ cargo run --locked -p registry-adapterctl -- fixtures replay \
 `check` validates the project against its pinned profile and pack, and the
 runtime configuration against both. `compile` writes the OpenAPI contract the
 facade serves. `fixtures replay` runs the routes through the real engine
-against the recorded source exchanges. The `dhis2-tracker`, `dhis2-govstack`
+against the recorded source exchanges. The `dhis2-tracker`
 and `opencrvs-events` facade examples take the same commands with their own
 profile, pack and fixtures; `scripts/check-contracts.sh` runs each one. The
 job examples use `adapterctl job check` instead; `kobotoolbox-job`,

@@ -192,27 +192,11 @@ impl Served {
             .join("../../products/adapter/profiles/breg-records/profile.yaml")
     }
 
-    /// The committed GovStack example project: the same DHIS2 pack under the
-    /// govstack-consultation profile.
+    /// The committed GovStack example project: the built-in Consultation
+    /// facade over the dhis2-tracker pack.
     pub fn govstack_project() -> std::path::PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/adapter/examples/dhis2-govstack")
-    }
-
-    /// The maintained govstack-consultation profile.
-    pub fn govstack_profile() -> std::path::PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../products/adapter/profiles/govstack-consultation/profile.yaml")
-    }
-
-    /// The maintained profile the project at `project` pins by id.
-    fn profile_for(project: &Path) -> std::path::PathBuf {
-        let text =
-            std::fs::read_to_string(project.join("project.yaml")).expect("the project is readable");
-        if text.contains("id: govstack-consultation") {
-            Self::govstack_profile()
-        } else {
-            Self::example_profile()
-        }
+            .join("../../products/adapter/examples/dhis2-consultation")
     }
 
     /// The maintained pack the example project pins.
@@ -584,7 +568,7 @@ idempotency:
             .lines()
             .any(|line| line.trim_end() == "consultation:");
         if !uses_builtin_consultation && !project.join("profile.yaml").exists() {
-            command.arg("--profile").arg(Self::profile_for(project));
+            command.arg("--profile").arg(Self::example_profile());
         }
         command
             .env("TEST_UPSTREAM_USERNAME", USERNAME)
@@ -864,21 +848,17 @@ pub fn expected_basic() -> String {
 pub fn copy_example_project(directory: &std::path::Path) {
     copy_project(
         &Served::example_project(),
-        &Served::example_profile(),
+        Some(&Served::example_profile()),
         directory,
     );
 }
 
 /// The govstack example in a copy a test can edit.
 pub fn copy_govstack_project(directory: &std::path::Path) {
-    copy_project(
-        &Served::govstack_project(),
-        &Served::govstack_profile(),
-        directory,
-    );
+    copy_project(&Served::govstack_project(), None, directory);
 }
 
-fn copy_project(project: &Path, profile: &Path, directory: &std::path::Path) {
+fn copy_project(project: &Path, profile: Option<&Path>, directory: &std::path::Path) {
     fn copy(from: &std::path::Path, to: &std::path::Path) {
         std::fs::create_dir_all(to).expect("create the copy directory");
         for entry in std::fs::read_dir(from).expect("read the example directory") {
@@ -896,7 +876,9 @@ fn copy_project(project: &Path, profile: &Path, directory: &std::path::Path) {
     // pack, scripts and profile beside it, so a test can edit them.
     let packs = Served::example_pack();
     copy(packs.parent().expect("the pack directory"), directory);
-    std::fs::copy(profile, directory.join("profile.yaml")).expect("copy the profile");
+    if let Some(profile) = profile {
+        std::fs::copy(profile, directory.join("profile.yaml")).expect("copy the profile");
+    }
 }
 
 /// The digest string the pins use for `bytes`.

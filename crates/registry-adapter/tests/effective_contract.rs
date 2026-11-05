@@ -92,19 +92,22 @@ cursorKeyRef: secret:env/TEST_CURSOR_KEY
 
 fn run_export(
     project: &std::path::Path,
-    profile: &std::path::Path,
+    profile: Option<&std::path::Path>,
     pack: &std::path::Path,
 ) -> std::process::Output {
     let scratch = tempfile::tempdir().expect("scratch directory");
     let runtime = runtime_file(scratch.path());
-    Command::new(env!("CARGO_BIN_EXE_adapter"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_adapter"));
+    command
         .arg("effective-contract")
         .arg("--runtime-config")
         .arg(runtime)
         .arg("--project")
-        .arg(project)
-        .arg("--profile")
-        .arg(profile)
+        .arg(project);
+    if let Some(profile) = profile {
+        command.arg("--profile").arg(profile);
+    }
+    command
         .arg("--pack")
         .arg(pack)
         .env("TEST_UPSTREAM_USERNAME", USERNAME)
@@ -118,7 +121,7 @@ fn run_export(
 
 fn export_paths(
     project: &std::path::Path,
-    profile: &std::path::Path,
+    profile: Option<&std::path::Path>,
     pack: &std::path::Path,
 ) -> Value {
     let output = run_export(project, profile, pack);
@@ -130,11 +133,13 @@ fn export_paths(
     serde_json::from_slice(&output.stdout).expect("contract JSON")
 }
 
-fn export(project: &str, profile: &str) -> Value {
+fn export(project: &str, profile: Option<&str>) -> Value {
     let root = repo_root();
+    let profile =
+        profile.map(|id| root.join(format!("products/adapter/profiles/{id}/profile.yaml")));
     export_paths(
         &root.join(format!("products/adapter/examples/{project}")),
-        &root.join(format!("products/adapter/profiles/{profile}/profile.yaml")),
+        profile.as_deref(),
         &root.join("products/adapter/packs/dhis2-tracker/pack.yaml"),
     )
 }
@@ -210,7 +215,7 @@ fn project_with_native_update(scratch: &std::path::Path) -> std::path::PathBuf {
 
 #[test]
 fn export_contains_only_effectively_served_reads_and_names_unserved_writes() {
-    let contract = export("dhis2-tracker", "breg-records");
+    let contract = export("dhis2-tracker", Some("breg-records"));
     let body = &contract["contract"];
     assert_eq!(
         contract["apiVersion"],
@@ -320,7 +325,7 @@ fn native_put_is_schema_valid_unserved_gateway_metadata() {
     let project = project_with_native_update(scratch.path());
     let export = export_paths(
         &project,
-        &root.join("products/adapter/profiles/breg-records/profile.yaml"),
+        Some(&root.join("products/adapter/profiles/breg-records/profile.yaml")),
         &root.join("products/adapter/packs/dhis2-tracker/pack.yaml"),
     );
 
@@ -399,57 +404,20 @@ fn native_write_202_without_async_completion_is_refused_at_load() {
 
     assert_202_refused_at_load(&run_export(
         &project_directory,
-        &profile_path,
-        &root.join("products/adapter/packs/dhis2-tracker/pack.yaml"),
-    ));
-}
-
-#[test]
-fn read_only_post_202_is_refused_at_load() {
-    let scratch = tempfile::tempdir().expect("scratch directory");
-    let root = repo_root();
-    let source_profile = root.join("products/adapter/profiles/govstack-consultation/profile.yaml");
-    let mut profile = read_yaml_value(&source_profile, &PROFILE_FORMAT);
-    let search = profile["operations"]
-        .as_array_mut()
-        .expect("profile operations")
-        .iter_mut()
-        .find(|operation| operation["id"] == "records-search")
-        .expect("read-only POST search operation");
-    assert_eq!(search["method"], "POST");
-    assert_eq!(search["readOnly"], true);
-    search["successStatus"] = serde_json::json!(202);
-    let profile_document = serde_norway::to_string(&profile).expect("encode read profile");
-    let profile_path = scratch.path().join("profile.yaml");
-    fs::write(&profile_path, &profile_document).expect("write read profile");
-
-    let source_project = root.join("products/adapter/examples/dhis2-govstack/project.yaml");
-    let mut project = read_yaml_value(&source_project, &PROJECT_FORMAT);
-    project["profile"]["digest"] = Value::String(sha256_uri(profile_document.as_bytes()));
-    let project_directory = scratch.path().join("project");
-    fs::create_dir(&project_directory).expect("create read project directory");
-    fs::write(
-        project_directory.join("project.yaml"),
-        serde_norway::to_string(&project).expect("encode read project"),
-    )
-    .expect("write read project");
-
-    assert_202_refused_at_load(&run_export(
-        &project_directory,
-        &profile_path,
+        Some(&profile_path),
         &root.join("products/adapter/packs/dhis2-tracker/pack.yaml"),
     ));
 }
 
 #[test]
 fn post_read_contract_carries_closed_body_and_pagination_bounds() {
-    let contract = export("dhis2-govstack", "govstack-consultation");
+    let contract = export("dhis2-consultation", None);
     let operations = contract["contract"]["operations"]
         .as_array()
         .expect("operations");
     let search = operations
         .iter()
-        .find(|operation| operation["id"] == "records-search.persons")
+        .find(|operation| operation["id"] == "search.people")
         .expect("search operation");
     assert_eq!(search["method"], "POST");
     assert_eq!(search["effect"], "read");
@@ -479,7 +447,7 @@ fn post_read_contract_carries_closed_body_and_pagination_bounds() {
 
 #[test]
 fn export_and_runtime_readback_match_the_registered_closed_schema() {
-    let export = export("dhis2-tracker", "breg-records");
+    let export = export("dhis2-tracker", Some("breg-records"));
     let schema: Value = serde_json::from_str(include_str!(
         "../../../products/adapter/schemas/effective-contract.v1alpha1.schema.json"
     ))
@@ -516,7 +484,7 @@ fn export_and_runtime_readback_match_the_registered_closed_schema() {
 fn schema_accepts_every_plain_string_version_the_cli_accepts() {
     let scratch = tempfile::tempdir().expect("scratch directory");
     let (project, profile, pack) = empty_version_artifacts(scratch.path());
-    let export = export_paths(&project, &profile, &pack);
+    let export = export_paths(&project, Some(&profile), &pack);
 
     assert_eq!(export["contract"]["project"]["version"], "");
     assert_eq!(export["contract"]["profileVersion"], "");

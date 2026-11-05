@@ -130,7 +130,7 @@ pub fn fixture_response(adapter_root: &Path, fixture: &str) -> Value {
         removed_keys: &[],
     };
     let path = adapter_root
-        .join("fixtures/dhis2-govstack")
+        .join("fixtures/dhis2-tracker")
         .join(format!("{fixture}.yaml"));
     let bytes = std::fs::read(&path).unwrap_or_else(|error| {
         panic!(

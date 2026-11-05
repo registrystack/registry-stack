@@ -105,7 +105,7 @@ Export the effective contract from the matching adapter runtime and reviewed art
 adapter effective-contract \
   --runtime-config /srv/adapter/runtime.yaml \
   --project /srv/adapter/project \
-  --profile /srv/adapter/profiles/govstack-consultation/profile.yaml \
+  --profile /srv/adapter/project/profile.yaml \
   --pack /srv/adapter/packs/dhis2-tracker/pack.yaml \
   > /srv/mcp/adapter-contract.json
 ```

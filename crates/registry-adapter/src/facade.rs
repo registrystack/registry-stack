@@ -57,9 +57,7 @@ use crate::engine::route::{
     run_async_status_poll, run_served_route_until, AsyncStatusPollKind, RouteContext, RouteFailure,
     EXCHANGE_DEADLINE,
 };
-use crate::govstack::consultation::{
-    CAPABILITIES_PATH, MOUNT_PATH, PROFILE_ID as CONSULTATION_PROFILE_ID,
-};
+use crate::govstack::consultation::{CAPABILITIES_PATH, MOUNT_PATH};
 use crate::govstack::correlation::RequestCorrelation;
 use crate::idempotent::{
     PostgresIdempotencyStore, RecoveryLease, StatusLookup, StatusLookupRequest, StoredResponse,
@@ -3302,7 +3300,7 @@ fn refusal_response(profile: Problems<'_>, refusal: CallerRefusal, request_id: &
         CallerRefusal::Unauthenticated => {
             (ErrorClass::FacadeUnauthenticated, StatusCode::UNAUTHORIZED)
         }
-        CallerRefusal::Unavailable if profile.profile.id.as_str() == CONSULTATION_PROFILE_ID => {
+        CallerRefusal::Unavailable if profile.profile.is_govstack_consultation() => {
             return consultation_unavailable(request_id);
         }
         CallerRefusal::Unavailable => (ErrorClass::Facade, StatusCode::SERVICE_UNAVAILABLE),
@@ -4467,7 +4465,7 @@ async fn refuse_request(
         );
     }
     if refusal.status == StatusCode::UNPROCESSABLE_ENTITY
-        && profile.profile.id.as_str() == CONSULTATION_PROFILE_ID
+        && profile.profile.is_govstack_consultation()
     {
         let pointer = crate::govstack::consultation::validation_pointer(&operation.operation);
         facade_validation_problem(
@@ -4667,9 +4665,7 @@ fn problem_response(
     if let Some(data) = data {
         slots.insert(SLOT_PROBLEM_DATA, data.clone());
     }
-    if problems.profile.id.as_str() == CONSULTATION_PROFILE_ID
-        && status == StatusCode::UNPROCESSABLE_ENTITY
-    {
+    if problems.profile.is_govstack_consultation() && status == StatusCode::UNPROCESSABLE_ENTITY {
         slots.insert(
             SLOT_PROBLEM_ERRORS,
             json!([{
@@ -4685,7 +4681,7 @@ fn problem_response(
                 header::CONTENT_TYPE,
                 HeaderValue::from_static("application/problem+json"),
             );
-            if problems.profile.id.as_str() == CONSULTATION_PROFILE_ID {
+            if problems.profile.is_govstack_consultation() {
                 crate::govstack::correlation::mark_problem(&mut response, rendered);
             }
             with_request_id(response, request_id)
@@ -5232,6 +5228,33 @@ mod tests {
             crate::govstack::consultation::SERVICE_UNAVAILABLE_PROBLEM_CODE
         );
         assert_eq!(body["status"], 503);
+    }
+
+    #[tokio::test]
+    async fn a_configured_profile_named_like_the_built_in_gets_no_govstack_problems() {
+        let built_in = crate::govstack::consultation::built_in_profile();
+        let profile: AdapterProfile =
+            serde_json::from_value(serde_json::to_value(&built_in).expect("serializes"))
+                .expect("a configured profile with the built-in id parses");
+        let envelope = CompiledEnvelope::compile(profile.problem_envelope.text(), &BTreeMap::new())
+            .expect("problem envelope compiles");
+        let response = refusal_response(
+            Problems {
+                profile: &profile,
+                envelope: &envelope,
+            },
+            CallerRefusal::Unavailable,
+            "0123456789abcdef0123456789abcdef",
+        );
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let bytes = axum::body::to_bytes(response.into_body(), 16 * 1024)
+            .await
+            .expect("bounded problem body");
+        let body: Value = serde_json::from_slice(&bytes).expect("problem JSON");
+        assert_ne!(
+            body["type"],
+            crate::govstack::consultation::SERVICE_UNAVAILABLE_PROBLEM_CODE
+        );
     }
 
     #[test]

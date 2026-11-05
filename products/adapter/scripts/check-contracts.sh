@@ -206,27 +206,6 @@ printf 'Example check passed\n'
   "${fixture_flags[@]}" >/dev/null
 printf 'Example fixture replay passed\n'
 
-# The govstack example binds the same pack under the GovStack Consultation
-# profile. Its fixtures are derived from the dhis2-tracker captures (each
-# file says so), and the contract it compiles to is committed beside the
-# project, so `compile --check` refuses on drift.
-govstack_flags=()
-for fixture in products/adapter/fixtures/dhis2-govstack/*.yaml; do
-  govstack_flags+=(--fixtures "$fixture")
-done
-"$adapterctl_bin" check products/adapter/examples/dhis2-govstack/project.yaml \
-  --profile products/adapter/profiles/govstack-consultation/profile.yaml \
-  --pack products/adapter/packs/dhis2-tracker/pack.yaml \
-  "${govstack_flags[@]}" >/dev/null
-"$adapterctl_bin" fixtures replay products/adapter/examples/dhis2-govstack/project.yaml \
-  --profile products/adapter/profiles/govstack-consultation/profile.yaml \
-  --pack products/adapter/packs/dhis2-tracker/pack.yaml \
-  "${govstack_flags[@]}" >/dev/null
-"$adapterctl_bin" compile --check products/adapter/examples/dhis2-govstack/project.yaml \
-  --profile products/adapter/profiles/govstack-consultation/profile.yaml \
-  --pack products/adapter/packs/dhis2-tracker/pack.yaml >/dev/null
-printf 'GovStack example check, fixture replay and compile passed\n'
-
 # Built-in Consultation projects own only source bindings, transformations and
 # schemas. Their standard protocol comes from Rust, so no --profile is supplied.
 for example in dhis2-consultation opencrvs-consultation; do

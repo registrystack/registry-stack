@@ -64,6 +64,7 @@ fn profile() -> AdapterProfile {
     AdapterProfile {
         id: local("problem-profile"),
         version: "1".to_owned(),
+        origin: Default::default(),
         operations: UniqueIdList::new(Vec::new()).expect("no operations"),
         problems: UniqueIdList::new(vec![
             problem(

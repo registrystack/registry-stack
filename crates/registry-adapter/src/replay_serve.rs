@@ -1352,13 +1352,6 @@ mod tests {
                 5,
             ),
             token(
-                "dhis2-govstack-list-page",
-                "records-list",
-                "person-list",
-                "persons",
-                5,
-            ),
-            token(
                 "opencrvs-events-search-page",
                 "records-search",
                 "birth-search",
@@ -1400,7 +1393,6 @@ mod tests {
             actual,
             [
                 "AZ-QW0He7xnlzHwsY_MoY3HaOSJkEzSnOof3k1fkUIdttZLapuyZGtNI5kAyIbnII4JOiV4s8Vy3tCHfbuY",
-                "AR-iZNpifiCYGwbA8XWnBD1HATcvY6QeFMv0_bOd6shPCQFv50lXtHVRfDJUS5U-4TkNEh04LeFioTgVJLo",
                 "AaW8rI1CvWK9y53Ni6oLOJeDjcl5fBVpQyicqzLMqPodcjKcJsY6mPbB0--gjsJEkxENyrX6bQqqqmFk1ag",
                 "AQGTVIRecXOAHQpErfOzhEknm-j2T4eSa5osZDxhcPxbjL4ZWsi_fwuEmekmwe3pJzk7HzaQ5NkeOQEeGBtmPJ2tSNzFv1vbYu21rA",
             ]

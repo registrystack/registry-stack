@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use registry_adapter_core::{AdapterPack, AdapterProfile, AdapterProject};
+use registry_adapter_core::{AdapterPack, AdapterProfile, AdapterProject, ProfileOrigin};
 use serde_json::{json, Value};
 
 pub mod consultation;
@@ -77,7 +77,10 @@ pub fn built_in_profile(project: &AdapterProject) -> AdapterProfile {
         }
         compose_write_problems(&mut value);
     }
-    serde_json::from_value(value).expect("the maintained unified GovStack profile is valid")
+    let mut profile: AdapterProfile =
+        serde_json::from_value(value).expect("the maintained unified GovStack profile is valid");
+    profile.origin = ProfileOrigin::BuiltInGovStack;
+    profile
 }
 
 fn compose_write_problems(profile: &mut Value) {
@@ -144,7 +147,7 @@ pub fn target_attachment(
     Ok(attachment)
 }
 
-fn target_identity(
+pub(super) fn target_identity(
     profile: &AdapterProfile,
     operations: &BTreeMap<String, crate::engine::target::TargetOperation>,
 ) -> Result<Vec<u8>, crate::engine::load::LoadError> {
@@ -195,6 +198,17 @@ fn target_identity(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_composed_profile_keeps_the_built_in_marker() {
+        let project: AdapterProject = serde_json::from_value(json!({
+            "project": {"id": "read-only", "version": "1"},
+            "pack": {"id": "source", "version": "1", "digest": "sha256:678260a56715cba21db1f0687e5a2c5e5efb2ea0b8eea687b5f3ee8723c5f6c9"},
+            "recordTypes": []
+        }))
+        .expect("read-only project");
+        assert!(built_in_profile(&project).is_govstack_consultation());
+    }
 
     #[test]
     fn write_only_profile_selects_fixed_create_update_and_companion_read() {
