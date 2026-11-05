@@ -60,8 +60,9 @@ use crate::engine::route::{
 use crate::govstack::consultation::{CAPABILITIES_PATH, MOUNT_PATH};
 use crate::govstack::correlation::RequestCorrelation;
 use crate::idempotent::{
-    ClaimRequest, PostgresIdempotencyStore, RecoveryLease, StatusLookup, StatusLookupRequest,
-    StoredResponse, TerminalOutcome, VerifiedCallerIdentity, MAX_STORED_RESPONSE_BYTES,
+    ClaimRequest, PostgresIdempotencyStore, RecoveryLease, StaleGuardCustody, StatusLookup,
+    StatusLookupRequest, StoredResponse, TerminalOutcome, VerifiedCallerIdentity,
+    MAX_STORED_RESPONSE_BYTES,
 };
 use crate::journal::{self, JournalEvent};
 use crate::serve::{Authenticator, Caller, CallerRefusal};
@@ -4515,8 +4516,10 @@ struct StaleConditionRequest<'a> {
 /// Answer a GovStack Update whose strong guard no longer validates here.
 /// The caller is already authenticated and authorized and the request fully
 /// validated. A terminal answer stored for the same key and fingerprint is
-/// replayed exactly; anything else is the generic 412 without a mutation. A
-/// changed fingerprint finds no stored answer, so it stays a 412.
+/// replayed exactly, and a retry while that attempt still runs gets the
+/// in-flight 409 a fresh guard would get; anything else is the generic 412
+/// without a mutation. A changed fingerprint finds nothing in custody, so it
+/// stays a 412.
 async fn answer_stale_condition(
     state: &FacadeState,
     request: StaleConditionRequest<'_>,
@@ -4531,29 +4534,62 @@ async fn answer_stale_condition(
         claim,
     } = request;
     let profile = state.loaded.problems();
-    let replay = match store.completed_replay(claim, SystemTime::now()).await {
-        Ok(replay) => replay,
+    let (response, terminal, failure) = match store
+        .stale_guard_custody(claim, SystemTime::now())
+        .await
+    {
+        Ok(StaleGuardCustody::Replay {
+            outcome: TerminalOutcome::Completed,
+            response,
+        }) => (replay_response(response), "exchangeCompleted", None),
+        Ok(StaleGuardCustody::Replay {
+            outcome: TerminalOutcome::Failed,
+            response,
+        }) => match replay_govstack_failed_response(response) {
+            Ok(response) => (response, "exchangeFailed", None),
+            Err(()) => {
+                tracing::error!("custodied GovStack failure has no canonical Problem identity");
+                (
+                    govstack_problem(
+                        "internal-error",
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        request_id,
+                    ),
+                    "exchangeFailed",
+                    None,
+                )
+            }
+        },
+        Ok(StaleGuardCustody::InFlight) => (
+            govstack_problem("idempotency-in-flight", StatusCode::CONFLICT, request_id),
+            "exchangeFailed",
+            Some(ErrorClass::FacadeConflict),
+        ),
+        Ok(StaleGuardCustody::Unanswered) => {
+            return refuse_request(
+                state,
+                operation,
+                caller,
+                record_type,
+                request_id,
+                Refusal::write("precondition-failed", StatusCode::PRECONDITION_FAILED),
+            )
+            .await;
+        }
         Err(error) => {
             tracing::error!(%error, "the idempotency store could not be read for a stale guard");
-            return govstack_problem(
-                "internal-error",
-                StatusCode::INTERNAL_SERVER_ERROR,
-                request_id,
-            );
+            (
+                govstack_problem(
+                    "internal-error",
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    request_id,
+                ),
+                "exchangeFailed",
+                Some(ErrorClass::Facade),
+            )
         }
     };
-    let Some((outcome, stored)) = replay else {
-        return refuse_request(
-            state,
-            operation,
-            caller,
-            record_type,
-            request_id,
-            Refusal::write("precondition-failed", StatusCode::PRECONDITION_FAILED),
-        )
-        .await;
-    };
-    let event = |kind: &'static str| {
+    let event = |kind: &'static str, detail: Option<Value>| {
         (
             JournalEvent {
                 event_kind: kind,
@@ -4561,38 +4597,29 @@ async fn answer_stale_condition(
                 operation: operation.operation.clone(),
                 caller_ref: caller.reference.clone(),
                 route_id: operation.route_id.clone(),
-                detail: None,
+                detail: detail.map(|value| value.to_string()),
             },
             SystemTime::now(),
         )
     };
-    let mut response = match outcome {
-        TerminalOutcome::Completed => replay_response(stored),
-        TerminalOutcome::Failed => match replay_govstack_failed_response(stored) {
-            Ok(response) => response,
-            Err(()) => {
-                tracing::error!("custodied GovStack failure has no canonical Problem identity");
-                govstack_problem(
-                    "internal-error",
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    request_id,
-                )
-            }
-        },
-    };
     let mut events = vec![
-        event("exchangeCreated"),
-        event(match outcome {
-            TerminalOutcome::Completed => "exchangeCompleted",
-            TerminalOutcome::Failed => "exchangeFailed",
-        }),
+        event("exchangeCreated", None),
+        event(
+            terminal,
+            failure.map(|class| exchange_failure_detail(profile, class)),
+        ),
     ];
     stamp_terminal_problem(&mut events, &response);
-    if let Some(correlation) = correlation {
-        response = correlation.finish(response);
+    let status = response.status();
+    let mut response = match correlation {
+        Some(correlation) => correlation.finish(response),
+        None => response,
+    };
+    if failure == Some(ErrorClass::FacadeConflict) {
+        response = retryable_conflict(response);
     }
     if let Err(fault) = append_all(&state.journal, events).await {
-        tracing::error!(%fault, "the audit journal could not record the replay");
+        tracing::error!(%fault, "the audit journal could not record the stale-guard answer");
         return facade_problem(
             profile,
             ErrorClass::Facade,
@@ -4600,6 +4627,9 @@ async fn answer_stale_condition(
             record_type,
             request_id,
         );
+    }
+    if let Some(class) = failure {
+        warn_exchange_failed(class, status);
     }
     response
 }

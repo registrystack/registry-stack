@@ -715,6 +715,70 @@ impl fmt::Debug for Execution {
     }
 }
 
+/// What custody holds for a request whose own guard no longer opens. Such a
+/// request can never execute, so custody either answers it or leaves it to
+/// the precondition failure.
+#[derive(Debug)]
+pub enum StaleGuardCustody {
+    /// An earlier attempt of the same request recorded this exact answer.
+    Replay {
+        /// Whether the recorded answer is a success or a failure.
+        outcome: TerminalOutcome,
+        /// The recorded caller-visible response.
+        response: StoredResponse,
+    },
+    /// An earlier attempt of the same request is still running.
+    InFlight,
+    /// Custody holds no answer for this request.
+    Unanswered,
+}
+
+/// How custody stands for a stale-guard request before any response bytes
+/// are decoded.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StaleGuardStanding {
+    Replay(TerminalOutcome),
+    InFlight,
+    Unanswered,
+}
+
+/// The custody row a stale-guard lookup reads, with its resume lease when
+/// the write is resumable.
+struct StaleGuardRow<'a> {
+    state: &'a str,
+    claimed_at: SystemTime,
+    effect_started_at: Option<SystemTime>,
+    expires_at: Option<SystemTime>,
+    resume: Option<(SystemTime, SystemTime)>,
+}
+
+/// Classify a stale-guard request the way a claim would answer it, without
+/// claiming. A recorded answer still in custody replays; an attempt that a
+/// claim would report in flight is in flight; anything a claim would take
+/// over, resume, reopen, or refuse as spent is unanswered, because the
+/// request could only be refused by its guard.
+fn stale_guard_standing(row: &StaleGuardRow<'_>, now: SystemTime) -> StaleGuardStanding {
+    let live = |since: SystemTime| now < since + EXCHANGE_DEADLINE;
+    match (row.state, row.resume) {
+        ("completed", _) if row.expires_at.is_some_and(|expires| expires > now) => {
+            StaleGuardStanding::Replay(TerminalOutcome::Completed)
+        }
+        ("failed", _) if row.expires_at.is_some_and(|expires| expires > now) => {
+            StaleGuardStanding::Replay(TerminalOutcome::Failed)
+        }
+        ("claimed" | "effect_started", Some((lease_until, expires_at)))
+            if lease_until > now && expires_at > now =>
+        {
+            StaleGuardStanding::InFlight
+        }
+        ("claimed", None) if live(row.claimed_at) => StaleGuardStanding::InFlight,
+        ("effect_started", None) if row.effect_started_at.is_some_and(live) => {
+            StaleGuardStanding::InFlight
+        }
+        _ => StaleGuardStanding::Unanswered,
+    }
+}
+
 /// Result of atomically claiming a caller, operation, and key namespace.
 #[derive(Debug)]
 pub enum Claim {
@@ -982,42 +1046,66 @@ impl PostgresIdempotencyStore {
         claim_from_row(row, request.request_digest)
     }
 
-    /// Read the exact terminal response bound to this namespace and request
-    /// digest while it is still in custody. This never claims, extends, or
-    /// erases a row: a request whose own guard no longer holds uses it to
-    /// replay what its earlier attempt already answered.
-    pub async fn completed_replay(
+    /// Read what custody holds for this namespace and request digest when
+    /// the request's own guard no longer opens. This never claims, extends,
+    /// or erases a row: a stale-guard request uses it to replay what its
+    /// earlier attempt already answered, or to learn that attempt is still
+    /// running.
+    pub async fn stale_guard_custody(
         &self,
         request: ClaimRequest<'_>,
         now: SystemTime,
-    ) -> Result<Option<(TerminalOutcome, StoredResponse)>, IdempotencyError> {
+    ) -> Result<StaleGuardCustody, IdempotencyError> {
         validate_claim_request(&request)?;
         let scope_digest = scope_digest(&request);
         let client = self.pool.get().await?;
         let Some(row) = client
             .query_opt(
-                "SELECT state, response_status, \
-                        response_content_type, response_location, response_etag, \
-                        response_body, response_request_id \
-                 FROM adapter_idempotency_entries \
-                 WHERE scope_digest = $1 AND request_digest = $2 \
-                   AND state IN ('completed', 'failed') AND expires_at > $3",
-                &[
-                    &scope_digest.as_slice(),
-                    &request.request_digest.as_slice(),
-                    &now,
-                ],
+                "SELECT entries.state, entries.claimed_at, entries.effect_started_at, \
+                        entries.expires_at, entries.response_status, \
+                        entries.response_content_type, entries.response_location, \
+                        entries.response_etag, entries.response_body, \
+                        entries.response_request_id, \
+                        resumes.lease_until AS resume_lease_until, \
+                        resumes.expires_at AS resume_expires_at \
+                 FROM adapter_idempotency_entries AS entries \
+                 LEFT JOIN adapter_idempotency_resumes AS resumes \
+                   ON resumes.scope_digest = entries.scope_digest \
+                  AND resumes.request_digest = entries.request_digest \
+                 WHERE entries.scope_digest = $1 AND entries.request_digest = $2",
+                &[&scope_digest.as_slice(), &request.request_digest.as_slice()],
             )
             .await?
         else {
-            return Ok(None);
+            return Ok(StaleGuardCustody::Unanswered);
         };
-        let outcome = if row.get::<_, String>("state") == "completed" {
-            TerminalOutcome::Completed
-        } else {
-            TerminalOutcome::Failed
+        let state: String = row.get("state");
+        let resume = match (
+            row.get::<_, Option<SystemTime>>("resume_lease_until"),
+            row.get::<_, Option<SystemTime>>("resume_expires_at"),
+        ) {
+            (Some(lease_until), Some(expires_at)) => Some((lease_until, expires_at)),
+            (None, None) => None,
+            _ => return Err(IdempotencyError::StoredDataInvalid),
         };
-        Ok(Some((outcome, response_from_row(&row)?)))
+        let standing = stale_guard_standing(
+            &StaleGuardRow {
+                state: &state,
+                claimed_at: row.get("claimed_at"),
+                effect_started_at: row.get("effect_started_at"),
+                expires_at: row.get("expires_at"),
+                resume,
+            },
+            now,
+        );
+        Ok(match standing {
+            StaleGuardStanding::Replay(outcome) => StaleGuardCustody::Replay {
+                outcome,
+                response: response_from_row(&row)?,
+            },
+            StaleGuardStanding::InFlight => StaleGuardCustody::InFlight,
+            StaleGuardStanding::Unanswered => StaleGuardCustody::Unanswered,
+        })
     }
 
     /// Claim or resume one closed linear multi-effect write. The initial
@@ -2934,6 +3022,96 @@ mod tests {
             digest_for("deployment-ab", "c"),
             digest_for("deployment-a", "bc")
         );
+    }
+
+    fn stale_row(state: &str, since: SystemTime) -> StaleGuardRow<'_> {
+        StaleGuardRow {
+            state,
+            claimed_at: since,
+            effect_started_at: (state == "effect_started").then_some(since),
+            expires_at: None,
+            resume: None,
+        }
+    }
+
+    #[test]
+    fn a_stale_guard_replays_only_a_recorded_answer_still_in_custody() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
+        for (state, outcome) in [
+            ("completed", TerminalOutcome::Completed),
+            ("failed", TerminalOutcome::Failed),
+        ] {
+            let mut row = stale_row(state, now - Duration::from_secs(60));
+            row.expires_at = Some(now + Duration::from_secs(1));
+            assert_eq!(
+                stale_guard_standing(&row, now),
+                StaleGuardStanding::Replay(outcome)
+            );
+            row.expires_at = Some(now);
+            assert_eq!(
+                stale_guard_standing(&row, now),
+                StaleGuardStanding::Unanswered
+            );
+        }
+    }
+
+    #[test]
+    fn a_stale_guard_is_in_flight_exactly_while_a_claim_would_be() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
+        let running = now - EXCHANGE_DEADLINE + Duration::from_secs(1);
+        let abandoned = now - EXCHANGE_DEADLINE;
+        for state in ["claimed", "effect_started"] {
+            assert_eq!(
+                stale_guard_standing(&stale_row(state, running), now),
+                StaleGuardStanding::InFlight,
+                "{state} within its exchange deadline"
+            );
+            // A claim takes an abandoned claim over and spends a lapsed
+            // effect; neither answers a request its guard refuses.
+            assert_eq!(
+                stale_guard_standing(&stale_row(state, abandoned), now),
+                StaleGuardStanding::Unanswered,
+                "{state} past its exchange deadline"
+            );
+
+            // A resumable write is in flight while its lease holds, however
+            // long ago it was claimed, and resumable once the lease lapses.
+            let mut row = stale_row(state, abandoned);
+            row.resume = Some((now + Duration::from_secs(1), now + Duration::from_secs(60)));
+            assert_eq!(
+                stale_guard_standing(&row, now),
+                StaleGuardStanding::InFlight
+            );
+            row.resume = Some((now, now + Duration::from_secs(60)));
+            assert_eq!(
+                stale_guard_standing(&row, now),
+                StaleGuardStanding::Unanswered
+            );
+            row.resume = Some((now + Duration::from_secs(1), now));
+            assert_eq!(
+                stale_guard_standing(&row, now),
+                StaleGuardStanding::Unanswered
+            );
+        }
+    }
+
+    #[test]
+    fn a_stale_guard_leaves_spent_and_accepted_keys_unanswered() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
+        for state in [
+            "accepted",
+            "accepted_expired",
+            "completed_expired",
+            "failed_expired",
+        ] {
+            let mut row = stale_row(state, now);
+            row.expires_at = Some(now + Duration::from_secs(60));
+            assert_eq!(
+                stale_guard_standing(&row, now),
+                StaleGuardStanding::Unanswered,
+                "{state}"
+            );
+        }
     }
 
     #[test]
