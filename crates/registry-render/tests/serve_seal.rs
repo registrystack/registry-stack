@@ -1366,8 +1366,8 @@ fn a_seal_too_large_for_a_document_pdf_standard_refuses_startup() {
 
 /// Write sealed files served by the seal route for an external validator
 /// such as `products/render/scripts/validate-seal.py`: a B-T and a B-B
-/// notice and a B-T PDF/A-2b archive, each with its `documentSha256`, and
-/// the seal and timestamp trust roots. Run it with
+/// notice, a B-T PDF/A-2b archive and a B-T PDF/UA-1 notice, each with its
+/// `documentSha256`, and the seal and timestamp trust roots. Run it with
 /// `REGISTRY_SEAL_SAMPLE_DIR` naming an existing directory.
 #[test]
 #[ignore = "writes served seal samples to REGISTRY_SEAL_SAMPLE_DIR"]
@@ -1384,6 +1384,7 @@ fn write_served_seal_samples() {
     for (name, fixture, document) in [
         ("notice-b-t", &timestamped, "notice"),
         ("archive-b-t", &timestamped, "archive"),
+        ("accessible-b-t", &timestamped, "accessible"),
         ("notice-b-b", &untimestamped, "notice"),
     ] {
         let server = start_server(fixture);

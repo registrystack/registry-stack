@@ -142,10 +142,12 @@ pub fn prepare(
 /// The widget is printable, has only a normal appearance, and has a
 /// zero-size rectangle; veraPDF counts such a widget as outside the crop
 /// box, so the PDF/UA-1 and accessible PDF/A rules that ask a visible widget
-/// to be tagged do not apply to it. What remains is the string-length limit
-/// of PDF/A-1 (ISO 19005-1 6.1.12) and of PDF/A-2 and PDF/A-3 (ISO 32000-1
-/// Annex C, through ISO 19005-2 and -3 6.1.13): the reserved `/Contents` is
-/// one string of `contents_capacity` bytes.
+/// to be tagged do not apply to it. The first page carries `/Tabs /S`, which
+/// PDF/UA-1 (ISO 14289-1 7.18.3) asks of a page with an annotation, and
+/// [`prepare`] refuses a page with another tab order. What remains is the
+/// string-length limit of PDF/A-1 (ISO 19005-1 6.1.12) and of PDF/A-2 and
+/// PDF/A-3 (ISO 32000-1 Annex C, through ISO 19005-2 and -3 6.1.13): the
+/// reserved `/Contents` is one string of `contents_capacity` bytes.
 ///
 /// Conformance holds for the embedded file only: until [`CheckedPdf::embed`]
 /// writes a signature, PDF/A-2 and PDF/A-3 (6.4.3) refuse the empty
@@ -371,6 +373,8 @@ struct Original {
     page_dict: Vec<u8>,
     /// The span of the page's `/Annots` value inside `page_dict`, if any.
     page_annots: Option<std::ops::Range<usize>>,
+    /// Whether the page already has `/Tabs /S`.
+    page_tabs: bool,
     /// The page's existing annotation references, in order.
     annotations: Vec<(i32, i32)>,
 }
@@ -437,6 +441,19 @@ fn read_original(
         }
     };
 
+    // The widget makes the page one with an annotation, which PDF/UA-1
+    // (ISO 14289-1 7.18.3) orders by structure; another order is not
+    // overridden.
+    let page_tabs = match page.get_raw::<Object<'_>>(b"Tabs") {
+        None => false,
+        Some(_) if has_name(&page, b"Tabs", b"S") => true,
+        Some(_) => {
+            return Err(PdfSignatureError::AlreadyHas(
+                "a first-page tab order other than structure order",
+            ));
+        }
+    };
+
     let catalog_dict = catalog.data().to_vec();
     let page_dict = page.data().to_vec();
     entries_matching(&catalog, &catalog_dict)?;
@@ -453,6 +470,7 @@ fn read_original(
             .map_err(|_| PdfSignatureError::Malformed("the first page has a negative number"))?,
         page_dict,
         page_annots,
+        page_tabs,
         annotations,
     })
 }
@@ -575,7 +593,7 @@ fn write_update(
     );
 
     // The first page, every original entry kept, with the widget appended
-    // to its annotations.
+    // to its annotations and `/Tabs /S` added if missing.
     let mut annots = String::from("[");
     for (number, generation) in &original.annotations {
         annots.push_str(&format!("{number} {generation} R "));
@@ -583,21 +601,23 @@ fn write_update(
     annots.push_str(&format!("{field_id} 0 R]"));
     offsets.push((original.page, out.len()));
     out.extend_from_slice(format!("{} 0 obj\n", original.page).as_bytes());
-    let page = &original.page_dict;
+    let page_body = &original.page_dict[..original.page_dict.len() - 2];
     match &original.page_annots {
         Some(span) => {
-            out.extend_from_slice(&page[..span.start]);
+            out.extend_from_slice(&page_body[..span.start]);
             out.extend_from_slice(annots.as_bytes());
-            out.extend_from_slice(&page[span.end..]);
+            out.extend_from_slice(&page_body[span.end..]);
         }
         None => {
-            out.extend_from_slice(&page[..page.len() - 2]);
+            out.extend_from_slice(page_body);
             out.extend_from_slice(b"/Annots");
             out.extend_from_slice(annots.as_bytes());
-            out.extend_from_slice(b">>");
         }
     }
-    out.extend_from_slice(b"\nendobj\n");
+    if !original.page_tabs {
+        out.extend_from_slice(b"/Tabs/S");
+    }
+    out.extend_from_slice(b">>\nendobj\n");
 
     // The signature field merged with its widget: invisible (zero-size
     // rectangle), printable as PDF/A-4 6.3.2 requires, locked, on the first
@@ -746,6 +766,8 @@ mod tests {
         perms: bool,
         stray_signature: bool,
         xref_stream: bool,
+        /// The first page's `/Tabs` name, if any.
+        tabs: Option<&'static [u8]>,
     }
 
     const CATALOG: Ref = Ref::new(1);
@@ -788,6 +810,9 @@ mod tests {
             }
             if options.indirect_link {
                 page.pair(WriterName(b"Annots"), ANNOTS);
+            }
+            if let Some(tabs) = options.tabs {
+                page.pair(WriterName(b"Tabs"), WriterName(tabs));
             }
         }
         pdf.stream(CONTENT, b"");
@@ -861,6 +886,48 @@ mod tests {
         assert_eq!(
             page_annotations(&prepared.bytes),
             vec![(next_object(&original), 0)]
+        );
+    }
+
+    /// PDF/UA-1 (ISO 14289-1 7.18.3) asks every page that has an annotation
+    /// for `/Tabs /S`. The widget is an annotation, so the rewritten first
+    /// page carries `/Tabs /S`, once, whatever annotations it had; another
+    /// tab order is refused rather than overridden.
+    #[test]
+    fn prepare_orders_the_first_page_tabs_by_structure() {
+        for options in [
+            Fixture::default(),
+            Fixture {
+                inline_link: true,
+                ..Fixture::default()
+            },
+            Fixture {
+                indirect_link: true,
+                ..Fixture::default()
+            },
+            Fixture {
+                tabs: Some(b"S"),
+                ..Fixture::default()
+            },
+        ] {
+            let prepared = prepare(&fixture(options), &field()).expect("prepare");
+            let pdf = hayro_syntax::Pdf::new(prepared.bytes).expect("reads");
+            let page = pdf.pages()[0].raw().clone();
+            let tabs: Name<'_> = page.get(b"Tabs").expect("Tabs");
+            assert_eq!(tabs.as_ref(), b"S");
+            syntax::dict_entries(page.data(), 0).expect("each key once");
+        }
+        assert_eq!(
+            prepare(
+                &fixture(Fixture {
+                    tabs: Some(b"R"),
+                    ..Fixture::default()
+                }),
+                &field()
+            ),
+            Err(PdfSignatureError::AlreadyHas(
+                "a first-page tab order other than structure order"
+            ))
         );
     }
 
