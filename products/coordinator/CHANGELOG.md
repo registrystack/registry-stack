@@ -10,14 +10,27 @@
   a deployment shares one Casework producer, so this check keeps each run's
   cancel to the request it submitted. The rule also holds when a package or
   run snapshot is restored: the service does not start on a pinned package
-  that breaks it, and while a live run admitted under such a definition
-  remains, normal serving, readiness, admissions and apply are refused. Before
-  upgrading, run this version's `coordinatorctl check` on each project and its
-  `coordinatorctl deployment-status` against the deployment, which also checks
-  every run in flight, including runs admitted from an earlier package. If
-  either refuses on this rule, settle or cancel the affected runs with the
-  0.45.0 binaries, then map `request` from the submit step, package and apply
-  again.
+  that breaks it, and a retained run whose definition no longer passes is
+  held. `coordinatorctl deployment-status` lists such runs in `heldRuns`.
+- A live run whose retained definition this version does not restore no
+  longer stops the deployment. Startup, readiness, admissions, apply and every
+  other run continue; only that run is held, with state `attention` and
+  failure code `definition-refused`, audited once before the hold with the
+  restore finding code. Nothing runs for it: the worker never claims it, its
+  deadline does not expire it, and `retry-same`, `reconcile` and `cancel`
+  answer 409 `run.definition-incompatible`. Only a release that accepts its
+  definition can end a held run. `attention=true` lists held runs;
+  `deployment-status` returns `heldRuns` and doctor returns
+  `state.heldRunCount` and `state.heldRuns`, each entry with `runId`,
+  `workflow`, `workflowRevision`, `reason`, `findingCode` and `advice`. A
+  snapshot that cannot be opened or an unreachable database still fails the
+  check and holds nothing.
+- Restore refusals give operator context instead of the authoring
+  suggestion. A pinned package this version does not restore keeps the
+  finding as its code and names its package digest and workflow; a held run
+  names its run id and workflow and carries the finding as `findingCode`.
+  Both point to "Apply and start" in `DEPLOYMENT.md`. `coordinatorctl check`
+  output is unchanged.
 - BREAKING: admission accepts a token only when its exact `sub` is listed in
   the caller policy's `subjects`, and refuses any token carrying an `act` claim;
   both answer 403 `operation.not-authorized`. Add `subjects` to every
