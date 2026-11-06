@@ -15,29 +15,19 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{Read as _, Write as _},
     net::{Ipv4Addr, TcpListener, TcpStream},
-    os::unix::{
-        fs::{OpenOptionsExt as _, PermissionsExt as _},
-        net::{UnixListener, UnixStream},
-    },
+    os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _},
     path::{Path, PathBuf},
     process::{Child, Command, Output, Stdio},
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, OnceLock,
-    },
+    sync::OnceLock,
     thread,
     time::{Duration, Instant},
 };
 
-use base64::{
-    engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
-    Engine as _,
-};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::Utc;
-use p256::ecdsa::{
-    signature::{hazmat::PrehashSigner as _, Signer as _},
-    Signature, SigningKey,
-};
+use p256::ecdsa::{signature::Signer as _, Signature, SigningKey};
+use registry_platform_crypto::document_signature::test_support::TestTransit;
+use registry_platform_crypto::PrivateJwk;
 use serde_json::{json, Value};
 
 const TOKEN_AUDIENCE: &str = "registry-evidence-production-test";
@@ -756,23 +746,6 @@ impl Drop for DevStopGuard {
     }
 }
 
-struct TransitServer {
-    stop: Arc<AtomicBool>,
-    socket: PathBuf,
-    worker: Option<thread::JoinHandle<()>>,
-}
-
-impl Drop for TransitServer {
-    fn drop(&mut self) {
-        self.stop.store(true, Ordering::Release);
-        let _ = UnixStream::connect(&self.socket);
-        if let Some(worker) = self.worker.take() {
-            worker.join().expect("synthetic Transit server");
-        }
-        let _ = fs::remove_file(&self.socket);
-    }
-}
-
 struct SourceProxy {
     docker: PathBuf,
     container_id: String,
@@ -984,41 +957,27 @@ impl Fixture {
         proxy
     }
 
-    fn start_transit(&self) -> TransitServer {
-        let socket = self.root.join("transit-proxy.sock");
-        let listener = UnixListener::bind(&socket).expect("bind synthetic Transit socket");
-        listener
-            .set_nonblocking(true)
-            .expect("synthetic Transit nonblocking listener");
-        let stop = Arc::new(AtomicBool::new(false));
-        let worker_stop = Arc::clone(&stop);
-        let root = self.root.clone();
-        let worker = thread::spawn(move || {
-            while !worker_stop.load(Ordering::Acquire) {
-                match listener.accept() {
-                    Ok((mut stream, _)) => {
-                        if worker_stop.load(Ordering::Acquire) {
-                            break;
-                        }
-                        // Darwin inherits O_NONBLOCK from the listener; wait for
-                        // each complete request within the bounded read timeout.
-                        stream
-                            .set_nonblocking(false)
-                            .expect("synthetic Transit blocking accepted stream");
-                        serve_transit_request(&root, &mut stream);
-                    }
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        thread::sleep(Duration::from_millis(5));
-                    }
-                    Err(error) => panic!("synthetic Transit accept failed: {error}"),
-                }
-            }
-        });
-        TransitServer {
-            stop,
-            socket,
-            worker: Some(worker),
-        }
+    /// Serve the Evidence signing key the staged target binds, version 1 of
+    /// `evidence-signing` on the `transit` mount, at the target's Transit
+    /// socket. The key is the one target staging generated, so stage the
+    /// target first.
+    fn start_transit(&self) -> TestTransit {
+        let key: PrivateJwk = serde_json::from_slice(
+            &fs::read(
+                self.root
+                    .join("transit-evidence-key/signing-p256-private-jwk"),
+            )
+            .expect("Evidence Transit fixture private JWK"),
+        )
+        .expect("Evidence Transit fixture private JWK parses");
+        TestTransit::start(
+            &self.root.join("transit-proxy.sock"),
+            "transit",
+            "evidence-signing",
+            1,
+            &key,
+        )
+        .expect("start the test Transit proxy")
     }
 
     fn stage_authoring_project(&self) {
@@ -1886,209 +1845,6 @@ impl Drop for Fixture {
         }
         let _ = &self.temporary;
     }
-}
-
-fn serve_transit_request(root: &Path, stream: &mut UnixStream) {
-    stream
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .expect("synthetic Transit read timeout");
-    let response = read_transit_request(stream).and_then(|(method, path, body)| {
-        if method == "GET" {
-            let key_name = path
-                .strip_prefix("/v1/transit/keys/")
-                .ok_or("unsupported Transit metadata path")?;
-            transit_metadata(root, key_name)
-        } else if method == "POST" {
-            let key_name = path
-                .strip_prefix("/v1/transit/sign/")
-                .and_then(|path| path.strip_suffix("/sha2-256"))
-                .ok_or("unsupported Transit signing path")?;
-            transit_signature(root, key_name, &body)
-        } else {
-            Err("unsupported Transit method")
-        }
-    });
-    let (status, document) = match response {
-        Ok(document) => (200, document),
-        Err(message) => (400, json!({"errors": [message]})),
-    };
-    let bytes = serde_json::to_vec(&document).expect("synthetic Transit response JSON");
-    let reason = if status == 200 { "OK" } else { "Bad Request" };
-    write!(
-        stream,
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-        bytes.len()
-    )
-    .expect("synthetic Transit response headers");
-    stream
-        .write_all(&bytes)
-        .expect("synthetic Transit response body");
-}
-
-fn read_transit_request(
-    stream: &mut UnixStream,
-) -> Result<(String, String, Vec<u8>), &'static str> {
-    let mut request = Vec::new();
-    let header_end = loop {
-        let mut chunk = [0_u8; 4096];
-        let read = stream
-            .read(&mut chunk)
-            .map_err(|_| "Transit request could not be read")?;
-        if read == 0 {
-            return Err("Transit request ended before its headers");
-        }
-        request.extend_from_slice(&chunk[..read]);
-        if request.len() > 128 * 1024 {
-            return Err("Transit request exceeded the fixture bound");
-        }
-        if let Some(position) = request.windows(4).position(|bytes| bytes == b"\r\n\r\n") {
-            break position + 4;
-        }
-    };
-    let headers = std::str::from_utf8(&request[..header_end])
-        .map_err(|_| "Transit request headers were not UTF-8")?;
-    let mut lines = headers.lines();
-    let mut request_line = lines
-        .next()
-        .ok_or("Transit request line was missing")?
-        .split_whitespace();
-    let method = request_line
-        .next()
-        .ok_or("Transit request method was missing")?
-        .to_owned();
-    let path = request_line
-        .next()
-        .ok_or("Transit request path was missing")?
-        .to_owned();
-    let content_length = lines
-        .filter_map(|line| line.split_once(':'))
-        .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
-        .map(|(_, value)| value.trim().parse::<usize>())
-        .transpose()
-        .map_err(|_| "Transit content length was invalid")?
-        .unwrap_or(0);
-    if content_length > 64 * 1024 {
-        return Err("Transit request body exceeded the fixture bound");
-    }
-    while request.len() < header_end + content_length {
-        let mut chunk = [0_u8; 4096];
-        let read = stream
-            .read(&mut chunk)
-            .map_err(|_| "Transit request body could not be read")?;
-        if read == 0 {
-            return Err("Transit request ended before its body");
-        }
-        request.extend_from_slice(&chunk[..read]);
-    }
-    Ok((
-        method,
-        path,
-        request[header_end..header_end + content_length].to_vec(),
-    ))
-}
-
-fn transit_metadata(root: &Path, key_name: &str) -> Result<Value, &'static str> {
-    let private = transit_private_jwk(root, key_name)?;
-    let public_key = transit_public_pem(&private)?;
-    Ok(json!({
-        "data": {
-            "type": "ecdsa-p256",
-            "derived": false,
-            "exportable": false,
-            "allow_plaintext_backup": false,
-            "supports_signing": true,
-            "latest_version": 1,
-            "min_encryption_version": 1,
-            "keys": {"1": {"public_key": public_key}}
-        }
-    }))
-}
-
-fn transit_signature(root: &Path, key_name: &str, body: &[u8]) -> Result<Value, &'static str> {
-    let private = transit_private_jwk(root, key_name)?;
-    let request: Value =
-        serde_json::from_slice(body).map_err(|_| "Transit signing JSON invalid")?;
-    if request["key_version"] != "1"
-        || request["marshaling_algorithm"] != "jws"
-        || request["prehashed"] != true
-    {
-        return Err("Transit signing contract invalid");
-    }
-    let digest = request["input"]
-        .as_str()
-        .ok_or("Transit signing input missing")
-        .and_then(|input| {
-            STANDARD
-                .decode(input)
-                .map_err(|_| "Transit signing input invalid")
-        })?;
-    if digest.len() != 32 {
-        return Err("Transit signing digest invalid");
-    }
-    let secret = private["d"]
-        .as_str()
-        .ok_or("Transit private JWK scalar missing")
-        .and_then(|value| {
-            URL_SAFE_NO_PAD
-                .decode(value)
-                .map_err(|_| "Transit private JWK scalar invalid")
-        })?;
-    let key = SigningKey::from_slice(&secret).map_err(|_| "Transit private JWK invalid")?;
-    let signature: Signature = key
-        .sign_prehash(&digest)
-        .map_err(|_| "Transit signing failed")?;
-    Ok(json!({
-        "data": {
-            "signature": format!("vault:v1:{}", URL_SAFE_NO_PAD.encode(signature.to_bytes()))
-        }
-    }))
-}
-
-fn transit_private_jwk(root: &Path, key_name: &str) -> Result<Value, &'static str> {
-    let path = match key_name {
-        "evidence-signing" => root.join("transit-evidence-key/signing-p256-private-jwk"),
-        _ => return Err("unknown Transit key"),
-    };
-    let bytes = fs::read(path).map_err(|_| "Transit fixture key unavailable")?;
-    serde_json::from_slice(&bytes).map_err(|_| "Transit fixture key invalid")
-}
-
-fn transit_public_pem(private: &Value) -> Result<String, &'static str> {
-    let x = private["x"]
-        .as_str()
-        .ok_or("Transit public JWK x missing")
-        .and_then(|value| {
-            URL_SAFE_NO_PAD
-                .decode(value)
-                .map_err(|_| "Transit public JWK x invalid")
-        })?;
-    let y = private["y"]
-        .as_str()
-        .ok_or("Transit public JWK y missing")
-        .and_then(|value| {
-            URL_SAFE_NO_PAD
-                .decode(value)
-                .map_err(|_| "Transit public JWK y invalid")
-        })?;
-    if x.len() != 32 || y.len() != 32 {
-        return Err("Transit public JWK coordinate invalid");
-    }
-    let mut spki = vec![
-        0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06, 0x08,
-        0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, 0x03, 0x42, 0x00, 0x04,
-    ];
-    spki.extend_from_slice(&x);
-    spki.extend_from_slice(&y);
-    let encoded = STANDARD.encode(spki);
-    let body = encoded
-        .as_bytes()
-        .chunks(64)
-        .map(|line| std::str::from_utf8(line).expect("base64 is ASCII"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    Ok(format!(
-        "-----BEGIN PUBLIC KEY-----\n{body}\n-----END PUBLIC KEY-----\n"
-    ))
 }
 
 fn read_json_document(path: &Path) -> Value {

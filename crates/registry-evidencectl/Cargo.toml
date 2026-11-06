@@ -75,4 +75,5 @@ required-features = ["schema"]
 registry-adapter-engine.workspace = true
 registry-evidence.workspace = true
 registry-evidence-authoring.workspace = true
+registry-platform-crypto = { workspace = true, features = ["test-support"] }
 tower.workspace = true
