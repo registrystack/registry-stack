@@ -608,7 +608,7 @@ fn problem_response(problem: &RenderProblem, trace: Option<&str>) -> Response {
             ProblemKind::TimestampFailed => "The timestamp authority did not timestamp the seal; no document was sealed.",
             ProblemKind::DocumentNotSealable => "This document type declares no seal; use the render route.",
             ProblemKind::SealClientNotAllowed => "This client is not allowed to use this document type's seal.",
-            _ => "The render request was refused; use the problem code and the operator diagnostics to correct it.",
+            _ => "The request was refused; use the problem code and the operator diagnostics to correct it.",
         }),
         code: problem.kind.http_code(),
         trace_id: context.trace_id.clone(),

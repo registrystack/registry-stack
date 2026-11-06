@@ -1075,7 +1075,7 @@ fn each_authorization_refusal_has_its_own_problem() {
             "/v1/seal/missing",
             400,
             "render.unknown-document",
-            "",
+            "The request was refused",
         ),
     ];
     for (token, route, status, code, guidance) in cases {
