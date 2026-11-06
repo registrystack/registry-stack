@@ -175,6 +175,13 @@ async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
                 "test-only seal: its documents are not official"
             );
         }
+        if !seal.allows_document_signing_purpose() {
+            tracing::warn!(
+                target: "registry_render::seal",
+                seal_id = %id,
+                "seal certificate purpose excludes document signing"
+            );
+        }
         match seal.availability(now) {
             Err(unavailable) => tracing::warn!(
                 target: "registry_render::seal",

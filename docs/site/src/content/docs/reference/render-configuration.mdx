@@ -117,6 +117,7 @@ Serve and `check` report these as runtime problems at the position of the key.
 | `render.runtime.seal-certificate-expired` | warning | The certificate is expired; the seal is unavailable. |
 | `render.runtime.seal-certificate-not-yet-valid` | warning | The certificate is not yet valid; the seal is unavailable. |
 | `render.runtime.seal-certificate-expiring` | warning | The certificate expires within 30 days. |
+| `render.runtime.seal-certificate-purpose` | warning | The certificate's extended key usage names none of document signing (RFC 9336 or Microsoft's), Adobe Authentic Documents, email protection or anyExtendedKeyUsage; validators such as Acrobat flag its seals. `serve` logs it at startup too. |
 
 Without `--environment`, `check` reads no chain file and says so: the human output ends with
 `seal chains not read: pass --environment to check them`, and the JSON report has

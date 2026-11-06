@@ -1011,6 +1011,29 @@ fn serve_warns_at_startup_about_a_seal_that_cannot_sign_or_expires_soon() {
     let server = start_server(&healthy);
     assert!(seal_startup_warnings(&server, "seal unavailable").is_empty());
     assert!(seal_startup_warnings(&server, "seal certificate expiring").is_empty());
+    assert!(seal_startup_warnings(&server, PURPOSE_WARNING).is_empty());
+}
+
+const PURPOSE_WARNING: &str = "seal certificate purpose excludes document signing";
+
+/// A seal certificate whose extended key usage names only other purposes
+/// still seals, but validators such as Acrobat flag the signer, so `serve`
+/// says so once at startup.
+#[test]
+fn serve_warns_at_startup_about_a_seal_certificate_not_meant_for_documents() {
+    let seal = seal_pki()
+        .issue_seal_with(SigningAlgorithm::Es256, |params| {
+            params.extended_key_usages = vec![rcgen::ExtendedKeyUsagePurpose::ServerAuth];
+        })
+        .unwrap();
+    let fixture = deployment(Some(SealSpec {
+        tsa_url: None,
+        seal,
+        key_of: None,
+    }));
+    let server = start_server(&fixture);
+    assert_eq!(seal_startup_warnings(&server, PURPOSE_WARNING).len(), 1);
+    assert_eq!(seal_json(&fixture, &server)["seal"]["id"], "ministry");
 }
 
 #[test]

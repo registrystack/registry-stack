@@ -13,7 +13,7 @@ use std::collections::HashSet;
 use std::fmt;
 use thiserror::Error;
 use time::OffsetDateTime;
-use x509_cert::ext::pkix::KeyUsage;
+use x509_cert::ext::pkix::{ExtendedKeyUsage, KeyUsage};
 use x509_cert::name::Name;
 use x509_cert::spki::SubjectPublicKeyInfoOwned;
 use x509_cert::time::Time as X509Time;
@@ -235,6 +235,42 @@ impl CertificateChain {
     #[must_use]
     pub fn may_sign(&self) -> bool {
         self.leaf_may_sign().unwrap_or(false)
+    }
+
+    /// Whether the seal certificate's purposes allow signing documents: it
+    /// has no extended key usage, or one that lists anyExtendedKeyUsage,
+    /// document signing (RFC 9336, or Microsoft's), Adobe Authentic
+    /// Documents or email protection. Validators such as Acrobat flag a
+    /// signer whose extended key usage names only other purposes, so a
+    /// caller warns rather than refuses. A malformed or repeated extension
+    /// counts as not allowing it.
+    #[must_use]
+    pub fn allows_document_signing_purpose(&self) -> bool {
+        let mut extensions = self
+            .leaf()
+            .parsed
+            .tbs_certificate
+            .extensions
+            .iter()
+            .flatten()
+            .filter(|extension| extension.extn_id == oid::EXTENDED_KEY_USAGE);
+        let extension = match (extensions.next(), extensions.next()) {
+            (None, _) => return true,
+            (Some(extension), None) => extension,
+            (Some(_), Some(_)) => return false,
+        };
+        ExtendedKeyUsage::from_der(extension.extn_value.as_bytes()).is_ok_and(|usage| {
+            usage.0.iter().any(|purpose| {
+                [
+                    oid::ANY_EXTENDED_KEY_USAGE,
+                    oid::KP_DOCUMENT_SIGNING,
+                    oid::MICROSOFT_DOCUMENT_SIGNING,
+                    oid::ADOBE_AUTHENTIC_DOCUMENTS,
+                    oid::KP_EMAIL_PROTECTION,
+                ]
+                .contains(purpose)
+            })
+        })
     }
 
     /// Refuse a provider key the seal certificate does not hold.

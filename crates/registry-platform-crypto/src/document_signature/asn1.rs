@@ -102,6 +102,21 @@ pub(super) mod oid {
     /// id-kp-timeStamping, RFC 5280 section 4.2.1.12.
     pub(crate) const KP_TIME_STAMPING: ObjectIdentifier =
         ObjectIdentifier::new_unwrap("1.3.6.1.5.5.7.3.8");
+    /// anyExtendedKeyUsage, RFC 5280 section 4.2.1.12.
+    pub(crate) const ANY_EXTENDED_KEY_USAGE: ObjectIdentifier =
+        ObjectIdentifier::new_unwrap("2.5.29.37.0");
+    /// id-kp-emailProtection, RFC 5280 section 4.2.1.12.
+    pub(crate) const KP_EMAIL_PROTECTION: ObjectIdentifier =
+        ObjectIdentifier::new_unwrap("1.3.6.1.5.5.7.3.4");
+    /// id-kp-documentSigning, RFC 9336.
+    pub(crate) const KP_DOCUMENT_SIGNING: ObjectIdentifier =
+        ObjectIdentifier::new_unwrap("1.3.6.1.5.5.7.3.36");
+    /// Microsoft's document signing purpose.
+    pub(crate) const MICROSOFT_DOCUMENT_SIGNING: ObjectIdentifier =
+        ObjectIdentifier::new_unwrap("1.3.6.1.4.1.311.10.3.12");
+    /// Adobe Authentic Documents Trust.
+    pub(crate) const ADOBE_AUTHENTIC_DOCUMENTS: ObjectIdentifier =
+        ObjectIdentifier::new_unwrap("1.2.840.113583.1.1.5");
 
     /// id-at-organizationName, RFC 5280 appendix A.1.
     pub(crate) const ORGANIZATION_NAME: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.5.4.10");

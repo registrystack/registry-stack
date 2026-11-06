@@ -300,7 +300,10 @@ signing:
 Run `registry-render check --bundle <package> --runtime-config runtime.yaml --environment`. It
 reads each chain file, never the key, and it fails on an unreadable or malformed chain, a seal
 certificate without a signing key usage, or a chain too large for the signature space. It warns
-about a certificate that is expired, not yet valid, or expires within 30 days. When `serve`
+about a certificate that is expired, not yet valid, or expires within 30 days, and about one whose
+extended key usage names no document-signing purpose (`render.runtime.seal-certificate-purpose`):
+validators such as Acrobat flag its seals, so `serve` also logs a `seal certificate purpose
+excludes document signing` warning for it at startup. When `serve`
 starts, it also checks that the key matches the certificate, and it refuses to start if it does
 not. If the runtime names a seal the package does not use, or the package names a seal the
 runtime does not bind, `check` reports it, and `serve` refuses the second case. If the package
