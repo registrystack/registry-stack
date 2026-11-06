@@ -16,7 +16,7 @@ registry-platform-canonical-json = { workspace = true }
 registry-platform-config = { workspace = true }
 registry-platform-oidc = { workspace = true }
 jsonwebtoken = { workspace = true }
-registry-platform-crypto = { workspace = true }
+registry-platform-crypto = { workspace = true, features = ["cms-signing"] }
 registry-platform-httpsec = { workspace = true, features = ["server"] }
 registry-platform-yaml = { workspace = true }
 typst = { workspace = true }
@@ -28,11 +28,13 @@ axum = { workspace = true }
 base64 = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true }
+hayro-syntax = { workspace = true }
 hex = { workspace = true }
 jsonschema = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
+pdf-writer = { workspace = true }
 rustix = { workspace = true }
 schemars = { workspace = true, optional = true }
 subtle = { workspace = true }
@@ -43,6 +45,7 @@ tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
+rcgen = { workspace = true }
 registry-render-client.workspace = true
 tempfile = { workspace = true }
 tower = { workspace = true }
