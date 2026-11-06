@@ -175,14 +175,20 @@ pub struct Seal {
     signing: SigningPayload,
     timestamp: Option<TimestampAuthority>,
     allowed_clients: Vec<String>,
-    /// Held while one caller probes a signer that is not ready, so a burst
-    /// of requests sends the provider one probe.
-    recovery_probe: tokio::sync::Mutex<()>,
+    /// Held by the recovery probe in flight, so a burst of requests sends
+    /// the provider one probe at a time. Its value is when the last probe
+    /// that failed ended; see [`Seal::start_signer_probe`].
+    recovery_probe: Arc<tokio::sync::Mutex<Option<tokio::time::Instant>>>,
 }
 
 /// What a recovery probe signs: never a document, so a probe signature
 /// cannot stand in for a seal.
 const SIGNER_PROBE_MESSAGE: &[u8] = b"registry-render-seal-signer-probe-v1";
+
+/// How long after a failed recovery probe ends the next may start, so a
+/// signer that stays not ready is probed at most once a second, however
+/// often it is asked.
+const PROBE_SPACING: std::time::Duration = std::time::Duration::from_secs(1);
 
 impl std::fmt::Debug for Seal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -443,7 +449,7 @@ impl Seal {
             contents_capacity,
             timestamp: None,
             allowed_clients: vec!["records-service".to_owned()],
-            recovery_probe: tokio::sync::Mutex::new(()),
+            recovery_probe: Arc::new(tokio::sync::Mutex::new(None)),
         }
     }
 }
@@ -755,7 +761,7 @@ impl Seal {
             contents_capacity,
             timestamp,
             allowed_clients: seal.allowed_clients.as_slice().to_vec(),
-            recovery_probe: tokio::sync::Mutex::new(()),
+            recovery_probe: Arc::new(tokio::sync::Mutex::new(None)),
         })
     }
 
@@ -799,26 +805,64 @@ impl Seal {
             .any(|client| client == client_id)
     }
 
-    /// Give a signer that said it is not ready one chance to recover: one
-    /// probe signature, which the signer verifies and records in its
-    /// readiness. A Transit signer turns not ready when a call fails, and
-    /// only a later call that succeeds turns it back, so the seal route and
-    /// `/ready` probe before they ask [`Seal::availability`]. A ready signer
-    /// is never called, and concurrent callers share one probe.
+    /// Give a signer that said it is not ready a chance to recover by
+    /// starting a probe: one probe signature, which the signer verifies and
+    /// records in its readiness. A Transit signer turns not ready when a
+    /// call fails, and only a later call that succeeds turns it back, so the
+    /// seal route and `/ready` start a probe before they ask
+    /// [`Seal::availability`].
+    ///
+    /// The probe runs as its own task and holds the probe lock until it
+    /// ends, so a caller that goes away cannot release it. A probe starts
+    /// only when the signer reports not ready, no probe is in flight, and
+    /// [`PROBE_SPACING`] has passed since the last probe that failed ended.
+    /// A probe that recovers the signer clears that end, so the first probe
+    /// after the signer turns not ready again starts at once. Returns the
+    /// probe's handle; dropping it leaves the probe running.
+    pub fn start_signer_probe(&self) -> Option<tokio::task::JoinHandle<()>> {
+        let Ok(mut failed_at) = Arc::clone(&self.recovery_probe).try_lock_owned() else {
+            return None;
+        };
+        // Read under the lock: a probe that just finished has set both.
+        if self.signer.readiness() != KeyReadiness::NotReady
+            || failed_at.is_some_and(|ended| ended.elapsed() < PROBE_SPACING)
+        {
+            return None;
+        }
+        let signer = Arc::clone(&self.signer);
+        let seal_id = self.id.clone();
+        Some(tokio::spawn(async move {
+            // The signer has verified the probe signature and recorded its
+            // readiness; the signature itself is not needed.
+            *failed_at = match signer.sign(SIGNER_PROBE_MESSAGE).await {
+                Ok(_) => None,
+                Err(error) => {
+                    tracing::warn!(
+                        target: "registry_render::seal",
+                        seal_id = %seal_id,
+                        %error,
+                        "seal signer is still not ready"
+                    );
+                    Some(tokio::time::Instant::now())
+                }
+            };
+        }))
+    }
+
+    /// Start a probe as [`Seal::start_signer_probe`] does and wait for it to
+    /// end, so the seal route reads [`Seal::availability`] after it. A ready
+    /// signer is never called, and a caller that finds a probe in flight or
+    /// held off does not wait.
     pub async fn recover_signer(&self) {
-        let Ok(_probe) = self.recovery_probe.try_lock() else {
+        let Some(probe) = self.start_signer_probe() else {
             return;
         };
-        // Read under the lock: a probe that just finished has set it.
-        if self.signer.readiness() != KeyReadiness::NotReady {
-            return;
-        }
-        if let Err(error) = self.signer.sign(SIGNER_PROBE_MESSAGE).await {
-            tracing::warn!(
+        if let Err(error) = probe.await {
+            tracing::error!(
                 target: "registry_render::seal",
                 seal_id = %self.id,
-                %error,
-                "seal signer is still not ready"
+                panicked = error.is_panic(),
+                "seal signer probe did not finish"
             );
         }
     }
@@ -1559,12 +1603,14 @@ mod tests {
     }
 
     /// A signer whose readiness follows its last signature, as a Transit
-    /// signer's does, and whose signatures succeed while `healthy` is set.
+    /// signer's does, whose signatures succeed while `healthy` is set, and
+    /// each of whose calls takes `takes`.
     struct ProbedSigner {
         inner: LocalJwkSigner,
         healthy: std::sync::atomic::AtomicBool,
         ready: std::sync::atomic::AtomicBool,
         calls: AtomicUsize,
+        takes: std::time::Duration,
     }
 
     #[async_trait::async_trait]
@@ -1591,7 +1637,7 @@ mod tests {
 
         async fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, SigningError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            tokio::time::sleep(self.takes).await;
             let healthy = self.healthy.load(Ordering::SeqCst);
             self.ready.store(healthy, Ordering::SeqCst);
             if healthy {
@@ -1602,11 +1648,9 @@ mod tests {
         }
     }
 
-    /// A signer that turned not ready gets one probe per recovery, shared by
-    /// concurrent callers, and the seal is available again once the probe
-    /// signs; a ready signer is never probed.
-    #[tokio::test]
-    async fn a_signer_that_turned_not_ready_is_probed_once_and_recovers() {
+    /// A seal whose signer is not ready and fails until it is made
+    /// healthy, each call taking `takes`.
+    fn probed_seal(takes: std::time::Duration) -> (Arc<ProbedSigner>, Arc<Seal>) {
         let pki = TestPki::generate().expect("test PKI");
         let test_seal = pki.issue_seal(SigningAlgorithm::Es256).expect("test seal");
         let signer = Arc::new(ProbedSigner {
@@ -1614,8 +1658,18 @@ mod tests {
             healthy: std::sync::atomic::AtomicBool::new(false),
             ready: std::sync::atomic::AtomicBool::new(false),
             calls: AtomicUsize::new(0),
+            takes,
         });
         let seal = Seal::for_test("ministry", &test_seal, Arc::clone(&signer) as _);
+        (signer, Arc::new(seal))
+    }
+
+    /// A signer that turned not ready gets one probe at a time, shared by
+    /// concurrent callers, and the seal is available again once a probe
+    /// signs; a ready signer is never probed.
+    #[tokio::test(start_paused = true)]
+    async fn a_signer_that_turned_not_ready_is_probed_once_and_recovers() {
+        let (signer, seal) = probed_seal(std::time::Duration::from_millis(20));
         let now = OffsetDateTime::now_utc();
 
         tokio::join!(seal.recover_signer(), seal.recover_signer());
@@ -1623,6 +1677,7 @@ mod tests {
         assert_eq!(seal.availability(now), Err(Unavailable::SignerNotReady));
 
         signer.healthy.store(true, Ordering::SeqCst);
+        tokio::time::advance(PROBE_SPACING).await;
         seal.recover_signer().await;
         assert_eq!(signer.calls.load(Ordering::SeqCst), 2);
         assert_eq!(seal.availability(now), Ok(()));
@@ -1632,6 +1687,85 @@ mod tests {
             signer.calls.load(Ordering::SeqCst),
             2,
             "a ready signer is not probed"
+        );
+    }
+
+    /// A failed probe holds off the next until [`PROBE_SPACING`] after it
+    /// ended, not after it started, so a probe that waited out a long
+    /// timeout is not retried at once. A probe that recovers the signer
+    /// leaves nothing to wait for: the first probe after the signer turns
+    /// not ready again starts at once.
+    #[tokio::test(start_paused = true)]
+    async fn a_failed_probe_holds_off_the_next_from_when_it_ended() {
+        let (signer, seal) = probed_seal(std::time::Duration::from_secs(30));
+        let now = OffsetDateTime::now_utc();
+
+        seal.recover_signer().await;
+        assert_eq!(signer.calls.load(Ordering::SeqCst), 1);
+        assert!(
+            seal.start_signer_probe().is_none(),
+            "no probe straight after a failed one"
+        );
+        tokio::time::advance(PROBE_SPACING - std::time::Duration::from_millis(1)).await;
+        assert!(
+            seal.start_signer_probe().is_none(),
+            "no probe within the spacing of the failed probe's end"
+        );
+        tokio::time::advance(std::time::Duration::from_millis(1)).await;
+        signer.healthy.store(true, Ordering::SeqCst);
+        seal.start_signer_probe()
+            .expect("a probe once the spacing has passed")
+            .await
+            .expect("the probe ends");
+        assert_eq!(signer.calls.load(Ordering::SeqCst), 2);
+        assert_eq!(seal.availability(now), Ok(()));
+
+        // A seal's own signature fails, and the signer turns not ready.
+        signer.healthy.store(false, Ordering::SeqCst);
+        assert!(signer.sign(b"a document digest").await.is_err());
+        assert_eq!(seal.availability(now), Err(Unavailable::SignerNotReady));
+        signer.healthy.store(true, Ordering::SeqCst);
+        seal.start_signer_probe()
+            .expect("the first probe after the signer turns not ready is not held off")
+            .await
+            .expect("the probe ends");
+        assert_eq!(signer.calls.load(Ordering::SeqCst), 4);
+        assert_eq!(seal.availability(now), Ok(()));
+    }
+
+    /// The probe holds the probe lock itself. A caller that goes away
+    /// mid-probe, as a disconnected client's request does, neither releases
+    /// the lock nor stops the probe, which still records its result.
+    #[tokio::test(start_paused = true)]
+    async fn a_caller_that_goes_away_leaves_its_probe_running_and_holding_the_lock() {
+        let (signer, seal) = probed_seal(std::time::Duration::from_millis(20));
+        let now = OffsetDateTime::now_utc();
+        signer.healthy.store(true, Ordering::SeqCst);
+
+        let caller = tokio::spawn({
+            let seal = Arc::clone(&seal);
+            async move { seal.recover_signer().await }
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        assert_eq!(
+            signer.calls.load(Ordering::SeqCst),
+            1,
+            "the probe is signing"
+        );
+        caller.abort();
+        assert!(caller.await.expect_err("the caller is gone").is_cancelled());
+        assert!(
+            seal.start_signer_probe().is_none(),
+            "the probe still holds the lock"
+        );
+        assert_eq!(seal.availability(now), Err(Unavailable::SignerNotReady));
+
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        assert_eq!(signer.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            seal.availability(now),
+            Ok(()),
+            "the probe finished and recorded its result"
         );
     }
 

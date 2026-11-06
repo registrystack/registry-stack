@@ -231,12 +231,14 @@ The problems specific to this route, from a closed vocabulary shared with the re
 `/ready` adds `signing`, one member per seal: `{"status": "ready"}` or `{"status": "not-ready",
 "reason": ...}` with `certificate-expired`, `certificate-not-yet-valid`, or `signer-not-ready`,
 plus `"testOnly": true` for a test-only seal. It never changes the status code. A `transit`
-seal turns `signer-not-ready` when a signature fails; each `/ready` call and each seal request
-then has Transit sign one probe message, one at a time, and the seal is ready again once a probe
-succeeds, with no restart. At startup,
-`serve` logs a `seal unavailable` warning with `seal_id` and the same `reason` for each seal that
-cannot sign, and a `seal certificate expiring` warning for one whose certificate expires within
-30 days.
+seal turns `signer-not-ready` when a signature fails; `/ready` calls and seal requests then start
+probes that have Transit sign one probe message, and the seal can sign again once a probe
+succeeds, with no restart. A seal has at most one probe in flight, and after a failed probe the
+next starts no sooner than one second after it ended. `/ready` starts the probe and never waits
+for it, so a recovery shows on a later call; a seal request waits for the probe it starts. At
+startup, `serve` logs a `seal unavailable` warning with `seal_id` and the same `reason` for each
+seal that cannot sign, and a `seal certificate expiring` warning for one whose certificate expires
+within 30 days.
 
 Each seal call adds `sealId` to its audit entries, and `testOnly: true` when the seal is
 test-only. The response entry adds `documentDigest`,

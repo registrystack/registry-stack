@@ -11,7 +11,7 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -517,6 +517,15 @@ impl Fixture {
             .signatures()
     }
 
+    /// Stop the Transit proxy and put a [`StubTransit`] that cannot sign on
+    /// its socket.
+    fn replace_transit(&mut self, mode: StubMode) -> StubTransit {
+        self.transit = None;
+        let socket = self.home.join("transit.sock");
+        std::fs::remove_file(&socket).expect("the stopped proxy's socket file");
+        StubTransit::start(&socket, mode)
+    }
+
     fn audit(&self) -> Vec<serde_json::Value> {
         std::fs::read_to_string(self.home.join("audit/render.jsonl"))
             .unwrap_or_default()
@@ -525,6 +534,127 @@ impl Fixture {
             .map(|line| serde_json::from_str(line).expect("one JSON entry per line"))
             .collect()
     }
+}
+
+/// What a [`StubTransit`] does with each connection.
+#[derive(Clone, Copy)]
+enum StubMode {
+    /// Take the connection and never answer, as a proxy stalled on its
+    /// Vault does.
+    Stall,
+    /// Answer each request with a 503, as a proxy whose Vault refuses does.
+    Fail,
+}
+
+/// A Transit proxy that cannot sign. It records when it takes each
+/// connection and counts the sign requests it reads.
+struct StubTransit {
+    accepted: Arc<Mutex<Vec<Instant>>>,
+    sign_requests: Arc<AtomicUsize>,
+    stop: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl StubTransit {
+    fn start(socket: &Path, mode: StubMode) -> Self {
+        let listener =
+            std::os::unix::net::UnixListener::bind(socket).expect("bind the stub Transit proxy");
+        listener
+            .set_nonblocking(true)
+            .expect("a nonblocking stub listener");
+        let accepted = Arc::new(Mutex::new(Vec::new()));
+        let sign_requests = Arc::new(AtomicUsize::new(0));
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread = std::thread::spawn({
+            let accepted = Arc::clone(&accepted);
+            let sign_requests = Arc::clone(&sign_requests);
+            let stop = Arc::clone(&stop);
+            move || {
+                // A stalled connection stays open until the stub stops.
+                let mut held = Vec::new();
+                while !stop.load(Ordering::SeqCst) {
+                    let mut stream = match listener.accept() {
+                        Ok((stream, _)) => stream,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            std::thread::sleep(Duration::from_millis(5));
+                            continue;
+                        }
+                        Err(error) => panic!("the stub Transit proxy cannot accept: {error}"),
+                    };
+                    accepted.lock().unwrap().push(Instant::now());
+                    match mode {
+                        StubMode::Stall => held.push(stream),
+                        StubMode::Fail => {
+                            stream.set_nonblocking(false).unwrap();
+                            stream
+                                .set_read_timeout(Some(Duration::from_secs(5)))
+                                .unwrap();
+                            let head = read_request(&mut stream);
+                            if head.starts_with("POST ") && head.contains("/sign/") {
+                                sign_requests.fetch_add(1, Ordering::SeqCst);
+                            }
+                            stream
+                                .write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                                .expect("answer the sign request");
+                        }
+                    }
+                }
+            }
+        });
+        Self {
+            accepted,
+            sign_requests,
+            stop,
+            thread: Some(thread),
+        }
+    }
+
+    /// When the stub took each connection, in order.
+    fn accepted(&self) -> Vec<Instant> {
+        self.accepted.lock().unwrap().clone()
+    }
+
+    /// The sign requests the stub has read.
+    fn sign_requests(&self) -> usize {
+        self.sign_requests.load(Ordering::SeqCst)
+    }
+}
+
+impl Drop for StubTransit {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(thread) = self.thread.take() {
+            thread.join().expect("the stub Transit proxy stops");
+        }
+    }
+}
+
+/// Read one HTTP request, head and body, and return its head.
+fn read_request(stream: &mut std::os::unix::net::UnixStream) -> String {
+    let mut raw = Vec::new();
+    let mut chunk = [0_u8; 4096];
+    let split = loop {
+        if let Some(split) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
+            break split;
+        }
+        let read = stream.read(&mut chunk).expect("read the request");
+        assert_ne!(read, 0, "the request ended before its head did");
+        raw.extend_from_slice(&chunk[..read]);
+    };
+    let head = String::from_utf8_lossy(&raw[..split]).into_owned();
+    let length: usize = head
+        .lines()
+        .filter_map(|line| line.split_once(':'))
+        .find(|(name, _)| name.trim().eq_ignore_ascii_case("content-length"))
+        .map_or(0, |(_, value)| {
+            value.trim().parse().expect("a content length")
+        });
+    while raw.len() < split + 4 + length {
+        let read = stream.read(&mut chunk).expect("read the request body");
+        assert_ne!(read, 0, "the request ended before its body did");
+        raw.extend_from_slice(&chunk[..read]);
+    }
+    head
 }
 
 struct Server {
@@ -1715,28 +1845,197 @@ fn a_transit_seal_is_unavailable_while_its_proxy_is_down_and_recovers_without_a_
     assert_eq!(plain.status, 200, "plain rendering is unaffected");
 
     fixture.restart_transit();
-    assert_eq!(
-        seal_readiness(&server),
-        serde_json::json!({"status": "ready"}),
-        "a readiness probe signs once and finds the proxy back"
-    );
+    // `/ready` starts a probe and never waits for it, so the recovery shows
+    // on a later call.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while seal_readiness(&server) != serde_json::json!({"status": "ready"}) {
+        assert!(
+            Instant::now() < deadline,
+            "no readiness probe found the proxy back"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
     assert_eq!(fixture.transit_signatures(), 1, "the probe's signature");
     seal_json(&fixture, &server);
     assert_eq!(fixture.transit_signatures(), 2);
 
-    // A seal request probes too, so sealing recovers with no `/ready` call.
+    // A seal request probes too, so sealing recovers with no `/ready` call
+    // once the spacing after the last failed probe has passed.
     fixture.stop_transit();
     for _ in 0..2 {
         let refused = post(&server, "/v1/seal/notice", &token, "application/json");
         assert_eq!(refused.status, 503);
     }
     fixture.restart_transit();
-    seal_json(&fixture, &server);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let reply = post(&server, "/v1/seal/notice", &token, "application/json");
+        if reply.status == 200 {
+            break;
+        }
+        assert_eq!(
+            reply.status,
+            503,
+            "{}",
+            String::from_utf8_lossy(&reply.body)
+        );
+        assert!(Instant::now() < deadline, "sealing did not recover");
+        std::thread::sleep(Duration::from_millis(50));
+    }
     assert_eq!(
         fixture.transit_signatures(),
         2,
         "the probe's signature and the seal's"
     );
+}
+
+/// `/ready` never waits on Transit. Against a proxy that takes the
+/// connection and never answers, it answers at once with the seal not
+/// ready while one probe waits out its attempt in the background. A seal
+/// request meanwhile starts no second probe, and SIGTERM neither waits for
+/// the probe nor panics.
+#[test]
+fn ready_answers_at_once_while_a_probe_waits_on_a_stalled_transit_proxy() {
+    let mut fixture = transit_sealed();
+    let text = std::fs::read_to_string(&fixture.runtime_path).unwrap();
+    let patient = text.replacen(
+        "attemptTimeoutMilliseconds: 2000",
+        "attemptTimeoutMilliseconds: 10000",
+        1,
+    );
+    assert!(patient.contains("attemptTimeoutMilliseconds: 10000"));
+    std::fs::write(&fixture.runtime_path, patient).unwrap();
+    let mut server = start_server(&fixture);
+    let token = fixture.token("render:seal", SEAL_CLIENT);
+
+    // A refused connection fails the next seal at once and turns the signer
+    // not ready; then the proxy comes back stalled.
+    fixture.stop_transit();
+    let failed = post(&server, "/v1/seal/notice", &token, "application/json");
+    assert_eq!(failed.status, 503);
+    let stub = fixture.replace_transit(StubMode::Stall);
+
+    let polling = Instant::now();
+    let mut answered = 0;
+    while polling.elapsed() < Duration::from_millis(1500) {
+        let asked = Instant::now();
+        let ready = request(server.port, "GET", "/ready", &[], None);
+        let latency = asked.elapsed();
+        assert!(
+            latency < Duration::from_secs(1),
+            "/ready took {latency:?} with the proxy stalled"
+        );
+        assert_eq!(ready.status, 200, "a seal never changes the status code");
+        assert_eq!(
+            ready.json()["signing"]["ministry"],
+            serde_json::json!({"status": "not-ready", "reason": "signer-not-ready"})
+        );
+        answered += 1;
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(answered > 1, "{answered} /ready calls");
+    let asked = Instant::now();
+    let refused = post(&server, "/v1/seal/notice", &token, "application/json");
+    assert!(
+        asked.elapsed() < Duration::from_secs(1),
+        "the seal route waited {:?} on the probe in flight",
+        asked.elapsed()
+    );
+    assert_eq!(refused.status, 503);
+    assert_eq!(refused.json()["code"], "render.signing-unavailable");
+    let accepted = stub.accepted();
+    assert_eq!(
+        accepted.len(),
+        1,
+        "one probe in flight, and nothing else reached the proxy"
+    );
+
+    Command::new("kill")
+        .args(["-TERM", &server.child.id().to_string()])
+        .output()
+        .expect("send SIGTERM");
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let status = loop {
+        if let Some(status) = server.child.try_wait().expect("server status") {
+            break status;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "serve did not exit after SIGTERM"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert!(
+        accepted[0].elapsed() < Duration::from_millis(10000),
+        "serve exited only once the probe's attempt could have timed out"
+    );
+    assert_eq!(status.code(), Some(0), "graceful exit");
+    let output = server_output(&server.stderr);
+    assert!(!output.contains("panicked"), "{output}");
+    let elapsed: Vec<_> = server
+        .log()
+        .into_iter()
+        .filter(|line| {
+            line["fields"]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("elapsed"))
+        })
+        .collect();
+    assert!(elapsed.is_empty(), "the probe held the drain: {elapsed:?}");
+}
+
+/// A burst of anonymous `/ready` calls against a proxy that fails every
+/// sign call sends Transit no more than one probe at a time, a second
+/// after the last one ended. Each failed probe is logged without values.
+#[test]
+fn a_burst_of_ready_calls_sends_transit_at_most_one_probe_a_second() {
+    let mut fixture = transit_sealed();
+    let server = start_server(&fixture);
+    let stub = fixture.replace_transit(StubMode::Fail);
+    let token = fixture.token("render:seal", SEAL_CLIENT);
+    let failed = post(&server, "/v1/seal/notice", &token, "application/json");
+    assert_eq!(failed.status, 503);
+    assert_eq!(stub.sign_requests(), 1, "the seal's own sign call");
+
+    let burst = Instant::now();
+    let callers: Vec<_> = (0..4)
+        .map(|_| {
+            let port = server.port;
+            std::thread::spawn(move || {
+                let mut answered = 0_usize;
+                while burst.elapsed() < Duration::from_millis(1500) {
+                    let ready = request(port, "GET", "/ready", &[], None);
+                    assert_eq!(ready.status, 200, "a seal never changes the status code");
+                    answered += 1;
+                }
+                answered
+            })
+        })
+        .collect();
+    let answered: usize = callers
+        .into_iter()
+        .map(|caller| caller.join().expect("a /ready caller"))
+        .sum();
+    let probes = stub.sign_requests() - 1;
+    assert!(answered >= 10, "the burst made {answered} /ready calls");
+    assert!(
+        (1..=3).contains(&probes),
+        "{probes} probes reached Transit over {answered} /ready calls in 1.5 s"
+    );
+
+    let socket = fixture.home.join("transit.sock").display().to_string();
+    let output = server_output(&server.stderr);
+    assert!(!output.contains(&socket), "the log names no socket path");
+    let failures = server
+        .log()
+        .into_iter()
+        .filter(|line| line["fields"]["message"] == "seal signer is still not ready")
+        .inspect(|line| {
+            assert_eq!(line["level"], "WARN");
+            assert_eq!(line["fields"]["seal_id"], "ministry");
+        })
+        .count();
+    assert!(failures >= 1, "a failed probe is logged");
 }
 
 /// A seal key file serve cannot use names why, and the fix follows: an

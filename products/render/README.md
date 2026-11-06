@@ -179,8 +179,10 @@ signing:
   never leaves Transit. `serve` reads that version's public key, checks that
   the certificate certifies it and signs once at startup, and refuses to
   start otherwise. A Transit seal whose proxy stops answering is
-  `signer-not-ready` until a probe, made by each `/ready` call and seal
-  request, signs again. `type: local-jwk`, for a test seal, reads
+  `signer-not-ready` until a probe signs again. `/ready` calls and seal
+  requests start the probes, at most one in flight per seal and the next no
+  sooner than a second after a failed one ended; `/ready` never waits for
+  one. `type: local-jwk`, for a test seal, reads
   `privateKeyRef`, a file-provider secret reference (`secret:file/<name>`)
   to one ES256, ES384, RS256 or RS384 private JWK; an environment reference
   is refused. A render worker that gained code execution runs as the serving
