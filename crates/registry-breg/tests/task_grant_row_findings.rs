@@ -4,6 +4,9 @@
 //! boundary. The compiler flags a profile, Action target, or Proposal target
 //! that binds no rows, even when the profile requires scopes and purposes.
 
+#[path = "support/membership_fixture.rs"]
+mod membership_fixture;
+
 use registry_breg::{compile_project, parse_project_json, CompileProfile, CompiledRegistry};
 use serde_json::{json, Value};
 
@@ -122,4 +125,33 @@ fn public_record_types_and_standing_profiles_draw_no_finding() {
     permissions["proposals"][0]["operations"] = json!(["edit"]);
     let registry = compile(&standing);
     assert_eq!(unbound_paths(&registry), Vec::<String>::new());
+}
+
+#[test]
+fn membership_bound_task_grant_profile_draws_no_finding() {
+    let mut source = membership_fixture::source("facility");
+    let member = source["accessProfiles"][0]
+        .as_object_mut()
+        .expect("member profile object");
+    member.insert("actorKind".to_owned(), json!("agent"));
+    member.insert("requesterClients".to_owned(), json!(["task-agent"]));
+    member.insert("requiredPurposes".to_owned(), json!(["membership-review"]));
+    member.insert(
+        "taskGrant".to_owned(),
+        json!({"sourceIssuer":"https://casework.example"}),
+    );
+    let registry =
+        membership_fixture::compile(&source).expect("membership-bound task-grant profile compiles");
+    assert_eq!(unbound_paths(&registry), Vec::<String>::new());
+
+    source["accessProfiles"][0]["permissions"]["records"][0]
+        .as_object_mut()
+        .expect("record permission object")
+        .remove("membershipBoundaries");
+    let registry =
+        membership_fixture::compile(&source).expect("unbound task-grant profile compiles");
+    assert_eq!(
+        unbound_paths(&registry),
+        ["recordTypes[id=facility].accessProfiles[id=member].rowBoundaries"]
+    );
 }
