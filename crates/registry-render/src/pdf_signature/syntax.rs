@@ -9,6 +9,14 @@
 //! revision also walks every object in use with a nesting bound, and the
 //! page tree with a depth bound and each node once, because `hayro-syntax`
 //! recurses through both without one and a stack overflow aborts.
+//!
+//! The reader accepts only files whose cross-reference table, trailer and
+//! objects `hayro-syntax` 0.7.2 reads as written. When it cannot, it
+//! rebuilds the table by scanning every byte of the file and reading what
+//! follows each `N G obj` without a depth bound, stream data included, so
+//! each rule here that is stricter than PDF needs says which reading of
+//! `hayro-syntax` it mirrors. The workspace pins that version: a new one
+//! has to be read again against these rules.
 
 use std::ops::Range;
 
@@ -350,7 +358,9 @@ struct XrefEntry {
 /// covering every object, a trailer without `/Prev`, `/XRefStm` or
 /// `/Encrypt`, and nothing after `%%EOF` but one optional EOL. The value of
 /// every object in use must read as a PDF value nested at most `MAX_DEPTH`
-/// deep; a stream's data after its dictionary is not read. The page tree
+/// deep that ends before the table; a stream must be one `hayro-syntax`
+/// reads (`check_stream`), and its data is not read. Every offset, `startxref` and `/Size` must fit the 32-bit
+/// numbers `hayro-syntax` reads them as. The page tree
 /// must nest at most `MAX_PAGE_TREE_DEPTH` nodes deep and reach each node
 /// once.
 pub(super) fn read_revision(pdf: &[u8]) -> Result<Revision, PdfSignatureError> {
@@ -373,7 +383,8 @@ pub(super) fn read_revision(pdf: &[u8]) -> Result<Revision, PdfSignatureError> {
     }
     let (subsections, trailer_keyword) = read_xref_table(pdf, xref_offset + 4, startxref_at)?;
 
-    let trailer_at = skip_space(pdf, trailer_keyword + b"trailer".len());
+    // `hayro-syntax` allows white-space here but not a comment.
+    let trailer_at = skip_whitespace(pdf, trailer_keyword + b"trailer".len());
     let (trailer, trailer_end) = dict_entries(&pdf[..startxref_at], trailer_at)?;
     if skip_space(pdf, trailer_end) != startxref_at {
         return Err(malformed("bytes sit between the trailer and startxref"));
@@ -391,11 +402,16 @@ pub(super) fn read_revision(pdf: &[u8]) -> Result<Revision, PdfSignatureError> {
         return Err(PdfSignatureError::NotSingleRevision);
     }
 
+    // `hayro-syntax` numbers objects with 32-bit signed numbers.
     let size = value(b"Size")
         .and_then(parse_uint)
+        .filter(|size| i32::try_from(*size).is_ok())
         .and_then(|size| u32::try_from(size).ok())
         .ok_or(malformed("the trailer has no numeric /Size"))?;
     let offsets = cover(&subsections, size)?;
+    let last_endstream = pdf[..xref_offset]
+        .windows(b"endstream".len())
+        .rposition(|window| window == b"endstream");
     let mut values = Vec::with_capacity(offsets.len());
     for (number, offset) in offsets.iter().enumerate() {
         let Some(offset) = offset else {
@@ -409,9 +425,17 @@ pub(super) fn read_revision(pdf: &[u8]) -> Result<Revision, PdfSignatureError> {
                 "a cross-reference entry does not point at its object",
             ))?;
         // `hayro-syntax` recurses without a depth limit; walking every
-        // object here first keeps its recursion within `MAX_DEPTH`.
+        // object here first keeps its recursion within `MAX_DEPTH`. The
+        // value is read in the whole file, as `hayro-syntax` reads it, so
+        // a token that runs on into `xref` is one token here too.
         let value = skip_space(pdf, body);
-        value_at(&pdf[..xref_offset], value, 0)?;
+        let end = value_at(pdf, value, 0)?;
+        if end > xref_offset {
+            return Err(malformed("an object runs into the cross-reference table"));
+        }
+        if pdf[value..].starts_with(b"<<") {
+            check_stream(&pdf[..xref_offset], value, end, last_endstream)?;
+        }
         values.push(Some(value));
     }
 
@@ -455,7 +479,9 @@ fn read_tail(pdf: &[u8]) -> Result<(usize, usize), PdfSignatureError> {
         .ok_or(malformed("the file has no startxref"))?;
     let digits_start = skip_whitespace(pdf, startxref_at + b"startxref".len());
     let digits_stop = digits_end(pdf, digits_start);
+    // `hayro-syntax` reads the offset as a 32-bit signed number.
     let xref_offset = parse_uint(&pdf[digits_start..digits_stop])
+        .and_then(|offset| i32::try_from(offset).ok())
         .and_then(|offset| usize::try_from(offset).ok())
         .ok_or(malformed("startxref has no offset"))?;
     let eof_at = skip_whitespace(pdf, digits_stop);
@@ -524,7 +550,9 @@ fn xref_entry(entry: &[u8]) -> Result<XrefEntry, PdfSignatureError> {
     let shaped = entry[10] == b' '
         && entry[16] == b' '
         && matches!(&entry[18..20], b" \r" | b" \n" | b"\r\n");
-    let offset = parse_uint(&entry[..10]);
+    // `hayro-syntax` reads every entry's offset, free or in use, as a
+    // 32-bit number and drops the whole table when one does not fit.
+    let offset = parse_uint(&entry[..10]).filter(|offset| u32::try_from(*offset).is_ok());
     let generation = parse_uint(&entry[11..16]);
     match (shaped, offset, generation, entry[17]) {
         (true, Some(offset), Some(generation), kind @ (b'n' | b'f')) => Ok(XrefEntry {
@@ -574,6 +602,52 @@ fn cover(subsections: &[Subsection], size: u32) -> Result<Vec<Option<usize>>, Pd
         ));
     }
     Ok(offsets)
+}
+
+/// If the dictionary at `dict..dict_end` opens a stream, check it is one
+/// `hayro-syntax` reads. Its stream reader gives up on a stream that names
+/// an external file, one whose `stream` keyword is not followed by an
+/// end-of-line, and one with no `endstream` after its data; an object it
+/// gives up on is missing from its object list, which is all the signature
+/// check sees. `/FFilter` and `/FDecodeParms` belong to an external file
+/// too. A comment before the keyword is refused because the reader's
+/// fallback finds the first `stream` after the dictionary, comments
+/// included. `last_endstream` is the offset of the last `endstream` in
+/// `objects`. The stream's data is not read.
+fn check_stream(
+    objects: &[u8],
+    dict: usize,
+    dict_end: usize,
+    last_endstream: Option<usize>,
+) -> Result<(), PdfSignatureError> {
+    let keyword = skip_space(objects, dict_end);
+    if !objects[keyword..].starts_with(b"stream") {
+        return Ok(());
+    }
+    if skip_whitespace(objects, dict_end) != keyword {
+        return Err(malformed("a comment sits before a stream keyword"));
+    }
+    let after = keyword + b"stream".len();
+    let data = match &objects[after..] {
+        [b'\r', b'\n', ..] => after + 2,
+        [b'\n', ..] => after + 1,
+        _ => {
+            return Err(malformed(
+                "a stream keyword is not followed by an end-of-line",
+            ));
+        }
+    };
+    if last_endstream.is_none_or(|at| at < data) {
+        return Err(malformed("a stream has no endstream"));
+    }
+    let (entries, _) = dict_entries(objects, dict)?;
+    if entries
+        .iter()
+        .any(|entry| matches!(entry.key.as_slice(), b"F" | b"FFilter" | b"FDecodeParms"))
+    {
+        return Err(malformed("a stream names an external file"));
+    }
+    Ok(())
 }
 
 /// If `<number> 0 obj` starts at `offset`, the offset just after `obj`.
@@ -893,6 +967,14 @@ mod tests {
                 "overflowing subsection count",
                 text.replace("xref\n0 3\n", "xref\n0 9999999999999999999\n"),
             ),
+            (
+                "free entry offset past 32 bits",
+                text.replace("0000000000 65535 f", "9999999999 65535 f"),
+            ),
+            (
+                "comment before the trailer dictionary",
+                text.replace("trailer\n<<", "trailer\n%c\n<<"),
+            ),
         ];
         for (label, input) in cases {
             match read_revision(input.as_bytes()) {
@@ -900,6 +982,27 @@ mod tests {
                 other => panic!("{label}: expected Malformed, got {other:?}"),
             }
         }
+    }
+
+    /// `hayro-syntax` reads `startxref` and object numbers as 32-bit signed
+    /// numbers and rebuilds the table when one does not fit, so the bounded
+    /// reader refuses what it would not read as written. Only a file of
+    /// gigabytes reaches either bound, so each is checked where it is read.
+    #[test]
+    fn startxref_and_size_fit_what_hayro_syntax_reads() {
+        assert_eq!(
+            read_tail(b"startxref\n2147483647\n%%EOF"),
+            Ok((0, 2_147_483_647))
+        );
+        assert_eq!(
+            read_tail(b"startxref\n2147483648\n%%EOF"),
+            Err(malformed("startxref has no offset"))
+        );
+        let text = String::from_utf8(minimal_pdf("")).expect("ascii");
+        assert_eq!(
+            read_revision(text.replace("/Size 3", "/Size 2147483648").as_bytes()).unwrap_err(),
+            malformed("the trailer has no numeric /Size")
+        );
     }
 
     #[test]
