@@ -1040,7 +1040,9 @@ fn signing_findings(runtime: &RenderRuntime, signing: &SigningRuntime) -> Vec<Fi
             _ => {}
         }
         if let Some(authority) = &seal.timestamp_authority {
-            if !timestamp_url_allowed(&authority.url) {
+            if !registry_platform_httputil::client::transport_protects_the_credential(
+                &authority.url.to_url(),
+            ) {
                 findings.push(finding(
                     "render.runtime.insecure-timestamp-url",
                     format!("{base}/timestampAuthority/url"),
@@ -1110,25 +1112,6 @@ fn is_plain_absolute(path: &Path) -> bool {
         && path
             .components()
             .all(|component| matches!(component, Component::RootDir | Component::Normal(_)))
-}
-
-/// `https`, or `http` for a loopback host only.
-fn timestamp_url_allowed(url: &Url) -> bool {
-    if url.is_https() {
-        return true;
-    }
-    let parsed = url.to_url();
-    let Some(host) = parsed.host_str() else {
-        return false;
-    };
-    let host = host
-        .strip_prefix('[')
-        .and_then(|inner| inner.strip_suffix(']'))
-        .unwrap_or(host);
-    host.eq_ignore_ascii_case("localhost")
-        || host
-            .parse::<std::net::IpAddr>()
-            .is_ok_and(|address| address.is_loopback())
 }
 
 /// A finding of the bundle and runtime read together.
@@ -2440,7 +2423,9 @@ mod tests {
         let (_dir, home) = home();
         for url in [
             "http://localhost:3161/tsr",
+            "http://LOCALHOST:3161/tsr",
             "http://127.0.0.1:3161/tsr",
+            "http://127.0.0.2:3161/tsr",
             "http://[::1]:3161/tsr",
             "https://tsa.example.test/tsr",
         ] {
@@ -2453,6 +2438,8 @@ mod tests {
             "http://tsa.example.test/tsr",
             "http://10.0.0.5/tsr",
             "http://localhost.example.test/",
+            "http://localhost./tsr",
+            "http://[::ffff:127.0.0.1]/tsr",
         ] {
             let seal = SEAL.replace("https://tsa.example.test/tsr", url);
             let problem = refused(&home, &signing_text(&home, &seal));
