@@ -9,13 +9,13 @@
 //! parent's own:
 //!
 //! - [`prepare`] reads the single-revision PDF, first with a bounded reader
-//!   that walks every object, then with `hayro-syntax`, and appends the
-//!   catalog rewritten with an AcroForm and a DocMDP permission, the first
-//!   page rewritten with the widget in `/Annots`, an invisible signature
-//!   field merged with its widget, an empty appearance stream, and a
-//!   certification signature dictionary whose `/Contents` is a run of zero
-//!   hex digits. The `/ByteRange` already holds its final values when
-//!   `prepare` returns.
+//!   that walks every object and the page tree, then with `hayro-syntax`,
+//!   and appends the catalog rewritten with an AcroForm and a DocMDP
+//!   permission, the first page rewritten with the widget in `/Annots`, an
+//!   invisible signature field merged with its widget, an empty appearance
+//!   stream, and a certification signature dictionary whose `/Contents` is a
+//!   run of zero hex digits. The `/ByteRange` already holds its final values
+//!   when `prepare` returns.
 //! - The parent then digests [`PreparedPdf::signed_parts`], signs, and
 //!   splices the CMS in with [`PreparedPdf::embed`].
 //!
@@ -99,8 +99,9 @@ pub enum PdfSignatureError {
 ///
 /// Deterministic: the same `first_revision` and `field` give the same bytes.
 /// Refuses, without panicking, a file that is not a single-revision PDF with
-/// a cross-reference table, an encrypted file, a file whose objects nest
-/// deeper than a bounded reader allows, and a file that already has an
+/// a cross-reference table, an encrypted file, a file whose objects or page
+/// tree nest deeper than a bounded reader allows, a page tree that reaches a
+/// node twice, and a file that already has an
 /// interactive form, a permissions dictionary, a document security store, or
 /// a signature.
 pub fn prepare(
@@ -880,28 +881,158 @@ mod tests {
 
     /// A hand-written one-page file whose catalog also holds `catalog_extra`.
     fn hand_written(catalog_extra: &[u8]) -> Vec<u8> {
-        let mut pdf = b"%PDF-1.7\n".to_vec();
-        let mut offsets = Vec::new();
-        for body in [
+        hand_written_objects(&[
             [&b"<</Type/Catalog/Pages 2 0 R"[..], catalog_extra, b">>"].concat(),
             b"<</Type/Pages/Kids[3 0 R]/Count 1>>".to_vec(),
             b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 100]>>".to_vec(),
-        ] {
+        ])
+    }
+
+    /// A hand-written single-revision file of these objects, numbered from
+    /// 1; object 1 is the catalog.
+    fn hand_written_objects(bodies: &[Vec<u8>]) -> Vec<u8> {
+        let mut pdf = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for body in bodies {
             offsets.push(pdf.len());
             pdf.extend_from_slice(format!("{} 0 obj\n", offsets.len()).as_bytes());
-            pdf.extend_from_slice(&body);
+            pdf.extend_from_slice(body);
             pdf.extend_from_slice(b"\nendobj\n");
         }
         let xref = pdf.len();
-        pdf.extend_from_slice(b"xref\n0 4\n0000000000 65535 f\r\n");
+        let size = bodies.len() + 1;
+        pdf.extend_from_slice(format!("xref\n0 {size}\n0000000000 65535 f\r\n").as_bytes());
         for offset in offsets {
             pdf.extend_from_slice(format!("{offset:010} 00000 n\r\n").as_bytes());
         }
         pdf.extend_from_slice(
-            format!("trailer\n<</Size 4/Root 1 0 R/ID[(a)(a)]>>\nstartxref\n{xref}\n%%EOF\n")
+            format!("trailer\n<</Size {size}/Root 1 0 R/ID[(a)(a)]>>\nstartxref\n{xref}\n%%EOF\n")
                 .as_bytes(),
         );
         pdf
+    }
+
+    /// A file whose page tree is a chain of `levels` page tree nodes, each
+    /// the only kid of the one before, ending in its one page.
+    fn page_chain(levels: usize) -> Vec<u8> {
+        let mut bodies = vec![b"<</Type/Catalog/Pages 2 0 R>>".to_vec()];
+        for level in 0..levels {
+            let number = level + 2;
+            let parent = if level == 0 {
+                String::new()
+            } else {
+                format!("/Parent {} 0 R", number - 1)
+            };
+            bodies.push(
+                format!("<</Type/Pages{parent}/Kids[{} 0 R]/Count 1>>", number + 1).into_bytes(),
+            );
+        }
+        bodies.push(
+            format!(
+                "<</Type/Page/Parent {} 0 R/MediaBox[0 0 200 100]>>",
+                levels + 1
+            )
+            .into_bytes(),
+        );
+        hand_written_objects(&bodies)
+    }
+
+    /// Run `prepare` on a small stack, where an unbounded reader overflows.
+    fn prepare_on_a_small_stack(original: Vec<u8>) -> Result<PreparedPdf, PdfSignatureError> {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(move || prepare(&original, &field()))
+            .expect("thread")
+            .join()
+            .expect("prepare does not panic")
+    }
+
+    /// `hayro-syntax` builds its page list while it opens the file,
+    /// recursing once per page tree level and once per parent of a shared
+    /// node. Each object can be shallow while the indirect chain is deep, so
+    /// the page tree is walked with a depth bound and each node once before
+    /// `hayro-syntax` reads the file: a deep chain would abort the process,
+    /// and a cycle or a node with two parents would never finish.
+    #[test]
+    fn prepare_refuses_a_page_tree_an_unbounded_reader_cannot_finish() {
+        let at_the_bound = page_chain(MAX_PAGE_TREE_DEPTH - 1);
+        prepare_on_a_small_stack(at_the_bound).expect("a tree at the bound prepares");
+        for levels in [MAX_PAGE_TREE_DEPTH, 5_000] {
+            assert_eq!(
+                prepare_on_a_small_stack(page_chain(levels)),
+                Err(PdfSignatureError::Malformed(
+                    "the page tree nests too deeply"
+                )),
+                "{levels} levels"
+            );
+        }
+
+        let page = b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 100]>>".to_vec();
+        for (label, bodies) in [
+            (
+                "a cycle",
+                vec![
+                    b"<</Type/Catalog/Pages 2 0 R>>".to_vec(),
+                    b"<</Type/Pages/Kids[3 0 R]/Count 1>>".to_vec(),
+                    b"<</Type/Pages/Parent 2 0 R/Kids[2 0 R 4 0 R]/Count 1>>".to_vec(),
+                    page.clone(),
+                ],
+            ),
+            (
+                "a node that is its own kid",
+                vec![
+                    b"<</Type/Catalog/Pages 2 0 R>>".to_vec(),
+                    b"<</Type/Pages/Kids[2 0 R 3 0 R]/Count 1>>".to_vec(),
+                    page.clone(),
+                ],
+            ),
+            (
+                "a node with two parents",
+                vec![
+                    b"<</Type/Catalog/Pages 2 0 R>>".to_vec(),
+                    b"<</Type/Pages/Kids[3 0 R 3 0 R]/Count 2>>".to_vec(),
+                    page.clone(),
+                ],
+            ),
+        ] {
+            assert_eq!(
+                prepare_on_a_small_stack(hand_written_objects(&bodies)),
+                Err(PdfSignatureError::Malformed(
+                    "the page tree reaches a node twice"
+                )),
+                "{label}"
+            );
+        }
+
+        for (pages, refusal) in [
+            (
+                &b"<</Type/Pages/Kids 4 0 R/Count 1>>"[..],
+                "a page tree node's /Kids is not an array",
+            ),
+            (
+                b"<</Type/Pages/Kids[<</Type/Page>>]/Count 1>>",
+                "a page tree reference is not an object reference",
+            ),
+            (
+                b"<</Type/Pages/Kids[9 0 R]/Count 1>>",
+                "a page tree reference names no object",
+            ),
+            (
+                b"<</Type/Pages/Kids[4 0 R]/Count 1>>",
+                "a page tree node is not a dictionary",
+            ),
+        ] {
+            let bodies = [
+                b"<</Type/Catalog/Pages 2 0 R>>".to_vec(),
+                pages.to_vec(),
+                page.clone(),
+                b"[3 0 R]".to_vec(),
+            ];
+            assert_eq!(
+                prepare(&hand_written_objects(&bodies), &field()),
+                Err(PdfSignatureError::Malformed(refusal))
+            );
+        }
     }
 
     /// `hayro-syntax` recurses without a depth limit, and a stack overflow
@@ -916,15 +1047,8 @@ mod tests {
         let mut deep = b"/Deep".to_vec();
         deep.extend(std::iter::repeat_n(b'[', levels));
         deep.extend(std::iter::repeat_n(b']', levels));
-        let original = hand_written(&deep);
-        let outcome = std::thread::Builder::new()
-            .stack_size(256 * 1024)
-            .spawn(move || prepare(&original, &field()))
-            .expect("thread")
-            .join()
-            .expect("prepare does not panic");
         assert_eq!(
-            outcome,
+            prepare_on_a_small_stack(hand_written(&deep)),
             Err(PdfSignatureError::Malformed("objects nest too deeply"))
         );
     }
