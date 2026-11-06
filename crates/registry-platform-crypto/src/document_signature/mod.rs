@@ -2,6 +2,11 @@
 //! Document signature primitives: certificate chains, detached CMS signed
 //! data for PAdES baseline signatures, and RFC 3161 signature timestamps.
 //!
+//! "Seal" in this module, as in "seal certificate", means a document seal (an
+//! electronic seal under ETSI EN 319 142-1). Elsewhere in this crate,
+//! `sealed_value::seal` and `field_encryption::seal_field` mean authenticated
+//! encryption of a stored value, which is unrelated.
+//!
 //! The caller owns the document format. For a PDF it computes the byte ranges
 //! a signature covers, passes them to [`sign_detached`], and embeds the
 //! returned CMS in the signature dictionary. For PAdES B-T it then sends

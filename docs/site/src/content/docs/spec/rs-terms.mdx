@@ -34,6 +34,7 @@ standards_referenced:
   - verifiable-credentials
   - sdmx
   - prov-o
+  - pades
 audience:
   - integrator
   - maintainer
@@ -66,6 +67,7 @@ The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 
 | 0.11.0 | 2026-08-10 | draft | Scoped the data-only SDMX definition to Relay 1.0 and added the separate Relay V2 read profile. |
 | 0.12.0 | 2026-08-11 | draft | Reseated the Relay vocabulary on the Relay V2 runtime and `relayctl`. Removed the Relay V1 project-authoring terms, the gateway adapter terms, and the governed PDP runtime terms, none of which a maintained component implements, retired the cross-product `Registry Stack project` in favour of the per-deployment `authoring project` the tooling names, and added the packaging, access, disclosure, Registry Core, Point, and statistical-dataset vocabulary the current runtime uses. |
 | 0.13.0 | 2026-10-03 | draft | Retired current Relay vocabulary after version 0.38.0, retained its published identifiers as historical terms, and added Base Registry Engine vocabulary. |
+| 0.14.0 | 2026-11-06 | draft | Added the seal (document) and electronic seal terms, and named the other stack uses of "seal" they exclude. |
 
 ## 1. Products
 
@@ -124,6 +126,10 @@ compiled model. Specification prose shortens the name to BReg.
 **OID4VCI**: OpenID for Verifiable Credential Issuance. The Registry Evidence runtime implements it in no part, and OID4VCI in any part is a frozen Registry Evidence Version 1 non-goal under both subject binding modes, so no serialization has a credential offer, pre-authorized code, authorization or token endpoint, `c_nonce`, credential endpoint, deferred issuance, or wallet grant. The separate `registry-evidence-oid4vci` front end speaks it, which is why it is a separate service.
 
 **eSignet**: Open-source identity and authentication service (part of MOSIP). No stack service calls it. Registry Evidence authenticates callers against one configured OIDC issuer and key set named in its immutable bundle and names no specific identity product. The integration runs the other way: a separately maintained eSignet provider authenticates a citizen against a Base Registry Engine (BReg) registry through one governed lookup carrying a token from its configured OAuth issuer, which makes eSignet an ordinary governed client of a registry. See [Authenticate citizens with eSignet](../../explanation/esignet-authentication-over-breg/). Not a Registry Stack product term.
+
+**seal (document)**: A PAdES signature made with an institution's own key over a document a stack product produced, so a relying party can check which institution issued the document and that it has not changed since. Registry Render applies one, at PAdES baseline level B-B or B-T (ETSI EN 319 142-1), to a PDF it rendered from a verified package in the same request, when the document type names a seal in its manifest; it never seals bytes a caller supplies. A document seal is an electronic seal in the PAdES format. Three other stack uses of "seal" do not mean a document seal: `sealed_value::seal` and `seal_field` in `registry-platform-crypto` mean authenticated encryption of a stored value; a sealed audit segment is a rotated audit file the shared writer has closed; and the retired Relay **sealed package** (see Retired vocabulary) was a checksummed deployment package. Registry Stack product term.
+
+**electronic seal**: The eIDAS term (Regulation (EU) No 910/2014, Article 3) for data in electronic form, created by a legal person, that is attached to or logically associated with other data to ensure that data's origin and integrity. A document seal is an electronic seal. Whether a seal is advanced or qualified under eIDAS, or recognised under another scheme, depends on the certificate, its issuer and the key custody, not on the signature encoding; the stack makes no qualification claim for its seals.
 
 ## 3. Metadata and standards terms
 
@@ -345,7 +351,12 @@ layer boundaries, [RS-DM-MANIFEST](../rs-dm-manifest/) and the
     products/evidence/contracts/README.md;
     products/evidence/contracts/request.schema.yaml;
     products/evidence/contracts/request-batch-response.schema.yaml;
-    products/evidence/contracts/problem-contract.yaml. */}
+    products/evidence/contracts/problem-contract.yaml;
+    products/render/CONCEPT.md, Sealing;
+    crates/registry-render/src/seal.rs;
+    crates/registry-platform-crypto/src/sealed_value.rs, seal;
+    crates/registry-platform-crypto/src/field_encryption.rs, seal_field;
+    crates/registry-platform-audit/src/writer.rs, sealed segments. */}
 
 ## Next
 
