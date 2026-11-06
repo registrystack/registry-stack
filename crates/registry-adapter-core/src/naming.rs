@@ -102,3 +102,14 @@ pub const ADAPTER_MAPPING_KIND: &str = "AdapterMapping";
 /// `$id` of the mapping model's JSON Schema.
 pub const ADAPTER_MAPPING_SCHEMA_ID: &str =
     "https://id.registrystack.org/schemas/adapter/mapping/mapping.v1alpha1.schema.json";
+
+/// apiVersion of the authored preview expectations.
+pub const ADAPTER_PREVIEW_EXPECTATIONS_API_VERSION: &str =
+    "id.registrystack.org/formats/adapter/preview-expectations/v1alpha1";
+
+/// Kind of the authored preview expectations.
+pub const ADAPTER_PREVIEW_EXPECTATIONS_KIND: &str = "AdapterPreviewExpectations";
+
+/// `$id` of the preview expectations' JSON Schema.
+pub const ADAPTER_PREVIEW_EXPECTATIONS_SCHEMA_ID: &str =
+    "https://id.registrystack.org/schemas/adapter/preview-expectations/preview-expectations.v1alpha1.schema.json";

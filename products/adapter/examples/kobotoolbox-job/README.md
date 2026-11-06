@@ -103,6 +103,13 @@ third is refused with `mapping.missing respondentName`, naming the field and
 never the value. Preview does not run the
 job, a source, or a destination.
 
+`preview/expected.yaml` records what each sample should give: the two accepted
+ones, and `missing-respondent` refused at `respondentName`. Preview reads it
+beside the samples, reports whether each result matched, and exits 1 when one
+differs, so the deliberate refusal reads as refused as expected and a changed
+mapping or sample fails the check (`products/adapter/scripts/check-contracts.sh`
+runs it).
+
 The generated script replaces a handwritten one that carried this note: the
 mapping is example-only programme mapping. The Kobo provider pack stays
 reusable, and this job-owned file maps the pack's declared projection into one

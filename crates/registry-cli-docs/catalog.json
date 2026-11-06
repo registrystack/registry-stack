@@ -1268,9 +1268,18 @@
               "options": [
                 {
                   "display": "--input <FILE>",
-                  "description": "A JSON or YAML file holding one source value; repeatable. A YAML input cannot hold `null`; use JSON for that",
+                  "description": "A JSON or YAML file holding one source value; repeatable. A YAML input cannot hold `null`; use JSON for that. An `expected.yaml` beside the inputs records the result each sample should give, named by its file name without the extension; the run exits 1 when a result differs. The `expected.yaml` itself is never a sample",
                   "always_required": true,
                   "repeatable": true,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--deny-warnings",
+                  "description": "Exit 1 when a warning is reported",
+                  "always_required": false,
+                  "repeatable": false,
                   "default_values": [],
                   "possible_values": [],
                   "environment": null

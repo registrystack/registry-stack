@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The generated JSON Schemas of the nine Adapter formats, derived from the
+//! The generated JSON Schemas of the ten Adapter formats, derived from the
 //! source-neutral model in `registry-adapter-core` with `schemars` or from
 //! the runtime's pure effective-contract projection, and
 //! written to `products/adapter/schemas/` (`products/adapter/CONCEPT.md`
@@ -13,10 +13,11 @@ use registry_adapter_core::{
     ADAPTER_FIXTURE_SCHEMA_ID, ADAPTER_JOB_API_VERSION, ADAPTER_JOB_KIND,
     ADAPTER_JOB_RUNTIME_API_VERSION, ADAPTER_JOB_RUNTIME_KIND, ADAPTER_MAPPING_API_VERSION,
     ADAPTER_MAPPING_KIND, ADAPTER_MAPPING_SCHEMA_ID, ADAPTER_PACK_API_VERSION, ADAPTER_PACK_KIND,
-    ADAPTER_PACK_SCHEMA_ID, ADAPTER_PROFILE_API_VERSION, ADAPTER_PROFILE_KIND,
-    ADAPTER_PROFILE_SCHEMA_ID, ADAPTER_PROJECT_API_VERSION, ADAPTER_PROJECT_KIND,
-    ADAPTER_PROJECT_SCHEMA_ID, ADAPTER_RUNTIME_API_VERSION, ADAPTER_RUNTIME_KIND,
-    ADAPTER_RUNTIME_SCHEMA_ID,
+    ADAPTER_PACK_SCHEMA_ID, ADAPTER_PREVIEW_EXPECTATIONS_API_VERSION,
+    ADAPTER_PREVIEW_EXPECTATIONS_KIND, ADAPTER_PREVIEW_EXPECTATIONS_SCHEMA_ID,
+    ADAPTER_PROFILE_API_VERSION, ADAPTER_PROFILE_KIND, ADAPTER_PROFILE_SCHEMA_ID,
+    ADAPTER_PROJECT_API_VERSION, ADAPTER_PROJECT_KIND, ADAPTER_PROJECT_SCHEMA_ID,
+    ADAPTER_RUNTIME_API_VERSION, ADAPTER_RUNTIME_KIND, ADAPTER_RUNTIME_SCHEMA_ID,
 };
 
 /// `$id` of the ingestion job's JSON Schema. The core carries the
@@ -72,8 +73,8 @@ struct Entry {
 
 fn entries() -> Result<Vec<Entry>, serde_json::Error> {
     use registry_adapter_core::{
-        AdapterFixture, AdapterMapping, AdapterPack, AdapterProfile, AdapterProject,
-        AdapterRuntimeConfig,
+        AdapterFixture, AdapterMapping, AdapterPack, AdapterPreviewExpectations, AdapterProfile,
+        AdapterProject, AdapterRuntimeConfig,
     };
     Ok(vec![
         Entry {
@@ -91,6 +92,14 @@ fn entries() -> Result<Vec<Entry>, serde_json::Error> {
             schema_id: ADAPTER_MAPPING_SCHEMA_ID,
             api_version: ADAPTER_MAPPING_API_VERSION,
             kind: ADAPTER_MAPPING_KIND,
+        },
+        Entry {
+            file: "preview-expectations.v1alpha1.schema.json",
+            derived: serde_json::to_value(schemars::schema_for!(AdapterPreviewExpectations))?,
+            title: "Registry Adapter preview expectations",
+            schema_id: ADAPTER_PREVIEW_EXPECTATIONS_SCHEMA_ID,
+            api_version: ADAPTER_PREVIEW_EXPECTATIONS_API_VERSION,
+            kind: ADAPTER_PREVIEW_EXPECTATIONS_KIND,
         },
         Entry {
             file: "job-runtime.v1alpha1.schema.json",
@@ -145,7 +154,7 @@ fn entries() -> Result<Vec<Entry>, serde_json::Error> {
     ])
 }
 
-/// The nine generated schema documents, keyed by file name. Deterministic:
+/// The ten generated schema documents, keyed by file name. Deterministic:
 /// the same workspace state renders the same bytes.
 pub fn documents() -> Result<BTreeMap<&'static str, String>, serde_json::Error> {
     let shared: Value =
@@ -574,7 +583,7 @@ mod tests {
     fn documents_are_deterministic_and_versioned() {
         let first = documents().unwrap();
         assert_eq!(documents().unwrap(), first);
-        assert_eq!(first.len(), 9);
+        assert_eq!(first.len(), 10);
         let effective: Value =
             serde_json::from_str(&first["effective-contract.v1alpha1.schema.json"])
                 .expect("the effective contract schema is JSON");

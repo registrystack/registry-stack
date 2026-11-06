@@ -4099,6 +4099,43 @@ formats:
     securityMembers: []
     restrictingMembers: []
 
+  - id: adapter/preview-expectations
+    product: adapter
+    title: Registry Adapter preview expectations
+    files: [preview/expected.yaml]
+    syntax: yaml
+    audience: authored
+    stability: experimental
+    current:
+      apiVersion: id.registrystack.org/formats/adapter/preview-expectations/v1alpha1
+      kind: AdapterPreviewExpectations
+      checkedBy:
+        file: crates/registry-adapter-core/src/naming.rs
+        symbol: ADAPTER_PREVIEW_EXPECTATIONS_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/adapter/preview-expectations/v1alpha1
+      kind: AdapterPreviewExpectations
+    schema:
+      path: products/adapter/schemas/preview-expectations.v1alpha1.schema.json
+      id: https://id.registrystack.org/schemas/adapter/preview-expectations/preview-expectations.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-adapterctl -- schemas --output-dir products/adapter/schemas
+      driftCheck: products/adapter/scripts/check-contracts.sh
+    reader:
+      crate: registry-adapterctl
+      file: crates/registry-adapterctl/src/mapping.rs
+      function: read_expectations
+      type: AdapterPreviewExpectations
+    check: adapterctl mapping preview {project}/mappings/register-household.mapping.yaml --input {project}/preview/accepted-string-id.json --input {project}/preview/accepted-integer-id.json --input {project}/preview/missing-respondent.json
+    example: products/adapter/examples/kobotoolbox-job/preview/expected.yaml
+    conformance:
+      requiredText: none
+      optionalText: /samples/missing-respondent/target
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+
   - id: adapter/fixture
     product: adapter
     title: Registry Adapter fixture suite
