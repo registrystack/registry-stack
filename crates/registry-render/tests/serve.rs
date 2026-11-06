@@ -410,6 +410,42 @@ fn serve_health_and_ready() {
     let _ = home;
 }
 
+/// `serve` marks itself non-dumpable before it reads any secret, so another
+/// process of the serving user, a render worker included, cannot read its
+/// environment. Removing the mark from `serve` fails this test; the control
+/// shows the same user reads an unmarked process. A process with
+/// `CAP_SYS_PTRACE`, such as root, reads both, so run it as an ordinary user.
+#[cfg(target_os = "linux")]
+#[test]
+fn another_process_of_the_serving_user_cannot_read_the_serving_environment() {
+    let mut control = Command::new("sleep")
+        .arg("30")
+        .spawn()
+        .expect("start the control process");
+    let control_read = std::fs::read(format!("/proc/{}/environ", control.id()));
+    let _ = control.kill();
+    let _ = control.wait();
+    control_read.expect("the same user reads an unmarked process's environment");
+
+    let (_home, runtime, _) = deployment(
+        DEFAULT_LIMITS,
+        &repo_root().join("products/render/bundles/receipt"),
+    );
+    let server = start_server(&runtime);
+    // Startup has finished, and with it the mark, once health answers.
+    assert_eq!(
+        request(server.port, "GET", "/health", &[], None).status,
+        200
+    );
+    let error = std::fs::read(format!("/proc/{}/environ", server.child.id()))
+        .expect_err("another process of the serving user read its environment");
+    assert_eq!(
+        error.kind(),
+        std::io::ErrorKind::PermissionDenied,
+        "{error}"
+    );
+}
+
 #[test]
 fn a_fixture_port_taken_before_the_bind_moves_to_a_fresh_port() {
     let (_home, runtime, configured_port) = deployment(
