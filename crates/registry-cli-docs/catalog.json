@@ -23527,7 +23527,7 @@
             },
             {
               "display": "--environment",
-              "description": "Fill `${NAME}` expressions in the runtime file from the process environment and check the values they produce. Without it, each expression is checked by syntax and position only",
+              "description": "Fill `${NAME}` expressions in the runtime file from the process environment and check the values they produce, reading each seal's certificate chain file too (never its key). Without it, each expression is checked by syntax and position only, and no chain file is read",
               "always_required": false,
               "repeatable": false,
               "default_values": [],

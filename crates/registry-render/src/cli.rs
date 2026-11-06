@@ -63,8 +63,10 @@ pub enum Command {
         #[arg(long = "runtime-config", value_name = "FILE")]
         runtime: Option<PathBuf>,
         /// Fill `${NAME}` expressions in the runtime file from the process
-        /// environment and check the values they produce. Without it, each
-        /// expression is checked by syntax and position only.
+        /// environment and check the values they produce, reading each seal's
+        /// certificate chain file too (never its key). Without it, each
+        /// expression is checked by syntax and position only, and no chain
+        /// file is read.
         #[arg(long, requires = "runtime")]
         environment: bool,
         /// Prove that the runtime file's audit file resolves under this
