@@ -54,21 +54,30 @@ deployment:
     # Run actions reach only the workflows a policy lists. Deployment-wide actions
     # reach every workflow this deployment serves, including workflows added later, so
     # the deployment operator lists no workflows.
+    #
+    # Each policy lists the exact token `sub` values it admits, written as the
+    # issuer writes them: a backend client's own service-account subject, or
+    # the named people an operator policy serves. A token from a listed client
+    # for any other subject, or any token carrying `act`, is refused.
     policies:
       reminder-producer:
+        subjects: [reminder-producer-service-account]
         requiredScopes: [coordinator:start]
         workflows: [delayed-follow-up]
         actions: [start, status]
       information-producer:
+        subjects: [information-producer-service-account]
         requiredScopes: [coordinator:start]
         workflows: [governed-action-follow-up]
         actions: [start, status]
       institution-operator:
+        subjects: [operations-lead, on-call-operator]
         requiredScopes: [coordinator:operate]
         workflows: [delayed-follow-up, governed-action-follow-up]
         actions: [status, inspect, retry-same, cancel, reconcile]
         operator: true
       deployment-operator:
+        subjects: [platform-operator]
         requiredScopes: [coordinator:operate]
         actions: [doctor, restore-hold, release-restore-hold, release-admission-hold, complete-execution-recovery, retain]
         operator: true

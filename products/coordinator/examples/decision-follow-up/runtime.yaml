@@ -32,3 +32,40 @@ connections:
         tokenRef: secret:env/COORDINATOR_DECISION_TOKEN
         principal: institutional-decision-account
     # Defaults: eight seconds; 65536 request and response bytes; no hidden retry.
+deployment:
+  databaseId: coordinator-institution-decision-follow-up
+  runtimeRole: coordinator_runtime
+  packages:
+    - root: /opt/registry-coordinator/package
+      expectedDigest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  listener:
+    bind: 127.0.0.1:8108
+    tlsTermination: operator-controlled-upstream
+  authentication:
+    issuer: https://issuer.example.org
+    audience: urn:example:coordinator
+    jwksSource:
+      type: discovery
+    # Each policy lists the exact token `sub` values it admits, written as the
+    # issuer writes them: a backend client's own service-account subject, or
+    # the named people an operator policy serves. A token from a listed client
+    # for any other subject, or any token carrying `act`, is refused.
+    policies:
+      institution-producer:
+        subjects: [institution-producer-service-account]
+        requiredScopes: [coordinator:start]
+        workflows: [decision-follow-up]
+        actions: [start, status]
+      institution-operator:
+        subjects: [operations-lead, on-call-operator]
+        requiredScopes: [coordinator:operate]
+        workflows: [decision-follow-up]
+        actions: [status, inspect, retry-same, cancel, reconcile, doctor, restore-hold, release-restore-hold, release-admission-hold, complete-execution-recovery, retain]
+        operator: true
+  auditFile: /var/lib/registry-coordinator/audit.jsonl
+  auditKeyRef: secret:file/audit-key
+  activeStateKey: 1
+  stateKeys:
+    "1":
+      keyRef: secret:file/state-key-1
+  admissionKeyRef: secret:file/admission-key

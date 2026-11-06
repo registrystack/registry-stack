@@ -304,7 +304,7 @@ def run(args):
         project = write_workflow(journey, owner, sample, data_schemas)
         alternate = write_alternate_workflow(journey)
         reader = journey.export(owner, "application-reader", keys)
-        runtime, coordinator_url, child = journey.coordinator_service("event-follow-up", keys,
+        runtime, coordinator_url, child = journey.coordinator_service(owner, "event-follow-up", keys,
             {"source": {"type": "breg", "baseUrl": journey.urls["breg"], "profile": "follow-up-reader",
                 "authorization": journey.authorization(reader, report["resource"], ["records:get"])}},
             coordinator_port, "coordinator-event-intake", primary_project=project,

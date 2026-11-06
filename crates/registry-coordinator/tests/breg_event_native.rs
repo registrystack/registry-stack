@@ -258,7 +258,7 @@ async fn native_proposal_event_admits_one_run_without_conferring_apply_authority
     runtime["deployment"] = json!({"databaseId":"native-event-proof","runtimeRole":role,"packages":[{"root":package,"expectedDigest":digest}],
         "listener":{"bind":address.to_string(),"tlsTermination":"development-loopback"},
         "authentication":{"issuer":issuer.issuer(),"audience":"urn:coordinator:native-event","scopeClaim":"scope","jwksSource":{"type":"uri","uri":issuer.jwks_uri()},
-            "policies":{"application-reader":{"requiredScopes":["coordinator:operate"],"workflows":["proposal-event-proof"],"actions":["status","inspect"],"operator":true}}},
+            "policies":{"application-reader":{"subjects":["coordinator-reader"],"requiredScopes":["coordinator:operate"],"workflows":["proposal-event-proof"],"actions":["status","inspect"],"operator":true}}},
         "auditFile":root.as_path().join("audit/events.jsonl"),"auditKeyRef":"secret:file/audit-key","activeStateKey":1,"stateKeys":{"1":{"keyRef":"secret:file/state-key"}},"admissionKeyRef":"secret:file/admission-key"});
     let owned = OwnedCoordinator {
         database: database.clone(),

@@ -845,7 +845,7 @@ class Journey:
         sender = self.export(owner, "case-system", keys)
         task = {"baseUrl": self.urls["casework"], "issuer": AUTHORITY, "subject": agent,
             "exchangeAudience": self.urls["issuer"], "bootstrapResource": resource}
-        return self.coordinator_service("deferred-appointment", keys, {
+        return self.coordinator_service(owner, "deferred-appointment", keys, {
             "applications": {"type": "breg", "baseUrl": self.urls["breg"], "profile": "follow-up-reader",
                 "authorization": self.authorization(reader, resource, ["records:get"])},
             "catalogue": {"type": "scheduling", "baseUrl": scheduling_url,
@@ -857,7 +857,7 @@ class Journey:
                 "authorization": self.authorization(sender, sender["resource"], ["messaging:send"])},
         }, free_ports(1)[0], "coordinator-before-wait")
 
-    def coordinator_service(self, flow, keys, connections, port, label, additional_projects=(), primary_project=None):
+    def coordinator_service(self, owner, flow, keys, connections, port, label, additional_projects=(), primary_project=None):
         """Package maintained example flows, apply them with a split role, and serve them."""
         projects = [(flow, primary_project or REPO / "products/coordinator/examples" / flow), *additional_projects]
         packages = []
@@ -899,7 +899,9 @@ class Journey:
             "listener": {"bind": f"127.0.0.1:{port}", "tlsTermination": "development-loopback"},
             "authentication": {"issuer": self.urls["issuer"], "audience": COORDINATOR_RESOURCE,
                 "scopeClaim": "scope", "jwksSource": {"type": "static", "documentRef": "secret:file/jwks"},
+                # Admission accepts only the producer client's own service subject.
                 "policies": {"coordinator-producer": {
+                    "subjects": [subject(self.token("bregctl", owner, "coordinator-producer"))],
                     "requiredScopes": ["coordinator:start", "coordinator:operate"],
                     "workflows": [flow_id for flow_id, _ in projects],
                     "actions": ["start", "status", "inspect", "reconcile", "retry-same", "cancel"], "operator": True}}},
@@ -1256,7 +1258,7 @@ class Journey:
         assert scenarios.count("workflowElapsedSeconds: 1209600") == 2
         private(short_scenarios, scenarios.replace(
             "workflowElapsedSeconds: 1209600", "workflowElapsedSeconds: 2"))
-        runtime, url, worker = self.coordinator_service("reviewed-notice", keys, {
+        runtime, url, worker = self.coordinator_service(owner, "reviewed-notice", keys, {
             "applications": {"type": "breg", "baseUrl": self.urls["breg"],
                 "profile": "follow-up-reader",
                 "authorization": self.authorization(reader, resource, ["records:get"])},

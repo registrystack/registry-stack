@@ -18,6 +18,21 @@
   either refuses on this rule, settle or cancel the affected runs with the
   0.45.0 binaries, then map `request` from the submit step, package and apply
   again.
+- BREAKING: every `deployment.authentication.policies` entry requires
+  `subjects`, one to sixty-four exact token `sub` values, and admission accepts
+  a token only when its client's policy lists its `sub`. A listed client's token
+  for any other subject, such as a person's, is refused with 403
+  `operation.not-authorized` and creates no run, the same answer as a missing
+  scope. Operator policies are bound the same way. Any token carrying an `act`
+  claim is refused, whatever its subject. A runtime file without `subjects` is
+  refused with `config.missing-key` at the policy. Before upgrading, add
+  `subjects` to every policy: for a producer, the `sub` its client credentials
+  token carries (read it from a token the client obtains for itself, or from
+  the service account in your identity provider); for an operator policy, the
+  `sub` of each operator. Clients that present delegated tokens with `act` must
+  switch to their own client credentials token. `sub` still decides run
+  ownership and never authorizes start input: a backend must authorize every
+  identifier it passes for the person it acts for.
 
 ## 0.45.0 - 2026-11-03
 

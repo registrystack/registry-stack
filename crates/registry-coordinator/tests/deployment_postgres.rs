@@ -770,7 +770,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
     d["stateKeys"] = json!({"1":{"keyRef":"secret:file/state-key"}});
     d["admissionKeyRef"] = json!("secret:file/admission-key");
     d["auditKeyRef"] = json!("secret:file/audit-key");
-    d["authentication"] = json!({"issuer":issuer.issuer(),"audience":"urn:coordinator:test","scopeClaim":"scope","jwksSource":{"type":"uri","uri":issuer.jwks_uri()},"policies":{"producer":{"requiredScopes":["coordinator:start"],"workflows":["delayed-follow-up"],"actions":["start","status"]},"operator":{"requiredScopes":["coordinator:operate"],"workflows":["delayed-follow-up"],"actions":["status","inspect","retry-same","cancel","reconcile","doctor","restore-hold","release-restore-hold","release-admission-hold","complete-execution-recovery","retain"],"operator":true}}});
+    d["authentication"] = json!({"issuer":issuer.issuer(),"audience":"urn:coordinator:test","scopeClaim":"scope","jwksSource":{"type":"uri","uri":issuer.jwks_uri()},"policies":{"producer":{"subjects":["owner-a","owner-b","audit-owner"],"requiredScopes":["coordinator:start"],"workflows":["delayed-follow-up"],"actions":["start","status"]},"operator":{"subjects":["operator-1"],"requiredScopes":["coordinator:operate"],"workflows":["delayed-follow-up"],"actions":["status","inspect","retry-same","cancel","reconcile","doctor","restore-hold","release-restore-hold","release-admission-hold","complete-execution-recovery","retain"],"operator":true}}});
     fs::write(&path, serde_norway::to_string(&doc).unwrap()).unwrap();
     let runtime = Arc::new(RuntimeConfig::load(&path).unwrap());
     let workflows =
@@ -2763,20 +2763,20 @@ impl TwoFlowFixture {
         d["stateKeys"] = json!({"1":{"keyRef":"secret:file/state-key"}});
         d["admissionKeyRef"] = json!("secret:file/admission-key");
         d["auditKeyRef"] = json!("secret:file/audit-key");
-        let producer = |workflows: Value| json!({"requiredScopes":["coordinator:start"],"workflows":workflows,"actions":["start","status"]});
-        let operator = |workflows: Value| json!({"requiredScopes":["coordinator:operate"],"workflows":workflows,"actions":OPERATOR_ACTIONS,"operator":true});
+        let producer = |subjects: Value, workflows: Value| json!({"subjects":subjects,"requiredScopes":["coordinator:start"],"workflows":workflows,"actions":["start","status"]});
+        let operator = |subjects: Value, workflows: Value| json!({"subjects":subjects,"requiredScopes":["coordinator:operate"],"workflows":workflows,"actions":OPERATOR_ACTIONS,"operator":true});
         d["authentication"] = json!({
             "issuer": issuer.issuer(),
             "audience": "urn:coordinator:test",
             "scopeClaim": "scope",
             "jwksSource": {"type": "uri", "uri": issuer.jwks_uri()},
             "policies": {
-                "producer-a": producer(json!([DELAYED])),
-                "producer-b": producer(json!([GOVERNED])),
-                "producer-wide": producer(json!([DELAYED, GOVERNED, "retired-flow"])),
-                "operator-a": operator(json!([DELAYED])),
-                "operator": operator(json!([DELAYED, GOVERNED])),
-                "deployment-operator": {"requiredScopes":["coordinator:operate"],"actions":DEPLOYMENT_ACTIONS,"operator":true},
+                "producer-a": producer(json!(["owner-a", "shared-subject", "check-producer"]), json!([DELAYED])),
+                "producer-b": producer(json!(["owner-b"]), json!([GOVERNED])),
+                "producer-wide": producer(json!(["owner-wide", "shared-subject"]), json!([DELAYED, GOVERNED, "retired-flow"])),
+                "operator-a": operator(json!(["operator-a"]), json!([DELAYED])),
+                "operator": operator(json!(["operator", "sdk-owner"]), json!([DELAYED, GOVERNED])),
+                "deployment-operator": {"subjects":["deployment-operator"],"requiredScopes":["coordinator:operate"],"actions":DEPLOYMENT_ACTIONS,"operator":true},
             },
         });
         let delayed_project = root_path.join("delayed-project");
@@ -3037,6 +3037,134 @@ async fn serve_runtime(
     workflows: &Arc<deployment::Workflows>,
 ) -> (String, tokio::task::JoinHandle<()>) {
     serve_fixture(runtime_http_state(runtime, workflows).await).await
+}
+
+/// A listed client's token for a subject its policy does not list is refused
+/// at `POST /v1/runs` like a scope mismatch, and no run is created. Operator
+/// policies are pinned the same way.
+#[tokio::test]
+async fn a_listed_client_token_for_an_unlisted_subject_is_refused_at_start_and_creates_no_run() {
+    let f = TwoFlowFixture::start().await;
+    let delayed = f.pin(&f.delayed_project, "subject-pinned-delayed");
+    let (_, runtime, workflows) = f.runtime("subject-pinned.yaml", json!([delayed]));
+    let migration = deployment::open_ctl(&runtime, true).await.unwrap();
+    deployment::apply(&migration, &runtime, &workflows, &[])
+        .await
+        .unwrap();
+    let (origin, server) = serve_runtime(&runtime, &workflows).await;
+    let http = reqwest::Client::new();
+    let listed = f.token("producer-a", "owner-a", "coordinator:start");
+    let contract: Value = http
+        .get(format!("{origin}/v1/workflows/{DELAYED}"))
+        .bearer_auth(&listed)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let revision = contract["workflowRevision"].as_str().unwrap().to_owned();
+    let input = json!({"applicationId":"00000000-0000-4000-8000-000000000011","sendAfter":(Utc::now()+chrono::Duration::minutes(20)).to_rfc3339()});
+    let start = |credential: String, key: &'static str| {
+        http.post(format!("{origin}/v1/runs"))
+            .bearer_auth(credential)
+            .header("Idempotency-Key", key)
+            .json(&json!({"workflow": DELAYED, "workflowRevision": revision, "input": input}))
+            .send()
+    };
+
+    // A person's subject, and a subject another policy lists, are both
+    // refused for this client before any run exists.
+    for subject in ["a-person", "owner-b"] {
+        let response = start(
+            f.token("producer-a", subject, "coordinator:start"),
+            "pinned",
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), 403, "{subject}");
+        assert!(response.headers().get("www-authenticate").is_none());
+        assert_eq!(
+            response.json::<Value>().await.unwrap()["code"],
+            "operation.not-authorized",
+            "{subject}"
+        );
+    }
+    assert!(f.run_rows(DELAYED).await["runs"].is_null());
+
+    // The same request under the listed subject creates exactly one run.
+    let response = start(listed, "pinned").await.unwrap();
+    assert_eq!(response.status(), 200);
+    let run = response.json::<Value>().await.unwrap()["runId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        f.run_rows(DELAYED).await["runs"].as_array().unwrap().len(),
+        1
+    );
+
+    // An operator policy admits only its named operators.
+    for (subject, expected) in [("a-person", 403), ("owner-a", 403), ("operator", 200)] {
+        let response = http
+            .get(format!("{origin}/v1/runs/{run}"))
+            .bearer_auth(f.token("operator", subject, "coordinator:operate"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected, "{subject}");
+        if expected == 403 {
+            assert_eq!(
+                response.json::<Value>().await.unwrap()["code"],
+                "operation.not-authorized",
+                "{subject}"
+            );
+        }
+    }
+    server.abort();
+    drop(migration);
+    f.stop().await;
+}
+
+/// Admission binds the caller, not the start input. Two admitted callers may
+/// start runs naming the same application: deciding whether a caller may act
+/// for that application stays with the trusted backend that calls the
+/// Coordinator, and each destination checks the Coordinator's own service.
+#[tokio::test]
+async fn start_input_is_not_bound_to_the_caller_subject() {
+    let f = TwoFlowFixture::start().await;
+    let delayed = f.pin(&f.delayed_project, "unbound-input-delayed");
+    let (_, runtime, workflows) = f.runtime("unbound-input.yaml", json!([delayed]));
+    let migration = deployment::open_ctl(&runtime, true).await.unwrap();
+    deployment::apply(&migration, &runtime, &workflows, &[])
+        .await
+        .unwrap();
+    let (origin, server) = serve_runtime(&runtime, &workflows).await;
+    let http = reqwest::Client::new();
+    let input = json!({"applicationId":"00000000-0000-4000-8000-000000000021","sendAfter":(Utc::now()+chrono::Duration::minutes(20)).to_rfc3339()});
+    let mut runs = Vec::new();
+    for (client, subject) in [("producer-a", "owner-a"), ("producer-wide", "owner-wide")] {
+        let credential = f.token(client, subject, "coordinator:start");
+        let (status, admitted) = start_run(
+            &http,
+            &origin,
+            &credential,
+            "same-application",
+            DELAYED,
+            input.clone(),
+        )
+        .await;
+        assert_eq!(status, 200, "{client}: {admitted}");
+        runs.push(admitted["runId"].as_str().unwrap().to_owned());
+    }
+    assert_ne!(runs[0], runs[1]);
+    assert_eq!(
+        f.run_rows(DELAYED).await["runs"].as_array().unwrap().len(),
+        2
+    );
+    server.abort();
+    drop(migration);
+    f.stop().await;
 }
 
 #[tokio::test]

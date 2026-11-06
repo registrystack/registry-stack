@@ -187,6 +187,16 @@
           "type": "array",
           "uniqueItems": true
         },
+        "subjects": {
+          "description": "The exact token `sub` values this policy admits, compared byte for\nbyte as the issuer writes them: the client's own service-account\nsubject, or the named operators an operator policy serves. Each is at\nmost 512 bytes. A verified token from this client whose subject is not\nlisted is refused, and the list has no unrestricted form.",
+          "items": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
         "workflows": {
           "description": "The workflows this policy's run actions reach: start, status, inspect,\nretry-same, cancel and reconcile. Required when the policy lists a run\naction and refused when it lists none.",
           "items": {
@@ -201,6 +211,7 @@
         }
       },
       "required": [
+        "subjects",
         "requiredScopes",
         "actions"
       ],
