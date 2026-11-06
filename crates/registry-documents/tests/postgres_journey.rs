@@ -77,10 +77,10 @@ fn render(binary: &Path, root: &Path) -> (Vec<u8>, String) {
         .arg("--output")
         .arg(&out));
     let report: serde_json::Value = serde_json::from_slice(&report).expect("a JSON report");
-    let digest = format!(
-        "sha256:{}",
-        report["pdfSha256"].as_str().expect("a reported PDF digest")
-    );
+    let digest = report["pdfDigest"]
+        .as_str()
+        .expect("a reported PDF digest")
+        .to_owned();
     let bytes = std::fs::read(&out).expect("the rendered PDF");
     assert!(bytes.starts_with(b"%PDF-"), "Registry Render wrote a PDF");
     (bytes, digest)

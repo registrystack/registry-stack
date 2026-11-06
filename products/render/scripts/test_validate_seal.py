@@ -53,6 +53,27 @@ class FirstRevisionEndTests(unittest.TestCase):
         self.assertIsNone(VALIDATOR.first_revision_end(pdf))
 
 
+class FirstRevisionCheckTests(unittest.TestCase):
+    def test_the_labelled_digest_of_the_first_revision_passes(self) -> None:
+        digest = "sha256:" + hashlib.sha256(FIRST).hexdigest()
+        result = VALIDATOR.first_revision_check(sealed(), digest)
+        self.assertEqual(result["name"], "first-revision-digest")
+        self.assertTrue(result["ok"])
+        self.assertEqual(
+            result["detail"], {"firstRevisionLength": len(FIRST), "digest": digest}
+        )
+
+    def test_another_digest_or_no_cut_fails(self) -> None:
+        other = "sha256:" + "0" * 64
+        self.assertFalse(VALIDATOR.first_revision_check(sealed(), other)["ok"])
+        digest = "sha256:" + hashlib.sha256(FIRST).hexdigest()
+        unsigned = VALIDATOR.first_revision_check(FIRST, digest)
+        self.assertFalse(unsigned["ok"])
+        self.assertEqual(
+            unsigned["detail"], {"firstRevisionLength": None, "digest": None}
+        )
+
+
 class MainTests(unittest.TestCase):
     def run_main(self, *args: str) -> tuple[int, dict]:
         out = io.StringIO()
@@ -70,6 +91,27 @@ class MainTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertFalse(report["ok"])
         self.assertFalse(report["checks"][0]["ok"])
+
+    def test_a_document_digest_must_be_labelled(self) -> None:
+        bare = hashlib.sha256(FIRST).hexdigest()
+        for value in [bare, "SHA256:" + bare, "sha256:" + bare.upper()]:
+            with self.assertRaises(SystemExit) as refused, contextlib.redirect_stderr(
+                io.StringIO()
+            ) as stderr:
+                VALIDATOR.main(
+                    ["--pdf", "x.pdf", "--trust-root", "r.pem", "--document-digest", value]
+                )
+            self.assertEqual(refused.exception.code, 2, value)
+            self.assertIn("sha256:<64 lowercase hex digits>", stderr.getvalue())
+
+    def test_the_retired_flag_is_refused(self) -> None:
+        with self.assertRaises(SystemExit) as refused, contextlib.redirect_stderr(
+            io.StringIO()
+        ):
+            VALIDATOR.main(
+                ["--pdf", "x.pdf", "--trust-root", "r.pem", "--document-sha256", "0" * 64]
+            )
+        self.assertEqual(refused.exception.code, 2)
 
 
 if __name__ == "__main__":

@@ -9,11 +9,15 @@
   choice for B-B) and the OIDC clients allowed to use it. With seals, `serve`
   adds `POST /v1/seal/{type}`, which needs the new `render:seal` scope (not
   implied by `render:render`; the legacy API key never seals) and returns the
-  sealed PDF with `documentSha256` over the first revision,
-  `signedFileSha256` over the whole file and the package's `bundleHash`
-  (`X-Registry-Bundle-Hash` on the PDF answer). The render worker answers
+  sealed PDF with `documentDigest` over the first revision,
+  `signedFileDigest` over the whole file, `dataDigest`, the package's
+  `packageDigest` in the form `package.expectedDigest` takes, and
+  `seal.certificateDigest`, each labelled `sha256:<hex>` (on the PDF answer,
+  `X-Registry-Document-Digest`, `X-Registry-Signed-File-Digest`,
+  `X-Registry-Data-Digest`, `X-Registry-Package-Digest` and
+  `X-Registry-Certificate-Digest`). The render worker answers
   with the first revision only, and `serve` writes the signature field after
-  it, so `documentSha256` covers every byte the worker wrote; an answer that
+  it, so `documentDigest` covers every byte the worker wrote; an answer that
   is not a single-revision PDF is refused. A failing timestamp fails the request
   and never falls back to B-B. Seals in flight, which hold no render slot
   while they sign and wait on the authority, are bounded by
@@ -23,15 +27,15 @@
   `seal`. `/ready` adds a `signing` member per seal and
   stays ready while a seal is unavailable; `serve` logs a warning at startup
   for a seal that cannot sign or expires within 30 days. Audit entries add the value-free
-  `sealId`, `documentSha256`, `signedFileSha256`, `certificateSha256` and
-  `timestampTokenSha256`; a `timestamp-failed` response entry adds `reason`,
+  `sealId`, `documentDigest`, `signedFileDigest`, `certificateDigest` and
+  `timestampTokenDigest`, labelled as in the answer; a `timestamp-failed` response entry adds `reason`,
   the value-free name of the failing check, which a `seal refused` log warning
   repeats. The payload gains a `signing` member on the seal route
   only. A seal declared `trust: test-only` says so in the JSON `seal`
   member, an `X-Registry-Seal-Test-Only` header, `/ready`, the audit and
   one startup warning, and the `init` scaffold prints the seal block with
   its test line. `registry-render-client` gains `RenderClient::seal`, whose
-  `SealedDocument` carries `bundle_hash` and `seal.test_only`; its success
+  `SealedDocument` carries `package_digest` and `seal.test_only`; its success
   bodies now tolerate members it does not know, on both routes, and its seal
   types are `#[non_exhaustive]`. Its `render` takes the same optional
   `correlation_key` as `seal`, sent as `Idempotency-Key` and checked when
@@ -52,6 +56,18 @@
   credential in the parent's environment is not passed to the process that runs
   template code. Worker tuning variables such as `RAYON_NUM_THREADS` or
   `MALLOC_ARENA_MAX` no longer reach the worker either.
+- The render route's JSON answer adds `pdfDigest` and `dataDigest`, and its
+  PDF answer `X-Registry-Pdf-Digest` and `X-Registry-Data-Digest`: the same
+  hashes labelled `sha256:<hex>`, the form `package.expectedDigest` takes.
+  `pdfSha256`, `dataSha256`, `X-Registry-Pdf-Sha256` and
+  `X-Registry-Data-Sha256` are deprecated and still sent. The OpenAPI document
+  marks them deprecated and now declares each route's response headers and
+  JSON members. `compile --format json` adds `pdfDigest`, `dataDigest` and
+  `packageDigest` beside `pdfSha256`, `dataSha256` and `bundleHash`.
+  `registry-render-client`'s `RenderedDocument` gains `pdf_digest` and
+  `data_digest`, which it requires and checks against the bare hex, so it
+  needs a server from this release; the Node and Python bindings return
+  them.
 - `serve` reads a render worker's answer straight into its typed form,
   refusing a member it does not know at its name, so a malformed answer
   costs the serving process no more memory than the answer's own bytes.

@@ -3,7 +3,7 @@
 One page for template authors. The renderer injects exactly one input,
 `sys.inputs.data`, as a JSON string. Those bytes are the RFC 8785
 canonicalization of the envelope below, and the sha256 of those exact bytes
-is the `dataSha256` the caller should store on the record.
+is the `dataDigest` the caller should store on the record.
 
 ```typst
 #let payload = json(bytes(sys.inputs.data))
@@ -76,7 +76,7 @@ Rules worth internalizing:
   test marking then, because a test seal is not an official document (the
   `registry-render init` scaffold prints the block below, labelled). The
   member is part of the canonical envelope, so a sealed render's
-  `dataSha256` differs from a plain render of the same request. The
+  `dataDigest` differs from a plain render of the same request. The
   signature itself is added after the template runs, as an invisible
   field: the template draws no signature appearance.
 

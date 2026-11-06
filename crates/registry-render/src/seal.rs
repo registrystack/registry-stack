@@ -34,7 +34,7 @@ use registry_platform_yaml::{Diagnostic, Severity};
 use time::OffsetDateTime;
 
 use crate::envelope::SigningPayload;
-use crate::hash::sha256_hex;
+use crate::hash::{sha256_digest, sha256_label};
 use crate::manifest::{Manifest, MANIFEST_KIND};
 use crate::pdf_signature::{PdfSignatureError, SignatureField, MAX_CONTENTS_CAPACITY};
 use crate::problem::{ProblemKind, RenderProblem};
@@ -669,9 +669,10 @@ impl Seal {
         self.contents_capacity
     }
 
-    /// The seal certificate's SHA-256 fingerprint, lowercase hex.
-    pub fn certificate_fingerprint(&self) -> String {
-        self.fingerprint.to_string()
+    /// The seal certificate's labelled SHA-256 digest, `sha256:<hex>` over
+    /// its DER: its fingerprint, in the form every Render digest takes.
+    pub fn certificate_digest(&self) -> String {
+        sha256_label(&self.fingerprint.to_string())
     }
 
     /// Whether the seal's `allowedClients` names this verified client.
@@ -731,7 +732,7 @@ impl Seal {
     }
 
     /// Seal the first revision a worker rendered, signed at `signing_time`:
-    /// hash the whole of it as `documentSha256`, append this seal's
+    /// hash the whole of it as `documentDigest`, append this seal's
     /// signature field, then sign, timestamp and embed. The worker's answer
     /// must be a single-revision PDF; one that carries an update or bytes
     /// after its end marker is refused before anything is signed. Reading
@@ -744,10 +745,10 @@ impl Seal {
     ) -> Result<SealedDocument, RenderProblem> {
         let internal = |detail: String| RenderProblem::new(ProblemKind::Internal, detail);
         let field = self.signature_field(signing_time)?;
-        let (document_sha256, prepared) = tokio::task::spawn_blocking(move || {
-            let document_sha256 = sha256_hex(&first_revision);
+        let (document_digest, prepared) = tokio::task::spawn_blocking(move || {
+            let document_digest = sha256_digest(&first_revision);
             crate::pdf_signature::prepare(&first_revision, &field)
-                .map(|prepared| (document_sha256, prepared))
+                .map(|prepared| (document_digest, prepared))
         })
         .await
         .map_err(|error| {
@@ -778,7 +779,7 @@ impl Seal {
                 })?;
                 let stamp = AppliedTimestamp {
                     timestamped_at: gen_time,
-                    token_sha256: sha256_hex(&token.token_der),
+                    token_digest: sha256_digest(&token.token_der),
                 };
                 (stamped, Some(stamp))
             }
@@ -795,11 +796,11 @@ impl Seal {
                 )),
             })?;
         Ok(SealedDocument {
-            signed_file_sha256: sha256_hex(&pdf),
+            signed_file_digest: sha256_digest(&pdf),
             pdf,
-            document_sha256,
+            document_digest,
             level: self.level(),
-            certificate_fingerprint: self.certificate_fingerprint(),
+            certificate_digest: self.certificate_digest(),
             timestamp,
         })
     }
@@ -878,13 +879,14 @@ fn chain_error_text(error: &CertificateError) -> String {
 #[derive(Debug, Clone)]
 pub struct SealedDocument {
     pub pdf: Vec<u8>,
-    /// SHA-256 over the first revision: the whole of the worker's answer,
-    /// computed by the parent before it appends the signature field.
-    pub document_sha256: String,
-    /// SHA-256 over the whole signed file.
-    pub signed_file_sha256: String,
+    /// `sha256:<hex>` over the first revision: the whole of the worker's
+    /// answer, computed by the parent before it appends the signature field.
+    pub document_digest: String,
+    /// `sha256:<hex>` over the whole signed file.
+    pub signed_file_digest: String,
     pub level: SealLevel,
-    pub certificate_fingerprint: String,
+    /// `sha256:<hex>` over the seal certificate's DER.
+    pub certificate_digest: String,
     /// Present for a B-T seal.
     pub timestamp: Option<AppliedTimestamp>,
 }
@@ -905,8 +907,8 @@ pub struct AppliedTimestamp {
     /// The token's `genTime`, RFC 3339 in UTC, at the precision the
     /// authority wrote it: fractional seconds only when `genTime` has them.
     pub timestamped_at: String,
-    /// SHA-256 over the DER token.
-    pub token_sha256: String,
+    /// `sha256:<hex>` over the DER token.
+    pub token_digest: String,
 }
 
 /// Which piece of the timestamp exchange failed.
@@ -1143,7 +1145,7 @@ mod tests {
     }
 
     /// S1: a worker answers with the first revision only and the parent
-    /// writes everything after it, so `documentSha256` covers every byte a
+    /// writes everything after it, so `documentDigest` covers every byte a
     /// worker chose. The review's proof of concept put a content stream and
     /// a second signature dictionary, its name escaped past a byte scan,
     /// between the first revision and the parent's signature dictionary,
@@ -1190,7 +1192,7 @@ mod tests {
 
         let sealed = seal.seal(honest.clone(), now).await.expect("seals");
         assert_eq!(signer.signatures.load(Ordering::SeqCst), 1);
-        assert_eq!(sealed.document_sha256, sha256_hex(&honest));
+        assert_eq!(sealed.document_digest, sha256_digest(&honest));
         let expected = crate::pdf_signature::prepare(&honest, &field).expect("the parent's update");
         let [_, gap_start, gap_end, _] = expected.byte_range();
         let mut unsigned = sealed.pdf.clone();

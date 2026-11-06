@@ -62,18 +62,19 @@ pub struct RenderAuditEvent {
     /// every entry naming a test-only seal, and absent otherwise.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub test_only: bool,
-    /// SHA-256 over the first revision, the rendered document a seal covers.
+    /// `sha256:<hex>` over the first revision, the rendered document a seal
+    /// covers.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub document_sha256: Option<String>,
-    /// SHA-256 over the whole signed file.
+    pub document_digest: Option<String>,
+    /// `sha256:<hex>` over the whole signed file.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub signed_file_sha256: Option<String>,
-    /// SHA-256 over the seal certificate's DER: its fingerprint.
+    pub signed_file_digest: Option<String>,
+    /// `sha256:<hex>` over the seal certificate's DER: its fingerprint.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub certificate_sha256: Option<String>,
-    /// SHA-256 over the embedded timestamp token's DER, on a B-T seal.
+    pub certificate_digest: Option<String>,
+    /// `sha256:<hex>` over the embedded timestamp token's DER, on a B-T seal.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub timestamp_token_sha256: Option<String>,
+    pub timestamp_token_digest: Option<String>,
     /// Verified credential fingerprint (never the token or principal claims).
     pub caller: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -108,10 +109,10 @@ impl RenderAuditEvent {
             data_sha256: None,
             seal_id: None,
             test_only: false,
-            document_sha256: None,
-            signed_file_sha256: None,
-            certificate_sha256: None,
-            timestamp_token_sha256: None,
+            document_digest: None,
+            signed_file_digest: None,
+            certificate_digest: None,
+            timestamp_token_digest: None,
             caller: caller.to_owned(),
             correlation_id: correlation_id.map(str::to_owned),
             trace_id: trace_id.map(str::to_owned),
@@ -160,10 +161,10 @@ impl RenderAuditEvent {
             data_sha256: None,
             seal_id: None,
             test_only: false,
-            document_sha256: None,
-            signed_file_sha256: None,
-            certificate_sha256: None,
-            timestamp_token_sha256: None,
+            document_digest: None,
+            signed_file_digest: None,
+            certificate_digest: None,
+            timestamp_token_digest: None,
             caller: caller.to_owned(),
             correlation_id: correlation_id.map(str::to_owned),
             trace_id: trace_id.map(str::to_owned),
@@ -257,10 +258,10 @@ fn unfinished(event: RenderAuditEvent) -> Result<serde_json::Value, RenderProble
         for field in [
             "pdfSha256",
             "dataSha256",
-            "documentSha256",
-            "signedFileSha256",
-            "certificateSha256",
-            "timestampTokenSha256",
+            "documentDigest",
+            "signedFileDigest",
+            "certificateDigest",
+            "timestampTokenDigest",
         ] {
             fields.remove(field);
         }
@@ -287,10 +288,10 @@ mod tests {
         assert_eq!(request["sealId"], "ministry");
         for field in [
             "outcome",
-            "documentSha256",
-            "signedFileSha256",
-            "certificateSha256",
-            "timestampTokenSha256",
+            "documentDigest",
+            "signedFileDigest",
+            "certificateDigest",
+            "timestampTokenDigest",
         ] {
             assert!(request.get(field).is_none(), "{field}: {request}");
         }
@@ -306,10 +307,10 @@ mod tests {
         let sealed = RenderAuditEvent {
             outcome: Some("sealed"),
             data_sha256: Some("d".repeat(64)),
-            document_sha256: Some("a".repeat(64)),
-            signed_file_sha256: Some("b".repeat(64)),
-            certificate_sha256: Some("c".repeat(64)),
-            timestamp_token_sha256: Some("e".repeat(64)),
+            document_digest: Some(format!("sha256:{}", "a".repeat(64))),
+            signed_file_digest: Some(format!("sha256:{}", "b".repeat(64))),
+            certificate_digest: Some(format!("sha256:{}", "c".repeat(64))),
+            timestamp_token_digest: Some(format!("sha256:{}", "e".repeat(64))),
             ..started().for_seal("ministry", false)
         };
         let entry = unfinished(sealed).unwrap();
@@ -318,10 +319,10 @@ mod tests {
         for field in [
             "pdfSha256",
             "dataSha256",
-            "documentSha256",
-            "signedFileSha256",
-            "certificateSha256",
-            "timestampTokenSha256",
+            "documentDigest",
+            "signedFileDigest",
+            "certificateDigest",
+            "timestampTokenDigest",
         ] {
             assert!(entry.get(field).is_none(), "{field}: {entry}");
         }

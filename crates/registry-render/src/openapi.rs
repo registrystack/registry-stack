@@ -28,7 +28,7 @@ pub fn served(sealing: bool) -> &'static str {
     })
 }
 
-pub const OPENAPI_JSON: &str = r#"{
+pub const OPENAPI_JSON: &str = r##"{
   "openapi": "3.1.0",
   "info": {
     "title": "Registry Render",
@@ -92,8 +92,30 @@ pub const OPENAPI_JSON: &str = r#"{
         },
         "responses": {
           "200": {
-            "description": "Rendered PDF. Default representation is application/pdf with X-Registry-Pdf-Sha256, X-Registry-Data-Sha256, X-Registry-Document-Version and X-Registry-Warning-Count headers. A nonzero warning count means the host should inspect the JSON warnings before releasing the document. With Accept: application/json, the body is {pdfBase64, pdfSha256, dataSha256, documentVersion, warnings}.",
+            "description": "Rendered PDF. The default representation is application/pdf with the headers below. A nonzero warning count means the host should inspect the JSON warnings before releasing the document. With Accept: application/json, the body carries the same values and the warning text, and the headers are not sent. pdfSha256 and dataSha256, and their headers, are deprecated: they are pdfDigest and dataDigest without the sha256: label.",
             "headers": {
+              "X-Registry-Pdf-Digest": {
+                "description": "SHA-256 over the PDF.",
+                "schema": { "$ref": "#/components/schemas/Digest" }
+              },
+              "X-Registry-Data-Digest": {
+                "description": "SHA-256 over the canonical request envelope the template read.",
+                "schema": { "$ref": "#/components/schemas/Digest" }
+              },
+              "X-Registry-Pdf-Sha256": {
+                "description": "Deprecated: X-Registry-Pdf-Digest without its sha256: label.",
+                "deprecated": true,
+                "schema": { "$ref": "#/components/schemas/Sha256Hex" }
+              },
+              "X-Registry-Data-Sha256": {
+                "description": "Deprecated: X-Registry-Data-Digest without its sha256: label.",
+                "deprecated": true,
+                "schema": { "$ref": "#/components/schemas/Sha256Hex" }
+              },
+              "X-Registry-Document-Version": {
+                "description": "The document type and its version, as <id> v<version>.",
+                "schema": { "type": "string" }
+              },
               "X-Registry-Warning-Count": {
                 "description": "Number of rendering warnings, including zero. Present on PDF responses; warning text is available in the JSON representation.",
                 "schema": { "type": "integer", "minimum": 0 }
@@ -101,7 +123,29 @@ pub const OPENAPI_JSON: &str = r#"{
             },
             "content": {
               "application/pdf": { "schema": { "type": "string", "format": "binary" } },
-              "application/json": { "schema": { "type": "object" } }
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["pdfBase64", "pdfDigest", "dataDigest", "pdfSha256", "dataSha256", "documentVersion", "warnings"],
+                  "properties": {
+                    "pdfBase64": { "type": "string", "contentEncoding": "base64" },
+                    "pdfDigest": { "$ref": "#/components/schemas/Digest" },
+                    "dataDigest": { "$ref": "#/components/schemas/Digest" },
+                    "pdfSha256": {
+                      "description": "Deprecated: pdfDigest without its sha256: label.",
+                      "deprecated": true,
+                      "$ref": "#/components/schemas/Sha256Hex"
+                    },
+                    "dataSha256": {
+                      "description": "Deprecated: dataDigest without its sha256: label.",
+                      "deprecated": true,
+                      "$ref": "#/components/schemas/Sha256Hex"
+                    },
+                    "documentVersion": { "type": "string" },
+                    "warnings": { "type": "array", "items": { "type": "string" } }
+                  }
+                }
+              }
             }
           },
           "400": { "description": "Invalid request, data, or assets (problem+json with JSON pointers)" },
@@ -150,10 +194,89 @@ pub const OPENAPI_JSON: &str = r#"{
         },
         "responses": {
           "200": {
-            "description": "Sealed PDF. Default representation is application/pdf with X-Registry-Document-Sha256 (the first revision, Render's rendered document), X-Registry-Signed-File-Sha256 (the whole signed file), X-Registry-Data-Sha256, X-Registry-Document-Version, X-Registry-Bundle-Hash (the package hash /v1/documents reports as bundleHash), X-Registry-Warning-Count, X-Registry-Seal-Id, X-Registry-Seal-Level (B-T or B-B, the ETSI EN 319 142-1 baseline level names), X-Registry-Certificate-Sha256, for B-T X-Registry-Timestamped-At, and for a test-only seal X-Registry-Seal-Test-Only: true. With Accept: application/json, the body is {pdfBase64, documentSha256, signedFileSha256, dataSha256, documentVersion, bundleHash, warnings, seal: {id, level, certificateSha256, timestampedAt, testOnly}}; timestampedAt is the timestamp authority's genTime, RFC 3339 in UTC at the precision the authority gave (fractional seconds only when genTime has them), present for B-T only, and testOnly, always true, for a seal the runtime declares trust: test-only. There is no pdfSha256.",
+            "description": "Sealed PDF. The default representation is application/pdf with the headers below. With Accept: application/json, the body carries the same values and the warning text, and the headers are not sent. A sealed file has two digests: documentDigest over the first revision, Render's rendered document, and signedFileDigest over the whole signed file; there is no pdfDigest.",
+            "headers": {
+              "X-Registry-Document-Digest": {
+                "description": "SHA-256 over the first revision, Render's rendered document.",
+                "schema": { "$ref": "#/components/schemas/Digest" }
+              },
+              "X-Registry-Signed-File-Digest": {
+                "description": "SHA-256 over the whole signed file.",
+                "schema": { "$ref": "#/components/schemas/Digest" }
+              },
+              "X-Registry-Data-Digest": {
+                "description": "SHA-256 over the canonical request envelope the template read, its signing member included.",
+                "schema": { "$ref": "#/components/schemas/Digest" }
+              },
+              "X-Registry-Document-Version": {
+                "description": "The document type and its version, as <id> v<version>.",
+                "schema": { "type": "string" }
+              },
+              "X-Registry-Package-Digest": {
+                "description": "The served package's digest, in the form package.expectedDigest takes.",
+                "schema": { "$ref": "#/components/schemas/Digest" }
+              },
+              "X-Registry-Warning-Count": {
+                "description": "Number of rendering warnings, including zero.",
+                "schema": { "type": "integer", "minimum": 0 }
+              },
+              "X-Registry-Seal-Id": {
+                "description": "The runtime seal id.",
+                "schema": { "type": "string" }
+              },
+              "X-Registry-Seal-Level": {
+                "description": "The PAdES baseline level, by its ETSI EN 319 142-1 name.",
+                "schema": { "type": "string", "enum": ["B-T", "B-B"] }
+              },
+              "X-Registry-Certificate-Digest": {
+                "description": "SHA-256 over the seal certificate's DER.",
+                "schema": { "$ref": "#/components/schemas/Digest" }
+              },
+              "X-Registry-Timestamped-At": {
+                "description": "B-T only: the timestamp authority's genTime, RFC 3339 in UTC at the precision the authority gave (fractional seconds only when genTime has them).",
+                "schema": { "type": "string", "format": "date-time" }
+              },
+              "X-Registry-Seal-Test-Only": {
+                "description": "true, for a seal the runtime declares trust: test-only; absent otherwise.",
+                "schema": { "type": "string", "enum": ["true"] }
+              }
+            },
             "content": {
               "application/pdf": { "schema": { "type": "string", "format": "binary" } },
-              "application/json": { "schema": { "type": "object" } }
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["pdfBase64", "documentDigest", "signedFileDigest", "dataDigest", "documentVersion", "packageDigest", "warnings", "seal"],
+                  "properties": {
+                    "pdfBase64": { "type": "string", "contentEncoding": "base64" },
+                    "documentDigest": { "$ref": "#/components/schemas/Digest" },
+                    "signedFileDigest": { "$ref": "#/components/schemas/Digest" },
+                    "dataDigest": { "$ref": "#/components/schemas/Digest" },
+                    "documentVersion": { "type": "string" },
+                    "packageDigest": { "$ref": "#/components/schemas/Digest" },
+                    "warnings": { "type": "array", "items": { "type": "string" } },
+                    "seal": {
+                      "type": "object",
+                      "required": ["id", "level", "certificateDigest"],
+                      "properties": {
+                        "id": { "type": "string" },
+                        "level": { "type": "string", "enum": ["B-T", "B-B"] },
+                        "certificateDigest": { "$ref": "#/components/schemas/Digest" },
+                        "timestampedAt": {
+                          "description": "B-T only, as X-Registry-Timestamped-At.",
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "testOnly": {
+                          "description": "Always true when present, for a seal the runtime declares trust: test-only.",
+                          "type": "boolean",
+                          "const": true
+                        }
+                      }
+                    }
+                  }
+                }
+              }
             }
           },
           "400": { "description": "Invalid request, data, or assets; or document-not-sealable, a document type that names no seal" },
@@ -171,9 +294,21 @@ pub const OPENAPI_JSON: &str = r#"{
     }
   },
   "components": {
+    "schemas": {
+      "Digest": {
+        "description": "A labelled SHA-256 digest: sha256: and 64 lowercase hex digits.",
+        "type": "string",
+        "pattern": "^sha256:[0-9a-f]{64}$"
+      },
+      "Sha256Hex": {
+        "description": "A bare SHA-256: 64 lowercase hex digits.",
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}$"
+      }
+    },
     "securitySchemes": {
       "bearerAuth": { "type": "http", "scheme": "bearer", "description": "Resource-bound OIDC access token with the route's scope: render:render for documents and rendering, render:seal for sealing. Or the configured legacy API key, which never seals." }
     }
   }
 }
-"#;
+"##;

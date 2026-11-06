@@ -49,7 +49,7 @@ The boundary:
   a caller supplies. There is no route that accepts a PDF to sign.
 - The private key is loaded in the serving (parent) process and never sent
   to the render worker. The render worker receives no key and answers with
-  the first revision only. The parent hashes all of it as `documentSha256`,
+  the first revision only. The parent hashes all of it as `documentDigest`,
   appends the signature field itself, signs, optionally timestamps, and
   splices the signature in, so every signed byte after the first revision is
   the parent's. A worker answer that is not a single-revision PDF is refused

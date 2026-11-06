@@ -13,7 +13,8 @@ test('provider authenticates one document; invalid input precedes acquisition', 
     assert.equal(request.headers.authorization,'Bearer canary-render-token');
     request.resume();request.on('end',()=> {
       response.writeHead(200,{'content-type':'application/json','traceparent':'00-1234567890abcdef1234567890abcdef-1234567890abcdef-01'});
-      response.end(JSON.stringify({pdfBase64:pdf.toString('base64'),pdfSha256:createHash('sha256').update(pdf).digest('hex'),dataSha256:'0'.repeat(64),documentVersion:'receipt v1',warnings:[]}));
+      const pdfHex=createHash('sha256').update(pdf).digest('hex');
+      response.end(JSON.stringify({pdfBase64:pdf.toString('base64'),pdfDigest:`sha256:${pdfHex}`,dataDigest:`sha256:${'0'.repeat(64)}`,pdfSha256:pdfHex,dataSha256:'0'.repeat(64),documentVersion:'receipt v1',warnings:[]}));
     });
   });
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
@@ -97,7 +98,9 @@ test('arrays refuse holes and accessors before invoking them or acquiring tokens
 test('seal returns the checked sealed document and sends the correlation key', async () => {
   const first=Buffer.from('%PDF-1.7\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n');
   const pdf=Buffer.concat([first,Buffer.from('2 0 obj<</Type/Sig>>endobj\ntrailer<<>>\n%%EOF\n')]);
-  const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
+  const hex=bytes=>createHash('sha256').update(bytes).digest('hex');
+  const sha=bytes=>`sha256:${hex(bytes)}`;
+  const digestOf=digit=>`sha256:${digit.repeat(64)}`;
   let tampered=false;const seen=[];let tokens=0;
   const server=createServer((request,response)=> {
     seen.push([request.url,request.headers['idempotency-key']]);
@@ -107,10 +110,10 @@ test('seal returns the checked sealed document and sends the correlation key', a
       if (request.headers['idempotency-key']) headers['idempotency-key']=request.headers['idempotency-key'];
       response.writeHead(200,headers);
       if (request.url==='/v1/render/receipt') {
-        response.end(JSON.stringify({pdfBase64:first.toString('base64'),pdfSha256:sha(first),dataSha256:'0'.repeat(64),documentVersion:'receipt v1',warnings:[]}));
+        response.end(JSON.stringify({pdfBase64:first.toString('base64'),pdfDigest:sha(first),dataDigest:digestOf('0'),pdfSha256:hex(first),dataSha256:'0'.repeat(64),documentVersion:'receipt v1',warnings:[]}));
         return;
       }
-      response.end(JSON.stringify({pdfBase64:pdf.toString('base64'),documentSha256:sha(first),signedFileSha256:tampered?'0'.repeat(64):sha(pdf),dataSha256:'0'.repeat(64),documentVersion:'receipt v1',bundleHash:'b'.repeat(64),warnings:[],seal:{id:'agency',level:'B-T',certificateSha256:'c'.repeat(64),timestampedAt:'2026-10-23T00:00:01Z',testOnly:true}}));
+      response.end(JSON.stringify({pdfBase64:pdf.toString('base64'),documentDigest:sha(first),signedFileDigest:tampered?digestOf('0'):sha(pdf),dataDigest:digestOf('0'),documentVersion:'receipt v1',packageDigest:digestOf('b'),warnings:[],seal:{id:'agency',level:'B-T',certificateDigest:digestOf('c'),timestampedAt:'2026-10-23T00:00:01Z',testOnly:true}}));
     });
   });
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
@@ -125,9 +128,10 @@ test('seal returns the checked sealed document and sends the correlation key', a
     await assert.rejects(client.seal(provider,'../receipt',request),error=>error.kind==='invalid-request');
     assert.equal(tokens,0);assert.equal(seen.length,0);
     const sealed=await client.seal(provider,'receipt',request,'node-key-1');
-    assert.deepEqual({...sealed},{pdfBase64:pdf.toString('base64'),documentSha256:sha(first),signedFileSha256:sha(pdf),dataSha256:'0'.repeat(64),documentVersion:'receipt v1',bundleHash:'b'.repeat(64),warnings:[],seal:{id:'agency',level:'B-T',certificateSha256:'c'.repeat(64),timestampedAt:'2026-10-23T00:00:01Z',testOnly:true}});
+    assert.deepEqual({...sealed},{pdfBase64:pdf.toString('base64'),documentDigest:sha(first),signedFileDigest:sha(pdf),dataDigest:digestOf('0'),documentVersion:'receipt v1',packageDigest:digestOf('b'),warnings:[],seal:{id:'agency',level:'B-T',certificateDigest:digestOf('c'),timestampedAt:'2026-10-23T00:00:01Z',testOnly:true}});
     await client.seal(provider,'receipt',request);
-    await client.render(provider,'receipt',request,'node-key-2');
+    const rendered=await client.render(provider,'receipt',request,'node-key-2');
+    assert.equal(rendered.pdfDigest,sha(first));assert.equal(rendered.dataDigest,digestOf('0'));
     assert.deepEqual(seen,[['/v1/seal/receipt','node-key-1'],['/v1/seal/receipt',undefined],['/v1/render/receipt','node-key-2']]);
     tampered=true;
     await assert.rejects(client.seal(provider,'receipt',request),error=>error.kind==='protocol');

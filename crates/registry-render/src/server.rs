@@ -36,6 +36,7 @@ use registry_platform_httpsec::{request_body_limit, security_headers, CspBuilder
 use crate::audit::{RenderAudit, RenderAuditEvent};
 use crate::auth::{RENDER_SCOPE, SEAL_SCOPE};
 use crate::bundle::Bundle;
+use crate::hash::sha256_label;
 use crate::problem::{ProblemKind, RenderProblem, PROBLEM_TYPE_BASE};
 use crate::runtime;
 use crate::seal::{Seal, SealedDocument, Seals};
@@ -965,10 +966,10 @@ async fn render_route(
                 data_sha256: Some(rendered.data_sha256.clone()),
                 seal_id: None,
                 test_only: false,
-                document_sha256: None,
-                signed_file_sha256: None,
-                certificate_sha256: None,
-                timestamp_token_sha256: None,
+                document_digest: None,
+                signed_file_digest: None,
+                certificate_digest: None,
+                timestamp_token_digest: None,
                 caller,
                 correlation_id: correlation.clone(),
                 trace_id: trace.clone(),
@@ -1147,13 +1148,13 @@ async fn seal_route(
                 bundle_hash: rendered.bundle_hash.clone(),
                 outcome: Some("sealed"),
                 data_sha256: Some(rendered.data_sha256.clone()),
-                document_sha256: Some(sealed.document_sha256.clone()),
-                signed_file_sha256: Some(sealed.signed_file_sha256.clone()),
-                certificate_sha256: Some(sealed.certificate_fingerprint.clone()),
-                timestamp_token_sha256: sealed
+                document_digest: Some(sealed.document_digest.clone()),
+                signed_file_digest: Some(sealed.signed_file_digest.clone()),
+                certificate_digest: Some(sealed.certificate_digest.clone()),
+                timestamp_token_digest: sealed
                     .timestamp
                     .as_ref()
-                    .map(|timestamp| timestamp.token_sha256.clone()),
+                    .map(|timestamp| timestamp.token_digest.clone()),
                 ..started.clone()
             };
             (event, respond_sealed(&headers, &seal, &rendered, sealed))
@@ -1294,12 +1295,13 @@ fn first_revision(pdf_base64: &str, limit: usize) -> Result<Vec<u8>, RenderProbl
 
 /// The sealed document in the representation the caller accepts, by the
 /// render route's rule. JSON carries the signed file and the seal; the PDF
-/// representation carries the same values in headers. Neither carries a
-/// `pdfSha256`: a sealed file has two hashes, `documentSha256` over the
-/// first revision and `signedFileSha256` over the whole file. Both carry the
-/// package's `bundleHash`, so a client granted only `render:seal` can pin the
-/// package without reading `/v1/documents`, and both say when the seal is
-/// test-only, whether or not the template prints it.
+/// representation carries the same values in headers. Every digest is
+/// labelled, `sha256:<hex>`. Neither carries a `pdfDigest`: a sealed file
+/// has two, `documentDigest` over the first revision and `signedFileDigest`
+/// over the whole file. Both carry the package's `packageDigest`, in the form
+/// `package.expectedDigest` takes, so a client granted only `render:seal` can
+/// pin the package without reading `/v1/documents`, and both say when the
+/// seal is test-only, whether or not the template prints it.
 fn respond_sealed(
     headers: &HeaderMap,
     seal: &Seal,
@@ -1307,6 +1309,8 @@ fn respond_sealed(
     sealed: SealedDocument,
 ) -> Response {
     let document_version = format!("{} v{}", rendered.document_id, rendered.document_version);
+    let data_digest = sha256_label(&rendered.data_sha256);
+    let package_digest = sha256_label(&rendered.bundle_hash);
     let accepts_json = headers
         .get(header::ACCEPT)
         .and_then(|v| v.to_str().ok())
@@ -1317,7 +1321,7 @@ fn respond_sealed(
         let mut member = serde_json::json!({
             "id": seal.id(),
             "level": sealed.level.as_str(),
-            "certificateSha256": sealed.certificate_fingerprint,
+            "certificateDigest": sealed.certificate_digest,
         });
         if let Some(timestamp) = &sealed.timestamp {
             member["timestampedAt"] = serde_json::Value::String(timestamp.timestamped_at.clone());
@@ -1327,11 +1331,11 @@ fn respond_sealed(
         }
         let body = serde_json::json!({
             "pdfBase64": base64::engine::general_purpose::STANDARD.encode(&sealed.pdf),
-            "documentSha256": sealed.document_sha256,
-            "signedFileSha256": sealed.signed_file_sha256,
-            "dataSha256": rendered.data_sha256,
+            "documentDigest": sealed.document_digest,
+            "signedFileDigest": sealed.signed_file_digest,
+            "dataDigest": data_digest,
             "documentVersion": document_version,
-            "bundleHash": rendered.bundle_hash,
+            "packageDigest": package_digest,
             "warnings": rendered.warnings,
             "seal": member,
         });
@@ -1346,20 +1350,20 @@ fn respond_sealed(
     )
         .into_response();
     let map = response.headers_mut();
-    insert_header(map, "X-Registry-Document-Sha256", &sealed.document_sha256);
+    insert_header(map, "X-Registry-Document-Digest", &sealed.document_digest);
     insert_header(
         map,
-        "X-Registry-Signed-File-Sha256",
-        &sealed.signed_file_sha256,
+        "X-Registry-Signed-File-Digest",
+        &sealed.signed_file_digest,
     );
-    insert_header(map, "X-Registry-Data-Sha256", &rendered.data_sha256);
+    insert_header(map, "X-Registry-Data-Digest", &data_digest);
     insert_header(
         map,
         "X-Registry-Warning-Count",
         &rendered.warnings.len().to_string(),
     );
     insert_header(map, "X-Registry-Document-Version", &document_version);
-    insert_header(map, "X-Registry-Bundle-Hash", &rendered.bundle_hash);
+    insert_header(map, "X-Registry-Package-Digest", &package_digest);
     insert_header(map, "X-Registry-Seal-Id", seal.id());
     insert_header(map, "X-Registry-Seal-Level", sealed.level.as_str());
     if seal.is_test_only() {
@@ -1367,8 +1371,8 @@ fn respond_sealed(
     }
     insert_header(
         map,
-        "X-Registry-Certificate-Sha256",
-        &sealed.certificate_fingerprint,
+        "X-Registry-Certificate-Digest",
+        &sealed.certificate_digest,
     );
     if let Some(timestamp) = &sealed.timestamp {
         insert_header(map, "X-Registry-Timestamped-At", &timestamp.timestamped_at);
@@ -1493,10 +1497,16 @@ fn sanitize_document_type(raw: &str) -> String {
     }
 }
 
+/// The rendered document in the representation the caller accepts. The
+/// labelled `pdfDigest` and `dataDigest` sit beside the bare hex `pdfSha256`
+/// and `dataSha256`, which are deprecated and kept for existing callers; the
+/// PDF representation does the same in headers.
 fn respond_rendered(
     headers: &HeaderMap,
     rendered: WorkerRendered,
 ) -> Result<Response, RenderProblem> {
+    let pdf_digest = sha256_label(&rendered.pdf_sha256);
+    let data_digest = sha256_label(&rendered.data_sha256);
     let accepts_json = headers
         .get(header::ACCEPT)
         .and_then(|v| v.to_str().ok())
@@ -1506,6 +1516,8 @@ fn respond_rendered(
     if accepts_json {
         let body = serde_json::json!({
             "pdfBase64": rendered.pdf_base64,
+            "pdfDigest": pdf_digest,
+            "dataDigest": data_digest,
             "pdfSha256": rendered.pdf_sha256,
             "dataSha256": rendered.data_sha256,
             "documentVersion": format!("{} v{}", rendered.document_id, rendered.document_version),
@@ -1530,6 +1542,8 @@ fn respond_rendered(
     )
         .into_response();
     let map = response.headers_mut();
+    insert_header(map, "X-Registry-Pdf-Digest", &pdf_digest);
+    insert_header(map, "X-Registry-Data-Digest", &data_digest);
     insert_header(map, "X-Registry-Pdf-Sha256", &rendered.pdf_sha256);
     insert_header(map, "X-Registry-Data-Sha256", &rendered.data_sha256);
     insert_header(
