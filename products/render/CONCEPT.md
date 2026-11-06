@@ -47,8 +47,8 @@ The boundary:
 
 - Render seals only what it just rendered from a verified package, never bytes
   a caller supplies. There is no route that accepts a PDF to sign.
-- The private key stays in the serving (parent) process. The render worker
-  receives no key; it renders the first revision and writes an empty signature
+- The private key is loaded in the serving (parent) process and never sent
+  to the render worker. The render worker receives no key; it renders the first revision and writes an empty signature
   field the parent fixed. The parent checks the field's shape by byte offsets
   and checks the package hash, signs, optionally timestamps, and splices the
   signature in.
@@ -82,7 +82,8 @@ What sealing does not do:
   B-LT or B-LTA level.
 - It does not support external signatures yet: the key is a local JWK
   reached through a secret reference. Local key files suit development and
-  pilots.
+  pilots only: a render worker that gained code execution runs as the
+  serving user and can read one.
 - It does not pin the timestamp authority's identity or decide trust. The
   authority is reached over TLS with the host's roots, and validators decide
   whether the seal certificate and the timestamp authority are trusted.
