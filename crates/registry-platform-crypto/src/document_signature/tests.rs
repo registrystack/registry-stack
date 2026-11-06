@@ -334,6 +334,53 @@ fn check_for_signing_accepts_either_signing_key_usage_alone() {
     }
 }
 
+/// A seal certificate without an extended key usage, or with one that names
+/// a document-signing purpose, allows document signing; one whose purposes
+/// are all others does not, and a validator such as Acrobat flags it.
+#[test]
+fn the_extended_key_usage_is_read_for_a_document_signing_purpose() {
+    let pki = test_pki();
+    let purposes = |usages: Vec<ExtendedKeyUsagePurpose>| {
+        pki.issue_seal_with(SigningAlgorithm::Es256, move |params| {
+            params.extended_key_usages = usages;
+        })
+        .expect("seal")
+        .chain()
+        .expect("chain")
+        .allows_document_signing_purpose()
+    };
+    assert!(purposes(Vec::new()), "no extended key usage");
+    for allowing in [
+        vec![ExtendedKeyUsagePurpose::Any],
+        vec![ExtendedKeyUsagePurpose::EmailProtection],
+        // id-kp-documentSigning, RFC 9336.
+        vec![ExtendedKeyUsagePurpose::Other(vec![
+            1, 3, 6, 1, 5, 5, 7, 3, 36,
+        ])],
+        // Microsoft document signing.
+        vec![ExtendedKeyUsagePurpose::Other(vec![
+            1, 3, 6, 1, 4, 1, 311, 10, 3, 12,
+        ])],
+        // Adobe Authentic Documents Trust.
+        vec![
+            ExtendedKeyUsagePurpose::ServerAuth,
+            ExtendedKeyUsagePurpose::Other(vec![1, 2, 840, 113_583, 1, 1, 5]),
+        ],
+    ] {
+        assert!(purposes(allowing.clone()), "{allowing:?}");
+    }
+    for refusing in [
+        vec![ExtendedKeyUsagePurpose::ServerAuth],
+        vec![
+            ExtendedKeyUsagePurpose::ClientAuth,
+            ExtendedKeyUsagePurpose::CodeSigning,
+            ExtendedKeyUsagePurpose::TimeStamping,
+        ],
+    ] {
+        assert!(!purposes(refusing.clone()), "{refusing:?}");
+    }
+}
+
 #[test]
 fn check_for_signing_refuses_outside_validity() {
     let pki = test_pki();

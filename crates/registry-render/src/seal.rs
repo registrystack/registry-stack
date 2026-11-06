@@ -335,6 +335,18 @@ pub fn check_chain(id: &str, seal: &SealRuntime, now: OffsetDateTime) -> ChainCh
     if !chain.may_sign() {
         findings.push(usage_finding(id));
     }
+    if !chain.allows_document_signing_purpose() {
+        findings.push(chain_warning(
+            "render.runtime.seal-certificate-purpose",
+            format!(
+                "signing.seals.{id}.certificateChainFile names a seal certificate whose extended \
+                 key usage names no document-signing purpose; validators such as Acrobat flag \
+                 its seals"
+            ),
+            "Use a seal certificate with no extended key usage, or one that lists document \
+             signing, email protection or anyExtendedKeyUsage.",
+        ));
+    }
     let contents_capacity = match reserved_space(id, &chain, seal) {
         Ok(capacity) => Some(capacity),
         Err(finding) => {
@@ -629,6 +641,12 @@ impl Seal {
 
     pub fn id(&self) -> &str {
         &self.id
+    }
+
+    /// Whether the seal certificate's extended key usage, if any, names a
+    /// document-signing purpose.
+    pub fn allows_document_signing_purpose(&self) -> bool {
+        self.chain.allows_document_signing_purpose()
     }
 
     /// Whether the runtime file declares the seal `trust: test-only`.

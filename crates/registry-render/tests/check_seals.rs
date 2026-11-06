@@ -218,7 +218,7 @@ fn check_with_the_environment_reads_each_seal_certificate_chain() {
     assert!(codes(&report).is_empty(), "{report}");
     assert!(report.get("sealChains").is_none(), "read: {report}");
 
-    let cases: [(Customise, Option<i32>, &str, &str); 5] = [
+    let cases: [(Customise, Option<i32>, &str, &str); 6] = [
         (
             &|params| params.not_after = now + time::Duration::days(10),
             Some(0),
@@ -239,6 +239,14 @@ fn check_with_the_environment_reads_each_seal_certificate_chain() {
             Some(0),
             "warning",
             "render.runtime.seal-certificate-not-yet-valid",
+        ),
+        (
+            &|params| {
+                params.extended_key_usages = vec![rcgen::ExtendedKeyUsagePurpose::ServerAuth];
+            },
+            Some(0),
+            "warning",
+            "render.runtime.seal-certificate-purpose",
         ),
         (
             &|params| params.key_usages = vec![rcgen::KeyUsagePurpose::KeyEncipherment],

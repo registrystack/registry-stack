@@ -117,6 +117,10 @@ What it does:
   not hold the signer's public key, that has neither the digitalSignature nor
   the nonRepudiation key usage, or whose validity does not include the given
   time. Errors name the certificate by fingerprint only, never by subject.
+  `CertificateChain::allows_document_signing_purpose` says whether the seal
+  certificate has no extended key usage or one naming document signing (RFC
+  9336 or Microsoft's), Adobe Authentic Documents, email protection or
+  anyExtendedKeyUsage, for a caller to warn on, not refuse.
 - `sign_detached` signs the concatenated parts as detached `SignedData`:
   id-data content, the chain in `certificates`, one signer identified by
   issuer and serial number, and exactly the signed attributes content type,
