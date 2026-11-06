@@ -2,7 +2,9 @@
 use registry_platform_yaml::{Diagnostic, Report, Severity};
 use std::path::{Path, PathBuf};
 
-/// A category, authored location and repair action, without runtime values.
+/// A category, authored location and repair action, without run payload
+/// values. A restore refusal's operator message names the run id or package
+/// digest; HTTP problems carry only the fixed detail of their problem code.
 #[derive(Debug, thiserror::Error)]
 #[error("{}", self.render())]
 pub struct CoordinatorError {

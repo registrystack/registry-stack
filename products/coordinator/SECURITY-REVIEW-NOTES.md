@@ -614,10 +614,7 @@ snapshot breaks it is held alone with `definition-refused` (see "Runs whose
 retained definition does not restore"): nothing runs for it, retry,
 reconcile and cancel refuse it, and normal serving, readiness, other runs,
 admissions and apply continue. Operator cost: only a release that accepts a
-held run's definition can end that run. Before upgrading, run the new
-`coordinatorctl check` on each project and the new
-`coordinatorctl deployment-status` against the deployment, whose `heldRuns`
-lists the runs in flight that this version would hold.
+held run's definition can end that run.
 
 ### Tests
 
