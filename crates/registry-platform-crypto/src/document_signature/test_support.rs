@@ -5,7 +5,8 @@
 //! timestamp authority certificate issued by the root with a critical
 //! extended key usage of id-kp-timeStamping. [`TestPki::issue_seal`] issues
 //! seal certificates under the issuing CA, each with a fresh private JWK for
-//! [`LocalJwkSigner`]. Every key is generated at call time and lives only in
+//! [`LocalJwkSigner`]. [`TestTransit`] serves such a key as a Transit
+//! signing proxy would. Every key is generated at call time and lives only in
 //! memory. Nothing here is fit for production signing.
 
 use super::asn1::{
@@ -39,6 +40,11 @@ use x509_cert::ext::pkix::name::GeneralName;
 use x509_cert::ext::pkix::ExtendedKeyUsage;
 use x509_cert::Certificate;
 
+#[cfg(unix)]
+mod transit;
+#[cfg(unix)]
+pub use transit::TestTransit;
+
 /// The organization every test seal certificate names.
 pub const TEST_SEAL_ORGANIZATION: &str = "Registry Stack Test Ministry";
 
@@ -62,6 +68,10 @@ pub enum TestPkiError {
     UnsupportedAlgorithm,
     #[error("the system random number generator failed")]
     RandomUnavailable,
+    #[error("a test Transit key is an ECDSA P-256 private JWK")]
+    TransitKey,
+    #[error("the test Transit socket could not be served: {0}")]
+    TransitSocket(#[from] std::io::Error),
 }
 
 /// A root CA, an issuing CA, and a timestamp authority, all in memory.

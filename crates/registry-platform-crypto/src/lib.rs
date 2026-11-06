@@ -650,13 +650,13 @@ impl TransitSignerConfig {
         let socket_path = socket_path.into();
         let mount_path = mount_path.into();
         let key_name = key_name.into();
-        if !socket_path.is_absolute()
-            || !valid_transit_path(&mount_path)
-            || !valid_transit_segment(&key_name)
-            || key_version == 0
-            || request_timeout.is_zero()
-            || request_timeout > MAX_TRANSIT_REQUEST_TIMEOUT
-            || public_jwk.algorithm().ok() != Some(SigningAlgorithm::Es256)
+        if !valid_transit_binding(
+            &socket_path,
+            &mount_path,
+            &key_name,
+            key_version,
+            request_timeout,
+        ) || public_jwk.algorithm().ok() != Some(SigningAlgorithm::Es256)
             || public_jwk.kid.as_deref().is_none_or(|kid| {
                 kid.trim().is_empty() || kid.len() > 256 || kid.chars().any(char::is_control)
             })
@@ -674,6 +674,65 @@ impl TransitSignerConfig {
             public_jwk,
             request_timeout,
         })
+    }
+
+    /// Bind to the public key Transit itself holds for `key_version`, read
+    /// after the custody and version checks [`TransitSigner::initialize`]
+    /// makes, as an ES256 public JWK whose `kid` is its RFC 7638 thumbprint.
+    /// The binding is refused, before the socket is opened, unless
+    /// [`TransitSignerConfig::new`] would accept it.
+    ///
+    /// Nothing outside Transit vouches for the key read here, so the caller
+    /// anchors it before relying on a signature: it requests a certificate
+    /// for the key, or checks the key against a certificate that already
+    /// certifies it. A caller that knows the identity in advance pins it
+    /// with [`TransitSignerConfig::new`].
+    pub async fn discover(
+        socket_path: impl Into<PathBuf>,
+        mount_path: impl Into<String>,
+        key_name: impl Into<String>,
+        key_version: u32,
+        request_timeout: Duration,
+    ) -> Result<Self, TransitInitializationError> {
+        let socket_path = socket_path.into();
+        let mount_path = mount_path.into();
+        let key_name = key_name.into();
+        if !valid_transit_binding(
+            &socket_path,
+            &mount_path,
+            &key_name,
+            key_version,
+            request_timeout,
+        ) {
+            return Err(TransitInitializationError::InvalidConfiguration);
+        }
+        let client =
+            build_transit_client(&socket_path).map_err(|_| TransitInitializationError::Client)?;
+        let metadata = send_transit_json(
+            &client,
+            request_timeout,
+            reqwest::Method::GET,
+            &transit_metadata_url(&mount_path, &key_name),
+            None,
+        )
+        .await?;
+        let pem = transit_public_key_pem(&metadata, key_version)?;
+        let mut public_jwk =
+            transit_public_jwk(pem).map_err(|_| TransitInitializationError::InvalidResponse)?;
+        public_jwk.kid = Some(
+            public_jwk
+                .jkt()
+                .map_err(|_| TransitInitializationError::InvalidResponse)?,
+        );
+        Self::new(
+            socket_path,
+            mount_path,
+            key_name,
+            key_version,
+            public_jwk,
+            request_timeout,
+        )
+        .map_err(|_| TransitInitializationError::InvalidConfiguration)
     }
 }
 
@@ -698,6 +757,10 @@ impl fmt::Debug for TransitSignerConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 #[non_exhaustive]
 pub enum TransitInitializationError {
+    /// The socket path, mount, key name, key version or timeout is outside
+    /// what [`TransitSignerConfig::new`] accepts, so no request was sent.
+    #[error("the Transit signer configuration is invalid")]
+    InvalidConfiguration,
     /// The HTTP client for the Unix socket could not be built.
     #[error("the Transit client could not be built for the configured Unix socket")]
     Client,
@@ -813,10 +876,7 @@ impl TransitSigner {
             .map_err(|_| TransitInitializationError::Client)?;
         let signer = Self {
             client,
-            metadata_url: format!(
-                "http://localhost/v1/{}/keys/{}",
-                config.mount_path, config.key_name
-            ),
+            metadata_url: transit_metadata_url(&config.mount_path, &config.key_name),
             sign_url: format!(
                 "http://localhost/v1/{}/sign/{}/sha2-256",
                 config.mount_path, config.key_name
@@ -860,72 +920,11 @@ impl TransitSigner {
         url: &str,
         body: Option<&Value>,
     ) -> Result<Value, TransitRequestFault> {
-        let mut request = self
-            .client
-            .request(method, url)
-            .header("X-Vault-Request", "true")
-            .timeout(self.request_timeout);
-        if let Some(body) = body {
-            request = request.json(body);
-        }
-        let response = request
-            .send()
-            .await
-            .map_err(|_| TransitRequestFault::Unavailable)?;
-        let status = response.status();
-        if status.is_server_error() {
-            return Err(TransitRequestFault::ProviderFailed);
-        }
-        if !status.is_success() {
-            return Err(TransitRequestFault::Refused);
-        }
-        let bytes = read_bounded_transit_response(response)
-            .await
-            .map_err(|_| TransitRequestFault::InvalidResponse)?;
-        parse_json_strict(&bytes).map_err(|_| TransitRequestFault::InvalidResponse)
+        send_transit_json(&self.client, self.request_timeout, method, url, body).await
     }
 
     fn validate_metadata(&self, document: &Value) -> Result<(), TransitInitializationError> {
-        let data = document
-            .get("data")
-            .and_then(Value::as_object)
-            .ok_or(TransitInitializationError::InvalidResponse)?;
-        let required_false = ["derived", "exportable", "allow_plaintext_backup"];
-        if data.get("type").and_then(Value::as_str) != Some("ecdsa-p256")
-            || data.get("supports_signing").and_then(Value::as_bool) != Some(true)
-            || required_false
-                .iter()
-                .any(|field| data.get(*field).and_then(Value::as_bool) != Some(false))
-        {
-            return Err(TransitInitializationError::Custody);
-        }
-
-        let latest_version = data
-            .get("latest_version")
-            .and_then(Value::as_u64)
-            .and_then(|value| u32::try_from(value).ok())
-            .ok_or(TransitInitializationError::InvalidResponse)?;
-        let minimum_signing_version = data
-            .get("min_encryption_version")
-            .and_then(Value::as_u64)
-            .and_then(|value| u32::try_from(value).ok())
-            .ok_or(TransitInitializationError::InvalidResponse)?;
-        if self.key_version > latest_version {
-            return Err(TransitInitializationError::KeyVersionNotCreated);
-        }
-        if self.key_version < minimum_signing_version {
-            return Err(TransitInitializationError::KeyVersionRetired);
-        }
-
-        let version = self.key_version.to_string();
-        let pem = data
-            .get("keys")
-            .and_then(Value::as_object)
-            .and_then(|keys| keys.get(&version))
-            .and_then(Value::as_object)
-            .and_then(|key| key.get("public_key"))
-            .and_then(Value::as_str)
-            .ok_or(TransitInitializationError::PublicKeyMismatch)?;
+        let pem = transit_public_key_pem(document, self.key_version)?;
         validate_transit_public_key(pem, &self.public_jwk)
             .map_err(|_| TransitInitializationError::PublicKeyMismatch)
     }
@@ -1021,6 +1020,136 @@ impl SigningProvider for TransitSigner {
             }
         }
     }
+}
+
+/// The key read URL of `key_name` under `mount_path`.
+#[cfg(feature = "transit")]
+fn transit_metadata_url(mount_path: &str, key_name: &str) -> String {
+    format!("http://localhost/v1/{mount_path}/keys/{key_name}")
+}
+
+/// Whether a Transit binding is one a signer accepts: an absolute socket,
+/// a mount path and key name of URL-safe segments, a pinned version and a
+/// timeout within [`MAX_TRANSIT_REQUEST_TIMEOUT`].
+#[cfg(feature = "transit")]
+fn valid_transit_binding(
+    socket_path: &Path,
+    mount_path: &str,
+    key_name: &str,
+    key_version: u32,
+    request_timeout: Duration,
+) -> bool {
+    socket_path.is_absolute()
+        && valid_transit_path(mount_path)
+        && valid_transit_segment(key_name)
+        && key_version != 0
+        && !request_timeout.is_zero()
+        && request_timeout <= MAX_TRANSIT_REQUEST_TIMEOUT
+}
+
+/// Send one request to the Transit proxy and read its bounded JSON answer.
+#[cfg(feature = "transit")]
+async fn send_transit_json(
+    client: &reqwest::Client,
+    request_timeout: Duration,
+    method: reqwest::Method,
+    url: &str,
+    body: Option<&Value>,
+) -> Result<Value, TransitRequestFault> {
+    let mut request = client
+        .request(method, url)
+        .header("X-Vault-Request", "true")
+        .timeout(request_timeout);
+    if let Some(body) = body {
+        request = request.json(body);
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|_| TransitRequestFault::Unavailable)?;
+    let status = response.status();
+    if status.is_server_error() {
+        return Err(TransitRequestFault::ProviderFailed);
+    }
+    if !status.is_success() {
+        return Err(TransitRequestFault::Refused);
+    }
+    let bytes = read_bounded_transit_response(response)
+        .await
+        .map_err(|_| TransitRequestFault::InvalidResponse)?;
+    parse_json_strict(&bytes).map_err(|_| TransitRequestFault::InvalidResponse)
+}
+
+/// The PEM public key a key read holds for `key_version`, once the key's
+/// custody flags and version bounds allow signing with that version.
+#[cfg(feature = "transit")]
+fn transit_public_key_pem(
+    document: &Value,
+    key_version: u32,
+) -> Result<&str, TransitInitializationError> {
+    let data = document
+        .get("data")
+        .and_then(Value::as_object)
+        .ok_or(TransitInitializationError::InvalidResponse)?;
+    let required_false = ["derived", "exportable", "allow_plaintext_backup"];
+    if data.get("type").and_then(Value::as_str) != Some("ecdsa-p256")
+        || data.get("supports_signing").and_then(Value::as_bool) != Some(true)
+        || required_false
+            .iter()
+            .any(|field| data.get(*field).and_then(Value::as_bool) != Some(false))
+    {
+        return Err(TransitInitializationError::Custody);
+    }
+
+    let latest_version = data
+        .get("latest_version")
+        .and_then(Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok())
+        .ok_or(TransitInitializationError::InvalidResponse)?;
+    let minimum_signing_version = data
+        .get("min_encryption_version")
+        .and_then(Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok())
+        .ok_or(TransitInitializationError::InvalidResponse)?;
+    if key_version > latest_version {
+        return Err(TransitInitializationError::KeyVersionNotCreated);
+    }
+    if key_version < minimum_signing_version {
+        return Err(TransitInitializationError::KeyVersionRetired);
+    }
+
+    let version = key_version.to_string();
+    data.get("keys")
+        .and_then(Value::as_object)
+        .and_then(|keys| keys.get(&version))
+        .and_then(Value::as_object)
+        .and_then(|key| key.get("public_key"))
+        .and_then(Value::as_str)
+        .ok_or(TransitInitializationError::PublicKeyMismatch)
+}
+
+/// The ES256 public JWK, without a `kid`, of a Transit PEM public key.
+#[cfg(feature = "transit")]
+fn transit_public_jwk(pem: &str) -> Result<PublicJwk, SigningError> {
+    let provider = P256PublicKey::from_public_key_pem(pem)
+        .map_err(|_| transit_error("transit provider public key is invalid"))?;
+    let point = provider.to_sec1_point(false);
+    let coordinates = point
+        .as_bytes()
+        .strip_prefix(&[0x04])
+        .filter(|coordinates| coordinates.len() == 64)
+        .ok_or_else(|| transit_error("transit provider public key is invalid"))?;
+    let (x, y) = coordinates.split_at(32);
+    Ok(PublicJwk {
+        kty: "EC".to_owned(),
+        kid: None,
+        alg: Some(SigningAlgorithm::Es256.jwa_name().to_owned()),
+        crv: Some("P-256".to_owned()),
+        x: Some(URL_SAFE_NO_PAD.encode(x)),
+        y: Some(URL_SAFE_NO_PAD.encode(y)),
+        n: None,
+        e: None,
+    })
 }
 
 #[cfg(feature = "transit")]
@@ -2847,6 +2976,133 @@ mod tests {
         }
     }
 
+    /// A caller with no public identity to pin yet, one requesting a
+    /// certificate for the key, takes the key Transit holds for the version,
+    /// as a thumbprint-named ES256 JWK, and the signer it builds proves it.
+    #[cfg(all(unix, feature = "transit"))]
+    #[tokio::test]
+    async fn a_discovered_transit_binding_takes_the_providers_key_for_the_version() {
+        const METADATA_PATH: &str = "/v1/transit/keys/key";
+        const SIGN_PATH: &str = "/v1/transit/sign/key/sha2-256";
+        let private = PrivateJwk::parse(P256_JWK).expect("P-256 private JWK");
+        let metadata = transit_metadata(&p256_public_pem(&private));
+        let replies = vec![
+            transit_reply("GET", METADATA_PATH, None, metadata.clone()),
+            transit_reply("GET", METADATA_PATH, None, metadata),
+            transit_reply(
+                "POST",
+                SIGN_PATH,
+                Some(transit_request(TRANSIT_SELF_TEST_MESSAGE, 7)),
+                transit_signature(&private, TRANSIT_SELF_TEST_MESSAGE, 7),
+            ),
+        ];
+        let (directory, socket_path, server) = spawn_transit_mock(replies);
+        let config =
+            TransitSignerConfig::discover(socket_path, "transit", "key", 7, Duration::from_secs(1))
+                .await
+                .expect("the Transit key is discovered");
+        let mut expected = private.public();
+        expected.kid = Some(expected.jkt().expect("thumbprint"));
+        let signer = TransitSigner::initialize(config)
+            .await
+            .expect("the discovered binding initializes");
+        assert_eq!(signer.public_jwk(), expected);
+        assert_eq!(signer.key_id(), expected.kid.as_deref().unwrap());
+        assert_eq!(signer.readiness(), KeyReadiness::Ready);
+        server.await.expect("mock Transit server completed");
+        drop(directory);
+    }
+
+    /// Discovery makes every check initialization makes before it reads the
+    /// key: custody, the version bounds, a key for the version.
+    #[cfg(all(unix, feature = "transit"))]
+    #[tokio::test]
+    async fn transit_discovery_refuses_what_initialization_refuses() {
+        const METADATA_PATH: &str = "/v1/transit/keys/key";
+        let private = PrivateJwk::parse(P256_JWK).expect("P-256 private JWK");
+        let pem = p256_public_pem(&private);
+        let mut exportable = transit_metadata(&pem);
+        exportable["data"]["exportable"] = Value::Bool(true);
+        let mut retired = transit_metadata(&pem);
+        retired["data"]["min_encryption_version"] = json!(8);
+        let mut not_created = transit_metadata(&pem);
+        not_created["data"]["latest_version"] = json!(6);
+        let mut no_key = transit_metadata(&pem);
+        no_key["data"]["keys"]
+            .as_object_mut()
+            .expect("keys object")
+            .remove("7");
+        let mut not_a_key = transit_metadata(&pem);
+        not_a_key["data"]["keys"]["7"]["public_key"] = json!("not a PEM");
+        for (metadata, expected) in [
+            (exportable, TransitInitializationError::Custody),
+            (retired, TransitInitializationError::KeyVersionRetired),
+            (
+                not_created,
+                TransitInitializationError::KeyVersionNotCreated,
+            ),
+            (no_key, TransitInitializationError::PublicKeyMismatch),
+            (not_a_key, TransitInitializationError::InvalidResponse),
+        ] {
+            let replies = vec![transit_reply("GET", METADATA_PATH, None, metadata)];
+            let (directory, socket_path, server) = spawn_transit_mock(replies);
+            let error = TransitSignerConfig::discover(
+                socket_path,
+                "transit",
+                "key",
+                7,
+                Duration::from_secs(1),
+            )
+            .await
+            .expect_err("unsafe Transit metadata must reject");
+            assert_eq!(error, expected);
+            server.await.expect("mock Transit server completed");
+            drop(directory);
+        }
+
+        let absent = tempfile::tempdir().expect("temporary Transit directory");
+        let error = TransitSignerConfig::discover(
+            absent.path().join("transit.sock"),
+            "transit",
+            "key",
+            7,
+            Duration::from_secs(1),
+        )
+        .await
+        .expect_err("a missing socket must reject");
+        assert_eq!(error, TransitInitializationError::Unavailable);
+    }
+
+    /// Discovery accepts exactly the bindings `new` accepts, and refuses the
+    /// rest before it opens the socket.
+    #[cfg(all(unix, feature = "transit"))]
+    #[tokio::test]
+    async fn transit_discovery_refuses_an_invalid_binding_unasked() {
+        let absent = tempfile::tempdir().expect("temporary Transit directory");
+        let socket = absent.path().join("transit.sock");
+        let second = Duration::from_secs(1);
+        let cases: [(PathBuf, &str, &str, u32, Duration); 6] = [
+            (PathBuf::from("relative.sock"), "transit", "key", 7, second),
+            (socket.clone(), "../transit", "key", 7, second),
+            (socket.clone(), "transit", "key/name", 7, second),
+            (socket.clone(), "transit", "key", 0, second),
+            (socket.clone(), "transit", "key", 7, Duration::ZERO),
+            (
+                socket,
+                "transit",
+                "key",
+                7,
+                MAX_TRANSIT_REQUEST_TIMEOUT + Duration::from_millis(1),
+            ),
+        ];
+        for (socket, mount, name, version, timeout) in cases {
+            let error = TransitSignerConfig::discover(socket, mount, name, version, timeout)
+                .await
+                .expect_err("an invalid binding must reject");
+            assert_eq!(error, TransitInitializationError::InvalidConfiguration);
+        }
+    }
+
     /// A socket that is not there, a provider that answers with a refusal, and
     /// a key whose signature does not verify are three unrelated faults. Each
     /// initialization failure names its own, so an operator restarting after a
@@ -2931,6 +3187,7 @@ mod tests {
         drop(directory);
 
         for fault in [
+            TransitInitializationError::InvalidConfiguration,
             TransitInitializationError::Unavailable,
             TransitInitializationError::Refused,
             TransitInitializationError::ProviderFailed,

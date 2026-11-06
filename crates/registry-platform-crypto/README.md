@@ -165,8 +165,10 @@ What it does not do:
 The `test-support` feature adds `document_signature::test_support`: an
 in-memory `TestPki` with a root CA, an issuing CA, ES256, ES384, RS256 and RS384
 seal certificates with private JWKs for `LocalJwkSigner`, a timestamp
-authority with a critical timeStamping extended key usage, and
-`respond_to_timestamp_request`. Enable it from `[dev-dependencies]` only.
+authority with a critical timeStamping extended key usage,
+`respond_to_timestamp_request`, and, on Unix, `TestTransit`, a Transit signing
+proxy that serves one P-256 key version from a private JWK. Enable it from
+`[dev-dependencies]` only.
 
 ## Supported Algorithms
 
@@ -201,6 +203,12 @@ interoperability and security policy.
   initialization returns a `TransitInitializationError` naming one cause, such
   as an unreachable socket or a pinned version below `min_encryption_version`,
   and never a provider response, path, or key material.
+- `TransitSignerConfig::discover` binds to the public key Transit itself holds
+  for the pinned version, after the same custody and version checks, for a
+  caller with no identity to pin yet. Nothing outside Transit vouches for that
+  key, so the caller anchors it before relying on a signature: it requests a
+  certificate for the key, or checks the key against the certificate that
+  certifies it, as a document seal does.
 - Readiness-gated live apply should use `KeyReadinessSnapshot`; only
   `status = active` plus `readiness = ready` is accepted. Degraded,
   not-ready, unknown, publish-only, and disabled keys fail closed before

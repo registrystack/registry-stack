@@ -1400,3 +1400,72 @@ fn the_refusing_test_authority_answers_with_a_rejection() {
         Err(TimestampError::NotGranted { status: 2 })
     ));
 }
+
+// ----- Seals signed through Transit -----
+
+/// A seal key held by Transit signs a detached signature that verifies
+/// under the seal certificate, through the test proxy a consumer's tests
+/// use; once the proxy is gone, the next signature fails and the signer
+/// says it is not ready.
+#[cfg(all(unix, feature = "transit"))]
+#[tokio::test]
+async fn a_transit_held_seal_key_signs_under_its_certificate() {
+    use super::test_support::TestTransit;
+    use crate::{TransitInitializationError, TransitSigner, TransitSignerConfig};
+
+    let pki = test_pki();
+    let seal = seal(&pki, SigningAlgorithm::Es256);
+    let directory = tempfile::tempdir().expect("socket directory");
+    let socket = directory.path().join("transit.sock");
+    let transit = TestTransit::start(&socket, "transit", "seal", 4, seal.private_jwk())
+        .expect("test Transit");
+    let config = TransitSignerConfig::discover(
+        transit.socket_path(),
+        "transit",
+        "seal",
+        4,
+        std::time::Duration::from_secs(2),
+    )
+    .await
+    .expect("the key is discovered");
+    let signer = TransitSigner::initialize(config)
+        .await
+        .expect("the signer initializes");
+    let chain = seal.chain().expect("seal chain");
+    let signature = sign_detached(&[FIRST_RANGE, SECOND_RANGE], &chain, &signer)
+        .await
+        .expect("detached signature");
+    let verified = verify_detached_signature(&signature.cms_der, &[FIRST_RANGE, SECOND_RANGE])
+        .expect("the signature verifies");
+    assert_eq!(verified.signer_fingerprint, chain.leaf_sha256_fingerprint());
+    assert_eq!(transit.signatures(), 2, "the self-test, then the seal");
+
+    // A key the proxy reports as exportable is refused before it signs.
+    let exportable = directory.path().join("exportable.sock");
+    let refusing = TestTransit::start_with(
+        &exportable,
+        "transit",
+        "seal",
+        4,
+        seal.private_jwk(),
+        |metadata| metadata["data"]["exportable"] = serde_json::Value::Bool(true),
+    )
+    .expect("test Transit");
+    let refused = TransitSignerConfig::discover(
+        &exportable,
+        "transit",
+        "seal",
+        4,
+        std::time::Duration::from_secs(2),
+    )
+    .await
+    .expect_err("an exportable key is refused");
+    assert_eq!(refused, TransitInitializationError::Custody);
+    assert_eq!(refusing.signatures(), 0);
+
+    drop(transit);
+    sign_detached(&[FIRST_RANGE, SECOND_RANGE], &chain, &signer)
+        .await
+        .expect_err("no proxy, no signature");
+    assert_eq!(signer.readiness(), KeyReadiness::NotReady);
+}
