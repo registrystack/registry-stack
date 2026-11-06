@@ -9,7 +9,10 @@
   `set_tag`, `parse_json`, `get_fn_metadata_list`) and time (`timestamp`,
   `elapsed`, instant arithmetic). Its string `pad` refuses an empty padding
   string instead of never returning, and its string `replace` refuses a
-  result over the string bound before building it instead of after. Change
+  result over the string bound before building it instead of after. It also
+  disables the `curry` keyword: Rhai does not count data curried into a
+  function pointer against the size bounds, and every copy of the pointer
+  copies that data, so a script that uses `curry` no longer compiles. Change
   `Standard` to `Deterministic`; a script that calls a left-out function
   fails with a function-not-found error. `registry-platform-hooks` Rhai hook
   programs run on the new base.

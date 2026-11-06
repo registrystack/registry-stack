@@ -6,7 +6,8 @@
   holds for every call a script can make. `timestamp`, `elapsed`, `sleep`,
   `exit`, `take`, `tag`, `set_tag`, `parse_json` and `get_fn_metadata_list`
   are no longer available, and string `pad` with an empty padding string,
-  which never returned, now fails. A script that makes such a call fails the
+  which never returned, now fails. A script that uses the `curry` keyword no
+  longer compiles. A script that makes such a call fails the
   call as any failing script does; `adapterctl check` does not flag it.
   Evidence Sources run their packs on the same engine. Remove those calls.
 

@@ -14,7 +14,8 @@
 - BREAKING: Action plans and Rhai hook programs run on a deterministic
   engine, so the evaluation deadline holds for every call a script can make.
   The engine no longer provides `timestamp`, `elapsed`, `sleep`, `exit`,
-  `take`, `tag`, `set_tag`, `parse_json` or `get_fn_metadata_list`. A plan
+  `take`, `tag`, `set_tag`, `parse_json` or `get_fn_metadata_list`, and a
+  plan or hook program that uses the `curry` keyword no longer compiles. A plan
   that calls one of them by literal name, directly, as a method or through
   `Fn("name")`, is refused by `bregctl check` and the package compile with
   `breg.action.plan-function-unavailable`, which names the function and its

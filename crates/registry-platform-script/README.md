@@ -22,9 +22,11 @@ without the language-core package (`sleep`, `exit`, `take`, `tag`, `set_tag`,
 `elapsed`, instant arithmetic). String `pad` is replaced by a version that
 refuses an empty padding string, and string `replace` by one that works out
 the size of its result and refuses one over the string bound before building
-it. A script that calls a left-out function fails at run time with a
-function-not-found error. `Raw` carries no packages at all, for a product that
-registers every callable itself.
+it. The `curry` keyword is disabled, because Rhai does not count data curried
+into a function pointer against the size bounds and every copy of the pointer
+copies that data; a script that uses it fails to compile. A script that calls
+a left-out function fails at run time with a function-not-found error. `Raw`
+carries no packages at all, for a product that registers every callable itself.
 
 The deterministic base has no clock, no sleep, and no ambient input: a script
 sees only its arguments and what the product registers, so the same call gives

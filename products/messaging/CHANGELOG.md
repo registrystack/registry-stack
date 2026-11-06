@@ -7,6 +7,7 @@
   make. `timestamp`, `elapsed`, `sleep`, `exit`, `take`, `tag`, `set_tag`,
   `parse_json` and `get_fn_metadata_list` are no longer available, and string
   `pad` with an empty padding string, which never returned, now fails. A
+  script that uses the `curry` keyword no longer compiles. A
   `prepare` script that makes such a call fails the delivery with
   `provider.prepare-failed` and sends nothing; an `interpret` or `receipt`
   script fails as any failing script does. Remove those calls.
