@@ -370,7 +370,7 @@ fn spki_matches_jwk(spki: &SubjectPublicKeyInfoOwned, jwk: &PublicJwk) -> KeyCom
             spki.algorithm.oid == oid::EC_PUBLIC_KEY
                 && named_curve == Some(curve)
                 && certificate_key.first() == Some(&0x04)
-                && certificate_key[1..] == [x, y].concat()
+                && certificate_key[1..] == [x.as_slice(), y.as_slice()].concat()
         }
         SigningAlgorithm::Rs256 | SigningAlgorithm::Rs384 => {
             let (Ok(n), Ok(e)) = (

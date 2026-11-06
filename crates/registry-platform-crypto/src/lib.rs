@@ -244,7 +244,10 @@ impl KeyReadinessSnapshot {
     }
 }
 
+/// A private JWK. Deserializing one goes through [`PrivateJwkMembers`], so a
+/// private member read from a document that is then refused is erased.
 #[derive(Clone, Deserialize)]
+#[serde(from = "PrivateJwkMembers")]
 pub struct PrivateJwk {
     pub kty: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -273,6 +276,102 @@ pub struct PrivateJwk {
     pub dq: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub qi: Option<String>,
+}
+
+/// The text of a private JWK member, erased when it drops. A member read
+/// before deserialization fails is dropped as one of these, so it leaves no
+/// copy behind.
+#[derive(Deserialize)]
+#[serde(transparent)]
+struct SecretMember(String);
+
+impl SecretMember {
+    /// Move the text out without copying it; the emptied member still
+    /// erases on drop.
+    fn into_inner(mut self) -> String {
+        std::mem::take(&mut self.0)
+    }
+}
+
+impl Drop for SecretMember {
+    fn drop(&mut self) {
+        self.0.zeroize();
+    }
+}
+
+/// The members of a private JWK as deserialized, before they move into
+/// [`PrivateJwk`], which erases them on drop.
+#[derive(Deserialize)]
+struct PrivateJwkMembers {
+    kty: String,
+    #[serde(default)]
+    kid: Option<String>,
+    #[serde(default)]
+    alg: Option<String>,
+    #[serde(default)]
+    crv: Option<String>,
+    #[serde(default)]
+    d: Option<SecretMember>,
+    #[serde(default)]
+    x: Option<String>,
+    #[serde(default)]
+    y: Option<String>,
+    #[serde(default)]
+    n: Option<String>,
+    #[serde(default)]
+    e: Option<String>,
+    #[serde(default)]
+    p: Option<SecretMember>,
+    #[serde(default)]
+    q: Option<SecretMember>,
+    #[serde(default)]
+    dp: Option<SecretMember>,
+    #[serde(default)]
+    dq: Option<SecretMember>,
+    #[serde(default)]
+    qi: Option<SecretMember>,
+}
+
+impl From<PrivateJwkMembers> for PrivateJwk {
+    fn from(members: PrivateJwkMembers) -> Self {
+        let secret = |member: Option<SecretMember>| member.map(SecretMember::into_inner);
+        Self {
+            kty: members.kty,
+            kid: members.kid,
+            alg: members.alg,
+            crv: members.crv,
+            d: secret(members.d),
+            x: members.x,
+            y: members.y,
+            n: members.n,
+            e: members.e,
+            p: secret(members.p),
+            q: secret(members.q),
+            dp: secret(members.dp),
+            dq: secret(members.dq),
+            qi: secret(members.qi),
+        }
+    }
+}
+
+/// A parsed JSON document whose strings are erased when it drops, so the
+/// private members it held do not outlive [`PrivateJwk::parse`], whether
+/// the key is accepted or refused.
+struct ErasedOnDrop(Value);
+
+impl Drop for ErasedOnDrop {
+    fn drop(&mut self) {
+        erase_strings(&mut self.0);
+    }
+}
+
+fn erase_strings(value: &mut Value) {
+    match value {
+        Value::String(text) => text.zeroize(),
+        Value::Array(items) => items.iter_mut().for_each(erase_strings),
+        Value::Object(members) => members.values_mut().for_each(erase_strings),
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
 }
 
 impl fmt::Debug for PrivateJwk {
@@ -1008,9 +1107,12 @@ impl PrivateJwk {
         if json.len() > MAX_JWK_JSON_BYTES {
             return Err(JwkError::JsonTooLarge);
         }
-        let value = parse_json_strict(json.as_bytes()).map_err(JwkError::StrictJson)?;
-        reject_unsupported_private_members(&value)?;
-        let jwk: Self = serde_json::from_value(value).map_err(JwkError::Json)?;
+        let value = ErasedOnDrop(parse_json_strict(json.as_bytes()).map_err(JwkError::StrictJson)?);
+        reject_unsupported_private_members(&value.0)?;
+        // Deserialize from the borrowed tree: each private member is copied
+        // once, into a `SecretMember`, and the tree is erased when `value`
+        // drops.
+        let jwk = Self::deserialize(&value.0).map_err(JwkError::Json)?;
         jwk.validate_private()?;
         Ok(jwk)
     }
@@ -1674,6 +1776,7 @@ fn decode_coordinate<const N: usize>(
     field: &'static str,
 ) -> Result<[u8; N], JwkError> {
     decode_fixed(value, N, field)?
+        .as_slice()
         .try_into()
         .map_err(|_| JwkError::Invalid(field))
 }
@@ -1765,7 +1868,10 @@ pub fn verify(payload: &[u8], signature: &[u8], jwk: &PublicJwk) -> Result<(), C
 
 fn verify_eddsa(payload: &[u8], signature: &[u8], jwk: &PublicJwk) -> Result<(), CryptoError> {
     let x = decode_fixed(jwk.x.as_deref(), 32, "x")?;
-    let x: [u8; 32] = x.try_into().map_err(|_| JwkError::Invalid("x length"))?;
+    let x: [u8; 32] = x
+        .as_slice()
+        .try_into()
+        .map_err(|_| JwkError::Invalid("x length"))?;
     let verifying_key =
         Ed25519VerifyingKey::from_bytes(&x).map_err(|_| CryptoError::InvalidSignature)?;
     let signature =
@@ -1911,11 +2017,15 @@ fn decode_fixed(
     value: Option<&str>,
     expected_len: usize,
     field: &'static str,
-) -> Result<Vec<u8>, JwkError> {
+) -> Result<Zeroizing<Vec<u8>>, JwkError> {
     let value = value.ok_or(JwkError::Invalid(field))?;
-    let decoded = URL_SAFE_NO_PAD
-        .decode(value)
-        .map_err(|_| JwkError::Invalid(field))?;
+    // The EdDSA private seed `d` is decoded here too, so the buffer erases
+    // when it drops, as `decode_nonempty`'s does.
+    let decoded = Zeroizing::new(
+        URL_SAFE_NO_PAD
+            .decode(value)
+            .map_err(|_| JwkError::Invalid(field))?,
+    );
     if decoded.len() != expected_len {
         return Err(JwkError::Invalid(field));
     }
@@ -2208,6 +2318,57 @@ mod tests {
             private.x.as_deref()
         );
         assert!(public_json.get("d").is_none());
+    }
+
+    #[test]
+    fn a_parsed_document_has_every_string_erased() {
+        let mut document = serde_json::json!({
+            "d": "private-scalar",
+            "nested": {"p": "prime", "list": ["qi", 5, {"dq": "exponent"}]},
+            "flag": true,
+        });
+        erase_strings(&mut document);
+        assert_eq!(
+            document,
+            serde_json::json!({
+                "d": "",
+                "nested": {"p": "", "list": ["", 5, {"dq": ""}]},
+                "flag": true,
+            })
+        );
+    }
+
+    #[test]
+    fn private_members_move_into_the_key_without_a_copy() {
+        let members: PrivateJwkMembers =
+            serde_json::from_str(RS384_OPENSSL_PRIVATE_JWK).expect("members deserialize");
+        let address = |member: &Option<SecretMember>| member.as_ref().map(|m| m.0.as_ptr());
+        let before = [
+            address(&members.d),
+            address(&members.p),
+            address(&members.q),
+            address(&members.dp),
+            address(&members.dq),
+            address(&members.qi),
+        ];
+        let jwk = PrivateJwk::from(members);
+        let after = [&jwk.d, &jwk.p, &jwk.q, &jwk.dp, &jwk.dq, &jwk.qi]
+            .map(|member| member.as_ref().map(|text| text.as_ptr()));
+        assert!(before.iter().all(Option::is_some));
+        assert_eq!(before, after);
+    }
+
+    #[test]
+    fn a_private_member_of_the_wrong_type_is_refused() {
+        for document in [
+            r#"{"kty":"OKP","crv":"Ed25519","alg":"EdDSA","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":5}"#,
+            r#"{"kty":"OKP","crv":"Ed25519","alg":"EdDSA","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","d":["2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw"]}"#,
+        ] {
+            assert!(matches!(
+                PrivateJwk::parse(document),
+                Err(JwkError::Json(_))
+            ));
+        }
     }
 
     #[test]
