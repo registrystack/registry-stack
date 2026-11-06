@@ -525,9 +525,12 @@ live run whose snapshot breaks it fails the retained live-binding scan, so
 normal serving, readiness, every admission and apply are refused until the
 run is settled; recovery-only mode still starts, but such a run cannot be
 cancelled from its wait under this runtime. Operator cost: before upgrading,
-check each project with the new `coordinatorctl`; if one is refused, settle
-or cancel its runs with the earlier binaries, as for an interpreter ABI
-change, then re-author the cancel, package and apply.
+run the new `coordinatorctl check` on each project and the new
+`coordinatorctl deployment-status` against the deployment, which also checks
+every run in flight, including runs admitted from an earlier package; if
+either refuses, settle or cancel the affected runs with the earlier binaries,
+as for an interpreter ABI change, then re-author the cancel, package and
+apply.
 
 ### Tests
 
