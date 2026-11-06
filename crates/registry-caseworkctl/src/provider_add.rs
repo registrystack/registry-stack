@@ -260,8 +260,8 @@ impl ProviderAddFailure {
             Self::BregPackageMismatch => (
                 "casework.provider-add.breg-package-mismatch",
                 "--breg-package".into(),
-                "the sealed BReg package does not match the selected BReg project",
-                "Repackage the selected BReg project and pass that sealed package, or select the BReg project that produced this package, then run provider add again.",
+                "the BReg deployment package does not match the selected BReg project",
+                "Repackage the selected BReg project and pass that deployment package, or select the BReg project that produced this package, then run provider add again.",
             ),
         }
     }
@@ -2011,7 +2011,7 @@ pub(super) fn add(
             next: if breg_package.is_some() {
                 "Replace the .test identities and bind the declared endpoints and secret references before deployment."
             } else {
-                "Create a sealed BReg package, then run provider add again with --breg-package to verify the native export and dry-run the Casework package."
+                "Create a BReg deployment package, then run provider add again with --breg-package to verify the native export and dry-run the Casework package."
             }
             .into(),
         },
@@ -3298,6 +3298,10 @@ exit 1
         .unwrap();
         assert_eq!(created["ok"], true, "initial generation");
         assert_eq!(created["outcome"], "created");
+        assert_eq!(
+            created["next"],
+            "Create a BReg deployment package, then run provider add again with --breg-package to verify the native export and dry-run the Casework package."
+        );
         assert!(created.get("state").is_none());
         assert_eq!(created["providerId"], "correct-address-context");
         assert_eq!(created["check"]["project"], json!(project));
@@ -4190,6 +4194,14 @@ exit 1
             "casework.provider-add.breg-package-mismatch"
         );
         assert_eq!(failure.diagnostic().1, "--breg-package");
+        assert_eq!(
+            failure.diagnostic().2,
+            "the BReg deployment package does not match the selected BReg project"
+        );
+        assert_eq!(
+            failure.diagnostic().3,
+            "Repackage the selected BReg project and pass that deployment package, or select the BReg project that produced this package, then run provider add again."
+        );
         assert!(!refused_project.exists());
         assert!(!refused_output.exists());
     }
