@@ -1580,6 +1580,167 @@ fn seals_in_flight_beyond_the_render_concurrency_are_refused_as_rate_limited() {
     );
 }
 
+/// A seal waiting on the timestamp authority holds no render slot, so the
+/// shutdown drain waits for the seals in flight as well as the renders: on
+/// SIGTERM the server keeps answering until the seal has its answer, then
+/// exits cleanly, with no elapsed grace to report.
+#[test]
+fn shutdown_drains_a_seal_waiting_on_the_timestamp_authority() {
+    let tsa = start_tsa(TsaMode::Silent);
+    let fixture = sealed(Some(&tsa));
+    let mut server = start_server(&fixture);
+    let bearer = format!("Bearer {}", fixture.token("render:seal", SEAL_CLIENT));
+    let port = server.port;
+    let seal = std::thread::spawn(move || {
+        request(
+            port,
+            "POST",
+            "/v1/seal/notice",
+            &[
+                ("Authorization", bearer.as_str()),
+                ("Content-Type", "application/json"),
+                ("Accept", "application/json"),
+            ],
+            Some(NOTICE_BODY),
+        )
+    });
+    let waiting = Instant::now();
+    while tsa.requests.load(Ordering::SeqCst) == 0 {
+        assert!(
+            waiting.elapsed() < Duration::from_secs(30),
+            "the seal never reached the authority"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    Command::new("kill")
+        .args(["-TERM", &server.child.id().to_string()])
+        .output()
+        .expect("send SIGTERM");
+    // The authority's 2000 ms attempt outlasts this pause, so the seal is
+    // still in flight and the drain still holds the listener open.
+    std::thread::sleep(Duration::from_millis(300));
+    let health = request(port, "GET", "/health", &[], None);
+    assert_eq!(health.status, 200, "the drain holds the listener open");
+
+    let sealed = seal.join().expect("seal call");
+    assert_eq!(
+        sealed.status,
+        502,
+        "{}",
+        String::from_utf8_lossy(&sealed.body)
+    );
+    assert_eq!(sealed.json()["code"], "render.timestamp-failed");
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let status = loop {
+        if let Some(status) = server.child.try_wait().expect("server status") {
+            break status;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "serve did not exit after SIGTERM"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert_eq!(status.code(), Some(0), "graceful exit");
+    let elapsed: Vec<_> = server
+        .log()
+        .into_iter()
+        .filter(|line| {
+            line["fields"]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("elapsed"))
+        })
+        .collect();
+    assert!(elapsed.is_empty(), "{elapsed:?}");
+}
+
+/// The drain waits for a seal in flight for the grace only: a seal whose
+/// authority attempt outlasts the whole shutdown window is reported, then
+/// abandoned at the bound, and `serve` still exits cleanly.
+#[test]
+fn shutdown_with_a_seal_in_flight_is_bounded_by_the_grace() {
+    let tsa = start_tsa(TsaMode::Silent);
+    let fixture = sealed(Some(&tsa));
+    let text = std::fs::read_to_string(&fixture.runtime_path).unwrap();
+    // A one-second grace (the least allowed) gives a two-second window; the
+    // seal's four-second attempt outlasts both.
+    let tightened = text
+        .replacen(
+            "shutdownGraceMilliseconds: 5000",
+            "shutdownGraceMilliseconds: 1000",
+            1,
+        )
+        .replacen(
+            "attemptTimeoutMilliseconds: 2000",
+            "attemptTimeoutMilliseconds: 4000",
+            1,
+        );
+    assert!(tightened.contains("shutdownGraceMilliseconds: 1000"));
+    assert!(tightened.contains("attemptTimeoutMilliseconds: 4000"));
+    std::fs::write(&fixture.runtime_path, tightened).unwrap();
+    let mut server = start_server(&fixture);
+    let bearer = format!("Bearer {}", fixture.token("render:seal", SEAL_CLIENT));
+    let port = server.port;
+    // The seal is abandoned, so its call ends without an answer; the thread
+    // only holds the request open.
+    std::thread::spawn(move || {
+        let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)) else {
+            return;
+        };
+        let wire = format!(
+            "POST /v1/seal/notice HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nAuthorization: {bearer}\r\nContent-Type: application/json\r\nAccept: application/json\r\nContent-Length: {}\r\n\r\n{NOTICE_BODY}",
+            NOTICE_BODY.len()
+        );
+        let _ = stream.write_all(wire.as_bytes());
+        let mut sink = Vec::new();
+        let _ = stream.read_to_end(&mut sink);
+    });
+    let waiting = Instant::now();
+    while tsa.requests.load(Ordering::SeqCst) == 0 {
+        assert!(
+            waiting.elapsed() < Duration::from_secs(30),
+            "the seal never reached the authority"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let signalled = Instant::now();
+    Command::new("kill")
+        .args(["-TERM", &server.child.id().to_string()])
+        .output()
+        .expect("send SIGTERM");
+    let status = loop {
+        if let Some(status) = server.child.try_wait().expect("server status") {
+            break status;
+        }
+        assert!(
+            signalled.elapsed() < Duration::from_secs(15),
+            "serve did not exit after SIGTERM"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert_eq!(status.code(), Some(0), "graceful exit");
+    let warnings: Vec<String> = server
+        .log()
+        .into_iter()
+        .filter(|line| line["level"] == "WARN")
+        .filter_map(|line| line["fields"]["message"].as_str().map(str::to_owned))
+        .collect();
+    assert!(
+        warnings
+            .iter()
+            .any(|message| message
+                .starts_with("shutdown grace elapsed with renders or seals in flight")),
+        "{warnings:?}"
+    );
+    assert!(
+        warnings
+            .iter()
+            .any(|message| message
+                .starts_with("shutdown window elapsed with connections still open")),
+        "{warnings:?}"
+    );
+}
+
 #[test]
 fn a_seal_writes_a_paired_value_free_audit() {
     let tsa = start_tsa(TsaMode::Grant);

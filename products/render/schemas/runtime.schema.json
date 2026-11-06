@@ -286,7 +286,7 @@
         },
         "shutdownGraceMilliseconds": {
           "default": 30000,
-          "description": "Time allowed for renders in flight to finish at shutdown, in\nmilliseconds. Open connections get the same again.",
+          "description": "Time allowed for renders and seals in flight to finish at shutdown,\nin milliseconds. Open connections get the same again.",
           "format": "uint64",
           "maximum": 3600000,
           "minimum": 1000,

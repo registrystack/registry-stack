@@ -120,8 +120,9 @@ These rules are not in the tables:
 - A string value may come from the environment as `${VAR}`, `${VAR:-default}`, or
   `${VAR:?message}`, except in `apiKeyRef` and under `secretProviders`.
 - `audit.destination: stdout` hands entries to your collector and takes no `path`.
-- `shutdownGraceMilliseconds` is how long in-flight renders get to finish on SIGTERM; open
-  connections then get the same again. Align it with your supervisor's stop timeout.
+- `shutdownGraceMilliseconds` is how long in-flight renders and seals get to finish on SIGTERM;
+  open connections then get the same again. Align it with your supervisor's stop timeout, and
+  with a seal's `attemptTimeoutMilliseconds`, which a seal waiting on its authority may need.
 
 {/* Evidence: crates/registry-render/src/runtime.rs, LimitsRuntime, AuditRuntime, validate_bind and
     default_shutdown_grace;

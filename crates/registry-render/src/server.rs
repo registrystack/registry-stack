@@ -260,14 +260,18 @@ async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
         let _ = stop_tx.send(());
     });
     // Phase 1 — drain: the graceful-shutdown future holds the server open
-    // until every render permit is back (up to grace), so renders in
-    // flight finish before the listener stops accepting.
+    // until every render permit and every seal place is back (up to grace),
+    // so renders and seals in flight finish before the listener stops
+    // accepting. A seal waiting on its timestamp authority holds no render
+    // permit, only its seal place.
     let mut stop_for_drain = stop_rx.clone();
     let shutdown = async move {
         let _ = stop_for_drain.changed().await;
         let service = drain_service;
         let drained = tokio::time::timeout(grace, async {
-            while service.concurrency.available_permits() < service.max_concurrency {
+            while service.concurrency.available_permits() < service.max_concurrency
+                || service.seals_in_flight.available_permits() < service.max_concurrency
+            {
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }
         })
@@ -275,7 +279,7 @@ async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
         if drained.is_err() {
             tracing::warn!(
                 grace_milliseconds = grace.as_millis(),
-                "shutdown grace elapsed with renders in flight; moving to connection teardown"
+                "shutdown grace elapsed with renders or seals in flight; moving to connection teardown"
             );
         }
     };
