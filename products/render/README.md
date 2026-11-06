@@ -176,7 +176,10 @@ that a worker can render.
   checksum envelope to that snapshot, and Typst consumes those exact
   verified bytes.
 - **Resource-bounded**: serves render in a supervised worker process,
-  killed at the timeout, memory-capped on Linux, recycled on panic.
+  killed at the timeout, memory-capped on Linux, recycled on panic. The
+  worker starts from an empty environment (only the dynamic loader's search
+  paths are kept), so tune it through the runtime configuration, not through
+  environment variables.
 - **Auditable**: value-free events (hashes, versions, caller fingerprint,
   trace/correlation ids, never data) written through the shared Registry
   Stack audit writer. A render writes a `request` entry before the worker
