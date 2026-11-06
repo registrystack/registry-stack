@@ -918,6 +918,12 @@ fn edge_names() -> Vec<String> {
         "/*",
         "*/",
         "~!@#$%^&*()-_=+[]{};:',<>?|",
+        "caf\u{e9}",
+        "cafe\u{301}",
+        "Saint-\u{c9}tienne \u{1F600}",
+        "say \"hi\"",
+        "back\\slash",
+        "\\\"",
     ]
     .iter()
     .map(ToString::to_string)
@@ -935,8 +941,14 @@ fn rendered(name: &str) -> String {
     if plain {
         name.to_owned()
     } else {
-        format!("\"{name}\"")
+        format!("\"{}\"", escaped(name))
     }
+}
+
+/// The text of a quoted key or filter literal: only a quote and a backslash
+/// are escaped.
+fn escaped(name: &str) -> String {
+    name.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 #[test]
@@ -947,7 +959,7 @@ fn quoted_segments_and_filter_literals_with_script_punctuation_run_verbatim() {
             "additionalProperties": false});
         let direct = json!([{"target": rendered(&name), "from": rendered(&name)}]);
         let keyed = json!([{"target": rendered(&name),
-            "from": format!("rows[k = \"{name}\"].v")}]);
+            "from": format!("rows[k = \"{}\"].v", escaped(&name))}]);
         let omitted = json!([{"target": rendered(&name), "from": rendered(&name),
             "whenMissing": "omit"}]);
         let cases = [

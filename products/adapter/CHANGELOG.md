@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- A quoted mapping selector key or filter literal takes any non-control
+  Unicode character, so a source key such as `prénom` can be mapped. `\"`
+  and `\\` are its only escapes, keys compare byte for byte with no
+  normalisation, and the 128-character bound stays. Every selector valid
+  before parses to the same segments; unquoted names are unchanged. The
+  `targetTree` of `adapterctl mapping check` now marks a target key with a
+  non-ASCII character, a quote or a backslash as mappable, and findings name
+  such a target with the quote and backslash escaped.
 - `adapterctl job check` warns with `adapter.job.mapping-unprojected` when a
   generated `direct-breg` destination mapping reads a source key that the
   job's `projection.fields` does not list, once per assignment, at the
