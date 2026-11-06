@@ -1219,7 +1219,8 @@ struct SealedRender {
 /// free, release the slot, then prepare the field, sign, timestamp and embed
 /// in this process, signed at `signing_time`. Preparing, signing and the
 /// timestamp exchange never hold a render slot; the whole call holds one of
-/// the service's places for seals in flight.
+/// the service's places for seals in flight, and the preparation keeps it
+/// until it ends even when the client has gone.
 async fn run_seal(
     service: &Service,
     seal: &Seal,
@@ -1228,7 +1229,7 @@ async fn run_seal(
 ) -> Result<(SealedRender, SealedDocument), RenderProblem> {
     // A seal beyond the places is refused, not queued: the queue behind a
     // slow authority would otherwise grow without a bound.
-    let _in_flight = service
+    let in_flight = service
         .seals_in_flight
         .clone()
         .try_acquire_owned()
@@ -1260,7 +1261,7 @@ async fn run_seal(
         data_sha256: answer.data_sha256,
         warnings: answer.warnings,
     };
-    let sealed = seal.seal(first_revision, signing_time).await?;
+    let sealed = seal.seal(first_revision, signing_time, in_flight).await?;
     Ok((rendered, sealed))
 }
 
