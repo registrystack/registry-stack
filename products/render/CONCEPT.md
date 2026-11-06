@@ -84,10 +84,13 @@ What sealing does not do:
   sealed files `serve` answered, and what those runs do not show.
 - It embeds no revocation data and no document security store, so there is no
   B-LT or B-LTA level.
-- It does not support external signatures yet: the key is a local JWK
-  the seal's `local-jwk` signer reads through the file secret provider.
-  Local key files suit development and pilots only: a render worker that
-  gained code execution runs as the serving user and can read one.
+- It signs through no external signer but Transit. A production seal's key
+  is an ECDSA P-256 key in Vault or OpenBao Transit, reached through a
+  signing proxy on the host, and never leaves it; a PKCS #11 HSM or a cloud
+  key service is not supported. A test seal may instead use a local JWK the
+  `local-jwk` signer reads through the file secret provider. Key files suit
+  test seals only: a render worker that gained code execution runs as the
+  serving user and can read one, so a `production` seal refuses them.
 - It does not pin the timestamp authority's identity or decide trust. The
   authority is reached over TLS with the host's roots, or with the CA bundle
   the seal names in their place, and validators decide whether the seal

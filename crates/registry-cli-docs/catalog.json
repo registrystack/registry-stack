@@ -23717,14 +23717,14 @@
           "name": "keygen",
           "invocation": "registry-render keygen",
           "about": "Generate a seal key and the certificate request for its seal certificate",
-          "long_about": "Generate a seal key and the certificate request for its seal certificate. Writes the private JWK owner-only to --key, the file a seal's `signer.privateKeyRef` names, and a PKCS #10 request to --csr for the certificate authority. Neither file may exist, and no key material is printed. With --from-pem, converts an existing unencrypted PKCS #8 key instead of generating one.",
-          "usage": "registry-render keygen [OPTIONS] --key <FILE> --csr <FILE> --common-name <TEXT>",
+          "long_about": "Generate a seal key and the certificate request for its seal certificate. Writes the private JWK owner-only to --key, the file a `local-jwk` signer's `privateKeyRef` names, and a PKCS #10 request to --csr for the certificate authority. With --from-pem, converts an existing unencrypted PKCS #8 key instead of generating one. With --transit-unix-socket-path, the key is a Transit key a `transit` signer names: it signs the request through the signing proxy, and only --csr is written. No output file may exist, and no key material is printed.",
+          "usage": "registry-render keygen [OPTIONS] --csr <FILE> --common-name <TEXT>",
           "arguments": [],
           "options": [
             {
               "display": "--key <FILE>",
               "description": "New private JWK file, created with mode 0600",
-              "always_required": true,
+              "always_required": false,
               "repeatable": false,
               "default_values": [],
               "possible_values": [],
@@ -23790,6 +23790,42 @@
               "environment": null
             },
             {
+              "display": "--transit-unix-socket-path <PATH>",
+              "description": "The Transit signing proxy's Unix socket, as `signer.unixSocketPath` names it: the seal key is a Transit key, which signs the request, and no key file is written. A production seal's key is one",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--transit-mount <ID>",
+              "description": "The Transit mount, as `signer.mount` names it",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--transit-key-name <ID>",
+              "description": "The Transit key, an ecdsa-p256 key, as `signer.keyName` names it",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--transit-key-version <VERSION>",
+              "description": "The Transit key version the certificate is for, as `signer.keyVersion` pins it",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "-h, --help",
               "description": "Print help (see a summary with '-h')",
               "always_required": false,
@@ -23799,7 +23835,59 @@
               "environment": null
             }
           ],
-          "constraints": [],
+          "constraints": [
+            {
+              "kind": "requires-all",
+              "when": "--transit-unix-socket-path <PATH>",
+              "arguments": [
+                "--transit-mount <ID>",
+                "--transit-key-name <ID>",
+                "--transit-key-version <VERSION>"
+              ]
+            },
+            {
+              "kind": "requires-all",
+              "when": "--transit-mount <ID>",
+              "arguments": [
+                "--transit-key-name <ID>",
+                "--transit-key-version <VERSION>",
+                "--transit-unix-socket-path <PATH>"
+              ]
+            },
+            {
+              "kind": "requires-all",
+              "when": "--transit-key-name <ID>",
+              "arguments": [
+                "--transit-mount <ID>",
+                "--transit-key-version <VERSION>",
+                "--transit-unix-socket-path <PATH>"
+              ]
+            },
+            {
+              "kind": "mutually-exclusive",
+              "when": null,
+              "arguments": [
+                "--algorithm <ALGORITHM>",
+                "--transit-unix-socket-path <PATH>"
+              ]
+            },
+            {
+              "kind": "mutually-exclusive",
+              "when": null,
+              "arguments": [
+                "--from-pem <FILE>",
+                "--transit-unix-socket-path <PATH>"
+              ]
+            },
+            {
+              "kind": "mutually-exclusive",
+              "when": null,
+              "arguments": [
+                "--key <FILE>",
+                "--transit-unix-socket-path <PATH>"
+              ]
+            }
+          ],
           "subcommands": []
         },
         {

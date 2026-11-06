@@ -14,9 +14,18 @@
   `check --seal` flag now say that `seal` was the old name for `package`,
   name the `registry-render package` command, and point to `signing.seals`
   and `POST /v1/seal/{type}` for document seals.
+- BREAKING: each seal in `signing.seals` declares `trust`, `test-only` or
+  `production`; a seal without it is refused with `config.missing-key`. A
+  `production` seal signs through a `transit` signer, and one with a
+  `local-jwk` key file is refused as
+  `render.runtime.seal-signer-assurance-mismatch`. Add `trust: test-only` to
+  each test seal's runtime file.
 - Add optional PAdES document sealing. A document type names a `seal` in its
   manifest, and a `signing.seals` block in the runtime file binds each seal to
-  a signer (`type: local-jwk`, whose `privateKeyRef` names a private JWK
+  a trust (`test-only` or `production`), a signer (`type: transit`, an ECDSA
+  P-256 key in Vault or OpenBao Transit reached through a signing proxy on a
+  Unix socket and pinned by `mount`, `keyName` and `keyVersion`; or, for a
+  test-only seal, `type: local-jwk`, whose `privateKeyRef` names a private JWK
   through the file secret provider; an environment reference is refused as
   `render.runtime.seal-key-requires-file-provider`), a certificate chain file, a timestamp policy
   (`timestampAuthority` for baseline B-T, or the named `withoutTimestamp`
@@ -63,7 +72,14 @@
   certificate, taken as the seal certificate, is a CA certificate, saying
   why validators refuse it and that a leaf issued with `CA:FALSE` seals. veraPDF
   has passed a test template at every accepted PDF/A level and at PDF/UA-1,
-  rendered and sealed (`EVIDENCE.md`). A seal key `serve` cannot read is refused with the secret provider's reason, and its text is erased once parsed. New problem
+  rendered and sealed (`EVIDENCE.md`). A seal key `serve` cannot read is refused with the secret provider's reason, and its text is erased once parsed. For a
+  Transit seal, `serve` reads the key version's public key, checks that the
+  certificate certifies it, and signs once at startup; a proxy that does not
+  answer, or a key that is exportable, derived, not `ecdsa-p256` or outside
+  its live versions, is refused as `render.runtime.seal-transit-unavailable`.
+  A Transit seal whose proxy stops answering turns `signer-not-ready`, and
+  each `/ready` call and seal request then probes it once, so it recovers
+  without a restart. New problem
   kinds with exit codes, for seal requests: `signing-unavailable` (26),
   `seal-certificate-invalid` (27), `timestamp-failed` (28),
   `document-not-sealable` (29) and `seal-client-not-allowed` (30). A seal that
@@ -79,8 +95,11 @@
   (`--organization`, `--country`, and `--algorithm` es256, es384, rs256 or
   rs384). `--from-pem` converts an unencrypted PKCS #8 key instead; an
   encrypted PKCS #8, SEC 1, PKCS #1 or PKCS #12 key is refused with the
-  `openssl` command that converts it. Keygen never overwrites a file and never
-  prints the key. The operate guide's "Make a test seal in ten minutes" has a
+  `openssl` command that converts it. With `--transit-unix-socket-path`,
+  `--transit-mount`, `--transit-key-name` and `--transit-key-version` in
+  place of `--key`, keygen has that Transit key sign the request and writes
+  no key file. Keygen never overwrites a file and never
+  prints a key. The operate guide's "Make a test seal in ten minutes" has a
   test root issue a seal certificate from the request.
 - `compile --preview-seal <test-only|production>` renders a template's
   sealed variant offline: it adds the payload's `signing` member as the seal

@@ -16,7 +16,7 @@ registry-platform-canonical-json = { workspace = true }
 registry-platform-config = { workspace = true }
 registry-platform-oidc = { workspace = true }
 jsonwebtoken = { workspace = true }
-registry-platform-crypto = { workspace = true, features = ["cms-signing"] }
+registry-platform-crypto = { workspace = true, features = ["cms-signing", "transit"] }
 registry-platform-httpsec = { workspace = true, features = ["server"] }
 registry-platform-httputil = { workspace = true }
 registry-platform-yaml = { workspace = true }
@@ -51,7 +51,7 @@ zeroize = { workspace = true }
 [dev-dependencies]
 async-trait = { workspace = true }
 rcgen = { workspace = true }
-registry-platform-crypto = { workspace = true, features = ["cms-signing", "test-support"] }
+registry-platform-crypto = { workspace = true, features = ["cms-signing", "test-support", "transit"] }
 registry-render-client.workspace = true
 tempfile = { workspace = true }
 tokio-rustls = { workspace = true }

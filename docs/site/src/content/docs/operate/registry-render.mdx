@@ -255,20 +255,27 @@ and `audit-failed` (503).
 Sealing is optional. Without a `signing` block, Render loads no key, makes no timestamp call, and
 serves no seal route. With one, `POST /v1/seal/<document-type>` renders the document and returns
 it with a PAdES signature made with your institution's key. Render seals only what it just
-rendered from the verified package, never bytes a caller sends, and the private key is loaded in
-the serving process and never sent to a render worker. The seal is PAdES baseline B-B or B-T. Render makes no
+rendered from the verified package, never bytes a caller sends. A production seal's private key
+stays in Transit, which signs for Render; a test seal's key file is loaded in the serving process.
+Neither is ever sent to a render worker. The seal is PAdES baseline B-B or B-T. Render makes no
 claim that it is a qualified seal under eIDAS or any other scheme: that depends on your
 certificate, its issuer, and how you hold the key.
 
 ### Enable a seal
 
 You need an OIDC deployment (a seal never works with the legacy API key), a seal certificate chain
-in a PEM file with the seal certificate first, and its private key as one ES256, ES384, RS256, or
-RS384 JWK under the file secret provider. `registry-render keygen --key <file> --csr <file>
---common-name <seal name>` writes a new key owner-only and the certificate request your
-certificate authority issues the seal certificate from; add `--from-pem <file>` to convert a key
-you already hold as unencrypted PKCS #8 instead. Name the seal in the document type's
-`manifest.yaml` entry with `seal: ministry`, then bind it in the runtime file:
+in a PEM file with the seal certificate first, and the seal key in Vault or OpenBao Transit: an
+`ecdsa-p256` key created non-exportable, reached through a Transit signing proxy on a Unix socket
+on the Render host. The proxy holds the Transit token; Render sends none. With the proxy running,
+`registry-render keygen --csr <file> --common-name <seal name> --transit-unix-socket-path
+<socket> --transit-mount <mount> --transit-key-name <key> --transit-key-version <version>` reads
+the key version's public key and has Transit sign the certificate request your certificate
+authority issues the seal certificate from. The key never leaves Transit, and keygen writes only
+the request. Name the seal in the document type's `manifest.yaml` entry with `seal: ministry`,
+then bind it in the runtime file:
+
+{/* Evidence: crates/registry-render/src/runtime.rs,
+    the_documented_production_seal_loads, loads this block as written. */}
 
 ```yaml
 authentication:
@@ -280,18 +287,28 @@ signing:
   seals:
     ministry:
       signer:
-        type: local-jwk
-        privateKeyRef: secret:file/seal.jwk
+        type: transit
+        unixSocketPath: /run/registry-render/transit.sock
+        mount: transit
+        keyName: render-seal
+        keyVersion: 1
+        attemptTimeoutMilliseconds: 2000
       certificateChainFile: /etc/registry-render/seal/chain.pem
       timestampAuthority:
         url: https://tsa.example.invalid/tsr
         attemptTimeoutMilliseconds: 10000
       allowedClients: [records-service]
+      trust: production
 ```
 
-- `signer.privateKeyRef` names the key under the file secret provider, such as
-  `secret:file/seal.jwk`. An environment reference is refused
-  (`render.runtime.seal-key-requires-file-provider`).
+- `trust` is required. `production` marks an official seal, and it signs through `transit` only:
+  Render refuses a production seal with a key file
+  (`render.runtime.seal-signer-assurance-mismatch`). `test-only` marks a test seal; see
+  [Use a test seal in development](#use-a-test-seal-in-development).
+- `signer.unixSocketPath` is the proxy's socket, an absolute path. `mount`, `keyName`, and
+  `keyVersion` name one Transit key version: pinning the version means a rotation in Transit never
+  changes the key behind your certificate unnoticed. `attemptTimeoutMilliseconds` (1 to 30000)
+  bounds each call to the proxy.
 - `allowedClients` is required and names each client allowed to seal. When `authentication.oidc.allowedClients`
   lists clients, each seal client must also be in that list, or Render refuses the file. Keep these
   separate from any citizen-facing client. `unrestricted` and wildcards are refused.
@@ -325,7 +342,11 @@ extended key usage names no document-signing purpose (`render.runtime.seal-certi
 validators such as Acrobat flag its seals, so `serve` also logs a `seal certificate purpose
 excludes document signing` warning for it at startup. When `serve`
 starts, it also checks that the key matches the certificate, and it refuses to start if it does
-not. A seal that cannot load, for any of these reasons or an unreadable key or CA bundle, stops
+not. For a Transit seal, `serve` reads the key version's public key from Transit and signs once to
+test it. It refuses to start if the proxy does not answer or refuses the key read, if the key is
+not a non-exportable, non-derived `ecdsa-p256` key without plaintext backup, or if `keyVersion` is
+outside the key's live versions (`render.runtime.seal-transit-unavailable`). A seal that cannot load, for any of these reasons or
+an unreadable key or CA bundle, stops
 `serve` with exit code 20 (`runtime-invalid`) and an error at the member's line in the runtime
 file. If the runtime names a seal the package does not use, or the package names a seal the
 runtime does not bind, `check` reports it, and `serve` refuses the second case. If the package
@@ -347,7 +368,13 @@ problems, and response shapes.
 
 ### Use a test seal in development
 
-Issue a test certificate from your own test authority and set `trust: test-only` on the seal. The
+Issue a test certificate from your own test authority and set `trust: test-only` on the seal. A
+test seal may keep its key in a file instead of Transit: `signer.type: local-jwk` with
+`privateKeyRef` naming one ES256, ES384, RS256, or RS384 private JWK under the file secret
+provider, such as `secret:file/seal.jwk`; an environment reference is refused
+(`render.runtime.seal-key-requires-file-provider`). `registry-render keygen --key <file> --csr
+<file> --common-name <seal name>` writes a new key owner-only with its certificate request; add
+`--from-pem <file>` to convert a key you hold as unencrypted PKCS #8 instead. The
 template then receives `signing.testOnly: true` in its payload on the seal route, and can print a
 visible test marking (the payload contract is `products/render/PAYLOAD.md` in the repository); the
 `registry-render init` scaffold prints it. Render also says so where a template cannot hide it:
@@ -426,7 +453,10 @@ Run `check --environment` on a schedule. Thirty days before expiry it warns with
 `seal unavailable` warning with the `seal_id` and the `/ready` `reason`. It does not log again
 while running, so restart or `/ready` is how a later expiry shows. To renew, write the new chain file with the seal
 certificate first, point `certificateChainFile` at it (or replace the file), and restart `serve`:
-Render reads the chain at startup. After the old certificate expires the seal is unavailable and
+Render reads the chain at startup. To move a Transit seal to a new key version, rotate the key in
+Transit, run `keygen` with the new `--transit-key-version`, have the new certificate issued, then
+change `keyVersion` and the chain file together and restart `serve`. After the old certificate
+expires the seal is unavailable and
 plain rendering is unaffected. A file sealed earlier with a timestamp is built to keep validating after the certificate expires,
 subject to the validator's trust decisions; a file sealed without one stops validating at expiry.
 
@@ -439,6 +469,11 @@ the status code: Render stays ready for plain rendering while a seal cannot sign
 request answers `signing-unavailable` or `seal-certificate-invalid` (503) until it can. Readiness
 reads the certificate validity and the key provider; it never calls the timestamp authority, so a
 ready seal can still fail with `timestamp-failed`.
+
+A Transit seal whose proxy stops answering fails the seal request in progress with
+`signing-unavailable` and turns `signer-not-ready`. Each `/ready` call and each seal request then
+has Transit sign one probe message, one probe at a time, and the seal is ready again as soon as a
+probe succeeds. You do not restart `serve` after a Transit or proxy outage.
 
 ### Reconcile audit hashes with your records
 

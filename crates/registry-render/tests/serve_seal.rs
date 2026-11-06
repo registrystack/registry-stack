@@ -18,7 +18,8 @@ use std::time::{Duration, Instant};
 use base64::Engine as _;
 use registry_platform_crypto::document_signature::test_support::{
     refuse_timestamp_request, respond_to_timestamp_request, respond_to_timestamp_request_with,
-    verify_detached_signature, EssAttribute, TestPki, TestSeal, TEST_SEAL_ORGANIZATION,
+    verify_detached_signature, EssAttribute, TestPki, TestSeal, TestTransit,
+    TEST_SEAL_ORGANIZATION,
 };
 use registry_platform_crypto::{
     generate_private_jwk, sign, GeneratedKeyAlgorithm, PrivateJwk, SigningAlgorithm,
@@ -304,10 +305,29 @@ struct SealSpec {
     key_of: Option<TestSeal>,
 }
 
+/// How the fixture's seal signs.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Signer {
+    /// A `local-jwk` key file, under `trust: test-only`.
+    KeyFile,
+    /// A key behind a [`TestTransit`] proxy, under `trust: production`.
+    Transit,
+}
+
+/// The Transit key a [`Signer::Transit`] seal names.
+const TRANSIT_MOUNT: &str = "transit";
+const TRANSIT_KEY: &str = "render-seal";
+const TRANSIT_KEY_VERSION: u32 = 3;
+
 struct Fixture {
     home: PathBuf,
     runtime_path: PathBuf,
     oidc_key: PrivateJwk,
+    /// The Transit proxy a [`Signer::Transit`] seal signs through, while it
+    /// runs.
+    transit: Option<TestTransit>,
+    /// The key that proxy serves.
+    transit_key: Option<PrivateJwk>,
 }
 
 fn seal_pki() -> TestPki {
@@ -353,7 +373,14 @@ fn package(home: &Path) -> PathBuf {
 }
 
 fn deployment(seal: Option<SealSpec>) -> Fixture {
+    deployment_signed_by(seal, Signer::KeyFile)
+}
+
+/// [`deployment`], its seal signing as `signer` says.
+fn deployment_signed_by(seal: Option<SealSpec>, signer: Signer) -> Fixture {
     let home = physical_tempdir();
+    let mut transit = None;
+    let mut transit_key = None;
     let package = package(&home);
     std::fs::create_dir(home.join("audit")).unwrap();
     let oidc_key = generate_private_jwk(GeneratedKeyAlgorithm::Es256).unwrap();
@@ -366,7 +393,28 @@ fn deployment(seal: Option<SealSpec>) -> Fixture {
         Some(spec) => {
             std::fs::write(home.join("chain.pem"), spec.seal.chain_pem()).unwrap();
             let key = spec.key_of.as_ref().unwrap_or(&spec.seal);
-            write_secret(&home.join("seal.jwk"), &private_jwk_json(key.private_jwk()));
+            let (signer, trust) = match signer {
+                Signer::KeyFile => {
+                    write_secret(&home.join("seal.jwk"), &private_jwk_json(key.private_jwk()));
+                    (
+                        "        type: local-jwk\n        privateKeyRef: secret:file/seal.jwk\n"
+                            .to_owned(),
+                        "test-only",
+                    )
+                }
+                Signer::Transit => {
+                    let socket = home.join("transit.sock");
+                    transit = Some(start_transit(&socket, key.private_jwk()));
+                    transit_key = Some(key.private_jwk().clone());
+                    (
+                        format!(
+                            "        type: transit\n        unixSocketPath: {}\n        mount: {TRANSIT_MOUNT}\n        keyName: {TRANSIT_KEY}\n        keyVersion: {TRANSIT_KEY_VERSION}\n        attemptTimeoutMilliseconds: 2000\n",
+                            socket.display()
+                        ),
+                        "production",
+                    )
+                }
+            };
             let timestamp = match spec.tsa_url {
                 Some(url) => format!(
                     "      timestampAuthority:\n        url: {url}\n        attemptTimeoutMilliseconds: 2000\n"
@@ -375,7 +423,7 @@ fn deployment(seal: Option<SealSpec>) -> Fixture {
                     .to_owned(),
             };
             format!(
-                "signing:\n  seals:\n    ministry:\n      signer:\n        type: local-jwk\n        privateKeyRef: secret:file/seal.jwk\n      certificateChainFile: {}\n{timestamp}      allowedClients: [{SEAL_CLIENT}]\n      trust: test-only\n",
+                "signing:\n  seals:\n    ministry:\n      signer:\n{signer}      certificateChainFile: {}\n{timestamp}      allowedClients: [{SEAL_CLIENT}]\n      trust: {trust}\n",
                 home.join("chain.pem").display()
             )
         }
@@ -393,7 +441,15 @@ fn deployment(seal: Option<SealSpec>) -> Fixture {
         home,
         runtime_path,
         oidc_key,
+        transit,
+        transit_key,
     }
+}
+
+/// Serve the fixture's Transit key at `socket`, signing with `key`.
+fn start_transit(socket: &Path, key: &PrivateJwk) -> TestTransit {
+    TestTransit::start(socket, TRANSIT_MOUNT, TRANSIT_KEY, TRANSIT_KEY_VERSION, key)
+        .expect("test Transit proxy")
 }
 
 fn sealed(tsa: Option<&Tsa>) -> Fixture {
@@ -407,6 +463,19 @@ fn sealed_by(pki: &TestPki, tsa: Option<&Tsa>) -> Fixture {
         seal: pki.issue_seal(SigningAlgorithm::Es256).unwrap(),
         key_of: None,
     }))
+}
+
+/// A production seal, its ES256 key held by a [`TestTransit`] proxy and
+/// sealing without a timestamp.
+fn transit_sealed() -> Fixture {
+    deployment_signed_by(
+        Some(SealSpec {
+            tsa_url: None,
+            seal: seal_pki().issue_seal(SigningAlgorithm::Es256).unwrap(),
+            key_of: None,
+        }),
+        Signer::Transit,
+    )
 }
 
 impl Fixture {
@@ -432,6 +501,28 @@ impl Fixture {
             .and_then(|l| l.rsplit(':').next())
             .and_then(|p| p.trim().parse().ok())
             .expect("port from runtime")
+    }
+
+    /// Stop the Transit proxy: a sign call now finds nothing listening.
+    fn stop_transit(&mut self) {
+        drop(self.transit.take().expect("a running Transit proxy"));
+    }
+
+    /// Serve the Transit key again on the same socket, as a restarted
+    /// proxy does.
+    fn restart_transit(&mut self) {
+        let socket = self.home.join("transit.sock");
+        std::fs::remove_file(&socket).expect("the stopped proxy's socket file");
+        let key = self.transit_key.as_ref().expect("a Transit seal");
+        self.transit = Some(start_transit(&socket, key));
+    }
+
+    /// The sign calls the Transit proxy has answered.
+    fn transit_signatures(&self) -> usize {
+        self.transit
+            .as_ref()
+            .expect("a running Transit proxy")
+            .signatures()
     }
 
     fn audit(&self) -> Vec<serde_json::Value> {
@@ -1541,6 +1632,186 @@ fn a_key_that_does_not_match_its_certificate_refuses_startup_by_position() {
     }
 }
 
+// ----- A production seal, signing through Transit -----
+
+#[test]
+fn a_production_seal_signs_through_its_transit_key() {
+    let fixture = transit_sealed();
+    let server = start_server(&fixture);
+    assert_eq!(
+        fixture.transit_signatures(),
+        1,
+        "startup signs once, to test the key"
+    );
+    let body = seal_json(&fixture, &server);
+    let pdf = base64_decode(body["pdfBase64"].as_str().unwrap());
+    let expected = first_revision(&fixture);
+    let signed = read_signed_file(&pdf, expected.pdf.len());
+    let parts = [
+        signed.signed_parts[0].as_slice(),
+        signed.signed_parts[1].as_slice(),
+    ];
+    let verified = verify_detached_signature(&signed.cms_der, &parts).expect("the CMS verifies");
+    assert_eq!(
+        body["seal"]["certificateDigest"],
+        format!("sha256:{}", verified.signer_fingerprint)
+    );
+    assert_eq!(fixture.transit_signatures(), 2, "the seal signed once");
+    assert!(
+        !fixture.home.join("seal.jwk").exists(),
+        "a Transit seal has no key file"
+    );
+}
+
+#[test]
+fn a_production_seal_never_signs_with_a_key_file() {
+    let fixture = sealed(None);
+    let text = std::fs::read_to_string(&fixture.runtime_path).unwrap();
+    let production = text.replacen("      trust: test-only\n", "      trust: production\n", 1);
+    assert_ne!(production, text);
+    std::fs::write(&fixture.runtime_path, production).unwrap();
+    let (code, stderr) = refused_startup(&fixture);
+    assert_eq!(
+        code,
+        Some(registry_render::ProblemKind::RuntimeInvalid.exit_code()),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("render.runtime.seal-signer-assurance-mismatch"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("/signing/seals/ministry/signer/type"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn a_transit_key_the_certificate_does_not_certify_refuses_startup_by_position() {
+    let pki = seal_pki();
+    let fixture = deployment_signed_by(
+        Some(SealSpec {
+            tsa_url: None,
+            seal: pki.issue_seal(SigningAlgorithm::Es256).unwrap(),
+            key_of: Some(pki.issue_seal(SigningAlgorithm::Es256).unwrap()),
+        }),
+        Signer::Transit,
+    );
+    let (code, stderr) = refused_startup(&fixture);
+    assert_eq!(
+        code,
+        Some(registry_render::ProblemKind::RuntimeInvalid.exit_code()),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("render.runtime.seal-key-mismatch"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("/signing/seals/ministry/signer/keyName"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(&seal_member_position(&fixture, "keyName:")),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("keygen --transit-unix-socket-path"),
+        "{stderr}"
+    );
+    assert_eq!(
+        fixture.transit_signatures(),
+        1,
+        "only the startup self-test signed"
+    );
+}
+
+#[test]
+fn a_transit_proxy_that_is_not_running_refuses_startup_by_position() {
+    let mut fixture = transit_sealed();
+    fixture.stop_transit();
+    let (code, stderr) = refused_startup(&fixture);
+    assert_eq!(
+        code,
+        Some(registry_render::ProblemKind::RuntimeInvalid.exit_code()),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("render.runtime.seal-transit-unavailable"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("/signing/seals/ministry/signer/unixSocketPath"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(&seal_member_position(&fixture, "unixSocketPath:")),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains(&fixture.home.join("transit.sock").display().to_string()),
+        "the refusal names the member, not its value: {stderr}"
+    );
+}
+
+/// The seal's `/ready` entry.
+fn seal_readiness(server: &Server) -> serde_json::Value {
+    request(server.port, "GET", "/ready", &[], None).json()["signing"]["ministry"].clone()
+}
+
+#[test]
+fn a_transit_seal_is_unavailable_while_its_proxy_is_down_and_recovers_without_a_restart() {
+    let mut fixture = transit_sealed();
+    let server = start_server(&fixture);
+    seal_json(&fixture, &server);
+    let token = fixture.token("render:seal", SEAL_CLIENT);
+
+    fixture.stop_transit();
+    let failed = post(&server, "/v1/seal/notice", &token, "application/json");
+    assert_eq!(failed.status, 503);
+    assert_eq!(failed.json()["code"], "render.signing-unavailable");
+    let refused = post(&server, "/v1/seal/notice", &token, "application/json");
+    assert_eq!(refused.status, 503);
+    assert_eq!(refused.json()["code"], "render.signing-unavailable");
+    let ready = request(server.port, "GET", "/ready", &[], None);
+    assert_eq!(ready.status, 200, "render stays ready");
+    assert_eq!(
+        ready.json()["signing"]["ministry"],
+        serde_json::json!({"status": "not-ready", "reason": "signer-not-ready"})
+    );
+    let plain = post(
+        &server,
+        "/v1/render/notice",
+        &fixture.token("render:render", OTHER_CLIENT),
+        "application/pdf",
+    );
+    assert_eq!(plain.status, 200, "plain rendering is unaffected");
+
+    fixture.restart_transit();
+    assert_eq!(
+        seal_readiness(&server),
+        serde_json::json!({"status": "ready"}),
+        "a readiness probe signs once and finds the proxy back"
+    );
+    assert_eq!(fixture.transit_signatures(), 1, "the probe's signature");
+    seal_json(&fixture, &server);
+    assert_eq!(fixture.transit_signatures(), 2);
+
+    // A seal request probes too, so sealing recovers with no `/ready` call.
+    fixture.stop_transit();
+    for _ in 0..2 {
+        let refused = post(&server, "/v1/seal/notice", &token, "application/json");
+        assert_eq!(refused.status, 503);
+    }
+    fixture.restart_transit();
+    seal_json(&fixture, &server);
+    assert_eq!(
+        fixture.transit_signatures(),
+        2,
+        "the probe's signature and the seal's"
+    );
+}
+
 /// A seal key file serve cannot use names why, and the fix follows: an
 /// unsafe file is not a missing one.
 #[test]
@@ -2226,13 +2497,7 @@ fn a_test_only_seal_says_so_in_every_answer_and_a_production_seal_adds_nothing()
     }
     assert_eq!(test_only.startup_warnings, 1);
 
-    // The same seal without `trust` is a production seal.
-    let text = std::fs::read_to_string(&fixture.runtime_path).unwrap();
-    let production = text.replacen("      trust: test-only\n", "", 1);
-    assert_ne!(production, text);
-    std::fs::write(&fixture.runtime_path, production).unwrap();
-    std::fs::write(fixture.home.join("audit/render.jsonl"), "").unwrap();
-    let production = trust_signals(&fixture);
+    let production = trust_signals(&transit_sealed());
     assert!(
         production.json.get("testOnly").is_none(),
         "{}",

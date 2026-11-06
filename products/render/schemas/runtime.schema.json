@@ -403,6 +403,16 @@
     "SealRuntime": {
       "additionalProperties": false,
       "description": "One seal: the signer, the certificate chain, the timestamp policy, and\nthe clients allowed to use it.",
+      "if": {
+        "properties": {
+          "trust": {
+            "const": "production"
+          }
+        },
+        "required": [
+          "trust"
+        ]
+      },
       "oneOf": [
         {
           "not": {
@@ -455,7 +465,7 @@
         },
         "signer": {
           "$ref": "#/$defs/SealSignerRuntime",
-          "description": "Binds the seal to the private-key transport that produces its\nsignature. Selects the signer transport for this seal: `local-jwk`\nresolves a file-provider secret directly. Local key files suit\ndevelopment and pilots; the serving process alone reads the key."
+          "description": "Binds the seal to the private-key transport that produces its\nsignature. Selects the signer transport for this seal: `local-jwk`\nresolves a file-provider secret directly, `transit` calls a\nworkload-local Transit signing proxy over a Unix socket. A\n`production` seal signs through `transit` only; a `local-jwk` key\nfile is for a `test-only` seal."
         },
         "timestampAuthority": {
           "$ref": "#/$defs/TimestampAuthorityRuntime",
@@ -463,7 +473,7 @@
         },
         "trust": {
           "$ref": "#/$defs/SealTrust",
-          "description": "`test-only` marks a seal made with a test certificate: the template is\ntold so and prints the seal as a test seal. Omit it for a production\nseal."
+          "description": "Whether the seal's documents are official. `test-only` marks a seal\nmade with a test certificate: the template is told so and prints the\nseal as a test seal. `production` marks an official seal, which signs\nthrough a `transit` signer, never a key file. Every seal says which\nit is."
         },
         "withoutTimestamp": {
           "$ref": "#/$defs/WithoutTimestamp",
@@ -473,8 +483,20 @@
       "required": [
         "signer",
         "certificateChainFile",
-        "allowedClients"
+        "allowedClients",
+        "trust"
       ],
+      "then": {
+        "properties": {
+          "signer": {
+            "properties": {
+              "type": {
+                "const": "transit"
+              }
+            }
+          }
+        }
+      },
       "type": "object"
     },
     "SealSignerRuntime": {
@@ -482,7 +504,7 @@
       "oneOf": [
         {
           "additionalProperties": false,
-          "description": "Resolves a file-provider secret directly.",
+          "description": "Resolves a file-provider secret directly; for a `test-only` seal.",
           "properties": {
             "privateKeyRef": {
               "$ref": "#/$defs/SecretReference",
@@ -498,15 +520,69 @@
             "privateKeyRef"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Calls a workload-local Transit signing proxy over a Unix socket. The\nkey is an ECDSA P-256 Transit key, so the seal signs ES256, and it\nnever leaves Transit.",
+          "properties": {
+            "attemptTimeoutMilliseconds": {
+              "description": "Bounds how long the runtime waits on each call to the Transit\nsigning proxy; because a `transit` signer keeps no local fallback\nkey, a call that exceeds this bound fails the seal request rather\nthan blocking it indefinitely.",
+              "format": "uint64",
+              "maximum": 30000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "keyName": {
+              "$ref": "#/$defs/LocalId",
+              "description": "Names the specific key within `signer.mount` this signer calls;\ncombined with `signer.mount` and `signer.keyVersion`, it reaches\nexactly one pinned Transit key."
+            },
+            "keyVersion": {
+              "description": "Pins signing to one exact Transit key version rather than a\n`latest` alias, so a provider-side rotation cannot silently\nreplace the key bytes behind an unchanged seal certificate.",
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "mount": {
+              "$ref": "#/$defs/LocalId",
+              "description": "Names the Transit secrets-engine mount this signer calls; it is a\npath segment in the local Transit-proxy request URL, not a\nfilesystem location."
+            },
+            "type": {
+              "const": "transit",
+              "type": "string"
+            },
+            "unixSocketPath": {
+              "description": "Absolute Unix socket path used to reach the workload-local Transit\nsigning proxy; the runtime supplies no provider token over this\nconnection, because token custody and renewal stay with the proxy.",
+              "not": {
+                "pattern": "(^|/)\\.{1,2}(/|$)"
+              },
+              "pattern": "^/(?:[^/]+/)*[^/]+$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "unixSocketPath",
+            "mount",
+            "keyName",
+            "keyVersion",
+            "attemptTimeoutMilliseconds"
+          ],
+          "type": "object"
         }
       ]
     },
     "SealTrust": {
-      "description": "How a seal is trusted.",
+      "description": "How a seal is trusted: what a seal's runtime `trust` member says, and\nwhat `compile --preview-seal` renders under.",
       "oneOf": [
         {
           "const": "test-only",
-          "description": "A seal made with a test certificate; documents print it as a test\nseal.",
+          "description": "A seal made with a test certificate: documents print it as a test\nseal (`signing.testOnly` is true).",
+          "type": "string"
+        },
+        {
+          "const": "production",
+          "description": "An official seal, signed through Transit: `signing.testOnly` is\nfalse.",
           "type": "string"
         }
       ]

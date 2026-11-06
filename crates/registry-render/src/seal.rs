@@ -8,13 +8,16 @@
 //! revision is the parent's own.
 //!
 //! A seal is loaded once, at startup, from the runtime file's
-//! `signing.seals`: its certificate chain is read and parsed, its private key
-//! resolved through `secretProviders` into a [`LocalJwkSigner`], the key is
-//! matched to the certificate, the certificate must carry a signing key
-//! usage, and the space the signature field reserves is computed and must fit.
-//! A certificate outside its validity does not refuse startup; it makes that
-//! seal unavailable, which `/ready` reports and a seal request answers with a
-//! 503 problem.
+//! `signing.seals`: its certificate chain is read and parsed, its signer is
+//! made (a `local-jwk` key resolved through `secretProviders` into a
+//! [`LocalJwkSigner`], or a `transit` key reached through its proxy as a
+//! [`TransitSigner`] that has passed its sign-and-verify self-test), the
+//! signer's key is matched to the certificate, the certificate must carry a
+//! signing key usage, and the space the signature field reserves is computed
+//! and must fit. A certificate outside its validity, or a Transit signer
+//! that has stopped answering, does not refuse startup or stop plain
+//! rendering; it makes that seal unavailable, which `/ready` reports and a
+//! seal request answers with a 503 problem.
 //!
 //! Nothing here records or returns a certificate subject, a key, or a
 //! timestamp token: the audit and the response carry the certificate's
@@ -28,7 +31,7 @@ use registry_platform_crypto::{
     accept_timestamp_response, add_signature_timestamp, random_timestamp_nonce, sign_detached,
     timestamp_request, CertificateChain, CertificateError, CertificateFingerprint, CmsError,
     KeyReadiness, LocalJwkSigner, PrivateJwk, SigningAlgorithm, SigningProvider, TimestampError,
-    MAX_TIMESTAMP_RESPONSE_BYTES,
+    TransitInitializationError, TransitSigner, TransitSignerConfig, MAX_TIMESTAMP_RESPONSE_BYTES,
 };
 use registry_platform_yaml::{Diagnostic, Severity};
 use time::OffsetDateTime;
@@ -39,7 +42,9 @@ use crate::hash::{sha256_digest, sha256_label};
 use crate::manifest::{Manifest, MANIFEST_FILE};
 use crate::pdf_signature::{PdfSignatureError, SignatureField, MAX_CONTENTS_CAPACITY};
 use crate::problem::{ProblemKind, RenderProblem};
-use crate::runtime::{RenderRuntime, SealRuntime, TimestampAuthorityRuntime, RUNTIME_KIND};
+use crate::runtime::{
+    RenderRuntime, SealRuntime, SealSignerRuntime, TimestampAuthorityRuntime, RUNTIME_KIND,
+};
 use crate::worker::WorkerSeal;
 
 /// The partial name, `/T`, of the one signature field a seal writes.
@@ -170,7 +175,14 @@ pub struct Seal {
     signing: SigningPayload,
     timestamp: Option<TimestampAuthority>,
     allowed_clients: Vec<String>,
+    /// Held while one caller probes a signer that is not ready, so a burst
+    /// of requests sends the provider one probe.
+    recovery_probe: tokio::sync::Mutex<()>,
 }
+
+/// What a recovery probe signs: never a document, so a probe signature
+/// cannot stand in for a seal.
+const SIGNER_PROBE_MESSAGE: &[u8] = b"registry-render-seal-signer-probe-v1";
 
 impl std::fmt::Debug for Seal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -189,13 +201,13 @@ pub type Seals = BTreeMap<String, Arc<Seal>>;
 /// no signing block. Refuses as `runtime-invalid`, with a diagnostic at the
 /// failing member whose message names the failing piece and repeats no
 /// value; [`crate::runtime::RuntimePositions::place`] gives it its line.
-pub fn load(runtime: &RenderRuntime) -> Result<Seals, RenderProblem> {
+pub async fn load(runtime: &RenderRuntime) -> Result<Seals, RenderProblem> {
     let mut seals = Seals::new();
     let Some(signing) = &runtime.signing else {
         return Ok(seals);
     };
     for (id, seal) in &signing.seals {
-        let loaded = Seal::load(runtime, id.as_str(), seal)?;
+        let loaded = Seal::load(runtime, id.as_str(), seal).await?;
         seals.insert(id.as_str().to_owned(), Arc::new(loaded));
     }
     Ok(seals)
@@ -431,6 +443,7 @@ impl Seal {
             contents_capacity,
             timestamp: None,
             allowed_clients: vec!["records-service".to_owned()],
+            recovery_probe: tokio::sync::Mutex::new(()),
         }
     }
 }
@@ -524,31 +537,23 @@ pub fn refuse_unsealable(bundle: &Bundle, seals: &Seals) -> Result<(), RenderPro
     .with_diagnostics(diagnostics))
 }
 
-impl Seal {
-    fn load(runtime: &RenderRuntime, id: &str, seal: &SealRuntime) -> Result<Self, RenderProblem> {
-        let certificate = |finding: ChainFinding| {
-            refusal(
-                id,
-                "certificateChainFile",
-                finding.code,
-                finding.message,
-                finding.action,
-            )
-        };
-        let key = |code: &str, message: String, action: &str| {
-            refusal(id, "signer/privateKeyRef", code, message, action)
-        };
-        let chain = read_chain(id, seal).map_err(certificate)?;
-        // The resolver's buffer erases the JWK text, private members
-        // included, when it drops after parsing.
-        let secret = crate::runtime::resolve_protected_secret(
-            runtime,
-            seal.signer.private_key_ref(),
-        )
-        .map_err(|error| {
+/// The `local-jwk` signer of seal `id`: the private JWK the file-provider
+/// secret `private_key_ref` holds.
+fn local_jwk_signer(
+    runtime: &RenderRuntime,
+    id: &str,
+    private_key_ref: &str,
+) -> Result<LocalJwkSigner, RenderProblem> {
+    let key = |code: &str, message: String, action: &str| {
+        refusal(id, "signer/privateKeyRef", code, message, action)
+    };
+    // The resolver's buffer erases the JWK text, private members included,
+    // when it drops after parsing.
+    let secret =
+        crate::runtime::resolve_protected_secret(runtime, private_key_ref).map_err(|error| {
             let action = if error == SecretError::UnsafeFile {
-                "Make the key file a regular file owned by the serving user, with mode 0600 \
-                     or 0400 and one link."
+                "Make the key file a regular file owned by the serving user, with mode 0600 or \
+                 0400 and one link."
             } else {
                 "Provide the seal's private key under the secret provider the reference names."
             };
@@ -558,24 +563,124 @@ impl Seal {
                 action,
             )
         })?;
-        let not_a_key = || {
-            key(
-                "render.runtime.seal-key-invalid",
-                format!("signing.seals.{id}.signer.privateKeyRef does not hold a private JWK"),
-                "Store the seal's private key as one ES256, ES384, RS256 or RS384 private JWK; \
-                 `registry-render keygen --from-pem` converts an unencrypted PKCS #8 key.",
+    let not_a_key = || {
+        key(
+            "render.runtime.seal-key-invalid",
+            format!("signing.seals.{id}.signer.privateKeyRef does not hold a private JWK"),
+            "Store the seal's private key as one ES256, ES384, RS256 or RS384 private JWK; \
+             `registry-render keygen --from-pem` converts an unencrypted PKCS #8 key.",
+        )
+    };
+    let text = std::str::from_utf8(secret.expose_secret()).map_err(|_| not_a_key())?;
+    let mut jwk = PrivateJwk::parse(text.trim()).map_err(|_| not_a_key())?;
+    drop(secret);
+    // The CMS names its signer by issuer and serial number, never by key id,
+    // so a seal key needs none; the seal id stands in when it has none.
+    if jwk.kid.as_deref().is_none_or(|kid| kid.trim().is_empty()) {
+        jwk.kid = Some(id.to_owned());
+    }
+    LocalJwkSigner::new(jwk).map_err(|_| not_a_key())
+}
+
+/// Seal `id`'s Transit signer could not be made: the refusal names the
+/// cause [`TransitInitializationError`] gives, which carries no path, name,
+/// provider answer or key material, at the member that fixes it.
+fn transit_refusal(id: &str, error: TransitInitializationError) -> RenderProblem {
+    use TransitInitializationError as Fault;
+    let (member, action) = match error {
+        Fault::Client | Fault::Unavailable => (
+            "signer/unixSocketPath",
+            "Start the Transit signing proxy listening on signer.unixSocketPath, reachable by \
+             the serving user, then start serve again.",
+        ),
+        Fault::Refused => (
+            "signer",
+            "Check signer.mount and signer.keyName, and give the proxy's token a policy that \
+             reads that key and signs with it.",
+        ),
+        Fault::ProviderFailed => (
+            "signer",
+            "Unseal Transit or restore its storage backend, then start serve again.",
+        ),
+        Fault::Custody => (
+            "signer/keyName",
+            "Seal with a Transit key of type ecdsa-p256 that is neither derived nor exportable \
+             and allows no plaintext backup.",
+        ),
+        Fault::KeyVersionNotCreated | Fault::KeyVersionRetired | Fault::PublicKeyMismatch => (
+            "signer/keyVersion",
+            "Pin signer.keyVersion to the Transit key version the seal certificate certifies, \
+             one between the key's min_encryption_version and latest_version.",
+        ),
+        Fault::SelfTest => (
+            "signer",
+            "Check that the proxy's token may sign with the key; its self-test signature did \
+             not verify.",
+        ),
+        _ => (
+            "signer",
+            "Check that signer.unixSocketPath is a Vault or OpenBao Transit signing proxy and \
+             that the signer members name the seal's key.",
+        ),
+    };
+    refusal(
+        id,
+        member,
+        "render.runtime.seal-transit-unavailable",
+        format!("signing.seals.{id}.signer cannot sign through Transit: {error}"),
+        action,
+    )
+}
+
+impl Seal {
+    async fn load(
+        runtime: &RenderRuntime,
+        id: &str,
+        seal: &SealRuntime,
+    ) -> Result<Self, RenderProblem> {
+        let certificate = |finding: ChainFinding| {
+            refusal(
+                id,
+                "certificateChainFile",
+                finding.code,
+                finding.message,
+                finding.action,
             )
         };
-        let text = std::str::from_utf8(secret.expose_secret()).map_err(|_| not_a_key())?;
-        let mut jwk = PrivateJwk::parse(text.trim()).map_err(|_| not_a_key())?;
-        drop(secret);
-        // The CMS names its signer by issuer and serial number, never by key
-        // id, so a seal key needs none; the seal id stands in when it has
-        // none.
-        if jwk.kid.as_deref().is_none_or(|kid| kid.trim().is_empty()) {
-            jwk.kid = Some(id.to_owned());
-        }
-        let signer = LocalJwkSigner::new(jwk).map_err(|_| not_a_key())?;
+        let chain = read_chain(id, seal).map_err(certificate)?;
+        let (signer, key_member): (Arc<dyn SigningProvider>, &str) = match &seal.signer {
+            SealSignerRuntime::LocalJwk { private_key_ref } => (
+                Arc::new(local_jwk_signer(runtime, id, private_key_ref)?),
+                "signer/privateKeyRef",
+            ),
+            SealSignerRuntime::Transit {
+                unix_socket_path,
+                mount,
+                key_name,
+                key_version,
+                attempt_timeout_milliseconds,
+            } => {
+                // The key Transit holds is the seal's only if the certificate
+                // certifies it, which the check below decides before the seal
+                // signs anything.
+                let config = TransitSignerConfig::discover(
+                    unix_socket_path,
+                    mount.as_str(),
+                    key_name.as_str(),
+                    key_version.get(),
+                    std::time::Duration::from_millis(attempt_timeout_milliseconds.get()),
+                )
+                .await
+                .map_err(|error| transit_refusal(id, error))?;
+                let signer = TransitSigner::initialize(config)
+                    .await
+                    .map_err(|error| transit_refusal(id, error))?;
+                (Arc::new(signer), "signer/keyName")
+            }
+        };
+        let key = |code: &str, message: String, action: &str| {
+            refusal(id, key_member, code, message, action)
+        };
         if signer.algorithm() == SigningAlgorithm::EdDsa {
             return Err(key(
                 "render.runtime.seal-key-unsupported",
@@ -595,15 +700,30 @@ impl Seal {
         match chain.check_for_signing(&signer.public_jwk(), inside_validity) {
             Ok(())
             | Err(CertificateError::Expired { .. } | CertificateError::NotYetValid { .. }) => {}
-            Err(CertificateError::KeyMismatch { .. }) => return Err(key(
-                "render.runtime.seal-key-mismatch",
-                format!(
-                    "signing.seals.{id}.signer.privateKeyRef does not hold the key the seal \
-                         certificate certifies"
-                ),
-                "Point signer.privateKeyRef at the private key of the seal certificate, or the \
-                     chain file at the certificate issued for this key.",
-            )),
+            Err(CertificateError::KeyMismatch { .. }) => {
+                return Err(match &seal.signer {
+                    SealSignerRuntime::LocalJwk { .. } => key(
+                        "render.runtime.seal-key-mismatch",
+                        format!(
+                            "signing.seals.{id}.signer.privateKeyRef does not hold the key the \
+                             seal certificate certifies"
+                        ),
+                        "Point signer.privateKeyRef at the private key of the seal certificate, \
+                         or the chain file at the certificate issued for this key.",
+                    ),
+                    SealSignerRuntime::Transit { .. } => key(
+                        "render.runtime.seal-key-mismatch",
+                        format!(
+                            "signing.seals.{id}.signer names a Transit key version that is not \
+                             the key the seal certificate certifies"
+                        ),
+                        "Point signer.keyName and signer.keyVersion at the Transit key the seal \
+                         certificate was issued for, or the chain file at a certificate issued \
+                         from a request `registry-render keygen --transit-unix-socket-path` \
+                         signed with this key. A Transit seal key is ECDSA P-256.",
+                    ),
+                })
+            }
             Err(CertificateError::MissingSigningKeyUsage { .. }) => {
                 return Err(certificate(usage_finding(id)))
             }
@@ -631,10 +751,11 @@ impl Seal {
                 test_only: seal.is_test_only(),
             },
             chain,
-            signer: Arc::new(signer),
+            signer,
             contents_capacity,
             timestamp,
             allowed_clients: seal.allowed_clients.as_slice().to_vec(),
+            recovery_probe: tokio::sync::Mutex::new(()),
         })
     }
 
@@ -676,6 +797,30 @@ impl Seal {
         self.allowed_clients
             .iter()
             .any(|client| client == client_id)
+    }
+
+    /// Give a signer that said it is not ready one chance to recover: one
+    /// probe signature, which the signer verifies and records in its
+    /// readiness. A Transit signer turns not ready when a call fails, and
+    /// only a later call that succeeds turns it back, so the seal route and
+    /// `/ready` probe before they ask [`Seal::availability`]. A ready signer
+    /// is never called, and concurrent callers share one probe.
+    pub async fn recover_signer(&self) {
+        let Ok(_probe) = self.recovery_probe.try_lock() else {
+            return;
+        };
+        // Read under the lock: a probe that just finished has set it.
+        if self.signer.readiness() != KeyReadiness::NotReady {
+            return;
+        }
+        if let Err(error) = self.signer.sign(SIGNER_PROBE_MESSAGE).await {
+            tracing::warn!(
+                target: "registry_render::seal",
+                seal_id = %self.id,
+                %error,
+                "seal signer is still not ready"
+            );
+        }
     }
 
     /// Whether the seal can sign at `now`. Readiness asks this too; it never
@@ -1348,6 +1493,83 @@ mod tests {
         assert!(
             contents_capacity(0, 0, true) < MAX_CONTENTS_CAPACITY,
             "the fixed allowances leave room for a chain"
+        );
+    }
+
+    /// A signer whose readiness follows its last signature, as a Transit
+    /// signer's does, and whose signatures succeed while `healthy` is set.
+    struct ProbedSigner {
+        inner: LocalJwkSigner,
+        healthy: std::sync::atomic::AtomicBool,
+        ready: std::sync::atomic::AtomicBool,
+        calls: AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl SigningProvider for ProbedSigner {
+        fn algorithm(&self) -> SigningAlgorithm {
+            self.inner.algorithm()
+        }
+
+        fn key_id(&self) -> &str {
+            self.inner.key_id()
+        }
+
+        fn public_jwk(&self) -> PublicJwk {
+            self.inner.public_jwk()
+        }
+
+        fn readiness(&self) -> KeyReadiness {
+            if self.ready.load(Ordering::SeqCst) {
+                KeyReadiness::Ready
+            } else {
+                KeyReadiness::NotReady
+            }
+        }
+
+        async fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, SigningError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            let healthy = self.healthy.load(Ordering::SeqCst);
+            self.ready.store(healthy, Ordering::SeqCst);
+            if healthy {
+                self.inner.sign(payload).await
+            } else {
+                Err(SigningError::external("the provider is away"))
+            }
+        }
+    }
+
+    /// A signer that turned not ready gets one probe per recovery, shared by
+    /// concurrent callers, and the seal is available again once the probe
+    /// signs; a ready signer is never probed.
+    #[tokio::test]
+    async fn a_signer_that_turned_not_ready_is_probed_once_and_recovers() {
+        let pki = TestPki::generate().expect("test PKI");
+        let test_seal = pki.issue_seal(SigningAlgorithm::Es256).expect("test seal");
+        let signer = Arc::new(ProbedSigner {
+            inner: test_seal.signer().expect("test signer"),
+            healthy: std::sync::atomic::AtomicBool::new(false),
+            ready: std::sync::atomic::AtomicBool::new(false),
+            calls: AtomicUsize::new(0),
+        });
+        let seal = Seal::for_test("ministry", &test_seal, Arc::clone(&signer) as _);
+        let now = OffsetDateTime::now_utc();
+
+        tokio::join!(seal.recover_signer(), seal.recover_signer());
+        assert_eq!(signer.calls.load(Ordering::SeqCst), 1, "one shared probe");
+        assert_eq!(seal.availability(now), Err(Unavailable::SignerNotReady));
+
+        signer.healthy.store(true, Ordering::SeqCst);
+        seal.recover_signer().await;
+        assert_eq!(signer.calls.load(Ordering::SeqCst), 2);
+        assert_eq!(seal.availability(now), Ok(()));
+
+        seal.recover_signer().await;
+        assert_eq!(
+            signer.calls.load(Ordering::SeqCst),
+            2,
+            "a ready signer is not probed"
         );
     }
 
