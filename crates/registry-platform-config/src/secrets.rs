@@ -265,8 +265,11 @@ fn read_secret_file(root: &Path, name: &str) -> Result<Zeroizing<Vec<u8>>, Secre
     read_bounded(file)
 }
 
+/// Read at most one byte past [`MAX_SECRET_BYTES`] into one buffer allocated
+/// at that size, which the read never outgrows: a grown buffer would copy
+/// the value and free the old buffer without erasing it.
 fn read_bounded(file: File) -> Result<Zeroizing<Vec<u8>>, SecretError> {
-    let mut bytes = Zeroizing::new(Vec::new());
+    let mut bytes = Zeroizing::new(Vec::with_capacity(MAX_SECRET_BYTES + 1));
     file.take((MAX_SECRET_BYTES + 1) as u64)
         .read_to_end(&mut bytes)
         .map_err(|_| SecretError::Read)?;
@@ -452,6 +455,29 @@ mod tests {
             let error = validate_secret(Zeroizing::new(value)).expect_err("invalid secret");
             assert_eq!(error, SecretError::InvalidValue);
             assert_eq!(error.to_string(), "the referenced secret value is invalid");
+        }
+    }
+
+    /// A grown buffer copies the value and frees the old one unerased, so
+    /// the read must fit one buffer allocated at the bound whatever the
+    /// file holds.
+    #[test]
+    fn a_bounded_read_never_grows_its_buffer() {
+        use std::io::{Seek as _, SeekFrom, Write as _};
+
+        for length in [
+            1,
+            4096,
+            MAX_SECRET_BYTES,
+            MAX_SECRET_BYTES + 1,
+            2 * MAX_SECRET_BYTES,
+        ] {
+            let mut file = tempfile::tempfile().expect("temporary file");
+            file.write_all(&vec![b'x'; length]).expect("write");
+            file.seek(SeekFrom::Start(0)).expect("rewind");
+            let bytes = read_bounded(file).expect("read");
+            assert_eq!(bytes.len(), length.min(MAX_SECRET_BYTES + 1));
+            assert_eq!(bytes.capacity(), MAX_SECRET_BYTES + 1, "{length} bytes");
         }
     }
 
