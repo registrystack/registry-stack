@@ -5,7 +5,9 @@
 //! Objects are read with `hayro-syntax`. This code exists because a parsed
 //! object model cannot give back the original bytes of an entry, and the
 //! update copies every entry it does not replace byte for byte. Callers
-//! cross-check the keys found here against `hayro-syntax`.
+//! cross-check the keys found here against `hayro-syntax`. Reading the
+//! revision also walks every object in use with a nesting bound, because
+//! `hayro-syntax` recurses without one and a stack overflow aborts.
 
 use std::ops::Range;
 
@@ -97,7 +99,10 @@ pub(super) fn dict_entries(
 ) -> Result<(Vec<Entry>, usize), PdfSignatureError> {
     let (entries, end) = dict_at(bytes, at, 0)?;
     let mut seen = std::collections::HashSet::with_capacity(entries.len());
-    if !entries.iter().all(|entry| seen.insert(entry.key.as_slice())) {
+    if !entries
+        .iter()
+        .all(|entry| seen.insert(entry.key.as_slice()))
+    {
         return Err(malformed("a dictionary repeats a key"));
     }
     Ok((entries, end))
@@ -342,7 +347,9 @@ struct XrefEntry {
 
 /// Read the single revision of `pdf`: a header, one cross-reference table
 /// covering every object, a trailer without `/Prev`, `/XRefStm` or
-/// `/Encrypt`, and nothing after `%%EOF` but one optional EOL.
+/// `/Encrypt`, and nothing after `%%EOF` but one optional EOL. The value of
+/// every object in use must read as a PDF value nested at most `MAX_DEPTH`
+/// deep; a stream's data after its dictionary is not read.
 pub(super) fn read_revision(pdf: &[u8]) -> Result<Revision, PdfSignatureError> {
     if !pdf.starts_with(b"%PDF-") {
         return Err(malformed("the file does not start with a %PDF- header"));
@@ -388,11 +395,15 @@ pub(super) fn read_revision(pdf: &[u8]) -> Result<Revision, PdfSignatureError> {
     let offsets = cover(&subsections, size)?;
     for (number, offset) in offsets.iter().enumerate() {
         if let Some(offset) = offset {
-            if *offset >= xref_offset || !object_header_matches(pdf, *offset, number) {
-                return Err(malformed(
+            let body = (*offset < xref_offset)
+                .then(|| object_body_at(pdf, *offset, number))
+                .flatten()
+                .ok_or(malformed(
                     "a cross-reference entry does not point at its object",
-                ));
-            }
+                ))?;
+            // `hayro-syntax` recurses without a depth limit; walking every
+            // object here first keeps its recursion within `MAX_DEPTH`.
+            value_at(&pdf[..xref_offset], skip_space(pdf, body), 0)?;
         }
     }
 
@@ -556,19 +567,20 @@ fn cover(subsections: &[Subsection], size: u32) -> Result<Vec<Option<usize>>, Pd
     Ok(offsets)
 }
 
-/// Whether `<number> 0 obj` starts at `offset`.
-fn object_header_matches(pdf: &[u8], offset: usize, number: usize) -> bool {
+/// If `<number> 0 obj` starts at `offset`, the offset just after `obj`.
+fn object_body_at(pdf: &[u8], offset: usize, number: usize) -> Option<usize> {
     let number_end = digits_end(pdf, offset);
     if parse_uint(&pdf[offset..number_end]) != Some(number as u64) {
-        return false;
+        return None;
     }
     let generation_start = skip_whitespace(pdf, number_end);
     let generation_end = digits_end(pdf, generation_start);
     if generation_start == number_end || &pdf[generation_start..generation_end] != b"0" {
-        return false;
+        return None;
     }
     let keyword = skip_whitespace(pdf, generation_end);
-    keyword > generation_end && pdf[keyword..].starts_with(b"obj") && ends_token(pdf, keyword + 3)
+    (keyword > generation_end && pdf[keyword..].starts_with(b"obj") && ends_token(pdf, keyword + 3))
+        .then_some(keyword + 3)
 }
 
 #[cfg(test)]
@@ -697,11 +709,21 @@ mod tests {
     }
 
     fn minimal_pdf(trailer_extra: &str) -> Vec<u8> {
+        minimal_pdf_with("", "", trailer_extra)
+    }
+
+    /// A minimal file with `catalog_extra` and `pages_extra` appended to the
+    /// catalog and page tree dictionaries.
+    fn minimal_pdf_with(catalog_extra: &str, pages_extra: &str, trailer_extra: &str) -> Vec<u8> {
         let mut pdf = b"%PDF-2.0\n".to_vec();
         let catalog = pdf.len();
-        pdf.extend_from_slice(b"1 0 obj\n<</Type/Catalog/Pages 2 0 R>>\nendobj\n");
+        pdf.extend_from_slice(
+            format!("1 0 obj\n<</Type/Catalog/Pages 2 0 R{catalog_extra}>>\nendobj\n").as_bytes(),
+        );
         let pages = pdf.len();
-        pdf.extend_from_slice(b"2 0 obj\n<</Type/Pages/Count 0/Kids[]>>\nendobj\n");
+        pdf.extend_from_slice(
+            format!("2 0 obj\n<</Type/Pages/Count 0/Kids[]{pages_extra}>>\nendobj\n").as_bytes(),
+        );
         let xref = pdf.len();
         pdf.extend_from_slice(
             format!(
@@ -721,6 +743,26 @@ mod tests {
         assert_eq!(&pdf[revision.id_first.clone()], b"(a)");
         assert!(pdf[revision.xref_offset..].starts_with(b"xref\n"));
         assert_eq!(keys(&revision.trailer), vec![&b"Size"[..], b"Root", b"ID"]);
+    }
+
+    /// Every object in use is walked with the nesting bound before any
+    /// other reader sees it, the catalog and the objects it does not name
+    /// alike.
+    #[test]
+    fn read_revision_refuses_an_object_nested_past_the_bound() {
+        let deep = format!("/Deep{}{}", "[".repeat(64), "]".repeat(64));
+        for (label, input) in [
+            ("catalog", minimal_pdf_with(&deep, "", "")),
+            ("page tree", minimal_pdf_with("", &deep, "")),
+        ] {
+            assert_eq!(
+                read_revision(&input).unwrap_err(),
+                PdfSignatureError::Malformed("objects nest too deeply"),
+                "{label}"
+            );
+        }
+        let shallow = format!("/Deep{}{}", "[".repeat(8), "]".repeat(8));
+        read_revision(&minimal_pdf_with(&shallow, &shallow, "")).expect("within the bound");
     }
 
     #[test]
