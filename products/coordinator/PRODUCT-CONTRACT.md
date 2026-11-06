@@ -294,6 +294,7 @@ carries its sentence as its `message`.
 | `coordinator.read-in-force.may-be-ambiguous` | `check` warning | "The register allows two records in force for this subject on one date, so this read can hold the run. Add a temporal-non-overlap constraint over these subject fields in BReg, or name every field the constraint is scoped by." |
 | `definition.proposal-not-run-owned` | `check` error | "Cancel only a request this run started or submitted: map proposalId from that step's output." |
 | `definition.read-in-force-entity` | `check` error | "This record type has no date validity interval, so no record can be in force on a date." |
+| `definition.review-request-not-run-owned` | `check` error | "Cancel only a review request this run submitted: map request from that step's output." |
 | `definition.unresolved-route` | `check` error | "A lookup is unresolved when no record matches, but also when two records match or a record is hidden from this profile, so creating a record from this route can make a duplicate. Route unresolved to a finish, another read or a Casework review request, and create the record from a later step. Step {name} ({op}) can create or change a record." |
 | `mapping.fields-depth` | `check` error | "This fields mapping nests deeper than 4 levels. Flatten it, or build the inner value in an earlier step." |
 | `mapping.fields-count` | `check` error | "This fields mapping builds more than 64 members across its levels. Remove members, or build part of the value in an earlier step." |
@@ -338,6 +339,12 @@ Both mutations recover with the same saved request and key, without a read-only 
 receipt. A `wait-for` names `completion: {step, name}` from an earlier accepted call on every route.
 Its required `timeoutSeconds` is shorter than the run deadline. A settled result takes `next`;
 timeout takes `onTimeout`, or reports `wait-timed-out`.
+
+`casework.cancel-review-request/v1` is limited to a request the run submitted. Compilation
+requires its `request` input to map the whole output of an earlier
+`casework.submit-review-request/v1` step on every route, with no path, and refuses any other
+source with `definition.review-request-not-run-owned`. Casework still decides the cancel under the
+producer identity, which every workflow in the deployment shares.
 
 An optional `onCancel` takes a durable authored cleanup path. A leased read records intent and
 routes when the read settles or the lease expires. Repeated cancellation preserves cleanup under

@@ -1608,12 +1608,12 @@ fn workflow_findings(flow: &Workflow) -> Vec<CoordinatorError> {
         }
     }
     for (name, step) in &flow.steps {
-        if !cancels_only_run_owned(flow, step) {
+        if let Some((code, message, action)) = cancel_not_run_owned(flow, step) {
             findings.push(authored(
-                "definition.proposal-not-run-owned",
+                code,
                 &format!("steps.{name}.input"),
-                "Cancel only a request this run started or submitted: map proposalId from that step's output.",
-                "Map proposalId from the output of the breg.start-proposal/v1 or breg.submit-proposal/v1 step that opened the request.",
+                message,
+                action,
             ));
         }
     }
@@ -2308,30 +2308,58 @@ fn fail(code: &'static str) -> CoordinatorError {
     }).suggest("Inspect the authored field and function, correct the definition, then rerun check. Admitted runs keep their original snapshot.")
 }
 
-/// A run cancels only a Proposal it opened: the cancel's `proposalId` is
-/// the `proposalId` a start or submit call step returned. Ordinary step
-/// reference checks then hold that the step ran on every route here.
-fn cancels_only_run_owned(flow: &Workflow, step: &Step) -> bool {
+/// A run cancels only work it opened, so a cancel's input is a fields
+/// mapping whose target member reads a call step of this run that opened it:
+///
+/// - a Proposal cancel's `proposalId` is the `/proposalId` a
+///   `breg.start-proposal/v1` or `breg.submit-proposal/v1` step returned;
+/// - a review cancel's `request` is the whole accepted request, with no path,
+///   a `casework.submit-review-request/v1` step returned.
+///
+/// Any other source, such as the run input, a literal, a Function, a nested
+/// object or another step, is refused with the code, message and suggestion
+/// returned here. Ordinary step reference checks then hold that the step ran
+/// on every route here.
+fn cancel_not_run_owned(
+    flow: &Workflow,
+    step: &Step,
+) -> Option<(&'static str, &'static str, &'static str)> {
     let Step::Call { call, input, .. } = step else {
-        return true;
+        return None;
     };
-    if call.operation != Operation::CancelProposal {
-        return true;
-    }
-    let Mapping::Fields { fields } = input else {
-        return false;
+    let (member, path, opened, refusal): (_, _, &[Operation], _) = match call.operation {
+        Operation::CancelProposal => (
+            "proposalId",
+            Some("/proposalId"),
+            &[Operation::StartProposal, Operation::SubmitProposal],
+            (
+                "definition.proposal-not-run-owned",
+                "Cancel only a request this run started or submitted: map proposalId from that step's output.",
+                "Map proposalId from the output of the breg.start-proposal/v1 or breg.submit-proposal/v1 step that opened the request.",
+            ),
+        ),
+        Operation::CancelReviewRequest => (
+            "request",
+            None,
+            &[Operation::SubmitReviewRequest],
+            (
+                "definition.review-request-not-run-owned",
+                "Cancel only a review request this run submitted: map request from that step's output.",
+                "Map request from the whole output of the casework.submit-review-request/v1 step that submitted it, with no path.",
+            ),
+        ),
+        _ => return None,
     };
-    let Some(Member::Reference(Reference::Step { step, path })) = fields.get("proposalId") else {
-        return false;
-    };
-    path.as_deref() == Some("/proposalId")
-        && matches!(
-            flow.steps.get(step),
-            Some(Step::Call { call, .. }) if matches!(
-                call.operation,
-                Operation::StartProposal | Operation::SubmitProposal
-            )
-        )
+    let owned = matches!(input, Mapping::Fields { fields } if matches!(
+        fields.get(member),
+        Some(Member::Reference(Reference::Step { step, path: read }))
+            if read.as_deref() == path
+                && matches!(
+                    flow.steps.get(step),
+                    Some(Step::Call { call, .. }) if opened.contains(&call.operation)
+                )
+    ));
+    (!owned).then_some(refusal)
 }
 
 pub(crate) fn authored(

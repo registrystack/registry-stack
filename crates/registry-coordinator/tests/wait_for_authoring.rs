@@ -2,7 +2,8 @@
 //! A `wait-for` step hands a run to an event another product delivers and
 //! continues with that event's value as its output. `check` holds the step to
 //! a request it can correlate on every route, a bounded timeout that fits the
-//! run deadline, and readers that use only what the event declares.
+//! run deadline, and readers that use only what the event declares. A
+//! withdrawal cancels only the request the run itself submitted.
 use registry_coordinator::definition::Definition;
 use serde_json::Value;
 use std::{fs, path::Path, process::Command};
@@ -241,6 +242,131 @@ fn the_wait_output_is_not_available_on_its_timeout_route() {
         "/workflow/steps/withdraw/input/fields/reason",
         "coordinator.mapping.dominance",
         &["not available on every incoming path"],
+    );
+}
+
+/// The refusal of a review cancel whose `request` is not the accepted
+/// request this run's own submit step returned.
+const NOT_RUN_OWNED: &str = "coordinator.definition.review-request-not-run-owned";
+
+/// The withdrawal's run-owned source, which every refused case replaces.
+const OWNED_REQUEST: &str = "request: {type: step, step: submit-review}";
+
+/// The one ownership refusal among `findings`, placed at the cancel input.
+fn not_run_owned(findings: &[Value]) -> &Value {
+    let found = finding(
+        findings,
+        "/workflow/steps/withdraw/input",
+        NOT_RUN_OWNED,
+        &["Cancel only a review request this run submitted"],
+    );
+    assert_eq!(
+        found["message"],
+        "Cancel only a review request this run submitted: map request from that step's output."
+    );
+    assert_eq!(
+        found["suggestedAction"],
+        "Map request from the whole output of the casework.submit-review-request/v1 step that submitted it, with no path."
+    );
+    found
+}
+
+#[test]
+fn a_run_cancels_only_a_review_request_it_submitted() {
+    let root = tempfile::tempdir().unwrap();
+    project(root.path(), &[]);
+    let output = cli(&[
+        "--format",
+        "json",
+        "check",
+        "--project",
+        root.path().to_str().unwrap(),
+    ]);
+    assert!(
+        output.status.success(),
+        "the whole output of the submit step is run-owned: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+
+    // Each source type-checks as an accepted request, so only ownership
+    // refuses it. A nested object is refused even when most of its members
+    // read the submit step, because its members can come from elsewhere.
+    let literal = format!("request: {{type: literal, value: {}}}", accepted());
+    let nested = format!(
+        "request: {{type: fields, fields: {{requestId: {{type: step, step: submit-review, path: /requestId}}, subject: {{type: literal, value: {{source: applications, type: application, id: 00000000-0000-4000-8000-000000000002, version: '1', digest: '{}'}}}}, policy: {{type: step, step: submit-review, path: /policy}}, submissionDigest: {{type: step, step: submit-review, path: /submissionDigest}}}}}}",
+        digest('d')
+    );
+    for source in [literal.as_str(), nested.as_str()] {
+        let findings = checked(&[(OWNED_REQUEST, source)]);
+        assert_eq!(findings.len(), 1, "{source}: {findings:#?}");
+        not_run_owned(&findings);
+    }
+
+    // Sources that are also the wrong type are refused for ownership too,
+    // beside their type finding.
+    for source in [
+        "request: {type: input}",
+        "request: {type: step, step: await-review}",
+        "request: {type: step, step: submit-review, path: /requestId}",
+    ] {
+        not_run_owned(&checked(&[(OWNED_REQUEST, source)]));
+    }
+}
+
+#[test]
+fn a_review_cancel_built_by_a_function_is_refused() {
+    let root = tempfile::tempdir().unwrap();
+    project(
+        root.path(),
+        &[
+            (
+                "    output: {operationInput: submit-message}\n",
+                "    output: {operationInput: submit-message}\n  withdrawal:\n    runtime: rhai\n    source: functions.rhai\n    entrypoint: withdrawal\n    inputs: {request: {operationOutput: submit-review-request}}\n    output: {operationInput: cancel-review-request}\n",
+            ),
+            (
+                "      input:\n        type: fields\n        fields:\n          request: {type: step, step: submit-review}\n          reason: {type: literal, value: \"No decision within fourteen days.\"}\n",
+                "      input: {type: function, function: withdrawal, inputs: {request: {type: step, step: submit-review}}}\n",
+            ),
+        ],
+    );
+    let functions = root.path().join("functions.rhai");
+    let mut source = fs::read_to_string(&functions).unwrap();
+    source.push_str(
+        "\nfn withdrawal(args) {\n    #{ request: args[\"request\"], reason: \"No decision within fourteen days.\" }\n}\n",
+    );
+    fs::write(&functions, source).unwrap();
+    let output = cli(&[
+        "--format",
+        "json",
+        "check",
+        "--project",
+        root.path().to_str().unwrap(),
+    ]);
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(output.status.code(), Some(1), "{report}");
+    let findings = report["diagnostics"].as_array().unwrap();
+    assert_eq!(findings.len(), 1, "{findings:#?}");
+    not_run_owned(findings);
+}
+
+#[test]
+fn a_snapshot_whose_review_cancel_is_not_run_owned_does_not_restore() {
+    let root = tempfile::tempdir().unwrap();
+    project(root.path(), &[]);
+    let snapshot = Definition::load(root.path()).unwrap().snapshot().unwrap();
+    let owned = r#""request":{"step":"submit-review","type":"step"}"#;
+    assert_eq!(snapshot.matches(owned).count(), 1, "{snapshot}");
+    let foreign = snapshot.replacen(
+        owned,
+        r#""request":{"type":"literal","value":{"policy":{"digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","id":"application-review","version":"1"},"requestId":"00000000-0000-4000-8000-000000000010","subject":{"digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","id":"00000000-0000-4000-8000-000000000001","source":"applications","type":"application","version":"3"},"submissionDigest":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}}"#,
+        1,
+    );
+    let Err(refusal) = Definition::from_snapshot(&foreign) else {
+        panic!("a snapshot that cancels a foreign review request restored");
+    };
+    assert_eq!(
+        refusal.code, "definition.review-request-not-run-owned",
+        "{refusal:?}"
     );
 }
 
