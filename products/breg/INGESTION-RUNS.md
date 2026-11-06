@@ -272,11 +272,11 @@ id and revision, so the scrub reaches the chunks that describe the erased
 record directly from the matching links: an erasure stays proportional to
 the erased record, never to the registry's whole ingestion history.
 
-Over an entity with encrypted fields, a receipt stores the sealed field
+Over an entity with encrypted fields, a receipt stores the encrypted field
 envelopes exactly as the ordinary batch route stores them, and every release
 path, the fresh answer, the replay, and the recovery read, opens those members
 at the same serve edge the batch route opens its answers. The stored receipt
-bytes stay sealed, and a process without key state, or one whose open fails,
+bytes stay encrypted, and a process without key state, or one whose open fails,
 answers `service.unavailable` instead of releasing an envelope.
 
 Every release of a retained receipt re-projects the stored answer through the
@@ -291,11 +291,11 @@ still grants keep serving, encrypted ones included. A live receipt whose row
 lost its map is refused as an outage. The stored map's ceiling is derived
 from the compiled bounds rather than assumed: the contract's full per-entity
 field scale of identifier pairs at their 64-byte compiler limits, so a
-projection at the declared field scale commits. A member that still parses as a sealed envelope in a receipt
+projection at the declared field scale commits. A member that still parses as an encrypted envelope in a receipt
 stored under a package the database no longer holds active fails the release
 closed with `service.unavailable`, unless the active entity declares that
 member's field encrypted; a successor that retires the encryption itself
-therefore still answers closed, and the envelope stays sealed at rest. An
+therefore still answers closed, and the envelope stays encrypted at rest. An
 envelope-shaped value stored under the package the database still holds active
 is caller data, never refused for its shape, and the ordinary batch route's
 idempotency answer never takes that closed check at all, because its key binds
