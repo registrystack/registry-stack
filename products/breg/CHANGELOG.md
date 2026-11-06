@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Flag a task-grant profile that binds no rows. For a non-public record type,
+  `breg.access-profile.task-grant-rows-unbound` is a finding (not an error)
+  when a profile with a `taskGrant`, or an Action or Proposal permission of
+  one, authors no row boundary, even if it requires scopes and purposes. A
+  task-grant token's row claims other than `sub` come only from the grant's
+  signed identity, so without a boundary the profile's ceiling applies to
+  every row. `TASK_GRANTS.md` now says so and corrects the wider-bounds and
+  immediate-action statements.
+
 ## 0.45.0 - 2026-11-03
 
 - BREAKING: `bregctl generate evidence-source` exports a reviewed Adapter pack
