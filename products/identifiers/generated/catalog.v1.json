@@ -4906,7 +4906,7 @@
       },
       "artifact": {
         "path": "products/coordinator/generated/runtime/runtime.schema.json",
-        "sha256": "bbbc49cc6aa19d2b6329db459ac7d5c8635583e2a0ca63f2d75556840a804202",
+        "sha256": "9d68a7c21821319603e16c3fb1a381e206a4f488a3eae95c9544180004ae2ea3",
         "mediaType": "application/schema+json"
       }
     },
