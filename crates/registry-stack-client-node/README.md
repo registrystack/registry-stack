@@ -189,7 +189,7 @@ Coordinator joins the seven-product roster at v0.44.0. The source facade also
 contains held `render` and `@registrystack/client/render` namespaces. Default
 assembly omits Render; `--include-render` adds it to an explicit local candidate
 and does not authorize publication. Render takes a token or a resource-bound provider with
-`bearerToken()` and performs one bounded render exchange. A correlation key is
+`bearerToken()` and performs one bounded render or seal exchange. A correlation key is
 not a durable idempotency promise. `outcomeUnknown` and `transportKind` preserve
 whether an exchange may have completed; provider errors keep their own class.
 Coordinator is optional.

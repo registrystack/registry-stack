@@ -3,7 +3,10 @@
 
 export declare class RenderClient {
   constructor(config: import('./client').RenderClientConfig)
-  render(token: string, documentType: string, request: any): Promise<import('./client').RenderedDocument>
+  render(token: string, documentType: string, request: any, correlationKey?: string | undefined | null): Promise<import('./client').RenderedDocument>
+  seal(token: string, documentType: string, request: any, correlationKey?: string | undefined | null): Promise<import('./client').SealedDocument>
 }
+
+export declare function validateCorrelationKey(correlationKey?: string | undefined | null): void
 
 export declare function validateRenderRequest(documentType: string, request: any): void

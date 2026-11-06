@@ -16,6 +16,14 @@ class RenderClient:
         token: str | Callable[[], str] | Any,
         document_type: str,
         request: dict[str, Any],
+        correlation_key: str | None = None,
+    ) -> dict[str, Any]: ...
+    def seal(
+        self,
+        token: str | Callable[[], str] | Any,
+        document_type: str,
+        request: dict[str, Any],
+        correlation_key: str | None = None,
     ) -> dict[str, Any]: ...
 
 __version__: str

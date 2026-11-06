@@ -96,7 +96,8 @@ contains held `registry_client.render`. Default assembly omits Render;
 `--include-render` adds it to an explicit local candidate and does not authorize
 publication.
 Render accepts a resource-specific token or `registry_client.auth.PrivateKeyJwt`
-provider and returns the checked JSON PDF representation. Errors expose
+provider and returns the checked JSON PDF representation from `render` or
+`seal`. Errors expose
 `outcome_unknown` and `transport_kind`; provider failures keep their own class.
 Coordinator remains
 optional for direct BReg and Casework applications.
