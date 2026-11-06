@@ -9,14 +9,16 @@
 //! unreadable or invalid chain, a certificate without a signing key usage,
 //! or a chain too large for the reserved signature space is refused as serve
 //! would refuse it, and a certificate outside its validity or within 30 days
-//! of expiring is a warning. Whether a seal's key matches its certificate is
-//! left to serve, the only reader of the key.
+//! of expiring is a warning. With the bundle given too, a document type whose
+//! `pdfStandard` cannot hold the signature space its seal reserves is refused
+//! at its `seal` member, as serve refuses it at startup. Whether a seal's key
+//! matches its certificate is left to serve, the only reader of the key.
 //! The rendered file closure is governed where a render exists to capture
 //! it: the golden suite pins each acceptance bundle's closure and proves
 //! every file it reads is manifest-governed, and `compile --format json` reports
 //! `deps` for authors reviewing their own bundles.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
@@ -152,12 +154,15 @@ pub fn run(request: &CheckRequest<'_>, stdout: &mut dyn Write, stderr: &mut dyn 
     }
     let mut audit = None;
     if let Some(path) = request.runtime {
-        let (checked, missing) = check_runtime_file(
+        let (mut checked, missing, seal_capacities) = check_runtime_file(
             path,
             request.environment,
             request.require_audit_under,
             manifest.as_ref(),
         );
+        if let (Some(dir), Some(manifest)) = (bundle_dir, manifest.as_ref()) {
+            checked.extend(unsealable_members(dir, manifest, &seal_capacities));
+        }
         files += 1;
         unavailable |= missing;
         let proven = !missing
@@ -588,15 +593,63 @@ pub fn check_package_source(bundle: &Bundle, dir: &Path) -> Result<(), RenderPro
     }
 }
 
+/// Each document type whose `pdfStandard` cannot hold the signature space
+/// its seal reserves, placed at the document type's `seal` member. The
+/// space is known only for the seals whose chain the runtime check read
+/// (`--environment`). Should the manifest no longer read for positions, each
+/// finding still names its member, without a line.
+fn unsealable_members(
+    dir: &Path,
+    manifest: &Manifest,
+    seal_capacities: &BTreeMap<String, usize>,
+) -> Vec<Diagnostic> {
+    let found = crate::seal::unsealable_documents(manifest, |id| seal_capacities.get(id).copied());
+    if found.is_empty() {
+        return Vec::new();
+    }
+    let file = bundle_file_name(dir, MANIFEST_FILE);
+    let read = read_root_manifest(dir)
+        .ok()
+        .and_then(|bytes| read_manifest(&file, &bytes).ok());
+    found
+        .iter()
+        .map(|document| match &read {
+            Some(read) => error_at(
+                &read.document,
+                crate::seal::UNSEALABLE_CODE,
+                &document.pointer(),
+                &document.message(),
+                document.action(),
+            ),
+            None => {
+                let mut diagnostic = Diagnostic::error(
+                    crate::seal::UNSEALABLE_CODE,
+                    document.pointer(),
+                    document.message(),
+                    document.action(),
+                );
+                diagnostic.artifact = Some(MANIFEST_KIND.to_owned());
+                diagnostic.source = Some(Source {
+                    file: file.clone(),
+                    line: None,
+                    column: None,
+                });
+                diagnostic
+            }
+        })
+        .collect()
+}
+
 /// Check the runtime file at `path` as given: the loader needs an absolute,
 /// lexically normal path, and every diagnostic names the file as given.
-/// Returns the findings and whether the file could not be read at all.
+/// Returns the findings, whether the file could not be read at all, and the
+/// signature space each seal whose chain was read reserves.
 fn check_runtime_file(
     path: &Path,
     environment: bool,
     audit_root: Option<&Path>,
     manifest: Option<&Manifest>,
-) -> (Vec<Diagnostic>, bool) {
+) -> (Vec<Diagnostic>, bool, BTreeMap<String, usize>) {
     let given = path.display().to_string();
     let Some(absolute) = absolute_lexical(path) else {
         let mut diagnostic = Diagnostic::error(
@@ -610,7 +663,7 @@ fn check_runtime_file(
             line: None,
             column: None,
         });
-        return (vec![diagnostic], true);
+        return (vec![diagnostic], true, BTreeMap::new());
     };
     let checked =
         crate::runtime::check_runtime_with_bundle(&absolute, environment, audit_root, manifest);
@@ -632,7 +685,7 @@ fn check_runtime_file(
             diagnostic
         })
         .collect();
-    (diagnostics, checked.unavailable)
+    (diagnostics, checked.unavailable, checked.seal_capacities)
 }
 
 /// `path` made absolute against the working directory, with `.` and `..`

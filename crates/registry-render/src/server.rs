@@ -152,8 +152,11 @@ async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
         );
     }
     // Seals load before the audit opens: a refused chain or key leaves
-    // nothing half-made behind.
+    // nothing half-made behind. A document type whose PDF standard cannot
+    // hold its seal's reserved signature space is refused here, before any
+    // render could write a nonconformant file.
     let seals = crate::seal::load(&runtime)?;
+    crate::seal::refuse_unsealable(&bundle.manifest, &seals)?;
     let audit = RenderAudit::open(runtime.audit.destination()?).await?;
     let service = Arc::new(Service {
         caller_fingerprint: registry_platform_authcommon::fingerprint_api_key(

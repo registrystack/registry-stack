@@ -395,21 +395,37 @@ fn try_start_server(fixture: &Fixture) -> Option<Server> {
 
 /// Run `serve` expecting it to refuse startup; returns its exit code and
 /// standard error.
+/// Run serve on a fixture it must refuse, and return its exit code and
+/// standard error. A serve that is still running after the deadline started
+/// instead of refusing: it is stopped and the test fails rather than hangs.
 fn refused_startup(fixture: &Fixture) -> (Option<i32>, String) {
-    let output = Command::new(env!("CARGO_BIN_EXE_registry-render"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_registry-render"))
         .arg("serve")
         .arg("--runtime-config")
         .arg(&fixture.runtime_path)
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("spawn registry-render serve")
-        .wait_with_output()
-        .expect("serve exits");
-    (
-        output.status.code(),
-        String::from_utf8_lossy(&output.stderr).into_owned(),
-    )
+        .expect("spawn registry-render serve");
+    let mut pipe = child.stderr.take().expect("serve stderr");
+    let reader = std::thread::spawn(move || {
+        let mut text = String::new();
+        pipe.read_to_string(&mut text).expect("read serve stderr");
+        text
+    });
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("serve status") {
+            break status;
+        }
+        if Instant::now() > deadline {
+            child.kill().expect("stop serve");
+            child.wait().expect("serve stops");
+            panic!("serve started instead of refusing its runtime");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    (status.code(), reader.join().expect("stderr reader"))
 }
 
 struct Reply {
@@ -519,6 +535,11 @@ fn seal_json(fixture: &Fixture, server: &Server) -> serde_json::Value {
 /// process from the same package: the exact first revision a sealed file
 /// must start with.
 fn first_revision(fixture: &Fixture) -> registry_render::Rendered {
+    first_revision_of(fixture, "notice")
+}
+
+/// [`first_revision`] for the document type `id`.
+fn first_revision_of(fixture: &Fixture, id: &str) -> registry_render::Rendered {
     let root = fixture.home.join("package");
     let verified = registry_platform_config::package::verify_package(
         &root,
@@ -527,7 +548,7 @@ fn first_revision(fixture: &Fixture) -> registry_render::Rendered {
     )
     .expect("shared package envelope");
     let bundle = registry_render::Bundle::load_package(&root, &verified).expect("package");
-    let document = bundle.document("notice").expect("notice").clone();
+    let document = bundle.document(id).expect("the document type").clone();
     let body: serde_json::Value = serde_json::from_str(NOTICE_BODY).unwrap();
     let request = registry_render::RenderRequest {
         locale: None,
@@ -557,6 +578,9 @@ fn first_revision(fixture: &Fixture) -> registry_render::Rendered {
 struct SignedFile {
     signed_parts: [Vec<u8>; 2],
     cms_der: Vec<u8>,
+    /// The bytes `/Contents` reserves for the signature: half its hex
+    /// digits.
+    reserved: usize,
 }
 
 fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -604,6 +628,7 @@ fn read_signed_file(pdf: &[u8], first_revision_len: usize) -> SignedFile {
     SignedFile {
         signed_parts: [pdf[..gap_start].to_vec(), pdf[gap_end..].to_vec()],
         cms_der,
+        reserved: contents.len(),
     }
 }
 
@@ -1136,6 +1161,14 @@ fn a_failing_timestamp_authority_fails_the_seal_naming_the_piece() {
             "{piece}: {problem}"
         );
         assert!(problem.get("pdfBase64").is_none());
+        // The prepared file, its signature space still empty, never leaves:
+        // under PDF/A-2 and PDF/A-3 it would not even be conformant.
+        assert_eq!(
+            reply.header("content-type"),
+            Some("application/problem+json"),
+            "{piece}"
+        );
+        assert!(find(&reply.body, b"%PDF").is_none(), "{piece}");
         if let Some(tsa) = &tsa {
             assert_eq!(tsa.requests.load(Ordering::SeqCst), 1, "{piece}: no retry");
         }
@@ -1237,5 +1270,88 @@ fn a_chain_too_large_for_the_reserved_space_refuses_startup() {
     assert!(
         stderr.contains("/signing/seals/ministry/certificateChainFile"),
         "{stderr}"
+    );
+}
+
+#[test]
+fn a_pdf_a_2_document_seals_within_its_string_limit() {
+    let tsa = start_tsa(TsaMode::Grant);
+    let fixture = sealed(Some(&tsa));
+    let server = start_server(&fixture);
+    let reply = post(
+        &server,
+        "/v1/seal/archive",
+        &fixture.token("render:seal", SEAL_CLIENT),
+        "application/json",
+    );
+    assert_eq!(
+        reply.status,
+        200,
+        "{}",
+        String::from_utf8_lossy(&reply.body)
+    );
+    let body = reply.json();
+    assert_eq!(body["seal"]["level"], "b-t");
+    let pdf = base64_decode(body["pdfBase64"].as_str().unwrap());
+    let expected = first_revision_of(&fixture, "archive");
+    assert!(
+        pdf.starts_with(&expected.pdf),
+        "the sealed file starts with the exact first revision"
+    );
+    let signed = read_signed_file(&pdf, expected.pdf.len());
+    assert!(
+        signed.reserved <= 32_767,
+        "a typical B-T seal fits a PDF/A-2 string: {} bytes",
+        signed.reserved
+    );
+    let parts = [
+        signed.signed_parts[0].as_slice(),
+        signed.signed_parts[1].as_slice(),
+    ];
+    let verified = verify_detached_signature(&signed.cms_der, &parts).expect("the CMS verifies");
+    assert!(
+        verified.timestamp_gen_time.is_some(),
+        "B-T carries a timestamp"
+    );
+}
+
+#[test]
+fn a_seal_too_large_for_a_document_pdf_standard_refuses_startup() {
+    // A B-T seal whose chain makes it reserve about 39 KB: within what a
+    // field may reserve, beyond what the PDF/A-2b `archive` can hold.
+    let pki = seal_pki();
+    let seal = pki
+        .issue_seal_with(SigningAlgorithm::Es256, |params| {
+            params
+                .custom_extensions
+                .push(rcgen::CustomExtension::from_oid_content(
+                    &[1, 3, 6, 1, 4, 1, 55555, 1],
+                    vec![0x5a; 6 * 1024],
+                ));
+        })
+        .unwrap();
+    let fixture = deployment(Some(SealSpec {
+        tsa_url: Some("http://127.0.0.1:9/tsr".to_owned()),
+        seal,
+        key_of: None,
+    }));
+    let (code, stderr) = refused_startup(&fixture);
+    assert_eq!(
+        code,
+        Some(registry_render::ProblemKind::RuntimeInvalid.exit_code()),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("render.bundle.seal-space-exceeds-standard"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("/documents/2/seal"), "{stderr}");
+    assert!(
+        stderr.contains("PDF/A-2 and PDF/A-3 limit a string to 32767 bytes"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("/documents/0/seal"),
+        "the plain notice keeps its seal: {stderr}"
     );
 }
