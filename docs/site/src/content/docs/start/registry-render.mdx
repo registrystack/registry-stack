@@ -40,8 +40,9 @@ seal calls the timestamp authority you configure.
 ## What Render refuses
 
 Render refuses data its schema rejects, a request without an issuance time, a package whose files
-changed, a caller whose token or API key it does not accept, and a public listening address. It
-never reads the host's clock, fonts, or network.
+changed, a caller whose token or API key it does not accept, and a public listening address. A
+render never reads the host's clock, fonts, or network; a seal takes its signing time from the
+host's clock.
 [How Registry Render works](../../explanation/render-determinism/) explains each boundary.
 
 ## When it is not the right product
@@ -60,7 +61,7 @@ and over HTTP in about 15 minutes. [Deploy Registry Render](../../operate/regist
 the service for real callers.
 
 {/* Evidence: crates/registry-render/src/cli.rs, Command;
-    crates/registry-render/src/server.rs, serve and render_route;
+    crates/registry-render/src/server.rs, serve, render_route and seal_route;
     crates/registry-render/src/world.rs, RenderWorld and today;
     crates/registry-render/src/runtime.rs, validate_bind;
     crates/registry-render/src/problem.rs, ProblemKind;

@@ -115,10 +115,10 @@ not that either service is reachable. Rebuild and recheck whenever the registry 
 
 For your own Proposal-mode Action, choose an approval pattern and a new Casework directory:
 
-```sh test-skip="the reader supplies their own Action and sealed BReg package"
+```sh test-skip="the reader supplies their own Action and BReg deployment package"
 caseworkctl provider add ./action-review \
   --breg-project ./registry --action <action-id> \
-  --pattern two-peer-approval --breg-package <sealed-package>
+  --pattern two-peer-approval --breg-package <deployment-package>
 ```
 
 When BReg needs changes, the command exits 1 with
