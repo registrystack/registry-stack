@@ -121,9 +121,10 @@ pub enum PdfSignatureError {
 ///
 /// Deterministic: the same `first_revision` and `field` give the same bytes.
 /// Refuses, without panicking, a file that is not a single-revision PDF with
-/// a cross-reference table, an encrypted file, and a file that already has
-/// an interactive form, a permissions dictionary, a document security store,
-/// or a signature.
+/// a cross-reference table, an encrypted file, a file whose objects nest
+/// deeper than a bounded reader allows, and a file that already has an
+/// interactive form, a permissions dictionary, a document security store, or
+/// a signature.
 pub fn prepare(
     first_revision: &[u8],
     field: &SignatureField,
@@ -918,6 +919,57 @@ mod tests {
         assert_eq!(
             prepare(&encrypted, &field()),
             Err(PdfSignatureError::Encrypted)
+        );
+    }
+
+    /// A hand-written one-page file whose catalog also holds `catalog_extra`.
+    fn hand_written(catalog_extra: &[u8]) -> Vec<u8> {
+        let mut pdf = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for body in [
+            [&b"<</Type/Catalog/Pages 2 0 R"[..], catalog_extra, b">>"].concat(),
+            b"<</Type/Pages/Kids[3 0 R]/Count 1>>".to_vec(),
+            b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 100]>>".to_vec(),
+        ] {
+            offsets.push(pdf.len());
+            pdf.extend_from_slice(format!("{} 0 obj\n", offsets.len()).as_bytes());
+            pdf.extend_from_slice(&body);
+            pdf.extend_from_slice(b"\nendobj\n");
+        }
+        let xref = pdf.len();
+        pdf.extend_from_slice(b"xref\n0 4\n0000000000 65535 f\r\n");
+        for offset in offsets {
+            pdf.extend_from_slice(format!("{offset:010} 00000 n\r\n").as_bytes());
+        }
+        pdf.extend_from_slice(
+            format!("trailer\n<</Size 4/Root 1 0 R/ID[(a)(a)]>>\nstartxref\n{xref}\n%%EOF\n")
+                .as_bytes(),
+        );
+        pdf
+    }
+
+    /// `hayro-syntax` recurses without a depth limit, and a stack overflow
+    /// aborts the process instead of panicking, so the bounded walk has to
+    /// refuse deep nesting before `hayro-syntax` reads the file. On this
+    /// small stack an unbounded reader overflows long before a million
+    /// levels.
+    #[test]
+    fn prepare_refuses_deep_nesting_before_an_unbounded_reader_sees_it() {
+        prepare(&hand_written(b""), &field()).expect("the hand-written file prepares");
+        let levels = 1_000_000;
+        let mut deep = b"/Deep".to_vec();
+        deep.extend(std::iter::repeat_n(b'[', levels));
+        deep.extend(std::iter::repeat_n(b']', levels));
+        let original = hand_written(&deep);
+        let outcome = std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(move || prepare(&original, &field()))
+            .expect("thread")
+            .join()
+            .expect("prepare does not panic");
+        assert_eq!(
+            outcome,
+            Err(PdfSignatureError::Malformed("objects nest too deeply"))
         );
     }
 
