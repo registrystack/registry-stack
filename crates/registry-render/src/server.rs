@@ -1141,12 +1141,6 @@ async fn run_seal(
     let result = worker::supervise_seal(worker_request, timeout).await;
     drop(permit);
     let prepared: WorkerPrepared = result?;
-    if prepared.bundle_hash != service.bundle.bundle_hash {
-        return Err(RenderProblem::new(
-            ProblemKind::BundleTampered,
-            "the package changed under serve; refusing the render from a drifted package",
-        ));
-    }
     let rendered = SealedRender {
         document_id: prepared.document_id.clone(),
         document_version: prepared.document_version,
@@ -1155,7 +1149,7 @@ async fn run_seal(
         data_sha256: prepared.data_sha256.clone(),
         warnings: prepared.warnings.clone(),
     };
-    let sealed = seal.seal(prepared).await?;
+    let sealed = seal.seal(prepared, &service.bundle.bundle_hash).await?;
     Ok((rendered, sealed))
 }
 
@@ -2023,6 +2017,51 @@ mod tests {
         let drawn = crate::audit::correlation();
         assert_eq!(drawn.len(), 36, "a random UUID: {drawn}");
         assert_ne!(drawn, crate::audit::correlation());
+    }
+
+    /// The legacy API key never reaches the seal route, even on a service
+    /// that loaded a seal without OIDC: the bearer layer refuses it before
+    /// the handler, with the guidance it needs, as one refusal entry.
+    #[tokio::test]
+    async fn the_legacy_api_key_is_refused_on_the_seal_route_at_request_time() {
+        use axum::body::to_bytes;
+        use registry_platform_crypto::document_signature::test_support::TestPki;
+        let pki = TestPki::generate().expect("test PKI");
+        let test_seal = pki
+            .issue_seal(registry_platform_crypto::SigningAlgorithm::Es256)
+            .expect("test seal");
+        let signer = Arc::new(test_seal.signer().expect("test signer"));
+        let lines = AuditLines::new(None);
+        let mut service = service(&lines, 1);
+        Arc::get_mut(&mut service)
+            .expect("fixture owns service")
+            .seals
+            .insert(
+                "ministry".to_owned(),
+                Arc::new(Seal::for_test("ministry", &test_seal, signer)),
+            );
+        let request = axum::http::Request::builder()
+            .method(Method::POST)
+            .uri("/v1/seal/receipt")
+            .header(header::AUTHORIZATION, format!("Bearer {TEST_API_KEY}"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(axum::body::Body::from("{}"))
+            .unwrap();
+        let response = router(Arc::clone(&service)).oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            response.headers()[header::CONTENT_TYPE],
+            "application/problem+json"
+        );
+        let body = to_bytes(response.into_body(), 16384).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["code"], "render.forbidden");
+        assert_eq!(body["detail"], LEGACY_KEY_GUIDANCE);
+        let accepted = lines.accepted();
+        assert_eq!(accepted.len(), 1, "{accepted:?}");
+        assert_eq!(accepted[0]["phase"], "response");
+        assert_eq!(accepted[0]["record"]["outcome"], "refused");
+        assert_eq!(accepted[0]["record"]["problem"], "forbidden");
     }
 
     /// Two calls that carry the same caller key still pair unambiguously:

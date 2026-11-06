@@ -48,6 +48,7 @@ tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
+async-trait = { workspace = true }
 rcgen = { workspace = true }
 registry-platform-crypto = { workspace = true, features = ["cms-signing", "test-support"] }
 registry-render-client.workspace = true

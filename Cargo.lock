@@ -7930,6 +7930,7 @@ dependencies = [
 name = "registry-render"
 version = "0.45.1"
 dependencies = [
+ "async-trait",
  "axum",
  "base64 0.23.1",
  "chrono",
