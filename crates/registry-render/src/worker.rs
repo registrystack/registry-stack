@@ -493,7 +493,17 @@ async fn exchange(
             format!("cannot locate the render binary: {err}"),
         )
     })?;
-    let mut child = worker_command(&exe).spawn().map_err(|err| {
+    exchange_with(worker_command(&exe), request, timeout).await
+}
+
+/// [`exchange`] over a given worker command, so a test can stand in for the
+/// worker.
+async fn exchange_with(
+    mut command: tokio::process::Command,
+    request: WorkerRequest,
+    timeout: Duration,
+) -> Result<WorkerResponse, RenderProblem> {
+    let mut child = command.spawn().map_err(|err| {
         RenderProblem::new(
             ProblemKind::Internal,
             format!("cannot spawn render worker: {err}"),
@@ -532,7 +542,8 @@ async fn exchange(
             .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
         Ok(value)
     };
-    let frame = tokio::time::timeout(timeout, async {
+    let deadline = tokio::time::Instant::now() + timeout;
+    let frame = tokio::time::timeout_at(deadline, async {
         write.await?;
         read.await
     });
@@ -553,8 +564,22 @@ async fn exchange(
             ));
         }
     };
-    let _ = child.wait().await;
-    let _ = drain.await;
+    // The answer is in. A worker that does not exit, or a process it started
+    // that holds its stderr open, would pin this request and its render
+    // permit, so the waits share the render deadline; the answer is kept.
+    let mut drain = drain;
+    let exited = tokio::time::timeout_at(deadline, async {
+        let _ = child.wait().await;
+        let _ = (&mut drain).await;
+    })
+    .await;
+    if exited.is_err() {
+        let _ = child.kill().await;
+        drain.abort();
+        tracing::warn!(
+            "render worker killed: it did not exit after answering, by the render deadline"
+        );
+    }
     serde_json::from_value(response).map_err(|err| {
         RenderProblem::new(
             ProblemKind::RenderPanicked,
@@ -611,7 +636,10 @@ mod tests {
     use std::collections::BTreeSet;
     use std::ffi::OsString;
 
-    use super::{isolate_environment, worker_command, WORKER_ENVIRONMENT};
+    use super::{
+        exchange_with, isolate_environment, worker_command, WorkerProblem, WorkerResponse,
+        WORKER_ENVIRONMENT,
+    };
 
     fn kept_names(command: &tokio::process::Command) -> BTreeSet<String> {
         command
@@ -673,6 +701,80 @@ mod tests {
             .collect();
         let command = worker_command(std::path::Path::new("/usr/bin/env"));
         assert_eq!(kept_names(&command), expected);
+    }
+
+    /// A stand-in worker that answers with a framed `Failed` response and
+    /// then runs `after` (shell), so a test controls how it exits.
+    fn answering_stand_in(dir: &std::path::Path, after: &str) -> std::path::PathBuf {
+        let answer = WorkerResponse::Failed {
+            problem: WorkerProblem {
+                kind: "internal".to_owned(),
+                detail: "stand-in answer".to_owned(),
+                pointers: Vec::new(),
+                locations: Vec::new(),
+                diagnostics: Vec::new(),
+            },
+        };
+        let body = serde_json::to_vec(&answer).expect("answer serializes");
+        let mut frame = (body.len() as u32).to_le_bytes().to_vec();
+        frame.extend_from_slice(&body);
+        let frame_file = dir.join("answer.frame");
+        std::fs::write(&frame_file, frame).expect("write frame");
+        let stand_in = dir.join("answering-worker");
+        std::fs::write(
+            &stand_in,
+            format!("#!/bin/sh\ncat '{}'\n{after}\n", frame_file.display()),
+        )
+        .expect("write stand-in");
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&stand_in, std::fs::Permissions::from_mode(0o700))
+            .expect("make stand-in executable");
+        stand_in
+    }
+
+    /// The render deadline bounds the whole exchange: a worker that answers
+    /// and then does not exit, or leaves a process holding its stderr open,
+    /// is cut off at the deadline and the answer it gave is kept.
+    #[tokio::test]
+    async fn a_worker_that_lingers_after_answering_is_cut_off_at_the_deadline() {
+        let deadline = std::time::Duration::from_secs(1);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pid_file = dir.path().join("lingering.pid");
+        for after in [
+            "exec sleep 10".to_owned(),
+            format!("sleep 10 &\necho $! > '{}'\nexit 0", pid_file.display()),
+        ] {
+            let stand_in = answering_stand_in(dir.path(), &after);
+            let started = std::time::Instant::now();
+            let answer = exchange_with(
+                worker_command(&stand_in),
+                super::seal_tests::receipt_request(None),
+                deadline,
+            )
+            .await;
+            let elapsed = started.elapsed();
+            if let Ok(pid) = std::fs::read_to_string(&pid_file) {
+                let status = std::process::Command::new("kill")
+                    .arg(pid.trim())
+                    .status()
+                    .expect("run kill");
+                assert!(
+                    status.success(),
+                    "{after}: the lingering process had ended before the exchange returned"
+                );
+                std::fs::remove_file(&pid_file).expect("remove pid file");
+            }
+            match answer {
+                Ok(WorkerResponse::Failed { problem }) => {
+                    assert_eq!(problem.detail, "stand-in answer");
+                }
+                other => panic!("{after}: {other:?}"),
+            }
+            assert!(
+                elapsed < std::time::Duration::from_secs(5),
+                "{after}: the exchange took {elapsed:?}"
+            );
+        }
     }
 
     #[test]
