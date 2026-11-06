@@ -4,25 +4,24 @@
 //! (ISO 32000-2 7.5.6) appended after the exact first revision, so a signed
 //! file can always be cut back to the rendered document and hashed.
 //!
-//! The work splits along the worker boundary:
+//! The render worker returns the first revision only; everything here runs
+//! in the key-holding parent, so every byte after the first revision is the
+//! parent's own:
 //!
-//! - [`prepare`] runs in the render worker. It reads Render's
-//!   single-revision PDF with `hayro-syntax` and appends the catalog
-//!   rewritten with an AcroForm and a DocMDP permission, the first page
-//!   rewritten with the widget in `/Annots`, an invisible signature field
-//!   merged with its widget, an empty appearance stream, and a certification
-//!   signature dictionary whose `/Contents` is a run of zero hex digits. The
-//!   `/ByteRange` already holds its final values when `prepare` returns.
-//! - [`PreparedPdf::check`] runs in the key-holding parent and parses no PDF
-//!   objects. It checks the fixed shape by byte offsets only; the parent
-//!   then digests [`CheckedPdf::signed_parts`], signs, and splices the CMS
-//!   in with [`CheckedPdf::embed`].
+//! - [`prepare`] reads the single-revision PDF, first with a bounded reader
+//!   that walks every object, then with `hayro-syntax`, and appends the
+//!   catalog rewritten with an AcroForm and a DocMDP permission, the first
+//!   page rewritten with the widget in `/Annots`, an invisible signature
+//!   field merged with its widget, an empty appearance stream, and a
+//!   certification signature dictionary whose `/Contents` is a run of zero
+//!   hex digits. The `/ByteRange` already holds its final values when
+//!   `prepare` returns.
+//! - The parent then digests [`PreparedPdf::signed_parts`], signs, and
+//!   splices the CMS in with [`PreparedPdf::embed`].
 //!
-//! The fixed shape: the signature dictionary carries
-//! `/ByteRange [0 a b c]`, padded with trailing spaces to
-//! `BYTE_RANGE_TEXT_LEN` bytes, immediately followed by `/Contents ` and the
-//! hex string the byte range leaves out. `/ByteRange` appears once in the
-//! update.
+//! The signature dictionary carries `/ByteRange [0 a b c]`, padded with
+//! trailing spaces to `BYTE_RANGE_TEXT_LEN` bytes, immediately followed by
+//! `/Contents ` and the hex string the byte range leaves out.
 
 mod syntax;
 
@@ -32,7 +31,6 @@ use chrono::{DateTime, Datelike, Timelike, Utc};
 use hayro_syntax::object::{Array, Dict, MaybeRef, Name, Object, ObjectIdentifier};
 use pdf_writer::types::{AnnotationFlags, FieldType};
 use pdf_writer::{Chunk, Rect, Ref, Settings, TextStr};
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::manifest::PdfStandardSpec;
@@ -48,15 +46,12 @@ pub const MAX_FIELD_NAME_LEN: usize = 127;
 /// padded with trailing spaces, so the final values are written in place.
 const BYTE_RANGE_TEXT_LEN: usize = 12 + 4 * 10 + 3 + 1;
 
-const BYTE_RANGE_KEY: &[u8] = b"/ByteRange";
-
 const CONTENTS_KEY: &[u8] = b"/Contents ";
 
 /// Nesting bound when walking from the catalog to the first page.
 const MAX_PAGE_TREE_DEPTH: usize = 32;
 
-/// What the signature field carries. The parent fixes these values; the
-/// worker writes them.
+/// What the signature field carries, fixed by the parent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignatureField {
     /// Written as the signature dictionary's `/M`, in UTC. PAdES baseline
@@ -71,30 +66,15 @@ pub struct SignatureField {
     pub field_name: String,
 }
 
-/// Render's PDF with the signature field appended, as the worker returns it.
-/// It is untrusted until [`PreparedPdf::check`] accepts it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct PreparedPdf {
-    /// The whole file: the first revision followed by the update. Serialized
-    /// as standard base64.
-    #[serde(with = "base64_bytes")]
-    pub bytes: Vec<u8>,
-    /// The signature dictionary's `/ByteRange`: `[0, gap start, gap end,
-    /// bytes after the gap]`, where the gap is the `/Contents` hex string
-    /// including its angle brackets.
-    pub byte_range: [usize; 4],
-}
-
-/// A prepared file whose shape the parent has checked. Only
-/// [`PreparedPdf::check`] makes one.
+/// Render's PDF with the signature field appended. Only [`prepare`] makes
+/// one, so its `/ByteRange` states where its `/Contents` placeholder sits.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CheckedPdf {
+pub struct PreparedPdf {
     bytes: Vec<u8>,
     byte_range: [usize; 4],
 }
 
-/// Why a signature field could not be prepared, checked, or filled.
+/// Why a signature field could not be prepared or filled.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PdfSignatureError {
     #[error("the input is not a PDF this signer can read: {0}")]
@@ -109,8 +89,6 @@ pub enum PdfSignatureError {
     AlreadyHas(&'static str),
     #[error("the signature field is invalid: {0}")]
     InvalidField(&'static str),
-    #[error("the prepared PDF does not have the expected shape: {0}")]
-    BadShape(&'static str),
     #[error("the CMS signature is {len} bytes but the field reserves {capacity}")]
     SignatureTooLarge { len: usize, capacity: usize },
     #[error("the CMS signature is empty")]
@@ -149,7 +127,7 @@ pub fn prepare(
 /// PDF/A-3 (ISO 32000-1 Annex C, through ISO 19005-2 and -3 6.1.13): the
 /// reserved `/Contents` is one string of `contents_capacity` bytes.
 ///
-/// Conformance holds for the embedded file only: until [`CheckedPdf::embed`]
+/// Conformance holds for the embedded file only: until [`PreparedPdf::embed`]
 /// writes a signature, PDF/A-2 and PDF/A-3 (6.4.3) refuse the empty
 /// `/Contents`.
 pub fn sealable(
@@ -227,74 +205,14 @@ impl SignatureField {
 }
 
 impl PreparedPdf {
-    /// Check the fixed shape by byte offsets only, without parsing PDF
-    /// objects: the byte range starts at zero and ends at the end of the
-    /// file; its gap is `<`, an even run of `0` digits, and `>`; the
-    /// `/ByteRange` text right before `/Contents ` states exactly these
-    /// values and is the update's only `/ByteRange`; and all of it sits
-    /// after the first `first_revision_len` bytes, which end with `%%EOF`.
-    pub fn check(self, first_revision_len: usize) -> Result<CheckedPdf, PdfSignatureError> {
-        let shape = PdfSignatureError::BadShape;
-        let [start, gap_start, gap_end, tail] = self.byte_range;
-        let len = self.bytes.len();
-        if start != 0 {
-            return Err(shape("the byte range does not start at zero"));
-        }
-        if first_revision_len >= len {
-            return Err(shape("the file has no update after the first revision"));
-        }
-        let first_revision = trim_eol(&self.bytes[..first_revision_len]);
-        if !first_revision.ends_with(b"%%EOF") {
-            return Err(shape("the first revision does not end with %%EOF"));
-        }
-        if gap_start >= gap_end || gap_end > len {
-            return Err(shape("the byte range gap is out of order"));
-        }
-        if gap_end.checked_add(tail) != Some(len) {
-            return Err(shape("the byte range does not end at the end of the file"));
-        }
-        let gap = &self.bytes[gap_start..gap_end];
-        if gap.len() < 4 || gap[0] != b'<' || gap[gap.len() - 1] != b'>' {
-            return Err(shape("the byte range gap is not a hex string"));
-        }
-        let digits = &gap[1..gap.len() - 1];
-        if !digits.len().is_multiple_of(2) || !digits.iter().all(|digit| *digit == b'0') {
-            return Err(shape(
-                "the byte range gap is not an even run of zero digits",
-            ));
-        }
-        let mut expected = byte_range_text(self.byte_range)
-            .ok_or(shape("the byte range values are too large"))?
-            .to_vec();
-        expected.extend_from_slice(CONTENTS_KEY);
-        let text_start = gap_start
-            .checked_sub(expected.len())
-            .ok_or(shape("the ByteRange text does not fit before the gap"))?;
-        if text_start < first_revision_len {
-            return Err(shape(
-                "the signature dictionary sits inside the first revision",
-            ));
-        }
-        if self.bytes[text_start..gap_start] != expected[..] {
-            return Err(shape("the ByteRange text does not state the byte range"));
-        }
-        let update = &self.bytes[first_revision_len..];
-        let byte_ranges = update
-            .windows(BYTE_RANGE_KEY.len())
-            .filter(|window| *window == BYTE_RANGE_KEY)
-            .count();
-        if byte_ranges != 1 {
-            return Err(shape("the update does not name exactly one ByteRange"));
-        }
-        Ok(CheckedPdf {
-            bytes: self.bytes,
-            byte_range: self.byte_range,
-        })
+    /// The whole file: the first revision followed by the update.
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
     }
-}
 
-impl CheckedPdf {
-    /// The checked `/ByteRange`.
+    /// The signature dictionary's `/ByteRange`: `[0, gap start, gap end,
+    /// bytes after the gap]`, where the gap is the `/Contents` hex string
+    /// including its angle brackets.
     pub fn byte_range(&self) -> [usize; 4] {
         self.byte_range
     }
@@ -334,14 +252,6 @@ impl CheckedPdf {
         bytes[start..start + digits.len()].copy_from_slice(digits.as_bytes());
         Ok(bytes)
     }
-}
-
-fn trim_eol(bytes: &[u8]) -> &[u8] {
-    let mut end = bytes.len();
-    while end > 0 && matches!(bytes[end - 1], b'\r' | b'\n') {
-        end -= 1;
-    }
-    &bytes[..end]
 }
 
 /// `/ByteRange [a b c d]` padded with trailing spaces to
@@ -650,8 +560,8 @@ fn write_update(
     offsets.push((appearance_id, out.len()));
     out.extend_from_slice(appearance.as_bytes());
 
-    // The certification signature dictionary, in the fixed shape `check`
-    // reads: `/ByteRange` text, then `/Contents ` and the zero hex string.
+    // The certification signature dictionary: `/ByteRange` text, then
+    // `/Contents ` and the zero hex string.
     offsets.push((signature_id, out.len()));
     out.extend_from_slice(
         format!(
@@ -721,26 +631,6 @@ fn write_update(
 /// between 1 and `i32::MAX`.
 fn object_ref(number: u32) -> Ref {
     Ref::new(i32::try_from(number).expect("object numbers are bounded by write_update"))
-}
-
-/// Serde for byte vectors as standard base64, the worker pipe's encoding
-/// for PDF bytes.
-mod base64_bytes {
-    use base64::Engine as _;
-    use serde::{Deserialize, Deserializer, Serializer};
-
-    pub(super) fn serialize<S: Serializer>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(&base64::engine::general_purpose::STANDARD.encode(bytes))
-    }
-
-    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
-        deserializer: D,
-    ) -> Result<Vec<u8>, D::Error> {
-        let text = String::deserialize(deserializer)?;
-        base64::engine::general_purpose::STANDARD
-            .decode(text)
-            .map_err(serde::de::Error::custom)
-    }
 }
 
 #[cfg(test)]
@@ -862,10 +752,9 @@ mod tests {
             ..Fixture::default()
         });
         let prepared = prepare(&original, &field()).expect("prepare");
-        assert!(prepared.bytes.starts_with(&original));
+        assert!(prepared.bytes().starts_with(&original));
         let widget = (next_object(&original), 0);
-        assert_eq!(page_annotations(&prepared.bytes), vec![(5, 0), widget]);
-        prepared.check(original.len()).expect("check");
+        assert_eq!(page_annotations(prepared.bytes()), vec![(5, 0), widget]);
     }
 
     #[test]
@@ -876,7 +765,7 @@ mod tests {
         });
         let prepared = prepare(&original, &field()).expect("prepare");
         let widget = (next_object(&original), 0);
-        assert_eq!(page_annotations(&prepared.bytes), vec![(5, 0), widget]);
+        assert_eq!(page_annotations(prepared.bytes()), vec![(5, 0), widget]);
     }
 
     #[test]
@@ -884,7 +773,7 @@ mod tests {
         let original = fixture(Fixture::default());
         let prepared = prepare(&original, &field()).expect("prepare");
         assert_eq!(
-            page_annotations(&prepared.bytes),
+            page_annotations(prepared.bytes()),
             vec![(next_object(&original), 0)]
         );
     }
@@ -911,7 +800,7 @@ mod tests {
             },
         ] {
             let prepared = prepare(&fixture(options), &field()).expect("prepare");
-            let pdf = hayro_syntax::Pdf::new(prepared.bytes).expect("reads");
+            let pdf = hayro_syntax::Pdf::new(prepared.bytes().to_vec()).expect("reads");
             let page = pdf.pages()[0].raw().clone();
             let tabs: Name<'_> = page.get(b"Tabs").expect("Tabs");
             assert_eq!(tabs.as_ref(), b"S");
@@ -1046,7 +935,7 @@ mod tests {
         let mut named = field();
         named.field_name = "Sceau ministériel".to_owned();
         let prepared = prepare(&original, &named).expect("prepare");
-        let pdf = hayro_syntax::Pdf::new(prepared.bytes).expect("reads");
+        let pdf = hayro_syntax::Pdf::new(prepared.bytes().to_vec()).expect("reads");
         let catalog: Dict<'_> = pdf.xref().get(pdf.xref().root_id()).expect("catalog");
         let form: Dict<'_> = catalog.get(b"AcroForm").expect("form");
         let fields: Array<'_> = form.get(b"Fields").expect("fields");
@@ -1101,32 +990,6 @@ mod tests {
         largest.contents_capacity = MAX_CONTENTS_CAPACITY;
         largest.field_name = "x".repeat(MAX_FIELD_NAME_LEN);
         assert!(prepare(&original, &largest).is_ok());
-    }
-
-    #[test]
-    fn check_refuses_inconsistent_ranges_without_panicking() {
-        let original = fixture(Fixture::default());
-        let prepared = prepare(&original, &field()).expect("prepare");
-        let len = prepared.bytes.len();
-        for byte_range in [
-            [0, usize::MAX, 5, 0],
-            [0, 5, 3, len - 3],
-            [0, 0, 0, len],
-            [0, 2, usize::MAX, 2],
-            [0, 2, len, usize::MAX],
-            [0, len - 2, len, 0],
-            [0, usize::MAX - 1, usize::MAX, 1],
-        ] {
-            let mut candidate = prepared.clone();
-            candidate.byte_range = byte_range;
-            assert!(
-                matches!(
-                    candidate.check(original.len()),
-                    Err(PdfSignatureError::BadShape(_))
-                ),
-                "{byte_range:?} should be refused"
-            );
-        }
     }
 
     #[test]

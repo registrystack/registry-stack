@@ -11,7 +11,10 @@
   implied by `render:render`; the legacy API key never seals) and returns the
   sealed PDF with `documentSha256` over the first revision,
   `signedFileSha256` over the whole file and the package's `bundleHash`
-  (`X-Registry-Bundle-Hash` on the PDF answer). A failing timestamp fails the request
+  (`X-Registry-Bundle-Hash` on the PDF answer). The render worker answers
+  with the first revision only, and `serve` writes the signature field after
+  it, so `documentSha256` covers every byte the worker wrote; an answer that
+  is not a single-revision PDF is refused. A failing timestamp fails the request
   and never falls back to B-B. Seals in flight, which hold no render slot
   while they sign and wait on the authority, are bounded by
   `limits.maximumConcurrentRenders`; one more is refused with `rate-limited`
@@ -49,6 +52,9 @@
   credential in the parent's environment is not passed to the process that runs
   template code. Worker tuning variables such as `RAYON_NUM_THREADS` or
   `MALLOC_ARENA_MAX` no longer reach the worker either.
+- `serve` reads a render worker's answer straight into its typed form,
+  refusing a member it does not know at its name, so a malformed answer
+  costs the serving process no more memory than the answer's own bytes.
 - The default HTTP problem detail reads "The request was refused; ..." in
   place of "The render request was refused; ...", since the seal route
   answers it too. The problem codes are unchanged.

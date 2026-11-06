@@ -1,10 +1,11 @@
 //! Document seals in serve: the key-holding half of a PAdES seal.
 //!
-//! The render worker renders the first revision and appends a signature
-//! field the parent fixed ([`crate::pdf_signature::prepare`]). Everything
-//! here runs in the serving parent, after the render slot is released: check
-//! the prepared file's fixed shape, hash the first revision, sign the byte
-//! ranges, timestamp the signature for B-T, and splice the CMS in.
+//! The render worker renders the first revision and answers with it alone.
+//! Everything here runs in the serving parent, after the render slot is
+//! released: hash the whole answer, append the signature field
+//! ([`crate::pdf_signature::prepare`]), sign the byte ranges, timestamp the
+//! signature for B-T, and splice the CMS in. Every byte after the first
+//! revision is the parent's own.
 //!
 //! A seal is loaded once, at startup, from the runtime file's
 //! `signing.seals`: its certificate chain is read and parsed, its private key
@@ -35,10 +36,10 @@ use time::OffsetDateTime;
 use crate::envelope::SigningPayload;
 use crate::hash::sha256_hex;
 use crate::manifest::{Manifest, MANIFEST_KIND};
-use crate::pdf_signature::{PdfSignatureError, MAX_CONTENTS_CAPACITY};
+use crate::pdf_signature::{PdfSignatureError, SignatureField, MAX_CONTENTS_CAPACITY};
 use crate::problem::{ProblemKind, RenderProblem};
 use crate::runtime::{RenderRuntime, SealRuntime, RUNTIME_KIND};
-use crate::worker::{WorkerPrepared, WorkerSeal};
+use crate::worker::WorkerSeal;
 
 /// The partial name, `/T`, of the one signature field a seal writes.
 pub const SEAL_FIELD_NAME: &str = "RegistrySeal";
@@ -701,57 +702,67 @@ impl Seal {
         self.chain.not_after() - now < time::Duration::days(EXPIRY_WARNING_DAYS)
     }
 
-    /// What the worker needs to prepare this seal's field at `signing_time`,
-    /// the parent's clock truncated to whole seconds.
-    pub fn worker_seal(&self, signing_time: OffsetDateTime) -> WorkerSeal {
-        let signing_time = signing_time.replace_nanosecond(0).unwrap_or(signing_time);
-        let signing_time = chrono::DateTime::from_timestamp(signing_time.unix_timestamp(), 0)
-            .unwrap_or_default()
-            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    /// What the worker needs to render this seal's first revision: the
+    /// template payload's `signing` member.
+    pub fn worker_seal(&self) -> WorkerSeal {
         WorkerSeal {
             signing: self.signing.clone(),
-            signing_time,
-            contents_capacity: self.contents_capacity,
-            field_name: SEAL_FIELD_NAME.to_owned(),
         }
     }
 
-    /// Check, sign, timestamp and embed what the worker prepared from the
-    /// package serve verified, whose hash is `bundle_hash`. An answer from
-    /// any other package is refused before anything is signed.
+    /// The signature field this seal writes at `signing_time`, the parent's
+    /// clock truncated to whole seconds.
+    pub(crate) fn signature_field(
+        &self,
+        signing_time: OffsetDateTime,
+    ) -> Result<SignatureField, RenderProblem> {
+        let signing_time = chrono::DateTime::from_timestamp(signing_time.unix_timestamp(), 0)
+            .ok_or_else(|| {
+                RenderProblem::new(
+                    ProblemKind::Internal,
+                    format!("seal {}: the signing time is out of range", self.id),
+                )
+            })?;
+        Ok(SignatureField {
+            signing_time,
+            contents_capacity: self.contents_capacity,
+            field_name: SEAL_FIELD_NAME.to_owned(),
+        })
+    }
+
+    /// Seal the first revision a worker rendered, signed at `signing_time`:
+    /// hash the whole of it as `documentSha256`, append this seal's
+    /// signature field, then sign, timestamp and embed. The worker's answer
+    /// must be a single-revision PDF; one that carries an update or bytes
+    /// after its end marker is refused before anything is signed. Reading
+    /// the PDF is blocking work, so it runs off the async workers; the
+    /// caller bounds `first_revision` by the output limit.
     pub async fn seal(
         &self,
-        prepared: WorkerPrepared,
-        bundle_hash: &str,
+        first_revision: Vec<u8>,
+        signing_time: OffsetDateTime,
     ) -> Result<SealedDocument, RenderProblem> {
-        if prepared.bundle_hash != bundle_hash {
-            return Err(RenderProblem::new(
-                ProblemKind::BundleTampered,
-                "the package changed under serve; refusing the render from a drifted package",
-            ));
-        }
         let internal = |detail: String| RenderProblem::new(ProblemKind::Internal, detail);
-        let first_revision_len = prepared.first_revision_len;
-        let checked = prepared
-            .prepared
-            .check(first_revision_len)
-            .map_err(|error| {
-                internal(format!(
-                    "seal {}: the worker's prepared file was refused: {error}",
-                    self.id
-                ))
-            })?;
-        if checked.contents_capacity() != self.contents_capacity {
-            return Err(internal(format!(
-                "seal {}: the worker reserved another signature space than requested",
+        let field = self.signature_field(signing_time)?;
+        let (document_sha256, prepared) = tokio::task::spawn_blocking(move || {
+            let document_sha256 = sha256_hex(&first_revision);
+            crate::pdf_signature::prepare(&first_revision, &field)
+                .map(|prepared| (document_sha256, prepared))
+        })
+        .await
+        .map_err(|error| {
+            internal(format!(
+                "seal {}: preparing the signature field stopped: {error}",
                 self.id
-            )));
-        }
-        // The check placed the signature dictionary after the first
-        // revision, so the first signed range starts with all of it.
-        let [first_part, _] = checked.signed_parts();
-        let document_sha256 = sha256_hex(&first_part[..first_revision_len]);
-        let signature = sign_detached(&checked.signed_parts(), &self.chain, self.signer.as_ref())
+            ))
+        })?
+        .map_err(|error| {
+            internal(format!(
+                "seal {}: the rendered document cannot be sealed: {error}",
+                self.id
+            ))
+        })?;
+        let signature = sign_detached(&prepared.signed_parts(), &self.chain, self.signer.as_ref())
             .await
             .map_err(|error| self.signing_problem(error))?;
         let (cms_der, timestamp) = match &self.timestamp {
@@ -772,7 +783,7 @@ impl Seal {
                 (stamped, Some(stamp))
             }
         };
-        let pdf = checked
+        let pdf = prepared
             .embed(&cms_der)
             .map_err(|error| match (error, &self.timestamp) {
                 (PdfSignatureError::SignatureTooLarge { .. }, Some(authority)) => {
@@ -867,7 +878,8 @@ fn chain_error_text(error: &CertificateError) -> String {
 #[derive(Debug, Clone)]
 pub struct SealedDocument {
     pub pdf: Vec<u8>,
-    /// SHA-256 over the first revision, Render's own document.
+    /// SHA-256 over the first revision: the whole of the worker's answer,
+    /// computed by the parent before it appends the signature field.
     pub document_sha256: String,
     /// SHA-256 over the whole signed file.
     pub signed_file_sha256: String,
@@ -1101,7 +1113,7 @@ mod tests {
     use registry_platform_crypto::document_signature::test_support::TestPki;
     use registry_platform_crypto::{PublicJwk, SigningError};
 
-    use crate::worker::seal_tests::prepared_receipt;
+    use crate::worker::seal_tests::sealed_receipt;
 
     /// A signer that counts its signatures, so a test can show that a
     /// refused answer was never signed.
@@ -1130,11 +1142,17 @@ mod tests {
         }
     }
 
-    /// A worker answer rendered from another package than the one serve
-    /// verified is refused as tampered before anything is signed; the same
-    /// answer under the served package hash seals.
+    /// S1: a worker answers with the first revision only and the parent
+    /// writes everything after it, so `documentSha256` covers every byte a
+    /// worker chose. The review's proof of concept put a content stream and
+    /// a second signature dictionary, its name escaped past a byte scan,
+    /// between the first revision and the parent's signature dictionary,
+    /// and kept the digest equal to an honest render. Here the same bytes
+    /// after the end marker, and an update of the worker's own, are refused
+    /// before anything is signed; an honest answer seals into the answer
+    /// followed by exactly the update the parent writes for it.
     #[tokio::test]
-    async fn a_worker_answer_from_another_package_is_refused_before_signing() {
+    async fn a_worker_cannot_put_signed_bytes_outside_the_document_digest() {
         let pki = TestPki::generate().expect("test PKI");
         let test_seal = pki.issue_seal(SigningAlgorithm::Es256).expect("test seal");
         let signer = Arc::new(CountingSigner {
@@ -1142,33 +1160,47 @@ mod tests {
             signatures: AtomicUsize::new(0),
         });
         let seal = Seal::for_test("ministry", &test_seal, Arc::clone(&signer) as _);
-        let prepared = prepared_receipt(seal.worker_seal(OffsetDateTime::now_utc()));
-        let served_hash = prepared.bundle_hash.clone();
-        let mut drifted = prepared.clone();
-        drifted.bundle_hash = "0".repeat(64);
-        assert_ne!(drifted.bundle_hash, served_hash);
+        let now = OffsetDateTime::now_utc();
+        let honest = sealed_receipt(seal.worker_seal());
 
-        let Err(problem) = seal.seal(drifted, &served_hash).await else {
-            panic!("an answer from another package was sealed");
-        };
-        assert_eq!(problem.kind, ProblemKind::BundleTampered);
+        let mut smuggled = honest.clone();
+        smuggled.extend_from_slice(
+            b"90 0 obj\n<</Length 21>>\nstream\nBT (SMUGGLED TEXT) ET\nendstream\nendobj\n\
+              91 0 obj\n<</Type/Sig/Byte#52ange[0 0 0 0]/Contents<00>>>\nendobj\n",
+        );
+        let field = seal.signature_field(now).expect("a field");
+        let own_update = crate::pdf_signature::prepare(&honest, &field)
+            .expect("an update")
+            .bytes()
+            .to_vec();
+        for (label, answer) in [
+            ("bytes after the end marker", smuggled),
+            ("an update of the worker's own", own_update),
+        ] {
+            let Err(problem) = seal.seal(answer, now).await else {
+                panic!("{label}: sealed");
+            };
+            assert_eq!(problem.kind, ProblemKind::Internal, "{label}");
+        }
         assert_eq!(
             signer.signatures.load(Ordering::SeqCst),
             0,
             "nothing signed"
         );
 
-        let sealed = seal
-            .seal(prepared, &served_hash)
-            .await
-            .expect("an answer from the served package");
+        let sealed = seal.seal(honest.clone(), now).await.expect("seals");
         assert_eq!(signer.signatures.load(Ordering::SeqCst), 1);
-        assert!(sealed.pdf.starts_with(b"%PDF-"));
+        assert_eq!(sealed.document_sha256, sha256_hex(&honest));
+        let expected = crate::pdf_signature::prepare(&honest, &field).expect("the parent's update");
+        let [_, gap_start, gap_end, _] = expected.byte_range();
+        let mut unsigned = sealed.pdf.clone();
+        unsigned[gap_start + 1..gap_end - 1].fill(b'0');
+        assert!(
+            unsigned == expected.bytes(),
+            "the sealed file is the answer and the parent's update"
+        );
     }
 
-    /// What a seal sends the worker is the signing payload, the signing
-    /// time, the reserved space and the field name; none of the seal key's
-    /// private members, for an elliptic curve key or an RSA key.
     #[test]
     fn timestamped_at_keeps_the_precision_the_authority_wrote() {
         let whole = time::macros::datetime!(2026-11-06 10:00:00 UTC);
@@ -1182,6 +1214,9 @@ mod tests {
         );
     }
 
+    /// What a seal sends the worker is the signing payload alone; none of
+    /// the seal key's private members, for an elliptic curve key or an RSA
+    /// key.
     #[test]
     fn the_seal_key_never_crosses_into_the_worker() {
         use std::collections::BTreeSet;
@@ -1193,7 +1228,7 @@ mod tests {
             let test_seal = pki.issue_seal(algorithm).expect("test seal");
             let signer = Arc::new(test_seal.signer().expect("test signer"));
             let seal = Seal::for_test("ministry", &test_seal, signer);
-            let request = receipt_request(Some(seal.worker_seal(OffsetDateTime::now_utc())));
+            let request = receipt_request(Some(seal.worker_seal()));
             let sent = serde_json::to_value(&request).expect("worker request");
             let members: BTreeSet<&str> = sent["seal"]
                 .as_object()
@@ -1201,11 +1236,7 @@ mod tests {
                 .keys()
                 .map(String::as_str)
                 .collect();
-            assert_eq!(
-                members,
-                BTreeSet::from(["contentsCapacity", "fieldName", "signing", "signingTime"]),
-                "{algorithm:?}"
-            );
+            assert_eq!(members, BTreeSet::from(["signing"]), "{algorithm:?}");
             let jwk = test_seal.private_jwk();
             let private: Vec<&str> = [&jwk.d, &jwk.p, &jwk.q, &jwk.dp, &jwk.dq, &jwk.qi]
                 .into_iter()
@@ -1261,10 +1292,9 @@ mod tests {
             growth
         );
 
-        let prepared = prepared_receipt(large_seal.worker_seal(OffsetDateTime::now_utc()));
-        let bundle_hash = prepared.bundle_hash.clone();
+        let first_revision = sealed_receipt(large_seal.worker_seal());
         large_seal
-            .seal(prepared, &bundle_hash)
+            .seal(first_revision, OffsetDateTime::now_utc())
             .await
             .expect("the signature fits the reserved space");
     }
