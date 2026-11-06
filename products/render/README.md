@@ -176,7 +176,9 @@ signing:
   imply. It returns the sealed PDF with `X-Registry-Document-Sha256` (the
   first revision, Render's rendered document) and `X-Registry-Signed-File-Sha256`
   (the whole file), or JSON with `pdfBase64`, `documentSha256`,
-  `signedFileSha256` and a `seal` object. There is no `pdfSha256`.
+  `signedFileSha256` and a `seal` object. There is no `pdfSha256`. Both
+  carry the package hash (`X-Registry-Bundle-Hash`, `bundleHash`), so a
+  sealing client needs no `render:render` to pin the package.
 - `/ready` adds a `signing` member per seal and stays ready while a seal is
   unavailable. Audit entries add `sealId`, `documentSha256`,
   `signedFileSha256`, `certificateSha256` and `timestampTokenSha256`, never a

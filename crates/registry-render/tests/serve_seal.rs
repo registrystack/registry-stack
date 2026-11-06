@@ -701,6 +701,8 @@ fn a_b_t_seal_verifies_over_its_byte_ranges_and_carries_its_timestamp() {
         "documentSha256 is the first revision"
     );
     assert_eq!(body["dataSha256"], expected.data_sha256);
+    // A client holding only `render:seal` pins the package from the answer.
+    assert_eq!(body["bundleHash"], expected.bundle_hash);
     let signed = read_signed_file(&pdf, expected.pdf.len());
     let parts = [
         signed.signed_parts[0].as_slice(),
@@ -770,6 +772,10 @@ fn the_pdf_representation_carries_the_seal_in_headers() {
     assert_eq!(
         reply.header("x-registry-document-version"),
         Some("notice v2")
+    );
+    assert_eq!(
+        reply.header("x-registry-bundle-hash"),
+        Some(expected.bundle_hash.as_str())
     );
     assert!(reply.header("x-registry-pdf-sha256").is_none());
 }

@@ -1171,7 +1171,9 @@ async fn run_seal(
 /// render route's rule. JSON carries the signed file and the seal; the PDF
 /// representation carries the same values in headers. Neither carries a
 /// `pdfSha256`: a sealed file has two hashes, `documentSha256` over the
-/// first revision and `signedFileSha256` over the whole file.
+/// first revision and `signedFileSha256` over the whole file. Both carry the
+/// package's `bundleHash`, so a client granted only `render:seal` can pin the
+/// package without reading `/v1/documents`.
 fn respond_sealed(
     headers: &HeaderMap,
     seal_id: &str,
@@ -1200,6 +1202,7 @@ fn respond_sealed(
             "signedFileSha256": sealed.signed_file_sha256,
             "dataSha256": rendered.data_sha256,
             "documentVersion": document_version,
+            "bundleHash": rendered.bundle_hash,
             "warnings": rendered.warnings,
             "seal": seal,
         });
@@ -1227,6 +1230,7 @@ fn respond_sealed(
         &rendered.warnings.len().to_string(),
     );
     insert_header(map, "X-Registry-Document-Version", &document_version);
+    insert_header(map, "X-Registry-Bundle-Hash", &rendered.bundle_hash);
     insert_header(map, "X-Registry-Seal-Id", seal_id);
     insert_header(map, "X-Registry-Seal-Level", sealed.level.as_str());
     insert_header(
