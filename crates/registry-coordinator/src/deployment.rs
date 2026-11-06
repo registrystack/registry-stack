@@ -1028,6 +1028,9 @@ mod tests {
         assert!(advice.contains("\"Apply and start\""), "{advice}");
         assert!(advice.contains("DEPLOYMENT.md"), "{advice}");
         assert!(!advice.contains("Map request"), "{advice}");
+        // The advice names the fix in the project, not an upgrade procedure.
+        assert!(advice.contains("Correct the workflow project"), "{advice}");
+        assert!(!advice.contains("version that accepted it"), "{advice}");
     }
 
     #[test]

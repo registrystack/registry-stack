@@ -5430,10 +5430,14 @@ fn assert_held_run(entry: &Value, run: Uuid, revision: &str) {
     );
     assert!(!advice.contains("Map request"), "{advice}");
     assert!(
-        advice.contains("release that accepts its definition")
-            && advice.contains("deployment-status"),
+        advice.contains("nothing will run for it")
+            && advice.contains("Only a release that accepts that definition can end the run"),
         "{advice}"
     );
+    // The advice states the run's state; it prescribes no upgrade procedure.
+    for procedure in ["upgrad", "deployment-status", "settle"] {
+        assert!(!advice.contains(procedure), "{advice}");
+    }
 }
 
 /// A retained run whose definition this version no longer restores is held
