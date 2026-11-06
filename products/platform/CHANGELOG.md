@@ -17,6 +17,35 @@
   fails with a function-not-found error. `registry-platform-hooks` Rhai hook
   programs run on the new base.
 
+- `registry-platform-crypto` adds the opt-in `cms-signing` feature and its
+  `document_signature` module: the CMS, certificate and RFC 3161 pieces a
+  product needs to apply a document seal as a PAdES baseline signature at
+  level B-B or B-T. `CertificateChain` reads a seal certificate chain and
+  checks it can sign; `sign_detached` signs byte ranges as detached CMS
+  `SignedData` through any `SigningProvider` (ES256, ES384, RS256 or RS384)
+  and verifies the result; `timestamp_request`, `accept_timestamp_response`
+  and `add_signature_timestamp` add an RFC 3161 signature timestamp;
+  `generate_seal_key`, `seal_key_from_pkcs8_pem` and `private_seal_key_json`
+  make or import a seal key as a private JWK; and `certificate_request`
+  writes a PKCS #10 request signed through the key's signing provider. It
+  performs no path validation, revocation checking or network access. The
+  feature is off by default.
+- `registry-platform-crypto` adds `TransitSignerConfig::discover`, which
+  binds to the public key Transit holds for a pinned key version after the
+  custody and version checks `TransitSigner::initialize` makes, for a caller
+  with no public key to pin yet. Nothing outside Transit vouches for that
+  key, so the caller anchors it, for example by checking it against the
+  certificate that certifies it. A socket path, mount, key name, version or
+  timeout that `TransitSignerConfig::new` refuses is refused before any
+  request as the new `TransitInitializationError::InvalidConfiguration`.
+- `registry-platform-crypto` adds the `test-support` feature, for
+  dev-dependencies only, and its `document_signature::test_support` module:
+  `TestPki`, an in-memory root CA, timestamp authority and issuing CA that
+  issues seal certificates with private JWKs; `respond_to_timestamp_request`;
+  and, on Unix, `TestTransit`, a Transit signing proxy on a Unix socket that
+  serves one P-256 key version from a private JWK and counts the signatures
+  it answers.
+
 ## 0.45.0 - 2026-11-03
 
 - Update Wasmtime LTS to 48.0.8 for RUSTSEC-2026-0422, RUSTSEC-2026-0423 and
