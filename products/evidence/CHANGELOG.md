@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- BREAKING: Source pack scripts run on the Adapter's deterministic engine, so
+  the acquisition deadline holds for every call a script can make. A pack
+  script that calls `timestamp`, `elapsed`, `sleep`, `exit`, `take`, `tag`,
+  `set_tag`, `parse_json` or `get_fn_metadata_list`, or pads a string with an
+  empty padding string, now fails its call. Remove those calls.
+
 ## 0.45.0 - 2026-11-03
 
 - BREAKING: Source acquisition moves into reviewed Adapter packs. Authored

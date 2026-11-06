@@ -890,21 +890,36 @@ fn compile_handler(
         }
         let declared_refusals = refusals.keys().map(String::as_str).collect();
         let declared_effects = writes.iter().map(|slot| slot.id.as_str()).collect();
-        for fault in crate::rhai_literal_lint::inspect(
+        let literal_faults = crate::rhai_literal_lint::inspect(
             script,
             &function.entrypoint,
             &declared_refusals,
             &declared_effects,
-        ) {
-            let location = match (fault.position.line(), fault.position.position()) {
+        )
+        .into_iter()
+        .map(|fault| (fault.code, fault.message.to_owned(), fault.position));
+        let unavailable_calls = crate::rhai_literal_lint::unavailable_calls(script)
+            .into_iter()
+            .map(|call| {
+                (
+                    "breg.action.plan-function-unavailable",
+                    format!(
+                        "`{}` is not available to Action plans, which run without the clock, sleep, or Rhai's language-core functions; remove the call",
+                        call.function
+                    ),
+                    call.position,
+                )
+            });
+        for (code, message, position) in literal_faults.chain(unavailable_calls) {
+            let location = match (position.line(), position.position()) {
                 (Some(line), Some(column)) => format!(" at line {line}, column {column}"),
                 (Some(line), _) => format!(" at line {line}"),
                 _ => String::new(),
             };
             errors.push(Diagnostic::error(
-                fault.code,
+                code,
                 format!("{function_path}.source"),
-                &format!("{}{location}", fault.message),
+                &format!("{message}{location}"),
             ));
         }
     }

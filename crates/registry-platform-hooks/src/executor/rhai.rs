@@ -4,9 +4,10 @@
 //!
 //! A hook program is one reviewed Rhai source with exactly one public
 //! `handle(ctx)` entry point. It runs on the bare platform script engine
-//! under the hook profile below: the standard engine with module loading,
-//! `eval`, and output removed, closures refused, and fixed operation, depth,
-//! and size limits. No product helper is registered, so every product runs
+//! under the hook profile below: the deterministic engine (the standard
+//! language without the clock, `sleep`, or any other native call that could
+//! outlast the attempt timeout) with module loading, `eval`, and output
+//! removed, closures refused, and fixed operation, depth, and size limits. No product helper is registered, so every product runs
 //! the same program the same way.
 
 use std::time::Instant;
@@ -47,7 +48,7 @@ pub const RHAI_HOOK_PROFILE: platform::RhaiProfile = platform::RhaiProfile {
         array_items: RHAI_HOOK_MAX_ARRAY_ITEMS,
         map_entries: RHAI_HOOK_MAX_MAP_ENTRIES,
     },
-    base: platform::RhaiBaseEngine::Standard,
+    base: platform::RhaiBaseEngine::Deterministic,
     disabled_symbols: &["import", "export", "eval", "print", "debug"],
     allow_anonymous_fn: false,
     maximum_source_bytes: RHAI_HOOK_MAX_SOURCE_BYTES,

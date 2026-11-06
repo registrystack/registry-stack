@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- BREAKING: `registry-platform-script` replaces `RhaiBaseEngine::Standard`
+  with `RhaiBaseEngine::Deterministic`, so a deadline checked between
+  operations holds for every call a script can make. The base carries Rhai's
+  standard packages except language core (`sleep`, `exit`, `take`, `tag`,
+  `set_tag`, `parse_json`, `get_fn_metadata_list`) and time (`timestamp`,
+  `elapsed`, instant arithmetic). Its string `pad` refuses an empty padding
+  string instead of never returning, and its string `replace` refuses a
+  result over the string bound before building it instead of after. Change
+  `Standard` to `Deterministic`; a script that calls a left-out function
+  fails with a function-not-found error. `registry-platform-hooks` Rhai hook
+  programs run on the new base.
+
 ## 0.45.0 - 2026-11-03
 
 - Update Wasmtime LTS to 48.0.8 for RUSTSEC-2026-0422, RUSTSEC-2026-0423 and

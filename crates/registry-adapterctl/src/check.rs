@@ -64,7 +64,7 @@ const SCRIPT_PROFILE: RhaiProfile = RhaiProfile {
         array_items: 256,
         map_entries: 256,
     },
-    base: RhaiBaseEngine::Standard,
+    base: RhaiBaseEngine::Deterministic,
     disabled_symbols: &["import", "export", "eval", "print", "debug"],
     allow_anonymous_fn: false,
     maximum_source_bytes: 65_536,

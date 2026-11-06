@@ -11,6 +11,21 @@
   every row. `TASK_GRANTS.md` now says so and corrects the wider-bounds and
   immediate-action statements.
 
+- BREAKING: Action plans and Rhai hook programs run on a deterministic
+  engine, so the evaluation deadline holds for every call a script can make.
+  The engine no longer provides `timestamp`, `elapsed`, `sleep`, `exit`,
+  `take`, `tag`, `set_tag`, `parse_json` or `get_fn_metadata_list`. A plan
+  that calls one of them by literal name, directly, as a method or through
+  `Fn("name")`, is refused by `bregctl check` and the package compile with
+  `breg.action.plan-function-unavailable`, which names the function and its
+  line. The runtime rederives a package when it loads it, so it refuses to
+  load a package an earlier release built with such a call. A call the
+  compile cannot see fails the invocation with `action.handler.execution`, as
+  does string `pad` with an empty padding string, which never returned; a
+  hook program that makes either call fails its delivery attempt. Remove
+  those calls, pass any time a plan needs as an action input, and rebuild the
+  package.
+
 ## 0.45.0 - 2026-11-03
 
 - BREAKING: `bregctl generate evidence-source` exports a reviewed Adapter pack

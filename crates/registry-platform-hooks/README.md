@@ -146,7 +146,8 @@ package revision it runs. A delivery runs a program only when its compiled
 delivery id, package revision, handler kind, and handler digest all match. The
 program receives the envelope JSON as its one argument and returns the
 handler message. The Rhai engine is the bare `registry-platform-script` engine
-with no product helpers; the WASM engine is a hook-owned module runtime with
+on its deterministic base, with no product helpers, so no native call reads the
+clock or holds the thread past the attempt timeout; the WASM engine is a hook-owned module runtime with
 its own fuel, epoch ticker, and prepared-module cache, separate from any
 product's action handler cache.
 

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- BREAKING: provider `prepare`, `interpret` and `receipt` scripts run on a
+  deterministic engine, so the script budget holds for every call a script can
+  make. `timestamp`, `elapsed`, `sleep`, `exit`, `take`, `tag`, `set_tag`,
+  `parse_json` and `get_fn_metadata_list` are no longer available, and string
+  `pad` with an empty padding string, which never returned, now fails. A
+  `prepare` script that makes such a call fails the delivery with
+  `provider.prepare-failed` and sends nothing; an `interpret` or `receipt`
+  script fails as any failing script does. Remove those calls.
+
 ## 0.45.0 - 2026-11-03
 
 - BREAKING: `messagingctl` adopts the shared report envelope. `status` `passed`

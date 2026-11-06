@@ -50,7 +50,9 @@ pub const MAXIMUM_PREPARE_OUTPUT_BYTES: usize = 1_114_112;
 pub const MAXIMUM_SCRIPT_OUTPUT_BYTES: usize = 65_536;
 
 /// The profile every provider script runs under. The string bound admits the
-/// largest rendered HTML part; nothing a script builds may exceed it.
+/// largest rendered HTML part; nothing a script builds may exceed it. The
+/// deterministic base has no native call that reads the clock or blocks, so
+/// the script budget bounds every prepare and interpret run.
 const PROVIDER_SCRIPT_PROFILE: RhaiProfile = RhaiProfile {
     limits: RhaiLimits {
         operations: MAXIMUM_SCRIPT_OPERATIONS,
@@ -61,7 +63,7 @@ const PROVIDER_SCRIPT_PROFILE: RhaiProfile = RhaiProfile {
         array_items: 256,
         map_entries: 256,
     },
-    base: RhaiBaseEngine::Standard,
+    base: RhaiBaseEngine::Deterministic,
     disabled_symbols: &["import", "export", "eval", "print", "debug"],
     allow_anonymous_fn: false,
     maximum_source_bytes: MAXIMUM_SCRIPT_SOURCE_BYTES,
