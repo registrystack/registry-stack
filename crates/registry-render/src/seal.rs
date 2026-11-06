@@ -878,18 +878,25 @@ impl Seal {
     /// must be a single-revision PDF; one that carries an update or bytes
     /// after its end marker is refused before anything is signed. Reading
     /// the PDF is blocking work, so it runs off the async workers; the
-    /// caller bounds `first_revision` by the output limit.
+    /// caller bounds `first_revision` by the output limit. `in_flight` is
+    /// the caller's place for this seal, held until the seal ends or, when
+    /// this future is dropped first, until the blocking work does.
     pub async fn seal(
         &self,
         first_revision: Vec<u8>,
         signing_time: OffsetDateTime,
+        in_flight: tokio::sync::OwnedSemaphorePermit,
     ) -> Result<SealedDocument, RenderProblem> {
         let internal = |detail: String| RenderProblem::new(ProblemKind::Internal, detail);
         let field = self.signature_field(signing_time)?;
-        let (document_digest, prepared) = tokio::task::spawn_blocking(move || {
+        // The place travels with the blocking work and back: if this future
+        // is dropped, the work runs on and the place is released only when
+        // it ends.
+        let (_in_flight, prepared) = tokio::task::spawn_blocking(move || {
             let document_digest = sha256_digest(&first_revision);
-            crate::pdf_signature::prepare(&first_revision, &field)
-                .map(|prepared| (document_digest, prepared))
+            let prepared = crate::pdf_signature::prepare(&first_revision, &field)
+                .map(|prepared| (document_digest, prepared));
+            (in_flight, prepared)
         })
         .await
         .map_err(|error| {
@@ -897,8 +904,8 @@ impl Seal {
                 "seal {}: preparing the signature field stopped: {error}",
                 self.id
             ))
-        })?
-        .map_err(|error| {
+        })?;
+        let (document_digest, prepared) = prepared.map_err(|error| {
             internal(format!(
                 "seal {}: the rendered document cannot be sealed: {error}",
                 self.id
@@ -1296,6 +1303,58 @@ mod tests {
 
     use crate::worker::seal_tests::sealed_receipt;
 
+    /// A place for one seal in flight, from a service of one.
+    fn place() -> tokio::sync::OwnedSemaphorePermit {
+        Arc::new(tokio::sync::Semaphore::new(1))
+            .try_acquire_owned()
+            .expect("a free place")
+    }
+
+    /// A client that disconnects drops its seal's future, but preparing the
+    /// field is blocking work that runs on. The seal's place goes with that
+    /// work and comes back only when it ends, so the drain, which waits for
+    /// every place, waits for it too. With the one blocking thread busy, the
+    /// preparation waits in the queue, holding the place, until it is free.
+    #[test]
+    fn a_dropped_seal_keeps_its_place_until_its_blocking_work_ends() {
+        use std::future::Future as _;
+        use std::task::{Context, Waker};
+
+        let pki = TestPki::generate().expect("test PKI");
+        let test_seal = pki.issue_seal(SigningAlgorithm::Es256).expect("test seal");
+        let seal = Seal::for_test(
+            "ministry",
+            &test_seal,
+            Arc::new(test_seal.signer().expect("test signer")),
+        );
+        let first_revision = sealed_receipt(seal.worker_seal());
+        let places = Arc::new(tokio::sync::Semaphore::new(1));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .max_blocking_threads(1)
+            .enable_all()
+            .build()
+            .expect("runtime");
+        runtime.block_on(async {
+            let (release, wait) = std::sync::mpsc::channel::<()>();
+            let busy = tokio::task::spawn_blocking(move || wait.recv());
+            let held = Arc::clone(&places).try_acquire_owned().expect("a place");
+            let mut sealing = Box::pin(seal.seal(first_revision, OffsetDateTime::now_utc(), held));
+            assert!(sealing
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_pending());
+            drop(sealing);
+            assert_eq!(
+                places.available_permits(),
+                0,
+                "the queued preparation holds the place"
+            );
+            release.send(()).expect("the busy task waits");
+            busy.await.expect("busy task").expect("released");
+            let _place = places.acquire().await.expect("the place comes back");
+        });
+    }
+
     /// A signer that counts its signatures, so a test can show that a
     /// refused answer was never signed.
     struct CountingSigner {
@@ -1358,7 +1417,7 @@ mod tests {
             ("bytes after the end marker", smuggled),
             ("an update of the worker's own", own_update),
         ] {
-            let Err(problem) = seal.seal(answer, now).await else {
+            let Err(problem) = seal.seal(answer, now, place()).await else {
                 panic!("{label}: sealed");
             };
             assert_eq!(problem.kind, ProblemKind::Internal, "{label}");
@@ -1369,7 +1428,10 @@ mod tests {
             "nothing signed"
         );
 
-        let sealed = seal.seal(honest.clone(), now).await.expect("seals");
+        let sealed = seal
+            .seal(honest.clone(), now, place())
+            .await
+            .expect("seals");
         assert_eq!(signer.signatures.load(Ordering::SeqCst), 1);
         assert_eq!(sealed.document_digest, sha256_digest(&honest));
         let expected = crate::pdf_signature::prepare(&honest, &field).expect("the parent's update");
@@ -1475,7 +1537,7 @@ mod tests {
 
         let first_revision = sealed_receipt(large_seal.worker_seal());
         large_seal
-            .seal(first_revision, OffsetDateTime::now_utc())
+            .seal(first_revision, OffsetDateTime::now_utc(), place())
             .await
             .expect("the signature fits the reserved space");
     }
