@@ -8,7 +8,7 @@ package:
 secretProviders:
   file:
     root: /run/secrets/registry-render
-auth:
+authentication:
   apiKeyRef: secret:file/render-api-key
 limits:
   renderTimeoutSeconds: 20

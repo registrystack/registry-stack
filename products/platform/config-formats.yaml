@@ -2385,13 +2385,13 @@ formats:
     securityMembers:
       - pointer: /listener/bind
         whenOmitted: refused
-      - pointer: /auth/apiKeyRef
+      - pointer: /authentication/apiKeyRef
         whenOmitted: refused
-      - pointer: /auth/oidc/allowedClients
+      - pointer: /authentication/oidc/allowedClients
         whenOmitted: refused
-      - pointer: /auth/oidc/allowInsecureHttp
+      - pointer: /authentication/oidc/allowInsecureHttp
         whenOmitted: closed
-      - pointer: /auth/oidc/assertionIssuers
+      - pointer: /authentication/oidc/assertionIssuers
         whenOmitted: open
       - pointer: /package/expectedDigest
         whenOmitted: open
@@ -2405,7 +2405,7 @@ formats:
         whenOmitted: closed
       - pointer: /signing/seals/*/trust
         whenOmitted: open
-    restrictingMembers: [/auth/oidc/allowedClients, /auth/oidc/assertionIssuers, /signing/seals/*/allowedClients]
+    restrictingMembers: [/authentication/oidc/allowedClients, /authentication/oidc/assertionIssuers, /signing/seals/*/allowedClients]
   - id: render/data-schema
     product: render
     title: Render document data schema

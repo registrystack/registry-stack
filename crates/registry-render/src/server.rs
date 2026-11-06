@@ -116,7 +116,7 @@ async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
         normalize_api_key(runtime::resolve_secret(
             &runtime,
             runtime
-                .auth
+                .authentication
                 .api_key_ref
                 .as_deref()
                 .expect("validated key mode"),
