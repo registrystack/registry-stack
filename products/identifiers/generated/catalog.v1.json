@@ -4258,7 +4258,7 @@
       },
       "artifact": {
         "path": "products/adapter/schemas/mapping.v1alpha1.schema.json",
-        "sha256": "7cd48890f4c8f4083cd1d93ea8d37dcded3e94d02942f77d83b5febc0cecdd23",
+        "sha256": "1a713af021f69a27c5c7f58b22464cd227972173f9935b2fc3a0a48eda51e6f5",
         "mediaType": "application/schema+json"
       }
     },

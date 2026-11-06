@@ -20,8 +20,9 @@
   as `targetTitle`, beside `targetTree`, so a tool can name what the mapping
   fills. It is display only, absent when the root has no title or the schema
   cannot be read, and present on a refusal.
-- A quoted mapping selector key or filter literal takes any non-control
-  Unicode character, so a source key such as `prénom` can be mapped. `\"`
+- A quoted mapping selector key or filter literal takes any Unicode
+  character except a control character, a text-direction control or a line
+  or paragraph separator (joiners stay allowed), so a source key such as `prénom` can be mapped. `\"`
   and `\\` are its only escapes, keys compare byte for byte with no
   normalisation, and the 128-character bound stays. Every selector valid
   before parses to the same segments; unquoted names are unchanged. The
