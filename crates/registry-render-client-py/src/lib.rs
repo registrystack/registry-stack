@@ -41,7 +41,7 @@ impl RenderClient {
         let value = py
             .detach(|| {
                 self.runtime
-                    .block_on(self.inner.render(&token, &document_type, &request))
+                    .block_on(self.inner.render(&token, &document_type, &request, None))
             })
             .map_err(mapped)?;
         serde_json::to_string(&value)

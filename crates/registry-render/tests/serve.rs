@@ -1703,6 +1703,7 @@ fn maintained_sdk_uses_the_real_oidc_adapter_for_render_and_typed_refusals() {
             ),
             "receipt",
             &input,
+            Some("render-correlation-1"),
         ))
         .unwrap();
     assert_eq!(rendered.pdf_sha256, golden_receipt_sha());
@@ -1722,13 +1723,13 @@ fn maintained_sdk_uses_the_real_oidc_adapter_for_render_and_typed_refusals() {
         ),
     ] {
         let error = runtime
-            .block_on(client.render(&make_token(scope, audience), "receipt", &input))
+            .block_on(client.render(&make_token(scope, audience), "receipt", &input, None))
             .unwrap_err();
         assert_eq!(error.kind, "problem");
         assert_eq!(error.status, Some(status));
         assert_eq!(error.code.as_deref(), Some(code));
         assert!(error.trace_id.is_some());
-        assert!(!error.outcome_unknown);
+        assert!(!error.is_outcome_unknown());
     }
     drop(server);
     let records = audit_lines(&home).join("\n");

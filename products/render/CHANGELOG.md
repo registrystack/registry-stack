@@ -30,7 +30,10 @@
   its test line. `registry-render-client` gains `RenderClient::seal`, whose
   `SealedDocument` carries `bundle_hash` and `seal.test_only`; its success
   bodies now tolerate members it does not know, on both routes, and its seal
-  types are `#[non_exhaustive]`. `check --environment` reads each seal's certificate chain, and it and `serve` warn about a seal certificate whose extended key usage names no document-signing purpose, and refuse a chain file whose first
+  types are `#[non_exhaustive]`. Its `render` takes the same optional
+  `correlation_key` as `seal`, sent as `Idempotency-Key` and checked when
+  echoed, and `RenderClientError` reports an uncertain exchange through
+  `is_outcome_unknown()` in place of a public field. `check --environment` reads each seal's certificate chain, and it and `serve` warn about a seal certificate whose extended key usage names no document-signing purpose, and refuse a chain file whose first
   certificate, taken as the seal certificate, is a CA certificate. veraPDF
   has passed a test template at every accepted PDF/A level and at PDF/UA-1,
   rendered and sealed (`EVIDENCE.md`). A seal key `serve` cannot read is refused with the secret provider's reason, and its text is erased once parsed. New problem

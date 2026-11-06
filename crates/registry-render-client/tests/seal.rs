@@ -266,7 +266,7 @@ async fn each_seal_problem_is_decoded() {
             error.code.as_deref(),
             Some(format!("render.{slug}").as_str())
         );
-        assert!(!error.outcome_unknown);
+        assert!(!error.is_outcome_unknown());
     }
     // A known kind with the wrong status stays a protocol failure.
     let error = seal_with(400, problem("timestamp-failed", 400), None, None)
@@ -290,6 +290,7 @@ async fn seal_problems_are_not_render_problems() {
             &BearerToken::new("canary-render-token").unwrap(),
             "receipt",
             &json!({"issuedAt":"2026-10-23T00:00:00Z","data":{}}),
+            None,
         )
         .await
         .unwrap_err();
@@ -347,7 +348,7 @@ async fn oversize_body_is_bounded() {
 }
 
 #[tokio::test]
-async fn idempotency_key_is_sent_and_must_be_echoed() {
+async fn correlation_key_is_sent_and_must_be_echoed() {
     let sealed = seal_with(200, sealed_body("B-T"), Some("key-1"), Some("key-1")).await;
     assert!(sealed.is_ok());
     for echo in [None, Some("other")] {
@@ -365,6 +366,64 @@ async fn idempotency_key_is_sent_and_must_be_echoed() {
                 &json!({"issuedAt":"2026-10-23T00:00:00Z","data":{}}),
                 Some(key),
             )
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind, "invalid-request");
+    }
+}
+
+/// `render` takes the same optional correlation key as `seal`: it is sent as
+/// `Idempotency-Key`, must come back exactly, and is checked before any
+/// exchange.
+#[tokio::test]
+async fn render_takes_the_same_correlation_key() {
+    type Received = std::sync::Arc<std::sync::Mutex<Vec<Option<String>>>>;
+    async fn echoing(State(received): State<Received>, headers: HeaderMap) -> Response {
+        let pdf = b"%PDF-fixture";
+        let body = json!({"pdfBase64":base64::engine::general_purpose::STANDARD.encode(pdf),"pdfSha256":sha(pdf),"dataSha256":"0".repeat(64),"documentVersion":"receipt v1","warnings":[]});
+        let mut response = (
+            StatusCode::OK,
+            Body::from(serde_json::to_vec(&body).unwrap()),
+        )
+            .into_response();
+        let h = response.headers_mut();
+        h.insert("content-type", "application/json".parse().unwrap());
+        h.insert(
+            "traceparent",
+            format!("00-{TRACE}-1234567890abcdef-01").parse().unwrap(),
+        );
+        let key = headers.get("idempotency-key");
+        received
+            .lock()
+            .unwrap()
+            .push(key.map(|key| key.to_str().unwrap().to_owned()));
+        if let Some(key) = key {
+            h.insert("idempotency-key", key.clone());
+        }
+        response
+    }
+    let received = Received::default();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let app = Router::new()
+        .route("/v1/render/receipt", post(echoing))
+        .with_state(received.clone());
+    let task = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    let client = RenderClient::new(RenderClientConfig::new(base)).unwrap();
+    let token = BearerToken::new("canary-render-token").unwrap();
+    let request = json!({"issuedAt":"2026-10-23T00:00:00Z","data":{}});
+    for key in [Some("key-1"), None] {
+        let rendered = client.render(&token, "receipt", &request, key).await;
+        assert!(rendered.is_ok(), "{key:?}: {rendered:?}");
+    }
+    task.abort();
+    assert_eq!(*received.lock().unwrap(), [Some("key-1".to_owned()), None]);
+    for key in ["", "has space", &"k".repeat(129)] {
+        let client = RenderClient::new(RenderClientConfig::new("http://127.0.0.1:1")).unwrap();
+        let error = client
+            .render(&token, "receipt", &request, Some(key))
             .await
             .unwrap_err();
         assert_eq!(error.kind, "invalid-request");
@@ -402,7 +461,7 @@ async fn a_broken_exchange_is_not_resent() {
         .await
         .unwrap_err();
     assert_eq!(error.kind, "transport");
-    assert!(error.outcome_unknown);
+    assert!(error.is_outcome_unknown());
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     assert_eq!(accepted.load(Ordering::SeqCst), 1);
     task.abort();

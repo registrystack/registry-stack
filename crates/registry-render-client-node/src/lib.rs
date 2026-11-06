@@ -35,7 +35,7 @@ impl RenderClient {
             .map_err(|_| mapped(registry_render_client::RenderClientError::invalid_request()))?;
         let result = self
             .inner
-            .render(&token, &document_type, &request)
+            .render(&token, &document_type, &request, None)
             .await
             .map_err(mapped)?;
         serde_json::to_value(result)
