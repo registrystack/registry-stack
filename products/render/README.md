@@ -66,7 +66,7 @@ Latin font set. Scripts beyond Latin (Arabic, Hebrew, …) need a bundle font
 Every CLI failure is one closed vocabulary (`ProblemKind`), and each kind
 has one stable exit code — scripts branch exactly. With `--format json`, the same
 failure prints one RFC 9457 problem document on stdout. 0 is success; the
-failure codes are 2-25 (clap's own usage errors also exit 2, and a panic
+failure codes are 2-30 (clap's own usage errors also exit 2, and a panic
 exits 101):
 
 | Code | Kind | Meaning |
@@ -92,7 +92,7 @@ exits 101):
 | 20 | `runtime-invalid` | serve runtime configuration invalid |
 | 21 | `internal` | internal invariant broke; never carries data |
 | 22 | `body-too-large` | request body over the configured ceiling (serve, HTTP 413) |
-| 23 | `forbidden` | verified credential lacks `render:render` (serve, HTTP 403) |
+| 23 | `forbidden` | verified credential lacks `render:render` (`render:seal` on the seal route), or the legacy API key calls the seal route (serve, HTTP 403) |
 | 24 | `authentication-unavailable` | verifier cannot reach a verdict (serve, HTTP 503) |
 | 25 | `not-found` | route is not exposed by the adapter (HTTP 404) |
 | 26 | `signing-unavailable` | the seal's key provider cannot sign now (serve, HTTP 503) |
@@ -115,7 +115,8 @@ auth:
 ```
 
 The shared verifier checks signature, expiry, issuer, resource audience membership
-and the configured client binding. Tokens need `render:render`; an audience array
+and the configured client binding. Tokens need `render:render`, and `render:seal`
+for the seal route; an audience array
 may contain the configured resource alongside other audiences. Unrelated signed
 task-grant claims confer no Render authority. OIDC discovery and JWKS fetches
 belong to the serving adapter; deployments may instead configure a URI or static

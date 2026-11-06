@@ -34,7 +34,8 @@ and `registry-render package` turns it into a package whose digest names its exa
 a counter without a service. `registry-render serve` is a small HTTP service behind a static API
 key that renders from one package in supervised worker processes. For every call it appends an
 audit entry that carries hashes and versions, never the document's data. It keeps no database and
-makes no outbound call while rendering.
+makes no outbound call while rendering; a timestamped seal calls the timestamp authority you
+configure.
 
 ## What Render refuses
 
