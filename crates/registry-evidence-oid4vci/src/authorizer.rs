@@ -153,7 +153,7 @@ pub fn verifier_profile(config: &OfferAuthorizationConfig) -> TokenVerifierConfi
             .map(|typ| (*typ).to_owned())
             .collect(),
     )
-    .with_allowed_clients(config.authorized_clients.items().to_vec())
+    .with_allowed_clients(config.allowed_clients.items().to_vec())
     .with_denied_kids(HashSet::new())
     .with_max_token_lifetime(Some(Duration::from_secs(
         config.maximum_token_lifetime_seconds,

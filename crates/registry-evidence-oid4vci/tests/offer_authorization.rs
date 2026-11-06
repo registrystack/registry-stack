@@ -119,7 +119,7 @@ fn offer_config(
         allow_insecure_http: false,
         audiences: vec![audience.to_owned()],
         algorithms: vec![algorithm],
-        authorized_clients: Restriction::Unrestricted,
+        allowed_clients: Restriction::Unrestricted,
         required_scopes: Restriction::Unrestricted,
         maximum_token_lifetime_seconds: 900,
     }
@@ -206,7 +206,7 @@ async fn restricted_and_unrestricted_clients_audit_the_same_canonical_azp() {
     let (token, keys) = signed_offer_fixture(json!({"azp":AZP,"client_id":CLIENT_ID}));
     let unrestricted = offer_config(FIXTURE_ISSUER, OFFER_AUDIENCE, AccessTokenAlgorithm::ES256);
     let mut restricted = offer_config(FIXTURE_ISSUER, OFFER_AUDIENCE, AccessTokenAlgorithm::ES256);
-    restricted.authorized_clients = Restriction::Listed(vec![AZP.to_owned()]);
+    restricted.allowed_clients = Restriction::Listed(vec![AZP.to_owned()]);
 
     let unrestricted_actor = resource_server(&unrestricted, &keys)
         .authorize(&token)

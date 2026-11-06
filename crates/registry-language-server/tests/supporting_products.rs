@@ -259,7 +259,7 @@ offers:
   issuer: https://identity.example.test
   jwksUri: https://identity.example.test/jwks
   audiences: [delivery]
-  authorizedClients: [front-end]
+  allowedClients: [front-end]
   requiredScopes: [oid4vci:offer]
 "#;
 fn delivery_project() -> Project {

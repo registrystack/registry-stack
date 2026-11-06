@@ -3064,7 +3064,7 @@ formats:
         whenOmitted: refused
       - pointer: /metricsListener/bind
         whenOmitted: closed
-      - pointer: /offers/authorizedClients
+      - pointer: /offers/allowedClients
         whenOmitted: refused
       - pointer: /offers/allowInsecureHttp
         whenOmitted: closed
@@ -3076,7 +3076,7 @@ formats:
         whenOmitted: refused
       - pointer: /audit/hashKeyRef
         whenOmitted: refused
-    restrictingMembers: [/offers/authorizedClients, /offers/requiredScopes]
+    restrictingMembers: [/offers/allowedClients, /offers/requiredScopes]
   - id: evidence/client-profile
     product: evidence
     title: Evidence relying-party client profile

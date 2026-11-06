@@ -231,6 +231,10 @@
           "description": "Permit plain HTTP beyond loopback to the offer-token issuer and to\n`jwksUri`.",
           "type": "boolean"
         },
+        "allowedClients": {
+          "$ref": "#/$defs/IdentifierRestriction",
+          "description": "Client identifiers permitted to create offers, each at most 128 bytes,\nor `unrestricted` for any client the issuer vouched for."
+        },
         "audiences": {
           "description": "The audiences this service answers to, each at most 256 bytes. A token\nissued for anything else is refused.",
           "items": {
@@ -239,10 +243,6 @@
           "minItems": 1,
           "type": "array",
           "uniqueItems": true
-        },
-        "authorizedClients": {
-          "$ref": "#/$defs/IdentifierRestriction",
-          "description": "Client identifiers permitted to create offers, each at most 128 bytes,\nor `unrestricted` for any client the issuer vouched for."
         },
         "claims": {
           "$ref": "#/$defs/ClaimNamesDocument",
@@ -284,7 +284,7 @@
         "issuer",
         "jwksUri",
         "audiences",
-        "authorizedClients",
+        "allowedClients",
         "requiredScopes"
       ],
       "type": "object"

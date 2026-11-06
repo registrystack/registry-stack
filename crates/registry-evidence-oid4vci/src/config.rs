@@ -313,7 +313,7 @@ pub struct OfferAuthorizationConfig {
     /// Client identifiers permitted to create offers. Unrestricted accepts any
     /// client the issuer vouched for, which is the usual single-adopter
     /// deployment.
-    pub authorized_clients: Restriction,
+    pub allowed_clients: Restriction,
     /// Scopes every offer token must carry, checked against the verified
     /// token's scope set. Unrestricted applies no scope gate; generated
     /// configurations state `oid4vci:offer`.
@@ -831,7 +831,7 @@ pub struct OffersDocument {
     pub algorithms: UniqueList<AccessTokenAlgorithm>,
     /// Client identifiers permitted to create offers, each at most 128 bytes,
     /// or `unrestricted` for any client the issuer vouched for.
-    pub authorized_clients: IdentifierRestriction,
+    pub allowed_clients: IdentifierRestriction,
     /// Scopes every offer token must carry, each an RFC 6749 scope token of at
     /// most 256 bytes, or `unrestricted` for no scope gate. Generated
     /// configurations state `oid4vci:offer`.
@@ -1212,7 +1212,7 @@ impl DeliveryDocument {
                     .map(ExternalId::into_string)
                     .collect(),
                 algorithms: self.offers.algorithms.into_vec(),
-                authorized_clients: self.offers.authorized_clients.into_restriction(),
+                allowed_clients: self.offers.allowed_clients.into_restriction(),
                 required_scopes: self.offers.required_scopes.into_restriction(),
                 maximum_token_lifetime_seconds: self.offers.maximum_token_lifetime_seconds.get(),
             },
@@ -1312,11 +1312,11 @@ impl OffersDocument {
                 "List the one algorithm the offer-token issuer signs with.",
             ));
         }
-        for (index, client) in self.authorized_clients.items().iter().enumerate() {
+        for (index, client) in self.allowed_clients.items().iter().enumerate() {
             if client.trim().is_empty() || client.len() > 128 {
                 findings.push(Finding::error(
                     "evidence.oid4vci.authorized-client",
-                    format!("/offers/authorizedClients/{index}"),
+                    format!("/offers/allowedClients/{index}"),
                     "every authorized offer client must be 1 to 128 bytes and not blank",
                     "Write the client identifier exactly as the offer-token issuer writes it.",
                 ));
@@ -1334,7 +1334,7 @@ impl OffersDocument {
         }
         for (list, items) in [
             ("/offers/audiences", &self.audiences[..]),
-            ("/offers/authorizedClients", self.authorized_clients.items()),
+            ("/offers/allowedClients", self.allowed_clients.items()),
             ("/offers/requiredScopes", self.required_scopes.items()),
         ] {
             for (index, item) in items.iter().enumerate() {
@@ -1619,7 +1619,7 @@ fn stand_in_for(pointer: &str) -> &'static str {
             const ALGORITHMS: [&str; 3] = ["EdDSA", "ES256", "RS256"];
             ALGORITHMS[index.parse::<usize>().unwrap_or(0) % ALGORITHMS.len()]
         }
-        ["offers", "authorizedClients" | "requiredScopes"] => "unrestricted",
+        ["offers", "allowedClients" | "requiredScopes"] => "unrestricted",
         _ => DEFAULT_STAND_IN,
     }
 }
@@ -1651,7 +1651,7 @@ offers:
   jwksUri: https://mint.example.org/.well-known/jwks.json
   audiences: ["https://wallet.example.org"]
   algorithms: [EdDSA]
-  authorizedClients: [adopter-front-end]
+  allowedClients: [adopter-front-end]
   requiredScopes: [oid4vci:offer]
   maximumTokenLifetimeSeconds: 900
 store:
@@ -2074,7 +2074,7 @@ store:
         assert_eq!(config.offers.audiences, ["https://wallet.example.org"]);
         assert_eq!(config.offers.algorithms, [AccessTokenAlgorithm::EdDSA]);
         assert_eq!(
-            config.offers.authorized_clients,
+            config.offers.allowed_clients,
             Restriction::Listed(vec!["adopter-front-end".to_owned()])
         );
         assert_eq!(
@@ -2121,13 +2121,13 @@ store:
                 "config.out-of-range",
             ),
             (
-                "  authorizedClients: [adopter-front-end]",
-                r#"  authorizedClients: [" "]"#,
+                "  allowedClients: [adopter-front-end]",
+                r#"  allowedClients: [" "]"#,
                 "evidence.oid4vci.authorized-client",
             ),
             (
-                "  authorizedClients: [adopter-front-end]",
-                "  authorizedClients: []",
+                "  allowedClients: [adopter-front-end]",
+                "  allowedClients: []",
                 "config.invalid-value",
             ),
             (
@@ -2161,38 +2161,38 @@ store:
     #[test]
     fn the_offer_gates_are_required_and_unrestricted_is_explicit() {
         for removed in [
-            "  authorizedClients: [adopter-front-end]\n",
+            "  allowedClients: [adopter-front-end]\n",
             "  requiredScopes: [oid4vci:offer]\n",
         ] {
             assert_eq!(refused(&VALID.replace(removed, "")), ["config.missing-key"]);
         }
         let text = VALID
             .replace(
-                "  authorizedClients: [adopter-front-end]",
-                "  authorizedClients: unrestricted",
+                "  allowedClients: [adopter-front-end]",
+                "  allowedClients: unrestricted",
             )
             .replace(
                 "  requiredScopes: [oid4vci:offer]",
                 "  requiredScopes: unrestricted",
             );
         let config = load_from(&text).expect("unrestricted gates load");
-        assert_eq!(config.offers.authorized_clients, Restriction::Unrestricted);
+        assert_eq!(config.offers.allowed_clients, Restriction::Unrestricted);
         assert_eq!(config.offers.required_scopes, Restriction::Unrestricted);
-        assert!(config.offers.authorized_clients.items().is_empty());
+        assert!(config.offers.allowed_clients.items().is_empty());
     }
 
     #[test]
     fn a_wildcard_spelled_item_is_a_warning_that_does_not_block_startup() {
         let text = VALID.replace(
-            "  authorizedClients: [adopter-front-end]",
-            "  authorizedClients: [\"*\"]",
+            "  allowedClients: [adopter-front-end]",
+            "  allowedClients: [\"*\"]",
         );
         let (_root, path) = write(&text);
         let (_, warnings) = DeliveryConfig::load_reporting(&path).expect("a warning loads");
         assert_eq!(warnings.len(), 1);
         assert_eq!(warnings[0].code, "evidence.oid4vci.wildcard-spelled-item");
         assert_eq!(warnings[0].severity, Severity::Warning);
-        assert_eq!(warnings[0].path, "/offers/authorizedClients/0");
+        assert_eq!(warnings[0].path, "/offers/allowedClients/0");
     }
 
     #[test]
@@ -2691,8 +2691,8 @@ store:
                 "credentialIssuer: ${EVIDENCE_OID4VCI_TEST_UNSET_ISSUER}",
             )
             .replace(
-                "  authorizedClients: [adopter-front-end]",
-                "  authorizedClients: ${EVIDENCE_OID4VCI_TEST_UNSET_CLIENTS}",
+                "  allowedClients: [adopter-front-end]",
+                "  allowedClients: ${EVIDENCE_OID4VCI_TEST_UNSET_CLIENTS}",
             );
         assert!(check(&text, false).diagnostics.is_empty());
         let substituted = check(&text, true);
@@ -2724,8 +2724,8 @@ store:
     fn distinct_deferred_items_of_one_list_are_not_a_repeat() {
         for (from, to) in [
             (
-                "  authorizedClients: [adopter-front-end]",
-                "  authorizedClients: ['${EVIDENCE_OID4VCI_TEST_UNSET_FIRST}', '${EVIDENCE_OID4VCI_TEST_UNSET_SECOND}']",
+                "  allowedClients: [adopter-front-end]",
+                "  allowedClients: ['${EVIDENCE_OID4VCI_TEST_UNSET_FIRST}', '${EVIDENCE_OID4VCI_TEST_UNSET_SECOND}']",
             ),
             (
                 "  requiredScopes: [oid4vci:offer]",
