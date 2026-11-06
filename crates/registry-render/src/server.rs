@@ -3,6 +3,14 @@
 //! supervised worker renders, an audit request entry accepted before every
 //! render starts, and an audit response entry accepted before every render
 //! response, refusals included, whatever refusal class they are.
+//!
+//! With a `signing` block, a second POST endpoint, `/v1/seal/{type}`, renders
+//! the same request and returns it sealed (PAdES). The route exists only
+//! when the runtime file declares seals: without one it is not mounted, the
+//! served OpenAPI document omits it, and `/ready` carries no `signing`
+//! member, so a deployment that does not seal is unchanged. It requires the
+//! `render:seal` scope, which `render:render` does not imply, and a client
+//! the seal's `allowedClients` names; the legacy API key never seals.
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -16,7 +24,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get};
 use axum::{Json, Router};
 use base64::Engine as _;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq;
 
 use registry_platform_authcommon::{
@@ -26,10 +34,12 @@ use registry_platform_canonical_json::parse_json_preserving_integers;
 use registry_platform_httpsec::{request_body_limit, security_headers, CspBuilder};
 
 use crate::audit::{RenderAudit, RenderAuditEvent};
+use crate::auth::{RENDER_SCOPE, SEAL_SCOPE};
 use crate::bundle::Bundle;
 use crate::problem::{ProblemKind, RenderProblem, PROBLEM_TYPE_BASE};
 use crate::runtime;
-use crate::worker::{self, WorkerRendered, WorkerRequest};
+use crate::seal::{Seal, SealedDocument, Seals};
+use crate::worker::{self, WorkerPrepared, WorkerRendered, WorkerRequest};
 
 pub struct Service {
     bundle: Bundle,
@@ -41,6 +51,8 @@ pub struct Service {
     bundle_path: PathBuf,
     concurrency: Arc<tokio::sync::Semaphore>,
     max_concurrency: usize,
+    /// The loaded seals by seal id; empty without a `signing` block.
+    seals: Seals,
 }
 
 #[derive(Debug, Deserialize)]
@@ -131,6 +143,17 @@ async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
     }
     let bundle = runtime::load_package(&runtime)?;
     crate::check::check_labels(&bundle)?;
+    for warning in runtime::validate_seal_bindings(&runtime, &bundle.manifest)? {
+        tracing::warn!(
+            code = %warning.code,
+            pointer = %warning.path,
+            "{}",
+            warning.message
+        );
+    }
+    // Seals load before the audit opens: a refused chain or key leaves
+    // nothing half-made behind.
+    let seals = crate::seal::load(&runtime)?;
     let audit = RenderAudit::open(runtime.audit.destination()?).await?;
     let service = Arc::new(Service {
         caller_fingerprint: registry_platform_authcommon::fingerprint_api_key(
@@ -146,6 +169,7 @@ async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
             runtime.limits.concurrent_renders(),
         )),
         max_concurrency: runtime.limits.concurrent_renders(),
+        seals,
     });
     tracing::info!(
         renderer = crate::display_version(),
@@ -267,28 +291,70 @@ fn router(service: Arc<Service>) -> Router {
         ))
         .layer(axum::middleware::from_fn_with_state(
             Arc::clone(&service),
-            require_bearer,
+            require_render_bearer,
         ));
-    Router::new()
+    let mut app = Router::new()
         .route("/health", get(health))
         .route("/ready", get(ready))
         .route("/openapi.json", get(openapi))
-        .merge(api)
-        .fallback(not_found)
+        .merge(api);
+    // The seal route exists only with seals: without a signing block it
+    // falls to the not-found fallback like any other unknown route. Its scope
+    // is its own layer, so neither route's scope reaches the other.
+    if !service.seals.is_empty() {
+        let seal_api = Router::new()
+            .route("/v1/seal/{type}", any(seal_route))
+            .layer(request_body_limit(service.limits.request_bytes()))
+            .layer(axum::middleware::from_fn_with_state(
+                Arc::clone(&service),
+                refuse_oversized_bodies,
+            ))
+            .layer(axum::middleware::from_fn_with_state(
+                Arc::clone(&service),
+                require_seal_bearer,
+            ));
+        app = app.merge(seal_api);
+    }
+    app.fallback(not_found)
         .with_state(service)
         .layer(security_headers(CspBuilder::restrictive()))
+}
+
+/// The caller guidance a credential without `render:seal` receives on the
+/// seal route.
+const SEAL_SCOPE_GUIDANCE: &str = "Obtain a Render resource credential with the render:seal scope.";
+/// The caller guidance the legacy API key receives on the seal route.
+const LEGACY_KEY_GUIDANCE: &str =
+    "The legacy API key cannot seal; present an OIDC resource credential with the render:seal scope.";
+
+async fn require_render_bearer(
+    State(service): State<Arc<Service>>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    require_bearer(service, request, next, RENDER_SCOPE).await
+}
+
+async fn require_seal_bearer(
+    State(service): State<Arc<Service>>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    require_bearer(service, request, next, SEAL_SCOPE).await
 }
 
 /// Authentication as a layer: it runs before the handler (and so before
 /// the body extractor buffers anything), and every refusal is audited as
 /// one response entry, with caller-controlled fields bounded and
-/// shape-checked first, because the audit log is append-only.
+/// shape-checked first, because the audit log is append-only. `scope` is
+/// the one scope the route requires.
 async fn require_bearer(
-    State(service): State<Arc<Service>>,
+    service: Arc<Service>,
     mut request: axum::extract::Request,
     next: axum::middleware::Next,
+    scope: &'static str,
 ) -> Response {
-    let caller = match authorized(&service, request.headers()).await {
+    let caller = match authorized(&service, request.headers(), scope).await {
         Ok(caller) => caller,
         Err(error) => {
             use crate::auth::AuthenticationError;
@@ -301,30 +367,60 @@ async fn require_bearer(
                     (ProblemKind::AuthenticationUnavailable, "unknown".to_owned())
                 }
             };
-            let problem = RenderProblem::new(kind, "Render access could not be authorized");
-            let target = sanitize_route_target(request.uri().path());
-            let correlation = correlation_id(request.headers());
-            let trace = trace_id(request.headers());
-            let event = RenderAuditEvent::refused(
-                &target,
-                &problem,
-                &caller,
-                correlation.as_deref(),
-                trace.as_deref(),
-            );
-            let envelope = crate::audit::correlation();
-            if let Err(audit_problem) = service.audit.response(&envelope, event).await {
-                return problem_response(&audit_problem, trace.as_deref());
+            let mut problem = RenderProblem::new(kind, "Render access could not be authorized");
+            if problem.kind == ProblemKind::Forbidden && scope == SEAL_SCOPE {
+                problem = problem.with_public_detail(SEAL_SCOPE_GUIDANCE);
             }
-            return problem_response(&problem, trace.as_deref());
+            let (path, headers) = (request.uri().path(), request.headers());
+            return refuse_access(&service, path, headers, &problem, &caller).await;
         }
     };
-    request.extensions_mut().insert(Caller(caller));
+    // The legacy API key never seals. The runtime already refuses a signing
+    // block without OIDC, so this holds even if that check is bypassed.
+    if scope == SEAL_SCOPE && service.oidc.is_none() {
+        let problem = RenderProblem::new(ProblemKind::Forbidden, "the legacy API key cannot seal")
+            .with_public_detail(LEGACY_KEY_GUIDANCE);
+        let (path, headers) = (request.uri().path(), request.headers());
+        return refuse_access(&service, path, headers, &problem, &caller.fingerprint).await;
+    }
+    request.extensions_mut().insert(caller);
     next.run(request).await
 }
 
+/// Audit an access refusal as one response entry, then answer with it.
+async fn refuse_access(
+    service: &Service,
+    path: &str,
+    headers: &HeaderMap,
+    problem: &RenderProblem,
+    caller: &str,
+) -> Response {
+    let target = sanitize_route_target(path);
+    let correlation = correlation_id(headers);
+    let trace = trace_id(headers);
+    let event = RenderAuditEvent::refused(
+        &target,
+        problem,
+        caller,
+        correlation.as_deref(),
+        trace.as_deref(),
+    );
+    let envelope = crate::audit::correlation();
+    if let Err(audit_problem) = service.audit.response(&envelope, event).await {
+        return problem_response(&audit_problem, trace.as_deref());
+    }
+    problem_response(problem, trace.as_deref())
+}
+
+/// The verified caller of an API route.
 #[derive(Clone)]
-struct Caller(String);
+struct Caller {
+    /// The credential fingerprint, the only caller value the audit records.
+    fingerprint: String,
+    /// The verified OIDC client, for a seal's `allowedClients`; never
+    /// audited. `None` for the legacy API key or a token naming no client.
+    client_id: Option<String>,
+}
 
 /// Post-auth body-framing refusal, before any body byte is read (a healthy
 /// connection can still be answered here): a declared Content-Length beyond
@@ -371,7 +467,7 @@ async fn refuse_oversized_bodies(
             .extensions()
             .get::<Caller>()
             .expect("auth middleware precedes body checks")
-            .0,
+            .fingerprint,
         correlation.as_deref(),
         trace_id(request.headers()).as_deref(),
     );
@@ -434,6 +530,7 @@ fn route_template(path: &str) -> &'static str {
         "/openapi.json" => "/openapi.json",
         "/v1/documents" => "/v1/documents",
         p if p.starts_with("/v1/render/") => "/v1/render/{type}",
+        p if p.starts_with("/v1/seal/") => "/v1/seal/{type}",
         _ => "other",
     }
 }
@@ -451,7 +548,7 @@ fn problem_response(problem: &RenderProblem, trace: Option<&str>) -> Response {
         type_uri: format!("{}/{}", PROBLEM_TYPE_BASE, problem.kind.slug()),
         title: problem.kind.slug(),
         status: problem.kind.http_status(),
-        detail: match problem.kind {
+        detail: problem.public_detail.unwrap_or(match problem.kind {
             ProblemKind::Unauthorized => "Present a valid bearer credential for this Render resource.",
             ProblemKind::Forbidden => "Obtain a Render resource credential with the render:render scope.",
             ProblemKind::AuthenticationUnavailable => "Credential verification is unavailable; retry when the issuer keys are available.",
@@ -460,8 +557,13 @@ fn problem_response(problem: &RenderProblem, trace: Option<&str>) -> Response {
             ProblemKind::BodyTooLarge => "Reduce the request body to the configured size limit.",
             ProblemKind::AuditFailed => "The audit destination is unavailable; contact the operator before retrying.",
             ProblemKind::RateLimited => "The renderer is at capacity; retry later.",
+            ProblemKind::SigningUnavailable => "Sealing is unavailable now; plain rendering is unaffected. Retry when /ready reports the seal ready.",
+            ProblemKind::SealCertificateInvalid => "The seal certificate cannot sign now; contact the operator.",
+            ProblemKind::TimestampFailed => "The timestamp authority did not timestamp the seal; no document was sealed.",
+            ProblemKind::DocumentNotSealable => "This document type declares no seal; use the render route.",
+            ProblemKind::SealClientNotAllowed => "This client is not allowed to use this document type's seal.",
             _ => "The render request was refused; use the problem code and the operator diagnostics to correct it.",
-        },
+        }),
         code: problem.kind.http_code(),
         trace_id: context.trace_id.clone(),
     };
@@ -514,24 +616,57 @@ async fn health(State(service): State<Arc<Service>>) -> Response {
     Json(body).into_response()
 }
 
+/// The `/ready` body. `signing` is present only with seals: one member per
+/// seal, ready or unavailable with a value-free reason. A seal never decides
+/// the status code, so plain rendering stays ready while a seal cannot sign.
+#[derive(Serialize)]
+struct Readiness<'a> {
+    status: &'static str,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    signing: BTreeMap<&'a str, SealReadiness>,
+}
+
+#[derive(Serialize)]
+struct SealReadiness {
+    status: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<&'static str>,
+}
+
 async fn ready(State(service): State<Arc<Service>>) -> Response {
     let keys_ready = match &service.oidc {
         Some(verifier) => verifier.key_source().ensure_key_set().await.is_ok(),
         None => true,
     };
-    if keys_ready && service.audit.ready().await {
-        minimal_json(StatusCode::OK, "{\"status\":\"ready\"}")
+    let (status, code) = if keys_ready && service.audit.ready().await {
+        ("ready", StatusCode::OK)
     } else {
-        minimal_json(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "{\"status\":\"not-ready\"}",
-        )
-    }
-}
-
-fn minimal_json(status: StatusCode, body: &'static str) -> Response {
+        ("not-ready", StatusCode::SERVICE_UNAVAILABLE)
+    };
+    // Availability reads the certificate validity and the key provider's
+    // readiness; it never requests a timestamp.
+    let now = time::OffsetDateTime::now_utc();
+    let signing = service
+        .seals
+        .iter()
+        .map(|(id, seal)| {
+            let readiness = match seal.availability(now) {
+                Ok(()) => SealReadiness {
+                    status: "ready",
+                    reason: None,
+                },
+                Err(unavailable) => SealReadiness {
+                    status: "unavailable",
+                    reason: Some(unavailable.reason()),
+                },
+            };
+            (id.as_str(), readiness)
+        })
+        .collect();
+    let body = serde_json::to_string(&Readiness { status, signing })
+        .expect("the readiness body serializes");
     (
-        status,
+        code,
         [(
             header::CONTENT_TYPE,
             HeaderValue::from_static("application/json"),
@@ -541,13 +676,13 @@ fn minimal_json(status: StatusCode, body: &'static str) -> Response {
         .into_response()
 }
 
-async fn openapi() -> Response {
+async fn openapi(State(service): State<Arc<Service>>) -> Response {
     (
         [(
             header::CONTENT_TYPE,
             HeaderValue::from_static("application/json"),
         )],
-        crate::openapi::OPENAPI_JSON,
+        crate::openapi::served(!service.seals.is_empty()),
     )
         .into_response()
 }
@@ -603,7 +738,8 @@ fn normalize_api_key(raw: Vec<u8>) -> Result<Vec<u8>, RenderProblem> {
 async fn authorized(
     service: &Service,
     headers: &HeaderMap,
-) -> Result<String, crate::auth::AuthenticationError> {
+    scope: &str,
+) -> Result<Caller, crate::auth::AuthenticationError> {
     use crate::auth::AuthenticationError;
     let mut values = headers.get_all(header::AUTHORIZATION).iter();
     let value = values.next().ok_or(AuthenticationError::Refused)?;
@@ -613,12 +749,19 @@ async fn authorized(
     let token = parse_bearer_token(value.to_str().map_err(|_| AuthenticationError::Refused)?)
         .map_err(|_| AuthenticationError::Refused)?;
     if let Some(verifier) = &service.oidc {
-        return crate::auth::authenticate(verifier, token).await;
+        let verified = crate::auth::authenticate(verifier, token, scope).await?;
+        return Ok(Caller {
+            fingerprint: verified.caller_fingerprint,
+            client_id: verified.client_id,
+        });
     }
     let expected = service.api_key.as_slice();
     let presented = token.as_bytes();
     (presented.len() == expected.len() && bool::from(presented.ct_eq(expected)))
-        .then(|| service.caller_fingerprint.clone())
+        .then(|| Caller {
+            fingerprint: service.caller_fingerprint.clone(),
+            client_id: None,
+        })
         .ok_or(AuthenticationError::Refused)
 }
 
@@ -661,7 +804,10 @@ fn correlation_id(headers: &HeaderMap) -> Option<String> {
 async fn render_route(
     State(service): State<Arc<Service>>,
     RoutePath(document_type): RoutePath<String>,
-    axum::Extension(Caller(caller)): axum::Extension<Caller>,
+    axum::Extension(Caller {
+        fingerprint: caller,
+        ..
+    }): axum::Extension<Caller>,
     headers: HeaderMap,
     method: Method,
     body: Result<axum::body::Bytes, axum::extract::rejection::BytesRejection>,
@@ -749,6 +895,11 @@ async fn render_route(
                 problem: None,
                 pdf_sha256: Some(rendered.pdf_sha256.clone()),
                 data_sha256: Some(rendered.data_sha256.clone()),
+                seal_id: None,
+                document_sha256: None,
+                signed_file_sha256: None,
+                certificate_sha256: None,
+                timestamp_token_sha256: None,
                 caller,
                 correlation_id: correlation.clone(),
                 trace_id: trace.clone(),
@@ -780,6 +931,302 @@ async fn render_route(
         }
         Err(problem) => problem_response(&problem, trace.as_deref()),
     }
+}
+
+/// One call to the seal route: what every audit entry of the call repeats.
+struct SealCall {
+    document_type: String,
+    /// The seal the document type names, once the type is known.
+    seal_id: Option<String>,
+    caller: String,
+    envelope: String,
+    correlation: Option<String>,
+    trace: Option<String>,
+}
+
+impl SealCall {
+    /// Refuse the call before any render starts: one response entry naming
+    /// the seal when it is known, accepted before responding.
+    async fn refuse(&self, service: &Service, problem: RenderProblem) -> Response {
+        let mut event = RenderAuditEvent::refused(
+            &self.document_type,
+            &problem,
+            &self.caller,
+            self.correlation.as_deref(),
+            self.trace.as_deref(),
+        );
+        if let Some(seal_id) = &self.seal_id {
+            event = event.for_seal(seal_id);
+        }
+        if let Err(audit_problem) = service.audit.response(&self.envelope, event).await {
+            return problem_response(&audit_problem, self.trace.as_deref());
+        }
+        problem_response(&problem, self.trace.as_deref())
+    }
+}
+
+/// `POST /v1/seal/{type}`: the render route's request, rendered for a seal
+/// and returned sealed. The checks before any render, in order: the method
+/// and body, a document the bundle declares, a document whose type names a
+/// seal, a client the seal allows, and a seal that can sign now.
+async fn seal_route(
+    State(service): State<Arc<Service>>,
+    RoutePath(document_type): RoutePath<String>,
+    axum::Extension(caller): axum::Extension<Caller>,
+    headers: HeaderMap,
+    method: Method,
+    body: Result<axum::body::Bytes, axum::extract::rejection::BytesRejection>,
+) -> Response {
+    let document_type = sanitize_document_type(&document_type);
+    let declared = service.bundle.document(&document_type).map(|document| {
+        (
+            document.spec.version,
+            document.spec.seal.as_ref().map(|seal| seal.to_owned()),
+        )
+    });
+    let mut call = SealCall {
+        seal_id: declared.as_ref().ok().and_then(|(_, seal)| seal.clone()),
+        document_type,
+        caller: caller.fingerprint.clone(),
+        envelope: crate::audit::correlation(),
+        correlation: correlation_id(&headers),
+        trace: trace_id(&headers),
+    };
+    if method != Method::POST {
+        let problem = RenderProblem::new(ProblemKind::InvalidArgument, "use POST");
+        return call.refuse(&service, problem).await;
+    }
+    let body = match body {
+        Ok(bytes) => bytes,
+        Err(rejection) => {
+            return call
+                .refuse(&service, body_rejection_problem(&rejection))
+                .await
+        }
+    };
+    if let Err(problem) = declared {
+        return call.refuse(&service, problem).await;
+    }
+    let Some(seal_id) = call.seal_id.clone() else {
+        let problem = RenderProblem::new(
+            ProblemKind::DocumentNotSealable,
+            format!("document type {} declares no seal", call.document_type),
+        );
+        return call.refuse(&service, problem).await;
+    };
+    // Startup refused a package naming a seal the runtime does not bind.
+    let Some(seal) = service.seals.get(&seal_id).map(Arc::clone) else {
+        call.seal_id = None;
+        let problem = RenderProblem::new(
+            ProblemKind::Internal,
+            format!(
+                "document type {} names a seal serve did not load",
+                call.document_type
+            ),
+        );
+        return call.refuse(&service, problem).await;
+    };
+    if !caller
+        .client_id
+        .as_deref()
+        .is_some_and(|client| seal.allows_client(client))
+    {
+        let problem = RenderProblem::new(
+            ProblemKind::SealClientNotAllowed,
+            format!("the verified client is not in signing.seals.{seal_id}.allowedClients"),
+        );
+        return call.refuse(&service, problem).await;
+    }
+    // One clock reading decides availability and is the signing time.
+    let now = time::OffsetDateTime::now_utc();
+    if let Err(unavailable) = seal.availability(now) {
+        return call.refuse(&service, unavailable.problem(&seal_id)).await;
+    }
+    let (mut worker_request, document_version) =
+        match prepare_render(&service, &call.document_type, &body) {
+            Ok(prepared) => prepared,
+            Err(problem) => return call.refuse(&service, problem).await,
+        };
+    worker_request.seal = Some(seal.worker_seal(now));
+    let started = RenderAuditEvent::started(
+        &call.document_type,
+        document_version,
+        service.bundle.manifest.bundle_version,
+        &service.bundle.bundle_hash,
+        &call.caller,
+        call.correlation.as_deref(),
+        call.trace.as_deref(),
+    )
+    .for_seal(&seal_id);
+    // As on the render route: the request entry is accepted before the
+    // render starts, and a call dropped from here on writes its unfinished
+    // response.
+    let _request = match service.audit.request(&call.envelope, started.clone()).await {
+        Ok(request) => request,
+        Err(audit_problem) => return problem_response(&audit_problem, call.trace.as_deref()),
+    };
+    let outcome = run_seal(&service, &seal, worker_request)
+        .await
+        .map(|(rendered, sealed)| {
+            let event = RenderAuditEvent {
+                document_version: rendered.document_version,
+                bundle_version: rendered.bundle_version,
+                bundle_hash: rendered.bundle_hash.clone(),
+                outcome: Some("sealed"),
+                data_sha256: Some(rendered.data_sha256.clone()),
+                document_sha256: Some(sealed.document_sha256.clone()),
+                signed_file_sha256: Some(sealed.signed_file_sha256.clone()),
+                certificate_sha256: Some(sealed.certificate_fingerprint.clone()),
+                timestamp_token_sha256: sealed
+                    .timestamp
+                    .as_ref()
+                    .map(|timestamp| timestamp.token_sha256.clone()),
+                ..started.clone()
+            };
+            (event, respond_sealed(&headers, &seal_id, &rendered, sealed))
+        });
+    let (event, outcome) = match outcome {
+        Ok((event, response)) => (event, Ok(response)),
+        Err(problem) => (started.refused_after_start(&problem), Err(problem)),
+    };
+    // The response entry is accepted before anything leaves.
+    if let Err(audit_problem) = service.audit.response(&call.envelope, event).await {
+        return problem_response(&audit_problem, call.trace.as_deref());
+    }
+    match outcome {
+        Ok(mut response) => {
+            if let Some(correlation) = call
+                .correlation
+                .as_ref()
+                .and_then(|c| header::HeaderValue::from_str(c).ok())
+            {
+                response
+                    .headers_mut()
+                    .insert("idempotency-key", correlation);
+            }
+            response
+        }
+        Err(problem) => problem_response(&problem, call.trace.as_deref()),
+    }
+}
+
+/// What a sealed response repeats from the worker's render.
+struct SealedRender {
+    document_id: String,
+    document_version: u32,
+    bundle_version: u32,
+    bundle_hash: String,
+    data_sha256: String,
+    warnings: Vec<String>,
+}
+
+/// Prepare the seal's field on a supervised worker once a render slot is
+/// free, release the slot, then sign, timestamp and embed in this process.
+/// Signing and the timestamp exchange never hold a render slot.
+async fn run_seal(
+    service: &Service,
+    seal: &Seal,
+    worker_request: WorkerRequest,
+) -> Result<(SealedRender, SealedDocument), RenderProblem> {
+    let permit = service
+        .concurrency
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(|_| RenderProblem::new(ProblemKind::Internal, "concurrency latch closed"))?;
+    let timeout = service.limits.render_timeout();
+    let result = worker::supervise_seal(worker_request, timeout).await;
+    drop(permit);
+    let prepared: WorkerPrepared = result?;
+    if prepared.bundle_hash != service.bundle.bundle_hash {
+        return Err(RenderProblem::new(
+            ProblemKind::BundleTampered,
+            "the package changed under serve; refusing the render from a drifted package",
+        ));
+    }
+    let rendered = SealedRender {
+        document_id: prepared.document_id.clone(),
+        document_version: prepared.document_version,
+        bundle_version: prepared.bundle_version,
+        bundle_hash: prepared.bundle_hash.clone(),
+        data_sha256: prepared.data_sha256.clone(),
+        warnings: prepared.warnings.clone(),
+    };
+    let sealed = seal.seal(prepared).await?;
+    Ok((rendered, sealed))
+}
+
+/// The sealed document in the representation the caller accepts, by the
+/// render route's rule. JSON carries the signed file and the seal; the PDF
+/// representation carries the same values in headers. Neither carries a
+/// `pdfSha256`: a sealed file has two hashes, `documentSha256` over the
+/// first revision and `signedFileSha256` over the whole file.
+fn respond_sealed(
+    headers: &HeaderMap,
+    seal_id: &str,
+    rendered: &SealedRender,
+    sealed: SealedDocument,
+) -> Response {
+    let document_version = format!("{} v{}", rendered.document_id, rendered.document_version);
+    let accepts_json = headers
+        .get(header::ACCEPT)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|accept| {
+            accept.contains("application/json") && !accept.contains("application/pdf")
+        });
+    if accepts_json {
+        let mut seal = serde_json::json!({
+            "id": seal_id,
+            "level": sealed.level.as_str(),
+            "certificateSha256": sealed.certificate_fingerprint,
+        });
+        if let Some(timestamp) = &sealed.timestamp {
+            seal["timestampTime"] = serde_json::Value::String(timestamp.time.clone());
+        }
+        let body = serde_json::json!({
+            "pdfBase64": base64::engine::general_purpose::STANDARD.encode(&sealed.pdf),
+            "documentSha256": sealed.document_sha256,
+            "signedFileSha256": sealed.signed_file_sha256,
+            "dataSha256": rendered.data_sha256,
+            "documentVersion": document_version,
+            "warnings": rendered.warnings,
+            "seal": seal,
+        });
+        return Json(body).into_response();
+    }
+    let mut response = (
+        [(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/pdf"),
+        )],
+        sealed.pdf,
+    )
+        .into_response();
+    let map = response.headers_mut();
+    insert_header(map, "X-Registry-Document-Sha256", &sealed.document_sha256);
+    insert_header(
+        map,
+        "X-Registry-Signed-File-Sha256",
+        &sealed.signed_file_sha256,
+    );
+    insert_header(map, "X-Registry-Data-Sha256", &rendered.data_sha256);
+    insert_header(
+        map,
+        "X-Registry-Warning-Count",
+        &rendered.warnings.len().to_string(),
+    );
+    insert_header(map, "X-Registry-Document-Version", &document_version);
+    insert_header(map, "X-Registry-Seal-Id", seal_id);
+    insert_header(map, "X-Registry-Seal-Level", sealed.level.as_str());
+    insert_header(
+        map,
+        "X-Registry-Certificate-Sha256",
+        &sealed.certificate_fingerprint,
+    );
+    if let Some(timestamp) = &sealed.timestamp {
+        insert_header(map, "X-Registry-Timestamp-Time", &timestamp.time);
+    }
+    response
 }
 
 /// Refuse one render call before any render starts: audit the refusal as
@@ -1111,6 +1558,7 @@ mod tests {
             bundle_path,
             concurrency: Arc::new(tokio::sync::Semaphore::new(permits)),
             max_concurrency: permits,
+            seals: Seals::new(),
         })
     }
 

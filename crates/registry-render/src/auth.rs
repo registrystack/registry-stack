@@ -89,22 +89,57 @@ fn verifier_failure(error: OidcError) -> AuthenticationError {
     }
 }
 
+/// The scope the render and document routes require.
+pub(crate) const RENDER_SCOPE: &str = "render:render";
+/// The scope the seal route requires. Neither scope implies the other: a
+/// sealing client is granted `render:seal` on its own, and a rendering
+/// client's `render:render` never reaches a seal.
+pub(crate) const SEAL_SCOPE: &str = "render:seal";
+
+/// A verified Render resource credential.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Authenticated {
+    /// The fingerprint of the exact credential, the only caller value the
+    /// audit records.
+    pub(crate) caller_fingerprint: String,
+    /// The verified client, compared against a seal's `allowedClients` and
+    /// never audited. `None` when the token names no client.
+    pub(crate) client_id: Option<String>,
+}
+
 pub(crate) async fn authenticate(
     verifier: &TokenVerifier,
     token: &str,
-) -> Result<String, AuthenticationError> {
+    required_scope: &str,
+) -> Result<Authenticated, AuthenticationError> {
     registry_platform_authcommon::validate_compact_access_token(token)
         .map_err(|_| AuthenticationError::Refused)?;
     let verified = verifier.verify(token).await.map_err(verifier_failure)?;
     // The verifier owns resource membership and the configured client binding.
     // Unrelated task-grant claims confer no Render authority.
     let caller_fingerprint = registry_platform_authcommon::fingerprint_api_key(token);
-    if !verified.scopes.iter().any(|scope| scope == "render:render") {
+    if !verified.scopes.iter().any(|scope| scope == required_scope) {
         return Err(AuthenticationError::Forbidden { caller_fingerprint });
     }
+    // With an allowlist the verifier has bound the client and records which
+    // claim matched. Without one, the signed claims name it, in the same
+    // order the verifier would read them: `azp`, then `client_id`.
+    let client_id = match verified.matched_client_id() {
+        Ok(Some(client)) => Some(client.to_owned()),
+        Ok(None) => verified
+            .claims
+            .azp
+            .clone()
+            .or_else(|| verified.claims.client_id.clone())
+            .filter(|client| !client.is_empty()),
+        Err(_) => return Err(AuthenticationError::Refused),
+    };
     // Correlate the exact verified credential, as in legacy API-key mode.
     // Issuer, subject, and client claims are never written into the audit event.
-    Ok(caller_fingerprint)
+    Ok(Authenticated {
+        caller_fingerprint,
+        client_id,
+    })
 }
 
 #[cfg(test)]
@@ -152,11 +187,11 @@ pub(crate) mod tests {
         let credential = token(
             json!({"aud":["urn:other","urn:render:test"],"registry_grant_id":"canary-unrelated"}),
         );
-        let caller = authenticate(&verifier, &credential)
+        let caller = authenticate(&verifier, &credential, RENDER_SCOPE)
             .await
             .expect("independently authorized Render token");
         assert_eq!(
-            caller,
+            caller.caller_fingerprint,
             registry_platform_authcommon::fingerprint_api_key(&credential)
         );
     }
@@ -166,32 +201,98 @@ pub(crate) mod tests {
         let verifier = test_verifier();
         let first = token(json!({"jti":"canary-first"}));
         let second = token(json!({"jti":"canary-second"}));
-        let caller = authenticate(&verifier, &first).await.unwrap();
+        let caller = authenticate(&verifier, &first, RENDER_SCOPE)
+            .await
+            .unwrap()
+            .caller_fingerprint;
         assert_eq!(
             caller,
             registry_platform_authcommon::fingerprint_api_key(&first)
         );
-        assert_eq!(authenticate(&verifier, &first).await.unwrap(), caller);
-        assert_ne!(authenticate(&verifier, &second).await.unwrap(), caller);
+        let again = authenticate(&verifier, &first, RENDER_SCOPE).await.unwrap();
+        assert_eq!(again.caller_fingerprint, caller);
+        let other = authenticate(&verifier, &second, RENDER_SCOPE)
+            .await
+            .unwrap();
+        assert_ne!(other.caller_fingerprint, caller);
     }
 
     #[tokio::test]
     async fn resource_expiry_signature_scope_and_grant_boundaries() {
         let verifier = test_verifier();
-        let caller = authenticate(&verifier, &token(json!({})))
+        let caller = authenticate(&verifier, &token(json!({})), RENDER_SCOPE)
             .await
             .expect("valid Render resource token");
-        assert!(!caller.contains("canary-principal"));
+        assert!(!caller.caller_fingerprint.contains("canary-principal"));
         for overrides in [
             json!({"aud":"urn:other"}),
             json!({"exp":1}),
             json!({"scope":"other"}),
             json!({"client_id":"other"}),
         ] {
-            assert!(authenticate(&verifier, &token(overrides)).await.is_err());
+            assert!(authenticate(&verifier, &token(overrides), RENDER_SCOPE)
+                .await
+                .is_err());
         }
-        assert!(authenticate(&verifier, "canary-invalid-token")
+        assert!(
+            authenticate(&verifier, "canary-invalid-token", RENDER_SCOPE)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn each_route_scope_authorizes_only_its_own_route() {
+        let verifier = test_verifier();
+        let render_only = token(json!({"scope":"render:render"}));
+        let seal_only = token(json!({"scope":"render:seal"}));
+        let both = token(json!({"scope":"render:render render:seal"}));
+        assert!(matches!(
+            authenticate(&verifier, &render_only, SEAL_SCOPE).await,
+            Err(AuthenticationError::Forbidden { .. })
+        ));
+        assert!(matches!(
+            authenticate(&verifier, &seal_only, RENDER_SCOPE).await,
+            Err(AuthenticationError::Forbidden { .. })
+        ));
+        assert!(authenticate(&verifier, &seal_only, SEAL_SCOPE)
             .await
-            .is_err());
+            .is_ok());
+        assert!(authenticate(&verifier, &both, SEAL_SCOPE).await.is_ok());
+        assert!(authenticate(&verifier, &both, RENDER_SCOPE).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn the_verified_client_is_returned_for_the_seal_allowlist() {
+        let bound = authenticate(&test_verifier(), &token(json!({})), RENDER_SCOPE)
+            .await
+            .unwrap();
+        assert_eq!(bound.client_id.as_deref(), Some("portal"));
+        let unrestricted = TokenVerifier::new(
+            TokenVerifierConfig::access_token_profile(
+                "https://issuer.example.test",
+                vec!["urn:render:test".to_owned()],
+                vec![Algorithm::HS256],
+                access_token_typ_set("at+jwt"),
+            )
+            .with_leeway(Duration::ZERO),
+            Arc::new(JwksFetcher::new_static(
+                serde_json::from_value(test_jwks()).unwrap(),
+                JwksFetcherConfig::defaults(),
+            )),
+        );
+        for (claims, client) in [
+            (json!({"client_id":"records"}), Some("records")),
+            (
+                json!({"client_id":"records","azp":"records"}),
+                Some("records"),
+            ),
+            (json!({"client_id":null}), None),
+        ] {
+            let verified = authenticate(&unrestricted, &token(claims), RENDER_SCOPE)
+                .await
+                .unwrap();
+            assert_eq!(verified.client_id.as_deref(), client);
+        }
     }
 }

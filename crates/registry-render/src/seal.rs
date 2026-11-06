@@ -1,0 +1,768 @@
+//! Document seals in serve: the key-holding half of a PAdES seal.
+//!
+//! The render worker renders the first revision and appends a signature
+//! field the parent fixed ([`crate::pdf_signature::prepare`]). Everything
+//! here runs in the serving parent, after the render slot is released: check
+//! the prepared file's fixed shape, hash the first revision, sign the byte
+//! ranges, timestamp the signature for B-T, and splice the CMS in.
+//!
+//! A seal is loaded once, at startup, from the runtime file's
+//! `signing.seals`: its certificate chain is read and parsed, its private key
+//! resolved through `secretProviders` into a [`LocalJwkSigner`], the key is
+//! matched to the certificate, the certificate must carry a signing key
+//! usage, and the space the signature field reserves is computed and must fit.
+//! A certificate outside its validity does not refuse startup; it makes that
+//! seal unavailable, which `/ready` reports and a seal request answers with a
+//! 503 problem.
+//!
+//! Nothing here records or returns a certificate subject, a key, or a
+//! timestamp token: the audit and the response carry the certificate's
+//! SHA-256 fingerprint and the token's SHA-256.
+
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
+use registry_platform_crypto::{
+    accept_timestamp_response, add_signature_timestamp, random_timestamp_nonce, sign_detached,
+    timestamp_request, CertificateChain, CertificateError, CertificateFingerprint, CmsError,
+    KeyReadiness, LocalJwkSigner, PrivateJwk, SigningAlgorithm, SigningProvider, TimestampError,
+    MAX_TIMESTAMP_RESPONSE_BYTES,
+};
+use registry_platform_yaml::Diagnostic;
+use time::OffsetDateTime;
+
+use crate::envelope::SigningPayload;
+use crate::hash::sha256_hex;
+use crate::pdf_signature::{PdfSignatureError, MAX_CONTENTS_CAPACITY};
+use crate::problem::{ProblemKind, RenderProblem};
+use crate::runtime::{RenderRuntime, SealRuntime, RUNTIME_KIND};
+use crate::worker::{WorkerPrepared, WorkerSeal};
+
+/// The partial name, `/T`, of the one signature field a seal writes.
+pub const SEAL_FIELD_NAME: &str = "RegistrySeal";
+
+/// Room for the signature value: an RSA signature under a key of up to 8192
+/// bits, which also covers DER ECDSA P-256 (at most 72 bytes) and P-384 (at
+/// most 104 bytes).
+pub const SIGNATURE_ALLOWANCE: usize = 1024;
+
+/// Room for the CMS structure around the certificates and the signature:
+/// content info, version, algorithm identifiers, the content-type and
+/// message-digest attributes, the signing-certificate-v2 hash, and the
+/// headers of every SEQUENCE and SET.
+pub const STRUCTURE_ALLOWANCE: usize = 1024;
+
+/// Room for the RFC 3161 timestamp token of a B-T seal. A token larger than
+/// this does not fit the reserved space and fails the seal request as a
+/// timestamp failure; it is never dropped to make a B-B seal.
+pub const TIMESTAMP_TOKEN_ALLOWANCE: usize = 16 * 1024;
+
+/// The bytes a seal's signature field reserves for its CMS signature,
+/// computed once at load and the same for every request:
+///
+/// ```text
+/// chain DER + 2 x seal certificate DER + SIGNATURE_ALLOWANCE
+///   + STRUCTURE_ALLOWANCE + (TIMESTAMP_TOKEN_ALLOWANCE when timestamped)
+/// ```
+///
+/// The CMS carries the chain once in `certificates`, and names the seal
+/// certificate's issuer and serial number twice (the signer identifier and
+/// the signing-certificate-v2 attribute); each is smaller than the
+/// certificate, so twice its DER bounds them.
+pub fn contents_capacity(chain_der_len: usize, leaf_der_len: usize, timestamped: bool) -> usize {
+    chain_der_len
+        + 2 * leaf_der_len
+        + SIGNATURE_ALLOWANCE
+        + STRUCTURE_ALLOWANCE
+        + if timestamped {
+            TIMESTAMP_TOKEN_ALLOWANCE
+        } else {
+            0
+        }
+}
+
+/// The PAdES baseline level a seal produces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SealLevel {
+    /// Signed, without a timestamp: the named `withoutTimestamp` choice.
+    BB,
+    /// Signed and timestamped by the seal's timestamp authority.
+    BT,
+}
+
+impl SealLevel {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::BB => "b-b",
+            Self::BT => "b-t",
+        }
+    }
+}
+
+/// Why a seal cannot sign now, as `/ready` and the seal route name it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unavailable {
+    CertificateExpired,
+    CertificateNotYetValid,
+    ProviderNotReady,
+}
+
+impl Unavailable {
+    /// The value-free reason `/ready` reports.
+    pub fn reason(self) -> &'static str {
+        match self {
+            Self::CertificateExpired => "certificate-expired",
+            Self::CertificateNotYetValid => "certificate-not-yet-valid",
+            Self::ProviderNotReady => "provider-not-ready",
+        }
+    }
+
+    /// The problem a seal request receives while the seal is unavailable.
+    pub fn problem(self, seal_id: &str) -> RenderProblem {
+        match self {
+            Self::CertificateExpired => RenderProblem::new(
+                ProblemKind::SealCertificateInvalid,
+                format!("seal {seal_id}: the seal certificate has expired"),
+            )
+            .with_public_detail(
+                "The seal certificate has expired; contact the operator. Plain rendering is \
+                 unaffected.",
+            ),
+            Self::CertificateNotYetValid => RenderProblem::new(
+                ProblemKind::SealCertificateInvalid,
+                format!("seal {seal_id}: the seal certificate is not yet valid"),
+            )
+            .with_public_detail(
+                "The seal certificate is not yet valid; contact the operator. Plain rendering is \
+                 unaffected.",
+            ),
+            Self::ProviderNotReady => RenderProblem::new(
+                ProblemKind::SigningUnavailable,
+                format!("seal {seal_id}: the signing key provider is not ready"),
+            ),
+        }
+    }
+}
+
+/// One loaded seal.
+pub struct Seal {
+    id: String,
+    chain: CertificateChain,
+    signer: Arc<dyn SigningProvider>,
+    fingerprint: CertificateFingerprint,
+    contents_capacity: usize,
+    signing: SigningPayload,
+    timestamp: Option<TimestampAuthority>,
+    allowed_clients: Vec<String>,
+}
+
+impl std::fmt::Debug for Seal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Seal")
+            .field("id", &self.id)
+            .field("fingerprint", &self.fingerprint.to_string())
+            .field("contents_capacity", &self.contents_capacity)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The loaded seals, by seal id.
+pub type Seals = BTreeMap<String, Arc<Seal>>;
+
+/// Load every seal the runtime file declares; an empty map when it declares
+/// no signing block. Refuses with a problem positioned at the failing member,
+/// whose message names the failing piece and repeats no value.
+pub fn load(runtime: &RenderRuntime) -> Result<Seals, RenderProblem> {
+    let mut seals = Seals::new();
+    let Some(signing) = &runtime.signing else {
+        return Ok(seals);
+    };
+    for (id, seal) in &signing.seals {
+        let loaded = Seal::load(runtime, id.as_str(), seal)?;
+        seals.insert(id.as_str().to_owned(), Arc::new(loaded));
+    }
+    Ok(seals)
+}
+
+fn refusal(
+    kind: ProblemKind,
+    seal_id: &str,
+    member: &str,
+    code: &str,
+    message: String,
+    action: &str,
+) -> RenderProblem {
+    let mut diagnostic = Diagnostic::error(
+        code,
+        format!("/signing/seals/{seal_id}/{member}"),
+        message,
+        action,
+    );
+    diagnostic.artifact = Some(RUNTIME_KIND.to_owned());
+    RenderProblem::new(kind, format!("seal {seal_id} cannot be loaded"))
+        .with_diagnostics(vec![diagnostic])
+}
+
+impl Seal {
+    fn load(runtime: &RenderRuntime, id: &str, seal: &SealRuntime) -> Result<Self, RenderProblem> {
+        let certificate = |code: &str, message: String, action: &str| {
+            refusal(
+                ProblemKind::SealCertificateInvalid,
+                id,
+                "certificateChainFile",
+                code,
+                message,
+                action,
+            )
+        };
+        let key = |kind: ProblemKind, code: &str, message: String, action: &str| {
+            refusal(kind, id, "privateKeyRef", code, message, action)
+        };
+        let pem = std::fs::read(&seal.certificate_chain_file).map_err(|_| {
+            certificate(
+                "render.runtime.seal-chain-unreadable",
+                format!("signing.seals.{id}.certificateChainFile cannot be read"),
+                "Mount the PEM certificate chain file at the configured path, readable by \
+                 serve.",
+            )
+        })?;
+        let chain = CertificateChain::from_pem(&pem).map_err(|error| {
+            certificate(
+                "render.runtime.seal-chain-invalid",
+                format!(
+                    "signing.seals.{id}.certificateChainFile is not a usable certificate chain: \
+                     {}",
+                    chain_error_text(&error)
+                ),
+                "Write the seal certificate first, then each issuer in turn, as PEM \
+                 CERTIFICATE blocks.",
+            )
+        })?;
+        let secret =
+            crate::runtime::resolve_secret(runtime, &seal.private_key_ref).map_err(|_| {
+                key(
+                    ProblemKind::RuntimeInvalid,
+                    "render.runtime.seal-key-unreadable",
+                    format!("signing.seals.{id}.privateKeyRef cannot be resolved"),
+                    "Provide the seal's private key under the secret provider the reference names.",
+                )
+            })?;
+        let not_a_key = || {
+            key(
+                ProblemKind::RuntimeInvalid,
+                "render.runtime.seal-key-invalid",
+                format!("signing.seals.{id}.privateKeyRef does not hold a private JWK"),
+                "Store the seal's private key as one ES256, ES384, RS256 or RS384 private JWK.",
+            )
+        };
+        let text = std::str::from_utf8(&secret).map_err(|_| not_a_key())?;
+        let mut jwk = PrivateJwk::parse(text.trim()).map_err(|_| not_a_key())?;
+        drop(secret);
+        // The CMS names its signer by issuer and serial number, never by key
+        // id, so a seal key needs none; the seal id stands in when it has
+        // none.
+        if jwk.kid.as_deref().is_none_or(|kid| kid.trim().is_empty()) {
+            jwk.kid = Some(id.to_owned());
+        }
+        let signer = LocalJwkSigner::new(jwk).map_err(|_| not_a_key())?;
+        if signer.algorithm() == SigningAlgorithm::EdDsa {
+            return Err(key(
+                ProblemKind::SealCertificateInvalid,
+                "render.runtime.seal-key-unsupported",
+                format!(
+                    "signing.seals.{id}.privateKeyRef is an EdDSA key; PAdES seals use ES256, \
+                     ES384, RS256 or RS384"
+                ),
+                "Issue the seal certificate for an ECDSA P-256, ECDSA P-384 or RSA key.",
+            ));
+        }
+        // Validity is a per-request condition, not a load failure: check the
+        // key and the key usage at an instant inside the validity, so only
+        // they can refuse here.
+        let inside_validity = chain
+            .not_before()
+            .max(OffsetDateTime::now_utc().min(chain.not_after()));
+        match chain.check_for_signing(&signer.public_jwk(), inside_validity) {
+            Ok(())
+            | Err(CertificateError::Expired { .. } | CertificateError::NotYetValid { .. }) => {}
+            Err(CertificateError::KeyMismatch { .. }) => {
+                return Err(key(
+                    ProblemKind::SealCertificateInvalid,
+                    "render.runtime.seal-key-mismatch",
+                    format!(
+                        "signing.seals.{id}.privateKeyRef does not hold the key the seal \
+                         certificate certifies"
+                    ),
+                    "Point privateKeyRef at the private key of the seal certificate, or the \
+                     chain file at the certificate issued for this key.",
+                ))
+            }
+            Err(CertificateError::MissingSigningKeyUsage { .. }) => {
+                return Err(certificate(
+                    "render.runtime.seal-certificate-usage",
+                    format!(
+                        "signing.seals.{id}.certificateChainFile names a seal certificate with \
+                         neither the digitalSignature nor the nonRepudiation key usage"
+                    ),
+                    "Use a seal certificate issued with the digitalSignature or nonRepudiation \
+                     key usage.",
+                ))
+            }
+            Err(error) => {
+                return Err(key(
+                    ProblemKind::SealCertificateInvalid,
+                    "render.runtime.seal-key-unsupported",
+                    format!(
+                        "signing.seals.{id}: the seal key cannot sign under this certificate: {}",
+                        chain_error_text(&error)
+                    ),
+                    "Issue the seal certificate for an ECDSA P-256, ECDSA P-384 or RSA key.",
+                ))
+            }
+        }
+        let contents_capacity = contents_capacity(
+            chain.der_len(),
+            chain.leaf_der().len(),
+            seal.timestamp_authority.is_some(),
+        );
+        if contents_capacity > MAX_CONTENTS_CAPACITY {
+            return Err(certificate(
+                "render.runtime.seal-chain-too-large",
+                format!(
+                    "signing.seals.{id}.certificateChainFile is too large for the signature \
+                     space a seal may reserve ({MAX_CONTENTS_CAPACITY} bytes)"
+                ),
+                "List only the seal certificate and the issuers a validator needs to build the \
+                 path to the trust anchor.",
+            ));
+        }
+        let timestamp = match &seal.timestamp_authority {
+            None => None,
+            Some(authority) => Some(TimestampAuthority::new(
+                id,
+                authority.url.to_url().as_str(),
+                authority.attempt_timeout(),
+            )?),
+        };
+        Ok(Self {
+            id: id.to_owned(),
+            fingerprint: chain.leaf_sha256_fingerprint(),
+            signing: SigningPayload {
+                signer_name: chain.display_name().map(str::to_owned),
+                test_only: seal.is_test_only(),
+            },
+            chain,
+            signer: Arc::new(signer),
+            contents_capacity,
+            timestamp,
+            allowed_clients: seal.allowed_clients.as_slice().to_vec(),
+        })
+    }
+
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub fn level(&self) -> SealLevel {
+        if self.timestamp.is_some() {
+            SealLevel::BT
+        } else {
+            SealLevel::BB
+        }
+    }
+
+    pub fn contents_capacity(&self) -> usize {
+        self.contents_capacity
+    }
+
+    /// The seal certificate's SHA-256 fingerprint, lowercase hex.
+    pub fn certificate_fingerprint(&self) -> String {
+        self.fingerprint.to_string()
+    }
+
+    /// Whether the seal's `allowedClients` names this verified client.
+    pub fn allows_client(&self, client_id: &str) -> bool {
+        self.allowed_clients
+            .iter()
+            .any(|client| client == client_id)
+    }
+
+    /// Whether the seal can sign at `now`. Readiness asks this too; it never
+    /// requests a timestamp.
+    pub fn availability(&self, now: OffsetDateTime) -> Result<(), Unavailable> {
+        if now < self.chain.not_before() {
+            return Err(Unavailable::CertificateNotYetValid);
+        }
+        if now > self.chain.not_after() {
+            return Err(Unavailable::CertificateExpired);
+        }
+        match self.signer.readiness() {
+            KeyReadiness::NotReady => Err(Unavailable::ProviderNotReady),
+            _ => Ok(()),
+        }
+    }
+
+    /// What the worker needs to prepare this seal's field at `signing_time`,
+    /// the parent's clock truncated to whole seconds.
+    pub fn worker_seal(&self, signing_time: OffsetDateTime) -> WorkerSeal {
+        let signing_time = signing_time.replace_nanosecond(0).unwrap_or(signing_time);
+        let signing_time = chrono::DateTime::from_timestamp(signing_time.unix_timestamp(), 0)
+            .unwrap_or_default()
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        WorkerSeal {
+            signing: self.signing.clone(),
+            signing_time,
+            contents_capacity: self.contents_capacity,
+            field_name: SEAL_FIELD_NAME.to_owned(),
+        }
+    }
+
+    /// Check, sign, timestamp and embed what the worker prepared.
+    pub async fn seal(&self, prepared: WorkerPrepared) -> Result<SealedDocument, RenderProblem> {
+        let internal = |detail: String| RenderProblem::new(ProblemKind::Internal, detail);
+        let first_revision_len = prepared.first_revision_len;
+        let checked = prepared
+            .prepared
+            .check(first_revision_len)
+            .map_err(|error| {
+                internal(format!(
+                    "seal {}: the worker's prepared file was refused: {error}",
+                    self.id
+                ))
+            })?;
+        if checked.contents_capacity() != self.contents_capacity {
+            return Err(internal(format!(
+                "seal {}: the worker reserved another signature space than requested",
+                self.id
+            )));
+        }
+        // The check placed the signature dictionary after the first
+        // revision, so the first signed range starts with all of it.
+        let [first_part, _] = checked.signed_parts();
+        let document_sha256 = sha256_hex(&first_part[..first_revision_len]);
+        let signature = sign_detached(&checked.signed_parts(), &self.chain, self.signer.as_ref())
+            .await
+            .map_err(|error| self.signing_problem(error))?;
+        let (cms_der, timestamp) = match &self.timestamp {
+            None => (signature.cms_der, None),
+            Some(authority) => {
+                let token = authority.stamp(&signature.signature_value).await?;
+                let stamped = add_signature_timestamp(&signature.cms_der, &token.token_der)
+                    .map_err(|_| authority.failure(TimestampFailure::InvalidToken))?;
+                let gen_time = token
+                    .gen_time
+                    .format(&time::format_description::well_known::Rfc3339)
+                    .map_err(|_| authority.failure(TimestampFailure::InvalidToken))?;
+                let stamp = AppliedTimestamp {
+                    time: gen_time,
+                    token_sha256: sha256_hex(&token.token_der),
+                };
+                (stamped, Some(stamp))
+            }
+        };
+        let pdf = checked
+            .embed(&cms_der)
+            .map_err(|error| match (error, &self.timestamp) {
+                (PdfSignatureError::SignatureTooLarge { .. }, Some(authority)) => {
+                    authority.failure(TimestampFailure::TooLarge)
+                }
+                (error, _) => internal(format!(
+                    "seal {}: the signature could not be embedded: {error}",
+                    self.id
+                )),
+            })?;
+        Ok(SealedDocument {
+            signed_file_sha256: sha256_hex(&pdf),
+            pdf,
+            document_sha256,
+            level: self.level(),
+            certificate_fingerprint: self.certificate_fingerprint(),
+            timestamp,
+        })
+    }
+
+    fn signing_problem(&self, error: CmsError) -> RenderProblem {
+        match error {
+            CmsError::Certificate(CertificateError::Expired { .. }) => {
+                Unavailable::CertificateExpired.problem(&self.id)
+            }
+            CmsError::Certificate(CertificateError::NotYetValid { .. }) => {
+                Unavailable::CertificateNotYetValid.problem(&self.id)
+            }
+            CmsError::Certificate(error) => RenderProblem::new(
+                ProblemKind::SealCertificateInvalid,
+                format!(
+                    "seal {}: the seal certificate may not sign: {}",
+                    self.id,
+                    chain_error_text(&error)
+                ),
+            ),
+            CmsError::Signing(_) => RenderProblem::new(
+                ProblemKind::SigningUnavailable,
+                format!("seal {}: the signing key provider failed", self.id),
+            ),
+            other => RenderProblem::new(
+                ProblemKind::Internal,
+                format!(
+                    "seal {}: the signature could not be produced: {other}",
+                    self.id
+                ),
+            ),
+        }
+    }
+}
+
+/// A certificate refusal in words that name the piece and carry no value:
+/// no fingerprint, subject or position beyond the block number.
+fn chain_error_text(error: &CertificateError) -> String {
+    match error {
+        CertificateError::Empty => "the file holds no PEM certificate".to_owned(),
+        CertificateError::MalformedPem { position } => format!("PEM block {position} is malformed"),
+        CertificateError::NotACertificate { position } => {
+            format!("PEM block {position} is not a CERTIFICATE")
+        }
+        CertificateError::MalformedCertificate { position } => {
+            format!("certificate {position} is not a DER X.509 certificate")
+        }
+        CertificateError::DuplicateCertificate { position } => {
+            format!("certificate {position} appears earlier in the chain")
+        }
+        CertificateError::ChainOutOfOrder { position } => format!(
+            "certificate {position} was not issued by the certificate after it; list the seal \
+             certificate first, then each issuer in turn"
+        ),
+        CertificateError::KeyMismatch { .. } => {
+            "the seal certificate does not hold the signing key's public key".to_owned()
+        }
+        CertificateError::MissingSigningKeyUsage { .. } => {
+            "the seal certificate has neither the digitalSignature nor the nonRepudiation key usage"
+                .to_owned()
+        }
+        CertificateError::NotYetValid { .. } => "the seal certificate is not yet valid".to_owned(),
+        CertificateError::Expired { .. } => "the seal certificate has expired".to_owned(),
+        CertificateError::UnsupportedKey { .. } => {
+            "the seal key is not an ECDSA P-256, ECDSA P-384 or RSA key".to_owned()
+        }
+        _ => "the certificate chain was refused".to_owned(),
+    }
+}
+
+/// A sealed file and the values the response and the audit record.
+#[derive(Debug, Clone)]
+pub struct SealedDocument {
+    pub pdf: Vec<u8>,
+    /// SHA-256 over the first revision, Render's own document.
+    pub document_sha256: String,
+    /// SHA-256 over the whole signed file.
+    pub signed_file_sha256: String,
+    pub level: SealLevel,
+    pub certificate_fingerprint: String,
+    /// Present for a B-T seal.
+    pub timestamp: Option<AppliedTimestamp>,
+}
+
+/// The timestamp a B-T seal carries.
+#[derive(Debug, Clone)]
+pub struct AppliedTimestamp {
+    /// The token's `genTime`, RFC 3339.
+    pub time: String,
+    /// SHA-256 over the DER token.
+    pub token_sha256: String,
+}
+
+/// Which piece of the timestamp exchange failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimestampFailure {
+    /// No answer within the attempt timeout, or the connection failed.
+    Unreachable,
+    /// The authority answered with an HTTP error or a status that grants no
+    /// token.
+    Refused,
+    /// The answer is not a timestamp reply, or its token does not verify or
+    /// does not cover this signature.
+    InvalidToken,
+    /// The answer exceeds what Render accepts, or its token does not fit the
+    /// space the seal reserves.
+    TooLarge,
+}
+
+impl TimestampFailure {
+    fn operator_text(self) -> &'static str {
+        match self {
+            Self::Unreachable => "the timestamp authority could not be reached",
+            Self::Refused => "the timestamp authority refused the request",
+            Self::InvalidToken => "the timestamp authority returned an invalid timestamp token",
+            Self::TooLarge => "the timestamp token is too large for the space the seal reserves",
+        }
+    }
+
+    fn public_text(self) -> &'static str {
+        match self {
+            Self::Unreachable => {
+                "The timestamp authority could not be reached within its attempt timeout; retry \
+                 later."
+            }
+            Self::Refused => "The timestamp authority refused the request; contact the operator.",
+            Self::InvalidToken => {
+                "The timestamp authority returned an invalid timestamp token; contact the \
+                 operator."
+            }
+            Self::TooLarge => {
+                "The timestamp authority's answer is too large for the space the seal reserves; \
+                 contact the operator."
+            }
+        }
+    }
+}
+
+/// One seal's RFC 3161 timestamp authority: one attempt per seal request,
+/// bounded by `attemptTimeoutMilliseconds`, never retried.
+struct TimestampAuthority {
+    seal_id: String,
+    url: reqwest::Url,
+    client: reqwest::Client,
+}
+
+const TIMESTAMP_QUERY: &str = "application/timestamp-query";
+const TIMESTAMP_REPLY: &str = "application/timestamp-reply";
+
+impl TimestampAuthority {
+    fn new(
+        seal_id: &str,
+        url: &str,
+        attempt_timeout: std::time::Duration,
+    ) -> Result<Self, RenderProblem> {
+        let unusable = || {
+            refusal(
+                ProblemKind::RuntimeInvalid,
+                seal_id,
+                "timestampAuthority",
+                "render.runtime.seal-timestamp-client",
+                format!("signing.seals.{seal_id}.timestampAuthority cannot be used"),
+                "Check the timestamp authority URL and the host's trusted root certificates.",
+            )
+        };
+        let url = reqwest::Url::parse(url).map_err(|_| unusable())?;
+        let client = registry_platform_httputil::client::build_client(
+            registry_platform_httputil::client::OutboundOptions {
+                request_timeout: attempt_timeout,
+                connect_timeout: attempt_timeout,
+                user_agent: Some("registry-render"),
+                trusted_root_certificates: None,
+            },
+        )
+        .map_err(|_| unusable())?;
+        Ok(Self {
+            seal_id: seal_id.to_owned(),
+            url,
+            client,
+        })
+    }
+
+    fn failure(&self, failure: TimestampFailure) -> RenderProblem {
+        RenderProblem::new(
+            ProblemKind::TimestampFailed,
+            format!("seal {}: {}", self.seal_id, failure.operator_text()),
+        )
+        .with_public_detail(failure.public_text())
+    }
+
+    async fn stamp(
+        &self,
+        signature_value: &[u8],
+    ) -> Result<registry_platform_crypto::SignatureTimestamp, RenderProblem> {
+        let internal = || {
+            RenderProblem::new(
+                ProblemKind::Internal,
+                format!(
+                    "seal {}: the timestamp request could not be built",
+                    self.seal_id
+                ),
+            )
+        };
+        let nonce = random_timestamp_nonce().map_err(|_| internal())?;
+        let query = timestamp_request(signature_value, nonce).map_err(|_| internal())?;
+        let response = self
+            .client
+            .post(self.url.clone())
+            .header(reqwest::header::CONTENT_TYPE, TIMESTAMP_QUERY)
+            .header(reqwest::header::ACCEPT, TIMESTAMP_REPLY)
+            .body(query)
+            .send()
+            .await
+            .map_err(|_| self.failure(TimestampFailure::Unreachable))?;
+        if !response.status().is_success() {
+            return Err(self.failure(TimestampFailure::Refused));
+        }
+        let is_reply = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.split(';').next())
+            .is_some_and(|media| media.trim().eq_ignore_ascii_case(TIMESTAMP_REPLY));
+        if !is_reply {
+            return Err(self.failure(TimestampFailure::InvalidToken));
+        }
+        let reply =
+            registry_platform_httputil::read_bounded(response, MAX_TIMESTAMP_RESPONSE_BYTES as u64)
+                .await
+                .map_err(|error| match error {
+                    registry_platform_httputil::BoundedReadError::Transport(_) => {
+                        self.failure(TimestampFailure::Unreachable)
+                    }
+                    _ => self.failure(TimestampFailure::TooLarge),
+                })?;
+        accept_timestamp_response(&reply, signature_value, nonce).map_err(|error| match error {
+            TimestampError::NotGranted { .. } => self.failure(TimestampFailure::Refused),
+            TimestampError::ResponseTooLarge => self.failure(TimestampFailure::TooLarge),
+            _ => self.failure(TimestampFailure::InvalidToken),
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_reserved_space_follows_the_documented_formula() {
+        assert_eq!(
+            contents_capacity(1200, 600, false),
+            1200 + 1200 + 1024 + 1024
+        );
+        assert_eq!(
+            contents_capacity(1200, 600, true),
+            1200 + 1200 + 1024 + 1024 + 16 * 1024
+        );
+        assert!(
+            contents_capacity(0, 0, true) < MAX_CONTENTS_CAPACITY,
+            "the fixed allowances leave room for a chain"
+        );
+    }
+
+    #[test]
+    fn levels_and_reasons_have_stable_names() {
+        assert_eq!(SealLevel::BT.as_str(), "b-t");
+        assert_eq!(SealLevel::BB.as_str(), "b-b");
+        for (reason, name, kind) in [
+            (
+                Unavailable::CertificateExpired,
+                "certificate-expired",
+                ProblemKind::SealCertificateInvalid,
+            ),
+            (
+                Unavailable::CertificateNotYetValid,
+                "certificate-not-yet-valid",
+                ProblemKind::SealCertificateInvalid,
+            ),
+            (
+                Unavailable::ProviderNotReady,
+                "provider-not-ready",
+                ProblemKind::SigningUnavailable,
+            ),
+        ] {
+            assert_eq!(reason.reason(), name);
+            assert_eq!(reason.problem("ministry").kind, kind);
+        }
+    }
+}

@@ -10,7 +10,10 @@
 //! the record as `correlationId`. The log carries no hash chain or signature.
 //!
 //! Events carry no data values and no asset bytes: identifiers, versions,
-//! hashes, outcomes, caller, trace and correlation ids only.
+//! hashes, outcomes, caller, trace and correlation ids only. A sealed
+//! document's entries add the seal id and, on the response, the hashes of
+//! what was sealed, the certificate and the timestamp token; never a
+//! certificate subject, a signer name or a token.
 
 use serde::Serialize;
 
@@ -35,9 +38,9 @@ pub struct RenderAuditEvent {
     pub document_version: u32,
     pub bundle_version: u32,
     pub bundle_hash: String,
-    /// "rendered", "refused", or "unfinished" for a call that ended before
-    /// its outcome; absent on the request entry written before the render
-    /// starts.
+    /// "rendered", "sealed", "refused", or "unfinished" for a call that
+    /// ended before its outcome; absent on the request entry written before
+    /// the render starts.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub outcome: Option<&'static str>,
     /// Problem slug for refusals.
@@ -47,6 +50,22 @@ pub struct RenderAuditEvent {
     pub pdf_sha256: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data_sha256: Option<String>,
+    /// The runtime seal id, on every entry of a call to the seal route that
+    /// named a sealable document.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seal_id: Option<String>,
+    /// SHA-256 over the first revision, the rendered document a seal covers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub document_sha256: Option<String>,
+    /// SHA-256 over the whole signed file.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signed_file_sha256: Option<String>,
+    /// SHA-256 over the seal certificate's DER: its fingerprint.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub certificate_sha256: Option<String>,
+    /// SHA-256 over the embedded timestamp token's DER, on a B-T seal.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timestamp_token_sha256: Option<String>,
     /// Verified credential fingerprint (never the token or principal claims).
     pub caller: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -78,6 +97,11 @@ impl RenderAuditEvent {
             problem: None,
             pdf_sha256: None,
             data_sha256: None,
+            seal_id: None,
+            document_sha256: None,
+            signed_file_sha256: None,
+            certificate_sha256: None,
+            timestamp_token_sha256: None,
             caller: caller.to_owned(),
             correlation_id: correlation_id.map(str::to_owned),
             trace_id: trace_id.map(str::to_owned),
@@ -92,6 +116,14 @@ impl RenderAuditEvent {
         Self {
             outcome: Some("refused"),
             problem: Some(problem.kind.slug().to_owned()),
+            ..self
+        }
+    }
+
+    /// The same event for a call to the seal route naming `seal_id`.
+    pub fn for_seal(self, seal_id: &str) -> Self {
+        Self {
+            seal_id: Some(seal_id.to_owned()),
             ..self
         }
     }
@@ -112,6 +144,11 @@ impl RenderAuditEvent {
             problem: Some(problem.kind.slug().to_owned()),
             pdf_sha256: None,
             data_sha256: None,
+            seal_id: None,
+            document_sha256: None,
+            signed_file_sha256: None,
+            certificate_sha256: None,
+            timestamp_token_sha256: None,
             caller: caller.to_owned(),
             correlation_id: correlation_id.map(str::to_owned),
             trace_id: trace_id.map(str::to_owned),
@@ -153,14 +190,7 @@ impl RenderAudit {
         correlation: &str,
         event: RenderAuditEvent,
     ) -> Result<AuditRequest, RenderProblem> {
-        let mut unfinished = record(RenderAuditEvent {
-            outcome: Some("unfinished"),
-            ..event.clone()
-        })?;
-        if let Some(fields) = unfinished.as_object_mut() {
-            fields.remove("pdfSha256");
-            fields.remove("dataSha256");
-        }
+        let unfinished = unfinished(event.clone())?;
         let record = record(event)?;
         self.writer
             .begin(AUDIT_SCHEMA, correlation, record, unfinished)
@@ -201,7 +231,93 @@ impl RenderAudit {
     }
 }
 
+/// The response a call that ends before its outcome writes: the request
+/// entry's identity, with no value only an outcome produces.
+fn unfinished(event: RenderAuditEvent) -> Result<serde_json::Value, RenderProblem> {
+    let mut unfinished = record(RenderAuditEvent {
+        outcome: Some("unfinished"),
+        ..event
+    })?;
+    if let Some(fields) = unfinished.as_object_mut() {
+        for field in [
+            "pdfSha256",
+            "dataSha256",
+            "documentSha256",
+            "signedFileSha256",
+            "certificateSha256",
+            "timestampTokenSha256",
+        ] {
+            fields.remove(field);
+        }
+    }
+    Ok(unfinished)
+}
+
 fn record(event: RenderAuditEvent) -> Result<serde_json::Value, RenderProblem> {
     serde_json::to_value(event)
         .map_err(|err| RenderProblem::new(ProblemKind::Internal, format!("audit event: {err}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn started() -> RenderAuditEvent {
+        RenderAuditEvent::started("notice", 2, 1, "bundle-hash", "caller", None, None)
+    }
+
+    #[test]
+    fn a_seal_request_entry_names_its_seal_and_no_response_value() {
+        let request = record(started().for_seal("ministry")).unwrap();
+        assert_eq!(request["sealId"], "ministry");
+        for field in [
+            "outcome",
+            "documentSha256",
+            "signedFileSha256",
+            "certificateSha256",
+            "timestampTokenSha256",
+        ] {
+            assert!(request.get(field).is_none(), "{field}: {request}");
+        }
+        let plain = record(started()).unwrap();
+        assert!(plain.get("sealId").is_none(), "{plain}");
+    }
+
+    #[test]
+    fn an_unfinished_seal_keeps_its_seal_and_drops_every_response_value() {
+        let sealed = RenderAuditEvent {
+            outcome: Some("sealed"),
+            data_sha256: Some("d".repeat(64)),
+            document_sha256: Some("a".repeat(64)),
+            signed_file_sha256: Some("b".repeat(64)),
+            certificate_sha256: Some("c".repeat(64)),
+            timestamp_token_sha256: Some("e".repeat(64)),
+            ..started().for_seal("ministry")
+        };
+        let entry = unfinished(sealed).unwrap();
+        assert_eq!(entry["outcome"], "unfinished");
+        assert_eq!(entry["sealId"], "ministry");
+        for field in [
+            "pdfSha256",
+            "dataSha256",
+            "documentSha256",
+            "signedFileSha256",
+            "certificateSha256",
+            "timestampTokenSha256",
+        ] {
+            assert!(entry.get(field).is_none(), "{field}: {entry}");
+        }
+    }
+
+    #[test]
+    fn a_seal_refusal_names_its_seal() {
+        let problem = RenderProblem::new(ProblemKind::SealClientNotAllowed, "refused");
+        let entry = record(
+            RenderAuditEvent::refused("notice", &problem, "caller", None, None)
+                .for_seal("ministry"),
+        )
+        .unwrap();
+        assert_eq!(entry["sealId"], "ministry");
+        assert_eq!(entry["problem"], "seal-client-not-allowed");
+    }
 }
