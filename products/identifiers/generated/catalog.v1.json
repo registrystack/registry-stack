@@ -4240,7 +4240,7 @@
       },
       "artifact": {
         "path": "products/adapter/schemas/job.v1alpha1.schema.json",
-        "sha256": "38818527ae8cf4435485ea3f283af51b41c4d1d1e0e26d04ab3e59c158c150a7",
+        "sha256": "843de6f3c01c8611f50c42010769f4f887b841f0deb385175f95a609eb5a5f30",
         "mediaType": "application/schema+json"
       }
     },
@@ -4276,7 +4276,7 @@
       },
       "artifact": {
         "path": "products/adapter/schemas/pack.v1alpha1.schema.json",
-        "sha256": "b799254a0972b343e0366009422c58968813e356d76f5d4d9e66ef5ce3656761",
+        "sha256": "a8d908e534dffcbeee5b1e3352007a4205e0a4614c64a24fd22130f59f0ff264",
         "mediaType": "application/schema+json"
       }
     },
@@ -4348,7 +4348,7 @@
       },
       "artifact": {
         "path": "products/adapter/schemas/runtime.v1alpha1.schema.json",
-        "sha256": "d61ae16de167e40cfd90a2ec244886e75bb5778ffffc13a6617efe3729fc7e39",
+        "sha256": "4a62c7dd8399bd3a5991efb203a34310918bad17a95b8a74c7784e6486ae6f21",
         "mediaType": "application/schema+json"
       }
     },
