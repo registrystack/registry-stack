@@ -1,5 +1,5 @@
-//! The static OpenAPI document. Two endpoints do not justify a generator;
-//! this file is the contract, and the serve tests pin its routes.
+//! The static OpenAPI document. A handful of routes do not justify a
+//! generator; this file is the contract, and the serve tests pin its routes.
 //!
 //! The document describes every route, the seal route included. A
 //! deployment without a `signing` block does not mount `/v1/seal/{type}`,
