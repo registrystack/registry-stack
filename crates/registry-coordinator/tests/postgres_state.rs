@@ -2278,16 +2278,37 @@ async fn inspection_refuses_recovery_after_deadline_receipt_expiry_and_unsupport
             .reason,
         Some(RetryBlockReason::SnapshotIncompatible)
     );
-    assert_eq!(
-        old.store
-            .retry_same(run, "binding-a")
-            .await
-            .unwrap_err()
-            .code,
-        "definition-incompatible"
-    );
+    // A restore refusal names the run, its workflow and the original finding,
+    // with operator advice in place of the authoring suggestion.
+    let refusal = old.store.retry_same(run, "binding-a").await.unwrap_err();
+    assert_eq!(refusal.code, "definition-refused");
+    for part in [
+        run.to_string().as_str(),
+        "synthetic-reminder",
+        "definition.abi",
+    ] {
+        assert!(refusal.message.contains(part), "{refusal:?}");
+    }
+    let advice = refusal.suggested_action.as_deref().unwrap();
+    assert!(advice.contains("\"Apply and start\""), "{advice}");
     assert_eq!(old.store.status(run).await.unwrap().state, "attention");
+    assert!(old.store.status(run).await.unwrap().uncertain);
+    // Cancel refuses the same way: the refused definition's cleanup never
+    // runs, and the uncertain step is kept.
+    let refusal = old
+        .store
+        .cancel_owned(run, &actor("operator", true), "withdraw-held-run")
+        .await
+        .unwrap_err();
+    assert_eq!(refusal.code, "definition-refused", "{refusal:?}");
+    assert!(refusal.message.contains("definition.abi"), "{refusal:?}");
+    let status = old.store.status(run).await.unwrap();
+    assert_eq!(status.state, "attention");
+    assert!(status.uncertain);
+    assert!(!status.cancel_requested);
 
+    // A worker that claims a run whose definition does not restore holds it
+    // with the reason, keeps its uncertainty, and makes no call.
     let pending = harness().await;
     let run = pending.admit().await;
     let fake = Fake::new(vec![]);
@@ -2299,8 +2320,31 @@ async fn inspection_refuses_recovery_after_deadline_receipt_expiry_and_unsupport
         .expect("unsupported ABI refuses before source effects");
     let status = pending.store.status(run).await.unwrap();
     assert_eq!(
-        status.failure_code.as_deref(),
-        Some("snapshot-incompatible")
+        (status.state.as_str(), status.failure_code.as_deref()),
+        ("attention", Some("definition-refused"))
+    );
+    assert!(fake.requests.lock().unwrap().is_empty());
+    let refusal = pending
+        .store
+        .retry_same(run, "binding-a")
+        .await
+        .unwrap_err();
+    assert_eq!(refusal.code, "definition-refused", "{refusal:?}");
+    let refusal = pending
+        .store
+        .cancel_owned(run, &actor("operator", true), "withdraw-held-run")
+        .await
+        .unwrap_err();
+    assert_eq!(refusal.code, "definition-refused", "{refusal:?}");
+    let status = pending.store.status(run).await.unwrap();
+    assert_eq!(
+        (status.state.as_str(), status.failure_code.as_deref()),
+        ("attention", Some("definition-refused"))
+    );
+    assert!(!status.cancel_requested);
+    assert!(
+        !worker.tick().await.unwrap(),
+        "a held run is not claimed again"
     );
     assert!(fake.requests.lock().unwrap().is_empty());
 }

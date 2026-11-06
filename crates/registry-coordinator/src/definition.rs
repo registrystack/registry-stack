@@ -30,6 +30,17 @@ use crate::{
 /// The compiled snapshot format, carried by its workflow.
 pub(crate) const API_VERSION: &str =
     "id.registrystack.org/formats/coordinator/definition-snapshot/v1alpha1";
+/// The reason a run is held when this version does not restore its retained
+/// definition.
+pub const DEFINITION_REFUSED: &str = "definition-refused";
+
+/// Operator advice for a run held because its retained definition does not
+/// restore.
+pub const HELD_RUN_ADVICE: &str = "This Coordinator version holds the run and runs nothing for it, and refuses to retry, reconcile or cancel it; every other run continues. Only a Coordinator release that accepts its definition can end the run. Run coordinatorctl deployment-status with a new release before upgrading to list the runs it would hold. See \"Apply and start\" in products/coordinator/DEPLOYMENT.md.";
+
+/// Operator advice for a pinned package this version does not restore.
+const PACKAGE_REFUSED_ADVICE: &str = "The service does not start on this package. Keep serving with the Coordinator version that accepted it, or correct the workflow project, rerun coordinatorctl check, package it and apply the new package. See \"Apply and start\" in products/coordinator/DEPLOYMENT.md.";
+
 const ADAPTER_ABI: &str = "coordinator/product-operations/v1";
 const SCHEMA_ABI: &str =
     "coordinator/jsonschema-0.18/draft202012/formats-asserted+uuid+numeric-widths/v2";
@@ -657,6 +668,46 @@ impl Definition {
         }
         let frozen = serde_json::from_value(value).map_err(|_| fail("definition.snapshot"))?;
         Self::restore(frozen)
+    }
+
+    /// Give a pinned package's restore refusal its operator context. The
+    /// finding keeps its own code; the message names the package digest and
+    /// workflow, and operator advice replaces the authoring location and fix.
+    pub fn package_refused(
+        mut finding: CoordinatorError,
+        digest: &str,
+        snapshot: &str,
+    ) -> CoordinatorError {
+        let workflow = serde_json::from_str::<Value>(snapshot)
+            .ok()
+            .and_then(|value| value["workflow"]["id"].as_str().map(str::to_owned))
+            .unwrap_or_else(|| "that cannot be read".to_owned());
+        finding.message = format!(
+            "this Coordinator version does not restore pinned package {digest} of workflow {workflow} ({})",
+            finding.code
+        );
+        finding.suggested_action = Some(PACKAGE_REFUSED_ADVICE.into());
+        finding.file = None;
+        finding.field = None;
+        finding.diagnostics = Box::default();
+        finding
+    }
+
+    /// Refuse to act on a run whose retained definition does not restore,
+    /// naming the run, its workflow and the original finding.
+    pub fn run_refused(
+        finding: &CoordinatorError,
+        run: impl std::fmt::Display,
+        workflow: &str,
+    ) -> CoordinatorError {
+        CoordinatorError::new(
+            "definition-refused",
+            format!(
+                "run {run} of workflow {workflow} is held: this Coordinator version does not restore its retained definition ({})",
+                finding.code
+            ),
+        )
+        .suggest(HELD_RUN_ADVICE)
     }
 
     fn restore(frozen: Snapshot) -> Result<Self> {

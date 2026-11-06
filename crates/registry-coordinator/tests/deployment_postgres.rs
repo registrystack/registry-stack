@@ -3,6 +3,8 @@
 #![cfg(feature = "postgres-test")]
 #[path = "support/failed_fixture.rs"]
 mod failed_fixture;
+#[path = "support/refused_snapshot.rs"]
+mod refused_snapshot;
 use chrono::Utc;
 use registry_coordinator::{
     adapters::HttpAdapters,
@@ -2912,6 +2914,88 @@ impl TwoFlowFixture {
         secrets
     }
 
+    /// Seal `snapshot` over a run's retained snapshot under `key`, as state
+    /// key version 1 would hold it.
+    async fn replace_snapshot(&self, run: Uuid, snapshot: &str, key: &[u8; 32]) {
+        use base64::Engine as _;
+        use registry_platform_crypto::sealed_value::{seal, Context};
+        let id = run.to_string();
+        let envelope = seal(
+            key,
+            &Context {
+                domain: "registry-coordinator/state/v1",
+                // The fixture's databaseId, which every sealed value binds.
+                scope: &["two-flow-test", &id, "snapshot", ""],
+                key_version: 1,
+            },
+            &serde_json::to_vec(snapshot).unwrap(),
+        )
+        .unwrap();
+        let sealed = json!({"sealedCoordinatorV1":base64::engine::general_purpose::STANDARD.encode(envelope)});
+        self.set_sealed_snapshot(run, &sealed).await;
+    }
+
+    async fn sealed_snapshot(&self, run: Uuid) -> Value {
+        self.admin
+            .query_one(
+                &format!(
+                    "SELECT snapshot FROM {}.runs WHERE run_id=$1",
+                    self.namespace
+                ),
+                &[&run],
+            )
+            .await
+            .unwrap()
+            .get(0)
+    }
+
+    async fn set_sealed_snapshot(&self, run: Uuid, sealed: &Value) {
+        let changed = self
+            .admin
+            .execute(
+                &format!(
+                    "UPDATE {}.runs SET snapshot=$2 WHERE run_id=$1",
+                    self.namespace
+                ),
+                &[&run, sealed],
+            )
+            .await
+            .unwrap();
+        assert_eq!(changed, 1);
+    }
+
+    /// The run's state and failure code, and its current step's job state,
+    /// attempt count, prepared command and uncertainty.
+    async fn run_progress(
+        &self,
+        run: Uuid,
+    ) -> (String, Option<String>, String, String, i16, bool, bool) {
+        let row = self
+            .admin
+            .query_one(
+                &format!("SELECT r.state,r.failure_code,r.step,j.state,j.attempt,j.command IS NOT NULL,j.uncertain FROM {0}.runs r JOIN {0}.jobs j ON j.run_id=r.run_id AND j.step=r.step WHERE r.run_id=$1", self.namespace),
+                &[&run],
+            )
+            .await
+            .unwrap();
+        (
+            row.get(0),
+            row.get(1),
+            row.get(2),
+            row.get(3),
+            row.get(4),
+            row.get(5),
+            row.get(6),
+        )
+    }
+
+    async fn reconnect_runtime_role(&self) {
+        self.admin
+            .batch_execute(&format!("ALTER ROLE {} LOGIN", self.role))
+            .await
+            .unwrap();
+    }
+
     async fn disconnect_runtime_role(&self) {
         // Commit the login refusal before enumerating sessions. A connection
         // admitted between enumeration and an uncommitted NOLOGIN otherwise
@@ -3013,6 +3097,17 @@ async fn runtime_http_state(
     runtime: &Arc<RuntimeConfig>,
     workflows: &Arc<deployment::Workflows>,
 ) -> HttpState {
+    let store = deployment::open(runtime, false).await.unwrap();
+    store_http_state(store, runtime, workflows).await
+}
+
+/// The HTTP state over a store the test already opened, which owns the
+/// service audit file.
+async fn store_http_state(
+    store: Arc<registry_coordinator::store::Store>,
+    runtime: &Arc<RuntimeConfig>,
+    workflows: &Arc<deployment::Workflows>,
+) -> HttpState {
     let authenticator = Arc::new(
         deployment::config(runtime)
             .unwrap()
@@ -3023,7 +3118,7 @@ async fn runtime_http_state(
     );
     HttpState {
         recovery_only: false,
-        store: deployment::open(runtime, false).await.unwrap(),
+        store,
         runtime: runtime.clone(),
         workflows: workflows.clone(),
         authenticator,
@@ -5308,4 +5403,331 @@ def job_id(value: Outcome) -> str:
         drop(state);
         f.stop().await;
     }
+}
+
+/// The hold audit entries for runs whose retained definition does not restore.
+fn definition_refused_audit(path: &std::path::Path) -> Vec<Value> {
+    fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|entry| entry["record"]["action"] == "definition-refused")
+        .collect()
+}
+
+/// One reported held run names the run, its workflow and revision, the
+/// original finding and operator advice, never the authoring suggestion.
+fn assert_held_run(entry: &Value, run: Uuid, revision: &str) {
+    assert_eq!(entry["runId"], run.to_string(), "{entry}");
+    assert_eq!(entry["workflow"], DELAYED, "{entry}");
+    assert_eq!(entry["workflowRevision"], revision, "{entry}");
+    assert_eq!(entry["reason"], "definition-refused", "{entry}");
+    assert_eq!(entry["findingCode"], refused_snapshot::FINDING, "{entry}");
+    let advice = entry["advice"].as_str().unwrap();
+    assert!(
+        advice.contains("\"Apply and start\"") && advice.contains("DEPLOYMENT.md"),
+        "{advice}"
+    );
+    assert!(!advice.contains("Map request"), "{advice}");
+    assert!(
+        advice.contains("release that accepts its definition")
+            && advice.contains("deployment-status"),
+        "{advice}"
+    );
+}
+
+/// A retained run whose definition this version no longer restores is held
+/// on its own. The deployment keeps serving, admitting and progressing every
+/// other run, nothing runs for the held run, and operators find it with its
+/// reason before and after the upgrade.
+#[tokio::test]
+async fn a_run_whose_retained_definition_does_not_restore_is_held_alone() {
+    let f = TwoFlowFixture::start().await;
+    let delayed_v1 = f.pin(&f.delayed_project, "held-delayed-v1");
+    let (path, runtime, workflows) = f.runtime("held.yaml", json!([delayed_v1]));
+    let migration = deployment::open_ctl(&runtime, true).await.unwrap();
+    deployment::apply(&migration, &runtime, &workflows, &[])
+        .await
+        .unwrap();
+
+    // Two due runs. The earlier one stands for a run admitted under a package
+    // that an earlier version accepted and this version refuses.
+    let (origin, server) = serve_runtime(&runtime, &workflows).await;
+    let http = reqwest::Client::new();
+    let producer = f.token("producer-a", "owner-a", "coordinator:start");
+    let operator = f.token("operator", "operator", "coordinator:operate");
+    let input = |minutes: i64| json!({"applicationId":"00000000-0000-4000-8000-000000000001","sendAfter":(Utc::now()+chrono::Duration::minutes(minutes)).to_rfc3339()});
+    let (status, body) = start_run(&http, &origin, &producer, "held", DELAYED, input(-2)).await;
+    assert_eq!(status, 200, "{body}");
+    let held = Uuid::parse_str(body["runId"].as_str().unwrap()).unwrap();
+    let revision = body["workflowRevision"].as_str().unwrap().to_owned();
+    let (status, body) = start_run(&http, &origin, &producer, "healthy", DELAYED, input(-1)).await;
+    assert_eq!(status, 200, "{body}");
+    let healthy = Uuid::parse_str(body["runId"].as_str().unwrap()).unwrap();
+    server.abort();
+    let _ = server.await;
+    f.replace_snapshot(held, &refused_snapshot::not_run_owned(), &[81; 32])
+        .await;
+    let before = f.run_progress(held).await;
+    assert_eq!(
+        (
+            before.2.as_str(),
+            before.3.as_str(),
+            before.4,
+            before.5,
+            before.6
+        ),
+        ("due", "pending", 0, false, false)
+    );
+    assert_eq!(before.1, None);
+
+    // The preflight reports the run and changes nothing.
+    let checked = local_cli(&path, "deployment-status", true);
+    let reported = checked["heldRuns"].as_array().expect("heldRuns");
+    assert_eq!(reported.len(), 1, "{checked}");
+    assert_held_run(&reported[0], held, &revision);
+    assert_eq!(
+        f.run_progress(held).await,
+        before,
+        "the preflight holds nothing"
+    );
+
+    // Startup serves. It holds only the refused run and audits that once,
+    // before the hold, by reference.
+    let audit_path = f.root_path.join("audit.jsonl");
+    assert!(definition_refused_audit(&audit_path).is_empty());
+    let store = deployment::open(&runtime, false).await.unwrap();
+    for (_, package) in workflows.iter() {
+        store
+            .definitions()
+            .seed(package.definition.clone())
+            .unwrap();
+    }
+    deployment::check_serving(&store, &runtime, workflows.digest())
+        .await
+        .expect("startup serves with a held run");
+    let held_state = f.run_progress(held).await;
+    assert_eq!(
+        held_state,
+        (
+            "attention".to_owned(),
+            Some("definition-refused".to_owned()),
+            "due".to_owned(),
+            "pending".to_owned(),
+            0,
+            false,
+            false
+        )
+    );
+    assert_eq!(f.run_progress(healthy).await.1, None);
+    let audited = definition_refused_audit(&audit_path);
+    assert_eq!(audited.len(), 2, "{audited:?}");
+    assert_eq!(audited[0]["phase"], "request");
+    assert_eq!(audited[1]["phase"], "response");
+    assert_eq!(audited[0]["correlation"], audited[1]["correlation"]);
+    assert_eq!(
+        audited[0]["record"]["findingCode"],
+        refused_snapshot::FINDING
+    );
+    assert_eq!(audited[1]["record"]["outcome"], "held");
+    for entry in &audited {
+        assert!(!entry.to_string().contains(&held.to_string()), "{entry}");
+    }
+    deployment::check_serving(&store, &runtime, workflows.digest())
+        .await
+        .unwrap();
+    assert_eq!(
+        definition_refused_audit(&audit_path).len(),
+        2,
+        "a held run is audited once"
+    );
+
+    // Readiness, a new admission and the healthy run carry on; the held run,
+    // although due first, is never claimed.
+    let (origin, server) =
+        serve_fixture(store_http_state(store.clone(), &runtime, &workflows).await).await;
+    let ready = http.get(format!("{origin}/ready")).send().await.unwrap();
+    assert_eq!(ready.status(), 200);
+    let (status, body) =
+        start_run(&http, &origin, &producer, "after-hold", DELAYED, input(20)).await;
+    assert_eq!(status, 200, "{body}");
+    let adapters: Arc<dyn registry_coordinator::protocol::AdapterSet> =
+        Arc::new(HttpAdapters::new(&runtime).unwrap());
+    let worker = registry_coordinator::worker::Worker::new(store.clone(), adapters);
+    assert!(worker.tick().await.unwrap());
+    assert_eq!(f.run_progress(healthy).await.2, "read-application");
+    assert_eq!(f.run_progress(held).await, held_state);
+
+    // Operators see the held run and its reason in status, the attention
+    // list, inspection and doctor.
+    let status: Value = http
+        .get(format!("{origin}/v1/runs/{held}"))
+        .bearer_auth(&operator)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        (status["state"].as_str(), status["failureCode"].as_str()),
+        (Some("attention"), Some("definition-refused")),
+        "{status}"
+    );
+    let page: Value = http
+        .get(format!("{origin}/v1/runs?limit=10&attention=true"))
+        .bearer_auth(&operator)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let attention = page["runs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|run| run["runId"].as_str().unwrap().to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(attention, vec![held.to_string()], "{page}");
+    let response = http
+        .get(format!("{origin}/v1/runs/{held}/inspect"))
+        .bearer_auth(&operator)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let inspection: Value = response.json().await.unwrap();
+    assert_eq!(
+        inspection["recovery"]["retryAllowed"], false,
+        "{inspection}"
+    );
+    assert_eq!(
+        inspection["recovery"]["reason"], "snapshot-incompatible",
+        "{inspection}"
+    );
+    let doctor: Value = http
+        .get(format!("{origin}/v1/doctor"))
+        .bearer_auth(&operator)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(doctor["activationReady"], true, "{doctor}");
+    assert_eq!(doctor["state"]["heldRunCount"], 1, "{doctor}");
+    let reported = doctor["state"]["heldRuns"].as_array().unwrap();
+    assert_eq!(reported.len(), 1, "{doctor}");
+    assert_held_run(&reported[0], held, &revision);
+
+    // Retry, reconcile and cancel refuse the held run with its reason; the
+    // refused definition's cleanup never runs.
+    for action in ["retry-same", "reconcile", "cancel"] {
+        let response = http
+            .post(format!("{origin}/v1/runs/{held}/{action}"))
+            .bearer_auth(&operator)
+            .json(&json!({"reason":"held-run"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 409, "{action}");
+        assert_eq!(
+            response.json::<Value>().await.unwrap()["code"],
+            "run.definition-incompatible",
+            "{action}"
+        );
+    }
+    assert_eq!(f.run_progress(held).await, held_state);
+    server.abort();
+    let _ = server.await;
+
+    // A corrected package applies while the run stays held.
+    let workflow_path = f.delayed_project.join("workflow.yaml");
+    let mut workflow: Value = yaml_value(
+        &fs::read_to_string(&workflow_path).unwrap(),
+        registry_coordinator::authoring::API_VERSION,
+        registry_coordinator::authoring::KIND,
+    )
+    .unwrap();
+    workflow["project"]["version"] = json!("2");
+    let deadline = workflow["workflow"]["deadlineSeconds"].as_u64().unwrap();
+    workflow["workflow"]["deadlineSeconds"] = json!(deadline + 1);
+    fs::write(&workflow_path, serde_norway::to_string(&workflow).unwrap()).unwrap();
+    let delayed_v2 = f.pin(&f.delayed_project, "held-delayed-v2");
+    let (_, runtime_v2, workflows_v2) = f.runtime("held-v2.yaml", json!([delayed_v2]));
+    // The first apply's store still owns the apply audit companion.
+    drop(migration);
+    let migration = deployment::open_ctl(&runtime_v2, true).await.unwrap();
+    let applied = deployment::apply(&migration, &runtime_v2, &workflows_v2, &[])
+        .await
+        .expect("apply is not refused because a run is held");
+    assert_eq!(changes(&applied), pairs(&[(DELAYED, "replace")]));
+    assert_eq!(f.run_progress(held).await, held_state);
+    f.stop().await;
+}
+
+/// Only a definite definition refusal holds a run. A retained snapshot that
+/// does not open, or a store that is unavailable, fails the check as before
+/// and holds nothing, and a run whose snapshot opens again is not held.
+#[tokio::test]
+async fn an_unreadable_snapshot_or_store_outage_fails_the_check_and_holds_nothing() {
+    let f = TwoFlowFixture::start().await;
+    let delayed = f.pin(&f.delayed_project, "outage-delayed");
+    let (path, runtime, workflows) = f.runtime("outage.yaml", json!([delayed]));
+    let migration = deployment::open_ctl(&runtime, true).await.unwrap();
+    deployment::apply(&migration, &runtime, &workflows, &[])
+        .await
+        .unwrap();
+    let (origin, server) = serve_runtime(&runtime, &workflows).await;
+    let http = reqwest::Client::new();
+    let producer = f.token("producer-a", "owner-a", "coordinator:start");
+    let input = json!({"applicationId":"00000000-0000-4000-8000-000000000001","sendAfter":(Utc::now()+chrono::Duration::minutes(20)).to_rfc3339()});
+    let (status, body) = start_run(&http, &origin, &producer, "outage", DELAYED, input).await;
+    assert_eq!(status, 200, "{body}");
+    let run = Uuid::parse_str(body["runId"].as_str().unwrap()).unwrap();
+    server.abort();
+    let _ = server.await;
+    let original = f.sealed_snapshot(run).await;
+    let before = f.run_progress(run).await;
+    let store = deployment::open(&runtime, false).await.unwrap();
+
+    // A snapshot sealed under another key does not open. That is a custody
+    // failure, whatever the snapshot holds.
+    // The status report runs first: this test blocks on that process, so no
+    // refused in-process transaction may still be waiting for its rollback.
+    f.replace_snapshot(run, &refused_snapshot::not_run_owned(), &[99; 32])
+        .await;
+    let report = local_cli(&path, "deployment-status", false);
+    assert_ne!(
+        report["diagnostics"][0]["code"], "coordinator.command.definition-refused",
+        "{report}"
+    );
+    let refusal = deployment::check_serving(&store, &runtime, workflows.digest())
+        .await
+        .unwrap_err();
+    assert_ne!(refusal.code, "definition-refused", "{refusal:?}");
+    assert_ne!(refusal.code, refused_snapshot::FINDING, "{refusal:?}");
+    assert_eq!(f.run_progress(run).await, before);
+
+    // Once the snapshot opens again, the run restores and is not held.
+    f.set_sealed_snapshot(run, &original).await;
+    deployment::check_serving(&store, &runtime, workflows.digest())
+        .await
+        .unwrap();
+    assert_eq!(f.run_progress(run).await, before);
+
+    // A store outage fails the check as unavailable, even with a refused
+    // snapshot retained, and holds nothing.
+    f.replace_snapshot(run, &refused_snapshot::not_run_owned(), &[81; 32])
+        .await;
+    f.disconnect_runtime_role().await;
+    let refusal = deployment::check_serving(&store, &runtime, workflows.digest())
+        .await
+        .unwrap_err();
+    assert_eq!(refusal.code, "store-unavailable", "{refusal:?}");
+    f.reconnect_runtime_role().await;
+    assert_eq!(f.run_progress(run).await, before);
+    assert!(definition_refused_audit(&f.root_path.join("audit.jsonl")).is_empty());
+    f.stop().await;
 }

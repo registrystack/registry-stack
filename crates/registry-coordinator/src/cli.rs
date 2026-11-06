@@ -843,9 +843,9 @@ async fn execute(cli: &Cli) -> Result<Value> {
             let workflows = deployment::load_workflows(deployment::config(&r)?)?;
             workflows.validate(&r)?;
             let store = deployment::open_ctl(&r, false).await?;
-            let active = deployment::check_serving(&store, &r, workflows.digest()).await?;
+            let (active, held_runs) = deployment::check_status(&store, &r, workflows.digest()).await?;
             let d = deployment::config(&r)?;
-            Ok(json!({"status":"checked","databaseId":d.database_id,"workflowsDigest":workflows.digest(),"workflows":workflows.package_digests(),"schemaVersion":crate::store::SCHEMA_VERSION,"runtimeRole":d.runtime_role,"active":active}))
+            Ok(json!({"status":"checked","databaseId":d.database_id,"workflowsDigest":workflows.digest(),"workflows":workflows.package_digests(),"schemaVersion":crate::store::SCHEMA_VERSION,"runtimeRole":d.runtime_role,"active":active,"heldRuns":held_runs}))
         }
         Command::Openapi => Ok(http::openapi()),
         Command::Types { project, language, output } => {

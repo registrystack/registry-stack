@@ -22,6 +22,46 @@ pub struct DoctorStatus {
     pub terminal_payloads: i64,
     pub oldest_terminal_payload_at: Option<DateTime<Utc>>,
     pub proposal_waits_by_turn: ProposalWaitsByTurn,
+    /// Live runs whose retained definition this version does not restore.
+    pub held_run_count: i64,
+    /// The first of those runs by run id, at most [`HELD_RUNS_LISTED`].
+    pub held_runs: Vec<HeldRun>,
+}
+
+/// The most held runs one doctor report lists.
+pub const HELD_RUNS_LISTED: usize = 100;
+
+/// A live run held because this version does not restore its retained
+/// definition. Nothing runs for it; every other run continues.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HeldRun {
+    pub run_id: Uuid,
+    pub workflow: String,
+    pub workflow_revision: String,
+    /// Always `definition-refused`.
+    pub reason: &'static str,
+    /// The restore finding, for example `definition.review-request-not-run-owned`.
+    pub finding_code: String,
+    pub advice: &'static str,
+}
+
+impl HeldRun {
+    fn new(
+        run_id: Uuid,
+        workflow: String,
+        workflow_revision: String,
+        finding: &CoordinatorError,
+    ) -> Self {
+        Self {
+            run_id,
+            workflow,
+            workflow_revision,
+            reason: DEFINITION_REFUSED,
+            finding_code: finding.code.clone(),
+            advice: HELD_RUN_ADVICE,
+        }
+    }
 }
 
 /// BReg Proposal waits counted by the turn their last answered read showed,
@@ -271,7 +311,7 @@ impl Store {
             let row = tx
                 .query_one(
                     &format!(
-                        "SELECT snapshot FROM {}.runs WHERE run_id=$1",
+                        "SELECT snapshot,workflow_id FROM {}.runs WHERE run_id=$1",
                         self.namespace
                     ),
                     &[&run],
@@ -291,6 +331,7 @@ impl Store {
                 })?,
             )?;
             self.definition(&snapshot)
+                .map_err(|finding| Definition::run_refused(&finding, run, row.get(1)))
         })
         .await
     }
@@ -400,20 +441,30 @@ impl Store {
             self.authorize_run(&tx,run,actor).await?;
             // Match Dispatch's job-then-run lock order. The product stop flag
             // fences every subsequent I/O check and next-step enqueue.
-            let row=tx.query_one(&format!("SELECT j.step,j.state,j.uncertain,r.state,r.restore_review_required,r.snapshot,r.authored_cancel_requested,EXISTS(SELECT 1 FROM {0}.completion_waits w WHERE w.run_id=j.run_id AND w.step=j.step) FROM {0}.jobs j JOIN {0}.runs r ON r.run_id=j.run_id AND r.step=j.step WHERE j.run_id=$1 FOR UPDATE OF j,r",self.namespace),&[&run]).await.map_err(unavailable)?;
+            let row=tx.query_one(&format!("SELECT j.step,j.state,j.uncertain,r.state,r.restore_review_required,r.snapshot,r.authored_cancel_requested,EXISTS(SELECT 1 FROM {0}.completion_waits w WHERE w.run_id=j.run_id AND w.step=j.step),r.workflow_id FROM {0}.jobs j JOIN {0}.runs r ON r.run_id=j.run_id AND r.step=j.step WHERE j.run_id=$1 FOR UPDATE OF j,r",self.namespace),&[&run]).await.map_err(unavailable)?;
             let step:String=row.get(0);let state:String=row.get(1);
+            let settled_failure=row.get::<_,String>(3)=="failed" && state=="delivered" && !row.get::<_,bool>(2) && !row.get::<_,bool>(4);
+            let live=!settled_failure && !matches!(row.get::<_,String>(3).as_str(),"finished"|"cancelled"|"cancelled-after-effect");
+            let waiting=row.get::<_,bool>(7);
+            // A live run whose retained definition this version refuses is
+            // held: cancel refuses it like retry and reconcile, so neither the
+            // refused definition's cleanup nor any other cancel step runs.
+            let snapshot:Option<Value>=row.get(5);
+            let definition=match snapshot.as_ref() {
+                Some(sealed) if live || waiting => {
+                    let snapshot=self.open_value::<String>(run,"snapshot","",sealed).map_err(unavailable)?;
+                    Some(self.definition(&snapshot).map_err(|finding|Definition::run_refused(&finding,run,row.get(8)))?)
+                }
+                None if waiting => return Err(unavailable("active wait has no snapshot")),
+                _ => None,
+            };
             if row.get::<_,bool>(6) {
                 tx.commit().await.map_err(unavailable)?;
                 drop(client);
                 return self.status(run).await;
             }
-            let snapshot:Option<Value>=row.get(5);
-            let authored=if row.get::<_,bool>(7) {
-                let sealed=snapshot.as_ref().ok_or_else(||unavailable("active wait has no snapshot"))?;
-                let snapshot=self.open_value::<String>(run,"snapshot","",sealed).map_err(unavailable)?;
-                Some(self.definition(&snapshot).map_err(unavailable)?)
-            } else { None };
-            if let Some(definition)=authored.as_ref().filter(|definition|matches!(definition.workflow.steps.get(&step),Some(Step::WaitFor{on_cancel:Some(_),..}))) {
+            let authored=definition.as_ref().filter(|_|waiting);
+            if let Some(definition)=authored.filter(|definition|matches!(definition.workflow.steps.get(&step),Some(Step::WaitFor{on_cancel:Some(_),..}))) {
                 if state=="leased" {
                     tx.execute(&format!("UPDATE {}.runs SET authored_cancel_requested=true,authored_cancel_pending_step=$2 WHERE run_id=$1 AND step=$2",self.namespace),&[&run,&step]).await.map_err(unavailable)?;
                 } else {
@@ -423,9 +474,8 @@ impl Store {
                 drop(client);
                 return self.status(run).await;
             }
-            let settled_failure=row.get::<_,String>(3)=="failed" && state=="delivered" && !row.get::<_,bool>(2) && !row.get::<_,bool>(4);
             let mut cancelled=false;
-            if !settled_failure && !matches!(row.get::<_,String>(3).as_str(),"finished"|"cancelled"|"cancelled-after-effect") {
+            if live {
                 let next=if row.get::<_,bool>(2)||state=="leased"||row.get::<_,bool>(4) {"attention"} else if state=="pending" {"cancel-requested"} else {"cancelled"};
                 tx.execute(&format!("UPDATE {}.runs SET cancel_requested=true,state=$2,completed_at=CASE WHEN $2='cancelled' THEN transaction_timestamp() ELSE completed_at END WHERE run_id=$1",self.namespace),&[&run,&next]).await.map_err(unavailable)?;
                 cancelled=next=="cancelled";
@@ -452,15 +502,18 @@ impl Store {
             let mut client=self.client().await.map_err(unavailable)?;
             let tx=client.transaction().await.map_err(unavailable)?;
             self.authorize_run(&tx,run,actor).await?;
-            let row=tx.query_one(&format!("SELECT r.step,r.snapshot,j.command,j.generation,j.state,r.outputs,r.binding_digest,j.lease_expires_at>clock_timestamp() FROM {}.runs r JOIN {}.jobs j ON j.run_id=r.run_id AND j.step=r.step WHERE r.run_id=$1",self.namespace,self.namespace),&[&run]).await.map_err(unavailable)?;
+            let row=tx.query_one(&format!("SELECT r.step,r.snapshot,j.command,j.generation,j.state,r.outputs,r.binding_digest,j.lease_expires_at>clock_timestamp(),r.workflow_id FROM {}.runs r JOIN {}.jobs j ON j.run_id=r.run_id AND j.step=r.step WHERE r.run_id=$1",self.namespace,self.namespace),&[&run]).await.map_err(unavailable)?;
             let step:String=row.get(0);let generation:i64=row.get(3);
             if row.get::<_,String>(6)!=binding || row.get::<_,String>(4)=="leased" && row.get::<_,Option<bool>>(7).unwrap_or(true){return Err(refused("reconcile-refused","preserve the original binding and wait for the active lease to settle"));}
+            // A run whose retained definition does not restore is refused with
+            // that reason before anything about its command is considered.
+            let snapshot:Option<String>=row.get::<_,Option<Value>>(1).map(|sealed|self.open_value(run,"snapshot","",&sealed)).transpose()?;
+            let definition=snapshot.as_deref().map(|snapshot|self.definition(snapshot).map_err(|finding|Definition::run_refused(&finding,run,row.get(8)))).transpose()?;
             let sealed:Option<Value>=row.get(2);
             let command:FrozenCommand=self.open_value(run,"command",&step,sealed.as_ref().ok_or_else(||refused("reconcile-refused","the run has no prepared product command"))?)?;
             if command.request().operation.is_read(){return Err(refused("reconcile-refused","use same-command retry for a read operation"));}
             if !command.request().operation.supports_read_receipt(){return Err(refused("reconciliation-unavailable","this operation has no authoritative original-result lookup; inspect its declared recovery capability or cancel the held run"));}
-            let snapshot:String=self.open_value(run,"snapshot","",&row.get::<_,Value>(1))?;
-            let definition=self.definition(&snapshot)?;
+            let (Some(snapshot),Some(definition))=(snapshot,definition) else{return Err(refused("payload-erased","only the spent-key tombstone is retained"));};
             let Some(Step::Call{call,next,..})=definition.workflow.steps.get(&step) else{return Err(refused("definition-invalid","pinned step is not a product call"));};
             if !command.matches_call(&definition,call){return Err(refused("reconcile-refused","the original command does not match its pinned operation; preserve the held run for investigation"));}
             let contract=definition.operation_contract(call)?;
@@ -505,26 +558,64 @@ impl Store {
     pub(super) fn terminal_retention_predicate(&self) -> String {
         format!("(r.state IN ('finished','cancelled','cancelled-after-effect','expired') OR (r.state='failed' AND EXISTS(SELECT 1 FROM {0}.jobs current_job WHERE current_job.run_id=r.run_id AND current_job.step=r.step AND current_job.state='delivered'))) AND NOT EXISTS(SELECT 1 FROM {0}.jobs j WHERE j.run_id=r.run_id AND (j.uncertain OR j.state IN ('pending','leased','unknown')))", self.namespace)
     }
-    /// Serialize service startup/status checks with activation and admission.
+    /// Serialize service startup and readiness checks with activation and
+    /// admission, then hold each retained run whose definition this version
+    /// refuses.
     pub(crate) async fn check_runtime_bindings(
         &self,
         runtime: &crate::runtime::RuntimeConfig,
     ) -> Result<()> {
         let mut client = self.client().await.map_err(unavailable)?;
         let tx = client.transaction().await.map_err(unavailable)?;
-        self.check_live_bindings(&tx, runtime).await?;
+        self.lock_admissions(&tx).await?;
+        let refused = self
+            .scan_live_definitions(&tx, Some(runtime), false)
+            .await?;
         self.verify_transaction(&tx).await.map_err(unavailable)?;
-        tx.commit().await.map_err(unavailable)
+        tx.commit().await.map_err(unavailable)?;
+        drop(client);
+        for run in &refused {
+            self.hold_definition_refused(run.run_id, &run.finding_code)
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// The same check for an operator's status report, which holds nothing:
+    /// the report may observe a deployment an earlier version still serves.
+    /// It returns every live run whose retained definition this version
+    /// refuses, held or not.
+    pub(crate) async fn observe_runtime_bindings(
+        &self,
+        runtime: &crate::runtime::RuntimeConfig,
+    ) -> Result<Vec<HeldRun>> {
+        let mut client = self.client().await.map_err(unavailable)?;
+        let tx = client.transaction().await.map_err(unavailable)?;
+        self.lock_admissions(&tx).await?;
+        let refused = self.scan_live_definitions(&tx, Some(runtime), true).await?;
+        self.verify_transaction(&tx).await.map_err(unavailable)?;
+        tx.commit().await.map_err(unavailable)?;
+        Ok(refused)
     }
 
     /// Validate each retained live definition against its own logical bindings.
     /// Called after activation audit intent, while the activation transaction
     /// holds admission_lock so new runs cannot invalidate the observation.
+    /// A run whose definition this version refuses does not stop the check
+    /// and is not held here: the serving check holds it, and admission and
+    /// apply proceed without it. Runs already held are not scanned again.
     pub(crate) async fn check_live_bindings(
         &self,
         tx: &Transaction<'_>,
         runtime: &crate::runtime::RuntimeConfig,
     ) -> Result<()> {
+        self.lock_admissions(tx).await?;
+        self.scan_live_definitions(tx, Some(runtime), false)
+            .await
+            .map(|_left_to_the_serving_check| ())
+    }
+
+    async fn lock_admissions(&self, tx: &Transaction<'_>) -> Result<()> {
         tx.query_one(
             &format!(
                 "SELECT id FROM {}.admission_lock WHERE id FOR UPDATE",
@@ -534,17 +625,40 @@ impl Store {
         )
         .await
         .map_err(unavailable)?;
+        Ok(())
+    }
+
+    /// Restore each retained live definition and, given a runtime, check the
+    /// restored ones against their original bindings. Return the runs whose
+    /// definition this version refuses. Compiling a definition does no I/O,
+    /// so a refusal is definite; a snapshot that cannot be read or opened, or
+    /// a store that cannot answer, fails the whole scan instead.
+    async fn scan_live_definitions(
+        &self,
+        tx: &Transaction<'_>,
+        runtime: Option<&crate::runtime::RuntimeConfig>,
+        include_held: bool,
+    ) -> Result<Vec<HeldRun>> {
+        let mut found = Vec::new();
         let mut after = Uuid::nil();
         loop {
-            let rows=tx.query(&format!("SELECT r.run_id,r.snapshot,r.binding_digest FROM {}.runs r WHERE r.run_id>$1 AND r.payload_erased_at IS NULL AND (NOT ({}) OR r.restore_review_required) ORDER BY r.run_id LIMIT 100",self.namespace,self.terminal_retention_predicate()),&[&after]).await.map_err(unavailable)?;
+            let rows=tx.query(&format!("SELECT r.run_id,r.snapshot,r.binding_digest,r.workflow_id,r.definition_digest FROM {}.runs r WHERE r.run_id>$1 AND r.payload_erased_at IS NULL AND ($2 OR r.failure_code IS DISTINCT FROM '{DEFINITION_REFUSED}') AND (NOT ({}) OR r.restore_review_required) ORDER BY r.run_id LIMIT 100",self.namespace,self.terminal_retention_predicate()),&[&after,&include_held]).await.map_err(unavailable)?;
             if rows.is_empty() {
                 break;
             }
             for row in &rows {
                 let id: Uuid = row.get(0);
+                after = id;
                 let snapshot: String =
                     self.open_value(id, "snapshot", "", &row.get::<_, Value>(1))?;
-                let definition = self.definition(&snapshot)?;
+                let definition = match self.definition(&snapshot) {
+                    Ok(definition) => definition,
+                    Err(finding) => {
+                        found.push(HeldRun::new(id, row.get(3), row.get(4), &finding));
+                        continue;
+                    }
+                };
+                let Some(runtime) = runtime else { continue };
                 let advice = "a live run requires its original connections; restore those bindings before normal serving or apply, or start --recovery-only to investigate without admissions or dispatch";
                 let digest = runtime
                     .binding_digest_for(&definition.workflow)
@@ -552,10 +666,56 @@ impl Store {
                 if digest != row.get::<_, String>(2) {
                     return Err(refused("live-binding-conflict", advice));
                 }
-                after = id;
             }
         }
-        Ok(())
+        Ok(found)
+    }
+
+    /// Hold one run whose retained definition this version refuses. The
+    /// audit request is durable before the hold commits. A run already held,
+    /// erased or settled is left as it is and audited no further. The hold
+    /// changes only the run's state and failure code, clearing the failure
+    /// path that described the earlier code: its jobs, uncertainty, prepared
+    /// commands, spent keys and restore-review mark are kept.
+    pub(crate) async fn hold_definition_refused(&self, run: Uuid, finding: &str) -> Result<()> {
+        let mut client = self.client().await.map_err(unavailable)?;
+        let tx = client.transaction().await.map_err(unavailable)?;
+        self.verify_transaction(&tx).await.map_err(unavailable)?;
+        let Some(row) = tx.query_opt(&format!("SELECT r.step FROM {}.runs r WHERE r.run_id=$1 AND r.payload_erased_at IS NULL AND r.failure_code IS DISTINCT FROM '{DEFINITION_REFUSED}' AND NOT ({}) FOR UPDATE OF r",self.namespace,self.terminal_retention_predicate()),&[&run]).await.map_err(unavailable)? else {
+            return Ok(());
+        };
+        let step: String = row.get(0);
+        let request = self
+            .security
+            .audit
+            .begin(
+                AUDIT_SCHEMA,
+                Uuid::new_v4().to_string(),
+                json!({"action":DEFINITION_REFUSED,"runRef":self.reference("run-v1",&run.to_string()),"stepRef":self.reference("step-v1",&step),"findingCode":finding}),
+                json!({"action":DEFINITION_REFUSED,"outcome":"unknown"}),
+            )
+            .await
+            .map_err(|_| refused("audit-unavailable", "durable audit is unavailable"))?;
+        let held = async {
+            tx.execute(&format!("UPDATE {}.runs SET state='attention',failure_code='{DEFINITION_REFUSED}',failure_path=NULL WHERE run_id=$1",self.namespace),&[&run]).await.map_err(unavailable)?;
+            tx.commit().await.map_err(unavailable)
+        }
+        .await;
+        request.finish(json!({"action":DEFINITION_REFUSED,"outcome":if held.is_ok(){"held"}else{"unknown"}})).await.map_err(|_|refused("audit-response-unavailable","the hold may have committed; check deployment status before continuing"))?;
+        held
+    }
+
+    /// The live runs whose retained definition this version refuses, held or
+    /// not, counted in full and listed up to `limit` by run id.
+    async fn definition_refused_runs(
+        &self,
+        tx: &Transaction<'_>,
+        limit: usize,
+    ) -> Result<(i64, Vec<HeldRun>)> {
+        let mut refused = self.scan_live_definitions(tx, None, true).await?;
+        let count = i64::try_from(refused.len()).unwrap_or(i64::MAX);
+        refused.truncate(limit);
+        Ok((count, refused))
     }
 
     pub async fn doctor(&self) -> Result<DoctorStatus> {
@@ -592,6 +752,8 @@ impl Store {
         let turns = tx.query_one(&format!(
             "SELECT count(*) FILTER(WHERE last_observation->>'turn'='party'),count(*) FILTER(WHERE last_observation->>'turn'='official'),count(*) FILTER(WHERE last_observation->>'turn'='nobody'),count(*) FILTER(WHERE last_observation IS NULL) FROM {}.completion_waits WHERE follows_proposal",
             self.namespace), &[]).await.map_err(unavailable)?;
+        let (held_run_count, held_runs) =
+            self.definition_refused_runs(&tx, HELD_RUNS_LISTED).await?;
         Ok(DoctorStatus {
             database_id: row.get(0),
             schema_version: row.get(1),
@@ -620,6 +782,8 @@ impl Store {
                 nobody: turns.get(2),
                 unobserved: turns.get(3),
             },
+            held_run_count,
+            held_runs,
         })
     }
     pub async fn set_restore_hold(&self, actor: &Actor, reason: &str) -> Result<()> {
