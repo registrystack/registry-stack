@@ -1205,3 +1205,37 @@ fn a_seal_writes_a_paired_value_free_audit() {
         assert!(!text.contains(protected), "audit holds no {protected}");
     }
 }
+
+#[test]
+fn a_chain_too_large_for_the_reserved_space_refuses_startup() {
+    let pki = seal_pki();
+    let seal = pki
+        .issue_seal_with(SigningAlgorithm::Es256, |params| {
+            params
+                .custom_extensions
+                .push(rcgen::CustomExtension::from_oid_content(
+                    &[1, 3, 6, 1, 4, 1, 55555, 1],
+                    vec![0x5a; 90 * 1024],
+                ));
+        })
+        .unwrap();
+    let fixture = deployment(Some(SealSpec {
+        tsa_url: None,
+        seal,
+        key_of: None,
+    }));
+    let (code, stderr) = refused_startup(&fixture);
+    assert_eq!(
+        code,
+        Some(registry_render::ProblemKind::SealCertificateInvalid.exit_code()),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("render.runtime.seal-chain-too-large"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("/signing/seals/ministry/certificateChainFile"),
+        "{stderr}"
+    );
+}

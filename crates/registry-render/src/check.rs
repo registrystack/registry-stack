@@ -4,7 +4,13 @@
 //! tables as the shared reader read them, label-script font coverage and
 //! per-locale label key sets, every other YAML file of the bundle identified
 //! by its envelope (CFG-CHECK-2), and the runtime file as `serve` reads it,
-//! with no package, secret material, or listener.
+//! with no package, secret material, or listener. With `--environment`, each
+//! seal's certificate chain file is read as well, since a chain is public: an
+//! unreadable or invalid chain, a certificate without a signing key usage,
+//! or a chain too large for the reserved signature space is refused as serve
+//! would refuse it, and a certificate outside its validity or within 30 days
+//! of expiring is a warning. Whether a seal's key matches its certificate is
+//! left to serve, the only reader of the key.
 //! The rendered file closure is governed where a render exists to capture
 //! it: the golden suite pins each acceptance bundle's closure and proves
 //! every file it reads is manifest-governed, and `compile --format json` reports

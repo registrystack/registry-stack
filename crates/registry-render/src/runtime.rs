@@ -656,7 +656,7 @@ pub fn check_runtime_with_bundle(
     audit_root: Option<&Path>,
     manifest: Option<&Manifest>,
 ) -> RuntimeCheck {
-    read_runtime(path, substitute, audit_root, manifest).1
+    read_runtime(path, substitute, audit_root, manifest, substitute).1
 }
 
 /// Load and validate a runtime file through the shared loader, with the
@@ -664,7 +664,7 @@ pub fn check_runtime_with_bundle(
 /// the `sha256:` digest of its effective configuration; a refusal carries
 /// every finding, each positioned in the file and naming its fix.
 pub fn load(path: &Path) -> Result<(RenderRuntime, String), RenderProblem> {
-    match read_runtime(path, true, None, None) {
+    match read_runtime(path, true, None, None, false) {
         (Some(loaded), _) => Ok((loaded.config, loaded.effective_digest)),
         (None, check) => {
             let detail = if check.unavailable {
@@ -681,13 +681,17 @@ pub fn load(path: &Path) -> Result<(RenderRuntime, String), RenderProblem> {
 /// The file read by the shared loader, then the members the loader cannot
 /// judge checked: the bind, the package and secret provider blocks, the
 /// caller key reference, and the audit destination, and, with `audit_root`,
-/// the audit containment proof. The configuration is returned only when
-/// nothing was found.
+/// the audit containment proof. With `seal_chains`, each seal's certificate
+/// chain file is read and checked without its key ([`crate::seal::check_chain`]);
+/// `check --environment` asks for it, and serve does not, since loading a
+/// seal reads the chain and the key together. The configuration is returned
+/// only when nothing was found.
 fn read_runtime(
     path: &Path,
     substitute: bool,
     audit_root: Option<&Path>,
     manifest: Option<&Manifest>,
+    seal_chains: bool,
 ) -> (Option<LoadedRuntimeConfig<RenderRuntime>>, RuntimeCheck) {
     let check = runtime_loader().check_offline::<RenderRuntime>(path, substitute, stand_in_for);
     let mut diagnostics = check.diagnostics.clone();
@@ -730,6 +734,26 @@ fn read_runtime(
                 };
                 diagnostic.severity = binding.severity;
                 diagnostics.push(diagnostic);
+            }
+        }
+        if let (true, Some(signing)) = (seal_chains, &loaded.config.signing) {
+            let now = time::OffsetDateTime::now_utc();
+            for (id, seal) in &signing.seals {
+                let pointer = format!("{}/certificateChainFile", seal_pointer(id.as_str()));
+                if check.defers(&pointer) {
+                    continue;
+                }
+                for finding in crate::seal::check_chain(id.as_str(), seal, now) {
+                    let mut diagnostic = check.error_at(
+                        RUNTIME_KIND,
+                        finding.code,
+                        &pointer,
+                        finding.message,
+                        finding.action.to_owned(),
+                    );
+                    diagnostic.severity = finding.severity;
+                    diagnostics.push(diagnostic);
+                }
             }
         }
         if let (Some(root), false) = (audit_root, audit_refused) {

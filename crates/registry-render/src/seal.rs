@@ -28,7 +28,7 @@ use registry_platform_crypto::{
     KeyReadiness, LocalJwkSigner, PrivateJwk, SigningAlgorithm, SigningProvider, TimestampError,
     MAX_TIMESTAMP_RESPONSE_BYTES,
 };
-use registry_platform_yaml::Diagnostic;
+use registry_platform_yaml::{Diagnostic, Severity};
 use time::OffsetDateTime;
 
 use crate::envelope::SigningPayload;
@@ -203,41 +203,165 @@ fn refusal(
         .with_diagnostics(vec![diagnostic])
 }
 
+/// How long before a seal certificate expires `check` warns about it.
+pub const EXPIRY_WARNING_DAYS: i64 = 30;
+
+/// One finding about a seal's certificate chain file, decided without the
+/// seal's key: the half of loading a seal that an offline check may repeat,
+/// since the chain is public and the key is not read (CFG-CHECK-1). The
+/// message names the failing piece and repeats no value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChainFinding {
+    pub severity: Severity,
+    pub code: &'static str,
+    pub message: String,
+    pub action: &'static str,
+}
+
+fn chain_error(code: &'static str, message: String, action: &'static str) -> ChainFinding {
+    ChainFinding {
+        severity: Severity::Error,
+        code,
+        message,
+        action,
+    }
+}
+
+fn chain_warning(code: &'static str, message: String, action: &'static str) -> ChainFinding {
+    ChainFinding {
+        severity: Severity::Warning,
+        code,
+        message,
+        action,
+    }
+}
+
+/// Read and parse a seal's chain file.
+fn read_chain(id: &str, seal: &SealRuntime) -> Result<CertificateChain, ChainFinding> {
+    let pem = std::fs::read(&seal.certificate_chain_file).map_err(|_| {
+        chain_error(
+            "render.runtime.seal-chain-unreadable",
+            format!("signing.seals.{id}.certificateChainFile cannot be read"),
+            "Mount the PEM certificate chain file at the configured path, readable by serve.",
+        )
+    })?;
+    CertificateChain::from_pem(&pem).map_err(|error| {
+        chain_error(
+            "render.runtime.seal-chain-invalid",
+            format!(
+                "signing.seals.{id}.certificateChainFile is not a usable certificate chain: {}",
+                chain_error_text(&error)
+            ),
+            "Write the seal certificate first, then each issuer in turn, as PEM CERTIFICATE \
+             blocks.",
+        )
+    })
+}
+
+fn usage_finding(id: &str) -> ChainFinding {
+    chain_error(
+        "render.runtime.seal-certificate-usage",
+        format!(
+            "signing.seals.{id}.certificateChainFile names a seal certificate with neither the \
+             digitalSignature nor the nonRepudiation key usage"
+        ),
+        "Use a seal certificate issued with the digitalSignature or nonRepudiation key usage.",
+    )
+}
+
+/// The seal's reserved signature space, refused when it exceeds what a field
+/// may reserve.
+fn reserved_space(
+    id: &str,
+    chain: &CertificateChain,
+    seal: &SealRuntime,
+) -> Result<usize, ChainFinding> {
+    let capacity = contents_capacity(
+        chain.der_len(),
+        chain.leaf_der().len(),
+        seal.timestamp_authority.is_some(),
+    );
+    if capacity > MAX_CONTENTS_CAPACITY {
+        return Err(chain_error(
+            "render.runtime.seal-chain-too-large",
+            format!(
+                "signing.seals.{id}.certificateChainFile is too large for the signature space a \
+                 seal may reserve ({MAX_CONTENTS_CAPACITY} bytes)"
+            ),
+            "List only the seal certificate and the issuers a validator needs to build the path \
+             to the trust anchor.",
+        ));
+    }
+    Ok(capacity)
+}
+
+/// What `check --environment` can say about one seal's chain at `now`
+/// without its key: every refusal serve's load would make from the chain
+/// alone, then a warning for a certificate outside its validity (serve
+/// starts and the seal is unavailable) or within
+/// [`EXPIRY_WARNING_DAYS`] of expiring. Whether the key matches the
+/// certificate is only known to serve, which reads the key.
+pub fn check_chain(id: &str, seal: &SealRuntime, now: OffsetDateTime) -> Vec<ChainFinding> {
+    let chain = match read_chain(id, seal) {
+        Ok(chain) => chain,
+        Err(finding) => return vec![finding],
+    };
+    let mut findings = Vec::new();
+    if !chain.may_sign() {
+        findings.push(usage_finding(id));
+    }
+    if let Err(finding) = reserved_space(id, &chain, seal) {
+        findings.push(finding);
+    }
+    let replace = "Replace the seal certificate and its chain before serving seals; plain \
+                   rendering is unaffected.";
+    if now < chain.not_before() {
+        findings.push(chain_warning(
+            "render.runtime.seal-certificate-not-yet-valid",
+            format!(
+                "signing.seals.{id}.certificateChainFile names a seal certificate that is not yet \
+                 valid; the seal is unavailable until it is"
+            ),
+            "Wait for the certificate's validity to start, or install a certificate valid now.",
+        ));
+    } else if now > chain.not_after() {
+        findings.push(chain_warning(
+            "render.runtime.seal-certificate-expired",
+            format!(
+                "signing.seals.{id}.certificateChainFile names an expired seal certificate; the \
+                 seal is unavailable"
+            ),
+            replace,
+        ));
+    } else if chain.not_after() - now < time::Duration::days(EXPIRY_WARNING_DAYS) {
+        findings.push(chain_warning(
+            "render.runtime.seal-certificate-expiring",
+            format!(
+                "signing.seals.{id}.certificateChainFile names a seal certificate that expires \
+                 within {EXPIRY_WARNING_DAYS} days"
+            ),
+            replace,
+        ));
+    }
+    findings
+}
+
 impl Seal {
     fn load(runtime: &RenderRuntime, id: &str, seal: &SealRuntime) -> Result<Self, RenderProblem> {
-        let certificate = |code: &str, message: String, action: &str| {
+        let certificate = |finding: ChainFinding| {
             refusal(
                 ProblemKind::SealCertificateInvalid,
                 id,
                 "certificateChainFile",
-                code,
-                message,
-                action,
+                finding.code,
+                finding.message,
+                finding.action,
             )
         };
         let key = |kind: ProblemKind, code: &str, message: String, action: &str| {
             refusal(kind, id, "privateKeyRef", code, message, action)
         };
-        let pem = std::fs::read(&seal.certificate_chain_file).map_err(|_| {
-            certificate(
-                "render.runtime.seal-chain-unreadable",
-                format!("signing.seals.{id}.certificateChainFile cannot be read"),
-                "Mount the PEM certificate chain file at the configured path, readable by \
-                 serve.",
-            )
-        })?;
-        let chain = CertificateChain::from_pem(&pem).map_err(|error| {
-            certificate(
-                "render.runtime.seal-chain-invalid",
-                format!(
-                    "signing.seals.{id}.certificateChainFile is not a usable certificate chain: \
-                     {}",
-                    chain_error_text(&error)
-                ),
-                "Write the seal certificate first, then each issuer in turn, as PEM \
-                 CERTIFICATE blocks.",
-            )
-        })?;
+        let chain = read_chain(id, seal).map_err(certificate)?;
         let secret =
             crate::runtime::resolve_secret(runtime, &seal.private_key_ref).map_err(|_| {
                 key(
@@ -298,15 +422,7 @@ impl Seal {
                 ))
             }
             Err(CertificateError::MissingSigningKeyUsage { .. }) => {
-                return Err(certificate(
-                    "render.runtime.seal-certificate-usage",
-                    format!(
-                        "signing.seals.{id}.certificateChainFile names a seal certificate with \
-                         neither the digitalSignature nor the nonRepudiation key usage"
-                    ),
-                    "Use a seal certificate issued with the digitalSignature or nonRepudiation \
-                     key usage.",
-                ))
+                return Err(certificate(usage_finding(id)))
             }
             Err(error) => {
                 return Err(key(
@@ -320,22 +436,7 @@ impl Seal {
                 ))
             }
         }
-        let contents_capacity = contents_capacity(
-            chain.der_len(),
-            chain.leaf_der().len(),
-            seal.timestamp_authority.is_some(),
-        );
-        if contents_capacity > MAX_CONTENTS_CAPACITY {
-            return Err(certificate(
-                "render.runtime.seal-chain-too-large",
-                format!(
-                    "signing.seals.{id}.certificateChainFile is too large for the signature \
-                     space a seal may reserve ({MAX_CONTENTS_CAPACITY} bytes)"
-                ),
-                "List only the seal certificate and the issuers a validator needs to build the \
-                 path to the trust anchor.",
-            ));
-        }
+        let contents_capacity = reserved_space(id, &chain, seal).map_err(certificate)?;
         let timestamp = match &seal.timestamp_authority {
             None => None,
             Some(authority) => Some(TimestampAuthority::new(
