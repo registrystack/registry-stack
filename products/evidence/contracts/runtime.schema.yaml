@@ -286,7 +286,7 @@ properties:
       destination:
         description: >-
           `file`, the default, appends each entry durably to `path` under a single-writer lock
-          and rotates and prunes sealed files; `stdout` writes each entry as one line on
+          and rotates the active file and prunes rotated files; `stdout` writes each entry as one line on
           standard output for a collector that owns durability, rotation, and retention.
         enum:
           - file
@@ -300,14 +300,14 @@ properties:
         $ref: '#/$defs/absolute-path'
       rotateBytes:
         description: >-
-          Size at which the active file is sealed and a fresh one opened; defaults to
+          Size at which the active file is rotated and a fresh one opened; defaults to
           104857600 (100 MiB). File destination only.
         type: integer
         minimum: 1048576
         maximum: 4294967295
       retentionDays:
         description: >-
-          Age in days after which a sealed file is deleted when the writer opens or rotates;
+          Age in days after which a rotated file is deleted when the writer opens or rotates;
           defaults to 90. The active file is never deleted. File destination only.
         type: integer
         minimum: 1
