@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! ASN.1 types this module encodes or reads that no crate in the lockfile
-//! provides: the RFC 3161 time-stamp protocol, the RFC 5035 ESS
-//! signing-certificate-v2 attribute, and the ECDSA-Sig-Value of RFC 5480.
+//! provides: the RFC 3161 time-stamp protocol, the ESS signing-certificate
+//! attributes of RFC 2634 and RFC 5035, and the ECDSA-Sig-Value of RFC 5480.
 
 use cms::content_info::ContentInfo;
 use der::asn1::{BitString, Int, ObjectIdentifier, OctetString, Uint};
@@ -35,6 +35,9 @@ pub(super) mod oid {
     #[cfg(test)]
     pub(crate) const SIGNING_TIME: ObjectIdentifier =
         ObjectIdentifier::new_unwrap("1.2.840.113549.1.9.5");
+    /// id-aa-signingCertificate, RFC 2634 section 5.4.
+    pub(crate) const SIGNING_CERTIFICATE: ObjectIdentifier =
+        ObjectIdentifier::new_unwrap("1.2.840.113549.1.9.16.2.12");
     /// id-aa-signingCertificateV2, RFC 5035 section 3.
     pub(crate) const SIGNING_CERTIFICATE_V2: ObjectIdentifier =
         ObjectIdentifier::new_unwrap("1.2.840.113549.1.9.16.2.47");
@@ -132,6 +135,24 @@ pub(super) struct EssCertIdV2 {
     pub(super) issuer_serial: Option<IssuerSerial>,
 }
 
+/// `SigningCertificate`, RFC 2634 section 5.4: the attribute a timestamp
+/// authority may carry instead of [`SigningCertificateV2`] (RFC 5816).
+#[derive(Clone, Debug, Eq, PartialEq, Sequence)]
+pub(super) struct SigningCertificate {
+    pub(super) certs: Vec<EssCertId>,
+    #[asn1(optional = "true")]
+    pub(super) policies: Option<Vec<PolicyInformation>>,
+}
+
+/// `ESSCertID`, RFC 2634 section 5.4.1: `certHash` is SHA-1 over the
+/// certificate's DER encoding.
+#[derive(Clone, Debug, Eq, PartialEq, Sequence)]
+pub(super) struct EssCertId {
+    pub(super) cert_hash: OctetString,
+    #[asn1(optional = "true")]
+    pub(super) issuer_serial: Option<IssuerSerial>,
+}
+
 /// `IssuerSerial`, RFC 5035 section 4.
 #[derive(Clone, Debug, Eq, PartialEq, Sequence)]
 pub(super) struct IssuerSerial {
@@ -186,7 +207,7 @@ pub(super) struct TimeStampResp {
 #[derive(Clone, Debug, Eq, PartialEq, Sequence)]
 pub(super) struct TstInfo {
     pub(super) version: u8,
-    pub(super) policy: ObjectIdentifier,
+    pub(super) policy: TsaPolicyId,
     pub(super) message_imprint: MessageImprint,
     pub(super) serial_number: Int,
     pub(super) gen_time: TspGeneralizedTime,
@@ -200,6 +221,64 @@ pub(super) struct TstInfo {
     pub(super) tsa: Option<GeneralName>,
     #[asn1(context_specific = "1", tag_mode = "IMPLICIT", optional = "true")]
     pub(super) extensions: Option<Extensions>,
+}
+
+/// `TSAPolicyId`, RFC 3161 section 2.4.2: an OBJECT IDENTIFIER kept as its
+/// content octets. X.660 allows arcs of any size, and a UUID-form policy
+/// under 2.25 has a 128-bit arc, while `ObjectIdentifier` holds arcs below
+/// 2^32 only. The policy is carried, not interpreted, so its arcs are checked
+/// for well-formed base-128 encoding and not parsed.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct TsaPolicyId(Vec<u8>);
+
+impl TsaPolicyId {
+    #[cfg(test)]
+    pub(super) fn from_content(content: Vec<u8>) -> Self {
+        Self(content)
+    }
+
+    /// X.690 8.19.2: at least one subidentifier, each in the fewest octets
+    /// (no leading 0x80) and ending with an octet whose top bit is clear.
+    fn is_well_formed(content: &[u8]) -> bool {
+        content.last().is_some_and(|last| last & 0x80 == 0)
+            && content
+                .iter()
+                .enumerate()
+                .all(|(at, &octet)| octet != 0x80 || (at > 0 && content[at - 1] & 0x80 != 0))
+    }
+}
+
+impl From<ObjectIdentifier> for TsaPolicyId {
+    fn from(oid: ObjectIdentifier) -> Self {
+        Self(oid.as_bytes().to_vec())
+    }
+}
+
+impl FixedTag for TsaPolicyId {
+    const TAG: Tag = Tag::ObjectIdentifier;
+}
+
+impl<'a> DecodeValue<'a> for TsaPolicyId {
+    fn decode_value<R: Reader<'a>>(reader: &mut R, header: Header) -> der::Result<Self> {
+        let content = reader.read_vec(header.length)?;
+        if !Self::is_well_formed(&content) {
+            return Err(ErrorKind::Value {
+                tag: Tag::ObjectIdentifier,
+            }
+            .into());
+        }
+        Ok(Self(content))
+    }
+}
+
+impl EncodeValue for TsaPolicyId {
+    fn value_len(&self) -> der::Result<Length> {
+        Length::try_from(self.0.len())
+    }
+
+    fn encode_value(&self, writer: &mut impl Writer) -> der::Result<()> {
+        writer.write(&self.0)
+    }
 }
 
 /// `Accuracy`, RFC 3161 section 2.4.2.
