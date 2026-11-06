@@ -130,7 +130,7 @@ Version one is not:
 - a workflow, orchestration, or case-management engine;
 - a general ETL, mapping, or query platform;
 - a runtime policy engine or general PDP;
-- a credential issuance protocol, OID4VCI, credential-status, or wallet service. The SD-JWT VC *response format* of section 15.6 and the holder-bound subject binding mode of section 15.8 are a serialization and a binding of the same assertion, and neither adds a credential lifecycle, a delivery protocol, or a credential status. Credential status is specified only by the optional module of section 15.9 and exists only where that module is enabled. Holder proof is verified by the relying party, through the portable verifier and its offline operator command, and never by the serving process, which issues no challenge and holds no presentation state;
+- a credential issuance protocol, OID4VCI, credential-status, or wallet service. The SD-JWT VC *response format* of section 15.6 and the holder-bound subject binding mode of section 15.8 are a serialization and a binding of the same assertion, and neither adds a credential lifecycle, a delivery protocol, or a credential status. Credential status is specified only by the optional module of section 15.9 and exists only where that module is enabled. Holder proof of a credential Evidence issued is verified by the relying party, through the portable verifier and its offline operator command, and never by the serving process. The serving process issues no challenge and holds no presentation state. The holder-presented source of section 15.10 verifies, as source input, a presentation that a separate protocol service received for another issuer's credential; it changes neither rule;
 - a multi-tenant SaaS control plane;
 - a federation or delegated-evaluation protocol;
 - an AI agent runtime, MCP server, or agent discovery service;
@@ -3108,6 +3108,181 @@ Approval of this section does not approve any of the following:
 14. Publishing status lists to a static host or CDN, which has no push mechanism
     in this design.
 
+### 15.10 Holder-presented credential source
+
+Status: approved profile (2026-11-06), not built. Nothing in this section is a
+Version 1 feature. Delivery is tracked in
+[#2557](https://github.com/registrystack/registry-stack/issues/2557).
+
+A person may hold a credential that another authority issued into a wallet and
+present it to a programme. This profile lets Evidence take that presentation as
+a source, verify it, and answer with an ordinary assertion. A consumer then
+receives one assertion format from one signer, whether a fact came from an
+authoritative source or from a presentation, and can see and enforce which.
+The profile is the presentation counterpart of the signed Evidence source of
+section 9.1, which verifies another deployment's signed answer before
+projection and passes on only its values.
+
+The rationale follows relying-party practice: verify at the moment of use,
+keep the verification decision and the minimum attributes, and keep the
+presented credential only where a law or stated purpose requires it.
+
+#### Roles
+
+- **Wallet protocol service.** A supporting service beside
+  `registry-evidence-oid4vci`. It runs the OpenID4VP exchange: protected
+  session creation that records the creating principal, nonce and request
+  state, a signed request object, DCQL, response decryption, the state check,
+  one accepted response per session, and short expiry. It holds the presentation
+  in memory until Evidence reads it or the result window ends, and never writes
+  it to a database. It retrieves status list tokens and issuer metadata only
+  from addresses its configuration fixes. It never decides issuer trust, never
+  signs an assertion, and holds no registry authority.
+- **Evidence serving process.** It reads the presentation through a fixed
+  source binding, verifies it, then extracts, derives, validates, signs, and
+  audits exactly as for any other source. It issues no challenge, consumes no
+  nonce, and holds no presentation state.
+
+#### The presentation source
+
+A Source may use a built-in wallet presentation host protocol, a sibling of
+the `signed-evidence-v1` protocol of section 9.1, on an authenticated HTTP
+endpoint of the protocol service. The protocol refuses an endpoint whose
+authentication kind is `none`. Its digest-pinned configuration holds the
+channel's issuer allow-list, credential types, disclosed claims, status policy,
+maximum credential age, and subject-link mode. The pack route sends a closed
+request carrying only the session reference and the presenting principal;
+the protocol service answers only when that principal created the session.
+Expected identity attributes, when the channel needs them, reach derivation
+only and are never sent.
+
+Rust verifies the presentation before any route step sees it:
+
+- issuer authentication against the configured allow-list, never against a
+  key or chain the presentation supplies for itself;
+- integrity of every disclosed element or disclosure, with the format's
+  duplicate, decoy, and unreferenced-element rules;
+- validity at the evaluation instant;
+- holder binding against the session context: the nonce, the client
+  identifier, and the format's audience or session transcript;
+- status, as configured;
+- the maximum credential age.
+
+A failure is a dependency failure, never `no-match`, and releases no fact.
+Later route steps see only the closed projection of the disclosed claims the
+configuration declares, plus a closed verification context: the allow-list
+entry that matched, the credential type, and the credential's own issue or
+observation time. Credential bytes, signatures, holder keys, nonces, and status
+references never reach scripts.
+
+Evidence relies on the protocol service for the request context it created. It
+never relies on that service for a credential's authenticity: issuer
+signatures, element integrity, and holder binding are verified in Evidence. A
+compromised protocol service can withhold or misroute a presentation; it
+cannot forge one.
+
+Each verification profile is a separately reviewed part of a pure verification
+library with no network, storage, or clock access, built behind a feature so a
+deployment without wallet sources links none of its format dependencies.
+Candidate profiles are ISO/IEC 18013-5 mdoc, third-party SD-JWT VC, and
+Evidence's own holder-bound SD-JWT VC through the existing portable verifier.
+Their order follows #2557.
+
+#### Channels
+
+A channel says how an assertion's facts were obtained. The vocabulary is closed
+at two values: `source` and `holder-presented`. The word is distinct from an
+Adapter pack route, which names one provider interaction inside a pack.
+
+- A definition declares one or more channels. Each channel binds its own
+  selector profile, so a request's selector profile selects exactly one
+  channel. Startup refuses a definition in which two channels accept the same
+  profile. A `holder-presented` channel acquires through exactly one Source
+  that uses the wallet presentation protocol; a `source` channel never does.
+- There is no fallback between channels. Asking a person to present a
+  credential when a source is unavailable is a workflow decision, never
+  Evidence's.
+- Every assertion carries a signed `channel` member. A `holder-presented`
+  assertion also carries the credential issuer, the credential type, the
+  credential's own issue or observation time, and its subject-link mode. The
+  verification instant is never substituted for a missing credential time; a
+  channel that needs one refuses.
+- A `holder-presented` channel declares a maximum credential age. A consumer
+  may only tighten it.
+- A grant may restrict the channels a caller may use.
+- A consumer declares the channels it accepts and refuses any other. Absence
+  means `source` only, as absence means `audience-scoped` for subject binding
+  modes, so adding a channel to a definition cannot widen what an existing
+  consumer accepts.
+
+Adding the `channel` member changes the closed assertion schema, its verifiers,
+and the clients together.
+
+#### Linking a credential to the subject
+
+Holder binding proves that the presenter controls the wallet key, not that the
+credential is about the person the consumer means. Each `holder-presented`
+channel declares one of two subject-link modes:
+
+- `possession`, for claims that are not about who the person is, such as an
+  age threshold;
+- `attribute-match`, for credentials about the person. The consumer supplies
+  the expected identity attributes as request selectors drawn from its own
+  record. Derivation compares them with the disclosed attributes through a
+  closed Rust primitive that applies a named, versioned normalisation profile
+  (Unicode normalisation and case folding, diacritic removal, hyphen and space
+  removal, and a declared transliteration table), then requires exact equality
+  on the channel's hard fields. Soft fields are reported and never decide. The
+  outcome is a controlled code; a mismatch names the differing fields, never
+  their values.
+
+The comparison is against one expected record, deterministic, and without
+scoring or candidates, within the boundary that section 20 sets for matching.
+Any association the consumer stores after a successful match is the
+consumer's record, not Evidence's.
+
+#### Trust
+
+Each `holder-presented` channel carries an allow-list. An entry names an issuer identity (a trust
+anchor or intermediate with an optional subject constraint, or a pinned issuer
+identifier), the credential types it may issue, and its key source. A deny-list
+is checked first. Trust anchors come from fixed files or from a list of trusted
+entities in the ETSI TS 119 602 format that the operator supplies as
+configuration; Evidence fetches neither. Credential type metadata is pinned
+with its integrity hash and never fetched at verification time.
+
+#### Status
+
+Each `holder-presented` channel declares status as `required` or
+`not-checked`. `not-checked` is an
+explicit, reviewable choice in the governed bundle, never a silent default.
+Under `required`, the protocol service supplies the status list token from a
+configured address, and Evidence verifies it against the issuer's trust with
+the pure status check of the portable verifier. When no valid token is
+available, the request is refused unless the operator has set a bounded offline
+grace.
+
+#### Retention
+
+Neither Evidence nor the protocol service keeps a presentation beyond the
+result window. Evidence audit is unchanged and holds no values. A consumer
+whose policy requires re-verifiable evidence stores the presentation in its own
+document custody under a bounded retention policy.
+
+#### Profile non-goals
+
+- A wallet, holder key custody, or any credential held for a person.
+- Accepting a credential without a configured channel, issuer allow-list
+  entry, and credential type.
+- Fuzzy, scored, or candidate-based matching.
+- Treating scanned documents or machine-extracted document data as a
+  `holder-presented` channel.
+- Serving a `holder-presented` channel as an SD-JWT VC; it answers as signed JWS.
+- DIDComm, AnonCreds, or Data Integrity credentials.
+- The W3C Digital Credentials API, which is a separate follow-on.
+- Any change to the profiles of sections 15.6 and 15.8: their presentation
+  non-goals concern credentials Evidence issues, and remain as written.
+
 ## 16. Initial assertion cases
 
 ### Adult status
@@ -3433,6 +3608,10 @@ The provider owns record meaning and lookup cardinality. Evidence accepts only
 the closed cardinality outcome plus minimized facts on one unique match. A
 reviewed deterministic requirement rule may compare those facts with an
 independently authorized role selector without creating a general matcher.
+The attribute-match link of section 15.10 is such a rule: one expected record
+supplied by the consumer, a named normalisation profile, and exact equality.
+Tolerance thresholds, scoring, or a choice among candidates would be a new
+concept decision.
 
 ### Script and configuration capability creep
 
@@ -3545,6 +3724,12 @@ This concept fixes the following decisions:
     optimization. It requires bundle and runtime `source-batch` capability,
     uses the closed `prepare_batch/2` and `extract_batch/2` ABIs, and otherwise
     leaves all transport authority and fallback behavior with Rust.
+29. A credential a citizen presents from a wallet is a source, not a separate
+    product. Evidence verifies it and signs an ordinary assertion whose signed
+    `channel` member says how the fact was obtained; a supporting protocol
+    service runs the wallet exchange and never signs (section 15.10). One
+    definition may accept several channels, each bound to its own selector
+    profile, with no fallback between them.
 
 ## 22. Production deployment decisions
 

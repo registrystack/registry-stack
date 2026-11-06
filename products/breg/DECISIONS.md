@@ -131,6 +131,21 @@
   requires an accepted audit attempt and records its outcome without assertion
   values. `bregctl evidence-retention erase-expired` remains available for manual
   use; this does not change request or history erasure.
+- A credential a person presents from a wallet reaches BReg only as a signed
+  Evidence assertion, through the holder-presented source of the Evidence
+  concept (section 15.10). Approved on 2026-11-06, not built. BReg gains no
+  intake contract, attachment path, presentation store, or verifier of its own:
+  the session reference is an ordinary subject selector bound to an Action
+  input. Three bounded changes follow. A selector source that BReg fills from
+  the authenticated caller, so Evidence passes the principal that must have
+  created the session. An accepted-channels list on each Action Evidence use,
+  checked against the assertion's signed `channel` member; absence means
+  `source` only, and the use may tighten a channel's maximum credential age.
+  Submit-time acquisition for Proposals, freezing the assertion into the
+  submission so review and Apply see the fact and its channel without a live
+  session. Verified values reach effects only through Evidence outputs, and an
+  Action that requires a presented credential needs the native Create and
+  Patch grants for the same state withheld.
 - `products/breg/starters/` holds ready-made, versioned BReg projects with
   fixed scenarios and synthetic clients, pinned to the same PublicSchema
   draft vocabulary snapshot as `bregctl init --from publicschema`.
