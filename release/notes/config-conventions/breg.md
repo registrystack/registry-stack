@@ -539,7 +539,6 @@ become `breg.package.*`, and `check.package.package_refused` becomes
 | `access_profile.task_grant.invalid` | `breg.access-profile.task-grant-invalid` |
 | `access_profile.task_grant.module_forbidden` | `breg.access-profile.task-grant-module-forbidden` |
 | `access_profile.task_grant.operation_forbidden` | `breg.access-profile.task-grant-operation-forbidden` |
-| `access_profile.task_grant.rows_unbound` | `breg.access-profile.task-grant-rows-unbound` |
 | `action.bounds.field_mutations` | `breg.action.bounds-field-mutations` |
 | `action.bounds.snapshot_bytes` | `breg.action.bounds-snapshot-bytes` |
 | `action.bounds.snapshot_unknown` | `breg.action.bounds-snapshot-unknown` |
