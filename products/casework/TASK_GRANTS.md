@@ -6,6 +6,11 @@ Casework grants only from ReviewTask. The trusted producer remains authoritative
 for the subject and proposal; the resource server independently authorizes and
 commits the agent's operation.
 
+A grant subject binds a row only where the resource server's profile authors a
+boundary on that key; for BReg, that is a row boundary on the identity key the
+template's `subjects` names. Casework cannot check this, because it never sees
+that profile.
+
 ## Declare templates
 
 Add `taskTemplates` to the Casework project. Each template declares:

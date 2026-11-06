@@ -138,6 +138,13 @@ the command. The source issuer must guarantee that its manager identifiers are
 stable and never reassigned. Beneficiary and organization references are
 booking data and never substitute for this verified binding.
 
+Ordinary grant bookings, those without `manager`, are owned by the agent's
+verified issuer and subject. Grant `subjects` are compared only for the
+task-grant status check and for the `schedulingManager` selector. External
+references, party references and `duplicateKey` values are caller booking data
+and are never compared with grant `subjects`, so a grant for one person does not
+stop its holder from booking with another person's references.
+
 Creating an assisted hold requires `hold.create-for`; direct creation and
 confirmation of an assisted hold require `appointment.create-for`. Release,
 reschedule and cancellation use their existing actions. Every assisted

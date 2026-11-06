@@ -21,9 +21,20 @@ contribute a task-grant profile, and the compiler refuses one with
 An authored `permissions` entry is the Registry's governed ceiling for a
 profile. A delegated `taskGrant` is signed, short-lived authority for one task
 inside that ceiling. It never adds an operation or field. BReg requires the
-grant's complete BReg permission bounds to equal the profile's compiled
-collections and operations. Wider, narrower, partial, and wrong-resource
-bounds are refused.
+profile's compiled collections and operations to be a subset of the grant's
+BReg permission bounds, so a grant missing one is refused. A grant that names
+more is admitted, and Record routes still use only the profile's fields and
+operations; the extra bounds add nothing there. Action and Proposal routes
+check their own `action:` and `proposal:` bounds against the matching
+permission. Wrong-resource and partial bounds are refused.
+
+For a task-grant token, row-boundary claims other than `sub` resolve only from
+the grant's signed `identity` object; a flat token claim of the same name is
+ignored. To pin a grant to its subject, author a row boundary on that subject
+key, in the profile and in each Action or Proposal target. Otherwise the
+profile's ceiling applies to every row, as for standing agents, whatever
+subject the grant names. The compiler reports a profile or target that binds
+no rows as `breg.access-profile.task-grant-rows-unbound`.
 
 Standing native citizen agents use the same `actorKind: agent` and
 `requesterClients` binding without a `taskGrant`. Configure the exact native
@@ -195,11 +206,14 @@ identifier never reaches the journal. A task-grant token without `act` records
 exactly what it did before.
 
 Both kinds of token also carry the object on a read's terminal record: record
-reads, lists and lookups, revision reads, and history and snapshot reads. No
-agent token is admitted to an immediate action: action admission refuses every
-task-grant token, a standing agent profile cannot hold an action permission,
-and a permission on a profile without `actorKind: agent` refuses a token
-carrying a trusted actor. The refusal record carries the object. A direct
-token records no `authorization` object anywhere.
+reads, lists and lookups, revision reads, and history and snapshot reads. A
+task-grant token is admitted to an immediate Action only when the profile's
+Action permission declares the same `taskGrant` with `actorKind: agent`, and the
+grant bounds `action:<id>` with `invoke`, under the grant's client, principal,
+purpose and an unexpired deadline; any other task-grant token is refused. A
+standing agent profile cannot hold an action permission, and a permission on a
+profile without `actorKind: agent` refuses a token carrying a trusted actor.
+The refusal record carries the object. A direct token records no
+`authorization` object anywhere.
 Neither kind of token adds the object to a pre-I/O attempt record or to the
 refusal record a read or revision read writes.
