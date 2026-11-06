@@ -681,10 +681,8 @@ uncertain effects, prepared commands, spent keys and restore-review marks stay
 as they are, and every other run continues. Find held runs with
 `attention=true`, the doctor report or `deployment-status`. This version cannot
 end a held run: only a Coordinator release that accepts its definition can.
-Before upgrading, run that release's `deployment-status` against the
-deployment; its `heldRuns` lists the runs it would hold. A retained snapshot that cannot be
-opened, or a database that cannot be reached, still refuses the check and holds
-nothing. A pinned package this version does not restore still stops the service
+A retained snapshot that cannot be opened, or a database that cannot be
+reached, still refuses the check and holds nothing. A pinned package this version does not restore still stops the service
 in either mode, naming its package digest, workflow and restore finding code.
 
 For an incompatible binding, restore the original bindings or use

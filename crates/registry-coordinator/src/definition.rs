@@ -36,7 +36,7 @@ pub const DEFINITION_REFUSED: &str = "definition-refused";
 
 /// Operator advice for a run held because its retained definition does not
 /// restore.
-pub const HELD_RUN_ADVICE: &str = "This Coordinator version holds the run and runs nothing for it, and refuses to retry, reconcile or cancel it; every other run continues. Only a Coordinator release that accepts its definition can end the run. Run coordinatorctl deployment-status with a new release before upgrading to list the runs it would hold. See \"Apply and start\" in products/coordinator/DEPLOYMENT.md.";
+pub const HELD_RUN_ADVICE: &str = "This Coordinator version holds the run and runs nothing for it, and refuses to retry, reconcile or cancel it; every other run continues. Only a Coordinator release that accepts its definition can end the run. See \"Apply and start\" in products/coordinator/DEPLOYMENT.md.";
 
 /// Operator advice for a pinned package this version does not restore.
 const PACKAGE_REFUSED_ADVICE: &str = "The service does not start on this package. Keep serving with the Coordinator version that accepted it, or correct the workflow project, rerun coordinatorctl check, package it and apply the new package. See \"Apply and start\" in products/coordinator/DEPLOYMENT.md.";
