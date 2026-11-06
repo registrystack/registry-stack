@@ -137,6 +137,9 @@ pub(crate) fn check_profile(
     }
 }
 
+const TASK_GRANT_ROWS_UNBOUND: &str = "breg.access-profile.task-grant-rows-unbound";
+const TASK_GRANT_ROWS_UNBOUND_MESSAGE: &str = "this task-grant profile binds no rows to the grant: row-boundary claims other than `sub` come only from the grant's signed identity, so without a row boundary the profile's ceiling applies to every row, whichever subject the grant names. Author a row boundary on a subject key to pin the grant to its subject";
+
 pub(crate) fn access_findings(entities: &BTreeMap<String, EntitySource>) -> Vec<Diagnostic> {
     let mut findings = Vec::new();
     for entity in entities.values() {
@@ -161,6 +164,20 @@ pub(crate) fn access_findings(entities: &BTreeMap<String, EntitySource>) -> Vec<
             {
                 findings.push(Diagnostic::finding("breg.access.profile-unrestricted-rows", format!("{path}.rowBoundaries"),
                     "this profile has no claim-bound row restriction for its granted operations; Review this registry-wide access"));
+            }
+            // A task grant's row claims come only from its signed identity, so a
+            // profile that authors no row boundary applies its ceiling to every
+            // row whatever the grant names. Scopes and purposes do not change that.
+            if entity.classification != Classification::Public
+                && profile.task_grant.is_some()
+                && profile.row_boundaries.is_empty()
+                && profile.membership_boundaries.is_empty()
+            {
+                findings.push(Diagnostic::finding(
+                    TASK_GRANT_ROWS_UNBOUND,
+                    format!("{path}.rowBoundaries"),
+                    TASK_GRANT_ROWS_UNBOUND_MESSAGE,
+                ));
             }
             let write_operations = [Operation::Create, Operation::Patch, Operation::Import]
                 .into_iter()
@@ -342,6 +359,58 @@ pub(crate) fn compiled_access_findings(
         {
             findings.push(Diagnostic::finding("breg.access.target-unrestricted-rows", &reach.source_path,
                 "this target permission has no claim-bound row restriction, within its configured operation and field limits. Review this registry-wide target authority"));
+        }
+    }
+    for action in &actions.actions {
+        let proposal_permissions: &[crate::model::CompiledProposalPermission] = match &action
+            .execution
+        {
+            crate::model::CompiledActionExecution::Proposal { proposal } => &proposal.permissions,
+            _ => &[],
+        };
+        let action_targets = action
+            .permissions
+            .iter()
+            .filter(|grant| grant.task_grant.is_some())
+            .flat_map(|grant| {
+                grant.entity_target_locks().map(move |target| {
+                    (
+                        &target.entity_id,
+                        &target.row_boundaries,
+                        format!(
+                            "actions[id={}].permissions[profile={}].targets[recordType={}].rowBoundaries",
+                            action.id, grant.profile_id, target.entity_id
+                        ),
+                    )
+                })
+            });
+        let proposal_targets = proposal_permissions
+            .iter()
+            .filter(|grant| grant.task_grant.is_some())
+            .flat_map(|grant| {
+                grant.targets.iter().map(move |target| {
+                    (
+                        &target.entity_id,
+                        &target.row_boundaries,
+                        format!(
+                            "actions[id={}].execution.proposal.permissions[profile={}].targets[recordType={}].rowBoundaries",
+                            action.id, grant.profile_id, target.entity_id
+                        ),
+                    )
+                })
+            });
+        for (entity_id, boundaries, path) in action_targets.chain(proposal_targets) {
+            if boundaries.is_empty()
+                && entities
+                    .get(entity_id)
+                    .is_some_and(|entity| entity.classification != Classification::Public)
+            {
+                findings.push(Diagnostic::finding(
+                    TASK_GRANT_ROWS_UNBOUND,
+                    path,
+                    TASK_GRANT_ROWS_UNBOUND_MESSAGE,
+                ));
+            }
         }
     }
     for entity in entities.values() {

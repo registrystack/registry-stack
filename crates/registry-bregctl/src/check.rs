@@ -134,6 +134,7 @@ pub(super) fn finding_rank_for_code(code: &str) -> FindingRank {
             | "breg.access.profile-unrestricted-rows"
             | "breg.access.profile-writable-row-boundary"
             | "breg.access.target-unrestricted-rows"
+            | "breg.access-profile.task-grant-rows-unbound"
     ) {
         FindingRank::WidensAccess
     } else if code.starts_with("breg.record-type.list-unindexed-") {
