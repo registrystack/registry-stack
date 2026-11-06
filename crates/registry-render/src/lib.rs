@@ -36,6 +36,7 @@ pub mod init;
 pub mod labels;
 pub mod manifest;
 pub mod openapi;
+pub mod pdf_signature;
 pub mod problem;
 pub mod render;
 pub mod runtime;
