@@ -212,9 +212,12 @@ bytes = { version = "1" }
 chacha20poly1305 = { version = "0.11", default-features = false, features = ["alloc"] }
 chrono = { version = "0.4" }
 chrono-tz = { version = "0.10.4" }
+cms = { version = "0.2.3" }
+const-oid = { version = "0.9.6", features = ["db"] }
 clap = { version = "4", features = ["derive", "env"] }
 criterion = { version = "0.8", features = ["html_reports", "async_tokio"] }
 deadpool-postgres = { version = "=0.14.2", default-features = false, features = ["rt_tokio_1"] }
+der = { version = "0.7.10", features = ["alloc", "derive", "oid", "pem"] }
 ed25519-dalek = { version = "2", features = ["pkcs8", "rand_core"] }
 fake = { version = "=4.4.0", default-features = false }
 fs2 = { version = "0.4" }
@@ -225,6 +228,7 @@ getrandom = { version = "0.4" }
 # introspection query schema; the pack checks parse authored documents only.
 graphql-parser = { version = "0.4", default-features = false }
 hickory-resolver = { version = "0.26.1", default-features = false, features = ["system-config", "tokio"] }
+hayro-syntax = { version = "0.7.2" }
 hex = { version = "0.4" }
 hmac = { version = "0.13" }
 http = { version = "1" }
@@ -246,6 +250,7 @@ jsonpath-rust = { version = "1" }
 # which would downgrade psm workspace-wide 0.1.32 to 0.1.24 and drop
 # ar_archive_writer 0.5.3 from the lock (the Render chain reaches psm
 # through stacker and typst-eval). Revisit when upstream relaxes the pin.
+pdf-writer = { version = "0.15.0" }
 pest = { version = "=2.8.5" }
 jsonwebtoken = { version = "10", default-features = false, features = ["aws_lc_rs"] }
 # Messaging SMTP only. Default features stay off: no connection pool, no
@@ -333,6 +338,7 @@ url = { version = "2" }
 utoipa = { version = "6" }
 uuid = { version = "1", features = ["v4"] }
 wiremock = { version = "0.6" }
+x509-cert = { version = "0.2.5" }
 zeroize = { version = "1", features = ["derive"] }
 
 [profile.dev]
