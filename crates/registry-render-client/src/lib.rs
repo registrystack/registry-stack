@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Thin client for the Render HTTP adapter. Rendering is one exchange; a
-//! correlation key is never treated as an idempotency or deduplication promise.
+//! Thin client for the Render HTTP adapter. Rendering and sealing are one
+//! exchange each; a correlation key is never treated as an idempotency or
+//! deduplication promise.
 use base64::Engine as _;
 use registry_platform_canonical_json::parse_json_strict;
 use registry_platform_httpsec::{response_trace_id, ProblemDocument};
@@ -63,6 +64,73 @@ pub struct RenderedDocument {
     pub data_sha256: String,
     pub document_version: String,
     pub warnings: Vec<String>,
+}
+
+/// The PAdES level of a seal, as the server names it in `seal.level`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum SealLevel {
+    /// PAdES baseline B (no timestamp).
+    #[serde(rename = "b-b")]
+    BaselineB,
+    /// PAdES baseline T (signature timestamp).
+    #[serde(rename = "b-t")]
+    BaselineT,
+}
+impl SealLevel {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::BaselineB => "b-b",
+            Self::BaselineT => "b-t",
+        }
+    }
+}
+
+/// The facts the server reports about a seal; none is verified by the client
+/// beyond shape and consistency with the level.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SealFacts {
+    pub id: String,
+    pub level: SealLevel,
+    pub certificate_sha256: String,
+    /// RFC 3339 timestamp token time; present exactly at level `b-t`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timestamp_time: Option<String>,
+}
+
+/// A sealed document. There is no `pdfSha256`: `document_sha256` covers the
+/// first revision (the rendered document) and `signed_file_sha256` the whole
+/// signed file in `pdf`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SealedDocument {
+    pub pdf: Vec<u8>,
+    pub document_sha256: String,
+    pub signed_file_sha256: String,
+    pub data_sha256: String,
+    pub document_version: String,
+    pub warnings: Vec<String>,
+    pub seal: SealFacts,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SealedWire {
+    pdf_base64: String,
+    document_sha256: String,
+    signed_file_sha256: String,
+    data_sha256: String,
+    document_version: String,
+    warnings: Vec<String>,
+    seal: SealWire,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SealWire {
+    id: String,
+    level: String,
+    certificate_sha256: String,
+    #[serde(default)]
+    timestamp_time: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, thiserror::Error)]
@@ -229,16 +297,137 @@ impl RenderClient {
         request: &Value,
     ) -> Result<RenderedDocument, RenderClientError> {
         let body = Self::validate_request(document_type, request)?;
+        let value = self
+            .exchange(token, Route::Render, document_type, body, None)
+            .await?;
+        let document: RenderedDocument =
+            serde_json::from_value(value).map_err(|_| error("protocol"))?;
+        let pdf = base64::engine::general_purpose::STANDARD
+            .decode(&document.pdf_base64)
+            .map_err(|_| error("protocol"))?;
+        if !pdf.starts_with(b"%PDF-")
+            || !is_digest(&document.pdf_sha256)
+            || !is_digest(&document.data_sha256)
+            || hex::encode(Sha256::digest(&pdf)) != document.pdf_sha256
+            || !bounded_version_and_warnings(
+                document_type,
+                &document.document_version,
+                &document.warnings,
+            )
+        {
+            return Err(error("protocol"));
+        }
+        Ok(document)
+    }
+
+    /// Render and seal once (PAdES) with a caller-acquired credential carrying
+    /// the `render:seal` scope. The route exists only on a deployment that
+    /// configures seals; otherwise the answer is the `render.not-found` problem.
+    ///
+    /// This is a single exchange and is never resent: a second seal of the
+    /// same request is a second valid file with another signing time (and,
+    /// at level b-t, another timestamp token), so the client cannot treat a
+    /// repeat as harmless. After a timeout or broken exchange
+    /// (`outcome_unknown`) the caller decides whether another file is wanted.
+    /// `idempotency_key` is an optional correlation key (1 to 128 visible
+    /// ASCII characters). It is sent as `Idempotency-Key` and the server must
+    /// echo it exactly; it is audited by the server, not a deduplication
+    /// promise.
+    ///
+    /// Before returning, the client checks that the bytes hash to
+    /// `signedFileSha256`, that they start as a PDF, that
+    /// `documentSha256` equals the SHA-256 of a prefix of the file ending at
+    /// one of its `%%EOF` markers (found by byte search, without parsing PDF),
+    /// and that the seal facts are consistent with the level. It does not
+    /// verify the signature, the certificate chain or the timestamp token;
+    /// that is the relying party's validation.
+    pub async fn seal(
+        &self,
+        token: &BearerToken,
+        document_type: &str,
+        request: &Value,
+        idempotency_key: Option<&str>,
+    ) -> Result<SealedDocument, RenderClientError> {
+        let body = Self::validate_request(document_type, request)?;
+        if let Some(key) = idempotency_key {
+            if key.is_empty() || key.len() > 128 || !key.bytes().all(|b| (0x21..=0x7e).contains(&b))
+            {
+                return Err(error("invalid-request"));
+            }
+        }
+        let value = self
+            .exchange(token, Route::Seal, document_type, body, idempotency_key)
+            .await?;
+        let wire: SealedWire = serde_json::from_value(value).map_err(|_| error("protocol"))?;
+        let pdf = base64::engine::general_purpose::STANDARD
+            .decode(&wire.pdf_base64)
+            .map_err(|_| error("protocol"))?;
+        let level = match wire.seal.level.as_str() {
+            "b-b" => SealLevel::BaselineB,
+            "b-t" => SealLevel::BaselineT,
+            _ => return Err(error("protocol")),
+        };
+        let timestamp_consistent = match (level, &wire.seal.timestamp_time) {
+            (SealLevel::BaselineB, None) => true,
+            (SealLevel::BaselineT, Some(time)) => {
+                time.len() <= 64 && chrono::DateTime::parse_from_rfc3339(time).is_ok()
+            }
+            _ => false,
+        };
+        if !pdf.starts_with(b"%PDF-")
+            || !is_digest(&wire.document_sha256)
+            || !is_digest(&wire.signed_file_sha256)
+            || !is_digest(&wire.data_sha256)
+            || !is_digest(&wire.seal.certificate_sha256)
+            || hex::encode(Sha256::digest(&pdf)) != wire.signed_file_sha256
+            || !first_revision_matches(&pdf, &wire.document_sha256)
+            || !timestamp_consistent
+            || wire.seal.id.is_empty()
+            || wire.seal.id.len() > 256
+            || !bounded_version_and_warnings(document_type, &wire.document_version, &wire.warnings)
+        {
+            return Err(error("protocol"));
+        }
+        Ok(SealedDocument {
+            pdf,
+            document_sha256: wire.document_sha256,
+            signed_file_sha256: wire.signed_file_sha256,
+            data_sha256: wire.data_sha256,
+            document_version: wire.document_version,
+            warnings: wire.warnings,
+            seal: SealFacts {
+                id: wire.seal.id,
+                level,
+                certificate_sha256: wire.seal.certificate_sha256,
+                timestamp_time: wire.seal.timestamp_time,
+            },
+        })
+    }
+
+    /// One POST, strict header, media type and problem validation. Returns the
+    /// success body; every refusal is a typed error.
+    async fn exchange(
+        &self,
+        token: &BearerToken,
+        route: Route,
+        document_type: &str,
+        body: Vec<u8>,
+        idempotency_key: Option<&str>,
+    ) -> Result<Value, RenderClientError> {
         let url = self
             .base_url
-            .join(&format!("v1/render/{document_type}"))
+            .join(&format!("v1/{}/{document_type}", route.segment()))
             .map_err(|_| error("invalid-request"))?;
-        let response = self
+        let mut builder = self
             .http
             .post(url)
             .header(AUTHORIZATION, token.authorization_header_value())
             .header(ACCEPT, "application/json")
-            .header(CONTENT_TYPE, "application/json")
+            .header(CONTENT_TYPE, "application/json");
+        if let Some(key) = idempotency_key {
+            builder = builder.header("idempotency-key", key);
+        }
+        let response = builder
             .body(body)
             .send()
             .await
@@ -272,6 +461,12 @@ impl RenderClient {
         } else {
             MAXIMUM_PROBLEM_BYTES
         };
+        let echoed: Vec<Option<String>> = response
+            .headers()
+            .get_all("idempotency-key")
+            .iter()
+            .map(|value| value.to_str().ok().map(str::to_owned))
+            .collect();
         let bytes = read_bounded(response, limit)
             .await
             .map_err(|error| transport_error(read_failure_kind(&error)))?;
@@ -303,6 +498,10 @@ impl RenderClient {
                 "compile-failed" | "strict-warnings" | "output-too-large" => 422,
                 "render-timeout" => 504,
                 "audit-failed" | "runtime-invalid" => 503,
+                "signing-unavailable" | "seal-certificate-invalid" if route == Route::Seal => 503,
+                "timestamp-failed" if route == Route::Seal => 502,
+                "document-not-sealable" if route == Route::Seal => 400,
+                "seal-client-not-allowed" if route == Route::Seal => 403,
                 "internal" | "render-panicked" => 500,
                 "invalid-argument" | "manifest-invalid" | "bundle-tampered" | "bundle-unsealed"
                 | "unknown-document" | "labels-invalid" | "font-invalid" | "data-invalid"
@@ -335,33 +534,76 @@ impl RenderClient {
         if status != reqwest::StatusCode::OK {
             return Err(error("protocol"));
         }
-        let document: RenderedDocument =
-            serde_json::from_value(value).map_err(|_| error("protocol"))?;
-        let pdf = base64::engine::general_purpose::STANDARD
-            .decode(&document.pdf_base64)
-            .map_err(|_| error("protocol"))?;
-        let digest = |text: &str| {
-            text.len() == 64
-                && text
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        };
-        if !pdf.starts_with(b"%PDF-")
-            || !digest(&document.pdf_sha256)
-            || !digest(&document.data_sha256)
-            || hex::encode(Sha256::digest(&pdf)) != document.pdf_sha256
-            || document
-                .document_version
-                .strip_prefix(&format!("{document_type} v"))
-                .and_then(|version| version.parse::<u32>().ok())
-                .is_none_or(|version| {
-                    document.document_version != format!("{document_type} v{version}")
-                })
-            || document.warnings.len() > 256
-            || document.warnings.iter().any(|warning| warning.len() > 2048)
-        {
-            return Err(error("protocol"));
+        if let Some(key) = idempotency_key {
+            if echoed != [Some(key.to_owned())] {
+                return Err(error("protocol"));
+            }
         }
-        Ok(document)
+        Ok(value)
     }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Route {
+    Render,
+    Seal,
+}
+impl Route {
+    fn segment(self) -> &'static str {
+        match self {
+            Self::Render => "render",
+            Self::Seal => "seal",
+        }
+    }
+}
+
+fn is_digest(text: &str) -> bool {
+    text.len() == 64
+        && text
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn bounded_version_and_warnings(document_type: &str, version: &str, warnings: &[String]) -> bool {
+    version
+        .strip_prefix(&format!("{document_type} v"))
+        .and_then(|number| number.parse::<u32>().ok())
+        .is_some_and(|number| version == format!("{document_type} v{number}"))
+        && warnings.len() <= 256
+        && warnings.iter().all(|warning| warning.len() <= 2048)
+}
+
+/// Whether `document_sha256` is the SHA-256 of a prefix of `pdf` that ends at
+/// a `%%EOF` marker, optionally followed by its end-of-line. Found by byte
+/// search; the PDF is not parsed. A prefix equal to the whole file is not a
+/// first revision.
+fn first_revision_matches(pdf: &[u8], document_sha256: &str) -> bool {
+    const MARKER: &[u8] = b"%%EOF";
+    // A real file has a handful of markers; bound the hashing work.
+    const MAXIMUM_CANDIDATES: usize = 64;
+    let mut candidates = 0;
+    for (start, window) in pdf.windows(MARKER.len()).enumerate() {
+        if window != MARKER {
+            continue;
+        }
+        candidates += 1;
+        if candidates > MAXIMUM_CANDIDATES {
+            return false;
+        }
+        let marker_end = start + MARKER.len();
+        let eol = match pdf[marker_end..] {
+            [b'\r', b'\n', ..] => 2,
+            [b'\r' | b'\n', ..] => 1,
+            _ => 0,
+        };
+        for end in [marker_end, marker_end + eol] {
+            if end < pdf.len() && hex::encode(Sha256::digest(&pdf[..end])) == document_sha256 {
+                return true;
+            }
+            if eol == 0 {
+                break;
+            }
+        }
+    }
+    false
 }
