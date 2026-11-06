@@ -14,16 +14,10 @@
 use std::{
     collections::BTreeMap,
     fs,
-    io::{Read as _, Write as _},
     net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket},
     os::unix::fs::PermissionsExt as _,
-    os::unix::net::{UnixListener, UnixStream},
     path::{Path, PathBuf},
-    sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
-        Arc,
-    },
-    thread,
+    sync::Arc,
     time::Duration,
 };
 
@@ -34,15 +28,13 @@ use base64::{
 };
 use chrono::Utc;
 use jsonwebtoken::{jwk::JwkSet, Algorithm};
-use p256::ecdsa::{
-    signature::hazmat::PrehashSigner as _, Signature as P256Signature, SigningKey as P256SigningKey,
-};
 use rcgen::{BasicConstraints, CertificateParams, IsCa, Issuer, KeyPair};
 use registry_evidence_authoring::{
     compile,
     project::{AcquisitionPosture, EvidenceProject, PackReference},
     target::{self, EvidenceTargetAuthority},
 };
+use registry_platform_crypto::document_signature::test_support::TestTransit;
 use registry_platform_crypto::{sign, PrivateJwk};
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig, TokenVerifier, TokenVerifierConfig};
 use registry_platform_yaml::LocalId;
@@ -121,7 +113,7 @@ const CONCEPT_CLASSIC: &str = "urn:example:normalized:concept:active:classic";
 const CONCEPT_SET: &str = "urn:example:normalized:concept:active:fetch-set";
 
 struct NormalizedRuntime {
-    transit: TransitServer,
+    transit: TestTransit,
     _source_tls: TlsSourceProxy,
     _temporary: TempDir,
     runtime: Arc<EvidenceRuntime>,
@@ -314,191 +306,6 @@ impl Drop for TlsSourceProxy {
     }
 }
 
-struct TransitServer {
-    stop: Arc<AtomicBool>,
-    signatures: Arc<AtomicUsize>,
-    socket: PathBuf,
-    worker: Option<thread::JoinHandle<()>>,
-}
-
-impl TransitServer {
-    fn start(root: &Path) -> Self {
-        let socket = root.join("transit.sock");
-        let listener = UnixListener::bind(&socket).expect("bind synthetic Transit socket");
-        listener
-            .set_nonblocking(true)
-            .expect("synthetic Transit listener is nonblocking");
-        let stop = Arc::new(AtomicBool::new(false));
-        let signatures = Arc::new(AtomicUsize::new(0));
-        let worker_stop = Arc::clone(&stop);
-        let worker_signatures = Arc::clone(&signatures);
-        let worker = thread::spawn(move || {
-            while !worker_stop.load(Ordering::Acquire) {
-                match listener.accept() {
-                    Ok((mut stream, _)) => {
-                        if worker_stop.load(Ordering::Acquire) {
-                            break;
-                        }
-                        stream
-                            .set_nonblocking(false)
-                            .expect("synthetic Transit connection is blocking");
-                        serve_transit_request(&mut stream, &worker_signatures);
-                    }
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        thread::sleep(Duration::from_millis(2));
-                    }
-                    Err(error) => panic!("synthetic Transit accept failed: {error}"),
-                }
-            }
-        });
-        Self {
-            stop,
-            signatures,
-            socket,
-            worker: Some(worker),
-        }
-    }
-
-    fn signatures(&self) -> usize {
-        self.signatures.load(Ordering::Acquire)
-    }
-}
-
-impl Drop for TransitServer {
-    fn drop(&mut self) {
-        self.stop.store(true, Ordering::Release);
-        let _ = UnixStream::connect(&self.socket);
-        if let Some(worker) = self.worker.take() {
-            worker.join().expect("synthetic Transit server stops");
-        }
-    }
-}
-
-fn serve_transit_request(stream: &mut UnixStream, signatures: &AtomicUsize) {
-    stream
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .expect("synthetic Transit read timeout");
-    let Some((method, path, body)) = read_transit_request(stream) else {
-        return;
-    };
-    let document = match (method.as_str(), path.as_str()) {
-        ("GET", "/v1/transit/keys/evidence-signing") => transit_metadata(),
-        ("POST", "/v1/transit/sign/evidence-signing/sha2-256") => {
-            let response = transit_signature(&body);
-            signatures.fetch_add(1, Ordering::AcqRel);
-            response
-        }
-        _ => panic!("unexpected synthetic Transit request {method} {path}"),
-    };
-    let bytes = serde_json::to_vec(&document).expect("synthetic Transit response serializes");
-    write!(
-        stream,
-        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-        bytes.len()
-    )
-    .expect("synthetic Transit response headers write");
-    stream
-        .write_all(&bytes)
-        .expect("synthetic Transit response body writes");
-}
-
-fn read_transit_request(stream: &mut UnixStream) -> Option<(String, String, Vec<u8>)> {
-    let mut request = Vec::new();
-    let header_end = loop {
-        let mut chunk = [0_u8; 4096];
-        let read = match stream.read(&mut chunk) {
-            Ok(0) if request.is_empty() => return None,
-            Err(error)
-                if request.is_empty()
-                    && matches!(
-                        error.kind(),
-                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                    ) =>
-            {
-                return None;
-            }
-            Ok(read) => read,
-            Err(error) => panic!("read Transit request: {error}"),
-        };
-        assert_ne!(read, 0, "Transit request ended before its headers");
-        request.extend_from_slice(&chunk[..read]);
-        assert!(request.len() <= 128 * 1024, "Transit request is bounded");
-        if let Some(position) = request.windows(4).position(|bytes| bytes == b"\r\n\r\n") {
-            break position + 4;
-        }
-    };
-    let headers = std::str::from_utf8(&request[..header_end]).expect("Transit headers are UTF-8");
-    assert!(
-        headers
-            .to_ascii_lowercase()
-            .contains("x-vault-request: true"),
-        "Transit request marks the trusted proxy hop"
-    );
-    let mut lines = headers.lines();
-    let mut request_line = lines
-        .next()
-        .expect("Transit request line")
-        .split_whitespace();
-    let method = request_line.next().expect("Transit method").to_owned();
-    let path = request_line.next().expect("Transit path").to_owned();
-    let content_length = lines
-        .filter_map(|line| line.split_once(':'))
-        .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
-        .map(|(_, value)| value.trim().parse::<usize>().expect("content length"))
-        .unwrap_or(0);
-    assert!(content_length <= 64 * 1024, "Transit body is bounded");
-    while request.len() < header_end + content_length {
-        let mut chunk = [0_u8; 4096];
-        let read = stream.read(&mut chunk).expect("read Transit request body");
-        assert_ne!(read, 0, "Transit request body ended early");
-        request.extend_from_slice(&chunk[..read]);
-    }
-    Some((
-        method,
-        path,
-        request[header_end..header_end + content_length].to_vec(),
-    ))
-}
-
-fn transit_metadata() -> Value {
-    json!({
-        "data": {
-            "type": "ecdsa-p256",
-            "derived": false,
-            "exportable": false,
-            "allow_plaintext_backup": false,
-            "supports_signing": true,
-            "latest_version": 1,
-            "min_encryption_version": 1,
-            "keys": {"1": {"public_key": transit_public_pem()}}
-        }
-    })
-}
-
-fn transit_signature(body: &[u8]) -> Value {
-    let request: Value = serde_json::from_slice(body).expect("Transit signing request is JSON");
-    assert_eq!(request["key_version"], "1");
-    assert_eq!(request["marshaling_algorithm"], "jws");
-    assert_eq!(request["prehashed"], true);
-    let digest = STANDARD
-        .decode(request["input"].as_str().expect("Transit input is present"))
-        .expect("Transit input is standard base64");
-    assert_eq!(digest.len(), 32, "Transit signs one SHA-256 digest");
-    let private: Value = serde_json::from_str(EVIDENCE_PRIVATE_JWK).expect("private JWK parses");
-    let scalar = URL_SAFE_NO_PAD
-        .decode(private["d"].as_str().expect("private scalar is present"))
-        .expect("private scalar is base64url");
-    let key = P256SigningKey::from_slice(&scalar).expect("private scalar is P-256");
-    let signature: P256Signature = key
-        .sign_prehash(&digest)
-        .expect("synthetic Transit signs the prehash");
-    json!({
-        "data": {
-            "signature": format!("vault:v1:{}", URL_SAFE_NO_PAD.encode(signature.to_bytes()))
-        }
-    })
-}
-
 fn certificate_pem(certificate: &[u8]) -> Vec<u8> {
     let encoded = STANDARD.encode(certificate);
     let mut pem = String::from("-----BEGIN CERTIFICATE-----\n");
@@ -508,32 +315,6 @@ fn certificate_pem(certificate: &[u8]) -> Vec<u8> {
     }
     pem.push_str("-----END CERTIFICATE-----\n");
     pem.into_bytes()
-}
-
-fn transit_public_pem() -> String {
-    let public: Value = serde_json::from_str(EVIDENCE_PUBLIC_JWK).expect("public JWK parses");
-    let x = URL_SAFE_NO_PAD
-        .decode(public["x"].as_str().expect("public x is present"))
-        .expect("public x is base64url");
-    let y = URL_SAFE_NO_PAD
-        .decode(public["y"].as_str().expect("public y is present"))
-        .expect("public y is base64url");
-    assert_eq!(x.len(), 32);
-    assert_eq!(y.len(), 32);
-    let mut spki = vec![
-        0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06, 0x08,
-        0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, 0x03, 0x42, 0x00, 0x04,
-    ];
-    spki.extend_from_slice(&x);
-    spki.extend_from_slice(&y);
-    let encoded = STANDARD.encode(spki);
-    let body = encoded
-        .as_bytes()
-        .chunks(64)
-        .map(|line| std::str::from_utf8(line).expect("PEM base64 is ASCII"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    format!("-----BEGIN PUBLIC KEY-----\n{body}\n-----END PUBLIC KEY-----\n")
 }
 
 #[tokio::test]
@@ -1432,7 +1213,14 @@ cases:
     .expect("compiled target authority activates for this exact package");
 
     write_secret(&secret_root, "source-token", SOURCE_TOKEN);
-    let transit = TransitServer::start(temporary.path());
+    let transit = TestTransit::start(
+        &temporary.path().join("transit.sock"),
+        "transit",
+        "evidence-signing",
+        1,
+        &serde_json::from_str::<PrivateJwk>(EVIDENCE_PRIVATE_JWK).expect("private JWK parses"),
+    )
+    .expect("start the test Transit proxy");
     write_secret(
         &secret_root,
         "audit-hash-key",
@@ -1488,7 +1276,7 @@ sourceConnections:
 "#,
             package_root.display(),
             secret_root.display(),
-            transit.socket.display(),
+            transit.socket_path().display(),
             audit_path.display(),
             authority_root.display(),
             source_tls.origin.as_str(),

@@ -87,6 +87,7 @@ criterion.workspace = true
 proptest.workspace = true
 rcgen.workspace = true
 registry-evidence-authoring.workspace = true
+registry-platform-crypto = { workspace = true, features = ["test-support", "transit"] }
 serde_norway.workspace = true
 tokio-rustls.workspace = true
 wiremock.workspace = true
