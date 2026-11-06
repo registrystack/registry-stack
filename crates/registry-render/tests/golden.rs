@@ -1,5 +1,6 @@
 //! Golden and determinism acceptance tests for the three coequal example
-//! bundles. The pinned hashes live in `products/render/golden.json`; the
+//! bundles, and the sealed variant of the `sealed-notice` test bundle's
+//! notice. The pinned hashes live in `products/render/golden.json`; the
 //! two-OS CI job re-runs this file so a byte difference anywhere — Typst
 //! pin, lockfile (including the deflate stack), bundle content — is a
 //! reviewed diff, never a silent pass.
@@ -192,6 +193,67 @@ fn package_files(bundle: &Path) -> std::collections::BTreeSet<String> {
     .files()
     .map(str::to_owned)
     .collect()
+}
+
+/// The sealed variant of a template: the `sealed-notice` fixture's `notice`
+/// rendered with the pinned `signing` member, as the seal route's worker
+/// renders the first revision it signs and as `compile --preview-seal`
+/// renders it with no signature. Returns the pin, the sealed variant and
+/// the plain render of the same data.
+fn sealed_preview() -> (Value, registry_render::Rendered, registry_render::Rendered) {
+    let pinned = golden()["sealedPreview"].clone();
+    let bundle = registry_render::Bundle::load(
+        &repo_root().join(pinned["bundle"].as_str().expect("pinned bundle path")),
+    )
+    .expect("the sealed-notice fixture loads");
+    let (id, _) = pinned["document"]
+        .as_str()
+        .and_then(|document| document.split_once(" v"))
+        .expect("pinned document as `<id> v<version>`");
+    let document = bundle.document(id).expect("pinned document type").clone();
+    assert_eq!(
+        format!("{} v{}", document.spec.id, document.spec.version),
+        pinned["document"].as_str().unwrap()
+    );
+    let request = registry_render::RenderRequest {
+        locale: None,
+        data: pinned["data"].clone(),
+        assets: BTreeMap::new(),
+        issued_at: issued_at(),
+    };
+    let signing: registry_render::envelope::SigningPayload =
+        serde_json::from_value(pinned["signing"].clone()).expect("pinned signing member");
+    let sealed = registry_render::render::render_for_sealing(
+        &bundle,
+        &document,
+        &request,
+        &signing,
+        false,
+        registry_render::DEFAULT_MAX_OUTPUT_BYTES,
+    )
+    .expect("the sealed variant renders");
+    let plain = registry_render::render(&bundle, &document, &request, false).expect("render");
+    (pinned, sealed, plain)
+}
+
+#[test]
+fn the_sealed_variant_golden_matches() {
+    let (pinned, sealed, plain) = sealed_preview();
+    assert_eq!(
+        sealed.pdf_sha256,
+        pinned["pdfSha256"].as_str().expect("pinned pdf hash"),
+        "golden PDF hash drifted for the sealed variant; review it"
+    );
+    assert_eq!(
+        sealed.data_sha256,
+        pinned["dataSha256"].as_str().expect("pinned data hash"),
+        "golden envelope hash drifted for the sealed variant"
+    );
+    assert!(sealed.warnings.is_empty(), "{:?}", sealed.warnings);
+    assert_ne!(
+        sealed.pdf_sha256, plain.pdf_sha256,
+        "the template prints its seal block only in the sealed variant"
+    );
 }
 
 #[test]

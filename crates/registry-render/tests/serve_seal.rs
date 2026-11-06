@@ -990,6 +990,40 @@ fn the_signing_member_reaches_the_template_only_on_the_seal_route() {
     );
 }
 
+/// `compile --preview-seal` renders exactly the first revision the seal
+/// route signs, so a template's sealed variant can be checked offline.
+#[test]
+fn compile_preview_seal_renders_the_seal_routes_first_revision() {
+    let fixture = sealed(None);
+    let server = start_server(&fixture);
+    let body = seal_json(&fixture, &server);
+    drop(server);
+    let request: serde_json::Value = serde_json::from_str(NOTICE_BODY).unwrap();
+    let data = fixture.home.join("data.json");
+    std::fs::write(&data, request["data"].to_string()).unwrap();
+    let compiled = Command::new(env!("CARGO_BIN_EXE_registry-render"))
+        .args(["compile", "--bundle"])
+        .arg(fixture.home.join("package"))
+        .args(["--type", "notice", "--data"])
+        .arg(&data)
+        .args(["--issued-at", request["issuedAt"].as_str().unwrap()])
+        .args(["--preview-seal", "test-only"])
+        .args(["--signer-name", TEST_SEAL_ORGANIZATION])
+        .args(["--format", "json", "--output"])
+        .arg(fixture.home.join("preview.pdf"))
+        .output()
+        .expect("run registry-render compile");
+    assert!(
+        compiled.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&compiled.stdout),
+        String::from_utf8_lossy(&compiled.stderr)
+    );
+    let summary: serde_json::Value = serde_json::from_slice(&compiled.stdout).unwrap();
+    assert_eq!(summary["pdfDigest"], body["documentDigest"], "{summary}");
+    assert_eq!(summary["dataDigest"], body["dataDigest"], "{summary}");
+}
+
 #[test]
 fn the_plain_route_returns_identical_bytes_with_and_without_signing() {
     let tsa = start_tsa(TsaMode::Grant);

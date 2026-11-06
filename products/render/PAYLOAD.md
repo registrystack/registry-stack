@@ -27,7 +27,8 @@ is the `dataDigest` the caller should store on the record.
                                        // also the world clock and PDF date
   "document": { "id": "receipt", "version": 3 },
   "signing": {                         // present only on the seal route,
-    "mode": "seal",                    // POST /v1/seal/{type}
+    "mode": "seal",                    // POST /v1/seal/{type}, and in
+                                       // compile --preview-seal
     "signerName": "Ministry of Licensing",
     "testOnly": false
   }
@@ -66,8 +67,13 @@ Rules worth internalizing:
 - **Data is inert.** Values are Typst values, never evaluated; a string
   that looks like code is just a string.
 - **`signing` means the file will be sealed.** Only the seal route adds
-  it; the render route, `compile` and every other CLI render never do, so
-  a template prints its seal block only on files that carry a seal. Read
+  it; the render route and every other render never do, so a template
+  prints its seal block only on files that carry a seal. The one exception
+  is a preview: `registry-render compile --preview-seal test-only` (or
+  `production`, which sets `testOnly`) adds the member, with
+  `--signer-name <text>` as `signerName`, and signs nothing. Its output is
+  byte for byte the first revision the seal route signs for the same
+  inputs, so a golden can cover a template's sealed variant. Read
   it with `payload.at("signing", default: none)` so one template serves
   both routes. `mode` is always `"seal"`. `signerName` is the seal
   certificate's display name (its organization, else its common name)

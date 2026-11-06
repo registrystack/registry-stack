@@ -23844,6 +23844,27 @@
               "environment": null
             },
             {
+              "display": "--preview-seal <TRUST>",
+              "description": "Render the template's sealed variant: add the `signing` member the seal route adds, as a seal of this `trust` would. Nothing is signed; the output is the first revision a seal would sign",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [
+                "test-only",
+                "production"
+              ],
+              "environment": null
+            },
+            {
+              "display": "--signer-name <TEXT>",
+              "description": "The `signing.signerName` a seal certificate's organization (else common name) would give. Without it, the member names no signer",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "-h, --help",
               "description": "Print help (see a summary with '-h')",
               "always_required": false,
@@ -23854,6 +23875,13 @@
             }
           ],
           "constraints": [
+            {
+              "kind": "requires-all",
+              "when": "--signer-name <TEXT>",
+              "arguments": [
+                "--preview-seal <TRUST>"
+              ]
+            },
             {
               "kind": "mutually-exclusive",
               "when": null,
