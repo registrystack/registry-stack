@@ -40,8 +40,10 @@ boundary is the source issuer, not the grant, and it writes the start's
 `reservationId` into the booking's references. Coordinator, BReg and
 Scheduling do not compare the start's `reservationId` with the reservation the
 grant names, so the calling backend must start the run only with a grant it
-obtained for that same reservation. Its grant is neither created nor extended
-by the review decision.
+obtained for that same reservation. A deployment that reads the reservation
+under a BReg task grant instead must bind that profile's row to the grant's
+subject, as [approved-record-check](../approved-record-check/README.md) shows.
+The review decision neither creates nor extends the Scheduling grant.
 Changing a source fact does not itself revoke a separate active Casework task
 or grant. Deployments must close or revoke that
 authority through Casework when its operational purpose ends.
