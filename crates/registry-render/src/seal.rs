@@ -22,6 +22,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use registry_platform_config::SecretError;
 use registry_platform_crypto::{
     accept_timestamp_response, add_signature_timestamp, random_timestamp_nonce, sign_detached,
     timestamp_request, CertificateChain, CertificateError, CertificateFingerprint, CmsError,
@@ -520,13 +521,21 @@ impl Seal {
             refusal(kind, id, "privateKeyRef", code, message, action)
         };
         let chain = read_chain(id, seal).map_err(certificate)?;
-        let secret =
-            crate::runtime::resolve_secret(runtime, &seal.private_key_ref).map_err(|_| {
+        // The resolver's buffer erases the JWK text, private members
+        // included, when it drops after parsing.
+        let secret = crate::runtime::resolve_protected_secret(runtime, &seal.private_key_ref)
+            .map_err(|error| {
+                let action = if error == SecretError::UnsafeFile {
+                    "Make the key file a regular file owned by the serving user, with mode 0600 \
+                     or 0400 and one link."
+                } else {
+                    "Provide the seal's private key under the secret provider the reference names."
+                };
                 key(
                     ProblemKind::RuntimeInvalid,
                     "render.runtime.seal-key-unreadable",
-                    format!("signing.seals.{id}.privateKeyRef cannot be resolved"),
-                    "Provide the seal's private key under the secret provider the reference names.",
+                    format!("signing.seals.{id}.privateKeyRef cannot be resolved: {error}"),
+                    action,
                 )
             })?;
         let not_a_key = || {
@@ -537,7 +546,7 @@ impl Seal {
                 "Store the seal's private key as one ES256, ES384, RS256 or RS384 private JWK.",
             )
         };
-        let text = std::str::from_utf8(&secret).map_err(|_| not_a_key())?;
+        let text = std::str::from_utf8(secret.expose_secret()).map_err(|_| not_a_key())?;
         let mut jwk = PrivateJwk::parse(text.trim()).map_err(|_| not_a_key())?;
         drop(secret);
         // The CMS names its signer by issuer and serial number, never by key

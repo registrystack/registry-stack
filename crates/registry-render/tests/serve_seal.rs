@@ -1148,6 +1148,48 @@ fn a_key_that_does_not_match_its_certificate_refuses_startup_by_position() {
     }
 }
 
+/// A seal key file serve cannot use names why, and the fix follows: an
+/// unsafe file is not a missing one.
+#[test]
+fn an_unusable_key_file_names_its_reason_and_fix() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = sealed(None);
+    let key_file = fixture.home.join("seal.jwk");
+    std::fs::set_permissions(&key_file, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let (code, stderr) = refused_startup(&fixture);
+    assert_eq!(
+        code,
+        Some(registry_render::ProblemKind::RuntimeInvalid.exit_code()),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("render.runtime.seal-key-unreadable"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("the referenced secret file is unsafe"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("mode 0600"), "{stderr}");
+
+    std::fs::remove_file(&key_file).unwrap();
+    let (code, stderr) = refused_startup(&fixture);
+    assert_eq!(
+        code,
+        Some(registry_render::ProblemKind::RuntimeInvalid.exit_code()),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("the referenced secret is unavailable"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("mode 0600"), "{stderr}");
+    assert!(
+        stderr.contains("Provide the seal's private key"),
+        "{stderr}"
+    );
+}
+
 #[test]
 fn an_unreadable_or_invalid_chain_refuses_startup_by_position() {
     let pki = seal_pki();
