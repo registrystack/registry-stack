@@ -896,6 +896,7 @@ async fn render_route(
                 bundle_hash: rendered.bundle_hash.clone(),
                 outcome: Some("rendered"),
                 problem: None,
+                reason: None,
                 pdf_sha256: Some(rendered.pdf_sha256.clone()),
                 data_sha256: Some(rendered.data_sha256.clone()),
                 seal_id: None,
@@ -1090,7 +1091,20 @@ async fn seal_route(
         });
     let (event, outcome) = match outcome {
         Ok((event, response)) => (event, Ok(response)),
-        Err(problem) => (started.refused_after_start(&problem), Err(problem)),
+        Err(problem) => {
+            // The caller reads fixed guidance; the operator reads the
+            // value-free reason here and in the audit.
+            if let Some(reason) = problem.reason {
+                tracing::warn!(
+                    target: "registry_render::seal",
+                    seal_id = %seal_id,
+                    problem = problem.kind.slug(),
+                    reason,
+                    "seal refused"
+                );
+            }
+            (started.refused_after_start(&problem), Err(problem))
+        }
     };
     // The response entry is accepted before anything leaves.
     if let Err(audit_problem) = service.audit.response(&call.envelope, event).await {

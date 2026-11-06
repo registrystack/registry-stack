@@ -719,11 +719,15 @@ impl Seal {
             Some(authority) => {
                 let token = authority.stamp(&signature.signature_value).await?;
                 let stamped = add_signature_timestamp(&signature.cms_der, &token.token_der)
-                    .map_err(|_| authority.failure(TimestampFailure::InvalidToken))?;
+                    .map_err(|_| {
+                        authority.failure(TimestampFailure::InvalidToken, "token-not-embeddable")
+                    })?;
                 let gen_time = token
                     .gen_time
                     .format(&time::format_description::well_known::Rfc3339)
-                    .map_err(|_| authority.failure(TimestampFailure::InvalidToken))?;
+                    .map_err(|_| {
+                        authority.failure(TimestampFailure::InvalidToken, "gen-time-not-rfc3339")
+                    })?;
                 let stamp = AppliedTimestamp {
                     time: gen_time,
                     token_sha256: sha256_hex(&token.token_der),
@@ -735,7 +739,7 @@ impl Seal {
             .embed(&cms_der)
             .map_err(|error| match (error, &self.timestamp) {
                 (PdfSignatureError::SignatureTooLarge { .. }, Some(authority)) => {
-                    authority.failure(TimestampFailure::TooLarge)
+                    authority.failure(TimestampFailure::TooLarge, "token-too-large")
                 }
                 (error, _) => internal(format!(
                     "seal {}: the signature could not be embedded: {error}",
@@ -930,12 +934,20 @@ impl TimestampAuthority {
         })
     }
 
-    fn failure(&self, failure: TimestampFailure) -> RenderProblem {
+    /// The problem for a failed exchange: `failure` names the piece for the
+    /// caller, and `reason`, a value-free kebab-case name of the failing
+    /// check, goes to the operator's log and the audit.
+    fn failure(&self, failure: TimestampFailure, reason: &'static str) -> RenderProblem {
         RenderProblem::new(
             ProblemKind::TimestampFailed,
-            format!("seal {}: {}", self.seal_id, failure.operator_text()),
+            format!(
+                "seal {}: {} ({reason})",
+                self.seal_id,
+                failure.operator_text()
+            ),
         )
         .with_public_detail(failure.public_text())
+        .with_reason(reason)
     }
 
     async fn stamp(
@@ -961,9 +973,11 @@ impl TimestampAuthority {
             .body(query)
             .send()
             .await
-            .map_err(|_| self.failure(TimestampFailure::Unreachable))?;
+            .map_err(|error| {
+                self.failure(TimestampFailure::Unreachable, transport_reason(&error))
+            })?;
         if !response.status().is_success() {
-            return Err(self.failure(TimestampFailure::Refused));
+            return Err(self.failure(TimestampFailure::Refused, "http-status"));
         }
         let is_reply = response
             .headers()
@@ -972,22 +986,57 @@ impl TimestampAuthority {
             .and_then(|value| value.split(';').next())
             .is_some_and(|media| media.trim().eq_ignore_ascii_case(TIMESTAMP_REPLY));
         if !is_reply {
-            return Err(self.failure(TimestampFailure::InvalidToken));
+            return Err(self.failure(TimestampFailure::InvalidToken, "not-a-timestamp-reply"));
         }
         let reply =
             registry_platform_httputil::read_bounded(response, MAX_TIMESTAMP_RESPONSE_BYTES as u64)
                 .await
                 .map_err(|error| match error {
-                    registry_platform_httputil::BoundedReadError::Transport(_) => {
-                        self.failure(TimestampFailure::Unreachable)
+                    registry_platform_httputil::BoundedReadError::Transport(error) => {
+                        self.failure(TimestampFailure::Unreachable, transport_reason(&error))
                     }
-                    _ => self.failure(TimestampFailure::TooLarge),
+                    _ => self.failure(TimestampFailure::TooLarge, "response-too-large"),
                 })?;
-        accept_timestamp_response(&reply, signature_value, nonce).map_err(|error| match error {
-            TimestampError::NotGranted { .. } => self.failure(TimestampFailure::Refused),
-            TimestampError::ResponseTooLarge => self.failure(TimestampFailure::TooLarge),
-            _ => self.failure(TimestampFailure::InvalidToken),
+        accept_timestamp_response(&reply, signature_value, nonce).map_err(|error| {
+            let (failure, reason) = response_failure(&error);
+            self.failure(failure, reason)
         })
+    }
+}
+
+/// The reason for a transport failure: the attempt timeout, or any other
+/// connection failure.
+fn transport_reason(error: &reqwest::Error) -> &'static str {
+    if error.is_timeout() {
+        "timed-out"
+    } else {
+        "connection-failed"
+    }
+}
+
+/// The piece and the value-free reason for a refused timestamp response.
+fn response_failure(error: &TimestampError) -> (TimestampFailure, &'static str) {
+    use TimestampFailure::{InvalidToken, Refused, TooLarge};
+    match error {
+        TimestampError::NotGranted { .. } => (Refused, "not-granted"),
+        TimestampError::ResponseTooLarge => (TooLarge, "response-too-large"),
+        TimestampError::MalformedResponse => (InvalidToken, "malformed-response"),
+        TimestampError::MissingToken => (InvalidToken, "missing-token"),
+        TimestampError::NotTstInfo => (InvalidToken, "not-tst-info"),
+        TimestampError::MalformedTstInfo => (InvalidToken, "malformed-tst-info"),
+        TimestampError::MessageImprintMismatch => (InvalidToken, "message-imprint-mismatch"),
+        TimestampError::NonceMismatch => (InvalidToken, "nonce-mismatch"),
+        TimestampError::TokenSignature(_) => (InvalidToken, "token-signature-invalid"),
+        TimestampError::TsaCertificateNotForTimestamping { .. } => {
+            (InvalidToken, "tsa-certificate-not-for-timestamping")
+        }
+        TimestampError::TsaCertificateNotValidAtGenTime { .. } => {
+            (InvalidToken, "tsa-certificate-not-valid-at-gen-time")
+        }
+        TimestampError::TsaCertificateNotNamedBySigningCertificate { .. } => {
+            (InvalidToken, "tsa-certificate-not-named-by-token")
+        }
+        _ => (InvalidToken, "invalid-token"),
     }
 }
 

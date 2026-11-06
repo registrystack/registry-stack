@@ -180,7 +180,8 @@ signing:
 - `/ready` adds a `signing` member per seal and stays ready while a seal is
   unavailable. Audit entries add `sealId`, `documentSha256`,
   `signedFileSha256`, `certificateSha256` and `timestampTokenSha256`, never a
-  subject.
+  subject. A `timestamp-failed` response entry adds `reason`, the value-free
+  name of the failing check, which a `seal refused` log warning repeats.
 - The seal is a certification signature (DocMDP permission 2) in an invisible
   field. Templates read the payload's `signing` member (see
   [PAYLOAD.md](PAYLOAD.md)) to print a visible seal block.

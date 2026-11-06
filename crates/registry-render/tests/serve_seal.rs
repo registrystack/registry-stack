@@ -17,8 +17,8 @@ use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 use registry_platform_crypto::document_signature::test_support::{
-    refuse_timestamp_request, respond_to_timestamp_request, verify_detached_signature, TestPki,
-    TestSeal, TEST_SEAL_ORGANIZATION,
+    refuse_timestamp_request, respond_to_timestamp_request, respond_to_timestamp_request_with,
+    verify_detached_signature, EssAttribute, TestPki, TestSeal, TEST_SEAL_ORGANIZATION,
 };
 use registry_platform_crypto::{
     generate_private_jwk, sign, GeneratedKeyAlgorithm, PrivateJwk, SigningAlgorithm,
@@ -87,6 +87,9 @@ enum TsaMode {
     Garbage,
     /// Read the query and never answer within the attempt timeout.
     Silent,
+    /// Grant a token whose signer carries no ESS signing-certificate
+    /// attribute.
+    Unbound,
 }
 
 struct Tsa {
@@ -167,6 +170,17 @@ fn start_tsa(mode: TsaMode) -> Tsa {
                 ),
                 TsaMode::Oversize => ("200 OK", reply, vec![0x30; 70 * 1024]),
                 TsaMode::Garbage => ("200 OK", reply, b"not a timestamp reply".to_vec()),
+                TsaMode::Unbound => (
+                    "200 OK",
+                    reply,
+                    respond_to_timestamp_request_with(
+                        &query,
+                        &pki,
+                        now_seconds(),
+                        EssAttribute::Absent,
+                    )
+                    .expect("grant"),
+                ),
                 TsaMode::Silent => unreachable!("a silent authority never answers"),
             };
             let head = format!(
@@ -340,6 +354,23 @@ impl Fixture {
 struct Server {
     child: Child,
     port: u16,
+    /// The server's standard error: its JSON log lines.
+    stderr: std::fs::File,
+}
+
+impl Server {
+    /// The JSON log lines the server has written so far.
+    fn log(&self) -> Vec<serde_json::Value> {
+        use std::io::{Seek as _, SeekFrom};
+        let mut stderr = self.stderr.try_clone().expect("server stderr handle");
+        let mut output = String::new();
+        stderr.seek(SeekFrom::Start(0)).unwrap();
+        stderr.read_to_string(&mut output).unwrap();
+        output
+            .lines()
+            .filter_map(|line| serde_json::from_str(line).ok())
+            .collect()
+    }
 }
 
 impl Drop for Server {
@@ -391,7 +422,11 @@ fn try_start_server(fixture: &Fixture) -> Option<Server> {
             panic!("server exited early with {status}:\n{output}");
         }
         if TcpStream::connect(("127.0.0.1", port)).is_ok() {
-            return Some(Server { child, port });
+            return Some(Server {
+                child,
+                port,
+                stderr,
+            });
         }
         assert!(
             Instant::now() < deadline,
@@ -1124,15 +1159,24 @@ fn a_failing_timestamp_authority_fails_the_seal_naming_the_piece() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.local_addr().unwrap().port()
     };
-    let cases: [(Option<TsaMode>, &str); 6] = [
-        (None, "could not be reached"),
-        (Some(TsaMode::Silent), "could not be reached"),
-        (Some(TsaMode::Reject), "refused"),
-        (Some(TsaMode::ServerError), "refused"),
-        (Some(TsaMode::Garbage), "invalid timestamp token"),
-        (Some(TsaMode::Oversize), "too large"),
+    let cases: [(Option<TsaMode>, &str, &str); 7] = [
+        (None, "could not be reached", "connection-failed"),
+        (Some(TsaMode::Silent), "could not be reached", "timed-out"),
+        (Some(TsaMode::Reject), "refused", "not-granted"),
+        (Some(TsaMode::ServerError), "refused", "http-status"),
+        (
+            Some(TsaMode::Garbage),
+            "invalid timestamp token",
+            "malformed-response",
+        ),
+        (
+            Some(TsaMode::Unbound),
+            "invalid timestamp token",
+            "tsa-certificate-not-named-by-token",
+        ),
+        (Some(TsaMode::Oversize), "too large", "response-too-large"),
     ];
-    for (mode, piece) in cases {
+    for (mode, piece, reason) in cases {
         let tsa = mode.map(start_tsa);
         let url = match &tsa {
             Some(tsa) => format!("http://127.0.0.1:{}/tsr", tsa.port),
@@ -1180,6 +1224,19 @@ fn a_failing_timestamp_authority_fails_the_seal_naming_the_piece() {
         if let Some(tsa) = &tsa {
             assert_eq!(tsa.requests.load(Ordering::SeqCst), 1, "{piece}: no retry");
         }
+        // The operator reads the cause, value-free, in one log line.
+        let log = server.log();
+        let named: Vec<_> = log
+            .iter()
+            .filter(|line| line["fields"]["reason"] == reason)
+            .collect();
+        assert_eq!(named.len(), 1, "{reason}: {log:?}");
+        assert_eq!(named[0]["level"], "WARN", "{reason}");
+        assert_eq!(named[0]["fields"]["seal_id"], "ministry", "{reason}");
+        assert_eq!(
+            named[0]["fields"]["problem"], "timestamp-failed",
+            "{reason}"
+        );
         drop(server);
         let audit = fixture.audit();
         assert_eq!(audit.len(), 2, "{audit:?}");
@@ -1188,6 +1245,8 @@ fn a_failing_timestamp_authority_fails_the_seal_naming_the_piece() {
         assert_eq!(audit[0]["correlation"], audit[1]["correlation"]);
         assert_eq!(audit[1]["record"]["outcome"], "refused");
         assert_eq!(audit[1]["record"]["problem"], "timestamp-failed");
+        assert_eq!(audit[1]["record"]["reason"], reason, "{audit:?}");
+        assert!(audit[0]["record"].get("reason").is_none());
         assert!(audit[1]["record"].get("signedFileSha256").is_none());
     }
 }
