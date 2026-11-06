@@ -24,4 +24,29 @@ The method performs one exchange. Render's correlation key offers no durable
 idempotency, so this client adds no mutation retry. Pure CLI and library
 rendering require neither this client nor an issuer.
 
+## Sealing
+
+`RenderClient::seal` calls `POST /v1/seal/{type}` with the render request body
+and a credential carrying the `render:seal` scope. The route exists only when
+the server configures seals; otherwise the answer is the `render.not-found`
+problem. It returns a `SealedDocument`: the signed PDF bytes, `document_sha256`
+(the first revision), `signed_file_sha256` (the whole file), `data_sha256`,
+`document_version`, warnings, and `seal` facts (`id`, a `SealLevel` of `BaselineB`
+for b-b or `BaselineT` for b-t, `certificate_sha256`, `timestamp_time` at b-t
+only). There is no `pdfSha256`.
+
+Before returning, the client checks that the bytes hash to `signedFileSha256`,
+that `documentSha256` is the hash of a prefix ending at one of the file's
+`%%EOF` markers (found by byte search, not PDF parsing), and that the facts fit
+the level. It does not validate the signature, the certificate chain or the
+timestamp token; that stays with the relying party.
+
+Sealing is never resent. A second seal is a second valid file with another
+signing time, so after an uncertain exchange (`outcome_unknown`) the caller
+decides. The optional `idempotency_key` (1 to 128 visible ASCII characters) is
+sent as `Idempotency-Key` and must be echoed exactly; it is a correlation key,
+not a deduplication promise. The new problem codes are `render.signing-unavailable`
+and `render.seal-certificate-invalid` (503), `render.timestamp-failed` (502),
+`render.document-not-sealable` (400) and `render.seal-client-not-allowed` (403).
+
 Run `cargo test --locked -p registry-render-client` for the HTTP boundary tests.
