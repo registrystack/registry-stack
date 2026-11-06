@@ -8,23 +8,18 @@
   same workflow (`definition.review-request-not-run-owned`), as
   `breg.cancel-proposal/v1` already requires of `proposalId`. Every workflow in
   a deployment shares one Casework producer, so this check keeps each run's
-  cancel to the request it submitted. The rule also holds when a package or
-  run snapshot is restored: the service does not start on a pinned package
-  that breaks it, and a retained run whose definition no longer passes is
-  held. `coordinatorctl deployment-status` lists such runs in `heldRuns`.
-- A live run whose retained definition this version does not restore no
-  longer stops the deployment. Startup, readiness, admissions, apply and every
-  other run continue; only that run is held, with state `attention` and
-  failure code `definition-refused`, audited once before the hold with the
-  restore finding code. Nothing runs for it: the worker never claims it, its
-  deadline does not expire it, and `retry-same`, `reconcile` and `cancel`
-  answer 409 `run.definition-incompatible`. Only a release that accepts its
-  definition can end a held run. `attention=true` lists held runs;
-  `deployment-status` returns `heldRuns` and doctor returns
-  `state.heldRunCount` and `state.heldRuns`, each entry with `runId`,
-  `workflow`, `workflowRevision`, `reason`, `findingCode` and `advice`. A
-  snapshot that cannot be opened or an unreachable database still fails the
-  check and holds nothing.
+  cancel to the request it submitted. The rule also holds on restore: the
+  service does not start on a pinned package that breaks it, and a run
+  admitted under such a definition is held.
+- BREAKING: a live run whose retained definition this version does not
+  restore is held alone instead of stopping the deployment. It shows state
+  `attention` with failure code `definition-refused`, audited once with the
+  restore finding code. Nothing runs for it, and `retry-same`, `reconcile` and
+  `cancel` refuse it with 409 `run.definition-incompatible`. Startup,
+  readiness, admissions, apply and every other run continue; `attention=true`,
+  doctor (`state.heldRunCount`, `state.heldRuns`) and `deployment-status`
+  (`heldRuns`) list held runs. A pinned package this version does not restore
+  still stops startup.
 - Restore refusals give operator context instead of the authoring
   suggestion. A pinned package this version does not restore keeps the
   finding as its code and names its package digest and workflow; a held run

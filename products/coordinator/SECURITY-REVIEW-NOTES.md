@@ -613,8 +613,8 @@ naming its package digest, workflow and the finding code. A live run whose
 snapshot breaks it is held alone with `definition-refused` (see "Runs whose
 retained definition does not restore"): nothing runs for it, retry,
 reconcile and cancel refuse it, and normal serving, readiness, other runs,
-admissions and apply continue. Operator cost: only a release that accepts a
-held run's definition can end that run.
+admissions and apply continue. Operator cost: a held run stays held under
+this version, and only a release that accepts its definition can end it.
 
 ### Tests
 
@@ -634,8 +634,8 @@ The rule is structural over the reviewed, pinned definition and adds no
 runtime check; Casework remains the authority for each cancel. One deployment
 is one trust domain, so workflows that must not share a Casework producer
 identity run in separate deployments. A retained run whose snapshot breaks
-the rule is held and runs nothing under this version; the pre-upgrade check
-and drain above keep runs out of that hold.
+the rule is held and runs nothing under this version, and only a release that
+accepts its definition can end it.
 
 ## Runs whose retained definition does not restore
 

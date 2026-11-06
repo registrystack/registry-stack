@@ -678,11 +678,11 @@ runs for a held run. The worker never claims it and its deadline does not
 expire it; `retry-same`, `reconcile` and `cancel` answer 409
 `run.definition-incompatible`, so no cleanup step runs for it either. Its
 uncertain effects, prepared commands, spent keys and restore-review marks stay
-as they are, and every other run continues. Find held runs with
-`attention=true`, the doctor report or `deployment-status`. This version cannot
-end a held run: only a Coordinator release that accepts its definition can.
-A retained snapshot that cannot be opened, or a database that cannot be
-reached, still refuses the check and holds nothing. A pinned package this version does not restore still stops the service
+as they are, and every other run continues. Held runs appear in
+`attention=true`, the doctor report and `deployment-status`. This version
+cannot end a held run: only a release that accepts its definition can. A
+retained snapshot that cannot be opened, or a database that cannot be reached,
+still refuses the check and holds nothing. A pinned package this version does not restore still stops the service
 in either mode, naming its package digest, workflow and restore finding code.
 
 For an incompatible binding, restore the original bindings or use
