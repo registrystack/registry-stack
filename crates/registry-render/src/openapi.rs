@@ -161,6 +161,7 @@ pub const OPENAPI_JSON: &str = r#"{
           "403": { "description": "forbidden: the credential lacks the render:seal scope, or is the legacy API key; seal-client-not-allowed: the verified client is not in the seal's allowedClients" },
           "413": { "description": "Request body over the configured limit (problem+json; audited, after authentication)" },
           "422": { "description": "Compile failure, strict warnings, or oversized output" },
+          "429": { "description": "rate-limited: as many seals as render slots are already in flight; refused, not queued; retry later" },
           "500": { "description": "Render panicked, or the prepared file was refused" },
           "502": { "description": "timestamp-failed: the timestamp authority could not be reached, refused, returned an invalid token, or answered too large; one attempt, never retried, never sealed without the timestamp" },
           "503": { "description": "signing-unavailable or seal-certificate-invalid (the seal cannot sign now, plain rendering unaffected); audit failure; or credential verifier unavailable" },

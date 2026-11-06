@@ -167,6 +167,7 @@ The problems specific to this route, from a closed vocabulary shared with the re
 | `signing-unavailable` | 503 | 26 | The seal's key provider is not ready. |
 | `seal-certificate-invalid` | 503 | 27 | The seal certificate is expired, not yet valid, or cannot sign. |
 | `timestamp-failed` | 502 | 28 | The timestamp authority gave no usable token. No file is returned and no retry is made. |
+| `rate-limited` | 429 | 18 | As many seals as `limits.maximumConcurrentRenders` are already in flight. The call is refused, not queued. |
 
 `/ready` adds `signing`, one member per seal: `{"status": "ready"}` or `{"status": "unavailable",
 "reason": ...}` with `certificate-expired`, `certificate-not-yet-valid`, or `provider-not-ready`,

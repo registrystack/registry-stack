@@ -907,7 +907,7 @@ fn readiness_reports_each_seal_and_never_requests_a_timestamp() {
     let openapi = request(server.port, "GET", "/openapi.json", &[], None).json();
     let seal = &openapi["paths"]["/v1/seal/{type}"]["post"];
     assert!(seal["security"][0]["bearerAuth"].is_array());
-    for status in ["200", "400", "401", "403", "502", "503"] {
+    for status in ["200", "400", "401", "403", "429", "502", "503"] {
         assert!(seal["responses"].get(status).is_some(), "{status}");
     }
 }
@@ -1352,6 +1352,86 @@ fn a_failing_timestamp_authority_fails_the_seal_naming_the_piece() {
         assert!(audit[0]["record"].get("reason").is_none());
         assert!(audit[1]["record"].get("signedFileSha256").is_none());
     }
+}
+
+/// A seal waiting on the timestamp authority holds no render slot, so seals
+/// in flight are bounded on their own, by the render concurrency: one more
+/// is refused at once as rate-limited, and a plain render still gets the
+/// free slot.
+#[test]
+fn seals_in_flight_beyond_the_render_concurrency_are_refused_as_rate_limited() {
+    let tsa = start_tsa(TsaMode::Silent);
+    let fixture = sealed(Some(&tsa));
+    let text = std::fs::read_to_string(&fixture.runtime_path).unwrap();
+    let one_slot = text.replacen(
+        "maximumConcurrentRenders: 2",
+        "maximumConcurrentRenders: 1",
+        1,
+    );
+    assert_ne!(one_slot, text);
+    std::fs::write(&fixture.runtime_path, one_slot).unwrap();
+    let server = start_server(&fixture);
+    let token = fixture.token("render:seal", SEAL_CLIENT);
+    let bearer = format!("Bearer {token}");
+    let port = server.port;
+    let first = std::thread::spawn(move || {
+        request(
+            port,
+            "POST",
+            "/v1/seal/notice",
+            &[
+                ("Authorization", bearer.as_str()),
+                ("Content-Type", "application/json"),
+                ("Accept", "application/json"),
+            ],
+            Some(NOTICE_BODY),
+        )
+    });
+    let waiting = Instant::now();
+    while tsa.requests.load(Ordering::SeqCst) == 0 {
+        assert!(
+            waiting.elapsed() < Duration::from_secs(30),
+            "the first seal never reached the authority"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    let refused = post(&server, "/v1/seal/notice", &token, "application/json");
+    assert_eq!(
+        refused.status,
+        429,
+        "{}",
+        String::from_utf8_lossy(&refused.body)
+    );
+    assert_eq!(refused.json()["code"], "render.rate-limited");
+    let plain = post(
+        &server,
+        "/v1/render/notice",
+        &fixture.token("render:render", OTHER_CLIENT),
+        "application/json",
+    );
+    assert_eq!(
+        plain.status,
+        200,
+        "{}",
+        String::from_utf8_lossy(&plain.body)
+    );
+
+    let first = first.join().expect("first seal call");
+    assert_eq!(
+        first.status,
+        502,
+        "{}",
+        String::from_utf8_lossy(&first.body)
+    );
+    // The first seal's place is free again.
+    let again = post(&server, "/v1/seal/notice", &token, "application/json");
+    assert_eq!(
+        again.status,
+        502,
+        "{}",
+        String::from_utf8_lossy(&again.body)
+    );
 }
 
 #[test]

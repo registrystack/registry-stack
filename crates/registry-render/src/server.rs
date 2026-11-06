@@ -53,6 +53,9 @@ pub struct Service {
     max_concurrency: usize,
     /// The loaded seals by seal id; empty without a `signing` block.
     seals: Seals,
+    /// Places for seals in flight, as many as render slots: a seal releases
+    /// its render slot before it signs and waits on the timestamp authority.
+    seals_in_flight: Arc<tokio::sync::Semaphore>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -200,6 +203,9 @@ async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
         )),
         max_concurrency: runtime.limits.concurrent_renders(),
         seals,
+        seals_in_flight: Arc::new(tokio::sync::Semaphore::new(
+            runtime.limits.concurrent_renders(),
+        )),
     });
     tracing::info!(
         renderer = crate::display_version(),
@@ -1177,12 +1183,25 @@ struct SealedRender {
 
 /// Prepare the seal's field on a supervised worker once a render slot is
 /// free, release the slot, then sign, timestamp and embed in this process.
-/// Signing and the timestamp exchange never hold a render slot.
+/// Signing and the timestamp exchange never hold a render slot; the whole
+/// call holds one of the service's places for seals in flight.
 async fn run_seal(
     service: &Service,
     seal: &Seal,
     worker_request: WorkerRequest,
 ) -> Result<(SealedRender, SealedDocument), RenderProblem> {
+    // A seal beyond the places is refused, not queued: the queue behind a
+    // slow authority would otherwise grow without a bound.
+    let _in_flight = service
+        .seals_in_flight
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| {
+            RenderProblem::new(
+                ProblemKind::RateLimited,
+                "every place for a seal in flight is taken; retry later",
+            )
+        })?;
     let permit = service
         .concurrency
         .clone()
@@ -1619,6 +1638,7 @@ mod tests {
             concurrency: Arc::new(tokio::sync::Semaphore::new(permits)),
             max_concurrency: permits,
             seals: Seals::new(),
+            seals_in_flight: Arc::new(tokio::sync::Semaphore::new(permits)),
         })
     }
 
