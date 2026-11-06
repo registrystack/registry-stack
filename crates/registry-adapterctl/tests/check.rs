@@ -2017,3 +2017,26 @@ fn job_check_accepts_deny_warnings() {
         String::from_utf8_lossy(&stderr)
     );
 }
+
+/// The refusal target is a path in the mapping's target syntax, a bounded
+/// plain string, not an identifier another system issues.
+#[test]
+fn the_expectation_target_is_a_bounded_plain_string_in_the_target_syntax() {
+    let root = tempfile::tempdir().unwrap();
+    let output = root.path().join("schemas").to_str().unwrap().to_owned();
+    let (exit, report, _) = run_json(&["schemas", "--output-dir", &output]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    let text = std::fs::read_to_string(
+        root.path()
+            .join("schemas/preview-expectations.v1alpha1.schema.json"),
+    )
+    .unwrap();
+    let schema: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let target = &schema["$defs"]["SampleExpectation"]["oneOf"][1]["properties"]["target"];
+    assert!(target.get("$ref").is_none(), "{target}");
+    assert_eq!(target["maxLength"], 256, "{target}");
+    assert!(
+        target["description"].as_str().unwrap().contains("target"),
+        "{target}"
+    );
+}

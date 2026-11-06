@@ -446,6 +446,10 @@ fn mapping_command(
         for (key, value) in members {
             envelope[key] = value;
         }
+        // A refused preview still lists what each sample gave.
+        if format == OutputFormat::Human {
+            write_preview_results(&envelope, stdout).map_err(|_| ())?;
+        }
         write_configuration_report(&checked, command_name, format, envelope, stdout, stderr)
             .map(|()| ExitCode::from(exit))
     };
@@ -823,31 +827,38 @@ fn render_human(report: &Value, checked: &Report, stdout: &mut dyn io::Write) ->
         }
     }
     if command == "mapping preview" {
-        for result in report["results"].as_array().into_iter().flatten() {
-            let mut line = format!(
-                "{}  {}",
-                result["input"].as_str().unwrap_or_default(),
-                result["outcome"].as_str().unwrap_or_default()
-            );
-            if let Some(failure) = result["failure"].as_str() {
-                line.push_str(&format!("  {failure}"));
-            }
-            if let Some(field) = result["field"].as_str() {
-                line.push_str(&format!(" {field}"));
-            }
-            if let Some(expected) = result["expected"]["outcome"].as_str() {
-                line.push_str(&format!("  expected {expected}"));
-                if let Some(field) = result["expected"]["field"].as_str() {
-                    line.push_str(&format!(" {field}"));
-                }
-            }
-            writeln!(stdout, "{line}")?;
-        }
+        write_preview_results(report, stdout)?;
     }
     if let Some(next) = report["nextStep"].as_str() {
         writeln!(stdout, "Next: {next}")?;
     }
     write!(stdout, "{}", checked.render_human())
+}
+
+/// One line per preview input: its outcome, the failure and field of a
+/// refusal, and the expectation it was judged against.
+fn write_preview_results(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
+    for result in report["results"].as_array().into_iter().flatten() {
+        let mut line = format!(
+            "{}  {}",
+            result["input"].as_str().unwrap_or_default(),
+            result["outcome"].as_str().unwrap_or_default()
+        );
+        if let Some(failure) = result["failure"].as_str() {
+            line.push_str(&format!("  {failure}"));
+        }
+        if let Some(field) = result["field"].as_str() {
+            line.push_str(&format!(" {field}"));
+        }
+        if let Some(expected) = result["expected"]["outcome"].as_str() {
+            line.push_str(&format!("  expected {expected}"));
+            if let Some(field) = result["expected"]["field"].as_str() {
+                line.push_str(&format!(" {field}"));
+            }
+        }
+        writeln!(stdout, "{line}")?;
+    }
+    Ok(())
 }
 
 fn human_lead(report: &Value) -> String {

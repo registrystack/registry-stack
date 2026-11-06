@@ -29,7 +29,10 @@
           "description": "The mapping refuses the sample. With a `target`, a refusal must name\nthat target field, in the mapping's target syntax; without one, any\nrefusal of the mapping will do.",
           "properties": {
             "target": {
-              "$ref": "#/$defs/ExternalId"
+              "description": "An assignment's `target`, written in the mapping's target\nsyntax (dotted names or quoted keys).",
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
             },
             "type": {
               "const": "refused",

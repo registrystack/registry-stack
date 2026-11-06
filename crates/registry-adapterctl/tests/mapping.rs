@@ -309,6 +309,7 @@ fn check_reports_the_title_of_the_target_schema_root() {
     for schema in [
         SCHEMA.replacen("\"source\": {", "\"source\": {\"title\": \"Nested\",", 1),
         titled.replacen("\"Register a person\"", "\"\"", 1),
+        titled.replacen("\"Register a person\"", "\" \\t \"", 1),
     ] {
         std::fs::write(root.path().join("schemas/person.schema.json"), schema).unwrap();
         let (exit, report, _) = run_json(&["mapping", "check", &model]);
@@ -855,7 +856,7 @@ fn preview_reports_each_samples_expectation_and_whether_it_matched() {
 }
 
 #[test]
-fn preview_takes_deny_warnings_like_the_other_mapping_checks() {
+fn preview_accepts_the_deny_warnings_flag() {
     let (root, inputs) = expectation_workspace("  good:\n    type: accepted\n");
     let model = path(&root, "person.mapping.yaml");
     let (exit, report, _) = run_json(&[
@@ -950,13 +951,40 @@ fn a_refusal_for_another_target_is_not_the_expected_refusal() {
 
 #[test]
 fn an_unreadable_sample_never_matches_an_expectation() {
-    let (root, inputs) =
-        expectation_workspace("  broken:\n    type: refused\n  bad:\n    type: refused\n");
-    let broken = write_input(&root, "preview/broken.json", "{ not: [valid");
-    let (exit, report) = preview_with(&root, &[broken, inputs[2].clone()]);
-    assert_refused(exit, &report, "adapterctl.mapping-preview-mismatch");
-    assert_eq!(report["results"][0]["matched"], false, "{report}");
-    assert_eq!(report["results"][1]["matched"], true, "{report}");
+    for expectation in [
+        "type: refused",
+        "type: accepted",
+        "type: refused\n    target: source.id",
+    ] {
+        let (root, inputs) = expectation_workspace(&format!(
+            "  broken:\n    {expectation}\n  huge:\n    {expectation}\n  bad:\n    type: refused\n"
+        ));
+        let broken = write_input(&root, "preview/broken.json", "{ not: [valid");
+        let huge = write_input(
+            &root,
+            "preview/huge.json",
+            &format!("{{\"id\": \"{}\"}}", "x".repeat(1024 * 1024)),
+        );
+        let (exit, report) = preview_with(&root, &[broken, huge, inputs[2].clone()]);
+        assert_refused(exit, &report, "adapterctl.mapping-preview-mismatch");
+        assert_eq!(
+            report["results"][0]["failure"], "input-unreadable",
+            "{report}"
+        );
+        assert_eq!(
+            report["results"][1]["failure"], "input-too-large",
+            "{report}"
+        );
+        assert_eq!(
+            report["results"][0]["matched"], false,
+            "{expectation}: {report}"
+        );
+        assert_eq!(
+            report["results"][1]["matched"], false,
+            "{expectation}: {report}"
+        );
+        assert_eq!(report["results"][2]["matched"], true, "{report}");
+    }
 }
 
 #[test]
@@ -1086,6 +1114,18 @@ fn preview_human_output_shows_expectations_and_names_a_mismatch() {
         "{text}"
     );
     assert!(text.contains("/samples/bad"), "{text}");
+    // The per-sample lines are printed on a refusal too.
+    assert!(
+        text.contains(&format!("{}  accepted  expected accepted\n", inputs[0])),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!(
+            "{}  refused  mapping.missing source.id  expected accepted\n",
+            inputs[2]
+        )),
+        "{text}"
+    );
     assert!(
         text.contains(
             "refused (mapping.missing at source.id), but the expectations record accepted"
@@ -2568,4 +2608,62 @@ fn source_request_example_checks_and_generates_headlessly() {
         "tracked-entity-request.mapping.yaml",
         "scripts/tracked-entity-request.rhai",
     );
+}
+
+/// A sample is any file passed as input, whatever its extension, and the
+/// extension is compared without case.
+#[test]
+fn a_sample_may_have_any_extension_and_any_case() {
+    let (root, _) = expectation_workspace(
+        "  Upper:\n    type: accepted\n  plain:\n    type: accepted\n  yml-case:\n    type: accepted\n",
+    );
+    let upper = write_input(&root, "preview/Upper.JSON", r#"{"id": "1", "size": "5"}"#);
+    let plain = write_input(&root, "preview/plain.txt", r#"{"id": "2", "size": "5"}"#);
+    let yml = write_input(&root, "preview/yml-case.YML", "id: \"3\"\nsize: \"5\"\n");
+    let (exit, report) = preview_with(&root, &[upper, plain, yml]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    for result in report["results"].as_array().unwrap() {
+        assert_eq!(result["matched"], true, "{report}");
+    }
+}
+
+/// Passing only the expectations file leaves nothing to preview: a visible
+/// failure of the same class as a missing input.
+#[test]
+fn passing_only_the_expectations_file_is_refused() {
+    let (root, _) = expectation_workspace("  good:\n    type: accepted\n");
+    let only = path(&root, "preview/expected.yaml");
+    let (exit, report) = preview_with(&root, &[only]);
+    assert_eq!(exit, ExitCode::from(3), "{report}");
+    assert_eq!(report["diagnostics"][0]["code"], "adapterctl.io-failure");
+    assert!(report.get("results").is_none(), "{report}");
+}
+
+/// The expectations file is read once however the directory is spelled.
+#[test]
+fn one_directory_spelled_two_ways_reads_its_expectations_once() {
+    let (root, inputs) =
+        expectation_workspace("  good:\n    type: accepted\n  gone:\n    type: refused\n");
+    let other = path(&root, "preview/../preview/bad.json");
+    let (exit, report) = preview_with(&root, &[inputs[0].clone(), other]);
+    assert_refused(exit, &report, "adapter.mapping.expectation-sample-unknown");
+    let unknown = report["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|d| d["code"] == "adapter.mapping.expectation-sample-unknown")
+        .count();
+    assert_eq!(unknown, 1, "{report}");
+}
+
+/// A directory glob includes the expectations file; it is skipped, and the
+/// samples beside it are all judged.
+#[test]
+fn a_directory_glob_that_includes_the_expectations_file_judges_every_sample() {
+    let (root, mut inputs) =
+        expectation_workspace("  good:\n    type: accepted\n  bad:\n    type: refused\n");
+    inputs.insert(0, path(&root, "preview/expected.yaml"));
+    let (exit, report) = preview_with(&root, &inputs);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    assert_eq!(report["results"].as_array().unwrap().len(), 3, "{report}");
 }

@@ -486,12 +486,13 @@ fn run_check(args: &MappingCheckArgs) -> Result<MappingRun, MappingFailure> {
     })
 }
 
-/// The title of the target schema's root, when it is non-empty text.
+/// The title of the target schema's root, when it is text with something
+/// other than whitespace in it.
 fn target_title(schema: &Value) -> Option<&str> {
     schema
         .get("title")
         .and_then(Value::as_str)
-        .filter(|title| !title.is_empty())
+        .filter(|title| !title.trim().is_empty())
 }
 
 fn target_name(target: MappingTarget) -> &'static str {
@@ -875,6 +876,20 @@ fn run_preview(args: &MappingPreviewArgs) -> Result<MappingRun, MappingFailure> 
                 .is_none_or(|name| name != EXPECTATIONS_FILE)
         })
         .collect();
+    if inputs.is_empty() {
+        // Only the expectations file was passed: there is nothing to preview.
+        return Err(MappingFailure::Io {
+            path: args
+                .input
+                .first()
+                .map(|input| input.display().to_string())
+                .unwrap_or_default(),
+            source: io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "the expectations file is not a sample, and no sample was passed",
+            ),
+        });
+    }
     let expectations = read_expectations(&inputs, &fields, &mut report, &mut files)?;
     if report.has_errors() {
         return Err(refusal(report, files));
@@ -967,12 +982,15 @@ struct Expectations {
 /// Expectations by the directory of the samples they sit beside.
 type ExpectationsByDirectory = BTreeMap<PathBuf, Expectations>;
 
-/// The directory an input sits in; a bare file name is in the current one.
+/// The directory an input sits in, however it is spelled: the resolved
+/// path when the directory exists, else the path as given. A bare file name
+/// is in the current directory.
 fn input_directory(input: &Path) -> PathBuf {
-    match input.parent() {
+    let directory = match input.parent() {
         Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
         _ => PathBuf::from("."),
-    }
+    };
+    std::fs::canonicalize(&directory).unwrap_or(directory)
 }
 
 /// A sample's name: its file name without the extension.
@@ -984,8 +1002,9 @@ fn sample_name(input: &Path) -> String {
 }
 
 /// The sample files in `directory`: the JSON and YAML files other than the
-/// expectations file, by sample name.
-fn sample_names(directory: &Path) -> Result<Vec<String>, MappingFailure> {
+/// expectations file, by sample name, and every input passed from it
+/// whatever its extension.
+fn sample_names(directory: &Path, passed: &[String]) -> Result<Vec<String>, MappingFailure> {
     let io_failure = |source: io::Error| MappingFailure::Io {
         path: directory.display().to_string(),
         source,
@@ -994,14 +1013,19 @@ fn sample_names(directory: &Path) -> Result<Vec<String>, MappingFailure> {
     for entry in std::fs::read_dir(directory).map_err(io_failure)? {
         let entry = entry.map_err(io_failure)?;
         let file = PathBuf::from(entry.file_name());
-        let sample = matches!(
-            file.extension().and_then(|extension| extension.to_str()),
-            Some("json" | "yaml" | "yml")
-        );
+        let sample = file
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| {
+                ["json", "yaml", "yml"]
+                    .iter()
+                    .any(|known| extension.eq_ignore_ascii_case(known))
+            });
         if sample && file != Path::new(EXPECTATIONS_FILE) && entry.path().is_file() {
             names.push(sample_name(&file));
         }
     }
+    names.extend(passed.iter().cloned());
     Ok(names)
 }
 
@@ -1021,6 +1045,11 @@ fn read_expectations(
         if found.contains_key(&directory) {
             continue;
         }
+        let passed: Vec<String> = inputs
+            .iter()
+            .filter(|other| input_directory(other) == directory)
+            .map(|other| sample_name(other))
+            .collect();
         let file = directory.join(EXPECTATIONS_FILE);
         if !file.is_file() {
             continue;
@@ -1040,7 +1069,7 @@ fn read_expectations(
         };
         let expectations = decoded.value;
         for mut finding in
-            check_preview_expectations(&expectations, &sample_names(&directory)?, &targets)
+            check_preview_expectations(&expectations, &sample_names(&directory, &passed)?, &targets)
         {
             finding.source = Some(Source {
                 file: file.display().to_string(),
