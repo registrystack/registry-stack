@@ -149,12 +149,12 @@ impl RenderRuntime {
 }
 
 /// The shortest grace a runtime may declare: zero would drop the renders
-/// in flight the moment SIGTERM arrives.
+/// and seals in flight the moment SIGTERM arrives.
 pub const MINIMUM_SHUTDOWN_GRACE_MILLISECONDS: u64 = 1_000;
 
 /// The longest grace a runtime may declare. Shutdown waits the grace for
-/// renders in flight and then the same again for connections, so the bound
-/// keeps that sum representable as well as operationally sane.
+/// renders and seals in flight and then the same again for connections, so
+/// the bound keeps that sum representable as well as operationally sane.
 pub const MAXIMUM_SHUTDOWN_GRACE_MILLISECONDS: u64 = 3_600_000;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -167,8 +167,8 @@ pub struct ListenerRuntime {
     pub bind: ListenerBind,
     #[serde(default)]
     pub network_exposure: ListenerNetworkExposure,
-    /// Time allowed for renders in flight to finish at shutdown, in
-    /// milliseconds. Open connections get the same again.
+    /// Time allowed for renders and seals in flight to finish at shutdown,
+    /// in milliseconds. Open connections get the same again.
     #[serde(default = "default_shutdown_grace")]
     pub shutdown_grace_milliseconds:
         BoundedU64<MINIMUM_SHUTDOWN_GRACE_MILLISECONDS, MAXIMUM_SHUTDOWN_GRACE_MILLISECONDS>,

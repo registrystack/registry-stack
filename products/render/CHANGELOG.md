@@ -15,7 +15,8 @@
   and never falls back to B-B. Seals in flight, which hold no render slot
   while they sign and wait on the authority, are bounded by
   `limits.maximumConcurrentRenders`; one more is refused with `rate-limited`
-  (429). `/v1/documents` names each document type's served seal as
+  (429). On SIGTERM the drain waits for seals in flight as it does for
+  renders, within `listener.shutdownGraceMilliseconds`. `/v1/documents` names each document type's served seal as
   `seal`. `/ready` adds a `signing` member per seal and
   stays ready while a seal is unavailable; `serve` logs a warning at startup
   for a seal that cannot sign or expires within 30 days. Audit entries add the value-free
