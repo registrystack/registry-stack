@@ -173,7 +173,8 @@ fn check_with_the_environment_reads_each_seal_certificate_chain() {
     let pki = TestPki::generate().unwrap();
     let now = time::OffsetDateTime::now_utc();
     let pointer = "/signing/seals/ministry/certificateChainFile";
-    let issue = |customise: &dyn Fn(&mut rcgen::CertificateParams)| {
+    type Customise<'a> = &'a dyn Fn(&mut rcgen::CertificateParams);
+    let issue = |customise: Customise| {
         let seal = pki
             .issue_seal_with(SigningAlgorithm::Es256, |params| customise(params))
             .unwrap();
@@ -187,12 +188,7 @@ fn check_with_the_environment_reads_each_seal_certificate_chain() {
     assert_eq!(exit, Some(0), "{report}");
     assert!(codes(&report).is_empty(), "{report}");
 
-    let cases: [(
-        &dyn Fn(&mut rcgen::CertificateParams),
-        Option<i32>,
-        &str,
-        &str,
-    ); 5] = [
+    let cases: [(Customise, Option<i32>, &str, &str); 5] = [
         (
             &|params| params.not_after = now + time::Duration::days(10),
             Some(0),
