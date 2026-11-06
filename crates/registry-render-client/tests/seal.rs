@@ -36,6 +36,7 @@ fn sealed_body(level: &str) -> Value {
         "signedFileSha256": sha(&pdf),
         "dataSha256": "0".repeat(64),
         "documentVersion": "receipt v1",
+        "bundleHash": "b".repeat(64),
         "warnings": ["w"],
         "seal": seal,
     })
@@ -131,8 +132,10 @@ async fn timestamped_seal_returns_typed_facts() {
     assert_eq!(sealed.document_sha256, sha(FIRST_REVISION));
     assert_eq!(sealed.signed_file_sha256, sha(&signed_file()));
     assert_eq!(sealed.document_version, "receipt v1");
+    assert_eq!(sealed.bundle_hash, "b".repeat(64));
     assert_eq!(sealed.warnings, ["w"]);
     assert_eq!(sealed.seal.id, "agency");
+    assert!(!sealed.seal.test_only);
     assert_eq!(sealed.seal.level, SealLevel::BaselineT);
     assert_eq!(sealed.seal.level.as_str(), "b-t");
     assert_eq!(
@@ -200,6 +203,33 @@ async fn hash_mismatches_are_refused() {
     // A pdfSha256 member is not part of the sealed contract.
     let mut body = sealed_body("b-t");
     body["pdfSha256"] = json!(sha(&signed_file()));
+    assert_eq!(
+        seal_with(200, body, None, None).await.unwrap_err().kind,
+        "protocol"
+    );
+}
+
+#[tokio::test]
+async fn unknown_members_are_tolerated_and_a_test_seal_is_named() {
+    let mut body = sealed_body("b-t");
+    body["laterMember"] = json!({"any": "shape"});
+    body["seal"]["laterFact"] = json!(1);
+    body["seal"]["testOnly"] = json!(true);
+    let sealed = seal_with(200, body, None, None).await.unwrap();
+    assert!(sealed.seal.test_only);
+    assert_eq!(sealed.seal.level, SealLevel::BaselineT);
+}
+
+#[tokio::test]
+async fn the_package_hash_is_required_and_checked() {
+    let mut body = sealed_body("b-b");
+    body.as_object_mut().unwrap().remove("bundleHash");
+    assert_eq!(
+        seal_with(200, body, None, None).await.unwrap_err().kind,
+        "protocol"
+    );
+    let mut body = sealed_body("b-b");
+    body["bundleHash"] = json!("not-a-digest");
     assert_eq!(
         seal_with(200, body, None, None).await.unwrap_err().kind,
         "protocol"

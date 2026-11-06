@@ -77,6 +77,19 @@ async fn one_authenticated_document_and_integrity_refusal() {
         .unwrap();
     assert_eq!(result.document_version, "receipt v1");
     task.abort();
+    // A member a later server adds is tolerated; the hash checks stay.
+    let mut later = body.clone();
+    later["laterMember"] = json!(true);
+    let (client, task) = self::client(200, later).await;
+    assert!(client
+        .render(
+            &BearerToken::new("canary-render-token").unwrap(),
+            "receipt",
+            &request()
+        )
+        .await
+        .is_ok());
+    task.abort();
     body["pdfSha256"] = json!("f".repeat(64));
     let (client, task) = self::client(200, body).await;
     assert_eq!(
