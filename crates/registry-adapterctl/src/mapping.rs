@@ -19,10 +19,12 @@ use registry_adapter::engine::project_transform::{
 use registry_adapter::engine::public_schema::{check_public_schema, PublicSchemaError};
 use registry_adapter::engine::scripts::CodeMaps;
 use registry_adapter_core::{
-    canonical_target_path, check_mapping_file, check_mapping_findings, generate,
-    is_clean_mapping_path, model_reference_from, parse_generated_header, parse_selector,
-    target_tree, AdapterMapping, BindingTransform, GeneratedHeaderState, IngestionMode,
-    MappingTarget, ProjectSchema, ProjectScript, ADAPTER_MAPPING_API_VERSION, ADAPTER_MAPPING_KIND,
+    canonical_target_path, check_mapping_file, check_mapping_findings, check_preview_expectations,
+    generate, is_clean_mapping_path, model_reference_from, parse_generated_header, parse_selector,
+    refusal_names_target, target_tree, AdapterMapping, AdapterPreviewExpectations,
+    BindingTransform, GeneratedHeaderState, IngestionMode, MappingTarget, ProjectSchema,
+    ProjectScript, SampleExpectation, ADAPTER_MAPPING_API_VERSION, ADAPTER_MAPPING_KIND,
+    ADAPTER_PREVIEW_EXPECTATIONS_API_VERSION, ADAPTER_PREVIEW_EXPECTATIONS_KIND,
     MAXIMUM_GENERATED_SCRIPT_BYTES,
 };
 use registry_platform_config::{sha256_uri, AuthoredExpressions};
@@ -30,6 +32,7 @@ use registry_platform_yaml::{
     ApiVersion, Diagnostic, EnvelopeRule, Expect, FormatSpec, Reader, Report, Severity, Source,
 };
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::io::{self, Write};
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -54,6 +57,22 @@ const INPUT_FORMAT: FormatSpec<'static> = FormatSpec {
     },
     removed_keys: &[],
 };
+
+/// The authored preview expectations format.
+const EXPECTATIONS_FORMAT: FormatSpec<'static> = FormatSpec {
+    kind: ADAPTER_PREVIEW_EXPECTATIONS_KIND,
+    envelope: EnvelopeRule::ApiVersionKind {
+        api_versions: &[ApiVersion::current(
+            ADAPTER_PREVIEW_EXPECTATIONS_API_VERSION,
+        )],
+        retired_api_versions: &[],
+    },
+    removed_keys: &[],
+};
+
+/// The file that records the expected result of each sample, beside the
+/// samples. It is never a sample itself.
+const EXPECTATIONS_FILE: &str = "expected.yaml";
 
 /// The warning code for a generated script that no longer matches its model.
 pub(crate) const SCRIPT_DRIFT_CODE: &str = "adapter.mapping.script-drift";
@@ -119,9 +138,16 @@ pub struct MappingPreviewArgs {
     pub model: PathBuf,
 
     /// A JSON or YAML file holding one source value; repeatable. A YAML
-    /// input cannot hold `null`; use JSON for that.
+    /// input cannot hold `null`; use JSON for that. An `expected.yaml` beside
+    /// the inputs records the result each sample should give, named by its
+    /// file name without the extension; the run exits 1 when a result
+    /// differs. The `expected.yaml` itself is never a sample.
     #[arg(long, value_name = "FILE", required = true)]
     pub input: Vec<PathBuf>,
+
+    /// Exit 1 when a warning is reported.
+    #[arg(long)]
+    pub deny_warnings: bool,
 }
 
 /// Why a mapping command could not run to a verdict.
@@ -839,9 +865,24 @@ fn run_preview(args: &MappingPreviewArgs) -> Result<MappingRun, MappingFailure> 
         .map(|assignment| assignment.target.as_str())
         .collect();
 
+    // The expectations file is not a sample, so `--input preview/*` works.
+    let inputs: Vec<&PathBuf> = args
+        .input
+        .iter()
+        .filter(|input| {
+            input
+                .file_name()
+                .is_none_or(|name| name != EXPECTATIONS_FILE)
+        })
+        .collect();
+    let expectations = read_expectations(&inputs, &fields, &mut report, &mut files)?;
+    if report.has_errors() {
+        return Err(refusal(report, files));
+    }
+
     let mut results = Vec::new();
     let (mut accepted, mut refused) = (0usize, 0usize);
-    for input in &args.input {
+    for input in inputs {
         let shown = input.display().to_string();
         let value = match read_input(input, &mut files)? {
             Ok(value) => value,
@@ -888,19 +929,242 @@ fn run_preview(args: &MappingPreviewArgs) -> Result<MappingRun, MappingFailure> 
             }
         }
     }
+    let mismatched = judge(&mut results, &expectations, &mut report);
+    let members = vec![
+        ("model", json!(args.model.display().to_string())),
+        ("target", json!(target_name(loaded.mapping.mapping.target))),
+        ("accepted", json!(accepted)),
+        ("refused", json!(refused)),
+        ("mismatched", json!(mismatched)),
+        ("results", Value::Array(results)),
+    ];
+    // A result that differs from its expectation fails the run, and the
+    // report still carries every result.
+    if mismatched > 0 {
+        return Err(MappingFailure::Refused {
+            diagnostics: report.into_diagnostics(),
+            files_checked: files,
+            members,
+            annotations: Vec::new(),
+        });
+    }
     Ok(MappingRun {
         warnings: report.into_diagnostics(),
         files_checked: files,
-        members: vec![
-            ("model", json!(args.model.display().to_string())),
-            ("target", json!(target_name(loaded.mapping.mapping.target))),
-            ("accepted", json!(accepted)),
-            ("refused", json!(refused)),
-            ("results", Value::Array(results)),
-        ],
+        members,
         annotations: Vec::new(),
-        deny_warnings: false,
+        deny_warnings: args.deny_warnings,
     })
+}
+
+/// The expectations file beside some samples, and the sample names it may
+/// list.
+struct Expectations {
+    file: PathBuf,
+    samples: BTreeMap<String, SampleExpectation>,
+}
+
+/// Expectations by the directory of the samples they sit beside.
+type ExpectationsByDirectory = BTreeMap<PathBuf, Expectations>;
+
+/// The directory an input sits in; a bare file name is in the current one.
+fn input_directory(input: &Path) -> PathBuf {
+    match input.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
+        _ => PathBuf::from("."),
+    }
+}
+
+/// A sample's name: its file name without the extension.
+fn sample_name(input: &Path) -> String {
+    input
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+/// The sample files in `directory`: the JSON and YAML files other than the
+/// expectations file, by sample name.
+fn sample_names(directory: &Path) -> Result<Vec<String>, MappingFailure> {
+    let io_failure = |source: io::Error| MappingFailure::Io {
+        path: directory.display().to_string(),
+        source,
+    };
+    let mut names = Vec::new();
+    for entry in std::fs::read_dir(directory).map_err(io_failure)? {
+        let entry = entry.map_err(io_failure)?;
+        let file = PathBuf::from(entry.file_name());
+        let sample = matches!(
+            file.extension().and_then(|extension| extension.to_str()),
+            Some("json" | "yaml" | "yml")
+        );
+        if sample && file != Path::new(EXPECTATIONS_FILE) && entry.path().is_file() {
+            names.push(sample_name(&file));
+        }
+    }
+    Ok(names)
+}
+
+/// Read the expectations file beside each input's directory, when there is
+/// one, and check it against the sample files and the targets the model
+/// reads. Findings go to the report; the caller refuses on an error.
+fn read_expectations(
+    inputs: &[&PathBuf],
+    read_targets: &[&str],
+    report: &mut Report,
+    files: &mut usize,
+) -> Result<ExpectationsByDirectory, MappingFailure> {
+    let mut found = ExpectationsByDirectory::new();
+    let targets: Vec<String> = read_targets.iter().map(ToString::to_string).collect();
+    for input in inputs {
+        let directory = input_directory(input);
+        if found.contains_key(&directory) {
+            continue;
+        }
+        let file = directory.join(EXPECTATIONS_FILE);
+        if !file.is_file() {
+            continue;
+        }
+        let Some((decoded, _bytes)) =
+            read::<AdapterPreviewExpectations>(&file, &EXPECTATIONS_FORMAT, report, files)?
+        else {
+            // The reader reported why; nothing else can be said of the file.
+            found.insert(
+                directory,
+                Expectations {
+                    file,
+                    samples: BTreeMap::new(),
+                },
+            );
+            continue;
+        };
+        let expectations = decoded.value;
+        for mut finding in
+            check_preview_expectations(&expectations, &sample_names(&directory)?, &targets)
+        {
+            finding.source = Some(Source {
+                file: file.display().to_string(),
+                line: None,
+                column: None,
+            });
+            report.push(finding);
+        }
+        found.insert(
+            directory,
+            Expectations {
+                file,
+                samples: expectations
+                    .samples
+                    .into_iter()
+                    .map(|(name, expectation)| (name.as_str().to_owned(), expectation))
+                    .collect(),
+            },
+        );
+    }
+    Ok(found)
+}
+
+/// Whether a preview result is the one its expectation asks for. A sample
+/// that could not be read as a source value matches no expectation.
+fn matches(expectation: &SampleExpectation, result: &Value) -> bool {
+    let outcome = result["outcome"].as_str();
+    let read_failure = matches!(
+        result["failure"].as_str(),
+        Some("input-too-large" | "input-unreadable")
+    );
+    match expectation {
+        SampleExpectation::Accepted {} => outcome == Some("accepted"),
+        SampleExpectation::Refused { target: None } => outcome == Some("refused") && !read_failure,
+        // A refusal names one target field, so it is a refusal at the target
+        // exactly when that field is the target.
+        SampleExpectation::Refused {
+            target: Some(target),
+        } => {
+            outcome == Some("refused")
+                && result["field"]
+                    .as_str()
+                    .is_some_and(|field| refusal_names_target(target.as_str(), field))
+        }
+    }
+}
+
+/// How an expectation reads in a report.
+fn expectation_member(expectation: &SampleExpectation) -> Value {
+    match expectation {
+        SampleExpectation::Accepted {} => json!({"outcome": "accepted"}),
+        SampleExpectation::Refused { target: None } => json!({"outcome": "refused"}),
+        SampleExpectation::Refused {
+            target: Some(target),
+        } => json!({"outcome": "refused", "field": target.as_str()}),
+    }
+}
+
+/// Add each result's expectation and whether it matched, raise one finding
+/// per mismatch, and count the mismatches. A result whose sample the file
+/// does not list is left as it is.
+fn judge(
+    results: &mut [Value],
+    expectations: &ExpectationsByDirectory,
+    report: &mut Report,
+) -> usize {
+    let mut mismatched = 0;
+    for result in results {
+        let input = PathBuf::from(result["input"].as_str().unwrap_or_default());
+        let name = sample_name(&input);
+        let Some(found) = expectations.get(&input_directory(&input)) else {
+            continue;
+        };
+        let Some(expectation) = found.samples.get(&name) else {
+            continue;
+        };
+        let matched = matches(expectation, result);
+        result["expected"] = expectation_member(expectation);
+        result["matched"] = json!(matched);
+        if matched {
+            continue;
+        }
+        mismatched += 1;
+        let mut finding = Diagnostic::error(
+            "adapterctl.mapping-preview-mismatch",
+            format!("/samples/{}", name.replace('~', "~0").replace('/', "~1")),
+            format!(
+                "the sample was {}, but the expectations record {}",
+                describe_result(result),
+                describe_expectation(expectation),
+            ),
+            "Fix the mapping or the sample, or correct the expectation in expected.yaml.",
+        );
+        finding.source = Some(Source {
+            file: found.file.display().to_string(),
+            line: None,
+            column: None,
+        });
+        report.push(finding);
+    }
+    mismatched
+}
+
+/// A result in words, without the source value.
+fn describe_result(result: &Value) -> String {
+    let mut text = result["outcome"].as_str().unwrap_or("unknown").to_owned();
+    if let Some(failure) = result["failure"].as_str() {
+        text.push_str(&format!(" ({failure}"));
+        if let Some(field) = result["field"].as_str() {
+            text.push_str(&format!(" at {field}"));
+        }
+        text.push(')');
+    }
+    text
+}
+
+fn describe_expectation(expectation: &SampleExpectation) -> String {
+    match expectation {
+        SampleExpectation::Accepted {} => "accepted".to_owned(),
+        SampleExpectation::Refused { target: None } => "refused".to_owned(),
+        SampleExpectation::Refused {
+            target: Some(target),
+        } => format!("refused at {}", target.as_str()),
+    }
 }
 
 /// Compile the generated script through the same seam the runtime uses for

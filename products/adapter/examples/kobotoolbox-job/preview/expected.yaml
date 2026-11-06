@@ -1,0 +1,17 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/preview-expectations/preview-expectations.v1alpha1.schema.json
+#
+# The result each sample in this directory should give when the job's mapping
+# previews it: `adapterctl mapping preview` reads this file beside the samples
+# and exits 1 when a result differs. A sample is named by its file name
+# without the extension; a sample not listed here has no expectation.
+apiVersion: id.registrystack.org/formats/adapter/preview-expectations/v1alpha1
+kind: AdapterPreviewExpectations
+samples:
+  accepted-integer-id:
+    type: accepted
+  accepted-string-id:
+    type: accepted
+  # A deliberate input: the submission has no respondent_name.
+  missing-respondent:
+    type: refused
+    target: respondentName

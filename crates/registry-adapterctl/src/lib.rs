@@ -796,7 +796,7 @@ fn render_human(report: &Value, checked: &Report, stdout: &mut dyn io::Write) ->
     let own: &[&str] = match command {
         "mapping check" => &["targetTitle", "targetTree"],
         "mapping generate" => &["modelDigest", "scriptDigest", "existed"],
-        "mapping preview" => &["accepted", "refused", "results"],
+        "mapping preview" => &["accepted", "refused", "mismatched", "results"],
         _ => &[],
     };
     if let Some(fields) = report.as_object() {
@@ -834,6 +834,12 @@ fn render_human(report: &Value, checked: &Report, stdout: &mut dyn io::Write) ->
             }
             if let Some(field) = result["field"].as_str() {
                 line.push_str(&format!(" {field}"));
+            }
+            if let Some(expected) = result["expected"]["outcome"].as_str() {
+                line.push_str(&format!("  expected {expected}"));
+                if let Some(field) = result["expected"]["field"].as_str() {
+                    line.push_str(&format!(" {field}"));
+                }
             }
             writeln!(stdout, "{line}")?;
         }

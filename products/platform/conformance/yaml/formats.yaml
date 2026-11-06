@@ -394,6 +394,10 @@ formats:
         set:
           /endpoints/0/credential/usernameRef: secret:env/REGISTRY_CONFORMANCE_VALUE
           /endpoints/0/credential/passwordRef: secret:env/REGISTRY_CONFORMANCE_VALUE
+  # The expectations are read beside the samples they judge, so the example
+  # stages the whole job directory, whose mapping the check previews.
+  adapter/preview-expectations:
+    project: products/adapter/examples/kobotoolbox-job
   adapter/fixture:
     project: products/adapter/examples/dhis2-tracker
     copies:

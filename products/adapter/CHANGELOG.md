@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- A mapping's preview samples can record the result each should give in
+  `preview/expected.yaml` beside them, an `AdapterPreviewExpectations`
+  document (`type: accepted`, or `type: refused` with an optional `target`
+  the refusal must name). `adapterctl mapping preview` reads the file in the
+  directory of its `--input` files and adds `expected` and `matched` to each
+  judged result and `mismatched` to the report. A result that differs from
+  its expectation raises `adapterctl.mapping-preview-mismatch` and exits 1; a
+  sample the file does not list has no expectation. A name with no sample
+  file, or a refusal target no assignment reads from the source, is refused
+  (`adapter.mapping.expectation-sample-unknown`,
+  `adapter.mapping.expectation-target-unknown`). `expected.yaml` is never a
+  sample. `mapping preview` also takes `--deny-warnings`. The new format has a
+  generated schema, `preview-expectations.v1alpha1.schema.json`, and the
+  KoboToolbox example ships its `preview/expected.yaml`.
 - `adapterctl mapping check` reports the `title` of the target schema's root
   as `targetTitle`, beside `targetTree`, so a tool can name what the mapping
   fills. It is display only, absent when the root has no title or the schema

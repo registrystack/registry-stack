@@ -1,0 +1,80 @@
+{
+  "$defs": {
+    "ExternalId": {
+      "description": "An identifier another system issues, written exactly as its issuer gives it.",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "type": "string"
+    },
+    "SampleExpectation": {
+      "description": "What one sample is meant to give.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "The mapping accepts the sample.",
+          "properties": {
+            "type": {
+              "const": "accepted",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The mapping refuses the sample. With a `target`, a refusal must name\nthat target field, in the mapping's target syntax; without one, any\nrefusal of the mapping will do.",
+          "properties": {
+            "target": {
+              "$ref": "#/$defs/ExternalId"
+            },
+            "type": {
+              "const": "refused",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/adapter/preview-expectations/preview-expectations.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The authored preview expectations.",
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/adapter/preview-expectations/v1alpha1",
+      "description": "The format envelope version.",
+      "type": "string"
+    },
+    "kind": {
+      "const": "AdapterPreviewExpectations",
+      "description": "The format kind: `AdapterPreviewExpectations`.",
+      "type": "string"
+    },
+    "samples": {
+      "additionalProperties": {
+        "$ref": "#/$defs/SampleExpectation"
+      },
+      "description": "The expected result of each sample, keyed by the sample's file name\nwithout its extension.",
+      "propertyNames": {
+        "$ref": "#/$defs/ExternalId"
+      },
+      "type": "object"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "samples"
+  ],
+  "title": "Registry Adapter preview expectations",
+  "type": "object"
+}

@@ -786,6 +786,314 @@ fn preview_reaches_source_keys_and_values_outside_printable_ascii() {
     assert_eq!(report["results"][1]["field"], "source.id", "{report}");
 }
 
+// --- preview expectations ---------------------------------------------------
+
+const EXPECTATIONS_HEAD: &str =
+    "apiVersion: id.registrystack.org/formats/adapter/preview-expectations/v1alpha1\n\
+     kind: AdapterPreviewExpectations\n\
+     samples:\n";
+
+/// Samples beside the workspace's model: two accepted and one refused for a
+/// missing `source.id`, with the expectations file `samples` beside them.
+fn expectation_workspace(samples: &str) -> (tempfile::TempDir, Vec<String>) {
+    let root = workspace();
+    std::fs::create_dir_all(root.path().join("preview")).unwrap();
+    for (name, text) in [
+        ("good.json", r#"{"id": "501", "size": "5"}"#),
+        ("also-good.json", r#"{"id": "502", "size": "6"}"#),
+        ("bad.json", r#"{"size": "5"}"#),
+    ] {
+        std::fs::write(root.path().join("preview").join(name), text).unwrap();
+    }
+    std::fs::write(
+        root.path().join("preview/expected.yaml"),
+        format!("{EXPECTATIONS_HEAD}{samples}"),
+    )
+    .unwrap();
+    let inputs = ["good.json", "also-good.json", "bad.json"]
+        .iter()
+        .map(|name| path(&root, &format!("preview/{name}")))
+        .collect();
+    (root, inputs)
+}
+
+fn preview_with(root: &tempfile::TempDir, inputs: &[String]) -> (ExitCode, Value) {
+    let model = path(root, "person.mapping.yaml");
+    let mut arguments = vec!["mapping", "preview", model.as_str()];
+    for input in inputs {
+        arguments.push("--input");
+        arguments.push(input);
+    }
+    let (exit, report, _) = run_json(&arguments);
+    (exit, report)
+}
+
+#[test]
+fn preview_reports_each_samples_expectation_and_whether_it_matched() {
+    let (root, inputs) = expectation_workspace(
+        "  good:\n    type: accepted\n  also-good:\n    type: accepted\n  bad:\n    type: refused\n    target: source.id\n",
+    );
+    let (exit, report) = preview_with(&root, &inputs);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    assert_eq!(report["mismatched"], 0, "{report}");
+    assert_eq!(report["accepted"], 2);
+    assert_eq!(report["refused"], 1);
+    let results = report["results"].as_array().unwrap();
+    assert_eq!(
+        results[0]["expected"],
+        json!({"outcome": "accepted"}),
+        "{report}"
+    );
+    assert_eq!(results[0]["matched"], true);
+    assert_eq!(
+        results[2]["expected"],
+        json!({"outcome": "refused", "field": "source.id"}),
+        "{report}"
+    );
+    assert_eq!(results[2]["matched"], true);
+    assert_eq!(results[2]["outcome"], "refused");
+}
+
+#[test]
+fn preview_takes_deny_warnings_like_the_other_mapping_checks() {
+    let (root, inputs) = expectation_workspace("  good:\n    type: accepted\n");
+    let model = path(&root, "person.mapping.yaml");
+    let (exit, report, _) = run_json(&[
+        "mapping",
+        "preview",
+        &model,
+        "--input",
+        &inputs[0],
+        "--deny-warnings",
+    ]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    assert_eq!(report["diagnostics"], json!([]));
+}
+
+#[test]
+fn a_bare_refused_matches_any_refusal_of_the_mapping() {
+    let (root, inputs) =
+        expectation_workspace("  good:\n    type: accepted\n  also-good:\n    type: accepted\n  bad:\n    type: refused\n");
+    let (exit, report) = preview_with(&root, &inputs);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    assert_eq!(
+        report["results"][2]["expected"],
+        json!({"outcome": "refused"})
+    );
+    assert_eq!(report["results"][2]["matched"], true);
+}
+
+#[test]
+fn a_refusal_names_its_target_in_any_spelling_of_the_target_syntax() {
+    let (root, inputs) =
+        expectation_workspace("  bad:\n    type: refused\n    target: '\"source\".id'\n");
+    let (exit, report) = preview_with(&root, &inputs[2..]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    assert_eq!(report["results"][0]["matched"], true, "{report}");
+}
+
+#[test]
+fn a_sample_the_file_does_not_list_has_no_expectation() {
+    let (root, inputs) = expectation_workspace("  bad:\n    type: refused\n");
+    let (exit, report) = preview_with(&root, &inputs);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    let results = report["results"].as_array().unwrap();
+    assert!(results[0].get("expected").is_none(), "{report}");
+    assert!(results[0].get("matched").is_none(), "{report}");
+    assert_eq!(results[2]["matched"], true);
+    assert_eq!(report["mismatched"], 0);
+}
+
+#[test]
+fn a_result_that_differs_from_its_expectation_fails_the_run() {
+    let (root, inputs) =
+        expectation_workspace("  good:\n    type: refused\n  also-good:\n    type: accepted\n  bad:\n    type: accepted\n");
+    let (exit, report) = preview_with(&root, &inputs);
+    assert_refused(exit, &report, "adapterctl.mapping-preview-mismatch");
+    assert_eq!(report["mismatched"], 2, "{report}");
+    let results = report["results"].as_array().unwrap();
+    assert_eq!(results[0]["matched"], false, "{report}");
+    assert_eq!(results[1]["matched"], true);
+    assert_eq!(results[2]["matched"], false);
+    let mismatches: Vec<&Value> = report["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|d| d["code"] == "adapterctl.mapping-preview-mismatch")
+        .collect();
+    assert_eq!(mismatches.len(), 2, "{report}");
+    assert_eq!(mismatches[0]["path"], "/samples/good");
+    assert!(
+        mismatches[0]["source"]["file"]
+            .as_str()
+            .unwrap()
+            .ends_with("preview/expected.yaml"),
+        "{report}"
+    );
+    assert!(!mismatches[0]["suggestedAction"]
+        .as_str()
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn a_refusal_for_another_target_is_not_the_expected_refusal() {
+    let (root, inputs) =
+        expectation_workspace("  bad:\n    type: refused\n    target: household.size\n");
+    let (exit, report) = preview_with(&root, &inputs[2..]);
+    assert_refused(exit, &report, "adapterctl.mapping-preview-mismatch");
+    assert_eq!(report["results"][0]["matched"], false, "{report}");
+    assert_eq!(report["results"][0]["field"], "source.id");
+    // The run still reports what it saw, value-free.
+    assert_eq!(report["refused"], 1);
+}
+
+#[test]
+fn an_unreadable_sample_never_matches_an_expectation() {
+    let (root, inputs) =
+        expectation_workspace("  broken:\n    type: refused\n  bad:\n    type: refused\n");
+    let broken = write_input(&root, "preview/broken.json", "{ not: [valid");
+    let (exit, report) = preview_with(&root, &[broken, inputs[2].clone()]);
+    assert_refused(exit, &report, "adapterctl.mapping-preview-mismatch");
+    assert_eq!(report["results"][0]["matched"], false, "{report}");
+    assert_eq!(report["results"][1]["matched"], true, "{report}");
+}
+
+#[test]
+fn a_mismatch_never_echoes_a_source_value() {
+    let (root, _) = expectation_workspace("  secret:\n    type: accepted\n");
+    let secret = write_input(&root, "preview/secret.json", r#"{"id": "SECRET-ID"}"#);
+    let (exit, report) = preview_with(&root, std::slice::from_ref(&secret));
+    assert_refused(exit, &report, "adapterctl.mapping-preview-mismatch");
+    let model = path(&root, "person.mapping.yaml");
+    let (_, human) = run_human(&["mapping", "preview", &model, "--input", &secret]);
+    let printed = format!("{report}{human}");
+    assert!(!printed.contains("SECRET"), "{printed}");
+}
+
+#[test]
+fn an_expectation_for_a_sample_with_no_file_is_refused() {
+    let (root, inputs) =
+        expectation_workspace("  good:\n    type: accepted\n  gone:\n    type: refused\n");
+    let (exit, report) = preview_with(&root, &inputs);
+    assert_refused(exit, &report, "adapter.mapping.expectation-sample-unknown");
+    let finding = report["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["code"] == "adapter.mapping.expectation-sample-unknown")
+        .unwrap();
+    assert_eq!(finding["path"], "/samples/gone");
+    assert!(
+        finding["source"]["file"]
+            .as_str()
+            .unwrap()
+            .ends_with("preview/expected.yaml"),
+        "{report}"
+    );
+    assert!(report.get("results").is_none(), "nothing ran: {report}");
+}
+
+#[test]
+fn a_sample_file_that_is_not_passed_as_input_still_counts_as_a_sample_file() {
+    let (root, inputs) =
+        expectation_workspace("  good:\n    type: accepted\n  also-good:\n    type: accepted\n");
+    let (exit, report) = preview_with(&root, &inputs[..1]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    assert_eq!(report["results"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn a_refusal_must_name_a_target_the_mapping_reads_from_the_source() {
+    // source.kind is a constant: no refusal can name it.
+    let (root, inputs) =
+        expectation_workspace("  bad:\n    type: refused\n    target: source.kind\n");
+    let (exit, report) = preview_with(&root, &inputs[2..]);
+    assert_refused(exit, &report, "adapter.mapping.expectation-target-unknown");
+}
+
+#[test]
+fn the_expectations_file_is_never_a_sample() {
+    let (root, mut inputs) =
+        expectation_workspace("  good:\n    type: accepted\n  bad:\n    type: refused\n");
+    inputs.push(path(&root, "preview/expected.yaml"));
+    let (exit, report) = preview_with(&root, &inputs);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    assert_eq!(report["results"].as_array().unwrap().len(), 3, "{report}");
+}
+
+#[test]
+fn an_expectations_file_of_another_format_is_refused_by_the_shared_reader() {
+    let (root, inputs) = expectation_workspace("  good:\n    type: accepted\n");
+    std::fs::write(
+        root.path().join("preview/expected.yaml"),
+        "apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1\nkind: AdapterPack\n",
+    )
+    .unwrap();
+    let (exit, report) = preview_with(&root, &inputs);
+    assert_refused(exit, &report, "config.wrong-kind");
+    assert!(report.get("results").is_none(), "{report}");
+}
+
+#[test]
+fn an_unknown_expectation_is_refused_with_its_position() {
+    let (root, inputs) = expectation_workspace("  good:\n    type: rejected\n");
+    let (exit, report) = preview_with(&root, &inputs);
+    assert_eq!(exit, ExitCode::from(1), "{report}");
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(diagnostic["path"], "/samples/good/type", "{report}");
+    assert!(
+        diagnostic["source"]["file"]
+            .as_str()
+            .unwrap()
+            .ends_with("preview/expected.yaml"),
+        "{report}"
+    );
+}
+
+#[test]
+fn each_inputs_expectations_come_from_its_own_directory() {
+    let (root, inputs) = expectation_workspace("  good:\n    type: accepted\n");
+    std::fs::create_dir_all(root.path().join("other")).unwrap();
+    std::fs::write(
+        root.path().join("other/expected.yaml"),
+        format!("{EXPECTATIONS_HEAD}  good:\n    type: refused\n"),
+    )
+    .unwrap();
+    let other = write_input(&root, "other/good.json", r#"{"size": "5"}"#);
+    let (exit, report) = preview_with(&root, &[inputs[0].clone(), other]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    assert_eq!(report["results"][0]["matched"], true);
+    assert_eq!(report["results"][1]["matched"], true);
+}
+
+#[test]
+fn preview_human_output_shows_expectations_and_names_a_mismatch() {
+    let (root, inputs) =
+        expectation_workspace("  good:\n    type: accepted\n  bad:\n    type: accepted\n");
+    let model = path(&root, "person.mapping.yaml");
+    let (exit, text) = run_human(&["mapping", "preview", &model, "--input", &inputs[0]]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{text}");
+    assert!(text.contains("expected accepted"), "{text}");
+    // A mismatch refuses the run, and the refusal names the sample and both
+    // results.
+    let (exit, text) = run_human(&[
+        "mapping", "preview", &model, "--input", &inputs[0], "--input", &inputs[2],
+    ]);
+    assert_eq!(exit, ExitCode::from(1), "{text}");
+    assert!(
+        text.contains("adapterctl.mapping-preview-mismatch"),
+        "{text}"
+    );
+    assert!(text.contains("/samples/bad"), "{text}");
+    assert!(
+        text.contains(
+            "refused (mapping.missing at source.id), but the expectations record accepted"
+        ),
+        "{text}"
+    );
+}
+
 /// The human form is one line per input: its outcome, and for a refusal the
 /// failure and the field it names.
 #[test]

@@ -86,6 +86,7 @@ Required fields that are not filled yet are what is left to do, and the target t
 The screen shows source keys and target field names, since mapping them is the task; selector text, the entrypoint and digests sit under Technical details.
 Under the trees, one line summarises the preview over the samples (how many were accepted and refused) and links to a Samples tab.
 That tab lists the job's preview inputs, one projected item per file in the job's `preview/` directory, with their result: Accepted, or Refused with the field that refused.
+When `preview/expected.yaml` records what a sample should give, the tab shows that beside the result, so a sample meant to be refused reads as refused as expected, and one that differs reads as a problem.
 Add sample adds one JSON item there.
 A YAML tab shows the model file.
 
@@ -140,7 +141,7 @@ Attribute selection is generic keyed-array selection, with no DHIS2-specific eng
 A field mapping does not establish programme membership or enable API operations.
 
 The ingestion example regenerates the KoboToolbox job's `register-household` mapping from a model: a copied submission identifier, a top-level answer, an answer inside a group with explicit string-to-integer conversion, and one preview input refused for a missing required value.
-That refused item is a preview input and a job seam test, not a pack fixture.
+That refused item is a preview input and a job seam test, not a pack fixture; the example's `preview/expected.yaml` records that `missing-respondent` is meant to be refused at `respondentName`.
 
 ## Preview and deferred enhancements
 
@@ -153,6 +154,32 @@ For a generated script, a refusal names the target field and the reason (`mappin
 Uniform native input-schema validation is not in this increment.
 For ingestion, preview validates the output against an authored mirror of the destination operation input, which is kept in sync with the operation by hand.
 Preview performs no source acquisition, credential resolution, signing or activation.
+
+### Expected results
+
+A sample that is meant to be refused is a test, so the samples can say what they should give.
+An optional file `expected.yaml` beside the samples (for the KoboToolbox job, `preview/expected.yaml`) is an authored `AdapterPreviewExpectations` document, registered in `products/platform/config-formats.yaml` and read under [the configuration conventions](../platform/CONFIG-CONVENTIONS.md), with a generated schema and the same envelope as the mapping:
+
+```yaml
+apiVersion: id.registrystack.org/formats/adapter/preview-expectations/v1alpha1
+kind: AdapterPreviewExpectations
+samples:
+  accepted-integer-id:
+    type: accepted
+  missing-respondent:
+    type: refused
+    target: respondentName
+```
+
+- A sample is named by its file name without the extension, and the sample files stay plain source items.
+- `type: accepted` expects the mapping to accept the sample. `type: refused` expects it to refuse the sample, for any reason the mapping gives; the optional `target` also requires the refusal to name that target field, so a sample refused for the wrong reason is caught. The target is written as in an assignment's `target`, and must be the target of an assignment that has a `from`, since no other target can refuse.
+- A refusal matches when any finding of the refusal names the target. Preview currently reports one finding per refused sample, the first field that failed.
+- A sample that could not be read as a source value (`input-unreadable`, `input-too-large`) matches no expectation.
+- A name in the file with no sample file beside it is refused with `adapter.mapping.expectation-sample-unknown`; a target no assignment reads from the source is refused with `adapter.mapping.expectation-target-unknown`. A sample the file does not list has no expectation, and previews as before.
+- `adapterctl mapping preview` reads the `expected.yaml` that sits in the directory of its `--input` files, so no flag is needed; the file itself is never a sample, and `--input preview/*` leaves it out. Inputs from several directories each read their own file.
+- The JSON report gives each judged result `expected` (`{outcome: accepted}`, `{outcome: refused}`, or `{outcome: refused, field}`) and `matched`, and the run a `mismatched` count. A mismatch raises `adapterctl.mapping-preview-mismatch` at `/samples/<name>`, naming both results and never a source value, and the run exits 1 with the report still carrying every result. The text form shows the expectation on each line.
+- `products/adapter/scripts/check-contracts.sh` previews the KoboToolbox example against its file, so a regression in the mapping or a changed sample fails CI.
+
 
 Richer runtime diagnostics, uniform native input validation and runtime coverage of authoring provenance are optional follow-ups, not editor prerequisites.
 General loops, general conditions, arbitrary code nodes, XML/XSLT, handwritten-Rhai import and live-source preview are also outside this increment.
