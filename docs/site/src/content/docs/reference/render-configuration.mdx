@@ -162,6 +162,20 @@ It never changes the status code.
 Each seal call adds `sealId` to its audit entries. The response entry adds `documentSha256`,
 `signedFileSha256`, `certificateSha256`, and, for B-T, `timestampTokenSha256`.
 
+A `timestamp-failed` response entry adds `reason`, the failing check, and the log has one
+`seal refused` warning with the same `reason`. Neither carries a value from the exchange.
+
+| `reason` | Piece |
+|---|---|
+| `connection-failed`, `timed-out` | The authority could not be reached within the attempt timeout. |
+| `http-status`, `not-granted` | The authority answered with an HTTP error, or a status that grants no token. |
+| `not-a-timestamp-reply`, `malformed-response`, `missing-token`, `not-tst-info`, `malformed-tst-info` | The answer is not a DER timestamp reply carrying a token. |
+| `message-imprint-mismatch`, `nonce-mismatch` | The token does not answer this request. |
+| `token-signature-invalid`, `tsa-certificate-not-named-by-token`, `tsa-certificate-not-for-timestamping`, `tsa-certificate-not-valid-at-gen-time` | The token does not verify under a timestamping certificate it names and that is valid at its time. |
+| `token-not-embeddable`, `gen-time-not-rfc3339` | The token cannot be added to the signature. |
+| `invalid-token` | Any other refusal of the token. |
+| `response-too-large`, `token-too-large` | The answer exceeds 64 KiB, or the token does not fit the space the seal reserves. |
+
 The key tables above are generated from the runtime schema by
 `docs/site/scripts/generate-render-configuration.mjs`; this section is hand-written. A sealed
 PDF/A-1, A-2, or A-3 document is not verified.

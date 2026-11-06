@@ -14,7 +14,9 @@
   and never falls back to B-B. `/ready` adds a `signing` member per seal and
   stays ready while a seal is unavailable. Audit entries add the value-free
   `sealId`, `documentSha256`, `signedFileSha256`, `certificateSha256` and
-  `timestampTokenSha256`. The payload gains a `signing` member on the seal route
+  `timestampTokenSha256`; a `timestamp-failed` response entry adds `reason`,
+  the value-free name of the failing check, which a `seal refused` log warning
+  repeats. The payload gains a `signing` member on the seal route
   only. `check --environment` reads each seal's certificate chain. New problem
   kinds with exit codes: `signing-unavailable` (26), `seal-certificate-invalid`
   (27), `timestamp-failed` (28), `document-not-sealable` (29) and

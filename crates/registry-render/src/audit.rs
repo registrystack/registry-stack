@@ -46,6 +46,10 @@ pub struct RenderAuditEvent {
     /// Problem slug for refusals.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub problem: Option<String>,
+    /// The value-free reason a refusal names, when its problem has one: the
+    /// failing check of a timestamp exchange.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pdf_sha256: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -95,6 +99,7 @@ impl RenderAuditEvent {
             bundle_hash: bundle_hash.to_owned(),
             outcome: None,
             problem: None,
+            reason: None,
             pdf_sha256: None,
             data_sha256: None,
             seal_id: None,
@@ -116,6 +121,7 @@ impl RenderAuditEvent {
         Self {
             outcome: Some("refused"),
             problem: Some(problem.kind.slug().to_owned()),
+            reason: problem.reason,
             ..self
         }
     }
@@ -142,6 +148,7 @@ impl RenderAuditEvent {
             bundle_hash: String::new(),
             outcome: Some("refused"),
             problem: Some(problem.kind.slug().to_owned()),
+            reason: problem.reason,
             pdf_sha256: None,
             data_sha256: None,
             seal_id: None,

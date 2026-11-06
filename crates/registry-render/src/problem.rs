@@ -235,6 +235,10 @@ pub struct RenderProblem {
     /// timestamp authority unreachable or refusing, say). The `detail` above
     /// stays the operator's text and never reaches the caller.
     pub public_detail: Option<&'static str>,
+    /// A value-free reason from a closed vocabulary, for the operator: which
+    /// check of the timestamp exchange failed, say. The audit and the log
+    /// record it; the caller never reads it.
+    pub reason: Option<&'static str>,
 }
 
 impl RenderProblem {
@@ -246,11 +250,17 @@ impl RenderProblem {
             locations: Vec::new(),
             diagnostics: Vec::new(),
             public_detail: None,
+            reason: None,
         }
     }
 
     pub fn with_public_detail(mut self, detail: &'static str) -> Self {
         self.public_detail = Some(detail);
+        self
+    }
+
+    pub fn with_reason(mut self, reason: &'static str) -> Self {
+        self.reason = Some(reason);
         self
     }
 

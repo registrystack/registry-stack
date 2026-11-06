@@ -289,7 +289,10 @@ signing:
   seal without a timestamp (B-B), and accept that the seal stops validating at expiry. Declare
   exactly one.
 - A failing timestamp authority fails the request with `timestamp-failed` (502). Render does not
-  retry and never returns an untimestamped file in its place.
+  retry and never returns an untimestamped file in its place. The audit's response entry and one
+  `seal refused` log warning name the failing check as `reason`, such as `timed-out` or
+  `nonce-mismatch`; the
+  [configuration reference](../../reference/render-configuration/#seal-documents) lists them.
 
 Run `registry-render check --bundle <package> --runtime-config runtime.yaml --environment`. It
 reads each chain file, never the key, and it fails on an unreadable or malformed chain, a seal
