@@ -331,6 +331,7 @@ fn check_bundle(dir: &Path) -> BundleCheck {
     diagnostics.extend(check_label_key_sets(&bundle));
     let (scanned, scanned_files) = scan_unread_yaml(dir, &bundle);
     diagnostics.extend(scanned);
+    diagnostics.extend(unverified_seal_standards(dir, &bundle.manifest));
     let schema_files = bundle
         .documents
         .values()
@@ -617,30 +618,78 @@ fn unsealable_members(
     seal_capacities: &BTreeMap<String, usize>,
 ) -> Vec<Diagnostic> {
     let found = crate::seal::unsealable_documents(manifest, |id| seal_capacities.get(id).copied());
-    if found.is_empty() {
+    at_manifest_members(
+        dir,
+        found
+            .iter()
+            .map(|document| ManifestFinding {
+                severity: Severity::Error,
+                code: crate::seal::UNSEALABLE_CODE,
+                pointer: document.pointer(),
+                message: document.message(),
+                action: document.action(),
+            })
+            .collect(),
+    )
+}
+
+/// Each document type sealed under a PDF/A level no recorded validator run
+/// has checked sealed, as a warning at the document type's `seal` member.
+fn unverified_seal_standards(dir: &Path, manifest: &Manifest) -> Vec<Diagnostic> {
+    let found = crate::seal::unverified_seal_standards(manifest);
+    at_manifest_members(
+        dir,
+        found
+            .iter()
+            .map(|document| ManifestFinding {
+                severity: Severity::Warning,
+                code: crate::seal::UNVERIFIED_STANDARD_CODE,
+                pointer: document.pointer(),
+                message: document.message(),
+                action: document.action(),
+            })
+            .collect(),
+    )
+}
+
+/// A finding about a member of the bundle's manifest.
+struct ManifestFinding {
+    severity: Severity,
+    code: &'static str,
+    pointer: String,
+    message: String,
+    action: &'static str,
+}
+
+/// Each finding at its manifest member's line and column. Should the
+/// manifest no longer read for positions, each finding still names its
+/// member and the file, without a line.
+fn at_manifest_members(dir: &Path, findings: Vec<ManifestFinding>) -> Vec<Diagnostic> {
+    if findings.is_empty() {
         return Vec::new();
     }
     let file = bundle_file_name(dir, MANIFEST_FILE);
     let read = read_root_manifest(dir)
         .ok()
         .and_then(|bytes| read_manifest(&file, &bytes).ok());
-    found
-        .iter()
-        .map(|document| match &read {
-            Some(read) => error_at(
-                &read.document,
-                crate::seal::UNSEALABLE_CODE,
-                &document.pointer(),
-                &document.message(),
-                document.action(),
+    findings
+        .into_iter()
+        .map(|finding| match &read {
+            Some(read) => read.document.diagnostic_at_value(
+                finding.severity,
+                finding.code,
+                &finding.pointer,
+                &finding.message,
+                finding.action,
             ),
             None => {
                 let mut diagnostic = Diagnostic::error(
-                    crate::seal::UNSEALABLE_CODE,
-                    document.pointer(),
-                    document.message(),
-                    document.action(),
+                    finding.code,
+                    finding.pointer,
+                    finding.message,
+                    finding.action,
                 );
+                diagnostic.severity = finding.severity;
                 diagnostic.artifact = Some(MANIFEST_KIND.to_owned());
                 diagnostic.source = Some(Source {
                     file: file.clone(),

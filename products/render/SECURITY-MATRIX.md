@@ -97,6 +97,9 @@ conditions, follow the table.
 - **No revocation data, no qualification.** A seal is PAdES baseline B-B or
   B-T. It embeds no revocation information (no B-LT or B-LTA) and makes no
   eIDAS qualification claim.
-- **Sealing under PDF/A-1, A-2 and A-3 is unverified.** The signature field
-  is exercised against PDF/A-4 and default-standard output; no check refuses
-  or proves the older standards.
+- **Sealing under some PDF/A levels is unverified.** veraPDF passed sealed
+  PDF/A-1b, A-2b, A-4 and PDF/UA-1 files that `serve` answered. No check
+  proves A-1a, A-2a, A-2u, A-3a, A-3b, A-3u, A-4e or A-4f: `check` and
+  `serve` warn about a document type sealed under one
+  (`render.bundle.seal-standard-unverified`), and `check` refuses only a
+  reserved space their string limit cannot hold.

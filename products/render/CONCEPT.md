@@ -87,10 +87,11 @@ What sealing does not do:
 - It does not pin the timestamp authority's identity or decide trust. The
   authority is reached over TLS with the host's roots, and validators decide
   whether the seal certificate and the timestamp authority are trusted.
-- Sealing a document type that renders to PDF/A-1, A-2 or A-3 is not
-  verified. The signature field is written and tested against PDF/A-4 output
-  and the default standard only; treat other standards as unverified until a
-  check proves them.
+- veraPDF has passed sealed PDF/A-1b, PDF/A-2b, PDF/A-4 and PDF/UA-1 files
+  that `serve` answered ([EVIDENCE.md](EVIDENCE.md)). No validator run covers
+  a seal under PDF/A-1a, A-2a, A-2u, A-3a, A-3b, A-3u, A-4e or A-4f; `check`
+  and `serve` warn about a document type sealed under one
+  (`render.bundle.seal-standard-unverified`).
 
 ## Runtime anatomy
 

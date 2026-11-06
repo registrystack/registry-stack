@@ -126,6 +126,14 @@ Serve and `check` report these as runtime problems at the position of the key.
 | `render.runtime.seal-certificate-expiring` | warning | The certificate expires within 30 days. |
 | `render.runtime.seal-certificate-purpose` | warning | The certificate's extended key usage names none of document signing (RFC 9336 or Microsoft's), Adobe Authentic Documents, email protection or anyExtendedKeyUsage; validators such as Acrobat flag its seals. `serve` logs it at startup too. |
 
+Each sealed document type is checked against its `pdfStandard`, at its `seal` member in
+`manifest.yaml`:
+
+| Code | Severity | Meaning |
+|---|---|---|
+| `render.bundle.seal-space-exceeds-standard` | error | The seal reserves more signature space than the standard's string limit holds: 65535 bytes under PDF/A-1, 32767 under PDF/A-2 and PDF/A-3. `check --environment` reports it, and `serve` refuses to start. |
+| `render.bundle.seal-standard-unverified` | warning | No validator run has checked a file sealed under this PDF/A level: A-1a, A-2a, A-2u, A-3a, A-3b, A-3u, A-4e or A-4f. veraPDF has passed sealed A-1b, A-2b, A-4 and PDF/UA-1 files. `check` reports it from the bundle alone; `serve` logs it at startup for a seal it serves. |
+
 Without `--environment`, `check` reads no chain file and says so: the human output ends with
 `seal chains not read: pass --environment to check them`, and the JSON report has
 `"sealChains": "not-read"`.
@@ -204,8 +212,7 @@ A `timestamp-failed` response entry adds `reason`, the failing check, and the lo
 | `response-too-large`, `token-too-large` | The answer exceeds 64 KiB, or the token does not fit the space the seal reserves. |
 
 The key tables above are generated from the runtime schema by
-`docs/site/scripts/generate-render-configuration.mjs`; this section is hand-written. A sealed
-PDF/A-1, A-2, or A-3 document is not verified.
+`docs/site/scripts/generate-render-configuration.mjs`; this section is hand-written.
 
 {/* Evidence: crates/registry-render/src/runtime.rs, SigningRuntime, SealRuntime, signing_findings
     and seal_binding_findings;

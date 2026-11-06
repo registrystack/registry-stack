@@ -299,6 +299,69 @@ fn check_with_the_environment_reads_each_seal_certificate_chain() {
     );
 }
 
+/// A sealed document type under a PDF/A level no recorded validator run has
+/// checked sealed is warned about at its `seal` member, from the bundle
+/// alone; a level with a recorded run, or no PDF/A level, is not.
+#[test]
+fn check_warns_about_a_seal_under_a_pdf_a_level_no_validator_has_checked() {
+    let temporary = tempfile::tempdir().unwrap();
+    let home = temporary.path().canonicalize().unwrap();
+    let bundle = sealed_bundle(&home);
+    let manifest = bundle.join("manifest.yaml");
+    let sealed = std::fs::read_to_string(&manifest).unwrap();
+    let check_under = |standard: &str| {
+        std::fs::write(
+            &manifest,
+            sealed.replacen(
+                "    seal: ministry\n",
+                &format!("    seal: ministry\n    pdfStandard: {standard}\n"),
+                1,
+            ),
+        )
+        .unwrap();
+        let output = registry_render()
+            .args(["check", "--bundle"])
+            .arg(&bundle)
+            .args(["--format", "json"])
+            .output()
+            .unwrap();
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        (output.status.code(), report)
+    };
+    for standard in [
+        "a-1a", "a-2a", "a-2u", "a-3a", "a-3b", "a-3u", "a-4e", "a-4f",
+    ] {
+        let (exit, report) = check_under(standard);
+        assert_eq!(exit, Some(0), "{standard}: {report}");
+        assert_eq!(
+            codes(&report),
+            [(
+                "warning".to_owned(),
+                "render.bundle.seal-standard-unverified".to_owned()
+            )],
+            "{standard}: {report}"
+        );
+        let diagnostic = &report["diagnostics"][0];
+        assert_eq!(diagnostic["path"], "/documents/0/seal", "{report}");
+        assert!(
+            diagnostic["source"]["file"]
+                .as_str()
+                .unwrap()
+                .ends_with("manifest.yaml"),
+            "{report}"
+        );
+        assert!(diagnostic["source"]["line"].is_number(), "{report}");
+        let message = diagnostic["message"].as_str().unwrap();
+        assert!(message.contains("sealed by ministry"), "{message}");
+        assert!(message.contains(standard), "{message}");
+    }
+    for standard in ["a-1b", "a-2b", "a-4", "ua-1", "'1.7'"] {
+        let (exit, report) = check_under(standard);
+        assert_eq!(exit, Some(0), "{standard}: {report}");
+        assert!(codes(&report).is_empty(), "{standard}: {report}");
+    }
+}
+
 #[test]
 fn check_with_the_environment_refuses_a_seal_too_large_for_a_document_pdf_standard() {
     use registry_platform_crypto::document_signature::test_support::TestPki;
