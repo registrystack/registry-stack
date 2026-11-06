@@ -649,6 +649,64 @@ fn preview_names_the_failing_field_without_the_value() {
     assert!(!printed.contains("SECRET"), "{printed}");
 }
 
+/// A quoted key or filter literal reaches a source key or value outside
+/// printable ASCII, and an escaped quote reaches a key holding one. Keys are
+/// compared byte for byte, so the decomposed spelling of an accented key is a
+/// different key.
+#[test]
+fn preview_reaches_source_keys_and_values_outside_printable_ascii() {
+    let root = workspace();
+    let model = path(&root, "person.mapping.yaml");
+    let text = std::fs::read_to_string(&model).unwrap();
+    let unicode = root.path().join("unicode.mapping.yaml");
+    std::fs::write(
+        &unicode,
+        text.replace("from: id", "from: '\"pr\u{e9}nom\"'")
+            .replace(
+                "from: size",
+                "from: 'places[name = \"Saint-\u{c9}tienne \\\"Nord\\\"\"].code'",
+            )
+            .replace("scripts/person.rhai", "scripts/unicode.rhai"),
+    )
+    .unwrap();
+    let unicode = unicode.to_str().unwrap();
+    let composed = write_input(
+        &root,
+        "composed.json",
+        r#"{"pr\u00e9nom": "Am\u00e9lie", "places": [
+            {"name": "Saint-\u00c9tienne \"Nord\"", "code": "42"},
+            {"name": "Saint-Etienne", "code": "7"}]}"#,
+    );
+    let decomposed = write_input(
+        &root,
+        "decomposed.json",
+        r#"{"pre\u0301nom": "Am\u00e9lie", "places": []}"#,
+    );
+    let (exit, report, _) = run_json(&["mapping", "check", unicode]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    let (exit, report, _) = run_json(&[
+        "mapping",
+        "preview",
+        unicode,
+        "--input",
+        &composed,
+        "--input",
+        &decomposed,
+    ]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    assert_eq!(
+        report["results"][0]["output"],
+        json!({"source": {"id": "Am\u{e9}lie", "kind": "person"}, "household": {"size": 42}}),
+        "{report}"
+    );
+    assert_eq!(report["results"][1]["outcome"], "refused", "{report}");
+    assert_eq!(
+        report["results"][1]["failure"], "mapping.missing",
+        "{report}"
+    );
+    assert_eq!(report["results"][1]["field"], "source.id", "{report}");
+}
+
 /// The human form is one line per input: its outcome, and for a refusal the
 /// failure and the field it names.
 #[test]

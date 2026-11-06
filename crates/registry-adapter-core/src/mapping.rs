@@ -359,6 +359,9 @@ pub struct Assignment {
     /// The selector read from the source root: dotted names or "quoted"
     /// keys, each optionally filtered with `[key = "value"]`. A key that
     /// holds a dot is quoted, for example `'"household.household_size"'`.
+    /// A quoted key or value takes any character except a control
+    /// character; `\"` and `\\` are its only escapes. Keys compare byte for
+    /// byte, with no Unicode normalisation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub from: Option<String>,
     /// A constant value instead of a selector.
@@ -434,8 +437,8 @@ impl PathError {
                  {MAXIMUM_MAPPING_QUOTED_CHARACTERS} characters"
             ),
             Self::QuotedCharacter { position } => format!(
-                "the quoted text at position {position} holds a character outside printable \
-                 ASCII, or a quote or backslash"
+                "the quoted text at position {position} holds a control character, or a \
+                 backslash not followed by a quote or a backslash"
             ),
             Self::MalformedFilter { position } => {
                 format!("the filter at position {position} is not [name = \"value\"]")
@@ -554,7 +557,21 @@ impl Parser {
                     self.position += 1;
                     break;
                 }
-                Some(character) if is_quoted_character(character) => {
+                Some('\\') => {
+                    let escape = self.position;
+                    self.position += 1;
+                    match self.peek() {
+                        Some(escaped @ ('"' | '\\')) => {
+                            text.push(escaped);
+                            self.position += 1;
+                        }
+                        _ => return Err(PathError::QuotedCharacter { position: escape }),
+                    }
+                    if text.chars().count() > MAXIMUM_MAPPING_QUOTED_CHARACTERS {
+                        return Err(PathError::QuotedTooLong { position: start });
+                    }
+                }
+                Some(character) if !character.is_control() => {
                     text.push(character);
                     self.position += 1;
                     if text.chars().count() > MAXIMUM_MAPPING_QUOTED_CHARACTERS {
@@ -615,10 +632,6 @@ fn is_name_continue(character: char) -> bool {
     character.is_ascii_alphanumeric() || character == '_'
 }
 
-fn is_quoted_character(character: char) -> bool {
-    (' '..='~').contains(&character) && character != '"' && character != '\\'
-}
-
 /// Whether `text` is a plain name segment (no quoting needed).
 fn is_plain_name(text: &str) -> bool {
     let mut characters = text.chars();
@@ -633,7 +646,7 @@ fn render_path(path: &[String]) -> String {
             if is_plain_name(name) {
                 name.clone()
             } else {
-                format!("\"{name}\"")
+                format!("\"{}\"", name.replace('\\', "\\\\").replace('"', "\\\""))
             }
         })
         .collect::<Vec<_>>()
@@ -2088,7 +2101,6 @@ mod tests {
             "\"unterminated",
             "\"back\\slash\"",
             "\"tab\there\"",
-            "\"é\"",
             "a.\"b\"c",
             "a[k=\"v\\\"]",
             "a[ k = \"\" ]",
@@ -2098,6 +2110,94 @@ mod tests {
         ] {
             assert!(parse_selector(bad).is_err(), "{bad:?} should be refused");
         }
+    }
+
+    #[test]
+    fn a_quoted_key_or_filter_literal_takes_any_non_control_character() {
+        let accented = segs("\"pr\u{e9}nom\"");
+        assert_eq!(accented[0].name, "pr\u{e9}nom");
+        let filtered = segs("locations[name = \"Saint-\u{c9}tienne \u{1F600}\"].code");
+        assert_eq!(
+            filtered[0].filter,
+            Some(KeyFilter {
+                key: "name".to_string(),
+                value: "Saint-\u{c9}tienne \u{1F600}".to_string()
+            })
+        );
+        assert_eq!(
+            parse_target_path("person.\"caf\u{e9}\""),
+            Ok(vec!["person".to_string(), "caf\u{e9}".to_string()])
+        );
+    }
+
+    #[test]
+    fn a_quote_and_a_backslash_are_the_only_escapes() {
+        assert_eq!(segs(r#""say \"hi\"""#)[0].name, r#"say "hi""#);
+        assert_eq!(segs(r#""back\\slash""#)[0].name, r"back\slash");
+        assert_eq!(
+            segs(r#"a[k = "v\"w"]"#)[0].filter.as_ref().unwrap().value,
+            r#"v"w"#
+        );
+        for bad in [r#""a\nb""#, r#""a\u00e9""#, r#""a\/b""#, r#""trailing\""#] {
+            assert!(parse_selector(bad).is_err(), "{bad:?} should be refused");
+        }
+        assert!(matches!(
+            parse_selector(r#""a\nb""#),
+            Err(PathError::QuotedCharacter { position: 2 })
+        ));
+    }
+
+    #[test]
+    fn a_control_character_is_refused_in_a_quoted_key() {
+        for control in ['\t', '\n', '\u{7f}', '\u{85}'] {
+            let text = format!("\"a{control}b\"");
+            assert!(
+                matches!(
+                    parse_selector(&text),
+                    Err(PathError::QuotedCharacter { position: 2 })
+                ),
+                "{control:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_quoted_bound_counts_characters_not_bytes() {
+        let at_bound = format!("\"{}\"", "\u{e9}".repeat(128));
+        assert!(parse_selector(&at_bound).is_ok());
+        let past_bound = format!("\"{}\"", "\u{e9}".repeat(129));
+        assert!(matches!(
+            parse_selector(&past_bound),
+            Err(PathError::QuotedTooLong { .. })
+        ));
+        // An escape is one character.
+        let escaped = format!("\"{}\"", "\\\"".repeat(100));
+        assert_eq!(segs(&escaped)[0].name.chars().count(), 100);
+    }
+
+    #[test]
+    fn keys_are_kept_byte_for_byte_without_normalisation() {
+        let composed = segs("\"caf\u{e9}\"")[0].name.clone();
+        let decomposed = segs("\"cafe\u{301}\"")[0].name.clone();
+        assert_ne!(composed, decomposed);
+        assert_eq!(decomposed, "cafe\u{301}");
+    }
+
+    #[test]
+    fn a_target_is_named_in_a_form_that_parses_back_to_the_same_path() {
+        for name in ["pr\u{e9}nom", "say \"hi\"", r"back\slash", "a.b"] {
+            let canonical =
+                canonical_target_path(&render_path(&[name.to_string()])).expect("parses");
+            assert_eq!(
+                parse_target_path(&canonical),
+                Ok(vec![name.to_string()]),
+                "{name:?}"
+            );
+        }
+        assert_eq!(
+            canonical_target_path(r#""say \"hi\"""#).as_deref(),
+            Some(r#""say \"hi\"""#)
+        );
     }
 
     #[test]
@@ -3352,12 +3452,13 @@ mod tests {
                 "caf\u{e9}": {"type": "string"},
                 "say \"hi\"": {"type": "string"},
                 "back\\slash": {"type": "string"},
+                "tab\there": {"type": "string"},
                 "fine": {"type": "string"}
             }
         });
         let tree = serde_json::to_value(target_tree(&schema).unwrap()).unwrap();
         for node in tree.as_array().unwrap() {
-            let expressible = node["key"] == "fine";
+            let expressible = node["key"] != "tab\there";
             assert_eq!(node["mappable"], expressible, "{node}");
             assert_eq!(node.get("conversions").is_some(), expressible, "{node}");
         }
