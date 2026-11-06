@@ -395,7 +395,8 @@ verdict on the issuer, not a failure of the file's integrity.
 ### Know the limits
 
 - The signature field is invisible. A template prints any visible seal block from the payload's
-  `signing` member.
+  `signing` member. `registry-render compile --preview-seal test-only` (or `production`) renders
+  that block offline, with `--signer-name` as the certificate's display name, and signs nothing.
 - Render embeds no revocation data (no B-LT or B-LTA) and does not pin the timestamp authority's
   identity; validators decide trust in both.
 - The seal key comes from a secret reference to a local JWK, and no HSM or managed-key custody

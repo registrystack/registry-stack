@@ -405,6 +405,121 @@ fn retired_seal_command_names_the_package_replacement() {
     );
 }
 
+/// `compile --preview-seal` renders a template's sealed variant, with the
+/// `signing` member the seal route adds, and signs nothing: its output is
+/// the pinned sealed golden, and it says on standard error that the file
+/// is not sealed.
+#[test]
+fn compile_preview_seal_renders_the_sealed_variant_without_a_signature() {
+    let golden: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(repo_root().join("products/render/golden.json")).unwrap(),
+    )
+    .unwrap();
+    let pinned = &golden["sealedPreview"];
+    let bundle = repo_root().join(pinned["bundle"].as_str().unwrap());
+    let dir = tempdir();
+    let data = dir.join("data.json");
+    std::fs::write(&data, pinned["data"].to_string()).unwrap();
+    let compile = |extra: &[&str], output: &Path| {
+        let mut args = vec![
+            "compile",
+            "--bundle",
+            bundle.to_str().unwrap(),
+            "--type",
+            "notice",
+            "--data",
+            data.to_str().unwrap(),
+            "--issued-at",
+            golden["issuedAt"].as_str().unwrap(),
+            "--output",
+            output.to_str().unwrap(),
+        ];
+        args.extend_from_slice(extra);
+        run(&args)
+    };
+
+    let pdf = dir.join("sealed-variant.pdf");
+    let out = compile(
+        &[
+            "--preview-seal",
+            "test-only",
+            "--signer-name",
+            pinned["signing"]["signerName"].as_str().unwrap(),
+            "--format",
+            "json",
+        ],
+        &pdf,
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(out.stderr.is_empty(), "JSON mode has no stderr chatter");
+    let summary: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(summary["pdfSha256"], pinned["pdfSha256"], "{summary}");
+    assert_eq!(summary["dataSha256"], pinned["dataSha256"], "{summary}");
+    let bytes = std::fs::read(&pdf).unwrap();
+    for marker in [&b"/ByteRange"[..], b"/SigFlags", b"/DocMDP"] {
+        assert!(
+            !bytes.windows(marker.len()).any(|window| window == marker),
+            "a preview carries no signature: found {}",
+            String::from_utf8_lossy(marker)
+        );
+    }
+
+    let envelope = dir.join("envelope.json");
+    let out = compile(
+        &[
+            "--preview-seal",
+            "production",
+            "--emit-envelope",
+            envelope.to_str().unwrap(),
+        ],
+        &dir.join("production.pdf"),
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--preview-seal") && stderr.contains("not sealed"),
+        "the preview says it is not a sealed file: {stderr}"
+    );
+    let envelope: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&envelope).unwrap()).unwrap();
+    assert_eq!(
+        envelope["signing"],
+        serde_json::json!({"mode": "seal", "testOnly": false}),
+        "without --signer-name the member names no signer, as for a certificate that names none"
+    );
+
+    let refused_pdf = dir.join("refused.pdf");
+    let refused = compile(&["--signer-name", "Ministry"], &refused_pdf);
+    assert_eq!(
+        refused.status.code(),
+        Some(2),
+        "--signer-name needs --preview-seal"
+    );
+    for name in ["", "   ", "Ministry\u{7}"] {
+        let refused = compile(
+            &["--preview-seal", "test-only", "--signer-name", name],
+            &refused_pdf,
+        );
+        assert_eq!(refused.status.code(), Some(2), "{name:?}");
+        assert!(
+            String::from_utf8_lossy(&refused.stderr).contains("--signer-name"),
+            "{}",
+            String::from_utf8_lossy(&refused.stderr)
+        );
+    }
+    assert!(!refused_pdf.exists(), "a refused preview writes nothing");
+}
+
 #[test]
 fn package_command_writes_repeatable_verified_envelopes_and_revision() {
     let dir = tempdir();

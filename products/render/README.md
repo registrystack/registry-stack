@@ -197,6 +197,9 @@ signing:
 - The seal is a certification signature (DocMDP permission 2) in an invisible
   field. Templates read the payload's `signing` member (see
   [PAYLOAD.md](PAYLOAD.md)) to print a visible seal block.
+  `compile --preview-seal test-only` (or `production`) renders that variant
+  offline, with `--signer-name` as the certificate's display name, and
+  signs nothing.
 - `registry-render check --environment` reads each chain file and reports
   errors and warnings, including a certificate that expires within 30 days.
   Whether the key matches the certificate is checked when `serve` starts.

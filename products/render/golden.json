@@ -45,5 +45,13 @@
         "templates/card.typ"
       ]
     }
+  },
+  "sealedPreview": {
+    "bundle": "crates/registry-render/tests/fixtures/sealed-notice",
+    "document": "notice v2",
+    "data": {"reference": "N-1", "body": "Hello."},
+    "signing": {"signerName": "Ministry of Licensing", "testOnly": true},
+    "pdfSha256": "1f5155c8fbd94fc521a29fc8c6d38c71927a42a982c8fdf4c985d665bfe59809",
+    "dataSha256": "fe0162ab0c4368265503647f872e4acd8def113e02a1a6b7c0f70bfd9e66ea35"
   }
 }

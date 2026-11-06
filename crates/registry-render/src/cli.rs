@@ -175,6 +175,20 @@ pub enum Command {
         /// template to this path (merge-gate and debugging aid).
         #[arg(long)]
         emit_envelope: Option<PathBuf>,
+        /// Render the template's sealed variant: add the `signing` member
+        /// the seal route adds, as a seal of this `trust` would. Nothing is
+        /// signed; the output is the first revision a seal would sign.
+        #[arg(long, value_name = "TRUST", value_enum)]
+        preview_seal: Option<PreviewSealTrust>,
+        /// The `signing.signerName` a seal certificate's organization (else
+        /// common name) would give. Without it, the member names no signer.
+        #[arg(
+            long,
+            value_name = "TEXT",
+            requires = "preview_seal",
+            value_parser = parse_signer_name
+        )]
+        signer_name: Option<String>,
     },
     /// Serve the HTTP rendering API (see the runtime YAML).
     Serve {
@@ -201,6 +215,26 @@ fn parse_absolute_directory(value: &str) -> Result<PathBuf, String> {
         Ok(path)
     } else {
         Err("--require-audit-under needs an absolute directory path".to_owned())
+    }
+}
+
+/// The `trust` a `compile --preview-seal` renders under, as a seal's
+/// runtime `trust` member names it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum PreviewSealTrust {
+    /// A seal made with a test certificate: `signing.testOnly` is true.
+    TestOnly,
+    /// A production seal: `signing.testOnly` is false.
+    Production,
+}
+
+/// A `--signer-name` holds what a seal certificate's display name could:
+/// text that is not blank and has no control character.
+fn parse_signer_name(value: &str) -> Result<String, String> {
+    if value.trim().is_empty() || value.chars().any(char::is_control) {
+        Err("--signer-name needs text without control characters, as a seal certificate's organization or common name".to_owned())
+    } else {
+        Ok(value.to_owned())
     }
 }
 
@@ -368,6 +402,8 @@ fn run_inner(cli: Cli) -> Result<i32, RenderProblem> {
             output,
             format,
             emit_envelope,
+            preview_seal,
+            signer_name,
         } => {
             let out = output;
             let issued = parse_issued_at(issued_at, now)?;
@@ -379,16 +415,40 @@ fn run_inner(cli: Cli) -> Result<i32, RenderProblem> {
                     issued.to_rfc3339()
                 );
             }
+            let signing = preview_seal.map(|trust| crate::envelope::SigningPayload {
+                signer_name,
+                test_only: trust == PreviewSealTrust::TestOnly,
+            });
+            if signing.is_some() && !matches!(format, crate::check::OutputFormat::Json) {
+                eprintln!(
+                    "note: --preview-seal renders the sealed variant; the file is not sealed and carries no signature"
+                );
+            }
             let request = read_request(&data, &locale, &assets, Some(issued))?;
             let timeout = std::time::Duration::from_secs(
                 timeout.unwrap_or_else(crate::runtime::default_render_timeout_seconds),
             );
             if watch {
-                return watch_loop(&bundle, &document, &request, strict, timeout, &out);
+                return watch_loop(
+                    &bundle,
+                    &document,
+                    &request,
+                    signing.as_ref(),
+                    strict,
+                    timeout,
+                    &out,
+                );
             }
             let loaded = Bundle::load_for_preview(&bundle)?;
             let document_spec = loaded.document(&document)?.clone();
-            let rendered = compile_once(&bundle, &document, &request, strict, timeout)?;
+            let rendered = compile_once(
+                &bundle,
+                &document,
+                &request,
+                signing.as_ref(),
+                strict,
+                timeout,
+            )?;
             let pdf = base64::Engine::decode(
                 &base64::engine::general_purpose::STANDARD,
                 &rendered.pdf_base64,
@@ -411,7 +471,7 @@ fn run_inner(cli: Cli) -> Result<i32, RenderProblem> {
                     issued_at: request.issued_at,
                     data: &request.data,
                     assets: &request.assets,
-                    signing: None,
+                    signing: signing.as_ref(),
                 });
                 let bytes = crate::envelope::canonical_bytes(&envelope)?;
                 if crate::hash::sha256_hex(&bytes) != rendered.data_sha256 {
@@ -571,11 +631,13 @@ pub(crate) fn read_request(
 /// CLI shares serve's timeout semantics: `typst::compile` has no
 /// cancellation parameter, and the killable child process is the only true
 /// wall. This is also what keeps a pathological template from hanging an
-/// authoring loop or a CI job.
+/// authoring loop or a CI job. With `signing`, the worker renders the
+/// sealed variant as it does for the seal route, and nothing is signed.
 fn compile_once(
     bundle_dir: &Path,
     document_id: &str,
     request: &RenderRequest,
+    signing: Option<&crate::envelope::SigningPayload>,
     strict: bool,
     timeout: std::time::Duration,
 ) -> Result<crate::worker::WorkerRendered, RenderProblem> {
@@ -590,7 +652,9 @@ fn compile_once(
         require_package: false,
         max_output_bytes: crate::render::DEFAULT_MAX_OUTPUT_BYTES,
         memory_limit_bytes: 512 * 1024 * 1024,
-        seal: None,
+        seal: signing.map(|signing| crate::worker::WorkerSeal {
+            signing: signing.clone(),
+        }),
     };
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -618,6 +682,7 @@ fn watch_loop(
     bundle_dir: &Path,
     document_id: &str,
     request: &RenderRequest,
+    signing: Option<&crate::envelope::SigningPayload>,
     strict: bool,
     timeout: std::time::Duration,
     out: &Path,
@@ -630,7 +695,7 @@ fn watch_loop(
     loop {
         let fingerprint = fingerprint_bundle(bundle_dir, out);
         if Some(&fingerprint) != last_fingerprint.as_ref() {
-            match compile_once(bundle_dir, document_id, request, strict, timeout) {
+            match compile_once(bundle_dir, document_id, request, signing, strict, timeout) {
                 Ok(rendered) => {
                     let pdf = base64::engine::general_purpose::STANDARD
                         .decode(&rendered.pdf_base64)

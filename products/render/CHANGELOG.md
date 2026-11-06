@@ -58,6 +58,12 @@
   `seal-client-not-allowed` (30). Render writes PAdES baseline B-B and B-T
   signatures; `EVIDENCE.md` records the pyHanko, EU DSS and veraPDF runs on
   sealed files `serve` answered. Render makes no eIDAS qualification claim.
+- `compile --preview-seal <test-only|production>` renders a template's
+  sealed variant offline: it adds the payload's `signing` member as the seal
+  route does, with `--signer-name` as `signerName`, and signs nothing. The
+  output is the first revision the seal route signs for the same inputs, so
+  a golden can cover the sealed variant; `golden.json` pins one for the
+  `sealed-notice` test bundle.
 - Every supervised render worker (`serve` and `compile`) starts from an empty
   environment, keeping only the dynamic loader's library search paths, so a
   credential in the parent's environment is not passed to the process that runs
