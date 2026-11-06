@@ -662,7 +662,7 @@ fn bounded_version_and_warnings(document_type: &str, version: &str, warnings: &[
 
 /// Whether `document_hex`, a lowercase hex SHA-256, is that of a prefix of
 /// `pdf` that ends at a `%%EOF` marker, optionally followed by its
-/// end-of-line. Found by byte search; the PDF is not parsed, so a marker
+/// end-of-line or the `\r` of a `\r\n`. Found by byte search; the PDF is not parsed, so a marker
 /// inside a stream is a candidate too. A prefix equal to the whole file is
 /// not a first revision.
 ///
@@ -686,7 +686,9 @@ fn first_revision_matches(pdf: &[u8], document_hex: &str) -> bool {
             [b'\r' | b'\n', ..] => 1,
             _ => 0,
         };
-        for end in [marker_end, marker_end + eol] {
+        // Every end through the end-of-line: a first revision that ends
+        // `%%EOF\r` is followed by the `\n` the update starts with.
+        for end in marker_end..=marker_end + eol {
             if end >= pdf.len() {
                 break;
             }
@@ -694,9 +696,6 @@ fn first_revision_matches(pdf: &[u8], document_hex: &str) -> bool {
             hashed = end;
             if running.clone().finalize().as_slice() == expected.as_slice() {
                 return true;
-            }
-            if eol == 0 {
-                break;
             }
         }
     }
