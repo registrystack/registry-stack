@@ -188,8 +188,8 @@ The problems specific to this route, from a closed vocabulary shared with the re
 | `timestamp-failed` | 502 | 28 | The timestamp authority gave no usable token. No file is returned and no retry is made. |
 | `rate-limited` | 429 | 18 | As many seals as `limits.maximumConcurrentRenders` are already in flight. The call is refused, not queued. |
 
-`/ready` adds `signing`, one member per seal: `{"status": "ready"}` or `{"status": "unavailable",
-"reason": ...}` with `certificate-expired`, `certificate-not-yet-valid`, or `provider-not-ready`,
+`/ready` adds `signing`, one member per seal: `{"status": "ready"}` or `{"status": "not-ready",
+"reason": ...}` with `certificate-expired`, `certificate-not-yet-valid`, or `signer-not-ready`,
 plus `"testOnly": true` for a test-only seal. It never changes the status code. At startup,
 `serve` logs a `seal unavailable` warning with `seal_id` and the same `reason` for each seal that
 cannot sign, and a `seal certificate expiring` warning for one whose certificate expires within

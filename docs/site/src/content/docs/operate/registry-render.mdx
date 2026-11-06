@@ -357,8 +357,8 @@ subject to the validator's trust decisions; a file sealed without one stops vali
 ### Read readiness
 
 When seals are configured, `/ready` adds a `signing` member with one entry per seal id. Each is
-`{"status": "ready"}` or `{"status": "unavailable", "reason": ...}`, where the reason is
-`certificate-expired`, `certificate-not-yet-valid`, or `provider-not-ready`. A seal never changes
+`{"status": "ready"}` or `{"status": "not-ready", "reason": ...}`, where the reason is
+`certificate-expired`, `certificate-not-yet-valid`, or `signer-not-ready`. A seal never changes
 the status code: Render stays ready for plain rendering while a seal cannot sign, and a seal
 request answers `signing-unavailable` or `seal-certificate-invalid` (503) until it can. Readiness
 reads the certificate validity and the key provider; it never calls the timestamp authority, so a

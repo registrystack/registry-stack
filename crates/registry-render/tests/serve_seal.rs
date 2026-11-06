@@ -1055,7 +1055,7 @@ fn render_stays_ready_while_an_expired_seal_is_unavailable() {
     assert_eq!(ready.status, 200, "render stays ready");
     assert_eq!(
         ready.json(),
-        serde_json::json!({"status":"ready","signing":{"ministry":{"status":"unavailable","reason":"certificate-expired","testOnly":true}}})
+        serde_json::json!({"status":"ready","signing":{"ministry":{"status":"not-ready","reason":"certificate-expired","testOnly":true}}})
     );
     let plain = post(
         &server,
