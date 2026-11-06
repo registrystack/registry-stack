@@ -29,7 +29,9 @@
   its test line. `registry-render-client` gains `RenderClient::seal`, whose
   `SealedDocument` carries `bundle_hash` and `seal.test_only`; its success
   bodies now tolerate members it does not know, on both routes, and its seal
-  types are `#[non_exhaustive]`. `check --environment` reads each seal's certificate chain, and it and `serve` warn about a seal certificate whose extended key usage names no document-signing purpose. `check` and `serve` warn
+  types are `#[non_exhaustive]`. `check --environment` reads each seal's certificate chain, and it and `serve` warn about a seal certificate whose extended key usage names no document-signing purpose, and refuse a chain file whose first
+  certificate, taken as the seal certificate, is a CA certificate. `check`
+  and `serve` warn
   (`render.bundle.seal-standard-unverified`) about a document type sealed
   under a PDF/A level no validator run has checked sealed: veraPDF has passed
   sealed PDF/A-1b, A-2b, A-4 and PDF/UA-1 files only. A seal key `serve` cannot read is refused with the secret provider's reason, and its text is erased once parsed. New problem

@@ -118,7 +118,7 @@ Serve and `check` report these as runtime problems at the position of the key.
 | Code | Severity | Meaning |
 |---|---|---|
 | `render.runtime.seal-chain-unreadable` | error | The chain file cannot be read. |
-| `render.runtime.seal-chain-invalid` | error | The file is not a usable certificate chain. |
+| `render.runtime.seal-chain-invalid` | error | The file is not a usable certificate chain: its certificates do not link in order, or its first certificate, taken as the seal certificate, is a CA certificate. |
 | `render.runtime.seal-certificate-usage` | error | The seal certificate has neither the digitalSignature nor the nonRepudiation key usage. |
 | `render.runtime.seal-chain-too-large` | error | The chain exceeds the signature space a seal may reserve. |
 | `render.runtime.seal-certificate-expired` | warning | The certificate is expired; the seal is unavailable. |

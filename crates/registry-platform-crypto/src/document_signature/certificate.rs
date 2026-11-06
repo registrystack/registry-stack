@@ -13,7 +13,7 @@ use std::collections::HashSet;
 use std::fmt;
 use thiserror::Error;
 use time::OffsetDateTime;
-use x509_cert::ext::pkix::{ExtendedKeyUsage, KeyUsage};
+use x509_cert::ext::pkix::{BasicConstraints, ExtendedKeyUsage, KeyUsage};
 use x509_cert::name::Name;
 use x509_cert::spki::SubjectPublicKeyInfoOwned;
 use x509_cert::time::Time as X509Time;
@@ -74,6 +74,10 @@ pub enum CertificateError {
         "certificate {position} was not issued by the certificate after it; list the leaf first, then each issuer in turn"
     )]
     ChainOutOfOrder { position: usize },
+    #[error(
+        "certificate 1 is a CA certificate, so it cannot be the seal certificate; list the leaf first, then each issuer in turn"
+    )]
+    LeafIsCertificateAuthority,
     #[error("seal certificate {fingerprint} does not hold the signing key's public key")]
     KeyMismatch { fingerprint: CertificateFingerprint },
     #[error("seal certificate {fingerprint} has neither the digitalSignature nor the nonRepudiation key usage")]
@@ -113,9 +117,10 @@ impl CertificateChain {
     /// Read PEM `CERTIFICATE` blocks: the leaf first, then each issuer in
     /// turn. Text outside the blocks is ignored. Refuses input with no
     /// certificate, any other PEM block (a private key included), a block that
-    /// is not a DER X.509 certificate, a repeated certificate, and a chain
+    /// is not a DER X.509 certificate, a repeated certificate, a chain
     /// whose issuer and subject names do not link each certificate to the
-    /// next.
+    /// next, and a first certificate that is a CA's: one whose basic
+    /// constraints say cA, or whose key usage includes keyCertSign.
     pub fn from_pem(pem: &[u8]) -> Result<Self, CertificateError> {
         let blocks = pem_certificate_blocks(pem)?;
         if blocks.is_empty() {
@@ -138,6 +143,9 @@ impl CertificateChain {
                     position: index + 1,
                 });
             }
+        }
+        if is_certificate_authority(&certificates[0].parsed) {
+            return Err(CertificateError::LeafIsCertificateAuthority);
         }
         let leaf = &certificates[0].parsed.tbs_certificate;
         let display_name = display_name(&leaf.subject);
@@ -309,6 +317,23 @@ impl CertificateChain {
             .map_err(|_| CertificateError::MissingSigningKeyUsage { fingerprint })?;
         Ok(usage.digital_signature() || usage.non_repudiation())
     }
+}
+
+/// Whether `certificate` is a CA's: its basic constraints say cA, or its
+/// key usage includes keyCertSign, which RFC 5280 (4.2.1.3) allows only
+/// with cA. An extension that does not decode says neither.
+fn is_certificate_authority(certificate: &Certificate) -> bool {
+    let extensions = certificate.tbs_certificate.extensions.iter().flatten();
+    extensions.into_iter().any(|extension| {
+        let value = extension.extn_value.as_bytes();
+        if extension.extn_id == oid::BASIC_CONSTRAINTS {
+            BasicConstraints::from_der(value).is_ok_and(|constraints| constraints.ca)
+        } else if extension.extn_id == oid::KEY_USAGE {
+            KeyUsage::from_der(value).is_ok_and(|usage| usage.key_cert_sign())
+        } else {
+            false
+        }
+    })
 }
 
 enum KeyComparison {
