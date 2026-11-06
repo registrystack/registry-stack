@@ -129,7 +129,14 @@ An agent is held to a narrower rule. A token from an agent, or one acting for an
 cannot create, patch, or delete Records directly, with or without a task grant; it reaches them
 through [Actions and Proposals](../breg-actions/) instead.
 
-{/* Evidence: crates/registry-breg/src/access.rs, breg.access.profile-row-boundary-not-writable and
+For a task-grant token, row-boundary claims other than `sub` resolve only from the grant's signed
+`identity` object, never from other token claims. To pin a grant to its subject, author a row
+boundary on that subject key. Without one, the profile's ceiling applies to every row, as for
+standing agents, and `bregctl check` reports `breg.access-profile.task-grant-rows-unbound`.
+
+{/* Evidence: crates/registry-breg/src/auth.rs;
+    crates/registry-breg/tests/http_auth.rs, task_grant_is_exactly_bound_and_cannot_fall_back_to_standing_authority;
+    crates/registry-breg/tests/task_grant_row_findings.rs; crates/registry-breg/src/access.rs, breg.access.profile-row-boundary-not-writable and
     breg.access.profile-writable-row-boundary; crates/registry-breg/src/api/mod.rs, authorize_direct_route();
     crates/registry-breg/src/compiler.rs, breg.access-profile.standing-agent-direct-mutation-forbidden and
     breg.access-profile.task-grant-direct-mutation-forbidden;
