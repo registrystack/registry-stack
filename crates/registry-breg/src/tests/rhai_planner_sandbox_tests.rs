@@ -20,8 +20,10 @@ use rhai::{Dynamic, EvalAltResult, ImmutableString, Map};
 
 use super::{compile_entrypoint, engine};
 
-/// The planner deadline the blocking cases run under.
-const DEADLINE: Duration = Duration::from_millis(50);
+/// The planner deadline the blocking cases run under. It starts before the
+/// engine is built, so it leaves room for a slow build and stays well under
+/// the watchdog.
+const DEADLINE: Duration = Duration::from_millis(500);
 
 /// How long a call may take before the case fails. Far longer than any
 /// refusal takes, and shorter than the two-second pauses the cases request.

@@ -16,8 +16,8 @@ use rhai::packages::{
     MoreStringPackage, Package,
 };
 use rhai::{
-    CallFnOptions, Dynamic, Engine, EvalAltResult, FuncArgs, ImmutableString, NativeCallContext,
-    Scope, AST, INT,
+    CallFnOptions, Dynamic, Engine, EvalAltResult, FuncArgs, FuncRegistration, ImmutableString,
+    NativeCallContext, Scope, AST, INT,
 };
 
 /// The numeric limits a profile asks the engine to enforce.
@@ -61,9 +61,12 @@ pub enum RhaiBaseEngine {
     /// version that refuses an empty padding string, which the package
     /// version pads with forever, and every string `replace` overload by one
     /// that refuses a result over the string bound before building it, where
-    /// the package version builds the whole result first. No module resolver
-    /// is installed, so every `import` fails, and no print or debug handler,
-    /// so output goes nowhere.
+    /// the package version builds the whole result first. The `curry` keyword
+    /// is disabled: Rhai does not count data curried into a function pointer
+    /// against the size bounds, and every copy of the pointer copies that
+    /// data, so a native call such as array `pad` could multiply it past every
+    /// bound inside one call. No module resolver is installed, so every
+    /// `import` fails, and no print or debug handler, so output goes nowhere.
     ///
     /// The base has no clock, no sleep, and no ambient input: a script sees
     /// only its arguments and what the product registers, so the same call
@@ -134,6 +137,7 @@ pub fn build_engine(
     let mut engine = Engine::new_raw();
     if profile.base == RhaiBaseEngine::Deterministic {
         register_deterministic_packages(&mut engine);
+        engine.disable_symbol("curry");
     }
     engine
         .set_max_operations(profile.limits.operations)
@@ -173,13 +177,24 @@ fn register_deterministic_packages(engine: &mut Engine) {
     BasicMapPackage::new().register_into_engine(engine);
     MoreStringPackage::new().register_into_engine(engine);
     // Functions registered on the engine are found before any package's, by
-    // name, function pointer, and method syntax alike.
-    engine
-        .register_fn("pad", pad_with_text)
-        .register_fn("replace", replace_text)
-        .register_fn("replace", replace_text_with_char)
-        .register_fn("replace", replace_char_with_text)
-        .register_fn("replace", replace_char);
+    // name, function pointer, and method syntax alike. They change their
+    // first argument, so they are registered as non-pure, as the package's
+    // are, and calling one on a constant is refused.
+    FuncRegistration::new("pad")
+        .with_purity(false)
+        .register_into_engine(engine, pad_with_text);
+    FuncRegistration::new("replace")
+        .with_purity(false)
+        .register_into_engine(engine, replace_text);
+    FuncRegistration::new("replace")
+        .with_purity(false)
+        .register_into_engine(engine, replace_text_with_char);
+    FuncRegistration::new("replace")
+        .with_purity(false)
+        .register_into_engine(engine, replace_char_with_text);
+    FuncRegistration::new("replace")
+        .with_purity(false)
+        .register_into_engine(engine, replace_char);
 }
 
 /// `text.pad(length, padding)`: pad `text` with repetitions of `padding` up
@@ -544,6 +559,50 @@ mod tests {
                     Err(RhaiCompileError::Parse(_))
                 ),
                 "disabled symbol accepted in: {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_deterministic_base_refuses_curry_in_every_call_form() {
+        let raw = profile_with(|profile| profile.base = RhaiBaseEngine::Raw);
+        for source in [
+            r#"fn helper(x) { x } fn entry(ctx) { let f = Fn("helper").curry(1); f.call() }"#,
+            r#"fn helper(x) { x } fn entry(ctx) { let f = curry(Fn("helper"), 1); f.call() }"#,
+        ] {
+            assert!(
+                matches!(
+                    compile_entrypoint(&breg_shaped_profile(), source, "entry", &[1]),
+                    Err(RhaiCompileError::Parse(_))
+                ),
+                "curry accepted in: {source}"
+            );
+            assert!(
+                compile_entrypoint(&raw, source, "entry", &[1]).is_ok(),
+                "the Raw base leaves curry to the product: {source}"
+            );
+        }
+        let error = evaluate(
+            &breg_shaped_profile(),
+            r#"fn entry(ctx) { let f = Fn("curry"); 1 }"#,
+            None,
+        )
+        .expect_err("a function pointer cannot name the curry keyword");
+        assert_eq!(classify_failure(&error), RhaiFailureCategory::Other);
+    }
+
+    #[test]
+    fn checked_string_helpers_refuse_to_change_a_constant() {
+        for source in [
+            r#"fn entry(ctx) { const TEXT = "abc"; TEXT.pad(5, "x"); TEXT }"#,
+            r#"fn entry(ctx) { const TEXT = "abc"; TEXT.replace("a", "z"); TEXT }"#,
+            r#"fn entry(ctx) { const TEXT = "abc"; TEXT.replace('a', 'z'); TEXT }"#,
+        ] {
+            let error = evaluate(&breg_shaped_profile(), source, None)
+                .expect_err("a constant cannot be changed by a method call");
+            assert!(
+                matches!(*error, EvalAltResult::ErrorNonPureMethodCallOnConstant(..)),
+                "{source} failed as {error:?}"
             );
         }
     }
