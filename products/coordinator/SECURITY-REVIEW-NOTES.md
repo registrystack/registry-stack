@@ -673,8 +673,9 @@ into an outage.
 - A hold changes no uncertain outcome, prepared command, spent start or
   command key, or restore-review mark. Restore hold and admission hold are
   unchanged. Admission and apply scan without holding and pass over refused
-  runs. `deployment-status` lists held and holdable runs and holds none;
-  doctor runs the serving check and lists them.
+  runs. `deployment-status` lists held and holdable runs and holds none.
+  Doctor runs the service's serving check first, as readiness does, so it
+  holds a refused run that is not yet held, then lists held runs.
 - Restore refusals carry operator context instead of the authoring
   suggestion. A pinned package keeps the finding as its code and names its
   package digest and workflow; a run names its run id and workflow, and the
