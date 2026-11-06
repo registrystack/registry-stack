@@ -327,7 +327,7 @@ pub struct AuditConfig {
     #[serde(default)]
     #[cfg_attr(feature = "schema", schemars(extend("pattern" = "^/")))]
     pub path: Option<PathBuf>,
-    /// The size at which the active file is sealed and a new one begun.
+    /// The size at which the active file is rotated and a new one begun.
     #[serde(
         default,
         deserialize_with = "typed::optional_bounded_u64::<_, MIN_AUDIT_ROTATE_BYTES, MAXIMUM_AUDIT_ROTATE_BYTES>"
@@ -337,7 +337,7 @@ pub struct AuditConfig {
         schemars(range(min = MIN_AUDIT_ROTATE_BYTES, max = MAXIMUM_AUDIT_ROTATE_BYTES))
     )]
     pub rotate_bytes: Option<u64>,
-    /// How many days a sealed audit file is kept.
+    /// How many days a rotated audit file is kept.
     #[serde(
         default,
         rename = "retentionDays",

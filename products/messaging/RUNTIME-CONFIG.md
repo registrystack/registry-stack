@@ -135,7 +135,7 @@ recipient pseudonyms later audit records carry, so records written before and
 after the rotation no longer join on them; it frees no idempotency key, which
 is scoped to the caller's issuer and subject. External tamper evidence and
 complete off-host retention are deployment responsibilities.
-`retentionDays` removes local sealed segments; ship required records before
+`retentionDays` removes local rotated segments; ship required records before
 that retention expires. A failed writer remains unhealthy until restart and
 makes `/ready` fail.
 
