@@ -20,7 +20,7 @@ use serde::Serialize;
 
 use crate::bundle::{bundle_file_name, read_root_manifest, Bundle};
 use crate::labels::{labels_path, read_labels_with_warning, LABELS_KIND};
-use crate::manifest::{error_at, read_manifest, MANIFEST_FILE, MANIFEST_KIND};
+use crate::manifest::{error_at, read_manifest, Manifest, MANIFEST_FILE, MANIFEST_KIND};
 use crate::problem::{ProblemKind, RenderProblem};
 use crate::runtime::RUNTIME_KIND;
 
@@ -66,6 +66,9 @@ struct BundleCheck {
     files: usize,
     unavailable: bool,
     summary: Option<BundleSummary>,
+    /// The manifest of a bundle that loaded, for the seal bindings the
+    /// runtime check resolves against it.
+    manifest: Option<Manifest>,
 }
 
 /// The bundle a clean or warning-only check accepted, as the report states it.
@@ -88,6 +91,8 @@ struct DocumentSummary {
     labels: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pdf_standard: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    seal: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -125,6 +130,7 @@ pub fn run(request: &CheckRequest<'_>, stdout: &mut dyn Write, stderr: &mut dyn 
     let mut files = 0;
     let mut unavailable = false;
     let mut summary = None;
+    let mut manifest = None;
     let bundle_dir = match (request.bundle, request.runtime) {
         (Some(dir), _) => Some(dir),
         (None, None) => Some(Path::new(".")),
@@ -136,11 +142,16 @@ pub fn run(request: &CheckRequest<'_>, stdout: &mut dyn Write, stderr: &mut dyn 
         files += checked.files;
         unavailable |= checked.unavailable;
         summary = checked.summary.map(|summary| (dir, summary));
+        manifest = checked.manifest;
     }
     let mut audit = None;
     if let Some(path) = request.runtime {
-        let (checked, missing) =
-            check_runtime_file(path, request.environment, request.require_audit_under);
+        let (checked, missing) = check_runtime_file(
+            path,
+            request.environment,
+            request.require_audit_under,
+            manifest.as_ref(),
+        );
         files += 1;
         unavailable |= missing;
         let proven = !missing
@@ -226,12 +237,16 @@ fn human_summary(dir: &Path, summary: &BundleSummary) -> String {
     let mut text = String::new();
     for document in &summary.documents {
         text.push_str(&format!(
-            "document {:<16} v{}  entry {}  labels [{}]  pdf {}\n",
+            "document {:<16} v{}  entry {}  labels [{}]  pdf {}{}\n",
             document.id,
             document.version,
             document.entry_file,
             document.labels.join(", "),
             document.pdf_standard.as_deref().unwrap_or("plain"),
+            document
+                .seal
+                .as_deref()
+                .map_or_else(String::new, |seal| format!("  seal {seal}")),
         ));
     }
     text.push_str(&format!(
@@ -256,6 +271,7 @@ fn check_bundle(dir: &Path) -> BundleCheck {
             files: 0,
             unavailable: true,
             summary: None,
+            manifest: None,
         };
     }
     let bundle = match Bundle::load_for_preview(dir) {
@@ -282,6 +298,7 @@ fn check_bundle(dir: &Path) -> BundleCheck {
                 files,
                 unavailable: false,
                 summary: None,
+                manifest: None,
             };
         }
     };
@@ -310,6 +327,7 @@ fn check_bundle(dir: &Path) -> BundleCheck {
                 entry_file: document.spec.entry.display().to_string(),
                 labels: document.spec.labels.clone(),
                 pdf_standard: document.spec.pdf_standard.map(|s| s.to_string()),
+                seal: document.spec.seal.clone(),
             })
             .collect(),
     };
@@ -318,6 +336,7 @@ fn check_bundle(dir: &Path) -> BundleCheck {
         files: 1 + bundle.label_sources.len() + schema_files + scanned_files,
         unavailable: false,
         summary: Some(summary),
+        manifest: Some(bundle.manifest.clone()),
     }
 }
 
@@ -570,6 +589,7 @@ fn check_runtime_file(
     path: &Path,
     environment: bool,
     audit_root: Option<&Path>,
+    manifest: Option<&Manifest>,
 ) -> (Vec<Diagnostic>, bool) {
     let given = path.display().to_string();
     let Some(absolute) = absolute_lexical(path) else {
@@ -586,7 +606,8 @@ fn check_runtime_file(
         });
         return (vec![diagnostic], true);
     };
-    let checked = crate::runtime::check_runtime(&absolute, environment, audit_root);
+    let checked =
+        crate::runtime::check_runtime_with_bundle(&absolute, environment, audit_root, manifest);
     let absolute = absolute.display().to_string();
     let diagnostics = checked
         .diagnostics

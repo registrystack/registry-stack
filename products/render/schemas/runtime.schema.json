@@ -298,6 +298,11 @@
       ],
       "type": "object"
     },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
     "OidcAllowedClients": {
       "anyOf": [
         {
@@ -395,6 +400,93 @@
       ],
       "type": "object"
     },
+    "SealRuntime": {
+      "additionalProperties": false,
+      "description": "One seal: the key material, the certificate chain, the timestamp policy,\nand the clients allowed to use it.",
+      "oneOf": [
+        {
+          "not": {
+            "required": [
+              "withoutTimestamp"
+            ]
+          },
+          "required": [
+            "timestampAuthority"
+          ]
+        },
+        {
+          "not": {
+            "required": [
+              "timestampAuthority"
+            ]
+          },
+          "required": [
+            "withoutTimestamp"
+          ]
+        }
+      ],
+      "properties": {
+        "allowedClients": {
+          "description": "The OIDC clients allowed to seal with this seal: a list of at least\none client, each also admitted by `auth.oidc.allowedClients`. There is\nno `unrestricted` form and no wildcard: a seal issues documents in the\ninstitution's name, so every seal-capable client is named. Keep these\nclients separate from any citizen-facing client.",
+          "items": {
+            "$ref": "#/$defs/ExternalId",
+            "not": {
+              "anyOf": [
+                {
+                  "const": "unrestricted"
+                },
+                {
+                  "pattern": "\\*"
+                }
+              ]
+            }
+          },
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "certificateChainFile": {
+          "description": "Absolute path of the PEM certificate chain file, the seal's own\ncertificate first. Render's other runtime paths are absolute for the\nsame reason: the file's meaning must not depend on the directory the\nservice starts in.",
+          "not": {
+            "pattern": "(^|/)\\.{1,2}(/|$)"
+          },
+          "pattern": "^/(?:[^/]+/)*[^/]+$",
+          "type": "string"
+        },
+        "privateKeyRef": {
+          "$ref": "#/$defs/SecretReference",
+          "description": "Secret reference to the seal's private key as a JSON Web Key, under a\ndeclared provider. A reference, never a path to a key file. Local key\nfiles suit development and pilots; the serving process alone reads\nthe key."
+        },
+        "timestampAuthority": {
+          "$ref": "#/$defs/TimestampAuthorityRuntime",
+          "description": "The RFC 3161 timestamp authority that timestamps each seal (PAdES\nB-T), so the seal keeps validating after its certificate expires.\nExactly one of `timestampAuthority` and `withoutTimestamp` is\nrequired."
+        },
+        "trust": {
+          "$ref": "#/$defs/SealTrust",
+          "description": "`test-only` marks a seal made with a test certificate: the template is\ntold so and prints the seal as a test seal. Omit it for a production\nseal."
+        },
+        "withoutTimestamp": {
+          "$ref": "#/$defs/WithoutTimestamp",
+          "description": "Seal without a timestamp (PAdES B-B). The only value states the\nconsequence the operator accepts: a seal without a timestamp stops\nvalidating when its certificate expires, which is usually before the\ndocument stops mattering. Exactly one of `timestampAuthority` and\n`withoutTimestamp` is required."
+        }
+      },
+      "required": [
+        "privateKeyRef",
+        "certificateChainFile",
+        "allowedClients"
+      ],
+      "type": "object"
+    },
+    "SealTrust": {
+      "description": "How a seal is trusted.",
+      "oneOf": [
+        {
+          "const": "test-only",
+          "description": "A seal made with a test certificate; documents print it as a test\nseal.",
+          "type": "string"
+        }
+      ]
+    },
     "SecretProvidersConfig": {
       "additionalProperties": false,
       "anyOf": [
@@ -437,12 +529,70 @@
       "pattern": "^(?:secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
       "type": "string"
     },
+    "SigningRuntime": {
+      "additionalProperties": false,
+      "description": "Document sealing: the seals this deployment can apply. A seal is a PAdES\nsignature made with the institution's own key. Which document types use\nwhich seal is decided in the bundle manifest (`seal` on a document type),\nnever by the caller.",
+      "properties": {
+        "seals": {
+          "additionalProperties": {
+            "$ref": "#/$defs/SealRuntime"
+          },
+          "description": "The seals, keyed by the local identifier the bundle manifest's `seal`\nnames. At least one seal is required: omit `signing` to turn sealing\noff.",
+          "minProperties": 1,
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "seals"
+      ],
+      "type": "object"
+    },
+    "TimestampAuthorityRuntime": {
+      "additionalProperties": false,
+      "description": "The RFC 3161 timestamp authority a seal uses.",
+      "properties": {
+        "attemptTimeoutMilliseconds": {
+          "default": 10000,
+          "description": "Time allowed for one request to the authority, in milliseconds.",
+          "format": "uint64",
+          "maximum": 60000,
+          "minimum": 1000,
+          "type": "integer"
+        },
+        "url": {
+          "$ref": "#/$defs/Url",
+          "allOf": [
+            {
+              "pattern": "^(?:[Hh][Tt][Tt][Pp][Ss]://|[Hh][Tt][Tt][Pp]://(?:[Ll][Oo][Cc][Aa][Ll][Hh][Oo][Ss][Tt]|127(?:\\.[0-9]{1,3}){3}|\\[::1\\])(?:[:/?#]|$))"
+            }
+          ],
+          "description": "Absolute `https` URL of the authority. `http` is accepted only for a\nloopback host (`localhost`, `127.0.0.0/8`, `[::1]`), for a test\nauthority on the same machine."
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "type": "object"
+    },
     "Url": {
       "description": "An absolute http or https URL with a host preserved as written, no user information, and no backslash, whitespace or control character. DNS case and equivalent IPv6 literals are permitted.",
       "format": "uri",
       "maxLength": 2048,
       "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@\\u005C\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]+([/?#][^\\u005C\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*)?$",
       "type": "string"
+    },
+    "WithoutTimestamp": {
+      "description": "The acknowledgement a seal needs to go without a timestamp.",
+      "oneOf": [
+        {
+          "const": "seal-stops-validating-when-certificate-expires",
+          "description": "The seal carries no timestamp, so it stops validating when its\ncertificate expires.",
+          "type": "string"
+        }
+      ]
     },
     "ipv4SocketHost": {
       "description": "Four canonical decimal IPv4 octets followed by a decimal port.",
@@ -503,6 +653,10 @@
     "secretProviders": {
       "$ref": "#/$defs/SecretProvidersConfig",
       "description": "Providers for secret references. Omit when the authentication mode uses\nno secret references."
+    },
+    "signing": {
+      "$ref": "#/$defs/SigningRuntime",
+      "description": "Optional document sealing. Omit it and Render loads no signer, makes\nno timestamp call, and cannot seal any document."
     }
   },
   "required": [
