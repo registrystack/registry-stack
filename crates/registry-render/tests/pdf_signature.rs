@@ -232,7 +232,7 @@ fn catalog_and_first_page_keep_every_existing_entry() {
         (
             original.pages()[0].raw().obj_id().expect("page id"),
             prepared.pages()[0].raw().obj_id().expect("page id"),
-            vec![&b"Annots"[..]],
+            vec![&b"Annots"[..], b"Tabs"],
         ),
     ];
     for (original_id, prepared_id, added) in pairs {
@@ -257,6 +257,9 @@ fn catalog_and_first_page_keep_every_existing_entry() {
         actual.sort();
         assert_eq!(actual, expected);
     }
+
+    // PDF/UA-1 orders a page with annotations by structure (ISO 14289-1, 7.18.3).
+    assert_eq!(name(prepared.pages()[0].raw(), b"Tabs"), b"S");
 }
 
 #[test]
