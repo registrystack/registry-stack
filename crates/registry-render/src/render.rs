@@ -8,7 +8,7 @@ use chrono::{DateTime, Datelike, Timelike, Utc};
 use crate::bundle::{
     Bundle, LoadedDocument, DEFAULT_MAX_ASSET_BYTES, DEFAULT_MAX_TOTAL_ASSET_BYTES,
 };
-use crate::envelope::{build_envelope, canonical_bytes, EnvelopeInput};
+use crate::envelope::{build_envelope, canonical_bytes, EnvelopeInput, SigningPayload};
 use crate::hash::sha256_hex;
 use crate::problem::{ProblemKind, RenderProblem};
 use crate::world::RenderWorld;
@@ -202,6 +202,40 @@ pub fn render_with_limits(
     strict: bool,
     max_output_bytes: usize,
 ) -> Result<Rendered, RenderProblem> {
+    render_envelope(bundle, document, request, None, strict, max_output_bytes)
+}
+
+/// Render the first revision of a sealed document: the same pipeline, with
+/// the template payload's `signing` member set, so the template can print
+/// its seal block. Only the seal route's worker calls this; its output is
+/// byte-stable for the same inputs and signing member, and differs from the
+/// plain route's render of the same data.
+pub fn render_for_sealing(
+    bundle: &Bundle,
+    document: &LoadedDocument,
+    request: &RenderRequest,
+    signing: &SigningPayload,
+    strict: bool,
+    max_output_bytes: usize,
+) -> Result<Rendered, RenderProblem> {
+    render_envelope(
+        bundle,
+        document,
+        request,
+        Some(signing),
+        strict,
+        max_output_bytes,
+    )
+}
+
+fn render_envelope(
+    bundle: &Bundle,
+    document: &LoadedDocument,
+    request: &RenderRequest,
+    signing: Option<&SigningPayload>,
+    strict: bool,
+    max_output_bytes: usize,
+) -> Result<Rendered, RenderProblem> {
     validate_data(document, request)?;
     let decoded_assets = decode_assets(
         request,
@@ -218,6 +252,7 @@ pub fn render_with_limits(
         issued_at: request.issued_at,
         data: &request.data,
         assets: &request.assets,
+        signing,
     });
     let envelope_bytes = canonical_bytes(&envelope)?;
     let data_sha256 = sha256_hex(&envelope_bytes);

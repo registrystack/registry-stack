@@ -6,6 +6,7 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, SecondsFormat, Utc};
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::problem::{ProblemKind, RenderProblem};
@@ -20,6 +21,24 @@ pub struct EnvelopeInput<'a> {
     pub data: &'a Value,
     /// Asset name -> exact base64 text as received (hashing covers it).
     pub assets: &'a BTreeMap<String, String>,
+    /// The `signing` member, present only on the seal route.
+    pub signing: Option<&'a SigningPayload>,
+}
+
+/// What a sealed render tells its template, as the `signing` member:
+/// `{"mode": "seal", "signerName": ..., "testOnly": ...}`. The plain route
+/// never carries it, so a template can print its seal block only on files
+/// that are sealed. It holds no key, certificate or subject value beyond
+/// the display name the certificate already shows every relying party.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SigningPayload {
+    /// The seal certificate's display name (organization, else common
+    /// name); absent when the certificate names neither.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signer_name: Option<String>,
+    /// Whether the runtime file declares the seal `trust: test-only`.
+    pub test_only: bool,
 }
 
 /// Fixed RFC 3339 rendering of the issuance time: UTC, second precision.
@@ -67,6 +86,15 @@ pub fn build_envelope(input: &EnvelopeInput<'_>) -> Value {
         Value::Number(input.document_version.into()),
     );
     envelope.insert("document".into(), Value::Object(document));
+    if let Some(signing) = input.signing {
+        let mut member = Map::new();
+        member.insert("mode".into(), Value::String("seal".to_owned()));
+        if let Some(name) = &signing.signer_name {
+            member.insert("signerName".into(), Value::String(name.clone()));
+        }
+        member.insert("testOnly".into(), Value::Bool(signing.test_only));
+        envelope.insert("signing".into(), Value::Object(member));
+    }
     Value::Object(envelope)
 }
 
@@ -110,6 +138,7 @@ mod tests {
             issued_at: at,
             data: &data,
             assets: &assets,
+            signing: None,
         });
         assert_eq!(envelope["data"]["reference"], "R-1");
         assert_eq!(envelope["assets"]["photo"], "aGk=");
@@ -122,5 +151,43 @@ mod tests {
         let text = envelope.to_string();
         assert!(!text.contains("renderer"));
         assert!(!text.contains("typst"));
+    }
+
+    #[test]
+    fn the_signing_member_appears_only_on_a_sealed_render() {
+        let labels = BTreeMap::new();
+        let assets = BTreeMap::new();
+        let data = serde_json::json!({});
+        let at = DateTime::parse_from_rfc3339("2026-09-16T10:32:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let input = |signing| EnvelopeInput {
+            document_id: "licence",
+            document_version: 1,
+            labels: &labels,
+            locale: None,
+            issued_at: at,
+            data: &data,
+            assets: &assets,
+            signing,
+        };
+        assert!(build_envelope(&input(None)).get("signing").is_none());
+        let named = SigningPayload {
+            signer_name: Some("Ministry of Licensing".to_owned()),
+            test_only: false,
+        };
+        assert_eq!(
+            build_envelope(&input(Some(&named)))["signing"],
+            serde_json::json!({"mode":"seal","signerName":"Ministry of Licensing","testOnly":false})
+        );
+        let unnamed_test = SigningPayload {
+            signer_name: None,
+            test_only: true,
+        };
+        assert_eq!(
+            build_envelope(&input(Some(&unnamed_test)))["signing"],
+            serde_json::json!({"mode":"seal","testOnly":true}),
+            "a certificate without a display name prints none"
+        );
     }
 }

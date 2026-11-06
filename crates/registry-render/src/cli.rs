@@ -410,6 +410,7 @@ fn run_inner(cli: Cli) -> Result<i32, RenderProblem> {
                     issued_at: request.issued_at,
                     data: &request.data,
                     assets: &request.assets,
+                    signing: None,
                 });
                 let bytes = crate::envelope::canonical_bytes(&envelope)?;
                 if crate::hash::sha256_hex(&bytes) != rendered.data_sha256 {
@@ -583,6 +584,7 @@ fn compile_once(
         require_package: false,
         max_output_bytes: crate::render::DEFAULT_MAX_OUTPUT_BYTES,
         memory_limit_bytes: 512 * 1024 * 1024,
+        seal: None,
     };
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()

@@ -858,6 +858,7 @@ fn prepare_render(
         require_package: true,
         max_output_bytes: service.limits.output_bytes(),
         memory_limit_bytes: 512 * 1024 * 1024,
+        seal: None,
     };
     Ok((worker_request, document_version))
 }
