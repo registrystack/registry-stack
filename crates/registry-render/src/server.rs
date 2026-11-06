@@ -594,7 +594,7 @@ fn problem_response(problem: &RenderProblem, trace: Option<&str>) -> Response {
         type_uri: format!("{}/{}", PROBLEM_TYPE_BASE, problem.kind.slug()),
         title: problem.kind.slug(),
         status: problem.kind.http_status(),
-        detail: problem.public_detail.unwrap_or(match problem.kind {
+        detail: problem.public_detail().unwrap_or(match problem.kind {
             ProblemKind::Unauthorized => "Present a valid bearer credential for this Render resource.",
             ProblemKind::Forbidden => "Obtain a Render resource credential with the render:render scope.",
             ProblemKind::AuthenticationUnavailable => "Credential verification is unavailable; retry when the issuer keys are available.",
@@ -1159,7 +1159,7 @@ async fn seal_route(
         Err(problem) => {
             // The caller reads fixed guidance; the operator reads the
             // value-free reason here and in the audit.
-            if let Some(reason) = problem.reason {
+            if let Some(reason) = problem.reason() {
                 tracing::warn!(
                     target: "registry_render::seal",
                     seal_id = %seal_id,

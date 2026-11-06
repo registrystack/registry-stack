@@ -230,15 +230,23 @@ pub struct RenderProblem {
     /// was refused (CFG-DIAG-1). The detail is the one sentence Render puts
     /// before them.
     pub diagnostics: Vec<Diagnostic>,
+    /// Boxed, since few problems carry them: every `Result` holding a
+    /// problem stays small.
+    notes: Option<Box<ProblemNotes>>,
+}
+
+/// The fixed texts a problem may carry beyond its kind and detail.
+#[derive(Debug, Clone, Default)]
+struct ProblemNotes {
     /// Fixed, value-free text an HTTP caller reads in place of the kind's
     /// default guidance, when one kind covers several failing pieces (the
-    /// timestamp authority unreachable or refusing, say). The `detail` above
-    /// stays the operator's text and never reaches the caller.
-    pub public_detail: Option<&'static str>,
+    /// timestamp authority unreachable or refusing, say). The problem's
+    /// `detail` stays the operator's text and never reaches the caller.
+    public_detail: Option<&'static str>,
     /// A value-free reason from a closed vocabulary, for the operator: which
     /// check of the timestamp exchange failed, say. The audit and the log
     /// record it; the caller never reads it.
-    pub reason: Option<&'static str>,
+    reason: Option<&'static str>,
 }
 
 impl RenderProblem {
@@ -249,19 +257,29 @@ impl RenderProblem {
             pointers: Vec::new(),
             locations: Vec::new(),
             diagnostics: Vec::new(),
-            public_detail: None,
-            reason: None,
+            notes: None,
         }
     }
 
     pub fn with_public_detail(mut self, detail: &'static str) -> Self {
-        self.public_detail = Some(detail);
+        self.notes.get_or_insert_with(Box::default).public_detail = Some(detail);
         self
     }
 
     pub fn with_reason(mut self, reason: &'static str) -> Self {
-        self.reason = Some(reason);
+        self.notes.get_or_insert_with(Box::default).reason = Some(reason);
         self
+    }
+
+    /// The text an HTTP caller reads in place of the kind's default
+    /// guidance, if any.
+    pub fn public_detail(&self) -> Option<&'static str> {
+        self.notes.as_ref().and_then(|notes| notes.public_detail)
+    }
+
+    /// The value-free reason the operator reads, if any.
+    pub fn reason(&self) -> Option<&'static str> {
+        self.notes.as_ref().and_then(|notes| notes.reason)
     }
 
     pub fn with_pointers(mut self, pointers: Vec<String>) -> Self {
@@ -404,12 +422,25 @@ mod tests {
         let problem = RenderProblem::new(ProblemKind::TimestampFailed, "operator text")
             .with_public_detail("The timestamp authority could not be reached; retry later.");
         assert_eq!(
-            problem.public_detail,
+            problem.public_detail(),
             Some("The timestamp authority could not be reached; retry later.")
         );
+        assert_eq!(problem.reason(), None);
+        let problem = problem.with_reason("timed-out");
+        assert_eq!(problem.reason(), Some("timed-out"));
         assert_eq!(
-            RenderProblem::new(ProblemKind::Internal, "x").public_detail,
-            None
+            problem.public_detail(),
+            Some("The timestamp authority could not be reached; retry later.")
         );
+        let plain = RenderProblem::new(ProblemKind::Internal, "x");
+        assert_eq!(plain.public_detail(), None);
+        assert_eq!(plain.reason(), None);
+    }
+
+    #[test]
+    fn a_problem_is_small_enough_to_return_in_a_result() {
+        // Clippy's result_large_err holds an error under 128 bytes, and
+        // nearly every Render function returns this one.
+        assert!(std::mem::size_of::<RenderProblem>() < 128);
     }
 }

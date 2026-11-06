@@ -126,7 +126,7 @@ impl RenderAuditEvent {
         Self {
             outcome: Some("refused"),
             problem: Some(problem.kind.slug().to_owned()),
-            reason: problem.reason,
+            reason: problem.reason(),
             ..self
         }
     }
@@ -155,7 +155,7 @@ impl RenderAuditEvent {
             bundle_hash: String::new(),
             outcome: Some("refused"),
             problem: Some(problem.kind.slug().to_owned()),
-            reason: problem.reason,
+            reason: problem.reason(),
             pdf_sha256: None,
             data_sha256: None,
             seal_id: None,
