@@ -904,6 +904,10 @@ fn chain_error_text(error: &CertificateError) -> String {
             "certificate {position} was not issued by the certificate after it; list the seal \
              certificate first, then each issuer in turn"
         ),
+        CertificateError::LeafIsCertificateAuthority => "certificate 1 is a CA certificate, \
+             and the first certificate in the file is taken as the seal certificate; list the \
+             seal certificate first, then each issuer in turn"
+            .to_owned(),
         CertificateError::KeyMismatch { .. } => {
             "the seal certificate does not hold the signing key's public key".to_owned()
         }

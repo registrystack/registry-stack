@@ -109,8 +109,10 @@ What it does:
 - `CertificateChain::from_pem` reads the seal certificate first, then each
   issuer in turn. It refuses empty input, any PEM block that is not a
   `CERTIFICATE` (a private key included), a block that is not a DER X.509
-  certificate, a repeated certificate, and a chain whose issuer and subject
-  names do not link each certificate to the next. It exposes the seal
+  certificate, a repeated certificate, a chain whose issuer and subject
+  names do not link each certificate to the next, and a first certificate
+  that is a CA's (basic constraints cA, or the keyCertSign key usage), such
+  as a root CA certificate given alone. It exposes the seal
   certificate's DER, SHA-256 fingerprint, validity, and display name (subject
   organization, else common name).
 - `CertificateChain::check_for_signing` refuses a seal certificate that does

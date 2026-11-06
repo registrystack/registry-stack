@@ -93,6 +93,9 @@ pub(super) mod oid {
 
     /// id-ce-keyUsage, RFC 5280 section 4.2.1.3.
     pub(crate) const KEY_USAGE: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.5.29.15");
+    /// id-ce-basicConstraints, RFC 5280 section 4.2.1.9.
+    pub(crate) const BASIC_CONSTRAINTS: ObjectIdentifier =
+        ObjectIdentifier::new_unwrap("2.5.29.19");
     /// id-ce-extKeyUsage, RFC 5280 section 4.2.1.12.
     pub(crate) const EXTENDED_KEY_USAGE: ObjectIdentifier =
         ObjectIdentifier::new_unwrap("2.5.29.37");

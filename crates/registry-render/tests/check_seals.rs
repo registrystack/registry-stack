@@ -288,6 +288,25 @@ fn check_with_the_environment_reads_each_seal_certificate_chain() {
         )]
     );
 
+    // The root CA alone, an easy slip for the seal's own certificate, is
+    // refused for what it is, not for its key usage.
+    std::fs::write(&chain, pki.root_certificate_pem()).unwrap();
+    let (exit, report) = check_chain(&home, &bundle, &chain);
+    assert_eq!(exit, Some(1), "{report}");
+    assert_eq!(
+        codes(&report),
+        [(
+            "error".to_owned(),
+            "render.runtime.seal-chain-invalid".to_owned()
+        )]
+    );
+    let message = report["diagnostics"][0]["message"].as_str().unwrap();
+    assert!(message.contains("is a CA certificate"), "{message}");
+    assert!(
+        message.contains("taken as the seal certificate"),
+        "{message}"
+    );
+
     let (exit, report) = check_chain(&home, &bundle, &home.join("absent.pem"));
     assert_eq!(exit, Some(1), "{report}");
     assert_eq!(

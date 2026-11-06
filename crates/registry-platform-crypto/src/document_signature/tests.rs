@@ -239,6 +239,51 @@ fn chain_refuses_an_unrelated_second_certificate() {
 }
 
 #[test]
+fn chain_refuses_a_ca_certificate_as_the_seal_certificate() {
+    let pki = test_pki();
+    let root = pem_block("CERTIFICATE", pki.root_certificate_der());
+    let issuing = pem_block("CERTIFICATE", pki.issuing_ca_certificate_der());
+    // The root alone, and the issuing CA then the root it links to: the
+    // first certificate is taken as the seal's, and it is a CA's.
+    for pem in [root.clone(), format!("{issuing}{root}")] {
+        assert!(
+            matches!(
+                CertificateChain::from_pem(pem.as_bytes()),
+                Err(CertificateError::LeafIsCertificateAuthority)
+            ),
+            "{pem}"
+        );
+    }
+    // A leaf asserting keyCertSign is a CA's certificate too (RFC 5280
+    // 4.2.1.3), whatever its basic constraints say.
+    let signs_certificates = pki
+        .issue_seal_with(SigningAlgorithm::Es256, |params| {
+            params.key_usages = vec![
+                KeyUsagePurpose::DigitalSignature,
+                KeyUsagePurpose::KeyCertSign,
+            ];
+        })
+        .expect("seal");
+    assert!(matches!(
+        signs_certificates.chain(),
+        Err(CertificateError::LeafIsCertificateAuthority)
+    ));
+    // So is one whose basic constraints say cA, whatever its key usage.
+    let says_ca = pki
+        .issue_seal_with(SigningAlgorithm::Es256, |params| {
+            params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        })
+        .expect("seal");
+    assert!(matches!(
+        says_ca.chain(),
+        Err(CertificateError::LeafIsCertificateAuthority)
+    ));
+    let seal = seal(&pki, SigningAlgorithm::Es256);
+    seal.chain()
+        .expect("an end-entity seal certificate is accepted");
+}
+
+#[test]
 fn chain_refuses_a_repeated_certificate() {
     let pki = test_pki();
     let root = pem_block("CERTIFICATE", pki.root_certificate_der());
