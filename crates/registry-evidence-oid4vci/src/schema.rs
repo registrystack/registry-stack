@@ -159,7 +159,7 @@ mod tests {
                 "jwksUri": "https://mint.example.org/.well-known/jwks.json",
                 "audiences": ["https://wallet.example.org"],
                 "algorithms": ["EdDSA"],
-                "authorizedClients": ["adopter-front-end"],
+                "allowedClients": ["adopter-front-end"],
                 "requiredScopes": ["oid4vci:offer"],
                 "maximumTokenLifetimeSeconds": 900
             },
@@ -217,7 +217,7 @@ mod tests {
             document["tokenClient"]["privateKeyRef"] = Value::from("/run/secrets/client.jwk")
         }));
         assert!(refused(&|document| {
-            document["offers"]["authorizedClients"] = serde_json::json!([])
+            document["offers"]["allowedClients"] = serde_json::json!([])
         }));
         assert!(refused(&|document| {
             document["offers"]["requiredScopes"] = Value::from("anything")
@@ -235,7 +235,7 @@ mod tests {
             document["store"]["maximumOffers"] = Value::from(255)
         }));
         assert!(!refused(&|document| {
-            document["offers"]["authorizedClients"] = Value::from("unrestricted")
+            document["offers"]["allowedClients"] = Value::from("unrestricted")
         }));
     }
 

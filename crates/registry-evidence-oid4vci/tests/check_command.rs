@@ -166,8 +166,8 @@ fn an_invalid_command_line_exits_two() {
 #[test]
 fn a_warning_passes_unless_warnings_are_denied() {
     let text = example().replace(
-        "  authorizedClients: [adopter-front-end]",
-        "  authorizedClients: [\"*\"]",
+        "  allowedClients: [adopter-front-end]",
+        "  allowedClients: [\"*\"]",
     );
     let (_root, path) = write(&text);
 

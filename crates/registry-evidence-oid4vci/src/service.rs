@@ -1694,7 +1694,7 @@ mod tests {
              audit:\n  destination: file\n  path: {root}/audit.jsonl\n  hashKeyRef: secret:file/audit-hash-key\n\
              evidence:\n  baseUrl: https://evidence.example.org\n\
              tokenClient:\n  tokenEndpoint: https://mint.example.org/token\n  clientId: evidence-oid4vci\n  privateKeyRef: secret:file/delivery-client.jwk.json\n\
-             offers:\n  issuer: https://mint.example.org\n  jwksUri: https://mint.example.org/.well-known/jwks.json\n  audiences: [\"https://wallet.example.org\"]\n  authorizedClients: unrestricted\n  requiredScopes: unrestricted\n",
+             offers:\n  issuer: https://mint.example.org\n  jwksUri: https://mint.example.org/.well-known/jwks.json\n  audiences: [\"https://wallet.example.org\"]\n  allowedClients: unrestricted\n  requiredScopes: unrestricted\n",
             root = directory.display(),
         );
         fs::write(&path, text).expect("write the configuration document");

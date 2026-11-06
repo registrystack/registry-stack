@@ -336,7 +336,7 @@ offers:
   issuer: https://mint.example.org
   jwksUri: https://mint.example.org/.well-known/jwks.json
   audiences: ["https://wallet.example.org"]
-  authorizedClients: unrestricted
+  allowedClients: unrestricted
   requiredScopes: unrestricted
 "#,
     )
@@ -719,7 +719,7 @@ offers:
   jwksUri: {SUPPORT_ORIGIN}/.well-known/jwks.json
   audiences: ["{ADOPTER_ORIGIN}"]
   algorithms: [ES256]
-  authorizedClients: [tutorial-operator]
+  allowedClients: [tutorial-operator]
   requiredScopes: unrestricted
 store:
   maximumOffers: 256

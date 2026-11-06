@@ -986,7 +986,7 @@ offers:
   jwksUri: https://mint.example.org/.well-known/jwks.json
   audiences: ["https://wallet.example.org"]
   algorithms: [EdDSA]
-  authorizedClients: [adopter-front-end]
+  allowedClients: [adopter-front-end]
   requiredScopes: unrestricted
   maximumTokenLifetimeSeconds: 900
 store:

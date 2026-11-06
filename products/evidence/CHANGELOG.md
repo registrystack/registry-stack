@@ -9,6 +9,13 @@
   empty padding string, now fails its call, and a pack script that uses the
   `curry` keyword no longer compiles. Remove those calls.
 
+- BREAKING: the `evidence-oid4vci` runtime member `offers.authorizedClients` is
+  renamed `offers.allowedClients`, the name every other product uses for its
+  client restriction. The value is unchanged: a nonempty list or
+  `unrestricted`. There is no alias; a file that still states
+  `authorizedClients` is refused as an unknown key. Rename the member in each
+  `runtime.yaml`.
+
 ## 0.45.0 - 2026-11-03
 
 - BREAKING: Source acquisition moves into reviewed Adapter packs. Authored

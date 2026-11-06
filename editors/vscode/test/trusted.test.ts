@@ -73,7 +73,7 @@ suite('Registry Stack extension', () => {
       '  issuer: https://mint.example.org',
       '  jwksUri: https://mint.example.org/.well-known/jwks.json',
       '  audiences: ["https://wallet.example.org"]',
-      '  authorizedClients: [adopter-front-end]',
+      '  allowedClients: [adopter-front-end]',
       '  requiredScopes: [oid4vci:offer]',
       'store:',
       '  maximumOffers: 4096',
