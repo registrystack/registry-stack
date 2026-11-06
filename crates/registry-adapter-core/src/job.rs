@@ -41,7 +41,8 @@ pub const ADAPTER_JOB_RUNTIME_KIND: &str = "AdapterJobRuntimeConfig";
 /// platform's own response-body cap
 /// (`registry-platform-httputil`'s `MAX_DESTINATION_RESPONSE_BODY_BYTES`).
 /// An endpoint only source routes reach may declare up to this bound
-/// (D39); a facade-reachable endpoint stays at the facade ceiling of
+/// (`products/adapter/CONCEPT.md` section 8.8); a facade-reachable
+/// endpoint stays at the facade ceiling of
 /// `crate::checks::MAXIMUM_RESPONSE_BYTES`.
 pub const MAXIMUM_JOB_RESPONSE_BYTES: u64 = 16_777_216;
 const _: () = assert!(
@@ -53,7 +54,7 @@ const _: () = assert!(
 /// platform-frozen facade ceiling on purpose:
 /// `registry-platform-httputil`'s `FixedDestinationPolicy::send` hard-caps
 /// every operation at 10 seconds, so a job profile cannot exceed it and a
-/// page must fit inside it (D39).
+/// page must fit inside it (`products/adapter/CONCEPT.md` section 8.8).
 pub const MAXIMUM_JOB_ATTEMPT_TIMEOUT_MILLISECONDS: u64 = 10_000;
 const _: () = assert!(
     MAXIMUM_JOB_ATTEMPT_TIMEOUT_MILLISECONDS
@@ -422,7 +423,7 @@ pub struct JobSource {
 /// enforces each bound again at the edge. The facade ceilings of section
 /// 8.8 are unchanged: the per-attempt timeout stays at the platform-frozen
 /// ceiling, and only a source-route-only endpoint's response bound may
-/// rise, to the platform cap (D39).
+/// rise, to the platform cap.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

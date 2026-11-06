@@ -41,7 +41,6 @@ REQUIRED_DOD_IDS = {
     "discovery-dod-16-5-evidence-resolver", "discovery-dod-16-6-runtime-query-api",
     "discovery-dod-16-7-client-trust-invocation", "discovery-dod-16-8-adopter-maintenance-ux",
     "discovery-dod-16-9-acceptance-journeys", "discovery-dod-16-10-security-ci",
-    "discovery-dod-16-11-pr-reduction",
 }
 
 
@@ -319,7 +318,7 @@ def check_definition_of_done() -> None:
         fail("Definition of Done must be a required machine contract")
     by_id = {item.get("id"): item for item in requirements}
     if set(by_id) != REQUIRED_DOD_IDS or len(by_id) != len(requirements):
-        fail("Definition of Done must cover sections 16.1 through 16.11 exactly once")
+        fail("Definition of Done must cover sections 16.1 through 16.10 exactly once")
     for identifier, item in by_id.items():
         if not isinstance(item.get("requirement"), str) or not isinstance(item.get("section"), str):
             fail(f"{identifier} lacks requirement or section")

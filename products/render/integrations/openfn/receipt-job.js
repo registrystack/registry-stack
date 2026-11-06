@@ -5,7 +5,8 @@
 // Deterministic rendering makes the bridge's at-least-once redelivery safe:
 // a retry or dead-letter replay returns the same bytes. This exact shape was
 // walked end to end against a live `registry-render serve` and a real breg dev
-// registry; see JOURNEY.md in this directory.
+// registry of an earlier release; the read-back step has not been re-walked
+// against the current BReg model.
 //
 // Configuration (private job config, e.g. notification.json):
 //   renderUrl:     "http://127.0.0.1:3200"   (loopback to registry-render serve)

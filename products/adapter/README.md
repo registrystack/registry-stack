@@ -38,7 +38,7 @@ its source can preserve those guarantees.
 
 The [product concept](CONCEPT.md) is the contract: artifact model, engine,
 exchange contract, failure semantics, authorization, audit, configuration
-formats, verification, and the recorded decisions. The
+formats, and verification. The
 [effective operation contract](EFFECTIVE-CONTRACT.md) describes what one
 loaded Adapter process exposes to an external gateway.
 
@@ -46,7 +46,7 @@ loaded Adapter process exposes to an external gateway.
 
 Unreleased and pre-1.0. The configuration formats are `v1alpha1` and may
 change without migration. `CONCEPT.md` section 8.10 records each ported
-concept and its evidence; section 14 records pending increments. Section 17
+concept and its evidence. Section 17
 owns the ingestion contract and its declared limits.
 
 ## Crates
@@ -151,8 +151,8 @@ It shows identifier-only checkpoints, same-body and same-key recovery at the
 first unfinished step, the artifact and lease fences, and the authoring shapes
 the Adapter refuses because skipped source-response state is not
 reconstructible in this closed subset. Later reads from the digest-bound,
-resupplied caller record are intentionally deferred rather than inherently
-dependent on stored payloads.
+resupplied caller record are not supported, though they would not inherently
+depend on stored payloads.
 
 ## Operate an SFTP job source
 
@@ -248,7 +248,7 @@ For `adapter.job.rabbitmq-event-changed`, first establish any possible
 destination outcome. The broker operator then resolves the old unsettled
 delivery under approved broker policy. Only after that does the source
 operator correct immutable-identity and version handling for legitimate
-future work. Publishing a new message ID does not clear the old held row or
+later messages. Publishing a new message ID does not clear the old held row or
 acknowledge its delivery; that delivery can continue to block the queue head.
 
 A pass that stops as `adapter.job.identity-migration-required` found stored
@@ -307,8 +307,9 @@ python3 products/adapter/scripts/test-connector-native.py --suite job-destinatio
 ```
 
 This is native fixture evidence for destination admission, recovery, and
-changed-item holds. It is not the controlled Kobo, review-provider, and
-application drill required by `CONCEPT.md` section 17.7.
+changed-item holds. It is not a controlled Kobo, review-provider, and
+application deployment drill; `CONCEPT.md` section 17.7 states that a named
+test is not a claim that a controlled deployment has passed.
 
 To check one project by hand:
 

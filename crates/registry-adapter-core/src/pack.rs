@@ -40,7 +40,8 @@ pub struct Endpoint {
     /// refused, never shortened. The runtime binding may lower it, never
     /// raise it. A facade-reachable endpoint stays within the facade
     /// ceiling and a source-route-only endpoint may declare up to the
-    /// platform cap (D39); the checks refuse the facade-reachable excess
+    /// platform cap (`products/adapter/CONCEPT.md` section 8.8); the checks
+    /// refuse the facade-reachable excess
     /// under `adapter.job.endpoint-response-bound`.
     pub maximum_response_bytes: BoundedU64<1, MAXIMUM_JOB_RESPONSE_BYTES>,
     /// The response headers the engine copies onto the exchange, Camel's
@@ -268,7 +269,8 @@ pub struct EndpointAsyncCompletion {
 pub const MAX_ASYNC_SOURCE_ID_BYTES: usize = 256;
 
 /// Return a value-free reason when a source-native operation id is not the
-/// bounded opaque identifier D16 permits. URLs and path/query delimiters are
+/// bounded opaque identifier section 9 of `products/adapter/CONCEPT.md`
+/// permits. URLs and path/query delimiters are
 /// refused, so the host can never follow a source-provided authority.
 #[must_use]
 pub fn async_source_id_fault(id: &str) -> Option<&'static str> {
@@ -691,7 +693,8 @@ mod tests {
     /// timeout; Evidence owns the omitted timeout default. A zero value is
     /// refused. The response bound's
     /// reader ceiling is the platform cap a source-route-only endpoint may
-    /// declare (D39); a facade-reachable endpoint stays at the facade
+    /// declare (`products/adapter/CONCEPT.md` section 8.8); a
+    /// facade-reachable endpoint stays at the facade
     /// ceiling, which the checks refuse past.
     #[test]
     fn endpoint_requires_both_limits_within_their_ceilings() {

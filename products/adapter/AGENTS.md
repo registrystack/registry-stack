@@ -30,7 +30,8 @@ verification scripts. Read the workspace `AGENTS.md`, this file,
 product's runtime, tooling, or protocol types. Product logic (routes, EIP
 processors, mapping, disclosure) never moves into a platform crate. The
 generic primitives under `throttle`, `circuitBreaker`, and redelivery live in
-`registry-platform-ratelimit` and `registry-platform-resilience` (D13); the
+`registry-platform-ratelimit` and `registry-platform-resilience`
+(`CONCEPT.md` section 8.1); the
 processors and the redelivery loop stay in the Adapter engine. The engine is
 shared by facade, jobs and Evidence through named execution profiles. Evidence
 links only Adapter core and engine; its authorization, assertion meaning,

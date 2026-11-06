@@ -32,7 +32,7 @@ not vouch for it.
 
 {/* Evidence: crates/registry-evidence/src/discovery.rs, render();
     products/discovery/contracts/security-invariant-matrix.yaml, sec-provider-public-projection;
-    products/discovery/DECISIONS.md, ADR-001 and ADR-004;
+    products/discovery/README.md and products/discovery/profile/README.md;
     crates/registry-discovery-profile/src/lib.rs accepts only the Evidence service kind. */}
 
 ## What does a requirement resolve to?
@@ -52,8 +52,7 @@ changes only when what the mappings say changes.
 
 {/* Evidence: crates/registry-discovery/src/query.rs, resolve_evidence_types() and
     resolver_preserves_and_within_lists_or_across_alternatives_and_refuses_over_bound;
-    crates/registry-discovery/src/model.rs, mapping_revision(); products/discovery/DECISIONS.md,
-    ADR-003. */}
+    crates/registry-discovery/src/model.rs, mapping_revision(). */}
 
 ## Which provider serves it?
 
@@ -96,7 +95,7 @@ that path.
 {/* Evidence: crates/registry-discovery-client/src/selection.rs, select_evidence(),
     validate_service_selection_structure(), accept_service_selection(),
     AcceptedServiceSelection, and discovery_metadata_has_no_trust_or_native_io_capability;
-    products/discovery/DECISIONS.md, ADR-001. */}
+    products/discovery/README.md. */}
 
 ## What happens when a provider republishes?
 
@@ -117,7 +116,7 @@ accept the selection again.
 
 {/* Evidence: crates/registry-discoveryctl/src/build.rs, fetch loop and sha256_digest();
     crates/registry-discovery/src/model.rs, build_time_provenance_does_not_change_semantic_revisions;
-    products/discovery/DECISIONS.md, ADR-003; crates/registry-discovery-client/src/selection.rs,
+    products/discovery/README.md; crates/registry-discovery-client/src/selection.rs,
     renew_unchanged_service_selection(). */}
 
 ## Why does a new revision need a new package?

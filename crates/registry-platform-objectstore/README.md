@@ -60,14 +60,12 @@ Neither digest commits to a credential or a timeout, so rotating a secret or
 tuning a timeout keeps the binding; moving the bucket, region, verifier URL,
 or policy changes it. The calling product records and compares the digest.
 
-## Security review notes
+## Security model
 
-- Scope: the S3 adapter and verifier transport moved here unchanged in
-  protocol, headers, timeouts, and refusals from the Base Registry Engine's
-  attachment storage and verification. The BReg namespace keeps the key
-  prefix `breg`, the binding domains `breg-attachment-s3-v1` and
-  `breg-attachment-verification-http-v1`, and therefore the same digests and
-  object keys.
+The crate enforces:
+
+- BReg namespace: the key prefix is `breg`, and the binding domains are
+  `breg-attachment-s3-v1` and `breg-attachment-verification-http-v1`.
 - Destinations: `url` must be `https`, or `http` on a loopback address only.
   Userinfo, query, fragment, and (for S3) a non-root path are refused. Virtual
   hosted style refuses IP hosts.
@@ -86,5 +84,9 @@ or policy changes it. The calling product records and compares the digest.
 - Fail closed: a verifier timeout, non-`200` status, malformed, duplicate,
   unknown, or oversized verdict is `Unavailable`, never an approval. Invalid
   digests and content types are refused before any request is sent.
-- Not covered: the transport never retries; the calling product owns retry
-  and quarantine policy and any concurrency limit on outbound calls.
+
+The calling product must:
+
+- Own retry and quarantine policy, and any concurrency limit on outbound
+  calls. The transport never retries.
+- Record and compare the binding digests (see above).

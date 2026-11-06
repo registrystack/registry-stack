@@ -1,12 +1,12 @@
 # Camel ingestion port records
 
-Status: current implementation record; Increment 4 remains pending.
+Status: current implementation record; the file, CSV, JSONL, PostgreSQL, SFTP, and job-only `pollEnrich` rows are not yet marked delivered.
 
 This record maps the implemented ingestion subset to Apache Camel tests and documents the
 Adapter-specific restrictions that a Camel reader would not predict.
 The normative product contract remains the port table in `CONCEPT.md` section 8.10.
 Recording a Rust test here or in `check-port-table.py` establishes that the named test exists.
-It does not establish Increment 4 acceptance or the controlled deployment drill in `CONCEPT.md`
+It does not establish that a component has passed the acceptance rows in `CONCEPT.md`
 section 17.7.
 
 The upstream reference is Apache Camel tag
@@ -306,9 +306,9 @@ The pinned source is the
 ## Evidence and acceptance limits
 
 The port-table gate records 30 existing Rust test references across the six rows in this record.
-`INCREMENT_DELIVERED` remains `1`, so the file, CSV, JSONL, PostgreSQL, SFTP, and job-only
-`pollEnrich` rows stay pending.
-The mappings do not promote Increment 4, the GraphQL row, the controlled deployment drill, or full
+`INCREMENT_DELIVERED` is `1`, so the file, CSV, JSONL, PostgreSQL, SFTP, and job-only
+`pollEnrich` rows stay pending in the gate.
+The mappings do not promote those rows, the GraphQL row, the controlled deployment drill, or full
 ingestion acceptance.
 They also do not convert plaintext PostgreSQL cancellation evidence into TLS evidence or job-host
 SFTP tests into facade reachability.

@@ -935,7 +935,7 @@ deferred:
       The policy declares a closed channel set, an undeclared channel is
       refused with a typed code, and every subquota is a ceiling inside the one
       published total, so a mis-chosen channel cannot oversell the window.
-    recordedIn: products/scheduling/SECURITY-REVIEW-NOTES.md
+    recordedIn: products/scheduling/SECURITY-MODEL.md
   - id: SCHEDULING-DEF-05
     subject: Database backstop under the duplicate-key guard
     state: deferred
@@ -948,13 +948,13 @@ deferred:
       The offering's supply lock serializes the guard and the claim it protects,
       so a concurrent pair cannot straddle it even when their booking intervals
       lie under different published opening revisions.
-    recordedIn: products/scheduling/SECURITY-REVIEW-NOTES.md
+    recordedIn: products/scheduling/SECURITY-MODEL.md
   - id: SCHEDULING-DEF-06
     subject: Appointment, history, and actionable outbox retention
     state: deferred
     reason: >-
       Retention windows for committed scheduling data are a product question
-      this milestone does not answer. Idempotency receipts do expire and
+      the current scope does not answer. Idempotency receipts do expire and
       tombstone, and the sweep clears the raw caller and key with them
       (SCHEDULING-SEC-33). The claim owner's raw issuer and subject expire
       separately under claimOwnerRetentionDays (SCHEDULING-SEC-34), but the

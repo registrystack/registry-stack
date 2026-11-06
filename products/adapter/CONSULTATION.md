@@ -24,6 +24,7 @@ The GovStack host owns the canonical `/govstack/registries` mount, versioned HTT
 Generated OpenAPI uses `/govstack/registries` as `servers.url` and keeps its operation paths relative under `/v1/...`.
 The facade crate exposes this protocol through its `govstack::consultation` and `govstack::write` modules in the same crate; the shared engine remains responsible for generic source execution, projections and schema validation.
 The host adds no separate crate, deployed service, or project-specific runtime configuration.
+Authentication and scope denial precede any source effect, and a required audit failure releases no protected result.
 It reuses the facade's authentication, access admission, bounded engine and durable journal.
 Evidence consumes the source pack through its listener-free engine binding and keeps its own facts contract, assertion evaluation, authorization, signing and release audit.
 It does not need to construct a GovStack Record.
@@ -65,6 +66,7 @@ List and Search require a declared deterministic source order with a unique tie-
 A cursor is opaque, excludes personal data and binds the operation, Registry, Collection, query, view, page size and applicable caller/access context.
 The caller context is the verified issuer, the subject and the verified client the caller acts through (`azp` or `client_id`), so a cursor issued to one client is refused when the same subject presents it through another, with the same `invalid-cursor` problem as any other mismatch.
 The token instance is not bound, so a refreshed token for the same subject and client continues a traversal; no purpose is bound, because Consultation carries none.
+A malformed, expired or mismatched cursor is refused before source execution.
 Every page applies current authorization.
 An empty advancing page is permitted; an unavailable source guarantee is never reported as completion.
 
@@ -83,6 +85,7 @@ The source assigns the durable Record identifier. An upsert with a client-select
 
 `PATCH /govstack/registries/v1/collections/{collectionId}/records/{recordId}` accepts `application/merge-patch+json` and a nonempty domain merge patch under `data`.
 Null removes an optional member under RFC 7396; required fields are refused by the selected input schema.
+Update validates its domain patch before any effect.
 The merge patch is flat: a member whose value is an object returns 422 `invalid-content` with one `errors` pointer per such member (for example `/data/address`), whatever the input schema admits, because a source applies each member as one whole-member change rather than a recursive merge. An array value replaces the whole member, as RFC 7396 specifies.
 One strong If-Match is required: missing returns 428, malformed returns 400, and a mismatched guard returns generic 412 without a mutation.
 A retry of an Update that already has a stored answer under the same key and fingerprint replays that answer even when its guard can no longer be opened, after a redeploy changed the guard's closure or its sealing key was rotated out. A retry while the first attempt still runs gets 409 `idempotency-in-flight` with `Retry-After`. Authentication and authorization are still checked first, and a changed fingerprint under a stale guard still returns 412.
@@ -134,23 +137,6 @@ DHIS2 does not, for three reasons:
 - Replay safety needs a client-supplied UID, and canonical Create forbids a client-selected identifier.
 - It offers no readback receipt for the write just made.
 
-Follow-up idea, not planned work: derive the DHIS2 UID from the derived native key, so a retry of Create upserts the same object. That would address the replay gap only; Update and the receipt remain open.
+Deriving the DHIS2 UID from the derived native key would make a retry of Create upsert the same object. That would address the replay gap only; Update and the receipt would remain open, and it is not implemented.
 SourceReference is explicitly refused until a selected source implements its evidence validation.
-Named transitions, governed Change Requests and asynchronous Write are not selected in this increment.
-
-## Definition of done
-
-1. Source acquisition and deployment-owned transformation are separate, digest-covered execution steps; two different projections reuse the same source pack without modifying its source routes.
-2. A versioned project-selected data schema supports nested objects and arrays; invalid schema references, digest mismatches, undeclared output and incorrectly typed output are refused visibly.
-3. The built-in Consultation host mounts maintained Rust protocol definitions at `/govstack/registries`, without requiring deployments to author standard envelopes, paths or problem mappings.
-4. Enabled reads, generated OpenAPI and caller capability discovery agree on operation, Registry, Collection, view, input and output schema and supported features.
-5. Authentication and scope denial precede source effects; required audit failure releases no protected result; discovery remains advisory and caller-filtered.
-6. Continuation is bound to the effective transformation/schema deployment and original request/access context; malformed, expired or mismatched cursors are refused before source execution.
-7. Fixture-backed DHIS2 baseline and OpenCRVS exact-read journeys execute through the served facade; unsupported Search, ordering and history claims are rejected.
-8. The same source pack remains usable by Evidence without a GovStack facade dependency; focused Evidence engine regressions pass.
-9. Unit, integration and served end-to-end tests cover the changed boundaries, including negative cases; format, clippy, generated-schema drift, configuration and dependency-direction checks pass.
-10. Maintained examples and authoring commands demonstrate check, compile and replay with no handwritten duplicate public contract; product documentation states the selected draft, supported surface and evidence limits accurately.
-11. Selected Create returns a source-assigned identifier and a consistent Location/ETag/receipt; the companion GET and Update share the selected guard context.
-12. Update validates its domain patch before effects, preserves RFC 7396 removal semantics for the declared schema, refuses missing or stale conditions, and returns bodyless 204 with its committed ETag.
-13. Canonical idempotency, exact semantic-header replay, uncertain-send recovery and audit failure are covered by unit, PostgreSQL integration and real source/facade journeys.
-14. Source limitations and unselected Write capabilities are explicit in generated metadata, maintained examples and verification reports.
+Named transitions, governed Change Requests and asynchronous Write are not supported.

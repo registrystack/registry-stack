@@ -73,7 +73,7 @@ contract for each construct.
 5. **Problem vocabulary is the profile's.** Every handled clause spells the
    case-api envelope members (`family`, `message`, `httpStatus`) and codes.
    The same pack cannot serve `breg-records` without rewriting every clause,
-   which contradicts D17 ("a pack knows a source system"). The
+   which contradicts CONCEPT section 7 ("A pack knows a source system"). The
    `second-target-profile` source shape probes this from the other side.
 6. **One query per endpoint.** A `graphql` endpoint carries exactly one
    `queryFile`, `operationName`, and `variables`, so two queries over one

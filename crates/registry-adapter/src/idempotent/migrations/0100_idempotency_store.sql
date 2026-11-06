@@ -1,5 +1,5 @@
--- Adapter idempotency response custody (products/adapter/CONCEPT.md section 9,
--- D12). The namespace digest binds verified caller issuer, subject, and acting
+-- Adapter idempotency response custody (products/adapter/CONCEPT.md section 9).
+-- The namespace digest binds verified caller issuer, subject, and acting
 -- client_id, the deployment identity, the concrete facade operation, and the caller's key without
 -- storing any raw component. The request digest detects changed-request reuse.
 -- Digests and terminal timestamps remain after response erasure solely to keep

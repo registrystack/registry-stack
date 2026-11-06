@@ -161,7 +161,7 @@
     },
     "IdempotencyRetention": {
       "additionalProperties": false,
-      "description": "Exact write-response custody in the idempotency store\n(`products/adapter/CONCEPT.md` section 9 and D12).",
+      "description": "Exact write-response custody in the idempotency store\n(`products/adapter/CONCEPT.md` section 9).",
       "properties": {
         "responseRetentionSeconds": {
           "description": "Seconds an exact facade response remains available for replay. The\nspent-key tombstone remains after its response body is erased.",

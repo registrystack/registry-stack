@@ -2,7 +2,7 @@
 
 //! The replay runner: serving a recorded exchange through the facade's
 //! own request path, the way the fixture suites replay a pack against
-//! its recorded sends (`products/adapter/CONCEPT.md` section 14). This
+//! its recorded sends (`products/adapter/CONCEPT.md` section 13.3). This
 //! is the facade half of replay: it reads the transcript the engine's
 //! write capability recorded (`engine::replay`) and answers through
 //! the facade's request machinery, so it names facade modules and

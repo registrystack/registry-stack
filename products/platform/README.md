@@ -7,7 +7,8 @@ Release label: pre-1.0 technical release for evaluation and integration pilots.
 Shared Rust security and operational primitives for Evidence and related
 registry services.
 
-The workspace is consumed by applications through a pinned git tag. It centralizes
+The crates live in the Registry Stack workspace under `crates/`, and the other
+products consume them as workspace dependencies. They centralize
 the pieces that should behave identically across services: outbound HTTP policy,
 authentication helpers, OIDC verification, audit writing, browser-facing HTTP
 security, SD-JWT VC support, crypto primitives, bounded SQLite reads, and
@@ -18,23 +19,23 @@ integration-test fixtures.
 | Crate | Purpose |
 | --- | --- |
 | [`registry-platform-activation`](../../crates/registry-platform-activation/README.md) | Shared PostgreSQL activation ledger, database identity binding, startup package checks, and runtime-role boundary enforcement. |
-| [`registry-platform-audit`](crates/registry-platform-audit/README.md) | Shared JSON Lines audit writer, durable file acceptance, rotation, and keyed reference helpers. |
-| [`registry-platform-authcommon`](crates/registry-platform-authcommon/README.md) | Provider-independent authentication helpers for Bearer tokens and API-key fingerprints. |
-| [`registry-platform-buildinfo`](crates/registry-platform-buildinfo/README.md) | Shared build and version metadata. |
-| [`registry-platform-canonical-json`](crates/registry-platform-canonical-json/README.md) | Canonical JSON serialization for digests and signatures. |
-| [`registry-platform-config`](crates/registry-platform-config/README.md) | Environment expansion and shared configuration parsing helpers. |
-| [`registry-platform-crypto`](crates/registry-platform-crypto/README.md) | Ed25519 JWK parsing, provider-backed signing, verification, DID validation, and JSON canonicalization. |
-| [`registry-platform-dispatch`](crates/registry-platform-dispatch/README.md) | At-least-once dispatch core: fenced PostgreSQL job leases, retry and expiry policy, and operator replay over a product-owned job table. |
-| [`registry-platform-hooks`](crates/registry-platform-hooks/README.md) | Shared hook contract: declarations, envelope, handler messages, compile-time rules, and the delivery core behind the `postgres` feature. |
-| [`registry-platform-httpsec`](crates/registry-platform-httpsec/README.md) | Axum/Tower HTTP security middleware, CORS policy validation, body limits, and RFC 9457 Problem Details responses. |
-| [`registry-platform-httputil`](crates/registry-platform-httputil/README.md) | Outbound HTTP clients, bounded response reads, URL construction, and SSRF-resistant fetch validation. |
+| [`registry-platform-audit`](../../crates/registry-platform-audit/README.md) | Shared JSON Lines audit writer, durable file acceptance, rotation, and keyed reference helpers. |
+| [`registry-platform-authcommon`](../../crates/registry-platform-authcommon/README.md) | Provider-independent authentication helpers for Bearer tokens and API-key fingerprints. |
+| [`registry-platform-buildinfo`](../../crates/registry-platform-buildinfo/README.md) | Shared build and version metadata. |
+| [`registry-platform-canonical-json`](../../crates/registry-platform-canonical-json/README.md) | Canonical JSON serialization for digests and signatures. |
+| [`registry-platform-config`](../../crates/registry-platform-config/README.md) | Environment expansion and shared configuration parsing helpers. |
+| [`registry-platform-crypto`](../../crates/registry-platform-crypto/README.md) | Ed25519 JWK parsing, provider-backed signing, verification, DID validation, and JSON canonicalization. |
+| [`registry-platform-dispatch`](../../crates/registry-platform-dispatch/README.md) | At-least-once dispatch core: fenced PostgreSQL job leases, retry and expiry policy, and operator replay over a product-owned job table. |
+| [`registry-platform-hooks`](../../crates/registry-platform-hooks/README.md) | Shared hook contract: declarations, envelope, handler messages, compile-time rules, and the delivery core behind the `postgres` feature. |
+| [`registry-platform-httpsec`](../../crates/registry-platform-httpsec/README.md) | Axum/Tower HTTP security middleware, CORS policy validation, body limits, and RFC 9457 Problem Details responses. |
+| [`registry-platform-httputil`](../../crates/registry-platform-httputil/README.md) | Outbound HTTP clients, bounded response reads, URL construction, and SSRF-resistant fetch validation. |
 | [`registry-platform-objectstore`](../../crates/registry-platform-objectstore/README.md) | S3-compatible object storage and HTTP content verification transports, bound to a caller-supplied namespace, with fixed refusals and no retries. |
-| [`registry-platform-oidc`](crates/registry-platform-oidc/README.md) | OIDC discovery, JWKS caching, and JWT verifier configuration shared by registry services. |
-| [`registry-platform-ratelimit`](crates/registry-platform-ratelimit/README.md) | Bounded in-memory keyed rate limiting: a token bucket and a fixed window counter over opaque caller keys. |
-| [`registry-platform-resilience`](crates/registry-platform-resilience/README.md) | Bounded in-process resilience: the retry delay computation and a process-local circuit breaker state machine. |
-| [`registry-platform-sdjwt`](crates/registry-platform-sdjwt/README.md) | SD-JWT VC issuance and holder-proof validation helpers. |
-| [`registry-platform-sqlite`](crates/registry-platform-sqlite/README.md) | Bounded read-only SQLite execution for Evidence source adapters. |
-| [`registry-platform-testing`](crates/registry-platform-testing/README.md) | Mock IdP, mock HTTP upstreams, key fixtures, and cross-crate assertions for consumers. |
+| [`registry-platform-oidc`](../../crates/registry-platform-oidc/README.md) | OIDC discovery, JWKS caching, and JWT verifier configuration shared by registry services. |
+| [`registry-platform-ratelimit`](../../crates/registry-platform-ratelimit/README.md) | Bounded in-memory keyed rate limiting: a token bucket and a fixed window counter over opaque caller keys. |
+| [`registry-platform-resilience`](../../crates/registry-platform-resilience/README.md) | Bounded in-process resilience: the retry delay computation and a process-local circuit breaker state machine. |
+| [`registry-platform-sdjwt`](../../crates/registry-platform-sdjwt/README.md) | SD-JWT VC issuance and holder-proof validation helpers. |
+| [`registry-platform-sqlite`](../../crates/registry-platform-sqlite/README.md) | Bounded read-only SQLite execution for Evidence source adapters. |
+| [`registry-platform-testing`](../../crates/registry-platform-testing/README.md) | Mock IdP, mock HTTP upstreams, key fixtures, and cross-crate assertions for consumers. |
 | [`registry-platform-yaml`](../../crates/registry-platform-yaml/README.md) | The shared configuration reader: one YAML subset, typed decoding, and value-free diagnostics with a code, a position, and the fix. |
 
 ## Design Principles
@@ -51,8 +52,9 @@ integration-test fixtures.
 - Rust edition: 2021.
 - License: Apache-2.0.
 - Publication: crates are private to this workspace (`publish = false`).
-- Versioning: all crates currently share the workspace version `0.2.1`.
-- Signing support: v0.2.1 supports EdDSA/Ed25519 for platform-owned signing and
+- Versioning: all crates share the workspace version in the root
+  [`Cargo.toml`](../../Cargo.toml).
+- Signing support: the platform supports EdDSA/Ed25519 for platform-owned signing and
   verification, including a provider abstraction for local JWKs and external
   signing adapters. OIDC JWT verification is caller-configurable for provider
   compatibility, but consumers should keep algorithm allowlists as narrow as
@@ -60,13 +62,13 @@ integration-test fixtures.
 
 ## Consuming the Workspace
 
-Registry applications should depend on a pinned git tag or revision and enable
-only the crates they need.
+Products in this workspace depend on a platform crate through the root
+`[workspace.dependencies]` table and enable only the crates they need.
 
 ```toml
 [dependencies]
-registry-platform-httputil = { git = "https://github.com/jeremi/registry-platform", tag = "v0.2.1" }
-registry-platform-oidc = { git = "https://github.com/jeremi/registry-platform", tag = "v0.2.1" }
+registry-platform-httputil.workspace = true
+registry-platform-oidc.workspace = true
 ```
 
 The `registry-platform-httputil` crate uses `rustls` for outbound HTTPS.
@@ -120,7 +122,7 @@ cargo test -p registry-platform-oidc
 
 ## Security Notes
 
-This repository contains reusable primitives, not a complete application security
+The platform crates are reusable primitives, not a complete application security
 boundary. Consumers remain responsible for service authorization, tenant
 isolation, audit retention, secret provisioning, and deployment configuration.
 
@@ -131,11 +133,12 @@ provider labels, readiness-gated apply, and posture-safe redaction.
 Product runtimes own their typed durable correctness state rather than selecting
 a generic platform storage backend.
 
-Report security-sensitive issues privately before opening a public issue.
+Report security-sensitive issues privately, following the
+[Registry Stack security policy](../../SECURITY.md), before opening a public issue.
 
 ## License
 
-Apache-2.0. See [`LICENSE`](LICENSE).
+Apache-2.0. See [`LICENSE`](../../LICENSE).
 
 ## Shared HTTP contracts
 

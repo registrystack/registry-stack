@@ -1,4 +1,7 @@
-# Product decisions
+# Design constraints
+
+These are the constraints BReg holds. Each entry states what the server does
+or refuses, with the context needed to apply it.
 
 - Version 1 supports PostgreSQL only. SQLite is not a deployment compatibility
   promise.
@@ -49,9 +52,8 @@
   compiled model and access checks permit it. Registry Manifest v1 currently
   requires relationship targets to be entities in the same dataset, so the
   lossy portable projection intentionally omits cross-dataset relationship
-  edges. First-class portable cross-dataset relationships are deferred until
-  Registry Manifest defines and validates that representation; the omission
-  does not weaken or invalidate the operational relationship.
+  edges. The omission does not weaken or invalidate the operational
+  relationship.
 - `bregctl init` emits a working example project rather than a blank
   one: package identity, a manifest projection, a closed vocabulary, two inline
   entities, three access profiles, one module extending an entity, and that
@@ -61,8 +63,7 @@
 - Evidence integrations use the published HTTP contract or the client and
   verifier libraries with platform primitives. Base Registry Engine does not
   depend on the Evidence runtime crate or duplicate its policy, disclosure, or
-  credential behavior. Relay is retired; its former decoupled publication
-  boundary does not imply a maintained Relay integration.
+  credential behavior. There is no Relay integration.
 - Base Registry Engine accepts one PostgreSQL client path: `tokio-postgres` 0.7.18,
   `deadpool-postgres` 0.14.2, and `tokio-postgres-rustls` 0.14.0. The real
   PostgreSQL kernel proves dynamic result handling, transactions, cancellation,
@@ -108,19 +109,17 @@
   field, and its active flag. Boundaries are restricted to `get`, `lookup`,
   `list`, `revisions`, and `snapshot`, require an authenticated profile with a
   verified `principalClaim`, and are capped at eight per profile.
-  `products/breg/scripts/check_source_neutrality.py` no longer forbids the
-  bare words `membership` or `memberships`, since the mechanism is a generic,
-  configured boundary and not domain-specific behavior; concrete fixture
-  compounds such as `group-membership` remain forbidden. Changing this
-  blocklist is a boundary decision, recorded here and in
-  `products/breg/AGENTS.md`.
+  `products/breg/scripts/check_source_neutrality.py` allows the bare words
+  `membership` and `memberships`, because the mechanism is a generic,
+  configured boundary; concrete fixture compounds such as `group-membership`
+  are forbidden (see `products/breg/AGENTS.md`).
 - `evidence::resolve(capability_id, subjects)` is available, as a trial, to
   the Rhai handler of an action that declares `evidence`: a governed action may
   consume a signed Evidence assertion as an ordinary relying party, with the
   trusted provider, its endpoint, token, and trusted JWKS all declared by the
   operator in runtime configuration. BReg depends unconditionally on
-  `registry-evidence-client` and `registry-evidence-verifier` for this
-  release; gating that dependency behind a Cargo feature is deferred. The
+  `registry-evidence-client` and `registry-evidence-verifier`; the dependency
+  is not behind a Cargo feature. The
   accepted assertion is retained for a fixed 24 hours after acceptance. A
   supervised runtime worker erases expired immediate Action and Proposal uses
   on startup and every minute, in batches of at most 1,000 rows per table.
@@ -166,8 +165,8 @@
 - Change-request flows cannot target an encrypted field, feed one through a
   Rhai write ceiling, or source one through a declarative `fromField`: the
   compiler refuses each shape, and a runtime backstop refuses again before any
-  proposal or target snapshot is materialized. Lifting this is future work,
-  not a configuration option.
+  proposal or target snapshot is materialized. No configuration option lifts
+  this.
 - Turning encryption on for a field with existing rows is a reviewed migration
   step that seals existing values and drops the plaintext column, with the
   history choice carried explicitly on the reviewed descriptor:
@@ -176,17 +175,17 @@
   pre-flip revisions as written, scoped by the flip boundary. A plan with no
   choice refuses, and `retain-plaintext-history` is an accepted-risk option
   that does not satisfy the database-read guarantee. Preflight and audit
-  report records, revisions, and counts, never values. In Phase 1, a
+  report records, revisions, and counts, never values. A
   `retain-plaintext-history` apply refuses before sealing any row when its
   preflight reports retained request target or proposal copies for a covered
   field; operators must clear those copies through the request lifecycle and
   retention policy first. All simultaneous field-encryption flips for one
   entity share one backfill step so migration history never records a partial
   successor shape.
-- Phase 1 does not support removing encryption, changing the lookup of an
+- The engine does not support removing encryption, changing the lookup of an
   already-encrypted field, or adding a required encrypted field to an existing
-  entity. Add a new encrypted field as optional, populate it through authorized
-  Registry writes, then make it required in a later package.
+  entity. Add a new encrypted field as optional, populate it
+  through authorized Registry writes, then make it required in a later package.
 
 - Statistical datasets declare fixed count populations and closed dimensions,
   using PostgreSQL's native query planner and the existing list predicate path.

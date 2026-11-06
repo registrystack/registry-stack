@@ -2,9 +2,10 @@
 
 `registry-render serve` is callable from a plain OpenFn job; no App Kit involved.
 This integration was walked end to end (real OpenFn CLI, real `registry-render
-serve`, real breg dev registry with a least-privilege reader profile);
-[JOURNEY.md](JOURNEY.md) records the walk, the asserted hashes, and the
-dead-letter replay.
+serve`, real breg dev registry with a least-privilege reader profile) against
+an earlier BReg release. It has not been re-walked against the current Record,
+Action, and Proposal model, so use the current BReg examples for the read-back
+step.
 
 Deployment shape:
 

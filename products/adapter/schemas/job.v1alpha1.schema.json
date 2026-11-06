@@ -165,7 +165,7 @@
     },
     "JobProfile": {
       "additionalProperties": false,
-      "description": "The explicit, bounded profile of one job (`products/adapter/CONCEPT.md`\nsection 17.2). Every member is mandatory and checked; the engine\nenforces each bound again at the edge. The facade ceilings of section\n8.8 are unchanged: the per-attempt timeout stays at the platform-frozen\nceiling, and only a source-route-only endpoint's response bound may\nrise, to the platform cap (D39).",
+      "description": "The explicit, bounded profile of one job (`products/adapter/CONCEPT.md`\nsection 17.2). Every member is mandatory and checked; the engine\nenforces each bound again at the edge. The facade ceilings of section\n8.8 are unchanged: the per-attempt timeout stays at the platform-frozen\nceiling, and only a source-route-only endpoint's response bound may\nrise, to the platform cap.",
       "properties": {
         "maximumPageBytes": {
           "description": "The largest serialized item page, in bytes (1 to 16777216).",

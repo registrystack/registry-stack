@@ -15,8 +15,8 @@
 //! source-bound manager does not need catalogue authority; the service then
 //! checks its exact retained service, location, manager and current status.
 //! A current grant for the appointment's service and location can also read a
-//! self-booked appointment by id (see SECURITY-REVIEW-NOTES.md, accepted
-//! residuals).
+//! self-booked appointment by id (see products/scheduling/SECURITY-MODEL.md,
+//! SCHEDULING-RES-01).
 //! The explain path takes its own scope; cross-owner operational reads take
 //! exactly one configured profile scope; mutating routes demand no extra
 //! product scope because their authority is the task grant, whose scheduling
@@ -106,7 +106,7 @@ impl SchedulingAuthenticator {
     /// service and location under fresh online status, and for a
     /// source-managed appointment to the stored manager. For a self-booked
     /// appointment a current grant for that service and location reads it by
-    /// id (accepted residual in SECURITY-REVIEW-NOTES.md).
+    /// id (accepted residual SCHEDULING-RES-01 in SECURITY-MODEL.md).
     pub async fn authenticate_appointment_detail(
         &self,
         token: &str,

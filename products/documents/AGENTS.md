@@ -40,6 +40,11 @@ rules that govern it and the invariant rows in `contracts/` that prove them.
 - `contracts/` is the security review baseline. A change that weakens an
   invariant row rewrites it in the same commit, and `scripts/check-contracts.sh`
   holds every cited test to its runner.
+- Record a deliberate behaviour a reader could mistake for an oversight in
+  `contracts/recorded-decisions.yaml`, with the tests that hold it. An entry
+  records the behaviour; the reasoning belongs in the pull request description.
 - Changes to authentication, authorization, content verification, audit, data
-  minimization, retention, or erasure are security-sensitive and need explicit
-  review notes in `SECURITY-REVIEW-NOTES.md`.
+  minimization, retention, or erasure are security-sensitive and need
+  `SECURITY-MODEL.md` updated in the same change when a trust boundary,
+  operator obligation, or accepted residual changes, with the review narrative
+  in the pull request description.

@@ -1,6 +1,6 @@
 # Registry Render Product Concept
 
-Status: implemented candidate against [DEFINITION-OF-DONE.md](DEFINITION-OF-DONE.md)
+Status: implemented candidate
 Date: 2026-09-17
 
 ## Executive position
@@ -17,8 +17,8 @@ product. Only the optional HTTP adapter uses OIDC discovery/JWKS networking.
 
 Transactional (receipts, acknowledgements, notices), attestations
 (certificates, extracts, letters), credentials (ID/member/licence cards
-with photo and QR, duplex), tags and labels (QR + short text). Lists are
-deferred; the CLI covers most of that shape today.
+with photo and QR, duplex), tags and labels (QR + short text). Lists are not a
+supported family.
 
 ## Boundary
 
@@ -29,6 +29,10 @@ synchronization. Printed QR verification belongs to the app that owns the
 record through an app-owned public check route and an Evidence-backed relying
 service. The app owns the bounded answer and its disclosure policy; Render
 mints nothing and does nothing at scan time.
+
+Version 1 has no batch or multi-document request, client crate, TLS
+termination, per-tenant rate limiting, metrics route, or hot reload or runtime
+bundle editing, and no document-type-specific behavior in production code.
 
 ## Runtime anatomy
 

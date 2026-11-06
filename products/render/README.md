@@ -43,11 +43,12 @@ Latin font set. Scripts beyond Latin (Arabic, Hebrew, …) need a bundle font
 - [CONCEPT.md](CONCEPT.md) — product boundary and design rules.
 - [PAYLOAD.md](PAYLOAD.md) — what a template receives (the one page every
   template author needs).
-- [DEFINITION-OF-DONE.md](DEFINITION-OF-DONE.md) — the acceptance contract.
 - [EVIDENCE.md](EVIDENCE.md) — the merge gate (library ≡ Typst CLI) and
   the golden-hash record.
 - `bundles/` — three immutable packaged examples: a bilingual RTL receipt, a
-  PDF/A-4 certificate, and an ID-1 duplex card with a photo. Use them with
+  PDF/A-4 certificate, and an ID-1 duplex card with a photo. Formal PDF/A
+  conformance validation (for example veraPDF) is not run; the evidence
+  records only that the `pdfaid:part` marker is present. Use them with
   `check`, `compile`, or `serve`; start editable source with
   `registry-render init`.
 - `integrations/` — the OpenFn job and App Kit wiring sketches.

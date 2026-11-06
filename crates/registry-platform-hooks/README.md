@@ -167,7 +167,9 @@ only after payload expiry and erasure complete. Later expiry does not restart
 the metadata horizon. Explicit discard likewise uses its completed terminal
 transition, without waiting for the original scheduled payload deadline.
 
-## Security review notes
+## Security model
+
+The crate enforces:
 
 - The identity preflight takes no advisory or row lock: an activation holds
   its own exclusive lock and verifies retained deliveries on a second
@@ -175,6 +177,11 @@ transition, without waiting for the original scheduled payload deadline.
   `lock_timeout` bounds the read, and any mismatch, missing activation, or
   read failure is `DeliveryError::Unavailable` with no reason carried.
 - The executor adds no authority: a program's message is a proposal the
-  product applies through its own seam, and `apply_proposal` stays with the
-  product.
-- Capability refusals are tested once, in `capability.rs`.
+  product applies through its own seam.
+
+The consuming product must:
+
+- Own `apply_proposal` and every effect it has. The crate never applies a
+  proposal itself.
+
+Capability refusals are tested once, in `capability.rs`.

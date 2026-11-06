@@ -395,7 +395,13 @@ that still resolves in the pull request, not a rewritten or squashed SHA.
   `docs/site/`, `release/`).
 - Changes to authentication, authorization, assertion evaluation or signing,
   audit integrity, release provenance, deployment defaults, or data
-  minimization are security-sensitive and need explicit review notes.
+  minimization are security-sensitive and need explicit review notes in the
+  pull request description. When such a change moves a trust boundary, an
+  operator obligation, or an accepted residual, update the product's
+  `SECURITY-MODEL.md` (BReg, Casework, Coordinator, Documents, Messaging, and
+  Scheduling keep one) or, for other products, its security invariant matrix
+  or security document (for example `products/render/SECURITY-MATRIX.md`) in
+  the same change.
 - Generated outputs (site references, OpenAPI, release artifacts) must be
   reproduced by their documented generator commands, never hand-edited, and
   must be bit-for-bit repeatable. Site CLI pages and the site's generated data

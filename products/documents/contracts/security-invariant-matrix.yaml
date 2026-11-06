@@ -10,7 +10,7 @@ reviewRule: >-
   This matrix is the baseline every later Document Store change is reviewed
   against. A change that weakens a row rewrites the row in the same commit and
   says why. A row may not lose its negative test. This matrix owns the test
-  names; the security review notes describe threats and residual risk without
+  names; the security model describes threats and residual risk without
   repeating them. The PostgreSQL suites prove the document invariants through
   the served router, with access tokens a test issuer signs and the runtime
   verifies.

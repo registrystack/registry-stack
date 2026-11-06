@@ -1,6 +1,6 @@
 # Registry Render evidence record
 
-Status: living evidence for the acceptance contract in `DEFINITION-OF-DONE.md`
+Status: living evidence for the merge gate and the golden record
 Date of first entry: 2026-09-17
 All hashes below were produced on macOS (aarch64) with the workspace lockfile
 in this tree; the two-OS CI golden job re-proves them on Linux for every
@@ -59,12 +59,12 @@ unit tests, 14 golden tests, 19 scaffold/CLI tests, and 20 serve tests, followed
 by clippy for all Render targets with warnings denied.
 
 The dated entries below preserve the evidence history of the retired manifest
-seal. Where they use “seal” or old test names, this section and the current
-acceptance map describe the replacement contract.
+seal. Where they use “seal” or old test names, this section
+describes the replacement contract.
 
 ## Merge gate: library mode ≡ Typst CLI (2026-09-17)
 
-The Definition of Done's merge gate: a library-mode render must reproduce the
+The merge gate: a library-mode render must reproduce the
 pinned Typst CLI's sha256 for the same inputs — the same bundle, the same
 canonical envelope bytes, the same creation timestamp — on the same machine.
 
@@ -88,7 +88,7 @@ Procedure (per bundle, all commands from the repo root):
 Results, re-run 2026-09-17 against the current example corpus (the bundles were
 rewritten to name no real programme; see **Golden record** below).
 
-Finding 4 below fixed `creator` to the version-free string `registry-render`,
+`PdfOptions` (item 4 of the world-construction rules below) fixes `creator` to the version-free string `registry-render`,
 while the Typst CLI stamps its own version into `/Creator`. Library and CLI
 bytes are therefore no longer equal, by design, and the gate is now the sharper
 claim: they differ *only* in that field and in what the PDF writer derives from
@@ -148,12 +148,11 @@ Findings folded back into the product (the gate's purpose):
    key (see the `data_paths_cannot_escape_the_bundle` test).
 4. `PdfOptions` must match the CLI defaults exactly (`ident: Auto`,
    `tagged: true`, `pretty: false`) — Auto derives the document ID from
-   content, which the golden hashes pin. (Amended 2026-09-17, PR review
-   item 12: `creator` is now the fixed, version-free string
+   content, which the golden hashes pin. (`creator` is the fixed, version-free string
    `registry-render` instead of `Auto`, so the Typst version no longer
    appears in PDF bytes; `ident` stays `Auto`. The Typst CLI stamps its
    own version into `/Creator`, so library output intentionally differs
-   from CLI output by that field from here on.)
+   from CLI output by that field.)
 
 ## Golden record
 
@@ -213,204 +212,6 @@ to a reader as example copy.
 The Typst pin bump burden improves with this change: a pin bump now
 changes golden bytes only when layout changes, not when the Typst
 version string does.
-
-## Implementation review round (2026-09-17)
-
-Two adversarial expert reviews ran against the working tree (systems/
-security and adopter-experience). Findings fixed in the same revision:
-
-- **Per-request seal enforcement** — serve workers now load sealed and the
-  response bundle hash must equal the startup hash; the seal invariant is
-  no longer startup-only.
-- **`/v1/documents` authenticated** (it previously leaked the inventory
-  unauthenticated, contradicting the crate's own OpenAPI).
-- **Audit-ledger write hardening** — caller-controlled route parameters
-  are bounded and kebab-validated before any audit append, including
-  pre-auth 401 events.
-- **Hash coverage** — only the root manifest is exempt from sealing; nested
-  `manifest.yaml` files are governed content, and any symlink refuses
-  sealing (sealed loads also reject symlinks while capturing their immutable
-  render snapshot).
-- **Auth moved to a layer before body buffering**; the API-key file is
-  rejected with leading/trailing whitespace (a silent always-401 footgun).
-- **`audit-verify` verified the wrong path** (the directory, hence an
-  empty view — the happy-path test had passed vacuously); it now proves
-  the real ledger, and a tampered-ledger negative test keeps that honest.
-- **Request lifecycle logs** (method class, route template, status,
-  latency, trace id) via middleware; 401 audit-append failures are
-  logged, not swallowed.
-- **`check --require-audit-under <root>`** added (with `--runtime`).
-- **Verify-then-seal ordering** in `check --seal`; a broken bundle never
-  gains a seal.
-- **Scaffold honesty** — non-Latin `--labels` scaffold compiles with zero
-  edits (full label key set seeded, template bound to the declared
-  locale), a data fixture is written, the unsealed notice prints on
-  compile, and edit-after-seal names `registry-render seal` as recovery.
-- **OpenAPI drift** corrected (413 documented, unimplementable 429
-  removed) and pinned by a serve test.
-- Dead code removed; font-order doc fixed to match the implementation
-  (baseline set first, mirroring the Typst CLI).
-
-Documented residuals live in `SECURITY-MATRIX.md` (bundle-directory
-TOCTOU with the read-only-content assumption, macOS without `RLIMIT_AS`,
-post-export size check, code-level asset caps).
-
-Test totals after the round: 36 (7 unit, 11 golden, 9 serve end-to-end,
-9 scaffold/CLI), all green with `--locked`; `cargo fmt --check`,
-`clippy -D warnings`, and `cargo deny check` pass on the same revision.
-
-## Two-OS golden gate: first proof (2026-09-17)
-
-PR #1113 run 35177001158 — `Registry Render golden gate` green on both
-`ubuntu-24.04` and `macos-14` (golden hashes, determinism suite, serve
-end-to-end); the run record pins the revision, which this branch's
-history does not survive. The same PR registers
-`registry-render` in the CI classifier's Rust shard inventory (new
-`render` shard), so ordinary Rust-workspace routing also covers the
-crate; the classifier's own test suites (111 tests) pass with the new
-shard.
-
-## PR #1113 review round (2026-09-17)
-
-An adversarial review of the PR (three blockers, should-fix list, docs-vs-code
-audit) was triaged and fixed item by item on this branch, TDD where a test
-could express the finding. Behavior changes:
-
-- **Caller API key files**: exactly one trailing line ending is trimmed
-  (the platform's shared normalization, now exported from authcommon);
-  any other whitespace refuses startup instead of arming a key no caller
-  can present while `/health` stays green.
-- **Compile diagnostics carry virtual paths only**: world `NotFound`
-  errors name root-relative virtual spellings, a redaction pass replaces
-  any residual host bundle root with `<bundle>`, and a golden test pins
-  the behavior.
-- **The DoD no longer claims the App Kit journey was walked**; it is the
-  acceptance requirement, with the deferral and sizing in ACCEPTANCE.md.
-- **Serve workers load sealed per request** (the `requireSealed` flag was
-  dead); tamper- and unseal-after-startup are both refused with their
-  named problems.
-- **`datetime.today(offset)` shifts the issuance instant** (22:30Z + 3h is
-  the next day), and an unrepresentable offset yields `None`, not a panic.
-- **Manifest `schema:` paths get the entry containment rule.**
-- **PDF export runs inside the panic boundary.**
-- **CLI renders are bounded**: `compile` (and each `--watch` iteration)
-  render through the supervised worker with a `--timeout` flag (serve's
-  default), so a pathological template costs its timeout, never an
-  unbounded hang.
-- **Shutdown drains inside the graceful-shutdown window**; renders past the
-  grace are abandoned (which kills their worker).
-- **The body ceiling moved inside authentication**: unauthenticated
-  oversized bodies are 401s, never buffered; authenticated ones get an
-  audited `body-too-large` problem (413, exit 22), with the tower stream
-  limit as the backstop.
-- **`server.bind` defaults to `127.0.0.1:8080`** and public or
-  all-interfaces binds refuse startup.
-- **The PDF creator is the fixed, version-free string `registry-render`**
-  (goldens regenerated — see the golden-record section).
-- **`registry-platform-httputil` removed** (declared, unused, and quietly
-  supplying tokio's `io-util` via feature unification); the inert
-  `serve-tests` feature removed with it.
-- **Worker stderr is piped and drained**, never inherited.
-- **`/health` reports bundle and renderer versions** (value-free).
-- **`--now` announces the instant it chose; `--json` failures are
-  RFC 9457 problem documents on stderr; `validate` gained `--json`.**
-- **Label key sets must agree across locales** at `registry-render check` and serve
-  startup — which caught both example bundles (receipt and card locales
-  diverged; now aligned with real translations and re-sealed).
-- **File closures are pinned per bundle in `golden.json`** and every
-  non-virtual dep must be manifest-governed (the closure-drift gate).
-- **The golden workflow** runs the scaffold suite on both OSes, triggers on
-  the eight `registry-platform-*` path dependencies, and no longer cancels
-  the second OS when the first fails.
-- **The Noto fonts ship with `OFL.txt`**; `load_fonts` loads only font
-  files by extension so licenses can live beside fonts.
-- **`registry-render init` scaffolds real starter fonts** (Noto Sans + Noto Naskh
-  Arabic + OFL.txt) instead of an empty `fonts/`. They are embedded in the
-  binary, which costs about 850 KiB: the price of a scaffold that renders
-  Latin and Arabic offline with zero edits.
-- Docs now match shipped behavior throughout; exit codes 2-22 are
-  documented in README.md; the OpenAPI drift test parses the served
-  document and compares the declared paths and the render route's
-  documented statuses structurally; `TYPST_PIN`
-  is tied to the linked typst by a unit test.
-
-Test totals after the round: 55 (15 unit, 13 golden, 13 serve end-to-end,
-14 scaffold/CLI), all green with `--locked`.
-
-### Staff-engineer second pass (2026-09-17)
-
-A second review of the fix round found four completions, all fixed with
-failing tests first:
-
-- **SIGTERM exit is bounded.** The drain held the door but nothing
-  bounded connection teardown — executed proof: a render past a 3s grace
-  held exit open 57.5s. The stop signal is now broadcast once; the drain
-  gets one grace, connection teardown a second, and dropping the serve
-  future at the bound abandons stragglers (their workers are killed). A
-  unix test drives a beyond-grace render through SIGTERM.
-- **Chunked bodies are refused up front.** A chunked stream that trips the
-  stream limit mid-body cannot be answered at all (broken request stream),
-  so it produced a plain 413 and no audit event; chunked transfer is now
-  refused before the first body byte as an audited problem naming
-  Content-Length. SECURITY-MATRIX row 18 records the mid-stream residual.
-- **`today(offset)` honors fractional hours** at full-second precision —
-  `Duration::hours()` is f64 total hours, and rounding +5h30m to 6h
-  crossed midnight for an 18:15Z issuance.
-- The golden-record note above now attributes each bundle's delta
-  correctly (creator fix vs label alignment + OFL re-seal); the earlier
-  "dataSha256 unchanged" claim was false for receipt and card.
-
-Also from that review: wrong methods on the render route answer the
-problem vocabulary with an audit event (the route takes any method; the
-old dead branch produced axum's bare 405), `registry-render audit-verify` warns
-when zero records verify against a non-empty ledger (a running writer
-holds the active segment), the `load_fonts` doc comment matches the
-baseline-first order, and the README exit-code intro no longer claims an
-"unmapped failure" code nothing emits (clap usage errors also exit 2; a
-panic exits 101).
-
-Test totals after the second pass: 63 (18 unit, 13 golden, 17 serve
-end-to-end, 15 scaffold/CLI), all green with `--locked`. The second
-pass's own total line understated this: two later commits in the same
-round (comma-separated `--labels`, runtime-relative path anchoring) added
-tests without updating it.
-
-### Third pass (2026-09-17)
-
-A third review, of the second pass's fixes, confirmed them and found
-seven more, each fixed with a failing test first except where noted:
-
-- **Schema refusals echoed request data.** The validator's message quotes
-  the offending value, so a payer identifier or a name left the process in
-  the problem detail. Refusals now name the field pointer and the schema
-  rule it violated, plus the absent property for a `required` failure
-  (that name comes from the schema, not the request).
-- **Per-request bundle-load problems carried host paths.** Serve reloads
-  the sealed bundle in every worker, so a refused symlink or an unreadable
-  manifest sent the deployment's real path to the caller. The bundle root
-  is now redacted to `<bundle>` in both its given and canonical spelling.
-- **Problem details were unbounded.** An undeclared locale and a badly
-  named asset are named back to the caller, who chooses their length.
-  Details are capped at 2048 characters with an explicit marker.
-- **`shutdownGraceSeconds` was unvalidated.** Zero dropped renders in
-  flight on SIGTERM, and a value near the integer ceiling panicked the
-  shutdown path where it adds the grace twice. The range is now 1 to 3600.
-- **The SIGTERM handler was installed inside the spawned signal task**,
-  where its only failure mode was a panic that killed that task alone and
-  turned SIGTERM into an immediate exit. Installation now happens before
-  the server accepts and refuses startup on failure. This one carries no
-  test: the failure cannot be provoked from a test process.
-- **A refused bind left state behind.** Opening the audit ledger creates
-  its directory, and that ran before the bind was validated. The address
-  is settled first.
-- **Two CLI argument combinations silently did nothing**: `compile
-  --watch --emit-envelope` entered the watch loop and never wrote the
-  envelope, and `init --labels en,en` scaffolded one label file twice
-  before failing on the directory that already existed. Both are usage
-  errors now.
-
-Test totals after the third pass: 71 (22 unit, 13 golden, 19 serve
-end-to-end, 17 scaffold/CLI), all green with `--locked`.
 
 ## Immutable bundle snapshot hardening (2026-09-19; package binding updated 2026-09-26)
 

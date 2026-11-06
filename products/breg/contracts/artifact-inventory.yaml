@@ -2,7 +2,6 @@ apiVersion: registry.registrystack.org/product-contract/v1
 product: breg
 artifacts:
   - {path: README.md, kind: product-boundary, state: authored}
-  - {path: DEFINITION-OF-DONE.md, kind: completion-contract, state: authored}
   - {path: IMPLEMENTATION.md, kind: implementation-guide, state: authored}
   - {path: ACCEPTANCE-JOURNEYS.md, kind: acceptance-guide, state: authored}
   - {path: proposals.md, kind: proposal-example-guide, state: authored}

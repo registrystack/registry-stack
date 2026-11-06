@@ -202,7 +202,6 @@ and currentness policy. Never treat origin, endpoint, issuer, provider,
 authority, or capability claims as trusted solely because Discovery returned
 them.
 
-This boundary preserves
-[ADR-001](../../products/discovery/DECISIONS.md#adr-001-discovery-is-an-index-not-a-trust-or-invocation-layer):
-Discovery remains an index and neither defines adopter trust policy nor proxies
-native Evidence invocation.
+This boundary keeps Discovery an index (see the
+[Discovery README](../../products/discovery/README.md)): it neither defines
+adopter trust policy nor proxies native Evidence invocation.

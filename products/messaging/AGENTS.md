@@ -14,7 +14,8 @@ examples, and product-local verification scripts. Read the workspace
   partial or enforced only in the change that adds the negative test that
   earns it. A mapped test is not evidence that the test ran.
 - Record a deliberate behaviour a reader could mistake for an oversight in
-  `contracts/recorded-decisions.yaml`, with the tests that hold it.
+  `contracts/recorded-decisions.yaml`, with the tests that hold it. An entry
+  records the behaviour; the reasoning belongs in the pull request description.
 - Preserve the product boundary: no Messaging crate, directly or through any
   shared dependency, reaches a Base Registry Engine, Casework, Coordinator,
   Scheduling, or Evidence crate, and none of those products reach the Messaging
@@ -25,8 +26,9 @@ examples, and product-local verification scripts. Read the workspace
   Never accept an environment expression, an inline value, or a request field
   in its place.
 - Changes to authentication, authorization, audit, data minimization, or
-  retention are security-sensitive: update `SECURITY-REVIEW-NOTES.md` and the
-  matrix in the same change.
+  retention are security-sensitive: update the matrix in the same change, and
+  `SECURITY-MODEL.md` when a trust boundary, operator obligation, or accepted
+  residual changes. Put the review narrative in the pull request description.
 - PostgreSQL verification requires a disposable database and the
   `postgres-test` feature. A test binary that skips because its database URL
   is absent is not database verification.

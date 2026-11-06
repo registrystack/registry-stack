@@ -189,7 +189,7 @@ fn the_minimal_fixture_project_compiles() {
     // One concrete authored operation for the one bound (operation, record
     // type) pair, beside the protected system contract route. The record
     // type is substituted into the authored path, so no template placeholder
-    // remains (D6, CONCEPT section 7).
+    // remains (CONCEPT section 7).
     let paths = document["paths"].as_object().expect("paths");
     assert_eq!(paths.len(), 2, "{paths:?}");
     assert!(paths.contains_key(registry_adapter::engine::effective_contract::WELL_KNOWN_PATH));
@@ -369,8 +369,8 @@ fn a_refused_project_writes_nothing() {
     );
 }
 
-/// A profile operation no binding binds emits no path (D6: the contract
-/// holds only bound operations).
+/// A profile operation no binding binds emits no path (the contract
+/// holds only bound operations, CONCEPT section 7).
 #[test]
 fn an_unbound_profile_operation_emits_no_path() {
     let (root, project) = copied_tree(&minimal_dir());

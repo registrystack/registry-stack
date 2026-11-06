@@ -38,9 +38,9 @@
 //! Proposal start and submit (`products/adapter/CONCEPT.md` sections 17.1
 //! and 17.3). Record create, patch, and tombstone, batch, and the
 //! ingestion run family stay out of a job's direct path: an item that
-//! needs a lookup or a choice goes to Coordinator, and bulk ends in a
-//! file for `bregctl data import`. The job's destination wiring admits a
-//! configured operation only when [`job_direct_admits`] does, so the
+//! needs a lookup or a choice goes to Coordinator, and bulk has no job path: its designed
+//! hand-off, a file for `bregctl data import`, is not implemented. The
+//! job's destination wiring admits a configured operation only when [`job_direct_admits`] does, so the
 //! credential it holds needs only the narrow grants those operations
 //! use.
 

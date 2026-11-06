@@ -3,7 +3,9 @@
 # Experiment project: the rest-offset-mtls jsonapi-households pack, byte for byte
 # (pack.yaml and scripts/ are copies, same digest), bound to the
 # FHIR-shaped experiment profile in profile.yaml beside this file. It tests
-# D17: one pack, a second target API, no pack change.
+# the rule that a pack knows a source system and a profile owns the outward
+# wire contract (CONCEPT section 7): one pack, a second target API, no pack
+# change.
 #
 # Upstream-call budgets as in rest-offset-mtls: search 11, read 2.
 #

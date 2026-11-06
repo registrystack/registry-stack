@@ -247,7 +247,7 @@ pub struct ToParameters {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ok_status_code_range: Option<String>,
     /// The source-native identifiers a later write-resume step needs
-    /// (Increment 3; `products/adapter/CONCEPT.md` section 9).
+    /// (`products/adapter/CONCEPT.md` section 9).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub resume_bindings: Vec<ResumeBinding>,
 }
@@ -673,8 +673,8 @@ pub struct EnrichStep {
 /// ported. Absent a strategy, the page replaces the body, as `enrich`
 /// replaces it. `timeoutMilliseconds` is mandatory: the checks refuse its
 /// absence under `adapter.job.poll-timeout`, and the reader refuses a
-/// value outside 1 to 10000 (D39 keeps the platform-frozen per-attempt
-/// ceiling for every endpoint). The step never appears in a
+/// value outside 1 to 10000 (the platform-frozen per-attempt ceiling of
+/// `products/adapter/CONCEPT.md` section 8.8 holds for every endpoint). The step never appears in a
 /// facade-reachable route (`adapter.job.poll-facade-refused`).
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
@@ -2507,7 +2507,7 @@ mod tests {
         assert!(templated("PageSize").is_err());
     }
 
-    /// Resume bindings, the Increment 3 write-resume addition of CONCEPT 9.
+    /// Resume bindings for write-resume, CONCEPT 9.
     #[test]
     fn resume_bindings_round_trip() {
         let binding: ResumeBinding =
@@ -2627,7 +2627,7 @@ mod tests {
     }
 
     /// The enrichment carries the send parameters: a method, a query, and
-    /// the operation it invokes, like a `to` send (staff review P1-13).
+    /// the operation it invokes, like a `to` send.
     #[test]
     fn enrichment_carries_the_send_parameters() {
         let enrich: EnrichStep = serde_json::from_str(

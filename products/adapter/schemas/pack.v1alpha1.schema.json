@@ -581,7 +581,7 @@
           "description": "The PostgreSQL result column whose scalar is the source item's\nstable identity. Required for a `postgres` endpoint and absent\nfrom every other component."
         },
         "maximumResponseBytes": {
-          "description": "The largest response body one send to this endpoint may take in, in\nbytes. Required, no default; a value above the platform cap is\nrefused, never shortened. The runtime binding may lower it, never\nraise it. A facade-reachable endpoint stays within the facade\nceiling and a source-route-only endpoint may declare up to the\nplatform cap (D39); the checks refuse the facade-reachable excess\nunder `adapter.job.endpoint-response-bound`.",
+          "description": "The largest response body one send to this endpoint may take in, in\nbytes. Required, no default; a value above the platform cap is\nrefused, never shortened. The runtime binding may lower it, never\nraise it. A facade-reachable endpoint stays within the facade\nceiling and a source-route-only endpoint may declare up to the\nplatform cap (`products/adapter/CONCEPT.md` section 8.8); the checks\nrefuse the facade-reachable excess\nunder `adapter.job.endpoint-response-bound`.",
           "format": "uint64",
           "maximum": 16777216,
           "minimum": 1,
@@ -1259,7 +1259,7 @@
     },
     "PollEnrichStep": {
       "additionalProperties": false,
-      "description": "A `pollEnrich` step, the bounded job-only port of Camel's Poll Enricher\n(`products/adapter/CONCEPT.md` sections 17.1 and 17.2). It reads one\nbounded page from a static `file:`, `rabbitmq:`, or `sftp:` endpoint the pack\ndeclares; no dynamic endpoint expression and no `consumerSendTo` are\nported. Absent a strategy, the page replaces the body, as `enrich`\nreplaces it. `timeoutMilliseconds` is mandatory: the checks refuse its\nabsence under `adapter.job.poll-timeout`, and the reader refuses a\nvalue outside 1 to 10000 (D39 keeps the platform-frozen per-attempt\nceiling for every endpoint). The step never appears in a\nfacade-reachable route (`adapter.job.poll-facade-refused`).",
+      "description": "A `pollEnrich` step, the bounded job-only port of Camel's Poll Enricher\n(`products/adapter/CONCEPT.md` sections 17.1 and 17.2). It reads one\nbounded page from a static `file:`, `rabbitmq:`, or `sftp:` endpoint the pack\ndeclares; no dynamic endpoint expression and no `consumerSendTo` are\nported. Absent a strategy, the page replaces the body, as `enrich`\nreplaces it. `timeoutMilliseconds` is mandatory: the checks refuse its\nabsence under `adapter.job.poll-timeout`, and the reader refuses a\nvalue outside 1 to 10000 (the platform-frozen per-attempt ceiling of\n`products/adapter/CONCEPT.md` section 8.8 holds for every endpoint). The step never appears in a\nfacade-reachable route (`adapter.job.poll-facade-refused`).",
       "properties": {
         "aggregationStrategy": {
           "$ref": "#/$defs/AggregationStrategy",
@@ -2450,7 +2450,7 @@
           "type": "object"
         },
         "resumeBindings": {
-          "description": "The source-native identifiers a later write-resume step needs\n(Increment 3; `products/adapter/CONCEPT.md` section 9).",
+          "description": "The source-native identifiers a later write-resume step needs\n(`products/adapter/CONCEPT.md` section 9).",
           "items": {
             "$ref": "#/$defs/ResumeBinding"
           },
