@@ -217,7 +217,7 @@ fn check_with_the_environment_reads_each_seal_certificate_chain() {
             "render.runtime.seal-certificate-usage",
         ),
         (
-            &|params| oversized(params, 90 * 1024),
+            &|params| oversized(params, 256 * 1024),
             Some(1),
             "error",
             "render.runtime.seal-chain-too-large",
@@ -282,13 +282,13 @@ fn check_with_the_environment_refuses_a_seal_too_large_for_a_document_pdf_standa
         )
         .unwrap();
     };
-    // A B-T seal whose chain makes it reserve about 39 KB: more than a
+    // A B-T seal whose chain makes it reserve about 37 KB: more than a
     // PDF/A-2 string may hold, less than PDF/A-1 or PDF/A-4 allow.
     let chain = home.join("chain.pem");
     let pki = TestPki::generate().unwrap();
     let seal = pki
         .issue_seal_with(SigningAlgorithm::Es256, |params| {
-            oversized(params, 6 * 1024)
+            oversized(params, 16 * 1024)
         })
         .unwrap();
     std::fs::write(&chain, seal.chain_pem()).unwrap();

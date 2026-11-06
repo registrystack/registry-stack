@@ -102,6 +102,13 @@ fn chain_parses_leaf_first_with_its_accessors() {
         seal.certificate_der().len() + pki.issuing_ca_certificate_der().len(),
         "the chain's DER size counts the seal certificate and its issuer"
     );
+    let leaf = Certificate::from_der(seal.certificate_der()).expect("leaf");
+    assert_eq!(
+        chain.leaf_issuer_serial_der_len(),
+        leaf.tbs_certificate.issuer.to_der().unwrap().len()
+            + leaf.tbs_certificate.serial_number.to_der().unwrap().len(),
+        "the issuer name and serial number that name the seal certificate"
+    );
 }
 
 #[test]
