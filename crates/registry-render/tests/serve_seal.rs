@@ -93,6 +93,8 @@ struct Tsa {
     port: u16,
     requests: Arc<AtomicUsize>,
     content_types: Arc<Mutex<Vec<String>>>,
+    /// The root certificate the authority's timestamp chain leads to.
+    root_pem: String,
 }
 
 fn read_http_request(stream: &mut TcpStream) -> (String, Vec<u8>) {
@@ -128,8 +130,9 @@ fn start_tsa(mode: TsaMode) -> Tsa {
     let requests = Arc::new(AtomicUsize::new(0));
     let content_types = Arc::new(Mutex::new(Vec::new()));
     let (counter, seen) = (Arc::clone(&requests), Arc::clone(&content_types));
+    let pki = TestPki::generate().expect("tsa pki");
+    let root_pem = pki.root_certificate_pem();
     std::thread::spawn(move || {
-        let pki = TestPki::generate().expect("tsa pki");
         for stream in listener.incoming() {
             let Ok(mut stream) = stream else { continue };
             counter.fetch_add(1, Ordering::SeqCst);
@@ -178,6 +181,7 @@ fn start_tsa(mode: TsaMode) -> Tsa {
         port,
         requests,
         content_types,
+        root_pem,
     }
 }
 
@@ -286,7 +290,11 @@ fn deployment(seal: Option<SealSpec>) -> Fixture {
 }
 
 fn sealed(tsa: Option<&Tsa>) -> Fixture {
-    let pki = seal_pki();
+    sealed_by(&seal_pki(), tsa)
+}
+
+/// [`sealed`] with a seal certificate `pki` issues.
+fn sealed_by(pki: &TestPki, tsa: Option<&Tsa>) -> Fixture {
     deployment(Some(SealSpec {
         tsa_url: tsa.map(|tsa| format!("http://127.0.0.1:{}/tsr", tsa.port)),
         seal: pki.issue_seal(SigningAlgorithm::Es256).unwrap(),
@@ -1354,4 +1362,50 @@ fn a_seal_too_large_for_a_document_pdf_standard_refuses_startup() {
         !stderr.contains("/documents/0/seal"),
         "the plain notice keeps its seal: {stderr}"
     );
+}
+
+/// Write sealed files served by the seal route for an external validator
+/// such as `products/render/scripts/validate-seal.py`: a B-T and a B-B
+/// notice and a B-T PDF/A-2b archive, each with its `documentSha256`, and
+/// the seal and timestamp trust roots. Run it with
+/// `REGISTRY_SEAL_SAMPLE_DIR` naming an existing directory.
+#[test]
+#[ignore = "writes served seal samples to REGISTRY_SEAL_SAMPLE_DIR"]
+fn write_served_seal_samples() {
+    let dir = PathBuf::from(
+        std::env::var_os("REGISTRY_SEAL_SAMPLE_DIR").expect("REGISTRY_SEAL_SAMPLE_DIR is set"),
+    );
+    let tsa = start_tsa(TsaMode::Grant);
+    let pki = seal_pki();
+    std::fs::write(dir.join("seal-root.pem"), pki.root_certificate_pem()).unwrap();
+    std::fs::write(dir.join("tsa-root.pem"), &tsa.root_pem).unwrap();
+    let timestamped = sealed_by(&pki, Some(&tsa));
+    let untimestamped = sealed_by(&pki, None);
+    for (name, fixture, document) in [
+        ("notice-b-t", &timestamped, "notice"),
+        ("archive-b-t", &timestamped, "archive"),
+        ("notice-b-b", &untimestamped, "notice"),
+    ] {
+        let server = start_server(fixture);
+        let reply = post(
+            &server,
+            &format!("/v1/seal/{document}"),
+            &fixture.token("render:seal", SEAL_CLIENT),
+            "application/json",
+        );
+        assert_eq!(
+            reply.status,
+            200,
+            "{name}: {}",
+            String::from_utf8_lossy(&reply.body)
+        );
+        let body = reply.json();
+        let pdf = base64_decode(body["pdfBase64"].as_str().expect("pdfBase64"));
+        std::fs::write(dir.join(format!("{name}.pdf")), &pdf).unwrap();
+        std::fs::write(
+            dir.join(format!("{name}.document-sha256")),
+            body["documentSha256"].as_str().expect("documentSha256"),
+        )
+        .unwrap();
+    }
 }
