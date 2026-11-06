@@ -146,7 +146,7 @@ enum ProviderCommand {
         /// Approval stages and outcomes shared with caseworkctl init.
         #[arg(long, value_parser = templates::PATTERN_NAMES)]
         pattern: String,
-        /// Sealed BReg package to pair and compare before packaging Casework.
+        /// BReg deployment package to pair and compare before packaging Casework.
         #[arg(long, value_name = "DIRECTORY")]
         breg_package: Option<PathBuf>,
         /// Package directory written with a new project; omit to inspect the package without writing it.
@@ -164,7 +164,7 @@ enum ProviderCommand {
         /// Declared Casework context provider to pair.
         #[arg(long)]
         provider_id: String,
-        /// Sealed native Base Registry Engine (BReg) package containing the action's context export.
+        /// Native Base Registry Engine (BReg) deployment package containing the action's context export.
         #[arg(long, value_name = "DIRECTORY")]
         breg_package: PathBuf,
         /// Base Registry Engine (BReg) action that declares the required review context.
@@ -209,7 +209,7 @@ struct CheckArgs {
     /// Refuse authored warnings as well as errors.
     #[arg(long)]
     deny_warnings: bool,
-    /// Compare imported provider contracts with this sealed native Base Registry Engine (BReg) package.
+    /// Compare imported provider contracts with this native Base Registry Engine (BReg) deployment package.
     #[arg(long, value_name = "DIRECTORY")]
     against_breg_package: Option<PathBuf>,
     /// Limit native package comparison to this declared provider.

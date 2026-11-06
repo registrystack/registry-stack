@@ -8883,7 +8883,7 @@
             },
             {
               "display": "--against-breg-package <DIRECTORY>",
-              "description": "Compare imported provider contracts with this sealed native Base Registry Engine (BReg) package",
+              "description": "Compare imported provider contracts with this native Base Registry Engine (BReg) deployment package",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -9206,7 +9206,7 @@
                 },
                 {
                   "display": "--breg-package <DIRECTORY>",
-                  "description": "Sealed BReg package to pair and compare before packaging Casework",
+                  "description": "BReg deployment package to pair and compare before packaging Casework",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -9295,7 +9295,7 @@
                 },
                 {
                   "display": "--breg-package <DIRECTORY>",
-                  "description": "Sealed native Base Registry Engine (BReg) package containing the action's context export",
+                  "description": "Native Base Registry Engine (BReg) deployment package containing the action's context export",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
