@@ -171,7 +171,10 @@ signing:
 - `allowedClients` is required, lists named OIDC clients, and refuses
   `unrestricted` and wildcards. Signing needs `auth.oidc`; the legacy API key
   never seals. `trust: test-only` marks a test certificate so the template can
-  print the seal as a test seal.
+  print the seal as a test seal (the `init` scaffold does). The answer, the
+  `/ready` entry and the audit say `testOnly: true` too, the PDF answer adds
+  `X-Registry-Seal-Test-Only: true`, and `serve` warns once per test-only
+  seal at startup.
 - The route needs the `render:seal` scope, which `render:render` does not
   imply. It returns the sealed PDF with `X-Registry-Document-Sha256` (the
   first revision, Render's rendered document) and `X-Registry-Signed-File-Sha256`

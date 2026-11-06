@@ -58,6 +58,10 @@ pub struct RenderAuditEvent {
     /// named a sealable document.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub seal_id: Option<String>,
+    /// Whether that seal is declared `trust: test-only`: present, `true`, on
+    /// every entry naming a test-only seal, and absent otherwise.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub test_only: bool,
     /// SHA-256 over the first revision, the rendered document a seal covers.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub document_sha256: Option<String>,
@@ -103,6 +107,7 @@ impl RenderAuditEvent {
             pdf_sha256: None,
             data_sha256: None,
             seal_id: None,
+            test_only: false,
             document_sha256: None,
             signed_file_sha256: None,
             certificate_sha256: None,
@@ -126,10 +131,12 @@ impl RenderAuditEvent {
         }
     }
 
-    /// The same event for a call to the seal route naming `seal_id`.
-    pub fn for_seal(self, seal_id: &str) -> Self {
+    /// The same event for a call to the seal route naming `seal_id`, a
+    /// test-only seal when `test_only`.
+    pub fn for_seal(self, seal_id: &str, test_only: bool) -> Self {
         Self {
             seal_id: Some(seal_id.to_owned()),
+            test_only,
             ..self
         }
     }
@@ -152,6 +159,7 @@ impl RenderAuditEvent {
             pdf_sha256: None,
             data_sha256: None,
             seal_id: None,
+            test_only: false,
             document_sha256: None,
             signed_file_sha256: None,
             certificate_sha256: None,
@@ -275,7 +283,7 @@ mod tests {
 
     #[test]
     fn a_seal_request_entry_names_its_seal_and_no_response_value() {
-        let request = record(started().for_seal("ministry")).unwrap();
+        let request = record(started().for_seal("ministry", false)).unwrap();
         assert_eq!(request["sealId"], "ministry");
         for field in [
             "outcome",
@@ -286,6 +294,9 @@ mod tests {
         ] {
             assert!(request.get(field).is_none(), "{field}: {request}");
         }
+        assert!(request.get("testOnly").is_none(), "{request}");
+        let test_only = record(started().for_seal("ministry", true)).unwrap();
+        assert_eq!(test_only["testOnly"], true);
         let plain = record(started()).unwrap();
         assert!(plain.get("sealId").is_none(), "{plain}");
     }
@@ -299,7 +310,7 @@ mod tests {
             signed_file_sha256: Some("b".repeat(64)),
             certificate_sha256: Some("c".repeat(64)),
             timestamp_token_sha256: Some("e".repeat(64)),
-            ..started().for_seal("ministry")
+            ..started().for_seal("ministry", false)
         };
         let entry = unfinished(sealed).unwrap();
         assert_eq!(entry["outcome"], "unfinished");
@@ -321,7 +332,7 @@ mod tests {
         let problem = RenderProblem::new(ProblemKind::SealClientNotAllowed, "refused");
         let entry = record(
             RenderAuditEvent::refused("notice", &problem, "caller", None, None)
-                .for_seal("ministry"),
+                .for_seal("ministry", false),
         )
         .unwrap();
         assert_eq!(entry["sealId"], "ministry");

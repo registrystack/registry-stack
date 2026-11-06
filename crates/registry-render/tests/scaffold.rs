@@ -85,6 +85,58 @@ fn default_scaffold_compiles_offline_with_zero_edits_and_no_warnings() {
     );
 }
 
+/// The scaffold prints the seal block PAYLOAD.md shows: a sealed render
+/// differs from a plain one, and a test seal adds its test line. Strict
+/// rendering keeps each one warning-free.
+#[test]
+fn the_scaffold_prints_the_seal_block_and_a_test_seal_line() {
+    let dir = tempdir();
+    let init = run(&["init", dir.to_str().unwrap()]);
+    assert!(init.status.success());
+    let bundle = registry_render::Bundle::load(&dir).expect("the scaffold loads");
+    let document = bundle.document("letter").expect("letter").clone();
+    let data = std::fs::read_to_string(dir.join("fixtures/data.json")).unwrap();
+    let request = registry_render::RenderRequest {
+        locale: None,
+        data: serde_json::from_str(&data).unwrap(),
+        assets: std::collections::BTreeMap::new(),
+        issued_at: chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc),
+    };
+    let sealed = |signer_name: Option<&str>, test_only: bool| {
+        let signing = registry_render::envelope::SigningPayload {
+            signer_name: signer_name.map(str::to_owned),
+            test_only,
+        };
+        registry_render::render::render_for_sealing(
+            &bundle,
+            &document,
+            &request,
+            &signing,
+            true,
+            registry_render::DEFAULT_MAX_OUTPUT_BYTES,
+        )
+        .expect("the sealed variant renders warning-free")
+        .pdf
+    };
+    let plain = registry_render::render::render(&bundle, &document, &request, true)
+        .expect("the plain variant renders warning-free")
+        .pdf;
+    let official = sealed(Some("Ministry of Licensing"), false);
+    let test_seal = sealed(Some("Ministry of Licensing"), true);
+    let unnamed = sealed(None, true);
+    assert!(
+        official != plain,
+        "the seal block prints on a sealed render"
+    );
+    assert!(test_seal != official, "a test seal prints its test line");
+    assert!(
+        unnamed != test_seal,
+        "a seal without a name prints the fallback"
+    );
+}
+
 #[test]
 fn init_prints_a_first_render_command_that_runs_as_printed() {
     // Replay the printed command from a directory other than the bundle's

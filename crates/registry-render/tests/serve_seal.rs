@@ -900,7 +900,7 @@ fn readiness_reports_each_seal_and_never_requests_a_timestamp() {
         assert_eq!(ready.status, 200);
         assert_eq!(
             ready.json(),
-            serde_json::json!({"status":"ready","signing":{"ministry":{"status":"ready"}}})
+            serde_json::json!({"status":"ready","signing":{"ministry":{"status":"ready","testOnly":true}}})
         );
     }
     assert_eq!(tsa.requests.load(Ordering::SeqCst), 0);
@@ -932,7 +932,7 @@ fn render_stays_ready_while_an_expired_seal_is_unavailable() {
     assert_eq!(ready.status, 200, "render stays ready");
     assert_eq!(
         ready.json(),
-        serde_json::json!({"status":"ready","signing":{"ministry":{"status":"unavailable","reason":"certificate-expired"}}})
+        serde_json::json!({"status":"ready","signing":{"ministry":{"status":"unavailable","reason":"certificate-expired","testOnly":true}}})
     );
     let plain = post(
         &server,
@@ -1310,6 +1310,87 @@ fn a_seal_writes_a_paired_value_free_audit() {
     ] {
         assert!(!text.contains(protected), "audit holds no {protected}");
     }
+}
+
+/// What a running seal says about its trust: the JSON `seal` member, the
+/// PDF header, the `/ready` entry, every audit entry of the call and the
+/// startup warnings naming the seal.
+struct TrustSignals {
+    json: serde_json::Value,
+    header: Option<String>,
+    ready: serde_json::Value,
+    audit: Vec<serde_json::Value>,
+    startup_warnings: usize,
+}
+
+fn trust_signals(fixture: &Fixture) -> TrustSignals {
+    let server = start_server(fixture);
+    let token = fixture.token("render:seal", SEAL_CLIENT);
+    let json = seal_json(fixture, &server)["seal"].clone();
+    let reply = post(&server, "/v1/seal/notice", &token, "application/pdf");
+    assert_eq!(reply.status, 200);
+    let header = reply.header("x-registry-seal-test-only").map(str::to_owned);
+    let ready =
+        request(server.port, "GET", "/ready", &[], None).json()["signing"]["ministry"].clone();
+    let startup_warnings = server
+        .log()
+        .iter()
+        .filter(|line| {
+            line["level"] == "WARN"
+                && line["fields"]["seal_id"] == "ministry"
+                && line["fields"]["message"] == "test-only seal: its documents are not official"
+        })
+        .count();
+    drop(server);
+    let audit = fixture
+        .audit()
+        .into_iter()
+        .map(|entry| entry["record"].clone())
+        .collect();
+    TrustSignals {
+        json,
+        header,
+        ready,
+        audit,
+        startup_warnings,
+    }
+}
+
+#[test]
+fn a_test_only_seal_says_so_in_every_answer_and_a_production_seal_adds_nothing() {
+    let fixture = sealed(None);
+    let test_only = trust_signals(&fixture);
+    assert_eq!(test_only.json["testOnly"], true, "{}", test_only.json);
+    assert_eq!(test_only.header.as_deref(), Some("true"));
+    assert_eq!(
+        test_only.ready,
+        serde_json::json!({"status": "ready", "testOnly": true})
+    );
+    assert_eq!(test_only.audit.len(), 4, "two calls, paired");
+    for record in &test_only.audit {
+        assert_eq!(record["testOnly"], true, "{record}");
+    }
+    assert_eq!(test_only.startup_warnings, 1);
+
+    // The same seal without `trust` is a production seal.
+    let text = std::fs::read_to_string(&fixture.runtime_path).unwrap();
+    let production = text.replacen("      trust: test-only\n", "", 1);
+    assert_ne!(production, text);
+    std::fs::write(&fixture.runtime_path, production).unwrap();
+    std::fs::write(fixture.home.join("audit/render.jsonl"), "").unwrap();
+    let production = trust_signals(&fixture);
+    assert!(
+        production.json.get("testOnly").is_none(),
+        "{}",
+        production.json
+    );
+    assert_eq!(production.header, None);
+    assert_eq!(production.ready, serde_json::json!({"status": "ready"}));
+    assert_eq!(production.audit.len(), 4);
+    for record in &production.audit {
+        assert!(record.get("testOnly").is_none(), "{record}");
+    }
+    assert_eq!(production.startup_warnings, 0);
 }
 
 #[test]
