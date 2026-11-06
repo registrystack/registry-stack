@@ -35,6 +35,8 @@ use pdf_writer::{Chunk, Rect, Ref, Settings, TextStr};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::manifest::PdfStandardSpec;
+
 /// The largest CMS signature, in bytes, a field may reserve room for.
 pub const MAX_CONTENTS_CAPACITY: usize = 256 * 1024;
 
@@ -130,6 +132,59 @@ pub fn prepare(
     let revision = syntax::read_revision(first_revision)?;
     let original = read_original(first_revision, &revision)?;
     write_update(first_revision, &revision, &original, field)
+}
+
+/// Whether a document rendered under `standard` stays conformant once
+/// sealed with a field reserving `contents_capacity` bytes, with a short
+/// reason when it does not.
+///
+/// The widget is printable, has only a normal appearance, and has a
+/// zero-size rectangle; veraPDF counts such a widget as outside the crop
+/// box, so the PDF/UA-1 and accessible PDF/A rules that ask a visible widget
+/// to be tagged do not apply to it. What remains is the string-length limit
+/// of PDF/A-1 (ISO 19005-1 6.1.12) and of PDF/A-2 and PDF/A-3 (ISO 32000-1
+/// Annex C, through ISO 19005-2 and -3 6.1.13): the reserved `/Contents` is
+/// one string of `contents_capacity` bytes.
+///
+/// Conformance holds for the embedded file only: until [`CheckedPdf::embed`]
+/// writes a signature, PDF/A-2 and PDF/A-3 (6.4.3) refuse the empty
+/// `/Contents`.
+pub fn sealable(
+    standard: Option<PdfStandardSpec>,
+    contents_capacity: usize,
+) -> Result<(), &'static str> {
+    use PdfStandardSpec as S;
+    if contents_capacity == 0 || contents_capacity > MAX_CONTENTS_CAPACITY {
+        return Err("contents capacity must be between 1 and 262144 bytes");
+    }
+    let Some(standard) = standard else {
+        return Ok(());
+    };
+    match standard {
+        S::A1a | S::A1b if contents_capacity > 65_535 => Err(
+            "PDF/A-1 limits a string to 65535 bytes, so a seal can reserve at most 65535 bytes for the signature",
+        ),
+        S::A2a | S::A2b | S::A2u | S::A3a | S::A3b | S::A3u if contents_capacity > 32_767 => Err(
+            "PDF/A-2 and PDF/A-3 limit a string to 32767 bytes, so a seal can reserve at most 32767 bytes for the signature",
+        ),
+        S::V1_4
+        | S::V1_5
+        | S::V1_6
+        | S::V1_7
+        | S::V2_0
+        | S::A1a
+        | S::A1b
+        | S::A2a
+        | S::A2b
+        | S::A2u
+        | S::A3a
+        | S::A3b
+        | S::A3u
+        | S::A4
+        | S::A4f
+        | S::A4e
+        | S::Ua1 => Ok(()),
+    }
 }
 
 impl SignatureField {
@@ -963,5 +1018,94 @@ mod tests {
         assert!(zeros.starts_with(b"/ByteRange [0 0 0 0]   "));
         assert_eq!(widest.last(), Some(&b']'));
         assert_eq!(byte_range_text([0, 10_000_000_000, 0, 0]), None);
+    }
+
+    const EVERY_STANDARD: [Option<PdfStandardSpec>; 18] = [
+        None,
+        Some(PdfStandardSpec::V1_4),
+        Some(PdfStandardSpec::V1_5),
+        Some(PdfStandardSpec::V1_6),
+        Some(PdfStandardSpec::V1_7),
+        Some(PdfStandardSpec::V2_0),
+        Some(PdfStandardSpec::A1b),
+        Some(PdfStandardSpec::A1a),
+        Some(PdfStandardSpec::A2b),
+        Some(PdfStandardSpec::A2u),
+        Some(PdfStandardSpec::A2a),
+        Some(PdfStandardSpec::A3b),
+        Some(PdfStandardSpec::A3u),
+        Some(PdfStandardSpec::A3a),
+        Some(PdfStandardSpec::A4),
+        Some(PdfStandardSpec::A4f),
+        Some(PdfStandardSpec::A4e),
+        Some(PdfStandardSpec::Ua1),
+    ];
+
+    #[test]
+    fn every_standard_is_sealable_with_room_for_a_timestamped_signature() {
+        for standard in EVERY_STANDARD {
+            assert_eq!(sealable(standard, 16 * 1024), Ok(()), "{standard:?}");
+        }
+    }
+
+    #[test]
+    fn sealable_holds_pdf_a_1_2_and_3_to_their_string_length_limits() {
+        use PdfStandardSpec as S;
+        let limited: [(&[S], usize, &str); 2] = [
+            (
+                &[S::A1a, S::A1b],
+                65_535,
+                "PDF/A-1 limits a string to 65535 bytes, so a seal can reserve at most 65535 bytes for the signature",
+            ),
+            (
+                &[S::A2a, S::A2b, S::A2u, S::A3a, S::A3b, S::A3u],
+                32_767,
+                "PDF/A-2 and PDF/A-3 limit a string to 32767 bytes, so a seal can reserve at most 32767 bytes for the signature",
+            ),
+        ];
+        for (standards, limit, reason) in limited {
+            for standard in standards {
+                assert_eq!(sealable(Some(*standard), limit), Ok(()), "{standard:?}");
+                assert_eq!(
+                    sealable(Some(*standard), limit + 1),
+                    Err(reason),
+                    "{standard:?}"
+                );
+            }
+        }
+        for standard in [
+            None,
+            Some(S::V1_4),
+            Some(S::V1_5),
+            Some(S::V1_6),
+            Some(S::V1_7),
+            Some(S::V2_0),
+            Some(S::A4),
+            Some(S::A4f),
+            Some(S::A4e),
+            Some(S::Ua1),
+        ] {
+            assert_eq!(
+                sealable(standard, MAX_CONTENTS_CAPACITY),
+                Ok(()),
+                "{standard:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn sealable_refuses_a_capacity_prepare_refuses() {
+        for standard in EVERY_STANDARD {
+            for capacity in [0, MAX_CONTENTS_CAPACITY + 1] {
+                let reason = sealable(standard, capacity).expect_err("out of range");
+                assert!(
+                    reason.contains(&MAX_CONTENTS_CAPACITY.to_string()),
+                    "{reason}"
+                );
+                let mut bad = field();
+                bad.contents_capacity = capacity;
+                assert!(bad.validate().is_err());
+            }
+        }
     }
 }

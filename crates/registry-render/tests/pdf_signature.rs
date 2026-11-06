@@ -11,7 +11,9 @@ use std::sync::OnceLock;
 
 use chrono::{TimeZone, Utc};
 use hayro_syntax::object::{Array, Dict, Name, Object, ObjectIdentifier};
-use registry_render::pdf_signature::{prepare, PdfSignatureError, PreparedPdf, SignatureField};
+use registry_render::pdf_signature::{
+    prepare, sealable, PdfSignatureError, PreparedPdf, SignatureField,
+};
 use serde_json::Value;
 
 const CAPACITY: usize = 8192;
@@ -25,18 +27,26 @@ fn repo_root() -> PathBuf {
         .to_path_buf()
 }
 
+fn certificate_root() -> PathBuf {
+    repo_root().join("products/render/bundles/certificate")
+}
+
+fn certificate_bundle() -> registry_render::Bundle {
+    let root = certificate_root();
+    let verified = registry_platform_config::package::verify_package(
+        &root,
+        &registry_render::runtime::package_limits(),
+        "registry-render package",
+    )
+    .expect("shared package envelope");
+    registry_render::Bundle::load_package(&root, &verified).expect("bound package bytes")
+}
+
 fn certificate_pdf() -> &'static [u8] {
     static PDF: OnceLock<Vec<u8>> = OnceLock::new();
     PDF.get_or_init(|| {
-        let root = repo_root().join("products/render/bundles/certificate");
-        let verified = registry_platform_config::package::verify_package(
-            &root,
-            &registry_render::runtime::package_limits(),
-            "registry-render package",
-        )
-        .expect("shared package envelope");
-        let bundle =
-            registry_render::Bundle::load_package(&root, &verified).expect("bound package bytes");
+        let root = certificate_root();
+        let bundle = certificate_bundle();
         let document = bundle.document("certificate").expect("document");
         let data: Value = serde_json::from_str(
             &std::fs::read_to_string(root.join("fixtures/data.json")).expect("fixture"),
@@ -88,6 +98,18 @@ fn startxref(pdf: &[u8]) -> usize {
 
 fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).position(|w| w == needle)
+}
+
+#[test]
+fn the_certificate_bundle_standard_is_sealable_at_the_test_capacity() {
+    let bundle = certificate_bundle();
+    let standard = bundle
+        .document("certificate")
+        .expect("document")
+        .spec
+        .pdf_standard;
+    assert_eq!(standard.map(|s| s.to_string()).as_deref(), Some("a-4"));
+    assert_eq!(sealable(standard, CAPACITY), Ok(()));
 }
 
 #[test]
