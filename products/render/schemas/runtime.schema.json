@@ -446,7 +446,7 @@
           "uniqueItems": true
         },
         "certificateChainFile": {
-          "description": "Absolute path of the PEM certificate chain file, the seal's own\ncertificate first. Render's other runtime paths are absolute for the\nsame reason: the file's meaning must not depend on the directory the\nservice starts in.",
+          "description": "Absolute path of the PEM certificate chain file, the seal's own\ncertificate first, then each issuer. It is absolute like Render's\nother runtime paths, so a runtime file names deployment locations,\nnot locations relative to wherever the file was copied.",
           "not": {
             "pattern": "(^|/)\\.{1,2}(/|$)"
           },

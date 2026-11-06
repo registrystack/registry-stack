@@ -407,9 +407,9 @@ pub struct SealRuntime {
     )]
     pub private_key_ref: String,
     /// Absolute path of the PEM certificate chain file, the seal's own
-    /// certificate first. Render's other runtime paths are absolute for the
-    /// same reason: the file's meaning must not depend on the directory the
-    /// service starts in.
+    /// certificate first, then each issuer. It is absolute like Render's
+    /// other runtime paths, so a runtime file names deployment locations,
+    /// not locations relative to wherever the file was copied.
     #[cfg_attr(feature = "schema", schemars(with = "PathBuf"))]
     pub certificate_chain_file: PathBuf,
     /// The RFC 3161 timestamp authority that timestamps each seal (PAdES
