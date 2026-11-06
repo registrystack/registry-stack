@@ -278,6 +278,85 @@ fn check_reports_no_target_tree_when_the_schema_root_is_unsupported() {
     assert!(report.get("targetTree").is_none(), "{report}");
 }
 
+/// The target schema's title is display text for tools; it sits beside the
+/// target tree and is absent when the schema has none.
+#[test]
+fn check_reports_the_title_of_the_target_schema_root() {
+    let root = workspace();
+    let model = path(&root, "person.mapping.yaml");
+    let (exit, report, _) = run_json(&["mapping", "check", &model]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    assert!(report.get("targetTitle").is_none(), "{report}");
+
+    let titled = SCHEMA.replacen(
+        "\"type\": \"object\",",
+        "\"title\": \"Register a person\",\n  \"type\": \"object\",",
+        1,
+    );
+    assert_ne!(titled, SCHEMA);
+    std::fs::write(root.path().join("schemas/person.schema.json"), &titled).unwrap();
+    let (exit, report, _) = run_json(&["mapping", "check", &model]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    assert_eq!(report["targetTitle"], "Register a person", "{report}");
+    assert!(report["targetTree"].is_array(), "{report}");
+    // Like the tree, the title is for tools; the text form leaves it out.
+    let (_, text) = run_human(&["mapping", "check", &model]);
+    assert!(!text.contains("targetTitle"), "{text}");
+    assert!(!text.contains("Register a person"), "{text}");
+
+    // Only the root's title counts: a nested one names a field, and an
+    // empty one names nothing.
+    for schema in [
+        SCHEMA.replacen("\"source\": {", "\"source\": {\"title\": \"Nested\",", 1),
+        titled.replacen("\"Register a person\"", "\"\"", 1),
+    ] {
+        std::fs::write(root.path().join("schemas/person.schema.json"), schema).unwrap();
+        let (exit, report, _) = run_json(&["mapping", "check", &model]);
+        assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+        assert!(report.get("targetTitle").is_none(), "{report}");
+    }
+
+    // A title that is not text makes the schema invalid, and the report
+    // shows none.
+    let not_text = titled.replacen("\"Register a person\"", "7", 1);
+    std::fs::write(root.path().join("schemas/person.schema.json"), not_text).unwrap();
+    let (exit, report, _) = run_json(&["mapping", "check", &model]);
+    assert_eq!(exit, ExitCode::from(1), "{report}");
+    assert!(report.get("targetTitle").is_none(), "{report}");
+}
+
+/// A refusal still carries the title, as it carries the tree.
+#[test]
+fn check_reports_the_title_when_the_model_is_refused() {
+    let root = workspace();
+    let model = path(&root, "person.mapping.yaml");
+    let text = std::fs::read_to_string(&model).unwrap();
+    std::fs::write(&model, text.replace("household.size", "household.sizes")).unwrap();
+    let titled = SCHEMA.replacen(
+        "\"type\": \"object\",",
+        "\"title\": \"Register a person\",\n  \"type\": \"object\",",
+        1,
+    );
+    std::fs::write(root.path().join("schemas/person.schema.json"), titled).unwrap();
+    let (exit, report, _) = run_json(&["mapping", "check", &model]);
+    assert_eq!(exit, ExitCode::from(1), "{report}");
+    assert_eq!(report["targetTitle"], "Register a person", "{report}");
+}
+
+/// No schema, no title: an unreadable schema reports neither member.
+#[test]
+fn check_reports_no_title_when_the_schema_cannot_be_read() {
+    let root = workspace();
+    std::fs::write(
+        root.path().join("schemas/person.schema.json"),
+        r#"{"title": "Hidden", "#,
+    )
+    .unwrap();
+    let (exit, report, _) = run_json(&["mapping", "check", &path(&root, "person.mapping.yaml")]);
+    assert_eq!(exit, ExitCode::from(1), "{report}");
+    assert!(report.get("targetTitle").is_none(), "{report}");
+}
+
 #[test]
 fn check_human_output_names_the_verdict() {
     let root = workspace();

@@ -408,6 +408,10 @@ fn run_check(args: &MappingCheckArgs) -> Result<MappingRun, MappingFailure> {
     let mut tree_members = Vec::new();
     if let Some(loaded) = &loaded {
         annotations = model_findings(loaded, &args.model, &mut report);
+        // Display text only: it never affects checking, generation or preview.
+        if let Some(title) = loaded.schema.as_ref().and_then(target_title) {
+            tree_members.push(("targetTitle", json!(title)));
+        }
         if let Some(tree) = loaded.schema.as_ref().and_then(target_tree) {
             tree_members.push((
                 "targetTree",
@@ -454,6 +458,14 @@ fn run_check(args: &MappingCheckArgs) -> Result<MappingRun, MappingFailure> {
         annotations,
         deny_warnings: args.deny_warnings,
     })
+}
+
+/// The title of the target schema's root, when it is non-empty text.
+fn target_title(schema: &Value) -> Option<&str> {
+    schema
+        .get("title")
+        .and_then(Value::as_str)
+        .filter(|title| !title.is_empty())
 }
 
 fn target_name(target: MappingTarget) -> &'static str {

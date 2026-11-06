@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `adapterctl mapping check` reports the `title` of the target schema's root
+  as `targetTitle`, beside `targetTree`, so a tool can name what the mapping
+  fills. It is display only, absent when the root has no title or the schema
+  cannot be read, and present on a refusal.
 - A quoted mapping selector key or filter literal takes any non-control
   Unicode character, so a source key such as `prénom` can be mapped. `\"`
   and `\\` are its only escapes, keys compare byte for byte with no
