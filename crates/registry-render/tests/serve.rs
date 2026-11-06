@@ -1,7 +1,9 @@
 //! End-to-end serve tests: the real `registry-render` binary serving real
 //! requests, spawning real supervised workers, writing a real audit file
-//! through the platform audit writer. These tests are the DoD's serve-mode
-//! acceptance coverage.
+//! through the platform audit writer. They cover the render route end to end:
+//! authentication, the PDF and JSON answers, the paired audit entries,
+//! package verification at startup and per render, body limits, bounded
+//! problems and pathological renders.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
