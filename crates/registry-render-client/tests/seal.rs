@@ -322,6 +322,20 @@ async fn first_revision_hash_may_exclude_the_line_ending() {
     assert!(seal_with(200, body, None, None).await.is_ok());
 }
 
+/// The parent writes `\n` before its update, so a first revision that ends
+/// `%%EOF\r` is followed by `\r\n` in the sealed file, and its hash ends
+/// between the two.
+#[tokio::test]
+async fn first_revision_hash_may_end_at_a_lone_carriage_return() {
+    let first_revision = b"%PDF-1.7\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\r";
+    let mut body = sealed_body_for(&[&first_revision[..], b"\n"].concat(), "B-B");
+    body["documentDigest"] = json!(sha(first_revision));
+    let sealed = seal_with(200, body, None, None)
+        .await
+        .expect("a first revision that ends with a carriage return");
+    assert_eq!(sealed.pdf, [&first_revision[..], b"\n", UPDATE].concat());
+}
+
 /// A stream may hold `%%EOF` as data, as a JPEG comment does, any number of
 /// times before the end marker of the first revision.
 #[tokio::test]
