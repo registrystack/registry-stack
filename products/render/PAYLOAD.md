@@ -25,7 +25,12 @@ is the `dataSha256` the caller should store on the record.
                                        // sent one (validated)
   "issuedAt": "2026-09-16T10:32:00Z",  // the document's issuance claim;
                                        // also the world clock and PDF date
-  "document": { "id": "receipt", "version": 3 }
+  "document": { "id": "receipt", "version": 3 },
+  "signing": {                         // present only on the seal route,
+    "mode": "seal",                    // POST /v1/seal/{type}
+    "signerName": "Ministry of Licensing",
+    "testOnly": false
+  }
 }
 ```
 
@@ -60,6 +65,27 @@ Rules worth internalizing:
   the envelope or the PDF bytes.
 - **Data is inert.** Values are Typst values, never evaluated; a string
   that looks like code is just a string.
+- **`signing` means the file will be sealed.** Only the seal route adds
+  it; the render route, `compile` and every other CLI render never do, so
+  a template prints its seal block only on files that carry a seal. Read
+  it with `payload.at("signing", default: none)` so one template serves
+  both routes. `mode` is always `"seal"`. `signerName` is the seal
+  certificate's display name (its organization, else its common name)
+  and is absent when the certificate names neither. `testOnly` is `true`
+  when the runtime declares the seal `trust: test-only`; print a visible
+  test marking then, because a test seal is not an official document. The
+  member is part of the canonical envelope, so a sealed render's
+  `dataSha256` differs from a plain render of the same request. The
+  signature itself is added after the template runs, as an invisible
+  field: the template draws no signature appearance.
+
+  ```typst
+  #let signing = payload.at("signing", default: none)
+  #if signing != none [
+    Electronically sealed by #signing.at("signerName", default: "the issuing authority").
+    #if signing.testOnly [ TEST SEAL: not a valid official document. ]
+  ]
+  ```
 - **Paths are contained.** `image()`/`read()` resolve only exact keys in the
   immutable bundle snapshot (and the virtual `/assets/…` namespace); `..`
   and absolute paths are refused by the renderer's world, and bundle
