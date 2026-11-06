@@ -53,6 +53,15 @@ For a deployment, the institution must supply these prerequisites:
 
 - BReg exposes a reviewed `approved-reader` profile that reads the collections
   callers name in `collection`, and admits the token the exchange issues.
+- The `approved-reader` profile binds each row to the grant's subject. The
+  Casework task template maps a grant identity key to the source field that
+  names the record, `subjects: {record_id: <field>}`, and the profile's row
+  boundary compares the record with it,
+  `{field: id, claim: record_id, operator: equals}`. For a task-grant token,
+  BReg resolves row-boundary claims other than `sub` only from the grant's
+  signed `identity`, so this boundary is what ties the grant to one record.
+  Without it, the profile's ceiling applies to every row it reaches.
+  Coordinator does not compare the start's `recordId` with the grant.
 - The token endpoint registers the `task-agent` client. It issues that client a
   token for `urn:example:casework` with scope `casework:grants:assert`, and
   exchanges a Casework task assertion for a token for

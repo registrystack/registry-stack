@@ -452,6 +452,17 @@ These are maintained references, not claims that the tests ran in this note.
 - Subjects are compared exactly. When an identity provider changes a client's
   service-account subject, for example after the client is recreated, its
   starts are refused until the operator updates `subjects`.
+- In the reviewed-notice pattern, the workflow reads consent (`noticeAllowed`)
+  again just before the Messaging send, but that read is advisory at commit
+  time: consent revoked between the read and the send is not seen. Only the
+  source of record or Messaging's own policy can refuse at send, and Messaging
+  does not own consent to be contacted (`products/messaging/README.md`,
+  Product boundary).
+- In the same example, `applicationDigest` is computed by the trusted starter
+  over the bounded projection and passed to Casework as the review subject's
+  digest. The workflow checks only that the record's identifier and revision
+  still match the input, so the digest is an input trust assumption, not a
+  consent check.
 
 ## Rhai 1.27 dependency review
 
