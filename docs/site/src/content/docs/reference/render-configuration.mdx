@@ -57,6 +57,125 @@ another value, such as `audit.path` on `audit.destination`. `audit.rotateBytes` 
 {/* Evidence: crates/registry-platform-audit/src/writer.rs, DEFAULT_AUDIT_ROTATE_BYTES and
     DEFAULT_AUDIT_RETAIN_DAYS. */}
 
+## Seal documents
+
+The tables above list the `signing.seals.<id>` keys and the manifest's per-document `seal`. These
+rules are not in the tables.
+
+- Omit `signing` to leave sealing off. With it, at least one seal is required, and `serve` mounts
+  `POST /v1/seal/{type}`. Without it, that path is an unknown route and `/ready` has no `signing`
+  member.
+- `signing` needs `auth.oidc`. Each seal has exactly one of `timestampAuthority` (B-T) and
+  `withoutTimestamp: seal-stops-validating-when-certificate-expires` (B-B).
+- `timestampAuthority.url` is `https`; `http` is accepted only for `localhost`, `127.0.0.0/8`, and
+  `[::1]`. `attemptTimeoutMilliseconds` is 1000 to 60000 and defaults to 10000.
+- `certificateChainFile` is an absolute path with no `.` or `..` segment. The file is PEM, the
+  seal certificate first. `privateKeyRef` is a secret reference to one ES256, ES384, RS256, or
+  RS384 private JWK; EdDSA is refused.
+- `allowedClients` is a list of at least one named client. `unrestricted` and any item containing
+  `*` are refused. When `auth.oidc.allowedClients` lists clients, each seal client must be in it.
+- `trust: test-only` is the only value. It sets `signing.testOnly` in the template payload.
+- A document type's `seal` must name a seal in `signing.seals`. A package that names an unbound
+  seal is refused at `serve`; `check` reports it, and warns about a runtime seal no document type
+  names.
+- The seal is a certification signature (DocMDP permission 2) in an invisible field named
+  `RegistrySeal`. The space it reserves is the certificate chain, twice the seal certificate, and
+  2 KiB of structure and signature allowance, plus 16 KiB when timestamped. A chain that needs
+  more than 256 KiB is refused.
+
+### Runtime and check problem codes
+
+Serve and `check` report these as runtime problems at the position of the key.
+
+| Code | Meaning |
+|---|---|
+| `render.runtime.signing-requires-oidc` | `signing` is declared with the legacy API key. |
+| `render.runtime.no-seals` | `signing.seals` is empty. |
+| `render.runtime.relative-path` | `certificateChainFile` is relative or has a `.` or `..` segment. |
+| `render.runtime.seal-timestamp-undecided` | Neither `timestampAuthority` nor `withoutTimestamp` is declared. |
+| `render.runtime.seal-timestamp-conflict` | Both are declared. |
+| `render.runtime.insecure-timestamp-url` | The timestamp URL is `http` and not loopback. |
+| `render.runtime.seal-clients-not-listed` | `allowedClients` is missing, empty, or not a list. |
+| `render.runtime.seal-client-wildcard` | A client is `unrestricted` or contains a wildcard. |
+| `render.runtime.seal-client-not-admitted` | A seal client is not in `auth.oidc.allowedClients`. |
+| `render.runtime.seal-not-bound` | A document type names a seal `signing.seals` does not bind (error). |
+| `render.runtime.seal-unused` | A runtime seal is named by no document type (warning). |
+
+`check --environment` and `serve` read the chain file and report:
+
+| Code | Severity | Meaning |
+|---|---|---|
+| `render.runtime.seal-chain-unreadable` | error | The chain file cannot be read. |
+| `render.runtime.seal-chain-invalid` | error | The file is not a usable certificate chain. |
+| `render.runtime.seal-certificate-usage` | error | The seal certificate has neither the digitalSignature nor the nonRepudiation key usage. |
+| `render.runtime.seal-chain-too-large` | error | The chain exceeds the signature space a seal may reserve. |
+| `render.runtime.seal-certificate-expired` | warning | The certificate is expired; the seal is unavailable. |
+| `render.runtime.seal-certificate-not-yet-valid` | warning | The certificate is not yet valid; the seal is unavailable. |
+| `render.runtime.seal-certificate-expiring` | warning | The certificate expires within 30 days. |
+
+`serve` alone also reads the key and reports `render.runtime.seal-key-unreadable`,
+`render.runtime.seal-key-invalid`, `render.runtime.seal-key-unsupported`,
+`render.runtime.seal-key-mismatch` (the key is not the one the certificate certifies), and
+`render.runtime.seal-timestamp-client` (the timestamp client cannot be built from the URL).
+
+### The seal route
+
+`POST /v1/seal/{type}` takes the render route's request body and returns the document sealed. It
+requires the `render:seal` scope, which `render:render` does not imply, from a client the seal's
+`allowedClients` names. The legacy API key never seals. The signing time is the server's clock,
+truncated to seconds.
+
+The default answer is `application/pdf` with these headers:
+
+| Header | Value |
+|---|---|
+| `X-Registry-Document-Sha256` | SHA-256 of the first revision, the document Render rendered. |
+| `X-Registry-Signed-File-Sha256` | SHA-256 of the whole signed file. |
+| `X-Registry-Data-Sha256` | SHA-256 of the canonical request data. |
+| `X-Registry-Document-Version` | Document type and version. |
+| `X-Registry-Warning-Count` | Number of render warnings. |
+| `X-Registry-Seal-Id` | The seal id. |
+| `X-Registry-Seal-Level` | `b-t` or `b-b`. |
+| `X-Registry-Certificate-Sha256` | SHA-256 of the seal certificate. |
+| `X-Registry-Timestamp-Time` | The timestamp token's time; B-T only. |
+
+With `Accept: application/json` the body is `pdfBase64`, `documentSha256`, `signedFileSha256`,
+`dataSha256`, `documentVersion`, `warnings`, and `seal` (`id`, `level`, `certificateSha256`, and
+`timestampTime` for B-T). There is no `pdfSha256`. Because the payload carries the `signing`
+member, a sealed render's `dataSha256` differs from a plain render of the same request.
+
+The problems specific to this route, from a closed vocabulary shared with the render route:
+
+| Problem | HTTP | Exit code | Meaning |
+|---|---|---|---|
+| `forbidden` | 403 | 23 | The credential lacks `render:seal`, or is the legacy API key. |
+| `seal-client-not-allowed` | 403 | 30 | The verified client is not in the seal's `allowedClients`. |
+| `document-not-sealable` | 400 | 29 | The document type names no seal. |
+| `signing-unavailable` | 503 | 26 | The seal's key provider is not ready. |
+| `seal-certificate-invalid` | 503 | 27 | The seal certificate is expired, not yet valid, or cannot sign. |
+| `timestamp-failed` | 502 | 28 | The timestamp authority gave no usable token. No file is returned and no retry is made. |
+
+`/ready` adds `signing`, one member per seal: `{"status": "ready"}` or `{"status": "unavailable",
+"reason": ...}` with `certificate-expired`, `certificate-not-yet-valid`, or `provider-not-ready`.
+It never changes the status code.
+
+Each seal call adds `sealId` to its audit entries. The response entry adds `documentSha256`,
+`signedFileSha256`, `certificateSha256`, and, for B-T, `timestampTokenSha256`.
+
+The key tables above are generated from the runtime schema by
+`docs/site/scripts/generate-render-configuration.mjs`; this section is hand-written. A sealed
+PDF/A-1, A-2, or A-3 document is not verified.
+
+{/* Evidence: crates/registry-render/src/runtime.rs, SigningRuntime, SealRuntime, signing_findings
+    and seal_binding_findings;
+    crates/registry-render/src/seal.rs, SIGNATURE_ALLOWANCE, STRUCTURE_ALLOWANCE,
+    TIMESTAMP_TOKEN_ALLOWANCE, contents_capacity, check_chain and Seal::load;
+    crates/registry-render/src/pdf_signature.rs, MAX_CONTENTS_CAPACITY;
+    crates/registry-render/src/server.rs, seal_route, respond_sealed and ready;
+    crates/registry-render/src/problem.rs, ProblemKind, exit_code and http_status;
+    crates/registry-render/src/openapi.rs, OPENAPI_JSON;
+    crates/registry-render/src/audit.rs, RenderAuditEvent::for_seal. */}
+
 ## Check commands
 
 <ConfigurationFormatChecks product="render" />

@@ -23,7 +23,8 @@ supported family.
 ## Boundary
 
 Render is not: a document store (attachments live in the owning registry),
-an e-signature or seal, a credentials-issuance system (no keys, chips, or
+a qualified e-signature or seal service (see Sealing below for the optional
+seal it does apply), a credentials-issuance system (no keys, chips, or
 MRZ), an HTML converter, an imposition engine, or offline-branch
 synchronization. Printed QR verification belongs to the app that owns the
 record through an app-owned public check route and an Evidence-backed relying
@@ -33,6 +34,62 @@ mints nothing and does nothing at scan time.
 Version 1 has no batch or multi-document request, client crate, TLS
 termination, per-tenant rate limiting, metrics route, or hot reload or runtime
 bundle editing, and no document-type-specific behavior in production code.
+
+## Sealing
+
+Sealing is optional and off unless the runtime file declares `signing.seals`.
+With it, `POST /v1/seal/{type}` renders a document and returns it with a PAdES
+signature made with the institution's own key. A document type opts in by
+naming a seal in the bundle manifest (`seal: <id>`); the caller never chooses
+the seal.
+
+The boundary:
+
+- Render seals only what it just rendered from a verified package, never bytes
+  a caller supplies. There is no route that accepts a PDF to sign.
+- The private key stays in the serving (parent) process. The render worker
+  receives no key; it renders the first revision and writes an empty signature
+  field the parent fixed. The parent checks the field's shape by byte offsets
+  and checks the package hash, signs, optionally timestamps, and splices the
+  signature in.
+- The seal is a certification signature (DocMDP permission 2) in an invisible
+  field. A template can print a visible seal block from the payload's
+  `signing` member, which exists only on the seal route.
+- Sealing needs OIDC. The `render:seal` scope is separate from `render:render`,
+  and each seal names the clients allowed to use it. The legacy API key never
+  seals.
+- A seal is PAdES baseline B-T by default (an RFC 3161 timestamp from the
+  configured authority). B-B, with no timestamp, is a named choice that stops
+  validating when the certificate expires. A failing timestamp fails the
+  request; it never falls back to B-B.
+
+An institution may sign elsewhere instead, with a tool of its own, as long as
+the tool saves incrementally, so the signed file starts with the exact bytes
+Render produced. One check, with `render.pdf` the Render output and
+`signed.pdf` the result:
+
+```sh
+head -c "$(wc -c < render.pdf)" signed.pdf | cmp - render.pdf && echo "signed file starts with the Render bytes"
+```
+
+What sealing does not do:
+
+- It makes no qualification claim. Whether a seal is advanced or qualified
+  under eIDAS, or recognised under any other scheme, depends on the
+  certificate, its issuer and the key custody, not on this encoding. Render
+  claims PAdES baseline B-B and B-T conformance of the signature it writes.
+- It embeds no revocation data and no document security store, so there is no
+  B-LT or B-LTA level.
+- It does not support external signatures yet: the key is a local JWK
+  reached through a secret reference. Local key files suit development and
+  pilots.
+- It does not pin the timestamp authority's identity or decide trust. The
+  authority is reached over TLS with the host's roots, and validators decide
+  whether the seal certificate and the timestamp authority are trusted.
+- Sealing a document type that renders to PDF/A-1, A-2 or A-3 is not
+  verified. The signature field is written and tested against PDF/A-4 output
+  and the default standard only; treat other standards as unverified until a
+  check proves them.
 
 ## Runtime anatomy
 

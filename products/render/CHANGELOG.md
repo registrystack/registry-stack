@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- Add optional PAdES document sealing. A document type names a `seal` in its
+  manifest, and a `signing.seals` block in the runtime file binds each seal to
+  a private key reference, a certificate chain file, a timestamp policy
+  (`timestampAuthority` for baseline B-T, or the named `withoutTimestamp`
+  choice for B-B) and the OIDC clients allowed to use it. With seals, `serve`
+  adds `POST /v1/seal/{type}`, which needs the new `render:seal` scope (not
+  implied by `render:render`; the legacy API key never seals) and returns the
+  sealed PDF with `documentSha256` over the first revision and
+  `signedFileSha256` over the whole file. A failing timestamp fails the request
+  and never falls back to B-B. `/ready` adds a `signing` member per seal and
+  stays ready while a seal is unavailable. Audit entries add the value-free
+  `sealId`, `documentSha256`, `signedFileSha256`, `certificateSha256` and
+  `timestampTokenSha256`. The payload gains a `signing` member on the seal route
+  only. `check --environment` reads each seal's certificate chain. New problem
+  kinds with exit codes: `signing-unavailable` (26), `seal-certificate-invalid`
+  (27), `timestamp-failed` (28), `document-not-sealable` (29) and
+  `seal-client-not-allowed` (30). Render claims PAdES baseline B-B and B-T
+  conformance and no eIDAS qualification.
 - Every supervised render worker (`serve` and `compile`) starts from an empty
   environment, keeping only the dynamic loader's library search paths, so a
   credential in the parent's environment is not passed to the process that runs

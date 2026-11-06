@@ -20,6 +20,9 @@ with the same rendering guarantees:
 - **Service** — `registry-render serve`: one POST endpoint (`/v1/render/{type}`),
   resource-token or legacy API-key auth, supervised workers, and value-free audit entries
   written before every render and before every response.
+- **Seal** (optional): with a `signing` block in the runtime file, `serve`
+  adds `POST /v1/seal/{type}`, which returns the rendered document with a PAdES
+  signature (see [Seal documents](#seal-documents)).
 - **Library** — `registry_render::render(bundle, document, request)` for
   embedding.
 
@@ -92,6 +95,11 @@ exits 101):
 | 23 | `forbidden` | verified credential lacks `render:render` (serve, HTTP 403) |
 | 24 | `authentication-unavailable` | verifier cannot reach a verdict (serve, HTTP 503) |
 | 25 | `not-found` | route is not exposed by the adapter (HTTP 404) |
+| 26 | `signing-unavailable` | the seal's key provider cannot sign now (serve, HTTP 503) |
+| 27 | `seal-certificate-invalid` | the seal certificate is unusable, or outside its validity (serve, HTTP 503) |
+| 28 | `timestamp-failed` | the timestamp authority gave no usable token; never falls back to B-B (serve, HTTP 502) |
+| 29 | `document-not-sealable` | the document type names no seal (serve, HTTP 400) |
+| 30 | `seal-client-not-allowed` | the verified client is not in the seal's `allowedClients` (serve, HTTP 403) |
 
 ## Authenticate the serving adapter
 
@@ -134,6 +142,55 @@ JSON PDF representation. Their source is ready for local candidates only; Render
 release-client hold remains in place. A lost response does not establish that a
 render failed. Clients expose transport uncertainty and perform no automatic retry;
 retaining identical inputs preserves byte determinism when the caller repeats it.
+
+## Seal documents
+
+Sealing is optional and off unless the runtime file has a `signing` block.
+A document type opts in with `seal: <id>` in `manifest.yaml`, and the runtime
+file binds each id to key material:
+
+```yaml
+signing:
+  seals:
+    ministry:
+      privateKeyRef: secret:file/seal.jwk
+      certificateChainFile: /etc/registry-render/seal/chain.pem
+      timestampAuthority:
+        url: https://tsa.example.org/tsr
+      allowedClients: [records-service]
+```
+
+- `privateKeyRef` is a secret reference to one ES256, ES384, RS256 or RS384
+  private JWK. `certificateChainFile` is an absolute PEM path, the seal
+  certificate first, then each issuer.
+- `timestampAuthority` (an RFC 3161 authority; `https`, or `http` on loopback
+  only; `attemptTimeoutMilliseconds` 1000 to 60000, default 10000) makes the
+  seal PAdES baseline B-T. `withoutTimestamp:
+  seal-stops-validating-when-certificate-expires` makes it B-B and states the
+  consequence. Declare exactly one.
+- `allowedClients` is required, lists named OIDC clients, and refuses
+  `unrestricted` and wildcards. Signing needs `auth.oidc`; the legacy API key
+  never seals. `trust: test-only` marks a test certificate so the template can
+  print the seal as a test seal.
+- The route needs the `render:seal` scope, which `render:render` does not
+  imply. It returns the sealed PDF with `X-Registry-Document-Sha256` (the
+  first revision, Render's rendered document) and `X-Registry-Signed-File-Sha256`
+  (the whole file), or JSON with `pdfBase64`, `documentSha256`,
+  `signedFileSha256` and a `seal` object. There is no `pdfSha256`.
+- `/ready` adds a `signing` member per seal and stays ready while a seal is
+  unavailable. Audit entries add `sealId`, `documentSha256`,
+  `signedFileSha256`, `certificateSha256` and `timestampTokenSha256`, never a
+  subject.
+- The seal is a certification signature (DocMDP permission 2) in an invisible
+  field. Templates read the payload's `signing` member (see
+  [PAYLOAD.md](PAYLOAD.md)) to print a visible seal block.
+- `registry-render check --environment` reads each chain file and reports
+  errors and warnings, including a certificate that expires within 30 days.
+  Whether the key matches the certificate is checked when `serve` starts.
+
+The boundary, the residual risks and what sealing does not claim are in
+[CONCEPT.md](CONCEPT.md#sealing) and [SECURITY-MATRIX.md](SECURITY-MATRIX.md)
+(rows 24-29). Render makes no eIDAS qualification claim.
 
 ## Linux worker execution on Apple Silicon
 
