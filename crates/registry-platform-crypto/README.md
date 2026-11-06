@@ -79,7 +79,10 @@ The opt-in `cms-signing` feature, in `document_signature`, provides the CMS,
 certificate and RFC 3161 pieces a product needs to seal a document as a PAdES
 baseline signature (ETSI EN 319 142-1, levels B-B and B-T). The product owns
 the document format: for a PDF it reserves the signature dictionary, computes
-the byte ranges the signature covers, and embeds the returned CMS.
+the byte ranges the signature covers, and embeds the returned CMS. The
+pyHanko, EU DSS and veraPDF runs on sealed files Registry Render answered,
+and what they do not show, are recorded in
+[`products/render/EVIDENCE.md`](../../products/render/EVIDENCE.md).
 
 ```rust
 use registry_platform_crypto::{

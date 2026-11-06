@@ -37,8 +37,9 @@
   sealed PDF/A-1b, A-2b, A-4 and PDF/UA-1 files only. A seal key `serve` cannot read is refused with the secret provider's reason, and its text is erased once parsed. New problem
   kinds with exit codes: `signing-unavailable` (26), `seal-certificate-invalid`
   (27), `timestamp-failed` (28), `document-not-sealable` (29) and
-  `seal-client-not-allowed` (30). Render claims PAdES baseline B-B and B-T
-  conformance and no eIDAS qualification.
+  `seal-client-not-allowed` (30). Render writes PAdES baseline B-B and B-T
+  signatures; `EVIDENCE.md` records the pyHanko, EU DSS and veraPDF runs on
+  sealed files `serve` answered. Render makes no eIDAS qualification claim.
 - Every supervised render worker (`serve` and `compile`) starts from an empty
   environment, keeping only the dynamic loader's library search paths, so a
   credential in the parent's environment is not passed to the process that runs

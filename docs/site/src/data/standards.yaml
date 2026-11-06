@@ -526,3 +526,34 @@
       url: https://github.com/registrystack/registry-stack/blob/v0.20.0/crates/registry-platform-sdjwt/src/lib.rs
   last_checked: 2026-06-13
   notes: The OID4VCI supporting service accepts a self-contained did:jwk#0 proof-key reference, decodes it locally as an ES256 P-256 public key, and never performs remote resolution. Platform retains shared DID and JWK helpers, while the pinned Notary route is historical. No current service publishes a DID document or operates a general DID resolver, and no DID Core conformance class is claimed.
+- id: pades
+  name: PDF Advanced Electronic Signatures (PAdES)
+  standards_body: ETSI
+  official_url: https://www.etsi.org/deliver/etsi_en/319100_319199/31914201/
+  version_or_profile: ETSI EN 319 142-1 baseline levels B-B and B-T (no edition asserted)
+  status: used
+  claim_level: emits
+  adoption_mode: profiled
+  used_by:
+    - registry-render
+    - registry-platform
+  surfaces:
+    - sealed PDF from the Render seal route
+    - CMS signature and RFC 3161 signature timestamp
+  evidence_docs:
+    - label: Deploy Registry Render, Seal documents
+      url: /operate/registry-render/
+    - label: Registry Render configuration reference
+      url: /reference/render-configuration/
+  last_checked: 2026-11-06
+  notes: >-
+    Registry Render seals a document it has just rendered as a PAdES baseline
+    B-B or B-T signature, with CMS and timestamp pieces from
+    `registry-platform-crypto`. The validator runs are recorded in
+    `products/render/EVIDENCE.md`: pyHanko validated sealed files `serve`
+    answered, EU DSS reported the PAdES-BASELINE-B and PAdES-BASELINE-T
+    formats with an indeterminate indication because the test chain has no
+    revocation data or trusted list, and veraPDF passed sealed PDF/A-1b,
+    PDF/A-2b, PDF/A-4 and PDF/UA-1 files. Render embeds no revocation data
+    (no B-LT or B-LTA level), no ETSI conformance checker was run, and no
+    eIDAS qualification is claimed.

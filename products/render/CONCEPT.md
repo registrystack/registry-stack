@@ -77,7 +77,9 @@ What sealing does not do:
 - It makes no qualification claim. Whether a seal is advanced or qualified
   under eIDAS, or recognised under any other scheme, depends on the
   certificate, its issuer and the key custody, not on this encoding. Render
-  claims PAdES baseline B-B and B-T conformance of the signature it writes.
+  writes the signature to the PAdES baseline B-B and B-T levels;
+  [EVIDENCE.md](EVIDENCE.md) records the pyHanko, EU DSS and veraPDF runs on
+  sealed files `serve` answered, and what those runs do not show.
 - It embeds no revocation data and no document security store, so there is no
   B-LT or B-LTA level.
 - It does not support external signatures yet: the key is a local JWK
