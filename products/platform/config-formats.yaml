@@ -2389,7 +2389,17 @@ formats:
         whenOmitted: refused
       - pointer: /package/expectedDigest
         whenOmitted: open
-    restrictingMembers: []
+      - pointer: /signing/seals/*/allowedClients
+        whenOmitted: refused
+      - pointer: /signing/seals/*/privateKeyRef
+        whenOmitted: refused
+      - pointer: /signing/seals/*/timestampAuthority
+        whenOmitted: refused
+      - pointer: /signing/seals/*/withoutTimestamp
+        whenOmitted: closed
+      - pointer: /signing/seals/*/trust
+        whenOmitted: open
+    restrictingMembers: [/signing/seals/*/allowedClients]
   - id: render/data-schema
     product: render
     title: Render document data schema
