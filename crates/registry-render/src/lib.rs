@@ -42,6 +42,7 @@ pub mod render;
 pub mod runtime;
 #[cfg(feature = "schema")]
 pub mod schema;
+pub mod seal;
 pub mod server;
 pub mod worker;
 pub mod world;

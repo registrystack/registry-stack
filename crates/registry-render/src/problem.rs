@@ -60,6 +60,19 @@ pub enum ProblemKind {
     RuntimeInvalid,
     /// An internal invariant broke; never carries data.
     Internal,
+    /// The seal's signer cannot sign now: its key provider is not ready
+    /// (HTTP 503). Plain rendering is unaffected.
+    SigningUnavailable,
+    /// The seal's certificate cannot be used: unreadable, malformed, without
+    /// a signing key usage, not matching its key, or outside its validity.
+    SealCertificateInvalid,
+    /// The timestamp authority did not return a usable token for a B-T seal
+    /// (HTTP 502). Render never falls back to an untimestamped seal.
+    TimestampFailed,
+    /// The document type declares no seal, so it cannot be sealed.
+    DocumentNotSealable,
+    /// The verified client is not in the seal's `allowedClients` (HTTP 403).
+    SealClientNotAllowed,
 }
 
 impl ProblemKind {
@@ -91,6 +104,11 @@ impl ProblemKind {
             Self::AuditFailed => 19,
             Self::RuntimeInvalid => 20,
             Self::Internal => 21,
+            Self::SigningUnavailable => 26,
+            Self::SealCertificateInvalid => 27,
+            Self::TimestampFailed => 28,
+            Self::DocumentNotSealable => 29,
+            Self::SealClientNotAllowed => 30,
         }
     }
 
@@ -121,6 +139,11 @@ impl ProblemKind {
             Self::AuditFailed => "render.audit-failed",
             Self::RuntimeInvalid => "render.runtime-invalid",
             Self::Internal => "render.internal",
+            Self::SigningUnavailable => "render.signing-unavailable",
+            Self::SealCertificateInvalid => "render.seal-certificate-invalid",
+            Self::TimestampFailed => "render.timestamp-failed",
+            Self::DocumentNotSealable => "render.document-not-sealable",
+            Self::SealClientNotAllowed => "render.seal-client-not-allowed",
         }
     }
 
@@ -136,17 +159,22 @@ impl ProblemKind {
             | Self::FontInvalid
             | Self::DataInvalid
             | Self::AssetInvalid
-            | Self::IssuedAtMissing => 400,
+            | Self::IssuedAtMissing
+            | Self::DocumentNotSealable => 400,
             Self::CompileFailed | Self::StrictWarnings | Self::OutputTooLarge => 422,
             Self::RenderTimeout => 504,
             Self::RenderPanicked | Self::Internal => 500,
             Self::Unauthorized => 401,
-            Self::Forbidden => 403,
+            Self::Forbidden | Self::SealClientNotAllowed => 403,
             Self::AuthenticationUnavailable => 503,
             Self::NotFound => 404,
             Self::BodyTooLarge => 413,
             Self::RateLimited => 429,
-            Self::AuditFailed | Self::RuntimeInvalid => 503,
+            Self::AuditFailed
+            | Self::RuntimeInvalid
+            | Self::SigningUnavailable
+            | Self::SealCertificateInvalid => 503,
+            Self::TimestampFailed => 502,
         }
     }
 
@@ -178,6 +206,11 @@ impl ProblemKind {
             Self::AuditFailed => "audit-failed",
             Self::RuntimeInvalid => "runtime-invalid",
             Self::Internal => "internal",
+            Self::SigningUnavailable => "signing-unavailable",
+            Self::SealCertificateInvalid => "seal-certificate-invalid",
+            Self::TimestampFailed => "timestamp-failed",
+            Self::DocumentNotSealable => "document-not-sealable",
+            Self::SealClientNotAllowed => "seal-client-not-allowed",
         }
     }
 }
@@ -197,6 +230,11 @@ pub struct RenderProblem {
     /// was refused (CFG-DIAG-1). The detail is the one sentence Render puts
     /// before them.
     pub diagnostics: Vec<Diagnostic>,
+    /// Fixed, value-free text an HTTP caller reads in place of the kind's
+    /// default guidance, when one kind covers several failing pieces (the
+    /// timestamp authority unreachable or refusing, say). The `detail` above
+    /// stays the operator's text and never reaches the caller.
+    pub public_detail: Option<&'static str>,
 }
 
 impl RenderProblem {
@@ -207,7 +245,13 @@ impl RenderProblem {
             pointers: Vec::new(),
             locations: Vec::new(),
             diagnostics: Vec::new(),
+            public_detail: None,
         }
+    }
+
+    pub fn with_public_detail(mut self, detail: &'static str) -> Self {
+        self.public_detail = Some(detail);
+        self
     }
 
     pub fn with_pointers(mut self, pointers: Vec<String>) -> Self {
@@ -287,6 +331,11 @@ mod tests {
             ProblemKind::AuditFailed,
             ProblemKind::RuntimeInvalid,
             ProblemKind::Internal,
+            ProblemKind::SigningUnavailable,
+            ProblemKind::SealCertificateInvalid,
+            ProblemKind::TimestampFailed,
+            ProblemKind::DocumentNotSealable,
+            ProblemKind::SealClientNotAllowed,
         ];
         let slugs: Vec<&str> = kinds.iter().map(|k| k.slug()).collect();
         let mut sorted = slugs.clone();
@@ -297,5 +346,60 @@ mod tests {
         codes.sort_unstable();
         codes.dedup();
         assert_eq!(codes.len(), kinds.len(), "exit codes must be unique");
+    }
+
+    #[test]
+    fn seal_kinds_name_their_status_type_and_exit_code() {
+        for (kind, status, slug, exit) in [
+            (
+                ProblemKind::SigningUnavailable,
+                503,
+                "signing-unavailable",
+                26,
+            ),
+            (
+                ProblemKind::SealCertificateInvalid,
+                503,
+                "seal-certificate-invalid",
+                27,
+            ),
+            (ProblemKind::TimestampFailed, 502, "timestamp-failed", 28),
+            (
+                ProblemKind::DocumentNotSealable,
+                400,
+                "document-not-sealable",
+                29,
+            ),
+            (
+                ProblemKind::SealClientNotAllowed,
+                403,
+                "seal-client-not-allowed",
+                30,
+            ),
+        ] {
+            assert_eq!(kind.http_status(), status, "{kind:?}");
+            assert_eq!(kind.slug(), slug);
+            assert_eq!(kind.http_code(), format!("render.{slug}"));
+            assert_eq!(kind.exit_code(), exit);
+            assert_eq!(
+                ProblemKind::from_slug(slug),
+                ProblemKind::Internal,
+                "the worker holds no signer, so a worker naming a signing failure is an internal fault"
+            );
+        }
+    }
+
+    #[test]
+    fn a_public_detail_names_the_failing_piece_and_nothing_else() {
+        let problem = RenderProblem::new(ProblemKind::TimestampFailed, "operator text")
+            .with_public_detail("The timestamp authority could not be reached; retry later.");
+        assert_eq!(
+            problem.public_detail,
+            Some("The timestamp authority could not be reached; retry later.")
+        );
+        assert_eq!(
+            RenderProblem::new(ProblemKind::Internal, "x").public_detail,
+            None
+        );
     }
 }

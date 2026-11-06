@@ -1,0 +1,16 @@
+# A test bundle for the seal route: `notice` is issued under the seal
+# `ministry` and prints its seal block only when the payload carries the
+# `signing` member; `letter` declares no seal.
+apiVersion: id.registrystack.org/formats/render/bundle/v1alpha1
+kind: RenderBundle
+bundleVersion: 1
+documents:
+  - id: notice
+    version: 2
+    entryFile: templates/notice.typ
+    schemaFile: schemas/notice.schema.json
+    seal: ministry
+  - id: letter
+    version: 1
+    entryFile: templates/notice.typ
+    schemaFile: schemas/notice.schema.json
