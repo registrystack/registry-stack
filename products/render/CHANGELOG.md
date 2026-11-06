@@ -38,6 +38,9 @@
   credential in the parent's environment is not passed to the process that runs
   template code. Worker tuning variables such as `RAYON_NUM_THREADS` or
   `MALLOC_ARENA_MAX` no longer reach the worker either.
+- The default HTTP problem detail reads "The request was refused; ..." in
+  place of "The render request was refused; ...", since the seal route
+  answers it too. The problem codes are unchanged.
 - The render timeout also bounds a worker's exit after it answers: a worker
   that does not exit, or leaves a process holding its standard error open, is
   killed at the deadline with a warning, and its answer is kept, so it no
