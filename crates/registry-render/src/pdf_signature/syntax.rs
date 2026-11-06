@@ -96,10 +96,9 @@ pub(super) fn dict_entries(
     at: usize,
 ) -> Result<(Vec<Entry>, usize), PdfSignatureError> {
     let (entries, end) = dict_at(bytes, at, 0)?;
-    for (index, entry) in entries.iter().enumerate() {
-        if entries[..index].iter().any(|seen| seen.key == entry.key) {
-            return Err(malformed("a dictionary repeats a key"));
-        }
+    let mut seen = std::collections::HashSet::with_capacity(entries.len());
+    if !entries.iter().all(|entry| seen.insert(entry.key.as_slice())) {
+        return Err(malformed("a dictionary repeats a key"));
     }
     Ok((entries, end))
 }
@@ -161,8 +160,11 @@ fn name_at(bytes: &[u8], at: usize) -> Result<(Vec<u8>, usize), PdfSignatureErro
     let mut index = 0;
     while index < raw.len() {
         if raw[index] == b'#' {
+            // Exactly two hexadecimal digits (ISO 32000-2 7.3.5); a sign
+            // that `from_str_radix` would accept is not one.
             let pair = raw
                 .get(index + 1..index + 3)
+                .filter(|pair| pair.iter().all(u8::is_ascii_hexdigit))
                 .and_then(|pair| std::str::from_utf8(pair).ok())
                 .and_then(|pair| u8::from_str_radix(pair, 16).ok())
                 .ok_or(malformed("a name has a broken # escape"))?;
@@ -648,6 +650,8 @@ mod tests {
             b"<</A 1.2.3>>",
             b"<</A bogus>>",
             b"<</A /B#4>>",
+            b"<</A /B#+F>>",
+            b"<</#+F 1>>",
             b"<<(key) 1>>",
             b"<</A 1/A 2>>",
             b"<</A )>>",
@@ -666,6 +670,30 @@ mod tests {
         deep.extend(std::iter::repeat_n(b']', 64));
         deep.extend_from_slice(b">>");
         assert!(dict_entries(&deep, 0).is_err());
+    }
+
+    /// A repeated key is found in one pass: a dictionary with many keys
+    /// costs time in proportion to its keys, not their square.
+    #[test]
+    fn a_wide_dictionary_is_checked_for_repeated_keys_in_linear_time() {
+        let keys = 200_000;
+        let mut wide = b"<<".to_vec();
+        for key in 0..keys {
+            wide.extend_from_slice(format!("/K{key} 1").as_bytes());
+        }
+        let unique_end = wide.len();
+        wide.extend_from_slice(b">>");
+        let started = std::time::Instant::now();
+        let (entries, _) = dict_entries(&wide, 0).expect("distinct keys");
+        assert_eq!(entries.len(), keys);
+        let mut repeated = wide[..unique_end].to_vec();
+        repeated.extend_from_slice(b"/K0 2>>");
+        assert!(dict_entries(&repeated, 0).is_err(), "the repeat is found");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "two passes over {keys} keys took {:?}",
+            started.elapsed()
+        );
     }
 
     fn minimal_pdf(trailer_extra: &str) -> Vec<u8> {
