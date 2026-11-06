@@ -127,6 +127,10 @@ struct CtlReport<'a> {
     bundle: Option<&'a BundleSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     audit: Option<AuditSummary>,
+    /// `not-read` when the runtime declares seals and the check ran without
+    /// `--environment`, so no chain file was read; absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    seal_chains: Option<&'static str>,
     diagnostics: serde_json::Value,
 }
 
@@ -153,8 +157,9 @@ pub fn run(request: &CheckRequest<'_>, stdout: &mut dyn Write, stderr: &mut dyn 
         manifest = checked.manifest;
     }
     let mut audit = None;
+    let mut seal_chains_not_read = false;
     if let Some(path) = request.runtime {
-        let (mut checked, missing, seal_capacities) = check_runtime_file(
+        let (mut checked, missing, seal_capacities, chains_not_read) = check_runtime_file(
             path,
             request.environment,
             request.require_audit_under,
@@ -165,6 +170,7 @@ pub fn run(request: &CheckRequest<'_>, stdout: &mut dyn Write, stderr: &mut dyn 
         }
         files += 1;
         unavailable |= missing;
+        seal_chains_not_read = chains_not_read;
         let proven = !missing
             && !checked
                 .iter()
@@ -189,6 +195,11 @@ pub fn run(request: &CheckRequest<'_>, stdout: &mut dyn Write, stderr: &mut dyn 
     } else {
         0
     };
+    let chains_note = if seal_chains_not_read {
+        "seal chains not read: pass --environment to check them\n"
+    } else {
+        ""
+    };
     match request.format {
         OutputFormat::Json => {
             let document = CtlReport {
@@ -206,6 +217,7 @@ pub fn run(request: &CheckRequest<'_>, stdout: &mut dyn Write, stderr: &mut dyn 
                 warnings: report.warning_count(),
                 bundle: summary.as_ref().map(|(_, summary)| summary),
                 audit,
+                seal_chains: seal_chains_not_read.then_some("not-read"),
                 diagnostics: report.to_json_value(),
             };
             let written = serde_json::to_writer_pretty(&mut *stdout, &document)
@@ -227,6 +239,7 @@ pub fn run(request: &CheckRequest<'_>, stdout: &mut dyn Write, stderr: &mut dyn 
                 ));
             }
             text.push_str(&report.render_human());
+            text.push_str(chains_note);
             if stdout.write_all(text.as_bytes()).is_err() {
                 return OPERATIONAL_FAILURE_EXIT;
             }
@@ -237,7 +250,7 @@ pub fn run(request: &CheckRequest<'_>, stdout: &mut dyn Write, stderr: &mut dyn 
             } else {
                 "registry-render check refused the input."
             };
-            let _ = write!(stderr, "{sentence}\n{}", report.render_human());
+            let _ = write!(stderr, "{sentence}\n{}{chains_note}", report.render_human());
         }
     }
     exit
@@ -642,14 +655,15 @@ fn unsealable_members(
 
 /// Check the runtime file at `path` as given: the loader needs an absolute,
 /// lexically normal path, and every diagnostic names the file as given.
-/// Returns the findings, whether the file could not be read at all, and the
-/// signature space each seal whose chain was read reserves.
+/// Returns the findings, whether the file could not be read at all, the
+/// signature space each seal whose chain was read reserves, and whether the
+/// file declares seals whose chains were not read.
 fn check_runtime_file(
     path: &Path,
     environment: bool,
     audit_root: Option<&Path>,
     manifest: Option<&Manifest>,
-) -> (Vec<Diagnostic>, bool, BTreeMap<String, usize>) {
+) -> (Vec<Diagnostic>, bool, BTreeMap<String, usize>, bool) {
     let given = path.display().to_string();
     let Some(absolute) = absolute_lexical(path) else {
         let mut diagnostic = Diagnostic::error(
@@ -663,7 +677,7 @@ fn check_runtime_file(
             line: None,
             column: None,
         });
-        return (vec![diagnostic], true, BTreeMap::new());
+        return (vec![diagnostic], true, BTreeMap::new(), false);
     };
     let checked =
         crate::runtime::check_runtime_with_bundle(&absolute, environment, audit_root, manifest);
@@ -685,7 +699,12 @@ fn check_runtime_file(
             diagnostic
         })
         .collect();
-    (diagnostics, checked.unavailable, checked.seal_capacities)
+    (
+        diagnostics,
+        checked.unavailable,
+        checked.seal_capacities,
+        checked.seal_chains_not_read,
+    )
 }
 
 /// `path` made absolute against the working directory, with `.` and `..`

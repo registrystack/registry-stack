@@ -157,16 +157,32 @@ async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
     // render could write a nonconformant file.
     let seals = crate::seal::load(&runtime)?;
     crate::seal::refuse_unsealable(&bundle.manifest, &seals)?;
-    for id in seals
-        .iter()
-        .filter(|(_, seal)| seal.is_test_only())
-        .map(|(id, _)| id)
-    {
-        tracing::warn!(
-            target: "registry_render::seal",
-            seal_id = %id,
-            "test-only seal: its documents are not official"
-        );
+    // Plain rendering starts whatever a seal's state; these lines are where
+    // an operator learns a seal cannot sign, or soon cannot, without polling
+    // `/ready`. Each names the seal id and a value-free reason only.
+    let now = time::OffsetDateTime::now_utc();
+    for (id, seal) in &seals {
+        if seal.is_test_only() {
+            tracing::warn!(
+                target: "registry_render::seal",
+                seal_id = %id,
+                "test-only seal: its documents are not official"
+            );
+        }
+        match seal.availability(now) {
+            Err(unavailable) => tracing::warn!(
+                target: "registry_render::seal",
+                seal_id = %id,
+                reason = unavailable.reason(),
+                "seal unavailable"
+            ),
+            Ok(()) if seal.expires_soon(now) => tracing::warn!(
+                target: "registry_render::seal",
+                seal_id = %id,
+                "seal certificate expiring"
+            ),
+            Ok(()) => {}
+        }
     }
     let audit = RenderAudit::open(runtime.audit.destination()?).await?;
     let service = Arc::new(Service {

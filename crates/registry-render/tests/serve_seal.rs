@@ -958,6 +958,61 @@ fn render_stays_ready_while_an_expired_seal_is_unavailable() {
     assert_eq!(tsa.requests.load(Ordering::SeqCst), 0);
 }
 
+/// The startup warnings `serve` logs about seal `ministry`, by message.
+fn seal_startup_warnings(server: &Server, message: &str) -> Vec<serde_json::Value> {
+    server
+        .log()
+        .into_iter()
+        .filter(|line| {
+            line["level"] == "WARN"
+                && line["fields"]["seal_id"] == "ministry"
+                && line["fields"]["message"] == message
+        })
+        .collect()
+}
+
+#[test]
+fn serve_warns_at_startup_about_a_seal_that_cannot_sign_or_expires_soon() {
+    let pki = seal_pki();
+    let deployment_with = |not_before_days: i64, not_after_days: i64| {
+        let seal = pki
+            .issue_seal_with(SigningAlgorithm::Es256, |params| {
+                let now = time::OffsetDateTime::now_utc();
+                params.not_before = now + time::Duration::days(not_before_days);
+                params.not_after = now + time::Duration::days(not_after_days);
+            })
+            .unwrap();
+        deployment(Some(SealSpec {
+            tsa_url: None,
+            seal,
+            key_of: None,
+        }))
+    };
+    for (fixture, reason) in [
+        (deployment_with(-30, -1), "certificate-expired"),
+        (deployment_with(2, 400), "certificate-not-yet-valid"),
+    ] {
+        let server = start_server(&fixture);
+        let unavailable = seal_startup_warnings(&server, "seal unavailable");
+        assert_eq!(unavailable.len(), 1, "{reason}");
+        assert_eq!(unavailable[0]["fields"]["reason"], reason);
+        assert!(seal_startup_warnings(&server, "seal certificate expiring").is_empty());
+    }
+
+    let expiring = deployment_with(-30, 10);
+    let server = start_server(&expiring);
+    assert_eq!(
+        seal_startup_warnings(&server, "seal certificate expiring").len(),
+        1
+    );
+    assert!(seal_startup_warnings(&server, "seal unavailable").is_empty());
+
+    let healthy = deployment_with(-1, 400);
+    let server = start_server(&healthy);
+    assert!(seal_startup_warnings(&server, "seal unavailable").is_empty());
+    assert!(seal_startup_warnings(&server, "seal certificate expiring").is_empty());
+}
+
 #[test]
 fn each_authorization_refusal_has_its_own_problem() {
     let tsa = start_tsa(TsaMode::Grant);
