@@ -376,6 +376,83 @@ warning from `insecure_http_startup_diagnostic`.
   declare the key endpoint as `jwksSource.uri`, or serve it from the issuer's
   origin.
 
+## Start input and subject binding
+
+### Threat
+
+A run's start input names the records, subjects and recipients the workflow
+reads, changes or notifies, and every downstream call runs under the
+connection's own service credential or a task grant. Destinations check that
+service identity, not the person a run concerns. If a token issued to a person,
+or to a client acting for a person, could start a run, that holder could name
+another person's record ID and the workflow would act on it with Coordinator's
+authority: a confused deputy. Before this binding, admission accepted any token
+from a listed client that carried the required scopes, whatever its `sub`.
+
+### Enforcement and defaults
+
+Every caller policy must list `subjects`: one to sixty-four distinct exact
+token `sub` values, each at most 512 bytes without control characters, the
+same bound admission applies to a token's `sub`. A producer policy lists its
+client's own service-account subject; an operator policy lists the named people
+who operate the deployment. Omitting `subjects` is refused, and the list has
+no unrestricted form.
+
+`Authenticator::authenticate` in `crates/registry-coordinator/src/access.rs`
+verifies the token, then refuses any token carrying an `act` claim, then
+admits it only when its matched client's policy lists its `sub` and its
+required scopes are present. Both refusals are `access.denied`, which the API
+answers as 403 `operation.not-authorized` before any run, key or audit row is
+written. `AccessConfig::findings` refuses an empty, oversized or out-of-bound
+`subjects` list when the runtime file is loaded; the shared reader refuses a
+missing list, a repeated subject and control characters.
+
+A token exchanged without an actor keeps the exchanging client's own service
+subject and carries no `act`, so a task-exchanged token that names a listed
+subject is still admitted when its client's assertion issuer is declared. A
+delegated exchange puts the person in `sub` and the client in `act`, and is
+refused.
+
+The verified `iss`, `sub` and client remain the run owner and admission
+idempotency identity. Coordinator does not compare start input with the
+caller's `sub`, and no mapping can reference the caller.
+
+### Tests
+
+- `crates/registry-coordinator/tests/deployment_surface.rs`:
+  `a_policy_admits_only_the_subjects_it_lists` covers producer and operator
+  policies, exact case and another policy's subject;
+  `a_token_carrying_act_is_refused_and_an_exchange_without_one_is_not` mints a
+  real delegated exchange and an actor-less exchange from the test
+  authorization server.
+- `crates/registry-coordinator/tests/deployment_postgres.rs`:
+  `a_listed_client_token_for_an_unlisted_subject_is_refused_at_start_and_creates_no_run`
+  proves the 403 at `POST /v1/runs` and the empty run table, and pins an
+  operator policy to its named operators;
+  `start_input_is_not_bound_to_the_caller_subject` pins that two admitted
+  callers may start runs naming the same application.
+- `crates/registry-coordinator/tests/runtime_config.rs`:
+  `caller_policies_list_the_exact_subjects_they_admit` covers acceptance of
+  UUID and email subjects and refusal of a missing, empty, oversized,
+  duplicated, overlong or control-character list, without echoing values.
+
+These are maintained references, not claims that the tests ran in this note.
+
+### Accepted residuals
+
+- A trusted backend can still pass an identifier it has not authorized for the
+  person it acts for. Coordinator cannot tell, because the input is the
+  backend's assertion. Authorizing each identifier stays the caller's duty, and
+  the deployment runbook says so.
+- Destinations check the connection's service identity, task grant and their
+  own policy, not the person a run concerns, so they do not catch a backend
+  that passes the wrong identifier.
+- A listed subject is trusted for every workflow and action its policy names.
+  A compromised backend credential is not contained by the binding.
+- Subjects are compared exactly. When an identity provider changes a client's
+  service-account subject, for example after the client is recreated, its
+  starts are refused until the operator updates `subjects`.
+
 ## Rhai 1.27 dependency review
 
 The workspace selects Rhai's `compact_str` backend, keeping Coordinator's

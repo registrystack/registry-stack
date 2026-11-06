@@ -36,6 +36,14 @@ choose an available reviewed model. Inspect provider data retention and minimize
 the summary before activating a remote binding. This fixture's endpoints and
 identities do not configure a working institutional deployment.
 
+The runtime template's caller policy admits one trusted backend client, listing
+its own service-account subject in `subjects`. Coordinator refuses a token for
+any other subject, such as a person's, and any token carrying `act`; an explicit
+operator policy grants inspection and recovery separately. The calling backend
+must already have authorized `applicationId` and the summary for the person the
+run concerns, because Coordinator does not compare them with the caller's
+subject.
+
 To use OpenAI Decisions, change the same logical binding to `openai-decisions`,
 its service root, and an available model name. The authored questions do not
 change. To use a System One compatible local service such as Ollama, select

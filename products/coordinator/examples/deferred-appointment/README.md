@@ -37,8 +37,14 @@ The institution must supply these prerequisites:
   version `1`, and locale `en` for the reviewed sender identity. Acceptance
   and provider delivery remain distinct product observations.
 - Institutional producers hold an audience-bound Coordinator access token for
-  the `deferred-appointment` workflow. An explicit operator policy grants inspection
-  and recovery separately.
+  the `deferred-appointment` workflow. They are trusted backend clients whose
+  caller policy lists their own service-account subject in `subjects`.
+  Coordinator refuses a token for any other subject, such as a person's, and
+  any token carrying `act`. An explicit operator policy grants inspection and
+  recovery separately.
+- The calling backend has already authorized `applicationId` and the grant for
+  the person the run concerns. Coordinator does not compare them with the
+  caller's subject.
 
 Input contains `applicationId`, `bookAfter`, `searchStart`, `searchEnd` and an
 approved `grant` with its `id` and original `expiresAt` Unix timestamp. Keep the

@@ -83,10 +83,13 @@ snapshot; unknown formats and remote schema references remain refused.
 
 Runtime connections form one tagged `connections` map. Supported types are `breg`,
 `casework-review-producer`, `messaging`, `scheduling`, `external-http`, and `evaluation`.
-Each variant owns its complete authority contract. A caller allowed to start a Workflow gains no
-downstream authority. Credentials are acquired for each attempt, and each receiver checks its own
-current policy. Waits, retries, restarts, and recovery never renew an approval or alter its original
-principal, resource, scopes, bounds, or deadline.
+Each variant owns its complete authority contract. A caller allowed to start a Workflow receives
+no credential. Coordinator acquires each connection's credential for each attempt, and each
+receiver checks its own current policy against that connection's identity. The caller does choose
+the record, subject and recipient values in its start input, and the Workflow sends them under the
+connection's authority, so admitting a caller is a decision to trust it with those values (see
+[Callers and start input](#callers-and-start-input)). Waits, retries, restarts, and recovery never
+renew an approval or alter its original principal, resource, scopes, bounds, or deadline.
 
 BReg caller-filtered contract metadata uses the native client's separate 8 MiB
 metadata ceiling. The 64 KiB business-response budget still applies to records,
@@ -473,6 +476,30 @@ An event workflow that writes to its own source must select meaningful state tra
 use guards to avoid repeated fresh events. Ordinary product API calls do not propagate event
 causation across products, so the envelope hop bound alone does not prevent those loops.
 
+### Callers and start input
+
+A caller policy that grants `start` names a confidential backend client the institution trusts,
+never a browser or other public client. Each caller policy lists in `subjects` the exact token
+`sub` values it admits: the client's own service-account subject, or the named people an
+operator policy serves. Admission accepts a verified token only when its
+client has a policy, its `sub` is one of that policy's `subjects`, and it carries every required
+scope. Otherwise it answers 403 `operation.not-authorized`, the same answer as a missing scope,
+and creates no run. A token carrying an `act` claim is refused the same way whatever its subject:
+it was issued for someone other than the client presenting it, typically a person delegated to
+that client. A token exchanged without an actor keeps the client's own subject and carries no
+`act`, so it is admitted like the client's own token when the client's assertion issuer is
+declared.
+
+The verified `iss`, `sub` and client decide run ownership and admission idempotency. They never
+authorize the start input. Coordinator does not compare a record, subject or recipient
+identifier in the input with the caller's `sub`, and no mapping can reference the caller. A
+backend that starts a run for a person must already have authorized every identifier it passes
+for that person. A run started by a backend is owned by that backend, even when its input names
+a citizen's record, so an application must also authorize source-record access itself and use
+its own record-to-run correlation before it displays a run's progress to a person. Destinations
+check the connection's service identity, any task grant and their own policy; they do not know
+which person a run concerns.
+
 ### Admission security coverage
 
 These references map admission guarantees to maintained tests. They do not assert that a
@@ -487,6 +514,10 @@ receiver over HTTP.
 | Delivery attempt time is fresh; an old event commit time alone does not prevent recovery. | `event_trigger_tests::stale_delivery_noncanonical_body_and_header_body_disagreement_are_refused` and `exact_event_identity_survives_retry_replay_and_old_commit_time` |
 | Concurrent delivery, restart, package activation and local source alias renaming recover one original Run; changed event bytes conflict. | `event_trigger_tests::postgres::event_admission_is_atomic_deduplicated_and_recovers_after_restart_and_activation` and `source_alias_rename_recovers_one_original_run_after_restart` |
 | An admitted event grants no source mutation authority. | `breg_event_native::native_proposal_event_admits_one_run_without_conferring_apply_authority` |
+| A caller policy admits only the token subjects it lists, operator policies included; an unlisted subject is refused at start before any run exists. | `deployment_surface::a_policy_admits_only_the_subjects_it_lists` and `deployment_postgres::a_listed_client_token_for_an_unlisted_subject_is_refused_at_start_and_creates_no_run` |
+| A token carrying `act` is refused; a token exchanged without an actor keeps the client's subject and is admitted. | `deployment_surface::a_token_carrying_act_is_refused_and_an_exchange_without_one_is_not` |
+| Start input is not bound to the caller's subject; this pins today's behaviour so a binding feature must change it deliberately. | `deployment_postgres::start_input_is_not_bound_to_the_caller_subject` |
+| A caller policy without a bounded, distinct `subjects` list is refused offline. | `runtime_config::caller_policies_list_the_exact_subjects_they_admit` |
 
 The library tests live in `crates/registry-coordinator/src/event_trigger_tests.rs`; the other
 targets live in `crates/registry-coordinator/tests/`. The dependency-direction and schema gates

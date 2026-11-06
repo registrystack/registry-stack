@@ -39,8 +39,11 @@ unverified token answers `401 authentication.refused` with `WWW-Authenticate: Be
 {/* Evidence: crates/registry-coordinator/src/access.rs, access_token_typ_set, scopeClaim;
     products/coordinator/DEPLOYMENT.md, Configure the deployment. */}
 
-Each exact verified client identity resolves its keyed caller policy, which lists the scopes it requires and the actions
-it allows:
+Each exact verified client identity resolves its keyed caller policy, which lists the token subjects
+it admits, the scopes it requires and the actions it allows. The token's exact `sub` must be one of
+the policy's `subjects`, the client's own service-account subject or a named operator; a token
+from a listed client for any other subject, and any token carrying an `act` claim, answers
+`403 operation.not-authorized`. The policy's actions divide as follows:
 
 - The run actions `start`, `status`, `inspect`, `retry-same`, `cancel`, and `reconcile` reach only
   the workflows the policy lists in `workflows`.
@@ -50,7 +53,9 @@ it allows:
 
 A resolved caller refused an action answers `403 operation.not-authorized`. Run ownership and the
 idempotency scope come from the token's exact verified `iss` and `sub`, never from input fields;
-input identifiers and grant references manufacture no caller authority. A caller allowed to start
+input identifiers and grant references manufacture no caller authority. Coordinator does not
+compare input identifiers with the caller's subject, so the calling backend must already have
+authorized them for the person the run concerns. A caller allowed to start
 a run gains no authority over the products its workflow calls: each call uses the identity the operator
 configured for that connection, and the receiving product decides it.
 

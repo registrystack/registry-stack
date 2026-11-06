@@ -78,6 +78,8 @@ Status is protected by current Coordinator policy and ownership. A run started
 by a backend is owned by that backend, even when its input mentions a citizen's
 record. Applications must independently authorize source-record access and use
 their explicit record-to-run correlation before displaying selected progress.
+The same holds for start input: Coordinator does not compare the identifiers a
+backend passes with its subject, so the backend authorizes them first.
 
 `reconcile`, `retry_same` and `cancel` take a reason of 1 to 256 bytes without
 control characters, refused before sending. `reconcile` observes the original

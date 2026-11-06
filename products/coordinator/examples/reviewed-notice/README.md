@@ -121,6 +121,11 @@ The institution supplies these independent authorities:
 - The token endpoint registers separate BReg reader, Casework producer,
   Messaging sender and Coordinator caller identities. Starting a run grants
   none of those product permissions.
+- Coordinator callers are trusted backend clients whose caller policy lists
+  their own service-account subject in `subjects`. Coordinator refuses a token
+  for any other subject, such as a person's, and any token carrying `act`.
+- The calling backend has already authorized `applicationId` for the person
+  the run concerns. Coordinator does not compare it with the caller's subject.
 
 Before packaging for your deployment, replace the synthetic offline PolicyBinding in
 `functions.rhai` with the exact ID, version, and digest in the owning Casework project's
