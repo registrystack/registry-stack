@@ -428,7 +428,7 @@ Fixture run passed. 1 journey.
 has expired fails a step as `the fixture request could not be constructed`; mint fresh tokens and
 rerun.
 
-`package` seals the candidate and binds it to the receipt:
+`package` builds the BReg deployment package from the candidate and binds it to the receipt:
 
 ```sh
 bregctl package facility \
@@ -437,7 +437,7 @@ bregctl package facility \
 ```
 
 ```text
-Sealed and published a deployment package.
+Published a BReg deployment package.
   profile            production
   package digest     sha256:ae245974f8da79cd441669fbe0e2461ceb26e216cd1f7f25a7240fd131d20fee
   registry revision  sha256:4877be0dd9ded0447278206d829445780bf93a6cee356bc1526773003acad158

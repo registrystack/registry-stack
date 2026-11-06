@@ -1,6 +1,6 @@
 ---
 title: Encrypt a field
-description: Seal a restricted field so the database holds only ciphertext, bind the key the runtime needs, and turn encryption on for a field that already holds data.
+description: Encrypt a restricted field so the database holds only ciphertext, bind the key the runtime needs, and turn encryption on for a field that already holds data.
 status: current
 owner: registry-docs
 source_repos:
@@ -19,7 +19,7 @@ restricted, encrypt that field. The database then stores only ciphertext, and Ba
 
 Set `encrypted: true` on the field in `registry.yaml`. The compiler accepts it only when the
 field's `classification` is `restricted` and its type is `string`, `text`, `date`, `decimal`, or
-`structured`. A sealed value has a size ceiling: an encrypted `string` or `text` field may declare
+`structured`. An encrypted value has a size ceiling: an encrypted `string` or `text` field may declare
 a `maximumLength` of at most 16,384 characters, and a `structured` field a `maximumBytes` of at
 most 64 KiB. A [Record type](../../reference/glossary/#record-type) may hold up to 128 encrypted
 fields. The facility template encrypts no field, so `bregctl check` on your own project is where
@@ -78,7 +78,7 @@ Vault or OpenBao Transit wrap it, reached through a local Unix socket (`unixSock
 `identity.databaseInitializationEnvironment` to `local`. [Deploy a registry](../../operate/breg/)
 shows the block.
 
-Each value is sealed with AES-256-GCM under a key derived from that data key, bound to its
+Each value is encrypted with AES-256-GCM under a key derived from that data key, bound to its
 registry, Record type, field, and record, so ciphertext copied to another row does not open.
 One key version is active, and BReg cannot rotate it. If you lose the wrapping key, you lose the
 data: escrow it before the first encrypted field goes live, as the
@@ -138,7 +138,7 @@ restricted value must go through review, keep that field unencrypted. Callers gr
 ## Encrypt a field that already holds data
 
 Adding `encrypted: true` to an existing field is a reviewed migration. Its descriptor declares a
-step with `type: field-encryption-backfill`, which seals existing values chunk by chunk without
+step with `type: field-encryption-backfill`, which encrypts existing values chunk by chunk without
 authored SQL, and one `history` choice:
 
 - `erase-and-rebaseline` erases retained history so no plaintext copy remains in the database.
