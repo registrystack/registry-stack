@@ -15,7 +15,10 @@ use registry_breg::{
     contract::parse_project_json,
     task_grant::{TaskGrantBinding, TaskGrantError, TaskGrantStatusChecker},
 };
-use registry_breg_client::{BRegActionInvocationRequest, BRegIdempotencyKey, BRegProblemCode};
+use registry_breg_client::{
+    BRegActionInvocationRequest, BRegCreateRequest, BRegDirectWrite, BRegIdempotencyKey,
+    BRegProblemCode, BRegRecordFormat,
+};
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig};
 use registry_platform_testing::{oidc_verifier_config, MockIdp};
@@ -449,5 +452,155 @@ async fn task_action_scope_subjects_replay_and_fresh_revocation_are_enforced() {
     assert_eq!(count().await, 1);
     drop(task);
     drop(sibling);
+    fixture.finish().await;
+}
+
+/// A grant whose signed `identity` names one jurisdiction reads only records of
+/// that jurisdiction, because the profile authors a row boundary on that key.
+/// A record of another jurisdiction is concealed, not disclosed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn task_record_read_is_bound_to_the_grant_identity_by_the_profile_row_boundary() {
+    let registry = registry();
+    let idp = MockIdp::start().await;
+    let audience = "urn:example:breg";
+    let mut verifier = oidc_verifier_config(idp.issuer(), vec![audience.into()]);
+    verifier.allowed_clients = vec!["agent-client".into()];
+    let auth = RegistryAuthenticator::new(
+        &registry,
+        verifier,
+        Arc::new(JwksFetcher::new_with_fetch_url_policy(
+            idp.jwks_uri(),
+            JwksFetcherConfig::defaults(),
+            FetchUrlPolicy::dev(),
+        )),
+        AuthorityClaimConfig::new("registry_principal", Some("registry_purpose".into()))
+            .with_contextual_claims(
+                registry_platform_oidc::ClaimNames::default(),
+                BTreeMap::from([(
+                    "agent-client".into(),
+                    "00000000-0000-4000-8000-0000000000aa".into(),
+                )]),
+            ),
+    )
+    .unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let token = json!({"aud":audience,"sub":"author","azp":"agent-client","registry_principal":"author",
+        "registry_actor_kind":"agent","registry_purpose":"directory-administration","scope":"contact:create",
+        "registry_grant_id":"00000000-0000-4000-8000-000000000001","registry_approver":"h:approver",
+        "registry_grant_source_issuer":"https://casework.example","registry_grant_client":"agent-client",
+        "registry_grant_resource":audience,"registry_grant_exp":now+600,
+        "registry_grant_bounds":{"type":"breg","permissions":[{"collection":"contacts","operations":["get"]}]},
+        "identity":{"jurisdiction":"zone-a"},"jurisdiction":"zone-b"});
+    let editor = |zone: &str| {
+        VerifiedRequestClaims::authenticated(
+            "registry_principal",
+            "editor",
+            BTreeSet::from(["registry:directory:write".into()]),
+            Some("directory-administration".into()),
+            BTreeMap::from([(
+                "jurisdiction".into(),
+                VerifiedClaimValue::direct_string(zone).unwrap(),
+            )]),
+        )
+        .unwrap()
+    };
+    let fixture = client_http::ClientFixture::start(registry, editor("zone-a")).await;
+    let create = |zone: &'static str, label: &'static str| {
+        let editor_client = fixture.client_for(editor(zone));
+        async move {
+            let editor_client = editor_client.await;
+            let contract = editor_client
+                .client
+                .registry_contract(Some("directory-editor"))
+                .await
+                .unwrap();
+            let BRegDirectWrite::Create(binding) = contract
+                .value
+                .select_direct_write("records.contact.create", "directory-editor")
+                .unwrap()
+            else {
+                panic!("records.contact.create is a create binding")
+            };
+            let Value::Object(data) =
+                json!({"name":label,"email":"private@example.test","jurisdiction":zone})
+            else {
+                unreachable!("create payload is an object")
+            };
+            editor_client
+                .client
+                .create_record(
+                    &binding,
+                    &BRegCreateRequest::new(data).unwrap(),
+                    &key(&format!("create-{zone}")),
+                    BRegRecordFormat::Json,
+                )
+                .await
+                .unwrap()
+                .value
+                .data
+                .record_identifier
+                .clone()
+        }
+    };
+    let own = create("zone-a", "Zone A contact").await;
+    let other = create("zone-b", "Zone B sentinel").await;
+    let task = fixture
+        .client_for(auth.authenticate(&idp.mint_token(token)).await.unwrap())
+        .await;
+    let options = registry_breg_client::BRegRecordOptions::default()
+        .access_profile("task-creator")
+        .unwrap();
+    let read = task
+        .client
+        .get_record("contacts", &own, &options)
+        .await
+        .unwrap();
+    assert!(serde_json::to_string(&read.value)
+        .unwrap()
+        .contains("Zone A contact"));
+    let error = task
+        .client
+        .get_record("contacts", &other, &options)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.problem_code(),
+        Some(BRegProblemCode::ResourceNotFound),
+        "{error:?}"
+    );
+    assert!(
+        !format!("{error:?}").contains("Zone B sentinel"),
+        "a refused read discloses no field"
+    );
+    let entries = fixture.audit_capture.entries();
+    let records = entries
+        .iter()
+        .filter_map(|entry| entry.get("record"))
+        .collect::<Vec<_>>();
+    let terminal_reads = |outcome: &str, count: u64| {
+        records
+            .iter()
+            .filter(|record| {
+                record["operationId"] == "records.contact.get"
+                    && record["selectedAccessProfile"] == "task-creator"
+                    && record["phase"] == "terminal"
+                    && record["outcome"] == outcome
+                    && record["resultCount"] == count
+            })
+            .count()
+    };
+    assert_eq!(terminal_reads("returned", 1), 1, "own-jurisdiction read");
+    assert_eq!(
+        terminal_reads("empty", 0),
+        1,
+        "other-jurisdiction read audit"
+    );
+    assert!(!serde_json::to_string(&entries)
+        .unwrap()
+        .contains("Zone B sentinel"));
+    drop(task);
     fixture.finish().await;
 }
