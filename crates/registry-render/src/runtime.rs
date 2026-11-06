@@ -629,6 +629,9 @@ pub struct RuntimeCheck {
     /// The signature space each seal reserves, by seal id, for every chain
     /// the check read and could size: only with `substitute`, which reads
     /// the chain files.
+    /// The file declares seals whose chain files were not read, because the
+    /// check ran without `substitute`.
+    pub seal_chains_not_read: bool,
     pub seal_capacities: BTreeMap<String, usize>,
 }
 
@@ -652,7 +655,8 @@ pub fn check_runtime(path: &Path, substitute: bool, audit_root: Option<&Path>) -
 /// serve, the seal bindings of both files together: a document type that
 /// names a seal the runtime does not bind is an error, and a runtime seal no
 /// document type names is a warning, each placed in the runtime file. With no
-/// `signing` block sealing is off and the manifest adds no finding.
+/// `signing` block sealing is off, and a manifest that names seals adds one
+/// warning that its sealed document types render unsealed.
 #[must_use]
 pub fn check_runtime_with_bundle(
     path: &Path,
@@ -794,6 +798,11 @@ fn read_runtime(
             }
         }
     }
+    let seal_chains_not_read = !seal_chains
+        && check
+            .loaded
+            .as_ref()
+            .is_some_and(|loaded| loaded.config.signing.is_some());
     // A warning reports a finding but does not refuse the file.
     let loaded = check
         .loaded
@@ -804,6 +813,7 @@ fn read_runtime(
             diagnostics,
             unavailable,
             seal_capacities,
+            seal_chains_not_read,
         },
     )
 }
@@ -1131,12 +1141,41 @@ struct BindingFinding {
 
 /// Resolve every seal id the bundle declares against `signing.seals`.
 ///
-/// With no `signing` block sealing is off and nothing is reported. With one,
-/// a document type that names a seal the runtime does not bind is an error,
+/// With no `signing` block sealing is off: a bundle that names seals is a
+/// warning, so a development deployment without keys still serves while the
+/// operator learns its sealed document types render unsealed. With one, a
+/// document type that names a seal the runtime does not bind is an error,
 /// and a runtime seal no document type names is a warning.
 fn seal_binding_findings(runtime: &RenderRuntime, manifest: &Manifest) -> Vec<BindingFinding> {
     let Some(signing) = &runtime.signing else {
-        return Vec::new();
+        let mut sealed: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+        for document in &manifest.documents {
+            if let Some(seal) = document.seal.as_deref() {
+                sealed.entry(seal).or_default().push(document.id.as_str());
+            }
+        }
+        if sealed.is_empty() {
+            return Vec::new();
+        }
+        let documents: Vec<&str> = sealed.values().flatten().copied().collect();
+        let seals: Vec<String> = sealed.keys().map(|seal| format!("`{seal}`")).collect();
+        return vec![BindingFinding {
+            severity: Severity::Warning,
+            at_key: false,
+            finding: Finding {
+                code: "render.runtime.seals-not-served",
+                pointer: String::new(),
+                message: format!(
+                    "the bundle issues document type {} under seal {}; this runtime declares \
+                     no signing block, so they render unsealed and the seal route is absent",
+                    documents.join(", "),
+                    seals.join(", ")
+                ),
+                action: "Declare signing.seals in the runtime file to seal them, or keep \
+                         sealing off only where no sealed document is issued."
+                    .to_owned(),
+            },
+        }];
     };
     let mut findings = Vec::new();
     let mut unbound: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
@@ -1195,7 +1234,8 @@ fn seal_binding_findings(runtime: &RenderRuntime, manifest: &Manifest) -> Vec<Bi
 /// positions. An error is a document type whose seal the runtime does not
 /// bind, refused as a runtime problem. With no `signing` block it accepts
 /// every package, since sealing is then off. On success it returns the
-/// warnings, such as a seal no document type uses.
+/// warnings, such as a seal no document type uses or a bundle that names
+/// seals served without a `signing` block.
 pub fn validate_seal_bindings(
     runtime: &RenderRuntime,
     manifest: &Manifest,
@@ -2249,9 +2289,13 @@ mod tests {
         assert!(runtime.seal("ministry").is_none());
         let manifest = signing_manifest(&[("licence", Some("ministry"))]);
         assert!(runtime.seal_for(&manifest, "licence").is_none());
-        assert!(validate_seal_bindings(&runtime, &manifest)
-            .expect("a package that names a seal still serves with sealing off")
-            .is_empty());
+        let warnings = validate_seal_bindings(&runtime, &manifest)
+            .expect("a package that names a seal still serves with sealing off");
+        assert_eq!(
+            warnings.len(),
+            1,
+            "it says the sealed type renders unsealed"
+        );
     }
 
     #[test]
@@ -2601,8 +2645,32 @@ mod tests {
         let (_dir, home) = home();
         let file = home.join("runtime.yaml");
         std::fs::write(&file, minimal(&home)).unwrap();
-        let manifest = signing_manifest(&[("licence", Some("ministry"))]);
+        let manifest = signing_manifest(&[
+            ("licence", Some("ministry")),
+            ("permit", Some("regional")),
+            ("notice", None),
+        ]);
         let check = check_runtime_with_bundle(&file, false, None, Some(&manifest));
+        assert_eq!(check.diagnostics.len(), 1, "{:?}", check.diagnostics);
+        let warning = &check.diagnostics[0];
+        assert_eq!(warning.code, "render.runtime.seals-not-served");
+        assert_eq!(warning.severity, Severity::Warning);
+        assert_eq!(warning.path, "");
+        assert!(
+            warning.message.contains("licence, permit") && warning.message.contains("unsealed"),
+            "{}",
+            warning.message
+        );
+        assert!(warning.source.is_some(), "placed in the runtime file");
+
+        // serve starts and logs it: a development deployment needs no keys.
+        let runtime = load_text(&home, &minimal(&home)).unwrap();
+        let warnings = validate_seal_bindings(&runtime, &manifest).expect("a warning serves");
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].code, "render.runtime.seals-not-served");
+
+        let unsealed = signing_manifest(&[("notice", None)]);
+        let check = check_runtime_with_bundle(&file, false, None, Some(&unsealed));
         assert!(check.diagnostics.is_empty(), "{:?}", check.diagnostics);
     }
 

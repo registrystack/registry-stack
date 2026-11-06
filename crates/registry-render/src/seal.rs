@@ -666,6 +666,12 @@ impl Seal {
         }
     }
 
+    /// Whether a seal that can sign at `now` stops within
+    /// [`EXPIRY_WARNING_DAYS`], the window `check --environment` warns in.
+    pub fn expires_soon(&self, now: OffsetDateTime) -> bool {
+        self.chain.not_after() - now < time::Duration::days(EXPIRY_WARNING_DAYS)
+    }
+
     /// What the worker needs to prepare this seal's field at `signing_time`,
     /// the parent's clock truncated to whole seconds.
     pub fn worker_seal(&self, signing_time: OffsetDateTime) -> WorkerSeal {

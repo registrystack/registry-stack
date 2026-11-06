@@ -90,6 +90,23 @@ fn check_resolves_bundle_seals_against_the_runtime_bindings() {
     assert_eq!(exit, Some(0), "{report}");
     assert!(codes(&report).is_empty(), "{report}");
     assert_eq!(report["bundle"]["documents"][0]["seal"], "ministry");
+    // Without --environment the chain files are not read, and the report
+    // says so rather than passing them silently.
+    assert_eq!(report["sealChains"], "not-read", "{report}");
+    let human = registry_render()
+        .args(["check", "--bundle"])
+        .arg(&bundle)
+        .arg("--runtime-config")
+        .arg(&bound)
+        .output()
+        .unwrap();
+    assert_eq!(human.status.code(), Some(0));
+    assert!(
+        String::from_utf8_lossy(&human.stdout)
+            .contains("seal chains not read: pass --environment to check them"),
+        "{}",
+        String::from_utf8_lossy(&human.stdout)
+    );
 
     // A seal the runtime does not bind is refused at the runtime file, and
     // the seal the bundle never names is only a warning.
@@ -120,11 +137,23 @@ fn check_resolves_bundle_seals_against_the_runtime_bindings() {
     let file = other.display().to_string();
     assert_eq!(report["diagnostics"][0]["source"]["file"], file);
 
-    // Without a signing block sealing is off and the package still checks.
+    // Without a signing block sealing is off: the package still checks, and
+    // a warning says the sealed document types render unsealed.
     let off = runtime(&home, "");
     let (exit, report) = check(&bundle, &off);
     assert_eq!(exit, Some(0), "{report}");
-    assert!(codes(&report).is_empty(), "{report}");
+    assert_eq!(
+        codes(&report),
+        [(
+            "warning".to_owned(),
+            "render.runtime.seals-not-served".to_owned()
+        )]
+    );
+    assert_eq!(
+        report["diagnostics"][0]["source"]["file"],
+        off.display().to_string()
+    );
+    assert!(report.get("sealChains").is_none(), "{report}");
 }
 
 /// A seal certificate with an extension of `bytes` octets, to make a chain
@@ -187,6 +216,7 @@ fn check_with_the_environment_reads_each_seal_certificate_chain() {
     let (exit, report) = check_chain(&home, &bundle, &chain);
     assert_eq!(exit, Some(0), "{report}");
     assert!(codes(&report).is_empty(), "{report}");
+    assert!(report.get("sealChains").is_none(), "read: {report}");
 
     let cases: [(Customise, Option<i32>, &str, &str); 5] = [
         (

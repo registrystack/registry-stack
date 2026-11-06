@@ -104,6 +104,7 @@ Serve and `check` report these as runtime problems at the position of the key.
 | `render.runtime.seal-client-not-admitted` | A seal client is not in `auth.oidc.allowedClients`. |
 | `render.runtime.seal-not-bound` | A document type names a seal `signing.seals` does not bind (error). |
 | `render.runtime.seal-unused` | A runtime seal is named by no document type (warning). |
+| `render.runtime.seals-not-served` | Document types name seals and the runtime has no `signing` block: they render unsealed (warning). |
 
 `check --environment` and `serve` read the chain file and report:
 
@@ -116,6 +117,10 @@ Serve and `check` report these as runtime problems at the position of the key.
 | `render.runtime.seal-certificate-expired` | warning | The certificate is expired; the seal is unavailable. |
 | `render.runtime.seal-certificate-not-yet-valid` | warning | The certificate is not yet valid; the seal is unavailable. |
 | `render.runtime.seal-certificate-expiring` | warning | The certificate expires within 30 days. |
+
+Without `--environment`, `check` reads no chain file and says so: the human output ends with
+`seal chains not read: pass --environment to check them`, and the JSON report has
+`"sealChains": "not-read"`.
 
 `serve` alone also reads the key and reports `render.runtime.seal-key-unreadable`,
 `render.runtime.seal-key-invalid`, `render.runtime.seal-key-unsupported`,
@@ -164,7 +169,10 @@ The problems specific to this route, from a closed vocabulary shared with the re
 
 `/ready` adds `signing`, one member per seal: `{"status": "ready"}` or `{"status": "unavailable",
 "reason": ...}` with `certificate-expired`, `certificate-not-yet-valid`, or `provider-not-ready`,
-plus `"testOnly": true` for a test-only seal. It never changes the status code.
+plus `"testOnly": true` for a test-only seal. It never changes the status code. At startup,
+`serve` logs a `seal unavailable` warning with `seal_id` and the same `reason` for each seal that
+cannot sign, and a `seal certificate expiring` warning for one whose certificate expires within
+30 days.
 
 Each seal call adds `sealId` to its audit entries, and `testOnly: true` when the seal is
 test-only. The response entry adds `documentSha256`,

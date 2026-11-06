@@ -300,7 +300,10 @@ certificate without a signing key usage, or a chain too large for the signature 
 about a certificate that is expired, not yet valid, or expires within 30 days. When `serve`
 starts, it also checks that the key matches the certificate, and it refuses to start if it does
 not. If the runtime names a seal the package does not use, or the package names a seal the
-runtime does not bind, `check` reports it, and `serve` refuses the second case.
+runtime does not bind, `check` reports it, and `serve` refuses the second case. If the package
+names seals and the runtime has no `signing` block at all, `check` and `serve` warn
+(`render.runtime.seals-not-served`): sealing is off, those document types render unsealed on the
+render route, and the seal route does not exist.
 
 Then call the route with a token that carries `render:seal`. The request body is the render
 route's. The PDF answer carries `X-Registry-Document-Sha256`, `X-Registry-Signed-File-Sha256`,
@@ -327,7 +330,10 @@ runtime into production.
 ### Renew the certificate
 
 Run `check --environment` on a schedule. Thirty days before expiry it warns with
-`render.runtime.seal-certificate-expiring`. To renew, write the new chain file with the seal
+`render.runtime.seal-certificate-expiring`. `serve` logs the same window when it starts, as a
+`seal certificate expiring` warning with the `seal_id`, and a seal that cannot sign then as a
+`seal unavailable` warning with the `seal_id` and the `/ready` `reason`. It does not log again
+while running, so restart or `/ready` is how a later expiry shows. To renew, write the new chain file with the seal
 certificate first, point `certificateChainFile` at it (or replace the file), and restart `serve`:
 Render reads the chain at startup. After the old certificate expires the seal is unavailable and
 plain rendering is unaffected. A file sealed earlier with a timestamp is built to keep validating after the certificate expires,
