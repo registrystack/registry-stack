@@ -1,6 +1,7 @@
 #let payload = json(bytes(sys.inputs.data))
 #let d = payload.data
 #let signing = payload.at("signing", default: none)
+#set document(title: [Notice #d.reference])
 #set text(font: "Libertinus Serif", size: 11pt, lang: "en")
 #set page(paper: "a5", margin: 2cm)
 
