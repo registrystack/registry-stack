@@ -14,15 +14,17 @@ ceiling remains 1 MiB and can be configured up to 8 MiB. The server owns documen
 schema and locale selection. Successful `documentVersion` must name the
 requested type and its unsigned version.
 
-`RenderClientError` exposes the shared `TransportKind` and `outcome_unknown`.
+`RenderClientError` exposes the shared `TransportKind` and `is_outcome_unknown()`.
 A refused connection establishes no exchange; a timeout, broken response or
 invalid protocol response may follow a completed render. Rendering remains a
 pure calculation and establishes no issuance authority. Retain the exact
 inputs when deciding whether to repeat it.
 
-The method performs one exchange. Render's correlation key offers no durable
-idempotency, so this client adds no mutation retry. Pure CLI and library
-rendering require neither this client nor an issuer.
+The method performs one exchange. Its optional `correlation_key` (1 to 128
+visible ASCII characters) is sent as `Idempotency-Key` and must be echoed
+exactly. Render's correlation key offers no durable idempotency, so this
+client adds no mutation retry. Pure CLI and library rendering require neither
+this client nor an issuer.
 
 ## Sealing
 
@@ -49,10 +51,10 @@ the level. It does not validate the signature, the certificate chain or the
 timestamp token; that stays with the relying party.
 
 Sealing is never resent. A second seal is a second valid file with another
-signing time, so after an uncertain exchange (`outcome_unknown`) the caller
-decides. The optional `idempotency_key` (1 to 128 visible ASCII characters) is
-sent as `Idempotency-Key` and must be echoed exactly; it is a correlation key,
-not a deduplication promise. The new problem codes are `render.signing-unavailable`
+signing time, so after an uncertain exchange (`is_outcome_unknown()`) the
+caller decides. The optional `correlation_key` is the same as `render`'s: sent
+as `Idempotency-Key`, echoed exactly, and not a deduplication promise. The
+seal route's problem codes are `render.signing-unavailable`
 and `render.seal-certificate-invalid` (503), `render.timestamp-failed` (502),
 `render.document-not-sealable` (400) and `render.seal-client-not-allowed` (403).
 

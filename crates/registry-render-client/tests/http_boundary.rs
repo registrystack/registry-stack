@@ -72,6 +72,7 @@ async fn one_authenticated_document_and_integrity_refusal() {
             &BearerToken::new("canary-render-token").unwrap(),
             "receipt",
             &request(),
+            None,
         )
         .await
         .unwrap();
@@ -85,7 +86,8 @@ async fn one_authenticated_document_and_integrity_refusal() {
         .render(
             &BearerToken::new("canary-render-token").unwrap(),
             "receipt",
-            &request()
+            &request(),
+            None
         )
         .await
         .is_ok());
@@ -97,7 +99,8 @@ async fn one_authenticated_document_and_integrity_refusal() {
             .render(
                 &BearerToken::new("canary-render-token").unwrap(),
                 "receipt",
-                &request()
+                &request(),
+                None
             )
             .await
             .unwrap_err()
@@ -115,6 +118,7 @@ async fn bounded_product_problem_matches_status_and_trace() {
             &BearerToken::new("canary-render-token").unwrap(),
             "receipt",
             &request(),
+            None,
         )
         .await
         .unwrap_err();
@@ -129,7 +133,8 @@ async fn bounded_product_problem_matches_status_and_trace() {
             .render(
                 &BearerToken::new("canary-render-token").unwrap(),
                 "receipt",
-                &request()
+                &request(),
+                None
             )
             .await
             .unwrap_err()
@@ -193,7 +198,8 @@ async fn document_version_is_bound_to_the_requested_document_and_unsigned_versio
                 .render(
                     &BearerToken::new("canary-render-token").unwrap(),
                     "receipt",
-                    &request()
+                    &request(),
+                    None
                 )
                 .await
                 .unwrap_err()
@@ -215,6 +221,7 @@ async fn refused_connection_exposes_transport_kind_and_no_completed_exchange() {
             &BearerToken::new("canary-render-token").unwrap(),
             "receipt",
             &request(),
+            None,
         )
         .await
         .unwrap_err();
@@ -240,11 +247,12 @@ async fn incomplete_response_exposes_an_uncertain_exchange_without_retry() {
             &BearerToken::new("canary-render-token").unwrap(),
             "receipt",
             &request(),
+            None,
         )
         .await
         .unwrap_err();
     assert_eq!(error.kind, "transport");
-    assert!(error.outcome_unknown);
+    assert!(error.is_outcome_unknown());
     assert_eq!(
         error.transport_kind,
         Some(registry_render_client::TransportKind::Exchange)
@@ -265,12 +273,13 @@ async fn server_pointer_budget_remains_a_typed_problem() {
             &BearerToken::new("canary-render-token").unwrap(),
             "receipt",
             &request(),
+            None,
         )
         .await
         .unwrap_err();
     assert_eq!(error.kind, "problem");
     assert_eq!(error.code.as_deref(), Some("render.data-invalid"));
     assert_eq!(error.status, Some(400));
-    assert!(!error.outcome_unknown);
+    assert!(!error.is_outcome_unknown());
     task.abort();
 }

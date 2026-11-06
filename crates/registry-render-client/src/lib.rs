@@ -159,7 +159,7 @@ struct SealWire {
 #[serde(rename_all = "camelCase")]
 pub struct RenderClientError {
     pub kind: &'static str,
-    pub outcome_unknown: bool,
+    outcome_unknown: bool,
     #[serde(
         skip_serializing_if = "Option::is_none",
         serialize_with = "serialize_transport_kind"
@@ -200,6 +200,31 @@ impl RenderClientError {
     /// A local argument refusal, before an HTTP exchange.
     pub fn invalid_request() -> Self {
         error("invalid-request")
+    }
+
+    /// Whether the exchange may have completed on the server although the
+    /// client has no valid answer: a timeout or broken exchange after the
+    /// connection was made, or an answer that broke the protocol. A refused
+    /// connection and a typed problem are known failures. The client never
+    /// resends; after a seal whose outcome is unknown, the caller decides
+    /// whether another sealed file is wanted.
+    #[must_use]
+    pub fn is_outcome_unknown(&self) -> bool {
+        self.outcome_unknown
+    }
+}
+
+/// A correlation key is 1 to 128 visible ASCII characters.
+fn check_correlation_key(key: Option<&str>) -> Result<(), RenderClientError> {
+    match key {
+        Some(key)
+            if key.is_empty()
+                || key.len() > 128
+                || !key.bytes().all(|byte| (0x21..=0x7e).contains(&byte)) =>
+        {
+            Err(error("invalid-request"))
+        }
+        _ => Ok(()),
     }
 }
 
@@ -311,15 +336,22 @@ impl RenderClient {
     }
 
     /// Render once with a caller-acquired credential for this Render resource.
+    ///
+    /// `correlation_key` is optional, as for [`RenderClient::seal`]: 1 to 128
+    /// visible ASCII characters, sent as `Idempotency-Key`, which the server
+    /// must echo exactly. It is audited by the server, not a deduplication
+    /// promise.
     pub async fn render(
         &self,
         token: &BearerToken,
         document_type: &str,
         request: &Value,
+        correlation_key: Option<&str>,
     ) -> Result<RenderedDocument, RenderClientError> {
         let body = Self::validate_request(document_type, request)?;
+        check_correlation_key(correlation_key)?;
         let value = self
-            .exchange(token, Route::Render, document_type, body, None)
+            .exchange(token, Route::Render, document_type, body, correlation_key)
             .await?;
         let document: RenderedDocument =
             serde_json::from_value(value).map_err(|_| error("protocol"))?;
@@ -349,8 +381,8 @@ impl RenderClient {
     /// same request is a second valid file with another signing time (and,
     /// at level B-T, another timestamp token), so the client cannot treat a
     /// repeat as harmless. After a timeout or broken exchange
-    /// (`outcome_unknown`) the caller decides whether another file is wanted.
-    /// `idempotency_key` is an optional correlation key (1 to 128 visible
+    /// ([`RenderClientError::is_outcome_unknown`]) the caller decides whether
+    /// another file is wanted. `correlation_key` is optional (1 to 128 visible
     /// ASCII characters). It is sent as `Idempotency-Key` and the server must
     /// echo it exactly; it is audited by the server, not a deduplication
     /// promise.
@@ -367,17 +399,12 @@ impl RenderClient {
         token: &BearerToken,
         document_type: &str,
         request: &Value,
-        idempotency_key: Option<&str>,
+        correlation_key: Option<&str>,
     ) -> Result<SealedDocument, RenderClientError> {
         let body = Self::validate_request(document_type, request)?;
-        if let Some(key) = idempotency_key {
-            if key.is_empty() || key.len() > 128 || !key.bytes().all(|b| (0x21..=0x7e).contains(&b))
-            {
-                return Err(error("invalid-request"));
-            }
-        }
+        check_correlation_key(correlation_key)?;
         let value = self
-            .exchange(token, Route::Seal, document_type, body, idempotency_key)
+            .exchange(token, Route::Seal, document_type, body, correlation_key)
             .await?;
         let wire: SealedWire = serde_json::from_value(value).map_err(|_| error("protocol"))?;
         let pdf = base64::engine::general_purpose::STANDARD
@@ -437,7 +464,7 @@ impl RenderClient {
         route: Route,
         document_type: &str,
         body: Vec<u8>,
-        idempotency_key: Option<&str>,
+        correlation_key: Option<&str>,
     ) -> Result<Value, RenderClientError> {
         let url = self
             .base_url
@@ -449,7 +476,7 @@ impl RenderClient {
             .header(AUTHORIZATION, token.authorization_header_value())
             .header(ACCEPT, "application/json")
             .header(CONTENT_TYPE, "application/json");
-        if let Some(key) = idempotency_key {
+        if let Some(key) = correlation_key {
             builder = builder.header("idempotency-key", key);
         }
         let response = builder
@@ -559,7 +586,7 @@ impl RenderClient {
         if status != reqwest::StatusCode::OK {
             return Err(error("protocol"));
         }
-        if let Some(key) = idempotency_key {
+        if let Some(key) = correlation_key {
             if echoed != [Some(key.to_owned())] {
                 return Err(error("protocol"));
             }
