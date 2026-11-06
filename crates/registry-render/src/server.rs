@@ -98,7 +98,10 @@ fn mark_not_dumpable() -> Result<(), RenderProblem> {
     )
 }
 
-/// Other platforms have no same-user `/proc` reads to close.
+/// Nothing to mark here. macOS has no `/proc`, but a same-user process reads
+/// another process's arguments and environment through `KERN_PROCARGS2`,
+/// and nothing here closes that: on macOS a worker that gained code
+/// execution can read the serving process's environment.
 #[cfg(not(target_os = "linux"))]
 fn mark_not_dumpable() -> Result<(), RenderProblem> {
     Ok(())

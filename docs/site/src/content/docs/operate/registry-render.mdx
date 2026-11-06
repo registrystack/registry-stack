@@ -251,8 +251,8 @@ and `audit-failed` (503).
 Sealing is optional. Without a `signing` block, Render loads no key, makes no timestamp call, and
 serves no seal route. With one, `POST /v1/seal/<document-type>` renders the document and returns
 it with a PAdES signature made with your institution's key. Render seals only what it just
-rendered from the verified package, never bytes a caller sends, and the private key stays in the
-serving process, never in a render worker. The seal is PAdES baseline B-B or B-T. Render makes no
+rendered from the verified package, never bytes a caller sends, and the private key is loaded in
+the serving process and never sent to a render worker. The seal is PAdES baseline B-B or B-T. Render makes no
 claim that it is a qualified seal under eIDAS or any other scheme: that depends on your
 certificate, its issuer, and how you hold the key.
 
@@ -381,9 +381,15 @@ verdict on the issuer, not a failure of the file's integrity.
   `signing` member.
 - Render embeds no revocation data (no B-LT or B-LTA) and does not pin the timestamp authority's
   identity; validators decide trust in both.
-- The seal key comes from a secret reference to a local JWK. That suits development and pilots.
+- The seal key comes from a secret reference to a local JWK, and no HSM or managed-key custody
+  exists yet. A render worker that gained code execution runs as the serving user and can read a
+  `secret:file` key, so keep a production seal key off such a host until that custody lands.
 - A render worker starts from an empty environment but is not a sandbox. A worker that gained code
-  execution could get arbitrary content sealed, because it renders the content.
+  execution could get arbitrary content sealed, because it renders the content, and could rewrite
+  a `file` audit destination. For a deployment that seals, use `audit.destination: stdout` and
+  ship it to storage the serving user cannot write.
+- On macOS, such a worker can also read the serving process's environment, including every
+  `${VAR}` and `secret:env` value. Seal on Linux, where `serve` closes that.
 - Sealing documents that render to PDF/A-1, A-2, or A-3 has not been verified.
 
 {/* Evidence: crates/registry-render/src/runtime.rs, SigningRuntime, SealRuntime and signing_findings;
@@ -417,7 +423,8 @@ disconnects is recorded as `unfinished`.
 When the active file would pass `rotateBytes`, it is renamed to `<path>.<sequence>` and a new file
 opens. At startup and at each rotation, sealed files older than `retentionDays` are deleted. The
 file is not chained or signed, so ship sealed files, or the `stdout` stream, to append-only storage
-before retention deletes them.
+before retention deletes them. A render worker runs as the serving user, so one that gained code
+execution could rewrite the file; a deployment that seals should use `stdout`.
 
 :::danger
 Never rename, edit, or truncate the active file while the process runs. The writer then stops, and

@@ -162,7 +162,10 @@ signing:
 
 - `privateKeyRef` is a secret reference to one ES256, ES384, RS256 or RS384
   private JWK. `certificateChainFile` is an absolute PEM path, the seal
-  certificate first, then each issuer.
+  certificate first, then each issuer. A render worker that gained code
+  execution runs as the serving user and can read a `secret:file` key; keep
+  a production seal key off such a host until HSM or managed-key custody
+  lands.
 - `timestampAuthority` (an RFC 3161 authority; `https`, or `http` on loopback
   only; `attemptTimeoutMilliseconds` 1000 to 60000, default 10000) makes the
   seal PAdES baseline B-T. `withoutTimestamp:

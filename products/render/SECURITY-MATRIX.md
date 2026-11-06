@@ -32,7 +32,7 @@ conditions, follow the table.
 | 23 | A credential in the serving process (a secret provider variable, a `${VAR}` value, anything the host injects, or a secret it has loaded) reaches the worker process that runs template code | `worker::worker_command`, the one constructor every supervised worker (serve and compile) is spawned from, clears the environment and keeps only the dynamic loader's search paths (`DYLD_FALLBACK_LIBRARY_PATH`, `DYLD_LIBRARY_PATH`, `LD_LIBRARY_PATH`), which the same executable needs to load its shared libraries; on Linux, `server::serve` marks the process non-dumpable before it reads any secret, so a same-user process cannot read its `/proc/<pid>/environ` or memory | `worker::tests::a_worker_sees_no_parent_variable_beyond_the_loader_paths` (spawns the production command under the test process's real environment); `worker::tests::a_worker_keeps_the_parents_loader_paths`; `worker::tests::only_the_loader_search_paths_are_kept`; `server::tests::serving_marks_the_process_not_dumpable` (Linux only) |
 | 24 | A caller or client not meant to seal gets a document sealed in the institution's name | `POST /v1/seal/{type}` sits behind its own bearer layer (`server::require_seal_bearer`) that demands `render:seal`, which `render:render` does not imply; `server::seal_route` then refuses a verified client not in the seal's `allowedClients` (`seal-client-not-allowed`, 403) before any render; `runtime::signing_findings` refuses at startup a seal with no client list, a wildcard or `unrestricted` client, or a client `auth.oidc.allowedClients` does not admit. Each refusal is one audited response entry | `serve_seal::each_authorization_refusal_has_its_own_problem`; `auth::tests::each_route_scope_authorizes_only_its_own_route`; `runtime::tests::the_unrestricted_refusal_states_why_and_never_repeats_a_client` |
 | 25 | The legacy API key seals | `runtime::signing_findings` refuses a `signing` block without `auth.oidc` (`render.runtime.signing-requires-oidc`), and `server::require_bearer` refuses a seal request on a service with no OIDC verifier (`forbidden`, 403) even if that check were bypassed | `serve_seal::the_legacy_api_key_never_seals` (startup refusal). The request-time refusal in `require_bearer` is a second line of defence with no dedicated test (code-reviewed) |
-| 26 | The seal's private key reaches the worker that runs template code | The key is resolved and held only in the serving process (`seal::Seal::load`, `LocalJwkSigner`). The worker's request (`worker::WorkerSeal`) carries the signing member, the signing time, the reserved space and the field name, never a key; `worker::worker_command` clears the worker's environment (row 23) | `worker::tests::a_seal_request_returns_the_prepared_field_over_a_sealed_render`; `worker::tests::a_worker_sees_no_parent_variable_beyond_the_loader_paths`. No test asserts that a key never crosses the pipe; the request type has no key member |
+| 26 | The seal's private key reaches the worker that runs template code | The key is resolved and held only in the serving process (`seal::Seal::load`, `LocalJwkSigner`). The worker's request (`worker::WorkerSeal`) carries the signing member, the signing time, the reserved space and the field name, never a key; `worker::worker_command` clears the worker's environment (row 23). A key file stays readable to a worker that gained code execution (residual "Local seal key files") | `worker::seal_tests::a_seal_request_returns_the_prepared_field_over_a_sealed_render`; `worker::tests::a_worker_sees_no_parent_variable_beyond_the_loader_paths`. No test asserts that a key never crosses the pipe; the request type has no key member |
 | 27 | A worker returns a file that makes the parent sign something other than the rendered document | The parent signs nothing it has not bounded: `pdf_signature::PreparedPdf::check` validates the fixed shape by byte offsets only (`/ByteRange` form and values, the zero-filled `/Contents` placeholder, the one signature dictionary after the first revision), `seal::Seal::seal` refuses a worker that reserved another capacity than the seal's computed one (`seal::contents_capacity`, at most 256 KiB), and `server::run_seal` refuses a worker whose package hash differs from the startup hash (`bundle-tampered`). The parent hashes the first revision itself | `pdf_signature::check_refuses_each_malformed_shape`; `pdf_signature::check_accepts_the_prepared_file_and_covers_all_but_the_contents`; `pdf_signature::embed_takes_exactly_the_capacity_and_refuses_more_or_nothing`; `seal::tests::the_reserved_space_follows_the_documented_formula`; `serve_seal::a_chain_too_large_for_the_reserved_space_refuses_startup`. The package-hash comparison in `run_seal` has no dedicated test (code-reviewed) |
 | 28 | The seal audit leaks a subject, signer name, key or token, or a sealed call goes unaudited | The audit record gains only value-free fields: `sealId`, `testOnly` (only `true`, for a test-only seal), `documentSha256`, `signedFileSha256`, `certificateSha256` and `timestampTokenSha256` (`audit::RenderAuditEvent::for_seal`), and on a `timestamp-failed` refusal a `reason` from the closed list `seal::response_failure` and `TimestampAuthority::stamp` name. The request entry is accepted before the worker starts and the response entry before the file leaves (row 8); the certificate is named by its SHA-256 only | `serve_seal::a_seal_writes_a_paired_value_free_audit` (canary scans for the organization, subject, client, principal, issuer and token); `audit::tests::a_seal_request_entry_names_its_seal_and_no_response_value`; `audit::tests::an_unfinished_seal_keeps_its_seal_and_drops_every_response_value`; `audit::tests::a_seal_refusal_names_its_seal`; `serve_seal::a_test_only_seal_says_so_in_every_answer_and_a_production_seal_adds_nothing` |
 | 29 | A timestamp failure silently produces a seal without a timestamp | A seal with `timestampAuthority` is B-T or nothing: `seal::Seal::seal` maps an unreachable, refusing, malformed or oversized timestamp response, and a token too large for the reserved space, to `timestamp-failed` (502) with no retry and no file. B-B exists only as the named `withoutTimestamp` choice, and `runtime::signing_findings` refuses a seal declaring neither or both | `serve_seal::a_failing_timestamp_authority_fails_the_seal_naming_the_piece` (seven failure modes, one authority request each, no `pdfBase64`, refused audit entry and one log warning naming the `reason`); `serve_seal::a_b_b_seal_is_the_named_choice_and_carries_no_timestamp` |
@@ -43,16 +43,23 @@ conditions, follow the table.
   user, with the same filesystem and network. A worker that gained code
   execution through a Typst or decoder defect could read files that user can
   read, including key files under `secretProviders.file.root`, and connect to
-  any socket that user can reach. Row 23 keeps the parent's environment and
-  memory out of its reach; the rest is not enforced. The worker needs only its
+  any socket that user can reach. On Linux, row 23 keeps the parent's
+  environment and memory out of its reach. On macOS it does not: a same-user
+  process reads another's arguments and environment through
+  `KERN_PROCARGS2`, so such a worker can read every `${VAR}` and
+  `secret:env` value the serving process holds; seal on Linux. The rest is
+  not enforced. The worker needs only its
   pipes, so refusing socket creation and restricting its filesystem view
   (seccomp, Landlock) are the next steps, not yet taken because they need
   per-architecture filters proven on the release image.
 - **The audit log is not tamper-evident on the host.** It carries no hash
   chain or signature, so a host user able to write the audit file can
-  remove, rewrite, or reorder lines undetected. Deployments that need
-  tamper evidence ship the `file` or `stdout` stream to append-only storage
-  they control.
+  remove, rewrite, or reorder lines undetected. A render worker that gained
+  code execution is such a user: it runs as the serving user, who owns the
+  `file` destination. Deployments that need tamper evidence ship the `file`
+  or `stdout` stream to append-only storage they control; deployments that
+  seal use `audit.destination: stdout`, shipped to storage the serving user
+  cannot write.
 - **macOS workers have no address-space cap** (`RLIMIT_AS` is not exposed
   by rustix there): the timeout kill is the sole wall. Serve deployments
   for pilots should run on Linux, where the rlimit applies.
@@ -73,7 +80,10 @@ conditions, follow the table.
   says. The mitigations are governed templates, which are verified at startup
   and by each worker (rows 3 and 4), the key staying outside the worker (row
   26), and the value-free audit (row 28) that lets an institution reconcile
-  every sealed hash with its own records.
+  every sealed hash with its own records. The same worker can rewrite a
+  `file` audit destination (previous residual), so that reconciliation
+  holds only for an audit sent to `stdout` and on to storage the serving
+  user cannot write.
 - **The timestamp authority's identity is not pinned.** Render reaches the
   authority over TLS with the host's root certificates and accepts a token
   that matches the signature, nonce and key usage; it does not pin the
