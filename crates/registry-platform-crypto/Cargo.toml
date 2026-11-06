@@ -16,6 +16,9 @@ transit = ["dep:reqwest"]
 # CMS signed data, certificate chains and RFC 3161 timestamps for document
 # signatures (PAdES); off unless a product signs documents.
 cms-signing = ["dep:cms", "dep:const-oid", "dep:der", "dep:x509-cert"]
+# The `document_signature::test_support` PKI and timestamp responder, for
+# consumers' tests only; never enable it in a production build.
+test-support = ["cms-signing", "dep:rcgen"]
 
 [dependencies]
 async-trait.workspace = true
@@ -29,6 +32,7 @@ hmac.workspace = true
 p256.workspace = true
 pkcs1.workspace = true
 pkcs8.workspace = true
+rcgen = { workspace = true, optional = true }
 registry-platform-canonical-json.workspace = true
 reqwest = { workspace = true, optional = true }
 serde.workspace = true
