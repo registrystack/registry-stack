@@ -288,6 +288,13 @@ signing:
   expires. Declare `withoutTimestamp: seal-stops-validating-when-certificate-expires` instead to
   seal without a timestamp (B-B), and accept that the seal stops validating at expiry. Declare
   exactly one.
+- Seal one test document through your timestamp authority before you rely on it for B-T. Render
+  accepts only a DER answer whose token is signed with RSA PKCS#1 v1.5 or ECDSA and names the
+  authority's certificate in an ESS signing-certificate attribute; the
+  [configuration reference](../../reference/render-configuration/#seal-documents) lists the limits.
+- Render reaches the timestamp authority over TLS with the serving host's root certificates and has
+  no setting of its own for them. If the authority's TLS certificate chains to a national or other
+  private root, add that root to the host's or the container image's trust store.
 - A failing timestamp authority fails the request with `timestamp-failed` (502). Render does not
   retry and never returns an untimestamped file in its place. The audit's response entry and one
   `seal refused` log warning name the failing check as `reason`, such as `timed-out` or
