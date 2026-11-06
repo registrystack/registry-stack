@@ -401,7 +401,10 @@ verdict on the issuer, not a failure of the file's integrity.
   ship it to storage the serving user cannot write.
 - On macOS, such a worker can also read the serving process's environment, including every
   `${VAR}` and `secret:env` value. Seal on Linux, where `serve` closes that.
-- Sealing documents that render to PDF/A-1, A-2, or A-3 has not been verified.
+- veraPDF has passed sealed PDF/A-1b, PDF/A-2b, PDF/A-4 and PDF/UA-1 files, and no other PDF/A
+  level. `check` and `serve` warn about a document type sealed under another level
+  (`render.bundle.seal-standard-unverified`); validate a sealed sample before you issue it, then
+  accept the warning in `check-acceptances.yaml`.
 
 {/* Evidence: crates/registry-render/src/runtime.rs, SigningRuntime, SealRuntime and signing_findings;
     crates/registry-render/src/seal.rs, Seal::load, check_chain and EXPIRY_WARNING_DAYS;

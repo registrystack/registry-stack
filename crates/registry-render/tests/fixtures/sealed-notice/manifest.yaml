@@ -2,7 +2,10 @@
 # `ministry` and prints its seal block only when the payload carries the
 # `signing` member; `letter` declares no seal; `archive` is the same notice
 # as PDF/A-2b, whose 32767-byte string limit bounds the seal's reserved
-# signature space; `accessible` is the same notice as PDF/UA-1.
+# signature space; `archive-1b` and `archive-4` are the same notice as
+# PDF/A-1b and PDF/A-4; `archive-3b` is the same notice as PDF/A-3b, a
+# level no validator run has checked sealed; `accessible` is the same
+# notice as PDF/UA-1.
 apiVersion: id.registrystack.org/formats/render/bundle/v1alpha1
 kind: RenderBundle
 bundleVersion: 1
@@ -21,6 +24,24 @@ documents:
     entryFile: templates/notice.typ
     schemaFile: schemas/notice.schema.json
     pdfStandard: a-2b
+    seal: ministry
+  - id: archive-1b
+    version: 1
+    entryFile: templates/notice.typ
+    schemaFile: schemas/notice.schema.json
+    pdfStandard: a-1b
+    seal: ministry
+  - id: archive-4
+    version: 1
+    entryFile: templates/notice.typ
+    schemaFile: schemas/notice.schema.json
+    pdfStandard: a-4
+    seal: ministry
+  - id: archive-3b
+    version: 1
+    entryFile: templates/notice.typ
+    schemaFile: schemas/notice.schema.json
+    pdfStandard: a-3b
     seal: ministry
   - id: accessible
     version: 1
