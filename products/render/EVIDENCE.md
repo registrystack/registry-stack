@@ -294,8 +294,8 @@ cargo test -p registry-render --test golden   # fails with the drift first
 ```
 
 The two-OS CI job (see `.github/workflows/render-golden.yml`) runs the
-golden test on macOS and Linux; identical hashes across both are the
-cross-machine byte-stability proof the DoD requires.
+golden test on macOS and Linux; identical hashes across both prove that
+the same inputs give the same bytes on both operating systems.
 
 **Regenerated 2026-09-17, example corpus made generic.** The three example
 bundles named one real programme, its institution, its jurisdiction and its

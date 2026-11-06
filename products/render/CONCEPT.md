@@ -11,7 +11,10 @@ APIs. It is a pure rendering function (bundle + validated data in,
 byte-stable PDF + hashes out), a governed template package as its
 content unit, and a value-free audit log as its issuance record.
 No database or rendering-path network calls, and no engine changes in any other
-product. Only the optional HTTP adapter uses OIDC discovery/JWKS networking.
+product. Only the optional HTTP adapter makes outside calls: OIDC discovery and
+JWKS, and for an optional seal, the Transit signing proxy on a host Unix socket
+and the timestamp authority, both from the serving process, never the render
+worker.
 
 ## Document families
 
@@ -31,9 +34,9 @@ record through an app-owned public check route and an Evidence-backed relying
 service. The app owns the bounded answer and its disclosure policy; Render
 mints nothing and does nothing at scan time.
 
-Version 1 has no batch or multi-document request, client crate, TLS
-termination, per-tenant rate limiting, metrics route, or hot reload or runtime
-bundle editing, and no document-type-specific behavior in production code.
+Version 1 has no batch or multi-document request, TLS termination, per-tenant
+rate limiting, metrics route, or hot reload or runtime bundle editing, and no
+document-type-specific behavior in production code.
 
 ## Sealing
 
@@ -111,7 +114,10 @@ house product anatomy: `init`/`check`/`validate`/`package`/`compile`/`serve`/
 runtime configuration loader) for deployment-local bindings; the
 `registry-platform-*` primitives (config loader and secrets, httpsec layers and
 problems, the shared audit writer, authcommon key handling, buildinfo, canonical
-JSON) reused rather than reinvented.
+JSON) reused rather than reinvented. The serving clients,
+`registry-render-client` in Rust with its Node and Python bindings
+(`registry-render-client-node`, `registry-render-client-py`), call the HTTP
+routes and hold no rendering code.
 
 The rendering engine is Typst in library mode, pinned at 0.15.1 with a
 lockfile matched to the Typst release — including the deflate stack,

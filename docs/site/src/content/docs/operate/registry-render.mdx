@@ -117,6 +117,10 @@ These rules are not in the tables:
 - `secret:file/<name>` resolves under `secretProviders.file.root`. `secret:env/<NAME>` works only
   when `secretProviders.environment: {}` is declared. A reference to an undeclared provider is
   refused.
+- A file a `secret:file/` reference names (the API key, an OIDC key set, a seal key, a CA bundle)
+  is a regular file owned by the user serve runs as, with mode `0400` or `0600` and a single link.
+  Serve follows no symbolic link to one, and refuses any other file at startup with
+  `runtime-invalid` and the message `the referenced secret file is unsafe`.
 - A string value may come from the environment as `${VAR}`, `${VAR:-default}`, or
   `${VAR:?message}`, except in `apiKeyRef` and under `secretProviders`.
 - `audit.destination: stdout` hands entries to your collector and takes no `path`.
@@ -266,7 +270,14 @@ certificate, its issuer, and how you hold the key.
 You need an OIDC deployment (a seal never works with the legacy API key), a seal certificate chain
 in a PEM file with the seal certificate first, and the seal key in Vault or OpenBao Transit: an
 `ecdsa-p256` key created non-exportable, reached through a Transit signing proxy on a Unix socket
-on the Render host. The proxy holds the Transit token; Render sends none. With the proxy running,
+on the Render host. The proxy holds the Transit token; Render sends none. Create the key and its
+least-privilege policy as
+[Configure Transit signing for Registry Evidence](../../tutorials/move-evidence-to-production-signing/#create-the-transit-key-and-its-policy)
+does, and run the proxy
+[with a forced token](../../tutorials/move-evidence-to-production-signing/#run-the-proxy-with-a-forced-token),
+its socket group admitting the Render service. Render makes the same calls, a read of the key and a
+prehashed `sha2-256` sign with the pinned `key_version`, so that policy works with your key name and
+version in place of Evidence's. With the proxy running,
 `registry-render keygen --csr <file> --common-name <seal name> --transit-unix-socket-path
 <socket> --transit-mount <mount> --transit-key-name <key> --transit-key-version <version>` reads
 the key version's public key and has Transit sign the certificate request your certificate
@@ -300,6 +311,11 @@ signing:
       allowedClients: [records-service]
       trust: production
 ```
+
+Render reads the issuer's signing keys from its OpenID Connect discovery document, or from
+`authentication.oidc.jwksSource`: a key set URL (`type: uri`) or a key set held as a secret
+(`type: static` with `documentRef`, such as `secret:file/jwks.json`).
+[Connect an OIDC issuer](../advanced/connect-an-oidc-issuer/) covers each choice.
 
 - `trust` is required. `production` marks an official seal, and it signs through `transit` only:
   Render refuses a production seal with a key file
@@ -442,8 +458,12 @@ signing:
       trust: test-only
 ```
 
-Then run `check --environment` and `serve` as above. `test-root.key` can issue certificates: keep
-it out of every deployment, and never trust the test root outside development.
+Put this `signing` block in a runtime file that has the `authentication` block from
+[Enable a seal](#enable-a-seal). Name the seal in the document type's `manifest.yaml` entry with
+`seal: ministry`, and run `registry-render package` again. Then run `check --environment` and
+`serve` as above. Callers need a token from your issuer that carries `render:seal`, issued to a
+client the seal's `allowedClients` names. `test-root.key` can issue certificates: keep it out of
+every deployment, and never trust the test root outside development.
 
 ### Renew the certificate
 
@@ -467,8 +487,10 @@ When seals are configured, `/ready` adds a `signing` member with one entry per s
 `certificate-expired`, `certificate-not-yet-valid`, or `signer-not-ready`. A seal never changes
 the status code: Render stays ready for plain rendering while a seal cannot sign, and a seal
 request answers `signing-unavailable` or `seal-certificate-invalid` (503) until it can. Readiness
-reads the certificate validity and the key provider; it never calls the timestamp authority, so a
-ready seal can still fail with `timestamp-failed`.
+reads the certificate validity and the signer's last known state; it never calls the timestamp
+authority, so a ready seal can still fail with `timestamp-failed`. A Transit seal turns
+`signer-not-ready` only after a sign call fails, so after its proxy stops, `/ready` reports it
+ready until a seal request fails.
 
 A Transit seal whose proxy stops answering fails the seal request in progress with
 `signing-unavailable` and turns `signer-not-ready`. Each `/ready` call and each seal request then
