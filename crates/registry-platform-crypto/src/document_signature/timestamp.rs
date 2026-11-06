@@ -4,19 +4,27 @@
 //!
 //! The authority is reached by the caller; this module neither opens
 //! connections nor decides which authorities to trust. It checks that a token
-//! answers this request, verifies under the certificate it carries, and that
+//! answers this request, verifies under the certificate it carries, names
+//! that certificate in its ESS signing-certificate attribute, and that
 //! certificate is a timestamping certificate valid at the token's time.
 
-use super::asn1::{oid, MessageImprint, TimeStampReq, TimeStampResp, TspGeneralizedTime, TstInfo};
+use super::asn1::{
+    oid, IssuerSerial, MessageImprint, SigningCertificate, SigningCertificateV2, TimeStampReq,
+    TimeStampResp, TspGeneralizedTime, TstInfo,
+};
 use super::certificate::{x509_time, CertificateFingerprint};
-use super::verify::{verify_signed_data, DigestAlgorithm, SignerVerificationError};
+use super::verify::{
+    single_attribute, verify_signed_data, DigestAlgorithm, SignerVerificationError,
+};
 use aws_lc_rs::rand::{SecureRandom as _, SystemRandom};
 use cms::content_info::ContentInfo;
 use cms::signed_data::SignedData;
 use der::asn1::{Int, OctetString, Uint};
-use der::{Decode as _, Encode as _, Tag, Tagged as _};
+use der::{Any, Decode as _, Encode as _, Tag, Tagged as _};
 use thiserror::Error;
 use time::OffsetDateTime;
+use x509_cert::attr::Attributes;
+use x509_cert::ext::pkix::name::GeneralName;
 use x509_cert::ext::pkix::ExtendedKeyUsage;
 use x509_cert::Certificate;
 
@@ -63,6 +71,10 @@ pub enum TimestampError {
     TsaCertificateNotForTimestamping { fingerprint: CertificateFingerprint },
     #[error("timestamp authority certificate {fingerprint} is not valid at the token's time")]
     TsaCertificateNotValidAtGenTime { fingerprint: CertificateFingerprint },
+    #[error(
+        "the timestamp token has no ESS signing-certificate attribute naming its authority's certificate {fingerprint}"
+    )]
+    TsaCertificateNotNamedBySigningCertificate { fingerprint: CertificateFingerprint },
     #[error("the timestamp request could not be DER encoded: {0}")]
     Encoding(#[from] der::Error),
     #[error("the system random number generator failed")]
@@ -106,9 +118,11 @@ pub fn timestamp_request(signature_value: &[u8], nonce: u64) -> Result<Vec<u8>, 
 /// missing token; a token that is not `SignedData` over a version 1 TSTInfo;
 /// a message imprint other than SHA-256 of `signature_value`; a missing or
 /// different nonce; a token signature that does not verify under the
-/// certificate the token carries; a certificate without a critical extended
-/// key usage of exactly id-kp-timeStamping (RFC 3161 section 2.3); and a
-/// `genTime` outside that certificate's validity.
+/// certificate the token carries; a token whose ESS signing-certificate
+/// attribute is missing or names another certificate (RFC 3161 section
+/// 2.4.1, RFC 5816); a certificate without a critical extended key usage of
+/// exactly id-kp-timeStamping (RFC 3161 section 2.3); and a `genTime` outside
+/// that certificate's validity.
 ///
 /// Whether the authority is trusted, and whether its certificate is revoked,
 /// is not checked here.
@@ -197,12 +211,25 @@ pub(super) fn check_imprint(
     Ok(())
 }
 
-/// Verify a token's signature, its authority's certificate usage, and that
-/// certificate's validity at `genTime`, and return `genTime`.
+/// Verify a token's signature, that its signing-certificate attribute names
+/// the certificate it verifies under, that certificate's usage, and its
+/// validity at `genTime`, and return `genTime`.
 pub(super) fn verify_token(token: &TimestampToken) -> Result<OffsetDateTime, TimestampError> {
     let certificate = verify_signed_data(&token.signed_data, &[&token.tst_info_der])
         .map_err(TimestampError::TokenSignature)?;
-    let fingerprint = CertificateFingerprint::of(&certificate.to_der()?);
+    let certificate_der = certificate.to_der()?;
+    let fingerprint = CertificateFingerprint::of(&certificate_der);
+    let names_certificate = token
+        .signed_data
+        .signer_infos
+        .0
+        .iter()
+        .next()
+        .and_then(|signer| signer.signed_attrs.as_ref())
+        .is_some_and(|attributes| names_signer(attributes, certificate, &certificate_der));
+    if !names_certificate {
+        return Err(TimestampError::TsaCertificateNotNamedBySigningCertificate { fingerprint });
+    }
     if !only_critical_timestamping(certificate) {
         return Err(TimestampError::TsaCertificateNotForTimestamping { fingerprint });
     }
@@ -212,6 +239,73 @@ pub(super) fn verify_token(token: &TimestampToken) -> Result<OffsetDateTime, Tim
         return Err(TimestampError::TsaCertificateNotValidAtGenTime { fingerprint });
     }
     Ok(gen_time)
+}
+
+/// RFC 3161 section 2.4.1, as RFC 5816 updates it: the signer carries
+/// signingCertificate (RFC 2634) or signingCertificateV2 (RFC 5035), and the
+/// first certificate each identifies is `certificate`, by hash and, when
+/// given, by issuer and serial number. Each attribute present must be a
+/// single value that decodes; at least one must be present.
+fn names_signer(
+    attributes: &Attributes,
+    certificate: &Certificate,
+    certificate_der: &[u8],
+) -> bool {
+    let attribute = |wanted| {
+        attributes
+            .iter()
+            .any(|attribute| attribute.oid == wanted)
+            .then(|| single_attribute(attributes, wanted))
+    };
+    let v2 = attribute(oid::SIGNING_CERTIFICATE_V2);
+    let v1 = attribute(oid::SIGNING_CERTIFICATE);
+    if v1.is_none() && v2.is_none() {
+        return false;
+    }
+    let v2_names = |value: &Any| {
+        value
+            .decode_as::<SigningCertificateV2>()
+            .ok()
+            .and_then(|attribute| attribute.certs.into_iter().next())
+            .is_some_and(|id| {
+                // RFC 5035 section 4: SHA-256 when the algorithm is absent.
+                let digest = match &id.hash_algorithm {
+                    None => Some(DigestAlgorithm::Sha256),
+                    Some(identifier) => DigestAlgorithm::from_identifier(identifier),
+                };
+                digest.is_some_and(|digest| {
+                    id.cert_hash.as_bytes() == digest.digest(&[certificate_der]).as_slice()
+                }) && issuer_serial_names(id.issuer_serial.as_ref(), certificate)
+            })
+    };
+    let v1_names = |value: &Any| {
+        value
+            .decode_as::<SigningCertificate>()
+            .ok()
+            .and_then(|attribute| attribute.certs.into_iter().next())
+            .is_some_and(|id| {
+                let sha1 = aws_lc_rs::digest::digest(
+                    &aws_lc_rs::digest::SHA1_FOR_LEGACY_USE_ONLY,
+                    certificate_der,
+                );
+                id.cert_hash.as_bytes() == sha1.as_ref()
+                    && issuer_serial_names(id.issuer_serial.as_ref(), certificate)
+            })
+    };
+    v2.is_none_or(|value| value.is_some_and(v2_names))
+        && v1.is_none_or(|value| value.is_some_and(v1_names))
+}
+
+/// An absent `issuerSerial`, or one whose serial number and a directory name
+/// are `certificate`'s issuer and serial number.
+fn issuer_serial_names(issuer_serial: Option<&IssuerSerial>, certificate: &Certificate) -> bool {
+    let tbs = &certificate.tbs_certificate;
+    issuer_serial.is_none_or(|issuer_serial| {
+        issuer_serial.serial_number == tbs.serial_number
+            && issuer_serial.issuer.iter().any(
+                |name| matches!(name, GeneralName::DirectoryName(issuer) if *issuer == tbs.issuer),
+            )
+    })
 }
 
 /// RFC 3161 section 2.3: one extended key usage extension, critical, whose

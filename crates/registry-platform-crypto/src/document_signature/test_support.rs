@@ -9,7 +9,8 @@
 //! memory. Nothing here is fit for production signing.
 
 use super::asn1::{
-    oid, Accuracy, PkiStatusInfo, TimeStampReq, TimeStampResp, TspGeneralizedTime, TstInfo,
+    oid, Accuracy, EssCertId, EssCertIdV2, IssuerSerial, PkiStatusInfo, SigningCertificate,
+    SigningCertificateV2, TimeStampReq, TimeStampResp, TspGeneralizedTime, TstInfo,
 };
 use super::certificate::{CertificateChain, CertificateError, CertificateFingerprint};
 use super::signed_data::{
@@ -26,7 +27,7 @@ use aws_lc_rs::rand::{SecureRandom as _, SystemRandom};
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use base64::Engine as _;
 use cms::signed_data::EncapsulatedContentInfo;
-use der::asn1::{Int, ObjectIdentifier, UintRef};
+use der::asn1::{Int, ObjectIdentifier, OctetString, UintRef};
 use der::{Any, Decode as _, Encode as _, Tag};
 use rcgen::{
     BasicConstraints, CertificateParams, CustomExtension, DistinguishedName, DnType, IsCa, Issuer,
@@ -34,6 +35,7 @@ use rcgen::{
 };
 use thiserror::Error;
 use time::{Duration, OffsetDateTime};
+use x509_cert::ext::pkix::name::GeneralName;
 use x509_cert::ext::pkix::ExtendedKeyUsage;
 use x509_cert::Certificate;
 
@@ -236,6 +238,19 @@ pub fn respond_to_timestamp_request(
     respond_with(request_der, pki.tsa(), gen_time, |_| {})
 }
 
+/// [`respond_to_timestamp_request`], with the token's signer carrying
+/// `signing_certificate` as its ESS signing-certificate attribute.
+pub fn respond_to_timestamp_request_with(
+    request_der: &[u8],
+    pki: &TestPki,
+    gen_time: OffsetDateTime,
+    signing_certificate: EssAttribute,
+) -> Result<Vec<u8>, TestPkiError> {
+    respond_with(request_der, pki.tsa(), gen_time, |parts| {
+        parts.signing_certificate = signing_certificate;
+    })
+}
+
 /// Answer a DER `TimeStampReq` as a timestamp authority that refuses it:
 /// status `rejection` (2) and no token.
 pub fn refuse_timestamp_request(
@@ -309,6 +324,26 @@ pub(super) struct ResponseParts {
     pub(super) tamper_signature: bool,
     pub(super) econtent_type: ObjectIdentifier,
     pub(super) tst_info: TstInfo,
+    pub(super) signing_certificate: EssAttribute,
+}
+
+/// The ESS signing-certificate attribute a test token's signer carries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EssAttribute {
+    /// signingCertificateV2 naming the authority's certificate by SHA-256,
+    /// issuer and serial number.
+    V2,
+    /// signingCertificate naming the authority's certificate by SHA-1,
+    /// issuer and serial number.
+    V1,
+    /// Neither attribute.
+    Absent,
+    /// signingCertificateV2 whose hash is over other bytes.
+    OtherCertificate,
+    /// signingCertificate whose hash is over other bytes.
+    V1OtherCertificate,
+    /// signingCertificateV2 with the right hash and another serial number.
+    OtherIssuerSerial,
 }
 
 /// Answer `request_der` as `tsa`, with `customise` changing the response
@@ -326,9 +361,10 @@ pub(super) fn respond_with(
         include_certificates: request.cert_req == Some(true),
         tamper_signature: false,
         econtent_type: oid::TST_INFO,
+        signing_certificate: EssAttribute::V2,
         tst_info: TstInfo {
             version: 1,
-            policy: TEST_TSA_POLICY,
+            policy: TEST_TSA_POLICY.into(),
             message_imprint: request.message_imprint,
             serial_number: Int::new(&random_serial()?)?,
             gen_time: TspGeneralizedTime::new(gen_time),
@@ -374,6 +410,12 @@ fn timestamp_token(
         &tsa.certificate_der,
         &certificate,
     )?;
+    let signed_attrs = with_signing_certificate(
+        signed_attrs,
+        parts.signing_certificate,
+        &tsa.certificate_der,
+        &certificate,
+    )?;
     let jws = sign(&signed_attrs.to_der()?, &tsa.private_jwk)?;
     let mut signature = jws_ecdsa_to_der(&jws, 32)?;
     if parts.tamper_signature {
@@ -399,6 +441,81 @@ fn timestamp_token(
         signature,
     )?;
     Ok(content_info(&signed_data)?)
+}
+
+/// Replace the signingCertificateV2 that [`signed_attributes`] writes with
+/// the attribute `choice` names.
+fn with_signing_certificate(
+    signed_attrs: x509_cert::attr::Attributes,
+    choice: EssAttribute,
+    certificate_der: &[u8],
+    certificate: &Certificate,
+) -> Result<x509_cert::attr::Attributes, TestPkiError> {
+    if choice == EssAttribute::V2 {
+        return Ok(signed_attrs);
+    }
+    let mut attributes: Vec<_> = signed_attrs
+        .into_vec()
+        .into_iter()
+        .filter(|attribute| attribute.oid != oid::SIGNING_CERTIFICATE_V2)
+        .collect();
+    let issuer_serial = || IssuerSerial {
+        issuer: vec![GeneralName::DirectoryName(
+            certificate.tbs_certificate.issuer.clone(),
+        )],
+        serial_number: certificate.tbs_certificate.serial_number.clone(),
+    };
+    let v2 = |hash: Vec<u8>, issuer_serial: IssuerSerial| -> Result<_, TestPkiError> {
+        Ok((
+            oid::SIGNING_CERTIFICATE_V2,
+            Any::encode_from(&SigningCertificateV2 {
+                certs: vec![EssCertIdV2 {
+                    hash_algorithm: None,
+                    cert_hash: OctetString::new(hash)?,
+                    issuer_serial: Some(issuer_serial),
+                }],
+                policies: None,
+            })?,
+        ))
+    };
+    let v1 = |hash: &[u8]| -> Result<_, TestPkiError> {
+        Ok((
+            oid::SIGNING_CERTIFICATE,
+            Any::encode_from(&SigningCertificate {
+                certs: vec![EssCertId {
+                    cert_hash: OctetString::new(hash)?,
+                    issuer_serial: Some(issuer_serial()),
+                }],
+                policies: None,
+            })?,
+        ))
+    };
+    let sha1 = |bytes: &[u8]| {
+        aws_lc_rs::digest::digest(&aws_lc_rs::digest::SHA1_FOR_LEGACY_USE_ONLY, bytes)
+            .as_ref()
+            .to_vec()
+    };
+    let sha256 = |bytes: &[u8]| DigestAlgorithm::Sha256.digest(&[bytes]);
+    let added = match choice {
+        EssAttribute::V2 | EssAttribute::Absent => None,
+        EssAttribute::V1 => Some(v1(&sha1(certificate_der))?),
+        EssAttribute::OtherCertificate => {
+            Some(v2(sha256(b"another certificate"), issuer_serial())?)
+        }
+        EssAttribute::V1OtherCertificate => Some(v1(&sha1(b"another certificate"))?),
+        EssAttribute::OtherIssuerSerial => {
+            let mut other = issuer_serial();
+            other.serial_number = x509_cert::serial_number::SerialNumber::new(&[0x7f; 8])?;
+            Some(v2(sha256(certificate_der), other)?)
+        }
+    };
+    if let Some((oid, value)) = added {
+        attributes.push(x509_cert::attr::Attribute {
+            oid,
+            values: der::asn1::SetOfVec::try_from(vec![value])?,
+        });
+    }
+    Ok(der::asn1::SetOfVec::try_from(attributes)?)
 }
 
 fn ecdsa_with_sha256() -> x509_cert::spki::AlgorithmIdentifierOwned {

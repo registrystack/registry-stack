@@ -1040,6 +1040,86 @@ fn accept_timestamp_response_refuses_a_tsa_without_critical_timestamping() {
     }
 }
 
+/// RFC 3161 section 2.4.1, as RFC 5816 updates it: the authority's signer
+/// carries signingCertificate (SHA-1) or signingCertificateV2, and its first
+/// certificate identifier names the certificate the token verifies under.
+#[test]
+fn accept_timestamp_response_requires_a_signing_certificate_naming_the_tsa() {
+    use super::test_support::EssAttribute;
+
+    let pki = test_pki();
+    for accepted in [EssAttribute::V2, EssAttribute::V1] {
+        let request = timestamp_request(b"value", 13).expect("request");
+        let response = respond_with(&request, pki.tsa(), now_seconds(), |parts| {
+            parts.signing_certificate = accepted;
+        })
+        .expect("response");
+        accept_timestamp_response(&response, b"value", 13)
+            .unwrap_or_else(|error| panic!("{accepted:?} refused: {error}"));
+    }
+    for refused in [
+        EssAttribute::Absent,
+        EssAttribute::OtherCertificate,
+        EssAttribute::V1OtherCertificate,
+        EssAttribute::OtherIssuerSerial,
+    ] {
+        let error = refusal(&pki, |parts| parts.signing_certificate = refused);
+        assert!(
+            matches!(
+                error,
+                TimestampError::TsaCertificateNotNamedBySigningCertificate { .. }
+            ),
+            "{refused:?}: {error}"
+        );
+    }
+}
+
+/// X.660 allows arcs of any size: a UUID-form policy under 2.25 has a
+/// 128-bit arc, beyond what `ObjectIdentifier` holds. The policy is carried,
+/// not interpreted, so such a token is accepted; a policy that is not a
+/// well-formed OBJECT IDENTIFIER is still refused.
+#[test]
+fn accept_timestamp_response_reads_a_policy_with_an_arc_beyond_32_bits() {
+    fn base128(mut arc: u128) -> Vec<u8> {
+        let mut bytes = vec![(arc & 0x7f) as u8];
+        arc >>= 7;
+        while arc > 0 {
+            bytes.push((arc & 0x7f) as u8 | 0x80);
+            arc >>= 7;
+        }
+        bytes.reverse();
+        bytes
+    }
+    let pki = test_pki();
+    // 2.25.158419573095214513358893402063207917553, the friction report's
+    // policy: the first two arcs encode as 2 * 40 + 25.
+    let mut uuid_policy = vec![2 * 40 + 25];
+    uuid_policy.extend(base128(158_419_573_095_214_513_358_893_402_063_207_917_553));
+    assert!(
+        ObjectIdentifier::from_bytes(&uuid_policy).is_err(),
+        "ObjectIdentifier cannot hold the arc"
+    );
+    let request = timestamp_request(b"value", 17).expect("request");
+    let response = respond_with(&request, pki.tsa(), now_seconds(), |parts| {
+        parts.tst_info.policy = super::asn1::TsaPolicyId::from_content(uuid_policy.clone());
+    })
+    .expect("response");
+    accept_timestamp_response(&response, b"value", 17).expect("a UUID-form policy is read");
+
+    for malformed in [vec![], vec![0x2a, 0x80], vec![0x2a, 0x80, 0x01]] {
+        let error = refusal(&pki, |parts| {
+            parts.tst_info.policy = super::asn1::TsaPolicyId::from_content(malformed.clone());
+        });
+        assert!(
+            matches!(
+                error,
+                TimestampError::MalformedResponse | TimestampError::MalformedTstInfo
+            ),
+            "{malformed:?}: {error}"
+        );
+    }
+}
+
 #[test]
 fn accept_timestamp_response_refuses_a_gen_time_outside_tsa_validity() {
     let pki = test_pki();
