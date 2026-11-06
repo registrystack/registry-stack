@@ -12,9 +12,12 @@
   run snapshot is restored: the service does not start on a pinned package
   that breaks it, and while a live run admitted under such a definition
   remains, normal serving, readiness, admissions and apply are refused. Before
-  upgrading, check each project with this version. If one is refused, settle
-  or cancel its runs with the 0.45.0 binaries, then map `request` from the
-  submit step, package and apply again.
+  upgrading, run this version's `coordinatorctl check` on each project and its
+  `coordinatorctl deployment-status` against the deployment, which also checks
+  every run in flight, including runs admitted from an earlier package. If
+  either refuses on this rule, settle or cancel the affected runs with the
+  0.45.0 binaries, then map `request` from the submit step, package and apply
+  again.
 
 ## 0.45.0 - 2026-11-03
 
