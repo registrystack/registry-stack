@@ -6,8 +6,9 @@
 //! object model cannot give back the original bytes of an entry, and the
 //! update copies every entry it does not replace byte for byte. Callers
 //! cross-check the keys found here against `hayro-syntax`. Reading the
-//! revision also walks every object in use with a nesting bound, because
-//! `hayro-syntax` recurses without one and a stack overflow aborts.
+//! revision also walks every object in use with a nesting bound, and the
+//! page tree with a depth bound and each node once, because `hayro-syntax`
+//! recurses through both without one and a stack overflow aborts.
 
 use std::ops::Range;
 
@@ -349,7 +350,9 @@ struct XrefEntry {
 /// covering every object, a trailer without `/Prev`, `/XRefStm` or
 /// `/Encrypt`, and nothing after `%%EOF` but one optional EOL. The value of
 /// every object in use must read as a PDF value nested at most `MAX_DEPTH`
-/// deep; a stream's data after its dictionary is not read.
+/// deep; a stream's data after its dictionary is not read. The page tree
+/// must nest at most `MAX_PAGE_TREE_DEPTH` nodes deep and reach each node
+/// once.
 pub(super) fn read_revision(pdf: &[u8]) -> Result<Revision, PdfSignatureError> {
     if !pdf.starts_with(b"%PDF-") {
         return Err(malformed("the file does not start with a %PDF- header"));
@@ -393,18 +396,23 @@ pub(super) fn read_revision(pdf: &[u8]) -> Result<Revision, PdfSignatureError> {
         .and_then(|size| u32::try_from(size).ok())
         .ok_or(malformed("the trailer has no numeric /Size"))?;
     let offsets = cover(&subsections, size)?;
+    let mut values = Vec::with_capacity(offsets.len());
     for (number, offset) in offsets.iter().enumerate() {
-        if let Some(offset) = offset {
-            let body = (*offset < xref_offset)
-                .then(|| object_body_at(pdf, *offset, number))
-                .flatten()
-                .ok_or(malformed(
-                    "a cross-reference entry does not point at its object",
-                ))?;
-            // `hayro-syntax` recurses without a depth limit; walking every
-            // object here first keeps its recursion within `MAX_DEPTH`.
-            value_at(&pdf[..xref_offset], skip_space(pdf, body), 0)?;
-        }
+        let Some(offset) = offset else {
+            values.push(None);
+            continue;
+        };
+        let body = (*offset < xref_offset)
+            .then(|| object_body_at(pdf, *offset, number))
+            .flatten()
+            .ok_or(malformed(
+                "a cross-reference entry does not point at its object",
+            ))?;
+        // `hayro-syntax` recurses without a depth limit; walking every
+        // object here first keeps its recursion within `MAX_DEPTH`.
+        let value = skip_space(pdf, body);
+        value_at(&pdf[..xref_offset], value, 0)?;
+        values.push(Some(value));
     }
 
     let (root, root_generation) = value(b"Root")
@@ -413,6 +421,7 @@ pub(super) fn read_revision(pdf: &[u8]) -> Result<Revision, PdfSignatureError> {
     if root_generation != 0 || offsets.get(root as usize).is_none_or(Option::is_none) {
         return Err(malformed("the trailer /Root names no object"));
     }
+    check_page_tree(&pdf[..xref_offset], &values, root)?;
 
     let id = trailer
         .iter()
@@ -581,6 +590,67 @@ fn object_body_at(pdf: &[u8], offset: usize, number: usize) -> Option<usize> {
     let keyword = skip_whitespace(pdf, generation_end);
     (keyword > generation_end && pdf[keyword..].starts_with(b"obj") && ends_token(pdf, keyword + 3))
         .then_some(keyword + 3)
+}
+
+/// Walk the page tree from the catalog's `/Pages` through every `/Kids`
+/// reference, at most `MAX_PAGE_TREE_DEPTH` nodes deep, reaching each node
+/// once. `hayro-syntax` builds its page list when it opens a file,
+/// recursing once per level and visiting a shared node once per parent:
+/// a deep chain of shallow objects aborts it on a stack overflow, a cycle
+/// never ends, and a node with two parents multiplies its work. The walk
+/// follows `/Kids` whatever a node's `/Type` says, so it reaches every node
+/// `hayro-syntax` recurses into.
+///
+/// `values[number]` is the offset in `objects` of object `number`'s value.
+fn check_page_tree(
+    objects: &[u8],
+    values: &[Option<usize>],
+    root: u32,
+) -> Result<(), PdfSignatureError> {
+    let entries_of = |number: u32, not_a_dict: &'static str| -> Result<Vec<Entry>, _> {
+        let at = values
+            .get(number as usize)
+            .copied()
+            .flatten()
+            .ok_or(malformed("a page tree reference names no object"))?;
+        if objects.get(at..at + 2) != Some(&b"<<"[..]) {
+            return Err(malformed(not_a_dict));
+        }
+        dict_entries(objects, at).map(|(entries, _)| entries)
+    };
+    let object_number = |span: Range<usize>| match reference(&objects[span]) {
+        Some((number, 0)) => Ok(number),
+        _ => Err(malformed(
+            "a page tree reference is not an object reference",
+        )),
+    };
+
+    let catalog = entries_of(root, "the catalog is not a dictionary")?;
+    let pages = catalog
+        .iter()
+        .find(|entry| entry.key == b"Pages")
+        .ok_or(malformed("the catalog has no page tree"))?;
+    let mut reached = vec![false; values.len()];
+    let mut pending = vec![(object_number(pages.value.clone())?, 1)];
+    while let Some((number, depth)) = pending.pop() {
+        if depth > super::MAX_PAGE_TREE_DEPTH {
+            return Err(malformed("the page tree nests too deeply"));
+        }
+        let entries = entries_of(number, "a page tree node is not a dictionary")?;
+        if std::mem::replace(&mut reached[number as usize], true) {
+            return Err(malformed("the page tree reaches a node twice"));
+        }
+        let Some(kids) = entries.iter().find(|entry| entry.key == b"Kids") else {
+            continue;
+        };
+        if objects[kids.value.start] != b'[' {
+            return Err(malformed("a page tree node's /Kids is not an array"));
+        }
+        for kid in array_elements(objects, kids.value.start)?.0 {
+            pending.push((object_number(kid)?, depth + 1));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
