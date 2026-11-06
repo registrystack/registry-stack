@@ -6,6 +6,7 @@
 //! loader, so its envelope, size bound, path rules, `${VAR}` substitution,
 //! and secret provider declarations match every other runtime.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -19,10 +20,12 @@ use registry_platform_config::{
     RuntimeConfigLoader, RuntimeEnvelope, RuntimeFileCheck, SecretProvidersConfig,
 };
 use registry_platform_yaml::{
-    escape_pointer_segment, BoundedU32, BoundedU64, Diagnostic, RetiredApiVersion, Source,
+    escape_pointer_segment, shape_union, BoundedU32, BoundedU64, Diagnostic, ExternalId, LocalId,
+    RetiredApiVersion, Severity, Source, UniqueList, Url,
 };
 use serde::Deserialize;
 
+use crate::manifest::Manifest;
 use crate::problem::{ProblemKind, RenderProblem};
 
 pub const RUNTIME_API_VERSION: &str = "id.registrystack.org/formats/render/runtime/v1alpha1";
@@ -106,6 +109,43 @@ pub struct RenderRuntime {
     #[serde(default)]
     pub limits: LimitsRuntime,
     pub audit: AuditRuntime,
+    /// Optional document sealing. Omit it and Render loads no signer, makes
+    /// no timestamp call, and cannot seal any document.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signing: Option<SigningRuntime>,
+}
+
+impl RenderRuntime {
+    /// The seal that `seal_id` binds, or `None` when the runtime has no
+    /// `signing` block or binds no such seal.
+    #[must_use]
+    pub fn seal(&self, seal_id: &str) -> Option<&SealRuntime> {
+        self.signing
+            .as_ref()?
+            .seals
+            .iter()
+            .find_map(|(id, seal)| (id.as_str() == seal_id).then_some(seal))
+    }
+
+    /// The seal the document type `document_id` is issued under: the seal id
+    /// the bundle manifest declares on the document type, resolved through
+    /// `signing.seals`.
+    ///
+    /// `None` means the document cannot be sealed: the document type is not
+    /// in `manifest`, it declares no `seal`, or the runtime has no `signing`
+    /// block. A document type that declares a seal the runtime does not bind
+    /// is refused before serving starts ([`validate_seal_bindings`] and
+    /// `registry-render check`), so on a validated pair `None` never hides a
+    /// misconfiguration. The seal route that uses this takes no seal name from
+    /// the caller; the bundle alone decides which seal issues which document.
+    #[must_use]
+    pub fn seal_for(&self, manifest: &Manifest, document_id: &str) -> Option<&SealRuntime> {
+        let document = manifest
+            .documents
+            .iter()
+            .find(|document| document.id == document_id)?;
+        self.seal(document.seal.as_deref()?)
+    }
 }
 
 /// The shortest grace a runtime may declare: zero would drop the renders
@@ -330,6 +370,193 @@ fn default_concurrent_renders() -> usize {
         .unwrap_or(2)
 }
 
+/// The shortest attempt a timestamp authority call may be given.
+pub const MINIMUM_TIMESTAMP_ATTEMPT_MILLISECONDS: u64 = 1_000;
+/// The longest attempt a timestamp authority call may be given.
+pub const MAXIMUM_TIMESTAMP_ATTEMPT_MILLISECONDS: u64 = 60_000;
+/// The attempt a timestamp authority call is given when the file says nothing.
+const DEFAULT_TIMESTAMP_ATTEMPT_MILLISECONDS: u64 = 10_000;
+
+/// Document sealing: the seals this deployment can apply. A seal is a PAdES
+/// signature made with the institution's own key. Which document types use
+/// which seal is decided in the bundle manifest (`seal` on a document type),
+/// never by the caller.
+#[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SigningRuntime {
+    /// The seals, keyed by the local identifier the bundle manifest's `seal`
+    /// names. At least one seal is required: omit `signing` to turn sealing
+    /// off.
+    pub seals: BTreeMap<LocalId, SealRuntime>,
+}
+
+/// One seal: the key material, the certificate chain, the timestamp policy,
+/// and the clients allowed to use it.
+#[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SealRuntime {
+    /// Secret reference to the seal's private key as a JSON Web Key, under a
+    /// declared provider. A reference, never a path to a key file. Local key
+    /// files suit development and pilots; the serving process alone reads
+    /// the key.
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_config::SecretReference")
+    )]
+    pub private_key_ref: String,
+    /// Absolute path of the PEM certificate chain file, the seal's own
+    /// certificate first. Render's other runtime paths are absolute for the
+    /// same reason: the file's meaning must not depend on the directory the
+    /// service starts in.
+    #[cfg_attr(feature = "schema", schemars(with = "PathBuf"))]
+    pub certificate_chain_file: PathBuf,
+    /// The RFC 3161 timestamp authority that timestamps each seal (PAdES
+    /// B-T), so the seal keeps validating after its certificate expires.
+    /// Exactly one of `timestampAuthority` and `withoutTimestamp` is
+    /// required.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "TimestampAuthorityRuntime"))]
+    pub timestamp_authority: Option<TimestampAuthorityRuntime>,
+    /// Seal without a timestamp (PAdES B-B). The only value states the
+    /// consequence the operator accepts: a seal without a timestamp stops
+    /// validating when its certificate expires, which is usually before the
+    /// document stops mattering. Exactly one of `timestampAuthority` and
+    /// `withoutTimestamp` is required.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "WithoutTimestamp"))]
+    pub without_timestamp: Option<WithoutTimestamp>,
+    /// The OIDC clients allowed to seal with this seal: a list of at least
+    /// one client, each also admitted by `auth.oidc.allowedClients`. There is
+    /// no `unrestricted` form and no wildcard: a seal issues documents in the
+    /// institution's name, so every seal-capable client is named. Keep these
+    /// clients separate from any citizen-facing client.
+    #[cfg_attr(feature = "schema", schemars(with = "UniqueList<ExternalId>"))]
+    pub allowed_clients: SealClients,
+    /// `test-only` marks a seal made with a test certificate: the template is
+    /// told so and prints the seal as a test seal. Omit it for a production
+    /// seal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "SealTrust"))]
+    pub trust: Option<SealTrust>,
+}
+
+impl SealRuntime {
+    /// Whether the OIDC client `client_id` may seal with this seal.
+    #[must_use]
+    pub fn allows_client(&self, client_id: &str) -> bool {
+        self.allowed_clients
+            .as_slice()
+            .iter()
+            .any(|allowed| allowed == client_id)
+    }
+
+    /// Whether the seal is declared test-only.
+    #[must_use]
+    pub fn is_test_only(&self) -> bool {
+        self.trust == Some(SealTrust::TestOnly)
+    }
+}
+
+/// The RFC 3161 timestamp authority a seal uses.
+#[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct TimestampAuthorityRuntime {
+    /// Absolute `https` URL of the authority. `http` is accepted only for a
+    /// loopback host (`localhost`, `127.0.0.0/8`, `[::1]`), for a test
+    /// authority on the same machine.
+    pub url: Url,
+    /// Time allowed for one request to the authority, in milliseconds.
+    #[serde(default = "default_timestamp_attempt")]
+    pub attempt_timeout_milliseconds:
+        BoundedU64<MINIMUM_TIMESTAMP_ATTEMPT_MILLISECONDS, MAXIMUM_TIMESTAMP_ATTEMPT_MILLISECONDS>,
+}
+
+impl TimestampAuthorityRuntime {
+    /// `attemptTimeoutMilliseconds` as a duration.
+    #[must_use]
+    pub fn attempt_timeout(&self) -> Duration {
+        Duration::from_millis(self.attempt_timeout_milliseconds.get())
+    }
+}
+
+fn default_timestamp_attempt(
+) -> BoundedU64<MINIMUM_TIMESTAMP_ATTEMPT_MILLISECONDS, MAXIMUM_TIMESTAMP_ATTEMPT_MILLISECONDS> {
+    BoundedU64::new(DEFAULT_TIMESTAMP_ATTEMPT_MILLISECONDS)
+        .expect("the default attempt is within its bounds")
+}
+
+/// The acknowledgement a seal needs to go without a timestamp.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum WithoutTimestamp {
+    /// The seal carries no timestamp, so it stops validating when its
+    /// certificate expires.
+    SealStopsValidatingWhenCertificateExpires,
+}
+
+/// How a seal is trusted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum SealTrust {
+    /// A seal made with a test certificate; documents print it as a test
+    /// seal.
+    TestOnly,
+}
+
+/// The clients allowed to use a seal, as `allowedClients` writes them. A
+/// single value instead of a list is read only so that its refusal can state
+/// why a seal is never unrestricted; the runtime check refuses it, so a
+/// runtime that loaded holds a non-empty list.
+#[derive(Debug, Clone)]
+pub struct SealClients {
+    clients: Vec<String>,
+    written_as_list: bool,
+}
+
+impl SealClients {
+    /// The listed client identifiers.
+    #[must_use]
+    pub fn as_slice(&self) -> &[String] {
+        &self.clients
+    }
+}
+
+/// A value in the position of the list, read only to be refused.
+struct NotAList;
+
+impl<'de> Deserialize<'de> for NotAList {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        String::deserialize(deserializer).map(|_| Self)
+    }
+}
+
+enum SealClientsWire {
+    Scalar(NotAList),
+    List(UniqueList<ExternalId>),
+}
+
+shape_union!(SealClientsWire { scalar => Scalar, list => List });
+
+impl<'de> Deserialize<'de> for SealClients {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(match SealClientsWire::deserialize(deserializer)? {
+            SealClientsWire::Scalar(NotAList) => Self {
+                clients: Vec::new(),
+                written_as_list: false,
+            },
+            SealClientsWire::List(list) => Self {
+                clients: list.into_iter().map(String::from).collect(),
+                written_as_list: true,
+            },
+        })
+    }
+}
+
 /// The largest `audit.rotateBytes` the shared audit writer accepts.
 const MAXIMUM_AUDIT_ROTATE_BYTES: u64 = u32::MAX as u64;
 
@@ -414,7 +641,22 @@ pub struct RuntimeCheck {
 /// storage (the container preflight proof).
 #[must_use]
 pub fn check_runtime(path: &Path, substitute: bool, audit_root: Option<&Path>) -> RuntimeCheck {
-    read_runtime(path, substitute, audit_root).1
+    check_runtime_with_bundle(path, substitute, audit_root, None)
+}
+
+/// [`check_runtime`], and with the `manifest` of the bundle the runtime will
+/// serve, the seal bindings of both files together: a document type that
+/// names a seal the runtime does not bind is an error, and a runtime seal no
+/// document type names is a warning, each placed in the runtime file. With no
+/// `signing` block sealing is off and the manifest adds no finding.
+#[must_use]
+pub fn check_runtime_with_bundle(
+    path: &Path,
+    substitute: bool,
+    audit_root: Option<&Path>,
+    manifest: Option<&Manifest>,
+) -> RuntimeCheck {
+    read_runtime(path, substitute, audit_root, manifest).1
 }
 
 /// Load and validate a runtime file through the shared loader, with the
@@ -422,7 +664,7 @@ pub fn check_runtime(path: &Path, substitute: bool, audit_root: Option<&Path>) -
 /// the `sha256:` digest of its effective configuration; a refusal carries
 /// every finding, each positioned in the file and naming its fix.
 pub fn load(path: &Path) -> Result<(RenderRuntime, String), RenderProblem> {
-    match read_runtime(path, true, None) {
+    match read_runtime(path, true, None, None) {
         (Some(loaded), _) => Ok((loaded.config, loaded.effective_digest)),
         (None, check) => {
             let detail = if check.unavailable {
@@ -445,6 +687,7 @@ fn read_runtime(
     path: &Path,
     substitute: bool,
     audit_root: Option<&Path>,
+    manifest: Option<&Manifest>,
 ) -> (Option<LoadedRuntimeConfig<RenderRuntime>>, RuntimeCheck) {
     let check = runtime_loader().check_offline::<RenderRuntime>(path, substitute, stand_in_for);
     let mut diagnostics = check.diagnostics.clone();
@@ -463,6 +706,30 @@ fn read_runtime(
                     finding.message,
                     finding.action,
                 ));
+            }
+        }
+        if let Some(manifest) = manifest {
+            for binding in seal_binding_findings(&loaded.config, manifest) {
+                let finding = binding.finding;
+                let mut diagnostic = if binding.at_key {
+                    check.error_at_key(
+                        RUNTIME_KIND,
+                        finding.code,
+                        &finding.pointer,
+                        finding.message,
+                        finding.action,
+                    )
+                } else {
+                    check.error_at(
+                        RUNTIME_KIND,
+                        finding.code,
+                        &finding.pointer,
+                        finding.message,
+                        finding.action,
+                    )
+                };
+                diagnostic.severity = binding.severity;
+                diagnostics.push(diagnostic);
             }
         }
         if let (Some(root), false) = (audit_root, audit_refused) {
@@ -494,7 +761,10 @@ fn read_runtime(
             }
         }
     }
-    let loaded = check.loaded.filter(|_| diagnostics.is_empty());
+    // A warning reports a finding but does not refuse the file.
+    let loaded = check
+        .loaded
+        .filter(|_| diagnostics.iter().all(|d| d.severity != Severity::Error));
     (
         loaded,
         RuntimeCheck {
@@ -612,6 +882,7 @@ fn findings(runtime: &RenderRuntime) -> Vec<Finding> {
         )
     });
     if needs_secrets
+        || runtime.signing.is_some()
         || runtime.secret_providers.file.is_some()
         || runtime.secret_providers.environment.is_some()
     {
@@ -634,7 +905,296 @@ fn findings(runtime: &RenderRuntime) -> Vec<Finding> {
     if let Err(error) = runtime.audit.settings() {
         findings.push(audit_finding(&error));
     }
+    if let Some(signing) = &runtime.signing {
+        findings.extend(signing_findings(runtime, signing));
+    }
     findings
+}
+
+/// The pointer of the seal `id` in the runtime file.
+fn seal_pointer(id: &str) -> String {
+    format!("/signing/seals/{}", escape_pointer_segment(id))
+}
+
+/// Every refusal of the `signing` block that needs no bundle: OIDC
+/// authentication, the secret reference, the certificate path, the
+/// timestamp policy, and the client list.
+fn signing_findings(runtime: &RenderRuntime, signing: &SigningRuntime) -> Vec<Finding> {
+    let mut findings = Vec::new();
+    let finding = |code: &'static str, pointer: String, message: String, action: &str| Finding {
+        code,
+        pointer,
+        message,
+        action: action.to_owned(),
+    };
+    // With the legacy key, `auth` already carries its own refusal when it is
+    // neither mode; only the key mode makes sealing impossible.
+    if runtime.auth.oidc.is_none() && runtime.auth.api_key_ref.is_some() {
+        findings.push(finding(
+            "render.runtime.signing-requires-oidc",
+            "/signing".to_owned(),
+            "signing needs OIDC authentication: the legacy API key cannot say which client is \
+             sealing, so it can never be allowed to seal"
+                .to_owned(),
+            "Configure auth.oidc and name the sealing clients in each seal's allowedClients, or \
+             remove the signing block.",
+        ));
+    }
+    if signing.seals.is_empty() {
+        findings.push(finding(
+            "render.runtime.no-seals",
+            "/signing/seals".to_owned(),
+            "signing.seals declares no seal".to_owned(),
+            "Declare at least one seal, or remove the signing block to leave sealing off.",
+        ));
+    }
+    let admitted: Option<BTreeSet<&str>> = runtime.auth.oidc.as_ref().and_then(|oidc| {
+        // An empty list is how the token verifier holds `unrestricted`.
+        let clients = &oidc.clients.allowed_clients;
+        (!clients.is_empty()).then(|| clients.iter().map(String::as_str).collect())
+    });
+    for (id, seal) in &signing.seals {
+        let id = id.as_str();
+        let base = seal_pointer(id);
+        if let Err(error) = runtime.secret_providers.check_reference(
+            &format!("signing.seals.{id}.privateKeyRef"),
+            &seal.private_key_ref,
+        ) {
+            findings.push(block_finding(&error));
+        }
+        if !is_plain_absolute(&seal.certificate_chain_file) {
+            findings.push(finding(
+                "render.runtime.relative-path",
+                format!("{base}/certificateChainFile"),
+                format!(
+                    "signing.seals.{id}.certificateChainFile must be an absolute path to a file, \
+                     with no `.` or `..` segment"
+                ),
+                "Write the absolute path of the PEM certificate chain file, the seal's own \
+                 certificate first.",
+            ));
+        }
+        match (&seal.timestamp_authority, &seal.without_timestamp) {
+            (None, None) => findings.push(finding(
+                "render.runtime.seal-timestamp-undecided",
+                base.clone(),
+                format!(
+                    "signing.seals.{id} declares neither timestampAuthority nor withoutTimestamp; \
+                     a seal without a timestamp stops validating when its certificate expires"
+                ),
+                "Declare timestampAuthority with the url of an RFC 3161 authority, or write \
+                 withoutTimestamp: seal-stops-validating-when-certificate-expires to accept that \
+                 consequence.",
+            )),
+            (Some(_), Some(_)) => findings.push(finding(
+                "render.runtime.seal-timestamp-conflict",
+                format!("{base}/withoutTimestamp"),
+                format!("signing.seals.{id} declares both timestampAuthority and withoutTimestamp"),
+                "Keep timestampAuthority to timestamp the seal, or withoutTimestamp to accept \
+                 that the seal stops validating when its certificate expires; remove the other.",
+            )),
+            _ => {}
+        }
+        if let Some(authority) = &seal.timestamp_authority {
+            if !timestamp_url_allowed(&authority.url) {
+                findings.push(finding(
+                    "render.runtime.insecure-timestamp-url",
+                    format!("{base}/timestampAuthority/url"),
+                    format!(
+                        "signing.seals.{id}.timestampAuthority.url must be an https URL; http is \
+                         accepted only for a loopback host"
+                    ),
+                    "Use the https URL of the timestamp authority; use http only for a test \
+                     authority on localhost.",
+                ));
+            }
+        }
+        let clients_pointer = format!("{base}/allowedClients");
+        if !seal.allowed_clients.written_as_list || seal.allowed_clients.as_slice().is_empty() {
+            findings.push(finding(
+                "render.runtime.seal-clients-not-listed",
+                clients_pointer.clone(),
+                format!(
+                    "signing.seals.{id}.allowedClients must list at least one client; a seal is \
+                     never unrestricted and an empty list is not how a file says so, because a \
+                     seal issues documents in the institution's name"
+                ),
+                "Name each OIDC client allowed to seal, for example [records-service]. Keep \
+                 these separate from any citizen-facing client.",
+            ));
+        }
+        for (index, client) in seal.allowed_clients.as_slice().iter().enumerate() {
+            let pointer = format!("{clients_pointer}/{index}");
+            if client == "unrestricted" || client.contains('*') {
+                findings.push(finding(
+                    "render.runtime.seal-client-wildcard",
+                    pointer,
+                    format!(
+                        "signing.seals.{id}.allowedClients holds a wildcard or the unrestricted \
+                         keyword as a client; a seal-capable client must be named"
+                    ),
+                    "Replace the item with the exact identifier of each client allowed to seal.",
+                ));
+            } else if admitted
+                .as_ref()
+                .is_some_and(|admitted| !admitted.contains(client.as_str()))
+            {
+                findings.push(finding(
+                    "render.runtime.seal-client-not-admitted",
+                    pointer,
+                    format!(
+                        "signing.seals.{id}.allowedClients names a client that \
+                         auth.oidc.allowedClients does not admit, so its token never reaches the \
+                         seal"
+                    ),
+                    "Add the client to auth.oidc.allowedClients, or remove it from the seal.",
+                ));
+            }
+        }
+    }
+    findings
+}
+
+/// An absolute path to a file with no `.` or `..` segment.
+fn is_plain_absolute(path: &Path) -> bool {
+    use std::path::Component;
+    path.is_absolute()
+        && path.file_name().is_some()
+        && path
+            .to_str()
+            .is_some_and(|text| !text.ends_with('/') && !text.contains("//"))
+        && path
+            .components()
+            .all(|component| matches!(component, Component::RootDir | Component::Normal(_)))
+}
+
+/// `https`, or `http` for a loopback host only.
+fn timestamp_url_allowed(url: &Url) -> bool {
+    if url.is_https() {
+        return true;
+    }
+    let parsed = url.to_url();
+    let Some(host) = parsed.host_str() else {
+        return false;
+    };
+    let host = host
+        .strip_prefix('[')
+        .and_then(|inner| inner.strip_suffix(']'))
+        .unwrap_or(host);
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|address| address.is_loopback())
+}
+
+/// A finding of the bundle and runtime read together.
+struct BindingFinding {
+    severity: Severity,
+    /// Placed at the mapping key at the pointer rather than at its value.
+    at_key: bool,
+    finding: Finding,
+}
+
+/// Resolve every seal id the bundle declares against `signing.seals`.
+///
+/// With no `signing` block sealing is off and nothing is reported. With one,
+/// a document type that names a seal the runtime does not bind is an error,
+/// and a runtime seal no document type names is a warning.
+fn seal_binding_findings(runtime: &RenderRuntime, manifest: &Manifest) -> Vec<BindingFinding> {
+    let Some(signing) = &runtime.signing else {
+        return Vec::new();
+    };
+    let mut findings = Vec::new();
+    let mut unbound: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    let mut used = BTreeSet::new();
+    for document in &manifest.documents {
+        let Some(seal) = document.seal.as_deref() else {
+            continue;
+        };
+        used.insert(seal);
+        if runtime.seal(seal).is_none() {
+            unbound.entry(seal).or_default().push(document.id.as_str());
+        }
+    }
+    for (seal, documents) in unbound {
+        findings.push(BindingFinding {
+            severity: Severity::Error,
+            at_key: false,
+            finding: Finding {
+                code: "render.runtime.seal-not-bound",
+                pointer: "/signing/seals".to_owned(),
+                message: format!(
+                    "the bundle issues document type {} under seal `{seal}`, which \
+                     signing.seals does not bind",
+                    documents.join(", ")
+                ),
+                action: format!(
+                    "Declare signing.seals.{seal} in the runtime file, or correct the `seal` \
+                     member of the document type in manifest.yaml."
+                ),
+            },
+        });
+    }
+    for id in signing.seals.keys() {
+        if !used.contains(id.as_str()) {
+            findings.push(BindingFinding {
+                severity: Severity::Warning,
+                at_key: true,
+                finding: Finding {
+                    code: "render.runtime.seal-unused",
+                    pointer: seal_pointer(id.as_str()),
+                    message: format!(
+                        "signing.seals.{id} is bound to no document type of the bundle"
+                    ),
+                    action: "Name the seal in the `seal` member of a document type in \
+                             manifest.yaml, or remove it from the runtime file."
+                        .to_owned(),
+                },
+            });
+        }
+    }
+    findings
+}
+
+/// Check the verified package's manifest against the runtime's seals before
+/// serving: the same resolution `registry-render check` reports, without file
+/// positions. An error is a document type whose seal the runtime does not
+/// bind, refused as a runtime problem. With no `signing` block it accepts
+/// every package, since sealing is then off. On success it returns the
+/// warnings, such as a seal no document type uses.
+pub fn validate_seal_bindings(
+    runtime: &RenderRuntime,
+    manifest: &Manifest,
+) -> Result<Vec<Diagnostic>, RenderProblem> {
+    let (mut errors, mut warnings) = (Vec::new(), Vec::new());
+    for BindingFinding {
+        severity, finding, ..
+    } in seal_binding_findings(runtime, manifest)
+    {
+        let mut diagnostic = Diagnostic::error(
+            finding.code,
+            finding.pointer,
+            finding.message,
+            finding.action,
+        );
+        diagnostic.artifact = Some(RUNTIME_KIND.to_owned());
+        diagnostic.severity = severity;
+        if severity == Severity::Error {
+            errors.push(diagnostic);
+        } else {
+            warnings.push(diagnostic);
+        }
+    }
+    if errors.is_empty() {
+        Ok(warnings)
+    } else {
+        errors.extend(warnings);
+        Err(RenderProblem::new(
+            ProblemKind::RuntimeInvalid,
+            "the runtime configuration does not bind every seal the bundle names",
+        )
+        .with_diagnostics(errors))
+    }
 }
 
 /// A value that satisfies the member at `pointer`, so a deferred expression
@@ -648,6 +1208,16 @@ fn stand_in_for(pointer: &str) -> &'static str {
         }
         "/audit/destination" => "file",
         "/audit/path" => "/audit.jsonl",
+        _ if pointer.starts_with("/signing/seals/")
+            && pointer.ends_with("/timestampAuthority/url") =>
+        {
+            "https://stand-in.invalid/"
+        }
+        _ if pointer.starts_with("/signing/seals/")
+            && pointer.ends_with("/certificateChainFile") =>
+        {
+            "/stand-in.pem"
+        }
         _ => registry_platform_config::DEFAULT_STAND_IN,
     }
 }
@@ -1582,6 +2152,461 @@ mod tests {
             problem.detail,
             "the runtime configuration could not be read"
         );
+    }
+
+    const SEAL: &str = "    ministry:\n      privateKeyRef: secret:file/seal.jwk\n      certificateChainFile: /etc/render/seal/chain.pem\n      timestampAuthority:\n        url: https://tsa.example.test/tsr\n      allowedClients: [records-service]\n";
+
+    /// OIDC authentication admitting `portal` and `records-service`, then a
+    /// `signing` block holding `seals` (the indented body under `seals:`).
+    fn signing_text(home: &Path, seals: &str) -> String {
+        let oidc = "oidc:\n    issuer: https://issuer.example.test\n    audience: https://render.example.test\n    allowedClients: [portal, records-service]";
+        format!(
+            "{}signing:\n  seals:\n{seals}",
+            minimal(home).replace("apiKeyRef: secret:file/api.key", oidc)
+        )
+    }
+
+    fn signing_manifest(documents: &[(&str, Option<&str>)]) -> Manifest {
+        let mut text = String::from(
+            "apiVersion: id.registrystack.org/formats/render/bundle/v1alpha1\nkind: RenderBundle\nbundleVersion: 1\ndocuments:\n",
+        );
+        for (id, seal) in documents {
+            text.push_str(&format!(
+                "  - id: {id}\n    version: 1\n    entryFile: templates/{id}.typ\n"
+            ));
+            if let Some(seal) = seal {
+                text.push_str(&format!("    seal: {seal}\n"));
+            }
+        }
+        Manifest::parse(text.as_bytes()).expect("the manifest parses")
+    }
+
+    #[test]
+    fn a_signing_block_loads_with_its_defaults_and_accessors() {
+        let (_dir, home) = home();
+        let runtime = load_text(&home, &signing_text(&home, SEAL)).expect("signing loads");
+        let seal = runtime.seal("ministry").expect("the seal is bound");
+        assert_eq!(seal.private_key_ref, "secret:file/seal.jwk");
+        assert_eq!(
+            seal.certificate_chain_file,
+            PathBuf::from("/etc/render/seal/chain.pem")
+        );
+        let authority = seal.timestamp_authority.as_ref().expect("timestamps");
+        assert_eq!(authority.attempt_timeout(), Duration::from_secs(10));
+        assert!(seal.without_timestamp.is_none());
+        assert!(seal.allows_client("records-service"));
+        assert!(!seal.allows_client("portal"));
+        assert!(!seal.is_test_only());
+        assert!(runtime.seal("other").is_none());
+
+        let text = signing_text(&home, SEAL).replace(
+            "      allowedClients: [records-service]\n",
+            "      allowedClients: [records-service]\n      trust: test-only\n",
+        );
+        let runtime = load_text(&home, &text).expect("a test-only seal loads");
+        assert!(runtime.seal("ministry").unwrap().is_test_only());
+    }
+
+    #[test]
+    fn without_a_signing_block_sealing_is_off() {
+        let (_dir, home) = home();
+        let runtime = load_text(&home, &minimal(&home)).expect("runtime loads");
+        assert!(runtime.signing.is_none());
+        assert!(runtime.seal("ministry").is_none());
+        let manifest = signing_manifest(&[("licence", Some("ministry"))]);
+        assert!(runtime.seal_for(&manifest, "licence").is_none());
+        assert!(validate_seal_bindings(&runtime, &manifest)
+            .expect("a package that names a seal still serves with sealing off")
+            .is_empty());
+    }
+
+    #[test]
+    fn signing_block_refusals_are_placed_at_the_offending_member() {
+        let (_dir, home) = home();
+        let ts_url = "        url: https://tsa.example.test/tsr\n";
+        let clients = "      allowedClients: [records-service]\n";
+        let cases: Vec<(String, &str, &str)> = vec![
+            (
+                SEAL.replace("secret:file/seal.jwk", "secret:env/SEAL_KEY"),
+                "render.runtime.undeclared-secret-provider",
+                "/signing/seals/ministry/privateKeyRef",
+            ),
+            (
+                SEAL.replace("secret:file/seal.jwk", "/etc/render/seal.jwk"),
+                "render.runtime.invalid-secret-reference",
+                "/signing/seals/ministry/privateKeyRef",
+            ),
+            (
+                SEAL.replace("/etc/render/seal/chain.pem", "chain.pem"),
+                "render.runtime.relative-path",
+                "/signing/seals/ministry/certificateChainFile",
+            ),
+            (
+                SEAL.replace("/etc/render/seal/chain.pem", "/etc/render/../chain.pem"),
+                "render.runtime.relative-path",
+                "/signing/seals/ministry/certificateChainFile",
+            ),
+            (
+                SEAL.replace(
+                    "      timestampAuthority:\n        url: https://tsa.example.test/tsr\n",
+                    "",
+                ),
+                "render.runtime.seal-timestamp-undecided",
+                "/signing/seals/ministry",
+            ),
+            (
+                SEAL.replace(
+                    ts_url,
+                    &format!("{ts_url}      withoutTimestamp: seal-stops-validating-when-certificate-expires\n"),
+                ),
+                "render.runtime.seal-timestamp-conflict",
+                "/signing/seals/ministry/withoutTimestamp",
+            ),
+            (
+                SEAL.replace("https://tsa", "http://tsa"),
+                "render.runtime.insecure-timestamp-url",
+                "/signing/seals/ministry/timestampAuthority/url",
+            ),
+            (
+                SEAL.replace(ts_url, &format!("{ts_url}        attemptTimeoutMilliseconds: 999\n")),
+                "config.out-of-range",
+                "/signing/seals/ministry/timestampAuthority/attemptTimeoutMilliseconds",
+            ),
+            (
+                SEAL.replace(ts_url, &format!("{ts_url}        attemptTimeoutMilliseconds: 60001\n")),
+                "config.out-of-range",
+                "/signing/seals/ministry/timestampAuthority/attemptTimeoutMilliseconds",
+            ),
+            (
+                SEAL.replace(clients, "      allowedClients: unrestricted\n"),
+                "render.runtime.seal-clients-not-listed",
+                "/signing/seals/ministry/allowedClients",
+            ),
+            (
+                SEAL.replace(clients, "      allowedClients: records-service\n"),
+                "render.runtime.seal-clients-not-listed",
+                "/signing/seals/ministry/allowedClients",
+            ),
+            (
+                SEAL.replace(clients, "      allowedClients: []\n"),
+                "render.runtime.seal-clients-not-listed",
+                "/signing/seals/ministry/allowedClients",
+            ),
+            (
+                SEAL.replace(clients, "      allowedClients: ['*']\n"),
+                "render.runtime.seal-client-wildcard",
+                "/signing/seals/ministry/allowedClients/0",
+            ),
+            (
+                SEAL.replace(clients, "      allowedClients: [records-service, unrestricted]\n"),
+                "render.runtime.seal-client-wildcard",
+                "/signing/seals/ministry/allowedClients/1",
+            ),
+            (
+                SEAL.replace(clients, "      allowedClients: ['records-*']\n"),
+                "render.runtime.seal-client-wildcard",
+                "/signing/seals/ministry/allowedClients/0",
+            ),
+            (
+                SEAL.replace(clients, "      allowedClients: [records-service, batch-job]\n"),
+                "render.runtime.seal-client-not-admitted",
+                "/signing/seals/ministry/allowedClients/1",
+            ),
+            (
+                SEAL.replace(clients, "      allowedClients: [records-service, records-service]\n"),
+                "config.duplicate-item",
+                "/signing/seals/ministry/allowedClients/1",
+            ),
+            (
+                SEAL.replace(clients, ""),
+                "config.missing-key",
+                "/signing/seals/ministry",
+            ),
+            (
+                SEAL.replace(clients, &format!("{clients}      keyFile: /etc/seal.jwk\n")),
+                "config.unknown-key",
+                "/signing/seals/ministry/keyFile",
+            ),
+            (
+                SEAL.replace(clients, &format!("{clients}      trust: production\n")),
+                "config.unknown-variant",
+                "/signing/seals/ministry/trust",
+            ),
+            (
+                SEAL.replace(ts_url, &format!("{ts_url}        retries: 3\n")),
+                "config.unknown-key",
+                "/signing/seals/ministry/timestampAuthority/retries",
+            ),
+        ];
+        for (seal, code, pointer) in cases {
+            let problem = refused(&home, &signing_text(&home, &seal));
+            assert!(
+                codes(&problem).contains(&(code, pointer)),
+                "{code} {pointer}: {:?}\n{seal}",
+                codes(&problem)
+            );
+        }
+    }
+
+    #[test]
+    fn loopback_http_is_accepted_for_a_test_timestamp_authority() {
+        let (_dir, home) = home();
+        for url in [
+            "http://localhost:3161/tsr",
+            "http://127.0.0.1:3161/tsr",
+            "http://[::1]:3161/tsr",
+            "https://tsa.example.test/tsr",
+        ] {
+            let seal = SEAL.replace("https://tsa.example.test/tsr", url);
+            load_text(&home, &signing_text(&home, &seal)).unwrap_or_else(|problem| {
+                panic!("{url}: {:?}", codes(&problem));
+            });
+        }
+        for url in [
+            "http://tsa.example.test/tsr",
+            "http://10.0.0.5/tsr",
+            "http://localhost.example.test/",
+        ] {
+            let seal = SEAL.replace("https://tsa.example.test/tsr", url);
+            let problem = refused(&home, &signing_text(&home, &seal));
+            assert_eq!(
+                codes(&problem),
+                [(
+                    "render.runtime.insecure-timestamp-url",
+                    "/signing/seals/ministry/timestampAuthority/url"
+                )],
+                "{url}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_timestamp_attempt_is_bounded_and_the_named_value_goes_without_a_timestamp() {
+        let (_dir, home) = home();
+        for ms in [1_000, 60_000] {
+            let seal = SEAL.replace(
+                "https://tsa.example.test/tsr\n",
+                &format!(
+                    "https://tsa.example.test/tsr\n        attemptTimeoutMilliseconds: {ms}\n"
+                ),
+            );
+            let runtime = load_text(&home, &signing_text(&home, &seal)).expect("bound accepted");
+            let authority = runtime
+                .seal("ministry")
+                .unwrap()
+                .timestamp_authority
+                .clone()
+                .unwrap();
+            assert_eq!(authority.attempt_timeout(), Duration::from_millis(ms));
+        }
+        let without = SEAL.replace(
+            "      timestampAuthority:\n        url: https://tsa.example.test/tsr\n",
+            "      withoutTimestamp: seal-stops-validating-when-certificate-expires\n",
+        );
+        let runtime = load_text(&home, &signing_text(&home, &without)).expect("B-B is allowed");
+        let seal = runtime.seal("ministry").unwrap();
+        assert!(seal.timestamp_authority.is_none());
+        assert_eq!(
+            seal.without_timestamp,
+            Some(WithoutTimestamp::SealStopsValidatingWhenCertificateExpires)
+        );
+        // A boolean or any other value is not the named acknowledgement.
+        for value in ["true", "without-timestamp", "yes"] {
+            let seal = without.replace("seal-stops-validating-when-certificate-expires", value);
+            let problem = refused(&home, &signing_text(&home, &seal));
+            assert!(
+                problem
+                    .diagnostics
+                    .iter()
+                    .any(|d| d.path == "/signing/seals/ministry/withoutTimestamp"),
+                "{value}: {:?}",
+                codes(&problem)
+            );
+        }
+    }
+
+    #[test]
+    fn the_unrestricted_refusal_states_why_and_never_repeats_a_client() {
+        let (_dir, home) = home();
+        let seal = SEAL.replace("[records-service]", "[records-service, 'batch-*']");
+        let problem = refused(&home, &signing_text(&home, &seal));
+        let diagnostic = &problem.diagnostics[0];
+        assert_eq!(diagnostic.code, "render.runtime.seal-client-wildcard");
+        assert!(
+            diagnostic.message.contains("must be named"),
+            "{}",
+            diagnostic.message
+        );
+        assert!(
+            !diagnostic.message.contains("batch-"),
+            "{}",
+            diagnostic.message
+        );
+        let source = diagnostic.source.as_ref().expect("positioned");
+        assert!(source.line.is_some() && source.column.is_some());
+
+        let problem = refused(
+            &home,
+            &signing_text(&home, &SEAL.replace("[records-service]", "unrestricted")),
+        );
+        assert!(
+            problem.diagnostics[0]
+                .message
+                .contains("never unrestricted"),
+            "{}",
+            problem.diagnostics[0].message
+        );
+    }
+
+    #[test]
+    fn a_seal_may_use_any_client_when_oidc_admits_every_client() {
+        let (_dir, home) = home();
+        let text = signing_text(&home, SEAL).replace(
+            "allowedClients: [portal, records-service]",
+            "allowedClients: unrestricted",
+        );
+        load_text(&home, &text).expect("the seal narrows an unrestricted issuer");
+    }
+
+    #[test]
+    fn signing_needs_oidc_and_refuses_the_legacy_key() {
+        let (_dir, home) = home();
+        let text = format!("{}signing:\n  seals:\n{SEAL}", minimal(&home));
+        let problem = refused(&home, &text);
+        assert_eq!(
+            codes(&problem)
+                .into_iter()
+                .filter(|(code, _)| code.starts_with("render.runtime.signing"))
+                .collect::<Vec<_>>(),
+            [("render.runtime.signing-requires-oidc", "/signing")]
+        );
+        let action = problem
+            .diagnostics
+            .iter()
+            .find(|d| d.code == "render.runtime.signing-requires-oidc")
+            .map(|d| d.suggested_action.as_str())
+            .unwrap();
+        assert!(action.contains("auth.oidc"), "{action}");
+    }
+
+    #[test]
+    fn a_signing_block_with_no_seal_or_a_null_is_refused() {
+        let (_dir, home) = home();
+        let oidc = "oidc:\n    issuer: https://issuer.example.test\n    audience: https://render.example.test\n    allowedClients: [portal]";
+        let base = minimal(&home).replace("apiKeyRef: secret:file/api.key", oidc);
+        let problem = refused(&home, &format!("{base}signing:\n  seals: {{}}\n"));
+        assert!(codes(&problem).contains(&("render.runtime.no-seals", "/signing/seals")));
+        let problem = refused(&home, &format!("{base}signing:\n"));
+        assert!(
+            codes(&problem).contains(&("config.null-value", "/signing")),
+            "{:?}",
+            codes(&problem)
+        );
+        let problem = refused(
+            &home,
+            &format!(
+                "{base}signing:\n  seals:\n    Ministry:\n{}",
+                SEAL.replace("    ministry:\n", "")
+            ),
+        );
+        assert!(!problem.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn the_secret_reference_uses_the_declared_provider() {
+        let (_dir, home) = home();
+        let text = signing_text(
+            &home,
+            &SEAL.replace("secret:file/seal.jwk", "secret:env/SEAL_KEY"),
+        )
+        .replace(
+            "secretProviders:\n",
+            "secretProviders:\n  environment: {}\n",
+        );
+        load_text(&home, &text).expect("a declared environment provider admits the reference");
+    }
+
+    #[test]
+    fn a_bundle_seal_the_runtime_does_not_bind_is_refused_when_signing_is_configured() {
+        let (_dir, home) = home();
+        let file = home.join("runtime.yaml");
+        std::fs::write(&file, signing_text(&home, SEAL)).unwrap();
+        let manifest = signing_manifest(&[
+            ("licence", Some("ministry")),
+            ("permit", Some("regional")),
+            ("receipt", Some("regional")),
+            ("notice", None),
+        ]);
+        let check = check_runtime_with_bundle(&file, false, None, Some(&manifest));
+        assert!(!check.unavailable);
+        assert_eq!(check.diagnostics.len(), 1, "{:?}", check.diagnostics);
+        let diagnostic = &check.diagnostics[0];
+        assert_eq!(diagnostic.code, "render.runtime.seal-not-bound");
+        assert_eq!(diagnostic.path, "/signing/seals");
+        assert_eq!(diagnostic.severity, Severity::Error);
+        assert!(
+            diagnostic.message.contains("permit, receipt"),
+            "{}",
+            diagnostic.message
+        );
+        let source = diagnostic.source.as_ref().expect("positioned");
+        assert_eq!(source.file, file.display().to_string());
+        // The mapping of seals starts at its first seal.
+        let text = std::fs::read_to_string(&file).unwrap();
+        let first_seal = text.lines().position(|l| l == "    ministry:").unwrap() + 1;
+        assert_eq!(source.line, Some(first_seal));
+
+        let runtime = load_text(&home, &signing_text(&home, SEAL)).unwrap();
+        let problem = validate_seal_bindings(&runtime, &manifest).expect_err("unbound seal");
+        assert_eq!(problem.kind, ProblemKind::RuntimeInvalid);
+        assert_eq!(problem.diagnostics[0].code, "render.runtime.seal-not-bound");
+    }
+
+    #[test]
+    fn a_package_serves_without_a_signing_block_even_when_it_names_seals() {
+        let (_dir, home) = home();
+        let file = home.join("runtime.yaml");
+        std::fs::write(&file, minimal(&home)).unwrap();
+        let manifest = signing_manifest(&[("licence", Some("ministry"))]);
+        let check = check_runtime_with_bundle(&file, false, None, Some(&manifest));
+        assert!(check.diagnostics.is_empty(), "{:?}", check.diagnostics);
+    }
+
+    #[test]
+    fn a_runtime_seal_no_document_uses_is_a_warning_that_does_not_refuse() {
+        let (_dir, home) = home();
+        let file = home.join("runtime.yaml");
+        let text = signing_text(
+            &home,
+            &format!("{SEAL}{}", SEAL.replace("ministry", "spare")),
+        );
+        std::fs::write(&file, &text).unwrap();
+        let manifest = signing_manifest(&[("licence", Some("ministry")), ("notice", None)]);
+        let check = check_runtime_with_bundle(&file, false, None, Some(&manifest));
+        assert_eq!(check.diagnostics.len(), 1, "{:?}", check.diagnostics);
+        let warning = &check.diagnostics[0];
+        assert_eq!(warning.code, "render.runtime.seal-unused");
+        assert_eq!(warning.severity, Severity::Warning);
+        assert_eq!(warning.path, "/signing/seals/spare");
+        let source = warning.source.as_ref().expect("positioned");
+        assert_eq!(source.column, Some(5), "placed at the key of the seal");
+
+        let runtime = load_text(&home, &text).unwrap();
+        let warnings = validate_seal_bindings(&runtime, &manifest).expect("a warning serves");
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].severity, Severity::Warning);
+    }
+
+    #[test]
+    fn seal_for_resolves_the_bundle_declaration_through_the_runtime() {
+        let (_dir, home) = home();
+        let runtime = load_text(&home, &signing_text(&home, SEAL)).unwrap();
+        let manifest = signing_manifest(&[("licence", Some("ministry")), ("notice", None)]);
+        assert!(runtime.seal_for(&manifest, "licence").is_some());
+        assert!(runtime.seal_for(&manifest, "notice").is_none());
+        assert!(runtime.seal_for(&manifest, "absent").is_none());
+        let regional = signing_manifest(&[("permit", Some("regional"))]);
+        assert!(runtime.seal_for(&regional, "permit").is_none());
     }
 
     #[test]

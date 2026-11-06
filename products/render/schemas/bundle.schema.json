@@ -37,6 +37,10 @@
           "pattern": "\\.json$",
           "type": "string"
         },
+        "seal": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The seal this document type is issued under: a local identifier that\nthe serving runtime's `signing.seals` binds to key material. Omit it\nand the document type cannot be sealed. The bundle never holds a key,\na certificate, or a client list."
+        },
         "version": {
           "description": "The document's own version; printed on paper by templates that wish to.",
           "format": "uint32",

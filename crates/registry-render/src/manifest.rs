@@ -171,6 +171,13 @@ pub(crate) struct DocumentFile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "schema", schemars(with = "PdfStandardSpec"))]
     pub(crate) pdf_standard: Option<PdfStandardSpec>,
+    /// The seal this document type is issued under: a local identifier that
+    /// the serving runtime's `signing.seals` binds to key material. Omit it
+    /// and the document type cannot be sealed. The bundle never holds a key,
+    /// a certificate, or a client list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "LocalId"))]
+    pub(crate) seal: Option<LocalId>,
 }
 
 impl Identified for DocumentFile {
@@ -201,6 +208,10 @@ pub struct DocumentSpec {
     /// PDF standard for this document; `None` means plain PDF.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pdf_standard: Option<PdfStandardSpec>,
+    /// The local identifier of the seal this document type is issued under,
+    /// as `seal` writes it; `None` means the document type cannot be sealed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seal: Option<String>,
 }
 
 impl DocumentSpec {
@@ -308,6 +319,7 @@ pub(crate) fn read_manifest(file: &str, bytes: &[u8]) -> Result<ReadManifest, Re
                     .map(LocalId::into_string)
                     .collect(),
                 pdf_standard: spec.pdf_standard,
+                seal: spec.seal.map(LocalId::into_string),
             })
             .collect(),
     };
@@ -506,6 +518,40 @@ mod tests {
         assert_eq!(m.documents.len(), 1);
         assert_eq!(m.documents[0].labels, vec!["ar", "fr"]);
         assert_eq!(m.documents[0].pdf_standard.map(|s| s.to_string()), None);
+    }
+
+    #[test]
+    fn a_document_type_may_name_the_seal_it_is_issued_under() {
+        let with_seal = format!("{HEAD}bundleVersion: 1\ndocuments:\n  - id: licence\n    version: 1\n    entryFile: templates/licence.typ\n    seal: ministry\n  - id: receipt\n    version: 1\n    entryFile: templates/receipt.typ\n");
+        let m = Manifest::parse(with_seal.as_bytes()).expect("parses");
+        assert_eq!(m.documents[0].seal.as_deref(), Some("ministry"));
+        assert_eq!(
+            m.documents[1].seal, None,
+            "absent means it cannot be sealed"
+        );
+        let json = serde_json::to_value(&m).unwrap();
+        assert_eq!(json["documents"][0]["seal"], "ministry");
+        assert!(json["documents"][1].get("seal").is_none());
+    }
+
+    #[test]
+    fn a_seal_id_follows_the_local_identifier_rules() {
+        for bad in [
+            "Ministry",
+            "9seal",
+            "has space",
+            "a.b",
+            "\"\"",
+            "true",
+            "null",
+        ] {
+            let text = format!("{HEAD}bundleVersion: 1\ndocuments:\n  - id: licence\n    version: 1\n    entryFile: templates/licence.typ\n    seal: {bad}\n");
+            let codes = refused_codes(&text);
+            assert!(
+                codes.iter().any(|(_, path)| path == "/documents/0/seal"),
+                "{bad}: {codes:?}"
+            );
+        }
     }
 
     #[test]

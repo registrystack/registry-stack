@@ -201,10 +201,106 @@ fn install_runtime_constraints(schema: &mut Value) {
             .remove("default");
     }
     set_audit_destination_constraints(schema);
+    set_signing_constraints(schema);
     if let Some(definitions) = schema.get_mut("$defs").and_then(Value::as_object_mut) {
         definitions.extend(socket_definitions());
     }
 }
+
+/// State the rules of the `signing` block that the types alone do not:
+/// the block is an object and never null, the seals are keyed by local
+/// identifiers and number at least one, the certificate chain file is an
+/// absolute path with no `.` or `..` segment, a seal has exactly one
+/// timestamp policy, its clients are named (no wildcard, no `unrestricted`),
+/// and a timestamp authority is `https`, or `http` on a loopback host.
+/// Rules that need another member (every client is admitted by
+/// `auth.oidc.allowedClients`, the secret provider is declared, OIDC is
+/// configured) are left to the reader and stated in the member descriptions.
+fn set_signing_constraints(schema: &mut Value) {
+    if let Some(member) = schema
+        .pointer_mut("/properties/signing")
+        .and_then(Value::as_object_mut)
+    {
+        member.remove("anyOf");
+        member.insert("$ref".to_owned(), json!("#/$defs/SigningRuntime"));
+    }
+    if let Some(seals) = schema
+        .pointer_mut("/$defs/SigningRuntime/properties/seals")
+        .and_then(Value::as_object_mut)
+    {
+        seals.remove("patternProperties");
+        seals.insert(
+            "propertyNames".to_owned(),
+            json!({"$ref": "#/$defs/LocalId"}),
+        );
+        seals.insert(
+            "additionalProperties".to_owned(),
+            json!({"$ref": "#/$defs/SealRuntime"}),
+        );
+        seals.insert("minProperties".to_owned(), json!(1));
+    }
+    if let Some(Value::Object(object)) = schema.get_mut("$defs") {
+        let local_id = serde_json::to_value(LocalId::json_schema(
+            &mut schemars::SchemaGenerator::default(),
+        ))
+        .expect("the local identifier schema is JSON");
+        object.insert("LocalId".to_owned(), local_id);
+    }
+    set_definition_property(
+        schema,
+        "SealRuntime",
+        "allowedClients",
+        "minItems",
+        json!(1),
+    );
+    set_definition_property(
+        schema,
+        "SealRuntime",
+        "allowedClients",
+        "items",
+        json!({
+            "$ref": "#/$defs/ExternalId",
+            "not": {"anyOf": [{"const": "unrestricted"}, {"pattern": "\\*"}]}
+        }),
+    );
+    set_definition_property(
+        schema,
+        "SealRuntime",
+        "certificateChainFile",
+        "pattern",
+        json!("^/(?:[^/]+/)*[^/]+$"),
+    );
+    set_definition_property(
+        schema,
+        "SealRuntime",
+        "certificateChainFile",
+        "not",
+        json!({"pattern": "(^|/)\\.{1,2}(/|$)"}),
+    );
+    if let Some(seal) = schema
+        .pointer_mut("/$defs/SealRuntime")
+        .and_then(Value::as_object_mut)
+    {
+        seal.insert(
+            "oneOf".to_owned(),
+            json!([
+                {"required": ["timestampAuthority"], "not": {"required": ["withoutTimestamp"]}},
+                {"required": ["withoutTimestamp"], "not": {"required": ["timestampAuthority"]}}
+            ]),
+        );
+    }
+    set_definition_property(
+        schema,
+        "TimestampAuthorityRuntime",
+        "url",
+        "allOf",
+        json!([{"pattern": LOOPBACK_OR_HTTPS_PATTERN}]),
+    );
+}
+
+/// An `https` URL, or an `http` URL whose host is `localhost`, an IPv4
+/// loopback address, or `[::1]`.
+const LOOPBACK_OR_HTTPS_PATTERN: &str = "^(?:[Hh][Tt][Tt][Pp][Ss]://|[Hh][Tt][Tt][Pp]://(?:[Ll][Oo][Cc][Aa][Ll][Hh][Oo][Ss][Tt]|127(?:\\.[0-9]{1,3}){3}|\\[::1\\])(?:[:/?#]|$))";
 
 /// State the shape `AuditRuntime::destination` requires: a `file`
 /// destination, the default, names an absolute `path`, and `stdout` takes
@@ -613,6 +709,338 @@ mod tests {
                 accepted,
                 "schema: {document}"
             );
+        }
+    }
+
+    fn signing_runtime_document() -> Value {
+        json!({
+            "apiVersion": RUNTIME_API_VERSION,
+            "kind": RUNTIME_KIND,
+            "listener": {"bind": "127.0.0.1:8080"},
+            "package": {"root": "/srv/render/package"},
+            "secretProviders": {"file": {"root": "/run/secrets"}},
+            "auth": {"oidc": {
+                "issuer": "https://issuer.example.test",
+                "audience": "https://render.example.test",
+                "allowedClients": ["portal", "records-service"]
+            }},
+            "audit": {"path": "/var/lib/render/audit/render.jsonl"},
+            "signing": {"seals": {"ministry": {
+                "privateKeyRef": "secret:file/seal.jwk",
+                "certificateChainFile": "/etc/render/seal/chain.pem",
+                "timestampAuthority": {"url": "https://tsa.example.test/tsr"},
+                "allowedClients": ["records-service"]
+            }}}
+        })
+    }
+
+    #[test]
+    fn signing_members_are_judged_alike_by_schema_and_reader() {
+        let validator = validator(RUNTIME_SCHEMA_FILE);
+        let base = signing_runtime_document();
+        let temporary = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+        let path = temporary.path().join("runtime.yaml");
+        let seal = "/signing/seals/ministry";
+        let authority = format!("{seal}/timestampAuthority");
+        let without = json!("seal-stops-validating-when-certificate-expires");
+        let no_authority = with(&base, &authority, None);
+        let cases = [
+            (
+                &base,
+                "/signing/seals/ministry/trust",
+                Some(json!("test-only")),
+                true,
+            ),
+            (
+                &base,
+                "/signing/seals/ministry/trust",
+                Some(json!("production")),
+                false,
+            ),
+            (
+                &base,
+                &format!("{authority}/url"),
+                Some(json!("http://tsa.example.test/")),
+                false,
+            ),
+            (
+                &base,
+                &format!("{authority}/url"),
+                Some(json!("http://localhost:3161/")),
+                true,
+            ),
+            (
+                &base,
+                &format!("{authority}/url"),
+                Some(json!("http://127.0.0.1:3161/tsr")),
+                true,
+            ),
+            (
+                &base,
+                &format!("{authority}/url"),
+                Some(json!("http://[::1]:3161/")),
+                true,
+            ),
+            (
+                &base,
+                &format!("{authority}/url"),
+                Some(json!("http://localhost.example.test/")),
+                false,
+            ),
+            (
+                &base,
+                &format!("{authority}/attemptTimeoutMilliseconds"),
+                Some(json!(999)),
+                false,
+            ),
+            (
+                &base,
+                &format!("{authority}/attemptTimeoutMilliseconds"),
+                Some(json!(1_000)),
+                true,
+            ),
+            (
+                &base,
+                &format!("{authority}/attemptTimeoutMilliseconds"),
+                Some(json!(60_000)),
+                true,
+            ),
+            (
+                &base,
+                &format!("{authority}/attemptTimeoutMilliseconds"),
+                Some(json!(60_001)),
+                false,
+            ),
+            (
+                &base,
+                &format!("{authority}/attemptTimeoutMilliseconds"),
+                Some(json!("5000")),
+                false,
+            ),
+            (
+                &base,
+                &format!("{authority}/retries"),
+                Some(json!(3)),
+                false,
+            ),
+            (
+                &base,
+                &format!("{seal}/allowedClients"),
+                Some(json!([])),
+                false,
+            ),
+            (
+                &base,
+                &format!("{seal}/allowedClients"),
+                Some(json!("unrestricted")),
+                false,
+            ),
+            (
+                &base,
+                &format!("{seal}/allowedClients"),
+                Some(json!(["*"])),
+                false,
+            ),
+            (
+                &base,
+                &format!("{seal}/allowedClients"),
+                Some(json!(["unrestricted"])),
+                false,
+            ),
+            (
+                &base,
+                &format!("{seal}/allowedClients"),
+                Some(json!(["records-*"])),
+                false,
+            ),
+            (
+                &base,
+                &format!("{seal}/allowedClients"),
+                Some(json!(["portal", "portal"])),
+                false,
+            ),
+            (
+                &base,
+                &format!("{seal}/allowedClients"),
+                Some(json!(["portal", "records-service"])),
+                true,
+            ),
+            (&base, &format!("{seal}/allowedClients"), None, false),
+            (
+                &base,
+                &format!("{seal}/certificateChainFile"),
+                Some(json!("chain.pem")),
+                false,
+            ),
+            (
+                &base,
+                &format!("{seal}/certificateChainFile"),
+                Some(json!("/etc/../chain.pem")),
+                false,
+            ),
+            (
+                &base,
+                &format!("{seal}/certificateChainFile"),
+                Some(json!("/etc//chain.pem")),
+                false,
+            ),
+            (
+                &base,
+                &format!("{seal}/certificateChainFile"),
+                Some(json!("/etc/seal/")),
+                false,
+            ),
+            (
+                &base,
+                &format!("{seal}/privateKeyRef"),
+                Some(json!("/etc/seal.jwk")),
+                false,
+            ),
+            (&base, &format!("{seal}/privateKeyRef"), None, false),
+            (
+                &base,
+                &format!("{seal}/keyFile"),
+                Some(json!("/etc/seal.jwk")),
+                false,
+            ),
+            (
+                &no_authority,
+                &format!("{seal}/withoutTimestamp"),
+                Some(without.clone()),
+                true,
+            ),
+            (
+                &no_authority,
+                &format!("{seal}/withoutTimestamp"),
+                Some(json!(true)),
+                false,
+            ),
+            (
+                &no_authority,
+                &format!("{seal}/withoutTimestamp"),
+                Some(json!("without-timestamp")),
+                false,
+            ),
+            (
+                &base,
+                &format!("{seal}/withoutTimestamp"),
+                Some(without),
+                false,
+            ),
+            (&no_authority, &format!("{seal}/trust"), None, false),
+            (&base, "/signing/seals", Some(json!({})), false),
+            (&base, "/signing", Some(Value::Null), false),
+            (&base, "/signing/extra", Some(json!(1)), false),
+        ];
+        let renamed = {
+            let mut document = base.clone();
+            let seals = document["signing"]["seals"].as_object_mut().unwrap();
+            let seal = seals.remove("ministry").unwrap();
+            seals.insert("Ministry".to_owned(), seal);
+            document
+        };
+        let documents = cases
+            .into_iter()
+            .map(|(document, pointer, value, accepted)| (with(document, pointer, value), accepted))
+            .chain([(base.clone(), true), (renamed, false)]);
+        for (document, accepted) in documents {
+            std::fs::write(&path, serde_json::to_string_pretty(&document).unwrap()).unwrap();
+            let check = check_runtime(&path, false, None);
+            assert_eq!(
+                check.diagnostics.is_empty(),
+                accepted,
+                "reader: {document}\n{:?}",
+                check.diagnostics
+            );
+            assert_eq!(
+                validator.is_valid(&document),
+                accepted,
+                "schema: {document}"
+            );
+        }
+    }
+
+    /// The rules that span members are the reader's alone, and the member
+    /// descriptions name them (CFG-SCHEMA-9).
+    #[test]
+    fn signing_rules_across_members_are_refused_by_the_reader_alone() {
+        let validator = validator(RUNTIME_SCHEMA_FILE);
+        let base = signing_runtime_document();
+        let temporary = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+        let path = temporary.path().join("runtime.yaml");
+        let key_mode = {
+            let document = with(&base, "/auth/oidc", None);
+            with(
+                &document,
+                "/auth/apiKeyRef",
+                Some(json!("secret:file/api.key")),
+            )
+        };
+        for (document, code) in [
+            (
+                with(
+                    &base,
+                    "/signing/seals/ministry/allowedClients",
+                    Some(json!(["batch-job"])),
+                ),
+                "render.runtime.seal-client-not-admitted",
+            ),
+            (
+                with(
+                    &base,
+                    "/signing/seals/ministry/privateKeyRef",
+                    Some(json!("secret:env/SEAL_KEY")),
+                ),
+                "render.runtime.undeclared-secret-provider",
+            ),
+            (key_mode, "render.runtime.signing-requires-oidc"),
+        ] {
+            assert!(validator.is_valid(&document), "schema: {document}");
+            std::fs::write(&path, serde_json::to_string_pretty(&document).unwrap()).unwrap();
+            let codes = check_runtime(&path, false, None)
+                .diagnostics
+                .into_iter()
+                .map(|diagnostic| diagnostic.code)
+                .collect::<Vec<_>>();
+            assert_eq!(codes, [code], "{document}");
+        }
+        let documents = schema_documents().unwrap();
+        let runtime: Value = serde_json::from_str(&documents[RUNTIME_SCHEMA_FILE]).unwrap();
+        let clients = runtime["$defs"]["SealRuntime"]["properties"]["allowedClients"]
+            ["description"]
+            .as_str()
+            .unwrap();
+        assert!(
+            clients.contains("auth.oidc.allowedClients"),
+            "the cross-member rule is stated: {clients}"
+        );
+    }
+
+    #[test]
+    fn a_document_type_names_its_seal_by_local_identifier_in_schema_and_reader() {
+        let validator = validator(BUNDLE_SCHEMA_FILE);
+        for (seal, accepted) in [
+            (json!("ministry"), true),
+            (json!("seal_2"), true),
+            (json!("Ministry"), false),
+            (json!("9seal"), false),
+            (json!(7), false),
+            (json!(null), false),
+        ] {
+            let document = json!({
+                "apiVersion": MANIFEST_API_VERSION,
+                "kind": MANIFEST_KIND,
+                "bundleVersion": 1,
+                "documents": [{"id": "licence", "version": 1,
+                    "entryFile": "templates/licence.typ", "seal": seal}]
+            });
+            let text = serde_json::to_string(&document).unwrap();
+            assert_eq!(
+                read_manifest("manifest.yaml", text.as_bytes()).is_ok(),
+                accepted,
+                "reader: {seal}"
+            );
+            assert_eq!(validator.is_valid(&document), accepted, "schema: {seal}");
         }
     }
 
