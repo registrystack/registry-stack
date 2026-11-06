@@ -396,6 +396,59 @@ fn start_server(fixture: &Fixture) -> Server {
     panic!("the server port was taken on every attempt");
 }
 
+/// Whether the listener on `port` is a Render server: `/health` answers
+/// 200 with the renderer version. A bare connect is not enough: `free_port`
+/// releases its port before the server binds it, and another test's socket
+/// (often a `free_port` probe given the same just-freed port) can hold it
+/// meanwhile. The server then exits with "Address already in use", and a
+/// request sent to the other socket is reset. Any failure here means "not
+/// this server yet"; the caller checks for that exit and bounds the wait.
+/// The answer may still come from another test's server given the same
+/// port; [`logged_health_request`] settles which server answered.
+fn answers_render_health(port: u16) -> bool {
+    let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)) else {
+        return false;
+    };
+    if stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .is_err()
+        || stream
+            .write_all(b"GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+            .is_err()
+    {
+        return false;
+    }
+    let mut raw = Vec::new();
+    if stream.read_to_end(&mut raw).is_err() {
+        return false;
+    }
+    raw.starts_with(b"HTTP/1.1 200") && raw.windows(17).any(|w| w == b"\"rendererVersion\"")
+}
+
+/// Whether this server's own standard error records a `/health` request,
+/// which shows the listener that answered [`answers_render_health`] is this
+/// child. The file is read with `read_exact_at`, which leaves untouched the
+/// file offset the child writes at.
+fn logged_health_request(stderr: &std::fs::File) -> bool {
+    use std::os::unix::fs::FileExt as _;
+    let Ok(metadata) = stderr.metadata() else {
+        return false;
+    };
+    let Ok(length) = usize::try_from(metadata.len()) else {
+        return false;
+    };
+    let mut output = vec![0; length];
+    if stderr.read_exact_at(&mut output, 0).is_err() {
+        return false;
+    }
+    String::from_utf8_lossy(&output)
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .any(|line| {
+            line["fields"]["message"] == "request completed" && line["fields"]["route"] == "/health"
+        })
+}
+
 fn try_start_server(fixture: &Fixture) -> Option<Server> {
     // Standard error goes to a file: an undrained pipe could fill and stall
     // the server.
@@ -421,7 +474,7 @@ fn try_start_server(fixture: &Fixture) -> Option<Server> {
             }
             panic!("server exited early with {status}:\n{output}");
         }
-        if TcpStream::connect(("127.0.0.1", port)).is_ok() {
+        if answers_render_health(port) && logged_health_request(&stderr) {
             return Some(Server {
                 child,
                 port,
