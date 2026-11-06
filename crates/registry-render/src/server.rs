@@ -702,10 +702,13 @@ async fn ready(State(service): State<Arc<Service>>) -> Response {
         ("not-ready", StatusCode::SERVICE_UNAVAILABLE)
     };
     // Availability reads the certificate validity and the key provider's
-    // readiness, after one probe of a signer that said it is not ready; it
-    // never requests a timestamp.
+    // readiness as the last finished probe left it; it never requests a
+    // timestamp and never waits on the provider. A signer that said it is
+    // not ready gets a probe in the background, within the seal's probe
+    // limits, and a probe that succeeds shows on a later call.
     for seal in service.seals.values() {
-        seal.recover_signer().await;
+        // Dropping the handle leaves the probe running.
+        drop(seal.start_signer_probe());
     }
     let now = time::OffsetDateTime::now_utc();
     let signing = service

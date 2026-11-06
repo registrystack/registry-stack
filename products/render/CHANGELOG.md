@@ -75,8 +75,10 @@
   answer, or a key that is exportable, derived, not `ecdsa-p256` or outside
   its live versions, is refused as `render.runtime.seal-transit-unavailable`.
   A Transit seal whose proxy stops answering turns `signer-not-ready`, and
-  each `/ready` call and seal request then probes it once, so it recovers
-  without a restart. New problem
+  `/ready` calls and seal requests then probe it, so it recovers without a
+  restart: at most one probe in flight per seal, the next no sooner than a
+  second after a failed one ended, and `/ready` never waits for a probe.
+  New problem
   kinds with exit codes, for seal requests: `signing-unavailable` (26),
   `seal-certificate-invalid` (27), `timestamp-failed` (28),
   `document-not-sealable` (29) and `seal-client-not-allowed` (30). A seal that

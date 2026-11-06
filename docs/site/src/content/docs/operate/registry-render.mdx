@@ -277,7 +277,20 @@ does, and run the proxy
 [with a forced token](../../tutorials/move-evidence-to-production-signing/#run-the-proxy-with-a-forced-token),
 its socket group admitting the Render service. Render makes the same calls, a read of the key and a
 prehashed `sha2-256` sign with the pinned `key_version`, so that policy works with your key name and
-version in place of Evidence's. With the proxy running,
+version in place of Evidence's.
+
+With `use_auto_auth_token = "force"`, the proxy puts its own token on every request that reaches
+its socket, so the socket's owner, group, and mode are the only check on who can sign with the seal
+key. Keep the tutorial's proxy settings, with Render's values. `socket_mode = "0660"`, with
+`socket_group` set to Render's service group, lets only the proxy's user and that group connect.
+`require_request_header = true` makes the proxy refuse a request without the
+`X-Vault-Request: true` header, which Render sends on every call. `num_retries = -1` makes the
+proxy fail fast instead of retrying a stalled Vault or OpenBao, so one Render call is one provider
+request and `attemptTimeoutMilliseconds` stays the bound on it. After the proxy starts, check the
+socket with `ls -l`: its mode must read `srw-rw----` and its group must be Render's. If they do
+not, correct them before you start `serve`.
+
+With the proxy running,
 `registry-render keygen --csr <file> --common-name <seal name> --transit-unix-socket-path
 <socket> --transit-mount <mount> --transit-key-name <key> --transit-key-version <version>` reads
 the key version's public key and has Transit sign the certificate request your certificate
@@ -493,9 +506,13 @@ authority, so a ready seal can still fail with `timestamp-failed`. A Transit sea
 ready until a seal request fails.
 
 A Transit seal whose proxy stops answering fails the seal request in progress with
-`signing-unavailable` and turns `signer-not-ready`. Each `/ready` call and each seal request then
-has Transit sign one probe message, one probe at a time, and the seal is ready again as soon as a
-probe succeeds. You do not restart `serve` after a Transit or proxy outage.
+`signing-unavailable` and turns `signer-not-ready`. `/ready` calls and seal requests then start
+probes, each of which has Transit sign one probe message, and the seal can sign again once a probe
+succeeds. `/ready` starts the probe and never waits for it: it answers at once with the state the
+last finished probe left, so the seal shows `ready` on a later call. A seal request waits for the
+probe it starts. Each seal has at most one probe in flight, and after a probe fails the
+next starts no sooner than one second after it ended, however many calls arrive. You do not
+restart `serve` after a Transit or proxy outage.
 
 ### Reconcile audit hashes with your records
 
