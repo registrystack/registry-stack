@@ -60,8 +60,13 @@ For a deployment, the institution must supply these prerequisites:
 - Casework, at `taskAuthority.baseUrl`, holds the approved grant for the
   registered agent subject `registered-agent-subject` and issues its task
   assertions as `https://casework.local.example`.
-- Callers hold a Coordinator access token for the `approved-record-check` workflow,
-  and an explicit operator policy grants inspection and recovery separately.
+- Callers are trusted backend clients whose caller policy lists their own
+  service-account subject in `subjects`. Coordinator refuses a token for any
+  other subject, such as a person's, and any token carrying `act`. An explicit
+  operator policy grants inspection and recovery separately.
+- The calling backend has already authorized `collection`, `recordId` and the
+  grant for the person the run concerns. Coordinator does not compare them
+  with the caller's subject.
 
 The runtime template uses loopback endpoints and secret references only, and
 sets `clientAssertionAudience`, the audience of the client's signed assertion;

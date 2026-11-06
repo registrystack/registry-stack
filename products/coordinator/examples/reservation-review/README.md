@@ -30,8 +30,11 @@ policy.
 The compiled service journey keeps administrative review and capacity
 authority separate. Deciding the reservation review invalidates grants owned
 by that review task. A distinct, current capacity-authorization task therefore
-supplies the Scheduling grant for the exact reservation, location and allowed
-actions. Its grant is neither created nor extended by the review decision.
+supplies the Scheduling grant, which Casework issues for that reservation,
+location and allowed actions. Coordinator and Scheduling do not compare the
+start's `reservationId` with the reservation the grant was issued for, so the
+calling backend must start the run only with a grant it obtained for that same
+reservation. Its grant is neither created nor extended by the review decision.
 Changing a source fact does not itself revoke a separate active Casework task
 or grant. Deployments must close or revoke that
 authority through Casework when its operational purpose ends.

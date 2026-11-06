@@ -36,9 +36,13 @@ Choose the policy from the owning Casework project's `caseworkctl check` report 
 `policyBindings`. Use its ID for default selection, or its complete ID, version and digest for
 strict selection. The offline scenarios exercise exact synthetic bindings; those digests are not
 deployment values. Configure the matching trusted producer, service credentials, completion
-destination, and Coordinator caller policies. The template contains synthetic HTTPS
-endpoints and secret references. Adapt it outside the package and follow the
-[deployment runbook](../../DEPLOYMENT.md).
+destination, and Coordinator caller policies. A producer policy lists in `subjects` the
+service-account subject of one trusted backend client, and an operator policy lists the
+named operators it serves; Coordinator refuses a token for any other subject and any token
+carrying `act`. The calling backend must already have authorized the review subject and
+requester reference for the person concerned, because Coordinator does not compare them with
+the caller's subject. The template contains synthetic HTTPS endpoints and secret references.
+Adapt it outside the package and follow the [deployment runbook](../../DEPLOYMENT.md).
 
 Offline scenarios check results, timeout, cancellation, and races with synthetic replies.
 Maintained Casework-client HTTP checks and Coordinator PostgreSQL checks cover the independent

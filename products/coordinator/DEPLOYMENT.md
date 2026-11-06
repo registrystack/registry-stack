@@ -336,7 +336,8 @@ secret separately through its enabled shared provider.
 
 The shared `jwksSource` block selects its variant with `type`, for example
 `type: discovery`. Key `authentication.policies` by exact verified client identity.
-Each entry declares required scopes, actions, and permitted `workflows` for run actions.
+Each entry declares the exact token subjects it admits, required scopes, actions, and
+permitted `workflows` for run actions.
 The policy keys are the admitted client set. Coordinator reads scopes from `registry_scopes`;
 set `scopeClaim: scope` when the issuer uses the standard `scope` claim.
 
@@ -586,19 +587,46 @@ deployment:
 
 [Watch metrics](#watch-metrics) lists the series it serves.
 
-Caller policies list exact admitted OAuth clients, required scopes, actions and,
-for run actions, allowed workflow identifiers. Each verified client resolves one
-policy. Ownership and admission idempotency come from the token's exact verified
-`iss` and `sub`, never input fields. The run actions `start`, `status`,
-`inspect`, `retry-same`, `cancel` and `reconcile` reach only the workflows the policy
-lists in `workflows`, which is required when the policy lists any of them. The
-deployment-wide actions `doctor`, `restore-hold`, `release-restore-hold`,
+Caller policies list exact admitted OAuth clients, the token subjects each admits,
+required scopes, actions and, for run actions, allowed workflow identifiers. Each
+verified client resolves one policy. Name only confidential backend clients that your
+institution runs and trusts, never a browser app, mobile app or other public client:
+whoever holds an admitted token chooses the records, subjects and recipients a
+workflow acts on.
+
+`subjects` is required and lists one to sixty-four exact `sub` values, each at most 512
+bytes without control characters, compared exactly as the issuer writes them. A
+producer policy lists the client's own service-account subject. An operator policy
+lists the named people who operate the deployment. A verified token from a listed
+client whose `sub` is not listed is refused with 403 `operation.not-authorized`, the
+same as a missing scope, and no run is created. A token that carries an `act` claim
+is refused the same way whatever its subject, because the issuer made it for someone
+other than the client presenting it. There is no `unrestricted` form.
+
+To find a client's service-account subject, request a token with that client's own
+credentials (the client credentials grant, as the client will in production) and
+read the `sub` claim of the access token, or read the service-account user's
+identifier in your identity provider's administration console. Many providers write
+a generated identifier such as a UUID rather than the client name; copy it exactly,
+including case. Repeat this after you recreate the client or its service account,
+because the subject may change.
+
+Ownership and admission idempotency come from the token's exact verified `iss` and
+`sub`, never input fields. The `sub` decides who owns a run; it never authorizes the
+input. Coordinator does not check that a record, subject or recipient identifier in
+the input belongs to anyone, so the calling backend must already have authorized every
+identifier it passes for the person it acts for.
+
+The run actions `start`, `status`, `inspect`, `retry-same`, `cancel` and `reconcile`
+reach only the workflows the policy lists in `workflows`, which is required when the
+policy lists any of them. The deployment-wide actions `doctor`, `restore-hold`, `release-restore-hold`,
 `release-admission-hold`, `complete-execution-recovery` and `retain` act on every
 workflow at once, including workflows added later, and need `operator: true` on the
 policy. They take no workflow list: a policy that lists only deployment-wide actions
 omits `workflows`, and the configuration check refuses one that sets it.
 Do not give institutional producers operator authority. A task-exchanged inbound
-token also requires the matching declared assertion issuer for that client.
+token also requires the matching declared assertion issuer for that client, and like
+any other token it is admitted only when its `sub` is listed and it carries no `act`.
 
 ## Apply and start
 

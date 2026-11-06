@@ -56,8 +56,12 @@ For a deployment, the institution must supply these prerequisites:
 - A lookup selector that needs a verified claim and no field values cannot be
   used here: the request is refused as `invalid-command` before BReg is
   contacted, because a service identity carries no such claim.
-- Callers hold a Coordinator access token for the `record-lookup` workflow,
-  and an explicit operator policy grants inspection and recovery separately.
+- Callers are trusted backend clients whose caller policy lists their own
+  service-account subject in `subjects`. Coordinator refuses a token for any
+  other subject, such as a person's, and any token carrying `act`. An explicit
+  operator policy grants inspection and recovery separately.
+- The calling backend has already authorized `nationalId` for the person the
+  run concerns. Coordinator does not compare it with the caller's subject.
 
 The runtime template uses loopback endpoints and secret references only. Copy
 it outside the package and adapt its endpoints, PostgreSQL identity and roles,

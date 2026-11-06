@@ -87,13 +87,24 @@ holds secret references, never values.
 | `deployment.authentication` | The issuer, audience, signing-key source, and caller policies. |
 | `deployment.auditFile`, `auditKeyRef`, `stateKeys`, `activeStateKey`, `admissionKeyRef` | The audit file and the three keys. |
 
-Key `authentication.policies` by verified client identity. A policy's `workflows` scopes its run
-actions: `start`, `status`, `inspect`, `retry-same`, `cancel`, and `reconcile`. The
+Key `authentication.policies` by verified client identity, and list in each policy's `subjects`
+the exact token `sub` values it admits: a backend client's own service-account subject, or the
+named people an operator policy serves. Copy each value from a token the issuer wrote; it is often
+a UUID. A token from a listed client for any other subject, such as a person signed in through
+that client, answers `403`, and so does any token carrying an `act` claim. Name only confidential
+backend clients in a start policy, never a browser or other public client. A policy's `workflows`
+scopes its run actions: `start`, `status`, `inspect`, `retry-same`, `cancel`, and `reconcile`. The
 deployment-wide actions `doctor`, `restore-hold`, `release-restore-hold`, `release-admission-hold`,
 `complete-execution-recovery`, and `retain` need `operator: true`. They act on every workflow at
 once, so a policy that lists only deployment-wide actions omits `workflows`, and the configuration
 check refuses one that sets it. Keep producers and operators in separate policies. A run belongs
-to its starting token's `iss` and `sub`.
+to its starting token's `iss` and `sub`. The subject decides who owns the run, never which record
+the start input names: the calling backend must already have authorized every identifier it
+passes for the person the run concerns.
+
+{/* Evidence: crates/registry-coordinator/src/access.rs, ClientPolicy subjects, authenticate;
+    products/coordinator/DEPLOYMENT.md, Configure the deployment;
+    products/coordinator/PRODUCT-CONTRACT.md, Callers and start input. */}
 
 The [configuration reference](../../reference/coordinator-configuration/) lists every key and
 bound, and [Configure the deployment](https://github.com/registrystack/registry-stack/blob/main/products/coordinator/DEPLOYMENT.md#configure-the-deployment) covers each connection type.

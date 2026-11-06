@@ -70,9 +70,12 @@ For a deployment, the institution must supply these prerequisites:
 - Messaging permits sender profile `transactional`, template
   `information-requested` version `1` and locale `en` for the `case-system`
   caller.
-- Callers hold a Coordinator access token for the `governed-action-follow-up`
-  workflow, and an explicit operator policy grants inspection and recovery
-  separately.
+- Callers are trusted backend clients whose caller policy lists their own
+  service-account subject in `subjects`. Coordinator refuses a token for any
+  other subject, such as a person's, and any token carrying `act`. An explicit
+  operator policy grants inspection and recovery separately.
+- The calling backend has already authorized `applicationId` for the person
+  the run concerns. Coordinator does not compare it with the caller's subject.
 
 The runtime template uses loopback endpoints and secret references only. Copy
 it outside the package and adapt its endpoints, PostgreSQL identity and roles,
