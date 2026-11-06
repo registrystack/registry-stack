@@ -185,6 +185,7 @@ signing:
   `signedFileSha256` and a `seal` object. There is no `pdfSha256`. Both
   carry the package hash (`X-Registry-Bundle-Hash`, `bundleHash`), so a
   sealing client needs no `render:render` to pin the package.
+  `/v1/documents` names each sealable document type's seal as `seal`.
 - `/ready` adds a `signing` member per seal and stays ready while a seal is
   unavailable. Audit entries add `sealId`, `documentSha256`,
   `signedFileSha256`, `certificateSha256` and `timestampTokenSha256`, never a

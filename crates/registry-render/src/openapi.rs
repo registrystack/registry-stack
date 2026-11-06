@@ -55,7 +55,7 @@ pub const OPENAPI_JSON: &str = r#"{
       "get": {
         "summary": "List document types in the verified package",
         "security": [{ "bearerAuth": [] }],
-        "responses": { "200": { "description": "document inventory" } }
+        "responses": { "200": { "description": "document inventory; a document type the seal route takes carries its seal id as seal" } }
       }
     },
     "/v1/render/{type}": {

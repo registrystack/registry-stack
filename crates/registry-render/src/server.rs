@@ -745,14 +745,25 @@ async fn documents(State(service): State<Arc<Service>>) -> Response {
         .documents
         .values()
         .map(|doc| {
-            serde_json::json!({
+            let mut listed = serde_json::json!({
                 "id": doc.spec.id,
                 "version": doc.spec.version,
                 "entry": doc.spec.entry.to_string_lossy(),
                 "labels": doc.spec.labels,
                 "pdfStandard": doc.spec.pdf_standard.map(|s| s.to_string()),
                 "schema": doc.spec.schema.as_ref().map(|p| p.to_string_lossy()),
-            })
+            });
+            // The seal route takes this document type: it names a seal this
+            // deployment serves.
+            if let Some(seal) = doc
+                .spec
+                .seal
+                .as_deref()
+                .filter(|seal| service.seals.contains_key(*seal))
+            {
+                listed["seal"] = serde_json::Value::String(seal.to_owned());
+            }
+            listed
         })
         .collect();
     let body = serde_json::json!({
