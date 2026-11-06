@@ -445,7 +445,9 @@ fn load_refusal(dir: &Path, problem: RenderProblem) -> Vec<Diagnostic> {
         return problem.diagnostics;
     }
     let (code, action) = match problem.kind {
-        ProblemKind::BundleTampered | ProblemKind::BundleUnsealed | ProblemKind::RuntimeInvalid => (
+        ProblemKind::BundleTampered
+        | ProblemKind::PackageChecksumsMissing
+        | ProblemKind::RuntimeInvalid => (
             "render.bundle.package-mismatch",
             "Rebuild the package with registry-render package from its source bundle, and deploy \
              the whole directory.",

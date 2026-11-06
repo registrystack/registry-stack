@@ -19,7 +19,7 @@ pub enum ProblemKind {
     /// A package does not match its shared checksum envelope.
     BundleTampered,
     /// A runtime package lacks the shared checksum envelope.
-    BundleUnsealed,
+    PackageChecksumsMissing,
     /// A requested document type or locale is not in the bundle.
     UnknownDocument,
     /// A label referenced by a document is missing or invalid.
@@ -83,7 +83,7 @@ impl ProblemKind {
             Self::InvalidArgument => 2,
             Self::ManifestInvalid => 3,
             Self::BundleTampered => 4,
-            Self::BundleUnsealed => 5,
+            Self::PackageChecksumsMissing => 5,
             Self::UnknownDocument => 6,
             Self::LabelsInvalid => 7,
             Self::FontInvalid => 8,
@@ -118,7 +118,7 @@ impl ProblemKind {
             Self::InvalidArgument => "render.invalid-argument",
             Self::ManifestInvalid => "render.manifest-invalid",
             Self::BundleTampered => "render.bundle-tampered",
-            Self::BundleUnsealed => "render.bundle-unsealed",
+            Self::PackageChecksumsMissing => "render.package-checksums-missing",
             Self::UnknownDocument => "render.unknown-document",
             Self::LabelsInvalid => "render.labels-invalid",
             Self::FontInvalid => "render.font-invalid",
@@ -153,7 +153,7 @@ impl ProblemKind {
             Self::InvalidArgument
             | Self::ManifestInvalid
             | Self::BundleTampered
-            | Self::BundleUnsealed
+            | Self::PackageChecksumsMissing
             | Self::UnknownDocument
             | Self::LabelsInvalid
             | Self::FontInvalid
@@ -185,7 +185,7 @@ impl ProblemKind {
             Self::InvalidArgument => "invalid-argument",
             Self::ManifestInvalid => "manifest-invalid",
             Self::BundleTampered => "bundle-tampered",
-            Self::BundleUnsealed => "bundle-unsealed",
+            Self::PackageChecksumsMissing => "package-checksums-missing",
             Self::UnknownDocument => "unknown-document",
             Self::LabelsInvalid => "labels-invalid",
             Self::FontInvalid => "font-invalid",
@@ -338,7 +338,7 @@ mod tests {
             ProblemKind::InvalidArgument,
             ProblemKind::ManifestInvalid,
             ProblemKind::BundleTampered,
-            ProblemKind::BundleUnsealed,
+            ProblemKind::PackageChecksumsMissing,
             ProblemKind::UnknownDocument,
             ProblemKind::LabelsInvalid,
             ProblemKind::FontInvalid,

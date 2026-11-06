@@ -367,19 +367,41 @@ fn validate_is_a_dry_run_and_needs_no_clock() {
     assert!(text.contains("body"), "the missing field is named: {text}");
 }
 
+/// The retired `seal` command and `check --seal` say what `seal` was and
+/// where document sealing lives now, so neither reads as a way to sign.
 #[test]
 fn retired_seal_command_names_the_package_replacement() {
     let dir = tempdir();
     run(&["init", dir.to_str().unwrap()]);
-    let refused = run(&["seal", "--bundle", dir.to_str().unwrap()]);
+    let bundle = dir.to_str().unwrap();
+    let sealing = "To seal documents with a PAdES signature, declare `signing.seals` in the \
+                   runtime file and call `POST /v1/seal/{type}`.";
+    let refused = run(&["seal", "--bundle", bundle]);
     assert_eq!(
         refused.status.code(),
         Some(registry_render::ProblemKind::InvalidArgument.exit_code())
     );
     let stderr = String::from_utf8_lossy(&refused.stderr);
     assert!(
-        stderr.contains("registry-render package") && stderr.contains("--output"),
+        stderr.contains(&format!(
+            "`seal` was the old name for `package`: build a deployment package with \
+             `registry-render package --bundle {bundle} --output <directory>`. {sealing}"
+        )),
         "retired command must name its replacement: {stderr}"
+    );
+    let refused = run(&["check", "--seal", "--bundle", bundle]);
+    assert_eq!(
+        refused.status.code(),
+        Some(registry_render::ProblemKind::InvalidArgument.exit_code())
+    );
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(
+        stderr.contains(&format!(
+            "`check --seal` was the old way to build a package: run `registry-render check`, \
+             then build a deployment package with `registry-render package --bundle <source> \
+             --output <directory>`. {sealing}"
+        )),
+        "retired flag must name its replacement: {stderr}"
     );
 }
 

@@ -141,7 +141,7 @@ impl ProblemKind {
             "invalid-argument" => Self::InvalidArgument,
             "manifest-invalid" => Self::ManifestInvalid,
             "bundle-tampered" => Self::BundleTampered,
-            "bundle-unsealed" => Self::BundleUnsealed,
+            "package-checksums-missing" => Self::PackageChecksumsMissing,
             "unknown-document" => Self::UnknownDocument,
             "labels-invalid" => Self::LabelsInvalid,
             "font-invalid" => Self::FontInvalid,
@@ -292,7 +292,7 @@ fn render_in_worker(request: &WorkerRequest) -> WorkerResponse {
         .map_err(|error| {
             let kind = match error.kind() {
                 registry_platform_config::package::PackageErrorKind::SumFileMissing => {
-                    ProblemKind::BundleUnsealed
+                    ProblemKind::PackageChecksumsMissing
                 }
                 _ => ProblemKind::BundleTampered,
             };

@@ -74,7 +74,7 @@ exits 101):
 | 2 | `invalid-argument` | malformed CLI or request argument |
 | 3 | `manifest-invalid` | bundle manifest missing or structurally invalid |
 | 4 | `bundle-tampered` | package files do not match the shared `SHA256SUMS` envelope |
-| 5 | `bundle-unsealed` | runtime package lacks `SHA256SUMS` |
+| 5 | `package-checksums-missing` | runtime package lacks `SHA256SUMS` |
 | 6 | `unknown-document` | requested document type or locale not in the bundle |
 | 7 | `labels-invalid` | label table missing, invalid, or key sets diverge across locales |
 | 8 | `font-invalid` | bundle font cannot be loaded, or label script uncovered |

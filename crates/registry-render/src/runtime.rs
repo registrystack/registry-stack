@@ -1411,7 +1411,7 @@ pub(crate) fn package_problem(
     use registry_platform_config::package::PackageErrorKind;
 
     let kind = match error.kind() {
-        PackageErrorKind::SumFileMissing => ProblemKind::BundleUnsealed,
+        PackageErrorKind::SumFileMissing => ProblemKind::PackageChecksumsMissing,
         PackageErrorKind::DigestMismatch(_) => ProblemKind::RuntimeInvalid,
         _ => ProblemKind::BundleTampered,
     };

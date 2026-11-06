@@ -579,9 +579,16 @@ impl RenderClient {
                 "document-not-sealable" if route == Route::Seal => 400,
                 "seal-client-not-allowed" if route == Route::Seal => 403,
                 "internal" | "render-panicked" => 500,
-                "invalid-argument" | "manifest-invalid" | "bundle-tampered" | "bundle-unsealed"
-                | "unknown-document" | "labels-invalid" | "font-invalid" | "data-invalid"
-                | "asset-invalid" | "issued-at-missing" => 400,
+                "invalid-argument"
+                | "manifest-invalid"
+                | "bundle-tampered"
+                | "package-checksums-missing"
+                | "unknown-document"
+                | "labels-invalid"
+                | "font-invalid"
+                | "data-invalid"
+                | "asset-invalid"
+                | "issued-at-missing" => 400,
                 _ => return Err(error("protocol")),
             };
             if problem.status != status.as_u16()

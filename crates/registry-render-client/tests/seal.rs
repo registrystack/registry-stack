@@ -345,6 +345,24 @@ async fn each_seal_problem_is_decoded() {
     assert_eq!(error.kind, "protocol");
 }
 
+/// A package without its SHA256SUMS is `package-checksums-missing`; the
+/// retired `bundle-unsealed` code is no longer a Render problem.
+#[tokio::test]
+async fn a_package_without_checksums_is_decoded_by_its_current_code() {
+    let error = seal_with(400, problem("package-checksums-missing", 400), None, None)
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind, "problem");
+    assert_eq!(
+        error.code.as_deref(),
+        Some("render.package-checksums-missing")
+    );
+    let error = seal_with(400, problem("bundle-unsealed", 400), None, None)
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind, "protocol");
+}
+
 #[tokio::test]
 async fn seal_problems_are_not_render_problems() {
     let (client, task) = serve(
