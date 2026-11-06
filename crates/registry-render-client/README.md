@@ -33,8 +33,8 @@ problem. It returns a `SealedDocument`: the signed PDF bytes, `document_sha256`
 (the first revision), `signed_file_sha256` (the whole file), `data_sha256`,
 `document_version`, `bundle_hash` (the package, so a sealing client needs no
 `render:render` to pin it), warnings, and `seal` facts (`id`, a `SealLevel` of
-`BaselineB` for b-b or `BaselineT` for b-t, `certificate_sha256`,
-`timestamp_time` at b-t only, and `test_only` for a seal the server declares
+`BaselineB` for `B-B` or `BaselineT` for `B-T`, `certificate_sha256`,
+`timestamped_at`, the timestamp authority's time, at `B-T` only, and `test_only` for a seal the server declares
 `trust: test-only`). There is no `pdfSha256`.
 
 A success body may carry members this client does not know; it ignores them

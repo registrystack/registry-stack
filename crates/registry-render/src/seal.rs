@@ -103,10 +103,12 @@ pub enum SealLevel {
 }
 
 impl SealLevel {
+    /// The level's name on the wire: the baseline level as ETSI EN 319 142-1
+    /// writes it, so a caller compares it with a validator's report as is.
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::BB => "b-b",
-            Self::BT => "b-t",
+            Self::BB => "B-B",
+            Self::BT => "B-T",
         }
     }
 }
@@ -760,14 +762,11 @@ impl Seal {
                     .map_err(|_| {
                         authority.failure(TimestampFailure::InvalidToken, "token-not-embeddable")
                     })?;
-                let gen_time = token
-                    .gen_time
-                    .format(&time::format_description::well_known::Rfc3339)
-                    .map_err(|_| {
-                        authority.failure(TimestampFailure::InvalidToken, "gen-time-not-rfc3339")
-                    })?;
+                let gen_time = timestamped_at(token.gen_time).ok_or_else(|| {
+                    authority.failure(TimestampFailure::InvalidToken, "gen-time-not-rfc3339")
+                })?;
                 let stamp = AppliedTimestamp {
-                    time: gen_time,
+                    timestamped_at: gen_time,
                     token_sha256: sha256_hex(&token.token_der),
                 };
                 (stamped, Some(stamp))
@@ -878,11 +877,22 @@ pub struct SealedDocument {
     pub timestamp: Option<AppliedTimestamp>,
 }
 
+/// A timestamp token's `genTime` as `timestampedAt` reports it: RFC 3339 in
+/// UTC, at the precision the authority wrote, so fractional seconds appear
+/// only when `genTime` has them. `None` for a time RFC 3339 cannot write.
+fn timestamped_at(gen_time: OffsetDateTime) -> Option<String> {
+    gen_time
+        .to_offset(time::UtcOffset::UTC)
+        .format(&time::format_description::well_known::Rfc3339)
+        .ok()
+}
+
 /// The timestamp a B-T seal carries.
 #[derive(Debug, Clone)]
 pub struct AppliedTimestamp {
-    /// The token's `genTime`, RFC 3339.
-    pub time: String,
+    /// The token's `genTime`, RFC 3339 in UTC, at the precision the
+    /// authority wrote it: fractional seconds only when `genTime` has them.
+    pub timestamped_at: String,
     /// SHA-256 over the DER token.
     pub token_sha256: String,
 }
@@ -1160,6 +1170,19 @@ mod tests {
     /// time, the reserved space and the field name; none of the seal key's
     /// private members, for an elliptic curve key or an RSA key.
     #[test]
+    fn timestamped_at_keeps_the_precision_the_authority_wrote() {
+        let whole = time::macros::datetime!(2026-11-06 10:00:00 UTC);
+        assert_eq!(timestamped_at(whole).unwrap(), "2026-11-06T10:00:00Z");
+        let fraction = time::macros::datetime!(2026-11-06 10:00:00.25 UTC);
+        assert_eq!(timestamped_at(fraction).unwrap(), "2026-11-06T10:00:00.25Z");
+        let micros = time::macros::datetime!(2026-11-06 10:00:00.000123 UTC);
+        assert_eq!(
+            timestamped_at(micros).unwrap(),
+            "2026-11-06T10:00:00.000123Z"
+        );
+    }
+
+    #[test]
     fn the_seal_key_never_crosses_into_the_worker() {
         use std::collections::BTreeSet;
 
@@ -1264,8 +1287,8 @@ mod tests {
 
     #[test]
     fn levels_and_reasons_have_stable_names() {
-        assert_eq!(SealLevel::BT.as_str(), "b-t");
-        assert_eq!(SealLevel::BB.as_str(), "b-b");
+        assert_eq!(SealLevel::BT.as_str(), "B-T");
+        assert_eq!(SealLevel::BB.as_str(), "B-B");
         for (reason, name, kind) in [
             (
                 Unavailable::CertificateExpired,

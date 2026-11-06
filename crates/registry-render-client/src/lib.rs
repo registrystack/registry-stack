@@ -68,23 +68,24 @@ pub struct RenderedDocument {
     pub warnings: Vec<String>,
 }
 
-/// The PAdES level of a seal, as the server names it in `seal.level`. A
-/// level this client does not know is refused as `protocol`.
+/// The PAdES level of a seal, as the server names it in `seal.level`: the
+/// baseline level as ETSI EN 319 142-1 writes it, `B-B` or `B-T`. A level
+/// this client does not know is refused as `protocol`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[non_exhaustive]
 pub enum SealLevel {
     /// PAdES baseline B (no timestamp).
-    #[serde(rename = "b-b")]
+    #[serde(rename = "B-B")]
     BaselineB,
     /// PAdES baseline T (signature timestamp).
-    #[serde(rename = "b-t")]
+    #[serde(rename = "B-T")]
     BaselineT,
 }
 impl SealLevel {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::BaselineB => "b-b",
-            Self::BaselineT => "b-t",
+            Self::BaselineB => "B-B",
+            Self::BaselineT => "B-T",
         }
     }
 }
@@ -98,9 +99,10 @@ pub struct SealFacts {
     pub id: String,
     pub level: SealLevel,
     pub certificate_sha256: String,
-    /// RFC 3339 timestamp token time; present exactly at level `b-t`.
+    /// The timestamp authority's `genTime`, RFC 3339 at the precision the
+    /// authority gave; present exactly at level `B-T`.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub timestamp_time: Option<String>,
+    pub timestamped_at: Option<String>,
     /// Whether the server declares the seal `trust: test-only`: a test
     /// seal's documents are not official.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -147,7 +149,7 @@ struct SealWire {
     level: String,
     certificate_sha256: String,
     #[serde(default)]
-    timestamp_time: Option<String>,
+    timestamped_at: Option<String>,
     #[serde(default)]
     test_only: bool,
 }
@@ -345,7 +347,7 @@ impl RenderClient {
     ///
     /// This is a single exchange and is never resent: a second seal of the
     /// same request is a second valid file with another signing time (and,
-    /// at level b-t, another timestamp token), so the client cannot treat a
+    /// at level B-T, another timestamp token), so the client cannot treat a
     /// repeat as harmless. After a timeout or broken exchange
     /// (`outcome_unknown`) the caller decides whether another file is wanted.
     /// `idempotency_key` is an optional correlation key (1 to 128 visible
@@ -382,11 +384,11 @@ impl RenderClient {
             .decode(&wire.pdf_base64)
             .map_err(|_| error("protocol"))?;
         let level = match wire.seal.level.as_str() {
-            "b-b" => SealLevel::BaselineB,
-            "b-t" => SealLevel::BaselineT,
+            "B-B" => SealLevel::BaselineB,
+            "B-T" => SealLevel::BaselineT,
             _ => return Err(error("protocol")),
         };
-        let timestamp_consistent = match (level, &wire.seal.timestamp_time) {
+        let timestamp_consistent = match (level, &wire.seal.timestamped_at) {
             (SealLevel::BaselineB, None) => true,
             (SealLevel::BaselineT, Some(time)) => {
                 time.len() <= 64 && chrono::DateTime::parse_from_rfc3339(time).is_ok()
@@ -421,7 +423,7 @@ impl RenderClient {
                 id: wire.seal.id,
                 level,
                 certificate_sha256: wire.seal.certificate_sha256,
-                timestamp_time: wire.seal.timestamp_time,
+                timestamped_at: wire.seal.timestamped_at,
                 test_only: wire.seal.test_only,
             },
         })

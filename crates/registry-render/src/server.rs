@@ -1277,7 +1277,7 @@ fn respond_sealed(
             "certificateSha256": sealed.certificate_fingerprint,
         });
         if let Some(timestamp) = &sealed.timestamp {
-            member["timestampTime"] = serde_json::Value::String(timestamp.time.clone());
+            member["timestampedAt"] = serde_json::Value::String(timestamp.timestamped_at.clone());
         }
         if seal.is_test_only() {
             member["testOnly"] = serde_json::Value::Bool(true);
@@ -1328,7 +1328,7 @@ fn respond_sealed(
         &sealed.certificate_fingerprint,
     );
     if let Some(timestamp) = &sealed.timestamp {
-        insert_header(map, "X-Registry-Timestamp-Time", &timestamp.time);
+        insert_header(map, "X-Registry-Timestamped-At", &timestamp.timestamped_at);
     }
     response
 }

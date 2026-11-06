@@ -165,14 +165,14 @@ The default answer is `application/pdf` with these headers:
 | `X-Registry-Bundle-Hash` | The package hash `/v1/documents` reports as `bundleHash`. |
 | `X-Registry-Warning-Count` | Number of render warnings. |
 | `X-Registry-Seal-Id` | The seal id. |
-| `X-Registry-Seal-Level` | `b-t` or `b-b`. |
+| `X-Registry-Seal-Level` | `B-T` or `B-B`, the baseline level names of ETSI EN 319 142-1. |
 | `X-Registry-Certificate-Sha256` | SHA-256 of the seal certificate. |
-| `X-Registry-Timestamp-Time` | The timestamp token's time; B-T only. |
+| `X-Registry-Timestamped-At` | The timestamp authority's `genTime`, RFC 3339 at the authority's precision; B-T only. |
 | `X-Registry-Seal-Test-Only` | `true`; only for a seal declared `trust: test-only`. |
 
 With `Accept: application/json` the body is `pdfBase64`, `documentSha256`, `signedFileSha256`,
 `dataSha256`, `documentVersion`, `bundleHash`, `warnings`, and `seal` (`id`, `level`,
-`certificateSha256`, `timestampTime` for B-T, and `testOnly: true` for a test-only seal). A client granted only `render:seal` pins the
+`certificateSha256`, `timestampedAt` for B-T, and `testOnly: true` for a test-only seal). A client granted only `render:seal` pins the
 package from `bundleHash` without reading `/v1/documents`. There is no `pdfSha256`. Because the payload carries the `signing`
 member, a sealed render's `dataSha256` differs from a plain render of the same request.
 
