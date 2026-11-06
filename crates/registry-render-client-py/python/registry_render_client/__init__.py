@@ -3,7 +3,11 @@
 import json
 
 from .registry_render_client import __version__ as __version__
-from .registry_render_client import _RenderClient, validate_render_request
+from .registry_render_client import (
+    _RenderClient,
+    validate_correlation_key,
+    validate_render_request,
+)
 
 
 class RenderClientError(Exception):
@@ -53,11 +57,30 @@ class RenderClient:
         except (ValueError, TypeError, RuntimeError, RenderClientError) as error:
             raise _mapped(error, "configuration") from None
 
-    def render(self, token, document_type, request):
-        """Render once; token is text, a callable, or a resource token provider."""
+    def render(self, token, document_type, request, correlation_key=None):
+        """Render once; token is text, a callable, or a resource token provider.
+
+        correlation_key is optional: 1 to 128 visible ASCII characters, sent
+        as Idempotency-Key and checked when echoed. It is not a deduplication
+        promise, and neither method resends.
+        """
+        return self._exchange(
+            self._native.render, token, document_type, request, correlation_key
+        )
+
+    def seal(self, token, document_type, request, correlation_key=None):
+        """Render and seal once; the arguments are as for render."""
+        return self._exchange(
+            self._native.seal, token, document_type, request, correlation_key
+        )
+
+    def _exchange(self, method, token, document_type, request, correlation_key):
         try:
             request = _json(request)
+            if correlation_key is not None and not isinstance(correlation_key, str):
+                raise RenderClientError("invalid-request")
             validate_render_request(document_type, request)
+            validate_correlation_key(correlation_key)
         except (ValueError, TypeError, RuntimeError, RenderClientError) as error:
             raise _mapped(error) from None
         if callable(token):
@@ -67,7 +90,7 @@ class RenderClient:
         if not isinstance(token, str):
             raise RenderClientError("invalid-request")
         try:
-            return json.loads(self._native.render(token, document_type, request))
+            return json.loads(method(token, document_type, request, correlation_key))
         except (ValueError, TypeError, RuntimeError, RenderClientError) as error:
             raise _mapped(error, "protocol") from None
 

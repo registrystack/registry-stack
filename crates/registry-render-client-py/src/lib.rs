@@ -28,20 +28,51 @@ impl RenderClient {
             .map_err(|_| PyRuntimeError::new_err("Render client runtime could not start"))?;
         Ok(Self { inner, runtime })
     }
+    #[pyo3(signature = (token, document_type, request, correlation_key=None))]
     fn render(
         &self,
         py: Python<'_>,
         token: String,
         document_type: String,
         request: String,
+        correlation_key: Option<String>,
     ) -> PyResult<String> {
         let token = BearerToken::new(token)
             .map_err(|_| mapped(render_client_sdk::RenderClientError::invalid_request()))?;
         let request = parse_json_strict(request.as_bytes()).map_err(|_| fixed())?;
         let value = py
             .detach(|| {
-                self.runtime
-                    .block_on(self.inner.render(&token, &document_type, &request, None))
+                self.runtime.block_on(self.inner.render(
+                    &token,
+                    &document_type,
+                    &request,
+                    correlation_key.as_deref(),
+                ))
+            })
+            .map_err(mapped)?;
+        serde_json::to_string(&value)
+            .map_err(|_| PyRuntimeError::new_err("Render response conversion failed"))
+    }
+    #[pyo3(signature = (token, document_type, request, correlation_key=None))]
+    fn seal(
+        &self,
+        py: Python<'_>,
+        token: String,
+        document_type: String,
+        request: String,
+        correlation_key: Option<String>,
+    ) -> PyResult<String> {
+        let token = BearerToken::new(token)
+            .map_err(|_| mapped(render_client_sdk::RenderClientError::invalid_request()))?;
+        let request = parse_json_strict(request.as_bytes()).map_err(|_| fixed())?;
+        let value = py
+            .detach(|| {
+                self.runtime.block_on(self.inner.seal(
+                    &token,
+                    &document_type,
+                    &request,
+                    correlation_key.as_deref(),
+                ))
             })
             .map_err(mapped)?;
         serde_json::to_string(&value)
@@ -55,10 +86,16 @@ fn validate_render_request(document_type: &str, request: &str) -> PyResult<()> {
         .map(|_| ())
         .map_err(mapped)
 }
+#[pyfunction]
+#[pyo3(signature = (correlation_key=None))]
+fn validate_correlation_key(correlation_key: Option<&str>) -> PyResult<()> {
+    CoreClient::validate_correlation_key(correlation_key).map_err(mapped)
+}
 #[pymodule]
 fn registry_render_client(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<RenderClient>()?;
     module.add_function(wrap_pyfunction!(validate_render_request, module)?)?;
+    module.add_function(wrap_pyfunction!(validate_correlation_key, module)?)?;
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }

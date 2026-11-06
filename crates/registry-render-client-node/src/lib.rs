@@ -30,12 +30,31 @@ impl RenderClient {
         token: String,
         document_type: String,
         request: Value,
+        correlation_key: Option<String>,
     ) -> Result<Value> {
         let token = BearerToken::new(token)
             .map_err(|_| mapped(registry_render_client::RenderClientError::invalid_request()))?;
         let result = self
             .inner
-            .render(&token, &document_type, &request, None)
+            .render(&token, &document_type, &request, correlation_key.as_deref())
+            .await
+            .map_err(mapped)?;
+        serde_json::to_value(result)
+            .map_err(|_| Error::from_reason("Render response conversion failed"))
+    }
+    #[napi(ts_return_type = "Promise<import('./client').SealedDocument>")]
+    pub async fn seal(
+        &self,
+        token: String,
+        document_type: String,
+        request: Value,
+        correlation_key: Option<String>,
+    ) -> Result<Value> {
+        let token = BearerToken::new(token)
+            .map_err(|_| mapped(registry_render_client::RenderClientError::invalid_request()))?;
+        let result = self
+            .inner
+            .seal(&token, &document_type, &request, correlation_key.as_deref())
             .await
             .map_err(mapped)?;
         serde_json::to_value(result)
@@ -47,4 +66,8 @@ pub fn validate_render_request(document_type: String, request: Value) -> Result<
     CoreClient::validate_request(&document_type, &request)
         .map(|_| ())
         .map_err(mapped)
+}
+#[napi]
+pub fn validate_correlation_key(correlation_key: Option<String>) -> Result<()> {
+    CoreClient::validate_correlation_key(correlation_key.as_deref()).map_err(mapped)
 }

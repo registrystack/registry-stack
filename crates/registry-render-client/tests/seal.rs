@@ -123,6 +123,34 @@ async fn seal_with(
     result
 }
 
+/// The language bindings return a sealed document as JSON: the names the
+/// server sends, with the PDF as `pdfBase64`.
+#[tokio::test]
+async fn a_sealed_document_serializes_with_the_wire_names() {
+    for (level, test_only) in [("B-T", false), ("B-B", true)] {
+        let mut body = sealed_body(level);
+        if test_only {
+            body["seal"]["testOnly"] = json!(true);
+        }
+        let sealed = seal_with(200, body.clone(), None, None).await.unwrap();
+        assert_eq!(serde_json::to_value(&sealed).unwrap(), body, "{level}");
+    }
+}
+
+#[test]
+fn a_correlation_key_is_validated_without_an_exchange() {
+    for key in [None, Some("k"), Some("~!"), Some(&*"k".repeat(128))] {
+        assert!(
+            RenderClient::validate_correlation_key(key).is_ok(),
+            "{key:?}"
+        );
+    }
+    for key in ["", "has space", "caf\u{e9}", &"k".repeat(129)] {
+        let error = RenderClient::validate_correlation_key(Some(key)).unwrap_err();
+        assert_eq!(error.kind, "invalid-request", "{key:?}");
+    }
+}
+
 #[tokio::test]
 async fn timestamped_seal_returns_typed_facts() {
     let sealed = seal_with(200, sealed_body("B-T"), None, None)

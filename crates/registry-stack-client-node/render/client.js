@@ -113,11 +113,24 @@ class RenderClient {
     try { this.native = new native.RenderClient(sanitize(config, 'configuration')); }
     catch (error) { throw normalized(error, 'configuration'); }
   }
-  async render(tokenOrProvider, documentType, request) {
+  // `correlationKey` is optional: 1 to 128 visible ASCII characters, sent as
+  // `Idempotency-Key` and checked when echoed. It is not a deduplication
+  // promise, and neither method resends.
+  async render(tokenOrProvider, documentType, request, correlationKey) {
+    return this.#exchange('render', tokenOrProvider, documentType, request, correlationKey);
+  }
+  async seal(tokenOrProvider, documentType, request, correlationKey) {
+    return this.#exchange('seal', tokenOrProvider, documentType, request, correlationKey);
+  }
+  async #exchange(method, tokenOrProvider, documentType, request, correlationKey) {
     try {
       request = sanitize(request, 'invalid-request');
       if (typeof documentType !== 'string') throw normalized({}, 'invalid-request');
+      if (correlationKey !== undefined && typeof correlationKey !== 'string') {
+        throw normalized({}, 'invalid-request');
+      }
       native.validateRenderRequest(documentType, request);
+      native.validateCorrelationKey(correlationKey);
     } catch (error) { throw normalized(error, 'invalid-request'); }
     // Providers own token-acquisition failures, including the shared OAuth
     // helper's typed classification. Preserve it for caller recovery.
@@ -127,7 +140,7 @@ class RenderClient {
       token = await tokenOrProvider.bearerToken();
     } else throw normalized({}, 'invalid-request');
     if (typeof token !== 'string') throw normalized({}, 'invalid-request');
-    try { return await this.native.render(token, documentType, request); }
+    try { return await this.native[method](token, documentType, request, correlationKey); }
     catch (error) { throw normalized(error, 'protocol'); }
   }
 }

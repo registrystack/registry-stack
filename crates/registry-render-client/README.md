@@ -58,4 +58,9 @@ seal route's problem codes are `render.signing-unavailable`
 and `render.seal-certificate-invalid` (503), `render.timestamp-failed` (502),
 `render.document-not-sealable` (400) and `render.seal-client-not-allowed` (403).
 
+The Node and Python bindings call `seal` too. They return the sealed document
+as JSON with the server's member names (the PDF as `pdfBase64`), which is how
+`SealedDocument` serializes, and check the correlation key with
+`RenderClient::validate_correlation_key` before acquiring a token.
+
 Run `cargo test --locked -p registry-render-client` for the HTTP boundary tests.

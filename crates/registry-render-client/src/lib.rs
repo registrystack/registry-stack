@@ -112,10 +112,14 @@ pub struct SealFacts {
 /// A sealed document. There is no `pdfSha256`: `document_sha256` covers the
 /// first revision (the rendered document) and `signed_file_sha256` the whole
 /// signed file in `pdf`. `bundle_hash` is the package the server rendered
-/// from, so a caller holding only `render:seal` can pin it.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// from, so a caller holding only `render:seal` can pin it. It serializes
+/// with the member names the server sends, `pdf` as `pdfBase64`, which is
+/// the shape the language bindings return.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct SealedDocument {
+    #[serde(rename = "pdfBase64", serialize_with = "serialize_base64")]
     pub pdf: Vec<u8>,
     pub document_sha256: String,
     pub signed_file_sha256: String,
@@ -124,6 +128,10 @@ pub struct SealedDocument {
     pub bundle_hash: String,
     pub warnings: Vec<String>,
     pub seal: SealFacts,
+}
+
+fn serialize_base64<S: serde::Serializer>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&base64::engine::general_purpose::STANDARD.encode(bytes))
 }
 
 /// The sealed answer as sent. A member the server adds later is ignored,
@@ -214,20 +222,6 @@ impl RenderClientError {
     }
 }
 
-/// A correlation key is 1 to 128 visible ASCII characters.
-fn check_correlation_key(key: Option<&str>) -> Result<(), RenderClientError> {
-    match key {
-        Some(key)
-            if key.is_empty()
-                || key.len() > 128
-                || !key.bytes().all(|byte| (0x21..=0x7e).contains(&byte)) =>
-        {
-            Err(error("invalid-request"))
-        }
-        _ => Ok(()),
-    }
-}
-
 pub struct RenderClient {
     http: reqwest::Client,
     base_url: ServiceBaseUrl,
@@ -264,6 +258,22 @@ impl RenderClient {
             base_url,
             maximum_response_bytes: config.maximum_response_bytes,
         })
+    }
+
+    /// Validate an optional correlation key, 1 to 128 visible ASCII
+    /// characters, before token acquisition in a language facade. No network
+    /// effects.
+    pub fn validate_correlation_key(key: Option<&str>) -> Result<(), RenderClientError> {
+        match key {
+            Some(key)
+                if key.is_empty()
+                    || key.len() > 128
+                    || !key.bytes().all(|byte| (0x21..=0x7e).contains(&byte)) =>
+            {
+                Err(error("invalid-request"))
+            }
+            _ => Ok(()),
+        }
     }
 
     /// Validate before token acquisition in a language facade. No network effects.
@@ -349,7 +359,7 @@ impl RenderClient {
         correlation_key: Option<&str>,
     ) -> Result<RenderedDocument, RenderClientError> {
         let body = Self::validate_request(document_type, request)?;
-        check_correlation_key(correlation_key)?;
+        Self::validate_correlation_key(correlation_key)?;
         let value = self
             .exchange(token, Route::Render, document_type, body, correlation_key)
             .await?;
@@ -402,7 +412,7 @@ impl RenderClient {
         correlation_key: Option<&str>,
     ) -> Result<SealedDocument, RenderClientError> {
         let body = Self::validate_request(document_type, request)?;
-        check_correlation_key(correlation_key)?;
+        Self::validate_correlation_key(correlation_key)?;
         let value = self
             .exchange(token, Route::Seal, document_type, body, correlation_key)
             .await?;
