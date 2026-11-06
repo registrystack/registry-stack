@@ -2816,7 +2816,7 @@ pub fn check_job_boundaries(pack: &AdapterPack, project: &AdapterProject) -> Vec
     }
     // A facade-reachable endpoint keeps the facade response ceiling; only
     // an endpoint the facade can never reach may declare up to the
-    // platform cap (D39).
+    // platform cap (`products/adapter/CONCEPT.md` section 8.8).
     let evidence_only_endpoints = evidence_only_endpoint_ids(pack);
     for (index, endpoint) in pack.endpoints.iter().enumerate() {
         if facade_endpoints.contains(endpoint.id.as_str())
@@ -6784,7 +6784,7 @@ fn worst_body(
 /// coverage, credential-kind match, `none` confined to the numeric
 /// loopback or `https` with an mTLS identity, and the plain-HTTP
 /// confinement to the loopback exception and the declared private CIDRs
-/// (decision D36), the rule load's own destination policy enforces on
+/// (`products/adapter/CONCEPT.md` section 13.7), the rule load's own destination policy enforces on
 /// resolved addresses. The facade's runtime check adds its own members
 /// to these findings.
 #[must_use]
@@ -7038,9 +7038,8 @@ pub fn loopback_exception_origin(url: &registry_platform_yaml::Url) -> bool {
     literal_origin_address(url).is_some_and(|address| address.is_loopback())
 }
 
-/// The one plain-HTTP rule (`products/adapter/CONCEPT.md` section 13.7,
-/// decision D36): plain HTTP is the contract inside the loopback
-/// exception and the declared private CIDRs, and refused everywhere
+/// The one plain-HTTP rule (`products/adapter/CONCEPT.md` section 13.7):
+/// plain HTTP is the contract inside the loopback exception and the declared private CIDRs, and refused everywhere
 /// else, for every authentication kind. The check evaluates the
 /// binding's host text; the send-time address resolution re-evaluates
 /// the same containment on the answers it gets, so a named host is
@@ -9628,7 +9627,7 @@ mod tests {
 
     /// A script finding carries the owning body's full document position:
     /// /routes/{id} for pack routes, /routeTemplates/{index} for template
-    /// bodies (staff review P2-1 follow-up).
+    /// bodies.
     #[test]
     fn script_findings_carry_the_owning_body_position() {
         let route = RouteDefinition {
@@ -10040,7 +10039,7 @@ mod tests {
     /// A `direct:` send resolves by the target route's `from` URI, as
     /// Camel connects routes, not by the route id: a route whose id and
     /// from differ is reachable by its from name, and an unknown name is
-    /// still refused (staff review P1-6).
+    /// still refused.
     #[test]
     fn direct_sends_resolve_by_the_from_uri() {
         let target = || RouteDefinition {
@@ -10070,8 +10069,7 @@ mod tests {
         );
     }
 
-    /// The errorHandler carries exactly one handler: none or both refuse
-    /// (staff review P1-7).
+    /// The errorHandler carries exactly one handler: none or both refuse.
     #[test]
     fn routes_refuse_an_error_handler_without_exactly_one_handler() {
         let route = |handler: ErrorHandlerStep| RouteDefinition {
@@ -10121,8 +10119,7 @@ mod tests {
     }
 
     /// A binding may not name a raw template: only a pack route or an
-    /// instantiated route id carries a concrete send shape (staff review
-    /// P1-5).
+    /// instantiated route id carries a concrete send shape.
     #[test]
     fn project_refuses_a_binding_of_a_never_instantiated_template() {
         let profile = profile_builder(vec![operation("cases-find", HttpMethod::Get)]);
@@ -10169,7 +10166,7 @@ mod tests {
 
     /// A template body's defect reports once at the authored
     /// /routeTemplates/N position, never again under each instantiation id
-    /// whose body is the same steps (staff review P2-1).
+    /// whose body is the same steps.
     #[test]
     fn template_defects_report_once_at_the_authored_position() {
         let bad_send = Step::To(ToStep {
@@ -10230,7 +10227,7 @@ mod tests {
     }
 
     /// A send naming no operation is never idempotent by inheritance:
-    /// caller redelivery over such a POST refuses (staff review P1-3).
+    /// caller redelivery over such a POST refuses.
     #[test]
     fn redelivery_refuses_a_post_that_names_no_operation() {
         let post = Step::To(ToStep {
@@ -10277,8 +10274,7 @@ mod tests {
     }
 
     /// The expression walk covers a send's path parameters and query, an
-    /// exception policy's retryWhile, and Rhai aggregation strategies
-    /// (staff review P1-4).
+    /// exception policy's retryWhile, and Rhai aggregation strategies.
     #[test]
     fn step_expressions_cover_the_send_and_policy_slots() {
         let steps = [
@@ -10361,7 +10357,7 @@ mod tests {
     }
 
     /// A Rhai aggregation strategy names a digest-pinned script like any
-    /// other reference (staff review P1-4).
+    /// other reference.
     #[test]
     fn aggregation_rhai_scripts_resolve_to_the_inventory() {
         let route = RouteDefinition {
@@ -10388,7 +10384,7 @@ mod tests {
     /// An enrichment classifies like a send once it carries the send
     /// parameters: a GET stays out of the non-safe set, a POST needs the
     /// idempotent claim, a POST naming an undeclared operation refuses,
-    /// and its query scripts join the inventory (staff review P1-13).
+    /// and its query scripts join the inventory.
     #[test]
     fn enrichment_writes_classify_like_sends() {
         let enrich = |http_method: HttpMethod, operation: Option<&str>| {
@@ -10487,8 +10483,7 @@ mod tests {
     }
 
     /// A template send's path references declared parameters like any
-    /// other slot: an undeclared `{{placeholder}}` in the path refuses
-    /// (staff review P1-4).
+    /// other slot: an undeclared `{{placeholder}}` in the path refuses.
     #[test]
     fn template_paths_reference_declared_parameters() {
         let template = |path: Option<String>| RouteTemplate {
@@ -10539,7 +10534,7 @@ mod tests {
     /// Composite nesting does not consume the direct depth bound: a
     /// redelivery over a send nested many composites and one direct hop
     /// deep still reaches its send, while a direct target that resolves
-    /// to nothing stays dead config (staff review R2).
+    /// to nothing stays dead config.
     #[test]
     fn redelivery_reaches_a_send_past_deep_composite_nesting() {
         let route = |target: Step| {
@@ -10720,8 +10715,7 @@ mod tests {
     }
 
     /// Caller-level redelivery over a POST inside a `direct:` target
-    /// needs the target send's `idempotentUpstream` claim (staff review
-    /// P1-2).
+    /// needs the target send's `idempotentUpstream` claim.
     #[test]
     fn write_refuses_caller_redelivery_over_a_post_inside_direct() {
         let writer = RouteDefinition {
@@ -10780,8 +10774,7 @@ mod tests {
     }
 
     /// A write `split` of POSTs runs the send per item, so it refuses the
-    /// one-non-safe-send rule even wrapped and with `stopOnException`
-    /// (staff review P1-2); a split of reads stays admitted.
+    /// one-non-safe-send rule even wrapped and with `stopOnException`; a split of reads stays admitted.
     #[test]
     fn write_refuses_a_split_of_posts() {
         let route = |inner: Vec<Step>| RouteDefinition {
@@ -10845,8 +10838,7 @@ mod tests {
 
     /// Findings come out in one order for the same input however the
     /// internal maps happen to hash: two runs over a pack whose routes
-    /// each carry a finding agree element for element (staff review
-    /// P1-12).
+    /// each carry a finding agree element for element.
     #[test]
     fn findings_come_out_in_a_deterministic_order() {
         let routes: Vec<RouteDefinition> = (0..24)
@@ -11476,7 +11468,7 @@ mod tests {
 
     // ----- worst-case walk: one regression per composite step -----
 
-    /// The probes of the Increment 0 staff review, one composite step per
+    /// One composite step per
     /// test: every addition and multiplication in the walk must show up
     /// in the binding's budget judgment.
     fn budgeted(steps: Vec<Step>, budget: u64) -> Vec<Diagnostic> {
@@ -11594,7 +11586,7 @@ mod tests {
 
     /// A breaker adds its body and its fallback to the running total:
     /// `[GET, GET, circuitBreaker{GET} onFallback{GET}]` sends 4, so a
-    /// budget of 3 is refused (staff review P0-2a).
+    /// budget of 3 is refused.
     #[test]
     fn breaker_adds_its_fallback_to_the_running_total() {
         let steps = vec![
@@ -11611,7 +11603,7 @@ mod tests {
 
     /// doTry adds its body, the widest catch, and doFinally: `[GET,
     /// doTry{GET} doCatch{GET, GET}]` sends 4, so a budget of 2 is
-    /// refused (staff review P0-2a).
+    /// refused.
     #[test]
     fn do_try_adds_its_widest_catch_and_finally_to_the_running_total() {
         let steps = vec![
@@ -11712,7 +11704,7 @@ mod tests {
     }
 
     /// An onException clause inside a split can run once per item, so its
-    /// candidate is multiplied by the split's bound (staff review P2-6).
+    /// candidate is multiplied by the split's bound.
     #[test]
     fn on_exception_inside_split_multiplies_by_maximum_items() {
         let clause = Step::OnException(OnExceptionStep {
@@ -11734,7 +11726,7 @@ mod tests {
     }
 
     /// A `filter` wrapper is transparent: its inner sends count, at any
-    /// depth (staff review P0-2b regression table).
+    /// depth.
     #[test]
     fn filter_is_transparent_to_the_walk() {
         let steps = nested_filters(3, vec![to_get("case-api"), to_get("case-api")]);
@@ -11746,7 +11738,7 @@ mod tests {
     }
 
     /// A `throttle` does not change its body's worst case: the inner
-    /// sends count once (staff review P0-2b regression table).
+    /// sends count once.
     #[test]
     fn throttle_counts_its_body() {
         let steps = vec![Step::Throttle(ThrottleStep {
@@ -11764,7 +11756,7 @@ mod tests {
     }
 
     /// An `idempotentConsumer` does not change its body's worst case: the
-    /// inner sends count once (staff review P0-2b regression table).
+    /// inner sends count once.
     #[test]
     fn idempotent_consumer_counts_its_body() {
         let steps = vec![Step::IdempotentConsumer(IdempotentConsumerStep {
@@ -11783,7 +11775,7 @@ mod tests {
 
     /// A walk that runs past the reader's depth bound refuses rather than
     /// silently counting zero: 17 nested filters around a split of 1000
-    /// must not pass a budget of 1 (staff review P0-2b), and nesting past
+    /// must not pass a budget of 1, and nesting past
     /// the bound itself carries the depth finding.
     #[test]
     fn walk_beyond_the_reader_depth_refuses_rather_than_passing() {
@@ -13933,7 +13925,8 @@ mod tests {
         );
     }
 
-    /// The one plain-HTTP rule (D36): a literal outside the declared
+    /// The one plain-HTTP rule (`products/adapter/CONCEPT.md` section
+    /// 13.7): a literal outside the declared
     /// CIDRs refuses, a literal inside them and a loopback origin are
     /// the declared contract, and a named host defers to the send-time
     /// resolution that evaluates the same containment.
@@ -14281,7 +14274,7 @@ mod tests {
         assert_has(&findings, CheckCode::RuntimeMissingEndpoint);
     }
 
-    // ----- origin-relative paths (round 6 C1) -----
+    // ----- origin-relative paths -----
 
     /// An authored operation path is origin-relative: no scheme or
     /// authority, no `..` segment in any spelling a URL parser resolves,
@@ -14368,7 +14361,7 @@ mod tests {
         assert_eq!(parsed.path(), "/admin");
     }
 
-    // ----- graphql send safety (round 6 C19) -----
+    // ----- graphql send safety -----
 
     /// A graphql send is non-safe unless its endpoint declares the named
     /// operation a query: a mutation, or an undeclared kind, sits under
@@ -14463,7 +14456,7 @@ mod tests {
         assert_clean(check_routes(&pack, &project_builder(&pack)));
     }
 
-    // ----- graphql send members (round 6 C11) -----
+    // ----- graphql send members -----
 
     /// A graphql send carries only the graphql members: the HTTP-send
     /// members `httpMethod`, `path`, `pathParameters`, and `query` each
@@ -14812,7 +14805,7 @@ mod tests {
         }
     }
 
-    // ----- okStatusCodeRange (round 6 C2) -----
+    // ----- okStatusCodeRange -----
 
     /// `okStatusCodeRange` is Camel's comma-separated list of single
     /// codes and inclusive ranges, every code inside 100 to 599 and no
@@ -14968,7 +14961,7 @@ mod tests {
         );
     }
 
-    // ----- path parameter correspondence (round 6 C12) -----
+    // ----- path parameter correspondence -----
 
     /// Every `{{name}}` placeholder of a send's static path is bound in
     /// `pathParameters`, and every entry binds a placeholder the path
@@ -15071,7 +15064,7 @@ mod tests {
         );
     }
 
-    // ----- header hygiene (round 6 C3) -----
+    // ----- header hygiene -----
 
     /// `is_route_unwritable_header_name` is the one predicate over the
     /// reserved names, the engine-owned prefixes, and the facade inputs:
@@ -15265,7 +15258,7 @@ mod tests {
         assert_eq!(findings[0].code, CheckCode::RouteUnknownHeader.code());
     }
 
-    // ----- header names and query keys (round 6 C24) -----
+    // ----- header names and query keys -----
 
     /// A header name is an RFC 9110 token at every position: a
     /// `setHeader` name and an endpoint `responseHeaders` entry refuse
@@ -15724,7 +15717,7 @@ mod tests {
         assert_clean(check_fixtures(&ws));
     }
 
-    /// An entry's operation is the facade-side primary key (D17): it
+    /// An entry's operation is the facade-side primary key: it
     /// must be a profile operation the project binds to a route. Unknown
     /// and known-but-unbound operations are each refused, with distinct
     /// value-free messages under one code.

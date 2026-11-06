@@ -1378,7 +1378,7 @@ async fn without_the_throw_an_out_of_range_status_returns_the_reply() {
 
 /// A plain-HTTP origin whose literal address sits inside a declared
 /// private CIDR loads: core's authoring check admits it by the same
-/// one rule (D36), the runtime's load agrees, and the send-time policy
+/// one rule (CONCEPT 13.7), the runtime's load agrees, and the send-time policy
 /// still refuses a plain-HTTP origin outside the declared CIDRs
 /// (`a_refused_destination_surfaces_as_egress_refused`).
 #[test]

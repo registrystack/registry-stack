@@ -26,8 +26,14 @@ class BRegProductCatalogTests(unittest.TestCase):
     def test_tracked_product_catalog_is_internally_complete(self) -> None:
         self.assertEqual([], VALIDATOR.validate_all())
 
+    def test_inventory_lists_no_definition_of_done_document(self) -> None:
+        inventory = VALIDATOR.load_yaml(VALIDATOR.CONTRACTS / "artifact-inventory.yaml")
+        paths = {item["path"] for item in inventory["artifacts"]}
+        self.assertNotIn("DEFINITION-OF-DONE.md", paths)
+        self.assertIn("contracts/definition-of-done.yaml", paths)
+
     def test_rls_assurance_and_operator_credential_posture_are_exact(self) -> None:
-        decisions = (VALIDATOR.PRODUCT_ROOT / "DECISIONS.md").read_text(
+        decisions = (VALIDATOR.PRODUCT_ROOT / "DESIGN-CONSTRAINTS.md").read_text(
             encoding="utf-8"
         )
         assurance = (

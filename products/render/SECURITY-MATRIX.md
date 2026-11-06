@@ -1,10 +1,8 @@
 # Security-invariant matrix
 
-Each security row of the Definition of Done, named as a threat, with its
-enforcement point and the executable negative test that proves it. Source:
-implementation review 2026-09-17 (two adversarial reviews; all findings
-fixed or explicitly documented as residuals below), extended by the PR
-#1113 review round the same day (rows 17-20).
+Each security requirement of Registry Render, named as a threat, with its
+enforcement point and the executable negative test that proves it. Residuals
+that are accepted, with their conditions, follow the table.
 
 | # | Threat | Enforcement point | Negative test |
 |---|---|---|---|
@@ -49,6 +47,5 @@ fixed or explicitly documented as residuals below), extended by the PR
   that path unreachable for ordinary callers; the backstop remains for a
   client that frames a Content-Length and then sends more.
 - **Asset caps are code-level constants** (per-asset 2 MiB, request total
-  8 MiB, JPEG/PNG only), not per-document manifest declarations; the DoD's
-  assets row was amended to match. Per-document asset policy is a v2
-  option if a journey needs it.
+  8 MiB, JPEG/PNG only), not per-document manifest declarations.
+  Per-document asset policy is a v2 option if a journey needs it.

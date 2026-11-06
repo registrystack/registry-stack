@@ -13,6 +13,13 @@ product.
 - Keep `contracts/security-invariant-matrix.yaml` and
   `contracts/security-test-traceability.yaml` scoped to implemented Scheduling
   behavior. A mapped test is not evidence that the test ran.
+- Record a deliberate behaviour a reader could mistake for an oversight in
+  `contracts/recorded-decisions.yaml`, with the tests that hold it. An entry
+  records the behaviour; the reasoning belongs in the pull request description.
+- Changes to authentication, authorization, audit, data minimization, or
+  retention are security-sensitive: update `SECURITY-MODEL.md` in the same
+  change when a trust boundary, operator obligation, or accepted residual
+  changes, and put the review narrative in the pull request description.
 - Preserve the source-neutral boundary: no scheduling crate, directly or
   through any shared dependency, reaches a Base Registry Engine, Casework,
   Document Store, Evidence, or Messaging crate, and none of those products

@@ -163,7 +163,7 @@ a complete externally issued task-grant context for configured institutional
 agent authority. It exposes no agent-facing operations. The closed
 requester-scoped definition response is not a catalog or authorization source.
 The closed public provider advertisement remains allowed because it is a
-package-derived publication for indexing, not a catalog runtime.
+package-derived publication for indexing, not a catalog runtime. A deferred capability gets no implementation, stub, placeholder schema, empty module, feature flag, or extension API; the credential status profile of section 15.9 is the one exception, and only as that section specifies.
 
 ## 5. Design principles
 
@@ -2332,9 +2332,7 @@ the PostgreSQL store, no credential carries `status`, and the deployed
 verifier still rejects `status`. Until the version 2 profile contracts it names
 are published and the runtime, the verifier, and every negative test of section
 13 that it adds exist, the Version 1 contracts and every statement this section
-amends continue to govern the shipped runtime. The plan section 18 requires is
-the credential status plan in `IMPLEMENTATION.md`, which lists what exists and
-what remains.
+amends continue to govern the shipped runtime.
 
 This profile lets a deployment withdraw an SD-JWT VC credential it has issued.
 It adds an optional status module to the one `evidence` binary, the Token
@@ -3255,111 +3253,9 @@ It does not include:
 - an application database, unless status is enabled (section 15.9); a mounted extract is a read-only source input, never a store
   the service owns, writes, or keeps state in.
 
-## 18. Delivery sequence
+## 18. Version 1 boundary
 
-`IMPLEMENTATION.md` owns the detailed phase exit gates and Definition of Done.
-The complete Version 1 sequence is:
-
-### Phase 0: freeze contracts, acceptance definitions, and DoD
-
-- Review and accept this concept note.
-- Define the CCCEV-to-JSON mapping.
-- Define the governed-bundle and runtime YAML schemas, selector-profile
-  contract, ownership split, and atomic bundle layout.
-- Define the closed lookup-result and derivation Rhai ABIs.
-- Define the initial domain-neutral primitive set and its resource bounds.
-- Define the normalized authority context.
-- Define the flattened JWS profile, signer identity, key discovery, rotation, and verifier rules.
-- Create golden fixtures for boolean, code, category, and role-bound relationship assertions.
-- Define negative fixtures for bundle-level inference and existence disclosure.
-- Define the source-shape compatibility mocks for both transports and their
-  exact request, authentication, cardinality, and failure expectations.
-- Define identifier-only, compound no-identifier, additional-disambiguator,
-  and multi-role selector fixtures with authorization and redaction
-  expectations.
-- Define all four initial assertion cases before production architecture is
-  written.
-- Map each security invariant to a threat, enforcement point, and negative
-  test.
-
-### Phase 1: generic offline kernel
-
-- Parse and validate the bundle.
-- Compile the source-adapter and requirement-derivation Rhai scripts.
-- Validate selector profiles and map source fixtures to closed lookup outcomes.
-- Run all four initial assertion cases through the same evaluator.
-- Reject undeclared, mistyped, oversized, or incomplete concept values before evidence construction.
-- Construct deterministic JSON evidence and sign it with a fixture key.
-- Verify that payload or protected-header modification invalidates the signature.
-- Prove that raw source facts cannot enter evidence, logs, audit, or errors.
-
-### Phase 2: generic source boundary
-
-- Add fixed HTTP JSON source execution, fixed headers, tagged selector/prior-
-  fact path templates, private-CA trust profiles, and generic Basic, static
-  Authorization header, static API-key header, and OAuth 2.0 client-credentials
-  authentication in both its client-secret and private-key JWT forms.
-- Add reviewed-statement execution over a read-only mounted extract, with the
-  prepare-time authorizer, the bound evaluation instant, publication-metadata
-  and maximum-age refusals, and declared row and step bounds.
-- Run flat REST, paged nested REST, OpenCRVS Event Search-shaped contracts, and
-  a sanitized extract file through one source layer.
-- Prove the selector matrix, zero, one, and multiple lookup outcomes, and no
-  broad candidate retrieval or candidate choice.
-- Prove at least one definition can change source shapes using YAML and Rhai
-  only.
-- Reject DHIS2 or OpenCRVS code, dependencies, features, or public contract
-  variants outside test and fixture paths.
-
-### Phase 3: trust, authorization, audit, and signing
-
-- Add the selected authentication profile.
-- Add selector value-origin, subject-authority, and authorization enforcement.
-- Add authenticated institutional task-grant authority for agent workloads,
-  with complete grant binding and no fallback from an invalid present grant.
-- Add a standalone minimal native audit event for every authorization refusal
-  after successful authentication, durably accepted before the generic `403`.
-- Add production signing-key resolution, fail-closed signing, and public JWKS publication.
-- Add durable audit before source access and before release.
-- Run all four cases through every trust boundary.
-
-### Phase 4: native HTTP service and operations
-
-- Add the evidence and operational endpoints, limits, safe errors, readiness,
-  rate controls, and generated public contracts.
-- Run all four cases through the real router while multiple definitions are
-  enabled in one process.
-
-### Phase 5: privacy, isolation, and schema freeze
-
-- Prove minimization, selector confidentiality, no-match and ambiguity
-  behavior, combined disclosure safety, cross-definition isolation, failure
-  closure, and signature verification.
-- Attempt optional read-only public-demo smoke tests after deterministic mocks.
-- Freeze Version 1 schemas only when the complete acceptance set passes.
-
-### Phase 6: runtime release readiness
-
-- Complete operator and verifier guidance and all applicable package,
-  contract, dependency, and workspace gates.
-- Satisfy the frozen runtime Definition of Done rows on one revision.
-
-### Phase 7: production build and issuer handoff
-
-- Keep the editable local project and `.evidence/dev` state outside production
-  inputs while compiling one explicit target into a closed candidate.
-- Require exact governance metadata, stable concept identifiers, and complete
-  synthetic fixtures without adding a domain branch or a second evaluator.
-- Use the real Evidence binary for candidate validation and fixture execution,
-  then perform target-host startup, verification, and audit proof with
-  independently provisioned secrets.
-- Support independently configured HTTPS OIDC and verify the actual
-  issuer-to-resource contract at handoff. Local tooling uses stock ThunderID.
-- Document the bare-binary journey and Compose adapter without generating
-  deployment artifacts.
-
-Stop implementation before every future profile in section 15. Future work
-requires a new approved concept and plan.
+Version 1 stops before every future profile in section 15.
 
 ## 19. Success criteria
 

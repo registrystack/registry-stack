@@ -6,8 +6,8 @@ Status: the mapping format, its checks, the generator, the preview command and t
 
 An implementer selects a source and a target schema, fills each target field from the source, previews the result against fixtures, and exports the Rhai and project references Adapter already accepts.
 One authoring model produces Consultation data, Evidence facts and ingestion destination inputs, preserving each [host boundary](CONSULTATION.md).
-This increment requires no change to transformation execution semantics or deployed runtime formats.
-It keeps [D32](CONCEPT.md#16-recorded-decisions): field mapping stays in scripts, and a generated script is an ordinary script.
+Generation requires no change to transformation execution semantics or deployed runtime formats.
+It keeps field mapping in scripts (see [the ingestion mapping](CONCEPT.md#173-the-pass-the-two-destinations-and-mapping)), and a generated script is an ordinary script.
 
 ## Ownership
 
@@ -125,7 +125,7 @@ Required unmapped fields, conflicting assignments, invalid selectors and unsuppo
 The editor lists source fields from the sample items (for an ingestion job, the files in its `preview/` directory) and from the model's existing selectors; it reads no source schema and infers nothing at generation time.
 A new answer appears once a sample carries it.
 For an ingestion job, the job's `projection.fields` must also name the answer, and a dotted path reaches the mapping as one literal key, which the model quotes (`'"household.village"'`).
-A field catalogue derived from fixtures or form definitions, and a reviewed DHIS2 catalogue of attribute UIDs, labels and types, are later work; the DHIS2 slice displays “Date of birth [Dob00000001]” but persists the UID and exact keyed-array selector.
+A field catalogue derived from fixtures or form definitions, and a reviewed DHIS2 catalogue of attribute UIDs, labels and types, are not provided; the DHIS2 slice displays “Date of birth [Dob00000001]” but persists the UID and exact keyed-array selector.
 Removed identifiers and incompatible schema changes require explicit correction.
 
 The read example uses a documented synthetic fixture with these assignments and a separate private canary:
@@ -143,7 +143,7 @@ A field mapping does not establish programme membership or enable API operations
 The ingestion example regenerates the KoboToolbox job's `register-household` mapping from a model: a copied submission identifier, a top-level answer, an answer inside a group with explicit string-to-integer conversion, and one preview input refused for a missing required value.
 That refused item is a preview input and a job seam test, not a pack fixture; the example's `preview/expected.yaml` records that `missing-respondent` is meant to be refused at `respondentName`.
 
-## Preview and deferred enhancements
+## Preview and current limits
 
 Preview runs the generated script through the existing Rust transformation API and shows its validated result or a value-free refusal.
 It runs on source items the author supplies, such as a documented synthetic fixture; pack fixtures hold upstream exchanges rather than source items, so for Consultation the end-to-end proof over them stays with `adapterctl fixtures replay`.
@@ -151,7 +151,7 @@ The ingestion target previews the operation input inside the destination shape; 
 Static authoring errors identify assignments.
 For a generated script, a refusal names the target field and the reason (`mapping.missing`, `mapping.duplicate` or `mapping.conversion`), never the value; preview accepts the thrown text only when it matches the generator's own shape for a field of this model, and the runtime refusal stays categorical.
 `mapping check` and `generate` apply the same compile acceptance as the runtime, so a target schema the runtime would refuse (`adapterctl.mapping-schema-not-public`) fails before preview.
-Uniform native input-schema validation is not in this increment.
+Preview does not apply uniform native input-schema validation.
 For ingestion, preview validates the output against an authored mirror of the destination operation input, which is kept in sync with the operation by hand.
 Preview performs no source acquisition, credential resolution, signing or activation.
 
@@ -180,18 +180,5 @@ samples:
 - The JSON report gives each judged result `expected` (`{outcome: accepted}`, `{outcome: refused}`, or `{outcome: refused, field}`) and `matched`, and the run a `mismatched` count. A mismatch raises `adapterctl.mapping-preview-mismatch` at `/samples/<name>`, naming both results and never a source value, and the run exits 1 with the report still carrying every result. The text form shows the expectation on each line, on a refused run as on a passing one.
 - `products/adapter/scripts/check-contracts.sh` previews every sample of the KoboToolbox example against its file, so a regression in the mapping or a changed sample fails CI.
 
-Richer runtime diagnostics, uniform native input validation and runtime coverage of authoring provenance are optional follow-ups, not editor prerequisites.
-General loops, general conditions, arbitrary code nodes, XML/XSLT, handwritten-Rhai import and live-source preview are also outside this increment.
-
-## Definition of done
-
-1. `AdapterMapping` is registered with a generated, drift-checked schema; the model, checks and generator run headlessly through `adapterctl` and emit artifacts accepted by the existing Rust API without new runtime formats.
-2. Studio generates and previews only through the pinned `adapterctl`; no second generator exists.
-3. Browser tests cover setting a field by dragging and by choosing source then target, changing its rule and clearing it, a keyed selection and a fixed value in the side panel, save and reopen, a refused sample that names its field, and the read-only state of a hand-edited script.
-4. The DHIS2 read example previews through Rust and proves nested targets, configured attribute selection and private-canary exclusion.
-5. The KoboToolbox ingestion example regenerates its mapping from a model, produces the destination input for accepted items, and refuses the missing-value item as an item-scoped refusal.
-6. Tests cover missing and duplicate matches, invalid dates, conversions, required-field gaps and extra output, with static errors or the named preview refusals as appropriate.
-7. Authoring changes require revalidation and regeneration; identifiers never silently retarget.
-8. A hand-edited generated script produces the drift warning in `adapterctl check`, and Studio shows it read-only with one replace action; generation conflicts preserve existing files and handwritten projects still work.
-9. Generated mappings work for Consultation, Evidence and the ingestion direct destination with their existing host boundaries; a write-direction model generates and checks headlessly.
-10. Unit, integration and browser end-to-end tests and owning authoring checks pass; the examples document the supported subset and diagnostic limits.
+The runtime offers no richer diagnostics, uniform native input validation or coverage of authoring provenance, and the editor does not need them.
+General loops, general conditions, arbitrary code nodes, XML/XSLT, handwritten-Rhai import and live-source preview are not supported.

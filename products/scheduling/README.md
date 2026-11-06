@@ -348,9 +348,9 @@ can disappear as soon as expiry completes. Active,
 retryable and uncertain work, spent idempotency keys, and audit records survive
 this cleanup. See [retention configuration](RUNTIME-CONFIG.md).
 
-## Phase 1 scope and exclusions
+## Scope and exclusions
 
-Phase 1 is one booking surface over anchored supply. It excludes, as tracked
+Scheduling is one booking surface over anchored supply. It excludes, as tracked
 exclusions rather than accidents:
 
 - Reassignment: no route moves an appointment to another party, and no

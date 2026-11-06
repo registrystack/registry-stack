@@ -74,9 +74,9 @@ read.
 An issuer may mint the `scheduling` tag only once every verifier it targets
 understands it. A verifier built before the tag existed rejects the whole
 grant as malformed, which is the intended fail-closed direction; an operator
-rolling a verifier back past that point needs to know it. The review record
-in `crates/registry-platform-oidc/README.md` carries the threat model and the
-release note to update when the first accepting release is cut.
+rolling a verifier back past that point needs to know it. The same rule is
+stated in the compatibility note of
+[Task-grant `scheduling` bounds](../../crates/registry-platform-oidc/README.md#task-grant-scheduling-bounds).
 
 ## How the runtime matches a permission
 
@@ -157,7 +157,7 @@ appointment's actual service and location bounds. For a source-managed
 appointment the caller must be the matching source manager. For a self-booked
 appointment, a caller holding a current online `appointment.read` task grant
 for that service and location can read any appointment it names by id; this is
-an accepted residual recorded in `SECURITY-REVIEW-NOTES.md`, so institutions
+an accepted residual recorded as SCHEDULING-RES-01 in `SECURITY-MODEL.md`, so institutions
 grant the action only to services whose workflow already selects the
 appointment. The action grants no list, history, catalogue or unrelated
 appointment authority. The original actor's ordinary read scope does not make it the
@@ -320,5 +320,6 @@ maintained in-stack approval path rather than a required Scheduling runtime
 dependency.
 
 Scheduling has no route that books on another party's behalf, and a grant does
-not create one: the Phase 1 scope records guest booking, a holder booking for
-someone else, as an explicit exclusion.
+not create one: guest booking, a holder booking for someone else, is an
+explicit exclusion in the
+[product scope](README.md#scope-and-exclusions).

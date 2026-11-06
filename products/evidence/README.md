@@ -391,9 +391,8 @@ revocation. The credential status profile of `CONCEPT.md` section 15.9, approved
 but not served, will add both for a requirement that declares credential status
 under version 2 of the profile. Its codec and status check, its ledger module,
 and a PostgreSQL store for the OID4VCI adapter exist as library code that the
-served runtime does not call; the
-[credential status plan](IMPLEMENTATION.md#credential-status-plan) lists what
-remains. The shipped verifier checks an SD-JWT VC for exactly what it checks for a signed
+served runtime does not call; section 15.9 of
+[CONCEPT.md](CONCEPT.md) defines what remains. The shipped verifier checks an SD-JWT VC for exactly what it checks for a signed
 JWS, namely issuer authenticity against a pinned key set and the output
 contract, and it never falls back to the credential format when signing fails.
 [The SD-JWT VC demo](SD-JWT-VC-DEMO.md) issues one assertion in both formats and
@@ -436,14 +435,16 @@ describes.
 Generated JSON Schema and OpenAPI artifacts are under `generated/`. The
 contract gate recreates them from Rust in a temporary directory and requires an
 exact diff. The complete workspace and dependency-policy gates remain those in
-[the implementation schedule](IMPLEMENTATION.md).
+[the verification gates](IMPLEMENTATION.md#verification-gates).
 
 ## Security
 
 Changes to authentication, authorization, disclosure, audit, configuration
 trust, signing, source credentials, or selector handling require explicit
 security review notes naming the threat, Rust enforcement point, and negative
-test. Report suspected vulnerabilities through the repository process in
+test. Put the notes in the pull request description, and record a new or
+changed invariant in `contracts/security-invariant-matrix.yaml` (threat,
+enforcement, `negative_test`). Report suspected vulnerabilities through the repository process in
 `SECURITY.md`, not a public issue.
 
 ### Rhai 1.27 dependency review

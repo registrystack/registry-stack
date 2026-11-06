@@ -68,5 +68,6 @@ The active root workflows provide two event-specific checks:
 Both use the nightly toolchain, pinned `cargo-fuzz` 0.13.2, the committed seed
 corpus, `-max_total_time=60`, and `-rss_limit_mb=1024`, and upload crash
 artifacts only on failure. A crash at these trust boundaries may be a security
-finding and should route through `SECURITY.md`; automation must not file a
+finding and should route through the repository
+[`SECURITY.md`](../../../SECURITY.md); automation must not file a
 public issue containing the input.

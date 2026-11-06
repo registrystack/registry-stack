@@ -25,3 +25,8 @@ canonical examples, and product-local verification scripts. Read the workspace
 - Keep the submitted and current-source examples small and executable. Preserve
   exact policy and provider bindings, reviewer disclosure, independent producer
   apply authority, and meaningful review and staffing proof when editing them.
+- Changes to authentication, authorization, audit, data minimization,
+  retention, or erasure are security-sensitive and need `SECURITY-MODEL.md`
+  updated in the same change when a trust boundary, operator obligation, or
+  accepted residual changes, with the review narrative in the pull request
+  description.

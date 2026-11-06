@@ -262,7 +262,7 @@ async fn a_paged_http_acquisition_round_trips_the_cursor() {
 }
 
 /// A job-only endpoint may declare its response bound up to the
-/// platform cap (CONCEPT 17.2, D39): a body past the facade's fixed
+/// platform cap (CONCEPT 17.2 and 8.8): a body past the facade's fixed
 /// ceiling passes the job page and the profile's raised bound, where a
 /// facade deployment would refuse it.
 #[tokio::test]

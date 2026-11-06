@@ -7,8 +7,14 @@ credential, or carry credentials.
 
 The first provider representation is the closed
 `registry-discovery-v1alpha1` JSON-LD profile. The public profile resources
-are in `profile/`; product decisions, security traceability, and Definition of
-Done are in `contracts/`.
+are in `profile/`; standards alignment, security traceability, and the
+Definition of Done contract are in `contracts/`.
+
+`catalogRevision` covers the normalized semantic service projection and
+excludes `originContentDigest`, `originFetchedAt`, and `builtAt`. Rebuilding
+identical semantic inputs keeps record identities, semantic fields, and
+revisions; fetch and build timestamps may change, and index bytes are not
+promised identical across builds.
 
 The profile uses a deliberately selected DCAT 3 / DCAT-AP 3.0.1 / BRegDCAT-AP
 alignment subset. It claims neither full DCAT-AP nor BRegDCAT-AP conformance.

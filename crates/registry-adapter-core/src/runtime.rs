@@ -298,7 +298,7 @@ pub struct AuditRetention {
 }
 
 /// Exact write-response custody in the idempotency store
-/// (`products/adapter/CONCEPT.md` section 9 and D12).
+/// (`products/adapter/CONCEPT.md` section 9).
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

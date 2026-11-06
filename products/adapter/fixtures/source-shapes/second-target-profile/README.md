@@ -7,8 +7,9 @@ https://hl7.org/fhir/R4/operationoutcome.html); no server was contacted.
 
 ## The shape
 
-D17 says "the same DHIS2 pack serves a `breg-records` deployment and a
-later GovStack deployment unchanged" (CONCEPT section 7). This shape
+The contract says a pack knows a source system and a profile owns the outward
+wire contract, so the same DHIS2 pack serves a `breg-records` deployment and a
+later GovStack deployment unchanged (CONCEPT section 7). This shape
 writes a third facade profile, `fhir-facade` (`profile.yaml`), and binds an
 existing pack to it without touching the pack:
 
@@ -78,8 +79,8 @@ holds the current contract for each construct.
    pack. Either the runtime refuses every mapped error, or a FHIR caller
    receives a breg-records problem. CONCEPT section 7 says the engine fills
    `problemCode`, `problemTitle`, `problemDetail`, and `status`, but no pack
-   construct supplies those values: the pack writes the whole body. D17
-   does not hold for errors.
+   construct supplies those values: the pack writes the whole body. The
+   one-pack, many-profiles rule does not hold for errors.
 7. **Fixtures are profile-bound.** A fixture entry names a profile
    operation and asserts a facade body in the profile's envelope, so a
    pack's fixture corpus cannot move with the pack: the `dhis2-tracker`

@@ -22,6 +22,15 @@ class ContractArtifactsTest(unittest.TestCase):
         result = subprocess.run([sys.executable, str(SCRIPT)], cwd=ROOT, text=True, capture_output=True, check=False)
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_definition_of_done_covers_ten_sections_and_cites_no_planning_ledger(self) -> None:
+        self.assertEqual(len(VALIDATOR.REQUIRED_DOD_IDS), 10)
+        self.assertNotIn("discovery-dod-16-11-pr-reduction", VALIDATOR.REQUIRED_DOD_IDS)
+        document = json.loads((ROOT / "contracts/definition-of-done.yaml").read_text())
+        removed = {"DECISIONS.md", "PR-DESCRIPTION.md", "SALVAGE-LEDGER.md", "FUTURE-WORK.md"}
+        cited = {Path(proof["path"]).name for item in document["requirements"] for proof in item["requiredEvidence"]}
+        self.assertEqual(cited & removed, set())
+        self.assertEqual({item["id"] for item in document["requirements"]}, VALIDATOR.REQUIRED_DOD_IDS)
+
     def test_openapi_problem_variants_pin_runtime_code_and_detail(self) -> None:
         document = json.loads((ROOT.parents[1] / "crates/registry-discovery/openapi.json").read_text())
         expected = {

@@ -28,8 +28,8 @@ reject ambiguous selection. Evidence matching retains the complete AND-list.
 Persisted selections remain inert and require current local acceptance;
 provenance renewal must not silently accept changed service semantics.
 
-Use [DECISIONS.md](DECISIONS.md) for these ownership and identity rules,
-[profile/README.md](profile/README.md) for the publication profile,
+Use [profile/README.md](profile/README.md) for the publication profile and
+its ownership and identity rules,
 `contracts/standards-profile.yaml` for precise alignment claims, and relevant
 rows of `contracts/security-invariant-matrix.yaml` and
 `contracts/security-test-traceability.yaml` for refusal tests. Standards

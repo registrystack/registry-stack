@@ -2,10 +2,10 @@ apiVersion: registry.registrystack.org/product-contract/v1
 product: messaging
 scope: mvp
 purpose: >-
-  Behaviour a reader could reasonably mistake for an oversight, recorded as a
-  deliberate choice with the reasoning that settled it. A later change may
-  overturn any of these, but it overturns the entry in the same commit rather
-  than rediscovering the question.
+  Behaviour a reader could reasonably mistake for an oversight, recorded as
+  deliberate. Each entry states what the product does or refuses, and cites
+  the tests that hold it. A change that alters one of these behaviours
+  updates or removes its entry in the same commit.
 decisions:
   - id: MESSAGING-DEC-01
     subject: The status route answers message.not-visible for a missing message
@@ -13,10 +13,6 @@ decisions:
       Every authenticated read of a message the caller may not see answers
       404 message.not-visible, and so does a read of a message that does not
       exist. The cancel route answers a caller the same way.
-    reasoning: >-
-      A distinct not-found answer would let any authenticated caller probe
-      which identifiers exist. One answer for both keeps the status route from
-      being an existence oracle.
     evidence:
       - {path: crates/registry-messaging-core/src/visibility.rs, name: a_missing_message_answers_exactly_like_an_invisible_one}
       - {path: crates/registry-messaging/src/http.rs, name: an_authenticated_caller_is_told_an_unknown_message_is_not_visible}
@@ -26,12 +22,9 @@ decisions:
     decision: >-
       A refused credential increments a closed-label counter on the private
       metrics listener and writes no audit record.
-    reasoning: >-
-      An unauthenticated request names no caller the journal could attribute
-      it to, and journaling every refusal would let anyone who can reach the
-      listener grow the journal without bound. The counter carries the route
-      template and the refusal reason, never the message identifier or a
-      token value.
+    alsoTrue: >-
+      The counter carries the route template and the refusal reason, never
+      the message identifier or a token value.
     evidence:
       - {path: crates/registry-messaging/src/http.rs, name: the_metrics_listener_serves_counters_and_nothing_else}
       - {path: crates/registry-messaging/src/metrics.rs, name: labels_are_closed}
@@ -41,10 +34,6 @@ decisions:
       A client identifier listed in two access profiles is refused when the
       package loads, and a token resolves to the one profile its client is
       listed in.
-    reasoning: >-
-      Choosing between two matching profiles at request time would need a
-      precedence rule a reviewer cannot see beside the templates. Refusing the
-      overlap keeps who may send what readable from the package alone.
     evidence:
       - {path: crates/registry-messaging-core/src/access.rs, name: a_client_in_two_profiles_is_refused}
       - {path: crates/registry-messaging-core/src/access.rs, name: a_token_resolves_to_the_profile_its_client_is_listed_in}
@@ -53,10 +42,6 @@ decisions:
     decision: >-
       The operator role sees every message and will settle, retry, and cancel
       them; submission belongs to the sender role only.
-    reasoning: >-
-      An operator credential is broad by design. Letting it also send would
-      make the widest credential the one that can reach any recipient through
-      any template, which is the opposite of what an access profile is for.
     evidence:
       - {path: crates/registry-messaging-core/src/access.rs, name: a_submission_outside_the_callers_sender_profiles_or_templates_is_refused}
   - id: MESSAGING-DEC-05
@@ -65,15 +50,7 @@ decisions:
       The runtime configuration uses the shared RuntimeConfigLoader. It
       parses YAML first, then substitutes expressions inside string values;
       keys remain literal, and expressions in credential references and
-      secret-provider declarations are refused. This supersedes the pre-parse mechanism
-      reviewed before the shared loader transition, preserving the secret
-      reference and document-shape invariants.
-    reasoning: >-
-      A secret reference already names where the secret lives. Expanding
-      into it would let an environment variable redirect the runtime to a
-      different secret, and would put the reference outside review. The
-      shared loader keeps an expanded value from changing the document's
-      shape, so one expansion grammar holds across the stack.
+      secret-provider declarations are refused.
     evidence:
       - {path: crates/registry-messaging/src/config.rs, name: shared_runtime_loader_refuses_environment_expressions_in_secret_references}
       - {path: crates/registry-messaging/src/config.rs, name: an_environment_expression_reaching_a_credential_field_through_an_alias_is_refused}
@@ -89,13 +66,6 @@ decisions:
       while that identity, digest, schema, and role boundary match. A pinned
       package.expectedDigest must match before any database operation, and a
       package change takes effect when the runtime restarts.
-    reasoning: >-
-      One shared activation contract avoids a product-local authority while
-      preserving the digest every later message was accepted under. Exact
-      database identity prevents a valid package from serving against another
-      deployment's data, and read-only runtime grants prevent the serving
-      credential from rewriting its own activation history. Restart keeps one
-      package per process; the pin binds deployment to reviewed bytes.
     evidence:
       - {path: crates/registry-messaging/src/config.rs, name: runtime_package_digest_pin_names_the_found_digest}
       - {path: crates/registry-messaging/tests/postgres_package.rs, name: plan_is_read_only_and_apply_records_once_and_is_idempotent}
@@ -118,14 +88,10 @@ decisions:
       the caller that used it (MESSAGING-DEC-17). An exact retry refused
       with 403 or 422 therefore says nothing about the first attempt, which
       may have been accepted under the package or profile active then.
-    reasoning: >-
-      A replay answered from the key alone would let a caller whose profile
-      lost a template keep sending it by repeating an old key, and would let
-      a different caller probe another caller's keys. The request hash covers
-      the canonical request body, so one key never stands for two different
-      requests. An operator drains senders before activating a package that
-      removes what an in-flight retry needs; a retry meets the refusal only
-      when the operator skips that drain.
+    alsoTrue: >-
+      The request hash covers the canonical request body, so one key never
+      stands for two different requests. An operator drains senders before
+      activating a package that removes what an in-flight retry needs.
     evidence:
       - {path: crates/registry-messaging/tests/postgres_messages.rs, name: an_idempotency_key_replays_one_request_and_refuses_another}
       - {path: crates/registry-messaging/tests/postgres_messages.rs, name: concurrent_submissions_under_one_key_record_one_message}
@@ -139,11 +105,6 @@ decisions:
       with the literal redacted, for the submitter, for an operator on the
       status route, and in messagingctl messages show. No read returns the
       body or the template data.
-    reasoning: >-
-      The submitter already holds the contact, and an operator acts on
-      dispatch state, not on who was written to. One masked shape for every
-      reader keeps the status route from being a way to recover contacts,
-      and keeps the operator tool from printing them into a terminal log.
     evidence:
       - {path: crates/registry-messaging/tests/postgres_messages.rs, name: a_message_is_visible_to_its_submitter_and_an_operator_only}
       - {path: crates/registry-messagingctl/tests/postgres_messages_cli.rs, name: list_and_show_report_messages_with_the_contact_masked}
@@ -158,15 +119,13 @@ decisions:
       maybe-sent or was interrupted by a lapsed lease answers 409
       message.dispatch-started, and one in any other final state answers 409
       message.terminal.
-    reasoning: >-
-      A maybe-sent or interrupted attempt, like an unknown outcome, may
-      already have reached the recipient, so calling the message cancelled
-      would tell the caller something nobody knows. Its retry carries the
-      same provider idempotency key, so letting it run is no second
-      delivery, and if it cannot run, because its attempts are spent or its
-      expiry passes first, the message stops unknown for the operator to
-      settle, never expired. A transient attempt is known not to have left, so
-      withdrawing its retry is still the truth.
+    alsoTrue: >-
+      A retry of a maybe-sent or interrupted attempt carries the same
+      provider idempotency key, so letting it run is no second delivery. If
+      it cannot run, because its attempts are spent or its expiry passes
+      first, the message stops unknown for the operator to settle, never
+      expired. A transient attempt is known not to have left, so withdrawing
+      its retry is still the truth.
     evidence:
       - {path: crates/registry-messaging/tests/postgres_messages.rs, name: a_queued_message_cancels_once_and_a_claimed_one_does_not}
       - {path: crates/registry-messaging/tests/postgres_messages.rs, name: a_cancellation_racing_a_claim_has_one_winner}
@@ -184,14 +143,6 @@ decisions:
       it as maybe-sent, which the default hold policy moves to unknown and the
       retry policy retries while attempts and time remain, then moves to
       unknown.
-    reasoning: >-
-      Only the transport knows whether its request was written, so only it
-      can call a timed-out attempt not sent; an outer cut-off alone would turn
-      a connection that never opened into an unknown message an operator must
-      settle. The dispatcher cannot tell whether an overrunning transport's
-      request reached the provider, and treating that as transient would
-      retry a send that may have been delivered, which is the duplicate
-      MESSAGING-SEC-06 exists to stop.
     evidence:
       - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: a_hanging_send_is_cut_off_and_held_as_unknown}
       - {path: crates/registry-messaging/src/providers/tests.rs, name: a_dispatched_http_attempt_classifies_its_own_timeout_before_the_worker_stops_waiting}
@@ -204,20 +155,17 @@ decisions:
       message, its generation, and a digest of the rendered content, so every
       attempt of one generation carries the same key and an operator requeue
       starts a new one.
-    reasoning: >-
-      An operator who retries a failed message or settles an unknown one as
-      not sent is asking for another delivery; a provider that deduplicates
-      on the old key would silently drop it. Because that requeue sends
-      without deduplication, a message whose attempt may have reached its
-      provider never ends failed, expired, or cancelled on the dispatcher's
-      own decision: when `onUncertain: retry` has no attempt or time left,
-      its expiry passes while its retry waits, or the row is quarantined, it
-      stops unknown, and only an operator who settles it decides whether
-      another delivery is wanted. That holds when a later attempt failed
-      transiently or was refused permanently, since the later answer does
-      not prove the earlier attempt did not land. A message never attempted,
-      or whose attempts all ended transient or permanent, is known not to
-      have left and still fails or expires.
+    alsoTrue: >-
+      A message whose attempt may have reached its provider never ends
+      failed, expired, or cancelled on the dispatcher's own decision: when
+      `onUncertain: retry` has no attempt or time left, its expiry passes
+      while its retry waits, or the row is quarantined, it stops unknown,
+      and only an operator who settles it decides whether another delivery
+      is wanted. That holds when a later attempt failed transiently or was
+      refused permanently, since the later answer does not prove the earlier
+      attempt did not land. A message never attempted, or whose attempts all
+      ended transient or permanent, is known not to have left and still
+      fails or expires.
     evidence:
       - {path: crates/registry-messaging/src/dispatch.rs, name: the_provider_key_is_stable_per_generation_and_binds_the_content}
       - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: a_retrying_message_that_spends_its_attempts_maybe_sent_ends_unknown}
@@ -236,10 +184,8 @@ decisions:
       without a send, and a warning names the code. A message whose payload
       retention already erased fails permanently with payload-erased, also
       without a send.
-    reasoning: >-
-      Holding such a message queued would hide a deployment defect behind a
-      growing backlog. Failing it is visible in the status, the journal, and
-      the log, and an operator retries it once the provider is configured.
+    alsoTrue: >-
+      An operator retries the message once the provider is configured.
     evidence:
       - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: a_message_for_an_unconfigured_provider_fails_without_a_send}
   - id: MESSAGING-DEC-13
@@ -252,12 +198,12 @@ decisions:
       records the outcome after the commit is established, attributed to the
       operator tool. A failed response append after commit reports unavailable
       without undoing or replaying the committed effect.
-    reasoning: >-
-      Each process has one writer and its own stream. File acceptance is
-      durable, but audit and PostgreSQL are separate systems: an unmatched
-      request or unknown outcome is honest when a commit cannot be proven.
-      Runtime and operator streams have no total order. Operator stdout stays
-      reserved for command results.
+    alsoTrue: >-
+      Each process has one audit writer and its own stream; the runtime and
+      operator streams have no total order. File acceptance is durable but
+      audit and PostgreSQL are separate systems, so an unmatched request or
+      an unknown outcome is recorded when a commit cannot be proven.
+      Operator stdout is reserved for command results.
     evidence:
       - {path: crates/registry-messagingctl/tests/postgres_messages_cli.rs, name: actions_preview_by_default_and_change_the_message_only_with_apply}
       - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: operator_actions_preview_by_default_and_apply_on_request}
@@ -266,10 +212,6 @@ decisions:
     decision: >-
       An attempt record says whether the provider returned a reference, and
       the reference itself stays in the message store for receipt matching.
-    reasoning: >-
-      A provider reference is provider data that can be joined to the
-      provider's own logs, which carry the contact. The journal only needs to
-      know that one exists.
     evidence:
       - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: no_contact_content_data_or_credential_reaches_the_dispatch_journal_or_log}
   - id: MESSAGING-DEC-15
@@ -278,14 +220,9 @@ decisions:
       GET /v1/messages/{message_id} and messagingctl messages list and show
       answer from the message store and write no audit record, whether the
       caller sees the message or not.
-    reasoning: >-
-      The sibling runtimes journal changes, not ordinary reads: Scheduling's
-      get_appointment and Casework's review_request and review_task answer
-      without an audit record, and Casework journals only the accountability
-      read that releases a raw reviewer identity. A message view releases no
-      contact, part, template data, or provider reference, so it is an
-      ordinary read, and journaling every poll would grow the journal with
-      the callers' polling rate rather than with what happened.
+    alsoTrue: >-
+      A message view releases no contact, part, template data, or provider
+      reference.
     evidence:
       - {path: crates/registry-messaging/tests/postgres_messages.rs, name: a_status_read_writes_no_audit_record}
   - id: MESSAGING-DEC-16
@@ -296,58 +233,44 @@ decisions:
       a terminal state, not after acceptance. A message's expiresAt stays
       capped at acceptance plus payloadRetentionDays, so a message never waits
       to send past the point its payload could be erased.
-    reasoning: >-
-      Counting from acceptance erased the payload of a message still waiting
-      in a retry, which then failed without a send. The terminal instant is
-      the first moment the payload has no further use, and it is already on
-      the job row, so the sweep needs no stored deadline.
+    alsoTrue: >-
+      The terminal instant is read from the dispatch job row; no deadline is
+      stored for the sweep.
     evidence:
       - {path: crates/registry-messaging/tests/postgres_retention.rs, name: a_payload_is_erased_payload_days_after_a_terminal_state_and_never_while_sending_or_unknown}
   - id: MESSAGING-DEC-17
     subject: A spent idempotency key belongs to the caller's issuer and subject
     decision: >-
       An idempotency row is keyed by an unkeyed SHA-256 digest over a fixed
-      domain and the caller's verified issuer and subject, the operation, and
-      the key, length-prefixed, as Scheduling and Casework scope theirs to
-      the caller, and never by the caller's keyed audit pseudonym. The raw
-      issuer, subject, and key stay beside the digest only while the
-      submission receipt does: when retention erases the receipt it clears
-      all three (MESSAGING-SEC-11) and keeps the message and the request
-      hash, so past the receipt horizon the same caller's exact retry is
-      refused with idempotency.expired and a changed one with
-      idempotency.key-reused, as Base Registry Engine, Scheduling, and
-      Casework answer a changed request under a spent key. When a record is
-      deleted its row stays with the message and the request hash nulled
-      too, so the digest row alone keeps the key spent indefinitely and every
-      repeat of it by the same caller, which can then no longer be told exact
-      or changed, is refused with idempotency.expired. Another caller's
-      identical key is fresh. Rotating
-      audit.hashKeyRef changes pseudonyms only: an exact retry after the
-      rotation replays its receipt or is refused as expired, and never sends
-      again. The audit journal keeps naming the caller by pseudonym. Fresh
-      creation defines this caller-scoped shape directly, without conversion
-      or discard of pseudonym-scoped records.
-    reasoning: >-
-      Freeing a key would turn a caller's mistaken retry into a second message
-      sent to the same recipient, which is the duplicate the key exists to
-      prevent. A changed request under a spent key is a caller defect whatever
-      the key's age, so it answers the conflict it answers inside the horizon;
-      telling it apart takes only the request hash the row already holds until
-      recordRetentionDays, and the record deletion drops that hash with the
-      message rather than keeping it for this answer alone. A key scoped to
-      the pseudonym was freed by every audit key rotation, so routine key
-      hygiene reopened that duplicate for every caller with a retry in flight,
-      and a digest keyed with any rotating secret would do the same; the
-      digest therefore takes no key. The raw issuer and subject name the
-      authenticated caller, not a recipient, and under a profile that admits a
-      human or agent actor or reads the principal from a claim other than sub
-      they may identify a person, such as a staff member's email address. They
-      are kept for at most receiptRetentionDays, no longer than the
-      message row already holds them, and the spent-key row holds them no
-      longer. The residual is that an unkeyed digest lets anyone who reads the
-      table and can guess a caller's issuer, subject, and key confirm that the
-      caller spent that key, which a random key makes impractical. v0.40.0 does
-      not upgrade v0.39.0 state in place; apply to a new database.
+      domain and the caller's verified issuer and subject, the operation,
+      and the key, length-prefixed, and never by the caller's keyed audit
+      pseudonym. The raw issuer, subject, and key stay beside the digest
+      only while the submission receipt does: when retention erases the
+      receipt it clears all three (MESSAGING-SEC-11) and keeps the message
+      and the request hash, so past the receipt horizon the same caller's
+      exact retry is refused with idempotency.expired and a changed one with
+      idempotency.key-reused. When a record is deleted its row stays with
+      the message and the request hash nulled too, so the digest row alone
+      keeps the key spent indefinitely and every repeat of it by the same
+      caller, which can then no longer be told exact or changed, is refused
+      with idempotency.expired. Another caller's identical key is fresh.
+      Rotating audit.hashKeyRef changes pseudonyms only: an exact retry
+      after the rotation replays its receipt or is refused as expired, and
+      never sends again. The audit journal keeps naming the caller by
+      pseudonym.
+    alsoTrue: >-
+      The raw issuer and subject name the authenticated caller, not a
+      recipient, and under a profile that admits a human or agent actor or
+      reads the principal from a claim other than sub they may identify a
+      person, such as a staff member's email address. They are kept for at
+      most receiptRetentionDays, no longer than the message row already
+      holds them, and the spent-key row holds them no longer. Existing
+      pseudonym-scoped state is not upgraded in place; apply to a new
+      database.
+    residual: >-
+      An unkeyed digest lets anyone who reads the table and can guess a
+      caller's issuer, subject, and key confirm that the caller spent that
+      key, which a random key makes impractical.
     evidence:
       - {path: crates/registry-messaging/tests/postgres_messages.rs, name: an_exact_retry_across_an_audit_key_rotation_replays_and_never_sends_again}
       - {path: crates/registry-messaging/tests/postgres_messages.rs, name: an_idempotency_key_replays_one_request_and_refuses_another}
@@ -367,11 +290,6 @@ decisions:
       messaging.retention.erased record only when a run erased something. A
       failed run is logged once until a run succeeds again and does not stop
       the runtime.
-    reasoning: >-
-      Retention that depends on an operator's cron is retention that stops
-      when the cron does. An hour is fine grain against periods counted in
-      days, and a record for every empty run would grow the journal with the
-      clock rather than with what happened.
     evidence:
       - {path: crates/registry-messaging/tests/postgres_retention.rs, name: the_runtime_sweep_erases_on_its_interval}
       - {path: crates/registry-messaging/tests/postgres_retention.rs, name: a_retention_run_is_journaled_with_its_counts_only}
@@ -386,12 +304,10 @@ decisions:
       operator-tool, and refuses a cutoff later
       than the local clock before any input or output and later than the
       database's clock inside the run.
-    reasoning: >-
-      Base Registry Engine's bregctl evidence-retention erase-expired erases
-      directly; messagingctl keeps its own convention (MESSAGING-DEC-13) so
-      one tool does not mix previewing and immediate actions. The lock and
-      each batch's database transaction keep an operator run and the runtime's
-      sweep from interleaving within a batch or forking the journal.
+    alsoTrue: >-
+      The lock and each batch's database transaction keep an operator run
+      and the runtime's sweep from interleaving within a batch or forking
+      the journal.
     evidence:
       - {path: crates/registry-messagingctl/tests/postgres_messages_cli.rs, name: retention_previews_by_default_and_erases_only_expired_terminal_messages_with_apply}
       - {path: crates/registry-messagingctl/src/lib.rs, name: a_malformed_or_future_cutoff_is_refused_before_any_file_or_database}
@@ -406,18 +322,11 @@ decisions:
       that cannot decide answers 503 service.unavailable. Original receipt
       observation does not consume or require this submission budget, is
       not throttled, and publishes no 429.
-    reasoning: >-
-      One replica is the supported topology, and the platform token bucket
-      is the primitive Evidence already uses. Charging before the
-      body keeps rendering behind the budget, and keying by the pseudonym
-      keeps the raw subject out of the limiter. Receipt observation neither
-      renders nor sends, and a caller that lost a submission response still
-      needs to recover its receipt after its send budget is exhausted.
-      A separate read budget would add a setting for little gain: an
-      authenticated caller repeating the lookup costs one bounded indexed
-      read and its audit records per call, the same kind of journal growth a
-      refused submission flood already causes, and the deployment's edge
-      proxy bounds both.
+    alsoTrue: >-
+      The bucket is per replica, so each replica enforces the configured rate
+      on its own and the rate holds for a deployment only with one replica. The raw
+      subject never enters the limiter. There is no separate read budget:
+      the deployment's edge proxy bounds repeated lookups.
     evidence:
       - {path: crates/registry-messaging/src/http.rs, name: a_caller_past_its_profile_rate_is_refused_with_the_wait_needed}
       - {path: crates/registry-messaging/src/limits.rs, name: callers_and_profiles_have_separate_budgets}
@@ -432,11 +341,10 @@ decisions:
       limit the submission is refused with 429 quota.exceeded and
       Retry-After set to when the oldest counted message leaves the window.
       A replay is not counted again.
-    reasoning: >-
-      A daily limit that a restart or a second replica resets is not a
-      limit. The accepted messages already are the count, so no counter
-      table can drift from them, and a record is deleted only well after it
-      leaves the window.
+    alsoTrue: >-
+      A restart or a second replica does not reset the count. The accepted
+      messages are the count, so no counter table exists, and a record is
+      deleted only well after it leaves the window.
     evidence:
       - {path: crates/registry-messaging/tests/postgres_messages.rs, name: a_profile_past_its_daily_limit_is_refused_across_a_restart}
       - {path: crates/registry-messaging/tests/postgres_messages.rs, name: concurrent_submissions_never_take_more_than_the_daily_limit}
@@ -450,13 +358,10 @@ decisions:
       time budget that never runs past the message's expiresAt, and an
       attempt whose slot does not open in time is a transient failure with
       nothing sent.
-    reasoning: >-
-      Pacing before the claim would hold the rate by delaying claims that a
-      second provider's messages need. Pacing inside the lease keeps other
-      providers moving, and the allowance keeps the wait from shortening
-      the send's own budget. Pacing only once an in-flight slot is held
-      spaces the requests as they leave: attempts paced first and then
-      queued behind a slow send would leave back to back.
+    alsoTrue: >-
+      Pacing happens inside the lease, after the claim and only once an
+      in-flight slot is held, so other providers' messages keep moving and
+      attempts leave spaced rather than back to back.
     evidence:
       - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: a_paced_provider_starts_one_send_per_interval}
       - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: a_paced_provider_below_the_worker_concurrency_still_sends_one_per_interval}
@@ -471,13 +376,9 @@ decisions:
       loaded at start. After messagingctl apply records another
       package, a running runtime answers 503 service.unavailable until it
       is restarted. /health stays 200 while the process serves.
-    reasoning: >-
-      A package change applies on restart (MESSAGING-DEC-06). A runtime
-      still serving the previous package after the operator recorded a new
-      one is running content the deployment no longer names, and readiness
-      is how an orchestrator learns to stop routing to it and roll it.
-      Liveness stays unaffected, so nothing restarts the process on its
-      own; the operator's restart is the apply.
+    alsoTrue: >-
+      Nothing restarts the process on its own; the operator's restart is the
+      apply.
     evidence:
       - {path: crates/registry-messaging/tests/postgres_messages.rs, name: the_runtime_is_ready_only_while_the_ledger_names_its_package_active}
   - id: MESSAGING-DEC-24
@@ -487,12 +388,6 @@ decisions:
       package.root, including the ones a Kubernetes ConfigMap or Secret
       volume uses to publish its files. Operators copy the package into
       place, for example from an init container, before the runtime starts.
-    reasoning: >-
-      A link can point outside package.root, and the target can change
-      between the digest and the read without the ledger seeing it.
-      Scheduling and Casework refuse links in their packages the same way,
-      and allowing only a ConfigMap's link shape would be a special case
-      the loader has to get exactly right.
     evidence:
       - {path: crates/registry-messaging/src/package.rs, name: a_symbolic_link_anywhere_in_the_package_is_refused}
   - id: MESSAGING-DEC-25
@@ -505,37 +400,23 @@ decisions:
       three states. Terminal states are not counted. A scrape the store cannot
       answer has no samples for the gauge and logs a warning. Attempt,
       limit, and retention counters are in-process and start at zero.
-    reasoning: >-
-      The queue is shared by every replica and outlives a restart, so only
-      the store knows its depth; a per-process count would drift and reset.
-      Sampling at scrape follows the Base Registry Engine's pool gauges and
-      adds no background task. Terminal jobs grow until retention and would
-      need a scan; the operator question is what is waiting. An absent
-      sample goes stale in Prometheus, which an alert can see, where a zero
-      would read as an empty queue.
     evidence:
       - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: the_metrics_sample_the_queue_and_count_attempts_by_outcome}
       - {path: crates/registry-messaging/src/metrics.rs, name: the_dispatch_queue_is_exposed_only_when_it_was_sampled}
   - id: MESSAGING-DEC-26
     subject: A plaintext loopback relay is accepted behind a development listener
     decision: >-
-      SMTP `tls: development-loopback` is accepted by a build carrying a test
-      feature, and by any build whose runtime listener is itself
+      SMTP `tls: development-loopback` is accepted by a build carrying a
+      test feature, and by any build whose runtime listener is itself
       `tlsTermination: development-loopback`. Behind an
       `operator-controlled-upstream` listener a release build refuses it at
       `messagingctl check` and at startup. The loopback-only host, the
       explicit port that is neither 587 nor 465, and the refusal of every
-      non-loopback answer are unchanged.
-    reasoning: >-
-      `messagingctl dev` runs the runtime of a release build against a local
-      Mailpit, which speaks no TLS, so a test-build-only rule would make the
-      local development path impossible without a second binary. Tying the
-      relaxation to the listener keeps the production posture whole: a
-      runtime that serves callers through an operator TLS edge still cannot
-      reach a plaintext relay, and a development listener is already refused
-      on any non-loopback bind. The HTTP provider accepts a plain `http`
-      loopback base URL in every build; SMTP stays stricter because a relay
-      credential travels on that connection.
+      non-loopback answer still apply.
+    alsoTrue: >-
+      A development listener is refused on any non-loopback bind. The HTTP
+      provider accepts a plain `http` loopback base URL in every build; SMTP
+      stays stricter because a relay credential travels on that connection.
     evidence:
       - {path: crates/registry-messagingctl/src/lib.rs, name: a_development_listener_admits_a_plaintext_loopback_relay}
       - {path: crates/registry-messagingctl/src/lib.rs, name: a_plaintext_loopback_relay_is_refused_behind_a_production_listener}
@@ -563,24 +444,18 @@ decisions:
       credential and endpoint, requires the Messaging session to be ready,
       and verifies the new token against the retained keys and same caller
       identity before publishing its header.
-    reasoning: >-
-      Casework's retained, supervised session keeps a database across
-      restarts because its tutorials build state over several sessions.
-      Messaging's local path is one send and one look at the result, and a
-      session that keeps no database cannot leave a rendered payload or a
-      recipient behind, so the simpler ephemeral shape serves it. Running the
-      runtime in process needs no second binary on `PATH` and no supervisor;
-      the runtime is the same library `messaging serve` runs, reading a
-      generated configuration that `messagingctl check` would accept. A
-      static key set generated with the session replaces a local issuer
-      container: the runtime already accepts a static JWKS, and the signing
-      key never leaves the session directory. Borrowing an issuer is still
-      public protocol composition by adopter tooling. Each foreground start
-      captures current public trust anew, so Messaging needs no retained
-      owner UUID, reset path, or lifecycle control. A BReg restart with the
-      same public authority continues to work; changed credentials, endpoint,
-      signing keys, or principal require a new Messaging start. An explicit
-      Messaging resource binds the intended audience for this invocation;
+    alsoTrue: >-
+      The session keeps no database across starts, so it leaves no rendered
+      payload or recipient behind. The runtime runs in process and is the
+      same library `messaging serve` runs, reading a generated configuration
+      that `messagingctl check` would accept. The static key set generated
+      with the session replaces a local issuer container, and the signing
+      key never leaves the session directory. Each foreground start captures
+      current public trust anew, so Messaging keeps no owner UUID, reset
+      path, or lifecycle control. A BReg restart with the same public
+      authority continues to work; changed credentials, endpoint, signing
+      keys, or principal require a new Messaging start. An explicit
+      Messaging resource binds the intended audience for the invocation, and
       a real OAuth grant proves that every requester client can use it.
     evidence:
       - {path: crates/registry-messagingctl/src/dev/tests.rs, name: the_generated_configuration_is_one_the_runtime_accepts}
@@ -607,21 +482,15 @@ decisions:
       messaging_limit_refusals_total{limit="callback"} and not in
       messaging_provider_callbacks_total, and a limiter that cannot decide
       answers 503 service.unavailable. The rate is fixed, not configured.
-    reasoning: >-
+    alsoTrue: >-
       The callback routes are the only public routes that take no bearer
       token, so the request rate is the only bound on the verification,
-      receipt-script, and store work an anonymous sender can cause.
-      Charging before verification is what makes it a bound, which means a
-      flood naming a provider spends that provider's budget and delays its
-      genuine callbacks; the bucket is per provider so it cannot delay
-      another provider's, and a provider retries a 429. The unrouted paths
-      share one bucket so that the refusal, like 403 callback.unverified,
-      does not tell which providers receive callbacks. The figure is fixed
-      because the runtime configuration has no place for a limit and 100
-      callbacks a second per provider stays above the delivery reports one
-      replica's dispatch produces in ordinary use; a deployment whose
-      provider reports faster than that is the trigger to make it
-      configurable.
+      receipt-script, and store work an anonymous sender can cause. A flood
+      naming a provider spends that provider's budget and delays its genuine
+      callbacks; the bucket is per provider so it cannot delay another
+      provider's, and a provider retries a 429. The unrouted paths share one
+      bucket so that the refusal, like 403 callback.unverified, does not
+      tell which providers receive callbacks.
     evidence:
       - {path: crates/registry-messaging/src/http.rs, name: callbacks_past_the_rate_are_refused_before_they_are_verified}
       - {path: crates/registry-messaging/src/limits.rs, name: each_callback_provider_and_the_unrouted_paths_have_separate_budgets}
@@ -633,10 +502,5 @@ decisions:
       require none. An omitted member, an empty list, `null`, and any other
       word are refused when the project or package is read, at the member.
       `requesterClients` likewise lists at least one client, each once.
-    reasoning: >-
-      An omitted or empty scope list used to admit a token carrying any scope
-      or none, so a profile could be left open by forgetting a line. Writing
-      `unrestricted` keeps that choice available but makes it a visible
-      statement a reviewer reads in the project, not a default.
     evidence:
       - {path: crates/registry-messaging-core/src/access.rs, name: required_scopes_are_unrestricted_or_listed_never_empty}

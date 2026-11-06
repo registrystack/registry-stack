@@ -108,7 +108,6 @@ def decision_row(
         "id": row_id,
         "subject": "A subject",
         "decision": "A decision.",
-        "reasoning": "Reasoning.",
         "evidence": [{"path": test_path, "name": test_name}],
     }
 
@@ -391,6 +390,18 @@ class DecisionValidation(unittest.TestCase):
         violations = validate_tree(tree, DEFAULT_FILES)
         self.assertTrue(any("evidence test" in violation for violation in violations),
                         violations)
+
+    def test_a_decision_carrying_reasoning_is_refused(self) -> None:
+        tree = happy_tree()
+        tree["recorded-decisions.yaml"]["decisions"][0]["reasoning"] = "Why."
+        violations = validate_tree(tree, DEFAULT_FILES)
+        self.assertTrue(
+            any(
+                "reasoning" in violation and "pull request description" in violation
+                for violation in violations
+            ),
+            violations,
+        )
 
     def test_a_decision_with_dangling_evidence_is_refused(self) -> None:
         tree = happy_tree()

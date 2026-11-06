@@ -1011,7 +1011,7 @@ mod tests {
     }
 
     /// The loop-bound class is catchable: a clause may name it, and no
-    /// prefix of another class resolves to it (staff review P0-3).
+    /// prefix of another class resolves to it.
     #[test]
     fn loop_bound_class_is_catchable() {
         let class = ErrorClass::from_class("loop.maximum-iterations-reached");
@@ -1130,7 +1130,7 @@ mod tests {
     /// error, the closest match across the whole chain wins, equally
     /// close matches resolve to the most nested cause, and an uncatchable
     /// class anywhere in the chain matches no clause whatever prefix the
-    /// clause names (staff review P1-10; reviewer defects M1 through M3).
+    /// clause names.
     #[test]
     fn closest_match_walks_the_cause_chain_and_skips_the_boundary() {
         // The most specific declared match on a cause wins.
@@ -1232,7 +1232,7 @@ mod tests {
 
     /// `is_within` goes down the hierarchy only: a clause naming a
     /// subclass never covers the bare superclass, and the named class
-    /// itself covers (reviewer defect M2).
+    /// itself covers.
     #[test]
     fn within_never_rises_up_the_hierarchy() {
         assert!(ErrorClass::UpstreamTimeout.is_within(ErrorClass::Upstream));

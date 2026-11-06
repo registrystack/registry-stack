@@ -37,7 +37,7 @@ The registry stack documentation has three layers. Each document belongs to exac
 
 1. **Practical docs.** Task-oriented, developer-facing pages: Get started, Tutorials, Explanation, Reference. They teach and orient.
 2. **Formal docs.** The specifications in this `/spec/` section. They define required behavior, data shapes, and boundaries precisely enough to implement, audit, or govern against. This document governs them.
-3. **Internal evidence.** Release records, security review notes, deployment specifics, working plans, and retrospectives. These stay in the internal repository.
+3. **Internal evidence.** Release records, security review notes, deployment specifics, working plans, and retrospectives. These stay in the internal repository. Base Registry Engine (BReg), Casework, Coordinator, Documents, Messaging, and Scheduling each keep a `SECURITY-MODEL.md` as the public security model: trust boundaries, operator obligations, and accepted residuals. Other products record security invariants in their `contracts/security-invariant-matrix.yaml` or security document (for example Render `SECURITY-MATRIX.md`).
 
 REQ-DOC-001: A formal specification MUST be a distilled public contract. It MUST NOT be a copy of an internal-evidence document. Authors derive a specification from internal material and from shipped code; they do not publish internal material as a specification.
 

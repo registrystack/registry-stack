@@ -18,11 +18,6 @@ an establishment, a facility inspection, a permit, an asset, or any other
 configured entity. Base Registry Engine has no built-in knowledge of those
 models.
 
-The existing transactional outbox and delivery worker are the starting point,
-not a conformance claim for this spec. The immediate deltas are simpler
-authoring, field conditions, CloudEvents, operator commands, a webhook demo,
-payload erasure and retention, and upgrade-safe queued delivery.
-
 The core threat is a hook leaking registry data, widening authority at
 deployment, or causing an unaccounted side effect. The invariant is that only
 the compiled projection may reach the exact activated logical destination,
@@ -318,54 +313,3 @@ The first complete journey must be possible without reading Rust code:
 - The [durable receiver example](examples/webhook-receiver/README.md) verifies signed deliveries and commits its SQLite inbox before acknowledgement.
   Its tests cover retry across restart, replay identity, authentication and
   contract refusals, conflicting duplicates, and storage recovery.
-
-## Definition of done
-
-Version 1 is done when one configured project can create or patch a record and
-focused runtime proofs show the resulting CloudEvent is transactionally captured,
-minimized, authenticated, retried, dead-lettered, inspected, and replayed.
-Focused negative tests must prove rollback creates no event, conditions do not
-overmatch, projections cannot cross their classification ceiling, runtime
-bindings cannot widen or redirect authority, signatures bind the exact request,
-payload retention is enforced, and a compatible package upgrade cannot strand
-a pending delivery.
-
-## Future direction
-
-These are intentionally deferred, but the Version 1 shapes must leave room for
-them:
-
-1. **Rhai rules.** Add `when.kind: rhai` only after field conditions prove
-   insufficient. Scripts are reviewed, hash-covered package artifacts with a
-   small versioned ABI, deterministic fresh state, fixed resource limits, and
-   minimized before/after inputs. They return only a Boolean or closed
-   validation result. They receive no I/O, secrets, credentials, database
-   handle, destination authority, clock, randomness, or audit ownership.
-2. **Validation and computed fields.** Reuse the same bounded Rhai kernel for
-   record validation first, then deterministic computed fields if a concrete
-   project needs them. Script failure fails the mutation atomically. Do not
-   extract a shared platform Rhai crate until Base Registry Engine is a real second
-   consumer and the common kernel is clear.
-3. **Richer event selection.** Add multiple field predicates, relationship
-   changes, and safe transforms through a versioned tagged condition ABI. Do
-   not grow an ad hoc expression language alongside Rhai.
-4. **More delivery adapters.** Consider native fanout, CloudEvents structured
-   mode, queues, or message brokers only for proven deployments. Keep the
-   transactional event contract independent of transport.
-5. **Inbound integration and scheduling.** Treat inbound webhooks, scheduled
-   jobs, multi-step actions, approvals, and workflows as explicit adapters or
-   separate products unless a recurring Base Registry Engine responsibility is
-   demonstrated.
-6. **Explicit business commands.** If projects need atomic multi-record
-   behavior, prefer reviewed command endpoints with a bounded mutation plan,
-   validation, authorization, audit, and events over implicit global model
-   callbacks.
-7. **UI and AI authoring.** A future UI and the separate control tool may build
-   on generated schemas, sample events, checks, explanations, and demos. AI may
-   propose configuration and tests but never bypass package review,
-   runtime destination policy, or operator replay authority.
-
-Arbitrary synchronous callbacks, Django-style global signals, dynamic Rust
-plugins, and scripts with ambient I/O are not on the roadmap. We retain Odoo's
-useful ability for modules to extend an existing model, while keeping extension
-behavior explicit, inspectable, transaction-safe, and independently operable.

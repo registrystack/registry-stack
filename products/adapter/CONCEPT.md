@@ -1,20 +1,15 @@
 # Adapter: live facade and governed ingestion
 
-Status: concept, direction accepted 2026-10-30; engine model then revised
-into a bounded port of Apache Camel (decisions D7 to D15; section 16
-records the status of each). The engine exists and serves the read
-operations of the `breg-records` profile (search, get, and read-only POST
-reads) over the compiled contract, with wrapped cursors and the value-free
-journal; the write operations and the remaining ported EIP set are
-contract-only until their increments land (section 8.10 carries the
-per-concept status). The ingestion-job mode (section 17) is a contract
-amendment of 2026-10-31, restated on 2026-11-01 to the accepted
-governed-ingestion design; its amendments are marked `[ingestion]` where
-they change accepted wording, the decisions it leaves open are listed in
-section 17.6, and section 17.7 states what is built and what may be
-claimed. This document is the plan of record for the
-product's shape, boundaries, and verification. Decisions are recorded in
-section 16.
+Status: concept and product contract. The engine is a bounded port of
+Apache Camel. It serves the read operations of the `breg-records` profile
+(search, get, and read-only POST reads) over the compiled contract, with
+wrapped cursors and the value-free journal; the write operations and the
+remaining ported EIP set are specified here and not yet built
+(section 8.10 carries the per-concept status). The ingestion-job mode
+(section 17) is part of the same contract; its amendments are marked
+`[ingestion]` where they change wording that applies to the facade, and
+section 17.7 states the acceptance rows a component must pass. This document
+states the product's shape, boundaries, and verification.
 
 ## Executive summary
 
@@ -165,9 +160,9 @@ each item's source key, a digest of its projection, a change sequence, a
 status with the destination's code, and the destination's reference, and
 never the item's values. There is no sealed custody, no vault, no retained
 captured item, and no stored prepared attempt: the source is the buffer,
-and a retry re-reads it. The one place a job writes payloads is the bulk
-hand-off file an operator imports with `bregctl data import`, which is in
-the operator's custody. The adapter still keeps no registry, no warehouse,
+and a retry re-reads it. A job writes no payloads. The designed bulk
+hand-off, a file an operator imports with `bregctl data import` and keeps
+in their custody, is not implemented (section 17.3). The adapter still keeps no registry, no warehouse,
 and no analytical copy of any source.
 
 ### 5.2 The declared model is the disclosure boundary
@@ -189,7 +184,7 @@ scripts at declared seams. Engine capabilities grow only under the
 two-system rule: a capability is added when a second real system needs it,
 otherwise it is pack logic. Components compiled into the engine are named for
 mechanisms (`http`, `graphql`), never for products. `[ingestion]` Two
-scoped exceptions, both still open for confirmation in section 17.6:
+scoped exceptions:
 
 1. **Job source components.** `file`, `sftp`, and read-only `postgres`
    enter the engine as job-only mechanisms (section 17.2), refused by
@@ -199,17 +194,18 @@ scoped exceptions, both still open for confirmation in section 17.6:
    across sources is the stated reason to build them, source independence
    (protocol, transport, and data format separated, section 17.1) is the
    property the rule protects, and a file fixture is the cheapest proof
-   that nothing is Kobo-specific. If the exception is refused, the
-   components wait for the second real system.
+   that nothing is Kobo-specific. The facade gains no file, SSH, or
+   database reachability from it; each source needs its own bounded-read,
+   recovery, and feature-isolation acceptance (section 17.7).
 2. **The BReg client for the direct destination.** Adapter otherwise links
    no other product's types. The one exception is
    `registry-adapter-connectors`: it alone links a product client, and
    only `registry-breg-client`, behind an off-by-default cargo feature,
    and holds the feature-gated BReg connector for the direct destination
    (section 17.3). It is a client, not an engine capability: it lives
-   outside the facade binary, never adds route vocabulary, and the rung 4
-   rule ("new protocol envelopes only") keeps governing engine
-   components. No other product client enters, and no Scheduling or
+   outside the facade binary, never adds route vocabulary, and rung 4 of
+   the escalation ladder (section 8.9, "new protocol envelopes only")
+   keeps governing engine components. No other product client enters, and no Scheduling or
    Document Store connector is planned. Coordinator is reached only
    through its published signed-event contract; no Adapter crate links a
    Coordinator crate.
@@ -222,7 +218,8 @@ behavior, with the Camel 4.x documentation page as the reference and a
 conformance test that restates it (section 13.2). We do not rename,
 re-scope, or re-default a documented pattern. A divergence exists only when
 boundedness, security, or the disclosure rule forces it, and the port table
-records each one with its reason. A capability Camel does not have (the
+records each one with its reason. Where fidelity to Camel and security
+conflict, security wins and the difference is a recorded divergence. A capability Camel does not have (the
 disclosure check, budgets, write resume) is an addition, marked as such.
 
 The reference is pinned: Apache Camel release tag `camel-4.23.0` (commit
@@ -265,7 +262,9 @@ maxima), the route call graph is acyclic, and `adapterctl check` computes a
 static worst-case upstream call count for every bound operation and refuses
 one above its declared budget. The runtime enforces the same budgets again.
 Errors that guard the boundary (budget exhaustion, disclosure violation,
-egress refusal) cannot be caught by any route.
+egress refusal) cannot be caught by any route. Sensitive state the engine
+must hold for callers, such as idempotency entries and the continuation key,
+stays in the engine, bounded by time and purpose.
 
 ### 5.6 Bounded scripts at declared seams
 
@@ -280,7 +279,7 @@ credentials (credentials never enter the exchange) and never construct URLs
 ### 5.7 One contract artifact per deployment
 
 The generated OpenAPI document is the exposed truth: it contains exactly the
-operations the deployment binds, no more (D6). Callers learn what exists
+operations the deployment binds, no more. Callers learn what exists
 today, not what a profile family could someday offer.
 
 ## 6. Artifact model
@@ -296,6 +295,7 @@ today, not what a profile family could someday offer.
 | Fixture suite | Authored, per pack | `AdapterFixture` | Recorded upstream exchanges with expected facade responses, each with provenance (section 13.3) |
 | Generated outputs | Build artifacts | read-back, drift-gated | Per-deployment facade OpenAPI and computed schemas, emitted by `adapterctl compile` into the built package |
 
+The maintained packs and profiles are artifacts under `products/adapter/`.
 Projects reference packs and profiles as plain identifiers (CFG-ID-3),
 resolved and digest-checked by `adapterctl check` (CFG-ID-4). Packs declare
 the engine capabilities they require (components, languages, EIPs); the ctl
@@ -393,7 +393,7 @@ OpenAPI document is the specification the consumer reads at startup; every
 concrete operation dispatches to the route its binding names; request
 validation against the contract is always on; an operation with no route is
 a startup failure (Camel's default `missingOperation` behavior, fixed). Since
-the generated contract holds only bound operations (D6), the two rules
+the generated contract holds only bound operations, the two rules
 coincide: the deployment serves exactly its contract.
 
 Route output is checked twice. `adapterctl check` validates every fixture's
@@ -455,7 +455,7 @@ minted request IDs inside the Adapter. Its PostgreSQL audit journal owns
 the durable release gate; it does not use the platform's file audit writer.
 The generic
 mechanisms under the resilience processors are built in platform crates from
-the start (D13): the rolling-window limiter in `registry-platform-ratelimit`,
+the start: the rolling-window limiter in `registry-platform-ratelimit`,
 and the circuit breaker state machine and redelivery delay computation in
 `registry-platform-resilience`. Neither knows an exchange, a route, or an
 error class. The `throttle` and `circuitBreaker` processors and the redelivery
@@ -545,7 +545,10 @@ resolved in the runtime config.
 A template omits `from`; the instantiated route's `from` is
 `direct:<routeId>` (divergence: Camel templates carry their own `from`; ours
 are always bound by the contract). Packs may also carry ordinary internal
-routes for shared sub-flows (`direct:` targets of `to` and `enrich`).
+routes for shared sub-flows (`direct:` targets of `to` and `enrich`). A
+deployment project writes no routes: it instantiates pack templates with
+`templatedRoutes` and binds them, and the project format has no member for a
+route body.
 
 ### 8.5 Expression languages
 
@@ -556,9 +559,9 @@ Expressions are externally tagged by language, as in Camel
   inline.
 - `jsonpath`: RFC 9535 JSONPath, inline, as Camel's `camel-jsonpath`
   language but on the IETF standard rather than Jayway's dialect
-  (divergence). Inline JSONPath needs the CFG-EMBED-1 amendment listed in
-  Increment 0: a selector is a query, like the inline regular expressions
-  that rule already admits, not code.
+  (divergence). CFG-EMBED-1 admits inline JSONPath:
+  a selector is a query, like the inline regular expressions
+  it admits, not code.
 - `rhai`: a digest-pinned script file and entrypoint, through
   `registry-platform-script`. This replaces Camel's Simple language,
   Groovy, JavaScript, and `bean` (divergence: not ported).
@@ -885,7 +888,8 @@ is in the profile's shape.
   at send time, after the header allowlist has been applied. A send's
   safety comes from its method; a `POST` whose endpoint operation declares
   `safeUpstream: true` (a reviewed claim, as for FHIR `POST _search`)
-  counts as safe for the write-safety rules. A read operation (a facade
+  counts as safe for the write-safety rules. A GraphQL send's safety comes
+  from its parsed operation type. A read operation (a facade
   `get` or `search` binding) reaches only safe sends: `check` refuses a
   non-safe `http` send, or a GraphQL mutation, anywhere in its route
   closure.
@@ -927,8 +931,8 @@ and never raise; the facade bounds above are unchanged. A `POST`
   `mutation` is non-safe under every write-safety rule. The reply's `data`
   member is the body. A GraphQL `errors` array raises `upstream.http`-class
   errors with the declared detail only (divergence: Camel leaves errors in
-  the body; partial data with errors fails the exchange). Arrives in
-  Increment 3.
+  the body; partial data with errors fails the exchange). Not yet
+  implemented (section 8.10).
 - Not ported: every other component, including `log` (value leakage) and
   `mock` outside the test harness (section 13.3).
 
@@ -952,8 +956,8 @@ Every row is the contract for one concept: the Camel 4.x page that defines
 its semantics, our form, and what differs. `products/adapter/scripts/check-port-table.py`
 holds this table to the code (section 13.2): each ported row names a
 conformance test module that exists and passes, and every EIP, component,
-or language key the core schema accepts has a row. Inc is the increment that
-delivers the row.
+or language key the core schema accepts has a row. Inc is the delivery stage
+of the row (section 14).
 
 | Camel concept | Reference (camel.apache.org) | Our form | Divergence | Inc |
 |---|---|---|---|---|
@@ -996,7 +1000,7 @@ delivers the row.
 | Type Converter | `manual/type-converter.html`, `components/next/eips/convertBodyTo-eip.html`, `convertHeaderTo-eip.html` | `convertBodyTo`, `convertHeaderTo`, `convertPropertyTo` (addition) with `type: codeMap:<id>`; Rhai `code_map`; `conversion.unmapped` on a miss | Explicit tables of scalar values, no converter chains, no `charset` | 1 |
 | Event Notifier | `manual/event-notifier.html` | The audit journal's event kinds (section 11) | Synchronous, value-free, before the response | 1 |
 | `file` (job source) `[ingestion]` | `components/next/file-component.html` | `file:<endpointId>` read through the job-only `pollEnrich` step (section 17.2); `noop` strategy forced; `include`, fixed ascending filename order (no authored `sortBy` expression), `doneFileName`, `readLock` restricted to none or changed, `maxMessagesPerPoll` where they apply | Read-only always: `delete`, `move`, `rename`, `markerFile`, and the `fileLock` strategy are not ported (each writes or locks the source); base directory fixed in runtime configuration, traversal and symlink escape refused; a delivered file is identified by namespace plus content digest, never by name or modification time alone | 4 |
-| `sftp` (job source) `[ingestion]` | `components/next/sftp-component.html` | `sftp:<endpointId>` through the same read step, sharing the `file` decoders | Host key pinned, secret references only; complete files detected through a ready manifest or completed-name handover; interrupted transfers and replaced same-name files handled by digest identity; no source writes; lands only after the SSH dependency review (section 17.6) | 4 |
+| `sftp` (job source) `[ingestion]` | `components/next/sftp-component.html` | `sftp:<endpointId>` through the same read step, sharing the `file` decoders | Host key pinned, secret references only; complete files detected through a ready manifest or completed-name handover; interrupted transfers and replaced same-name files handled by digest identity; no source writes; SSH dependency and host-key rules in section 17.4 | 4 |
 | `rabbitmq` (job source) `[ingestion]` | `components/next/spring-rabbitmq-component.html` | `rabbitmq:<endpointId>` through the job-only read step, one manually settled message per page | AMQPS only in production; fixed durable queue and a dead-letter exchange the host proves exist by passive declares (it declares the topology itself only under `declareTopology: true`); source acknowledgement follows the durable destination outcome, held items remain unsettled, and explicit refusals reject without requeue; local outstanding-delivery bounds because `basic.get` is not governed by consumer prefetch; broker `max_message_size` is an operator prerequisite because Lapin assembles the body before the retained-byte check | 4 |
 | SQL (read-only job source) `[ingestion]` | `components/next/sql-component.html` | `postgres:<endpointId>` send with a digest-pinned `queryFile`, required stable `keyColumn`, and reviewed `parameterOrder` mapping names to native `$1`-onward positions; omit `parameterOrder` for a zero-argument query | One fixed, read-only `SELECT` with root `ORDER BY` and no root `LIMIT` or `OFFSET`, paged by an engine-appended `OFFSET` bound from the cursor; exact named parameters only, bound as text, checked integers, double-precision numbers, or booleans; result columns of text, integer, float, boolean, `numeric`, `date`, `timestamp`, `timestamptz` and `uuid` types, or `NULL`, cross as JSON values (the type table is in `CAMEL-INGESTION-PORTS.md`), and any other type stops the page under `adapter.job.postgres-column-type` naming the column; read-only transaction with statement timeout, bounded fetch, and cancellation; each page uses its own read-committed statement snapshot, so ordering alone does not prevent offset drift across concurrent source edits; no user-supplied SQL; Camel's `onConsume` progress updates not ported because they write the source | 4 |
 | CSV data format `[ingestion]` | `components/next/dataformats/csv-dataformat.html` | A decoder selected on a `file` or `sftp` endpoint, not an `unmarshal` step; option names and defaults from `CsvDataFormat` | No type inference: leading zeros, quoted multiline fields, empty versus null, oversized rows, and malformed rows are deterministic; text is UTF-8 only, with no declared encoding; a malformed or non-UTF-8 record fails the whole read closed, naming its zero-based record ordinal (header included), and the cursor does not advance, so the read stays blocked on that file until it is corrected or replaced; one read returns a bounded page whose `next` holds the file digest and position | 4 |
@@ -1244,7 +1248,7 @@ code; it raises error classes and the profile decides what the caller sees.
 
 This replaces the earlier rule that an exception clause sets
 `CamelHttpResponseCode` and a profile-shaped body; that rule made every
-pack profile-specific, which D17 forbids.
+pack profile-specific, which would couple a pack to one facade profile.
 
 #### 8.11.7 `direct:` and `enrich`
 
@@ -1312,7 +1316,7 @@ process (draft, declare), several `to` steps in sequence.
 - The idempotency store is PostgreSQL, separate from the audit journal. It is
   the only place the adapter retains a response body: the exact facade
   response, for a retention window the deployment configures, then erased
-  by a supervised sweep, as BReg's store does. This is a data-minimization decision (D12)
+  by a supervised sweep, as BReg's store does. This is a data-minimization decision
   and carries a security review note.
   Deployment identifiers must remain stable across artifact upgrades and
   distinct for deployments sharing a database. The logical-deployment
@@ -1381,7 +1385,7 @@ process (draft, declare), several `to` steps in sequence.
   authority but leaves the key spent, so it can never reopen an effect; a
   write that expires before its first step is marked attempted sent
   nothing, so its expiry frees the key instead.
-  `[ingestion]` D14 is unchanged for routes: an
+  `[ingestion]` The closed write-resume sequence is unchanged for routes: an
   ingestion hand-off is never a route with non-safe sends. A source route
   only reads. The direct destination sends one BReg operation per item
   through the BReg client outside the route engine (a Proposal's start and
@@ -1515,11 +1519,10 @@ calls on the facade. The adapter inherits no authorization from any product
 and grants none to any source. The caller's token is never forwarded
 upstream: upstream calls run under the deployment's own credential for that
 source, or without a source credential only under the explicit anonymous
-HTTPS admission in section 10.2. The journal records which caller asked
-(D19).
+HTTPS admission in section 10.2. The journal records which caller asked.
 The runtime config's required, non-empty `allowedClients` list names the
 OAuth clients the deployment admits; a token from any other client is
-refused even when its scopes match an access profile (D33).
+refused even when its scopes match an access profile.
 
 Client admission is not record-level authorization. The facade serves
 trusted machine clients only: any admitted client with a matching scope
@@ -1608,11 +1611,11 @@ Rules:
   binding's fixed `baseUrl` and normal TLS trust remain authoritative.
 
 Not ported: Camel's NTLM and Digest methods, API keys in the query string
-(they leak into upstream and proxy access logs), and caller token exchange
-(D19). The implementation is adapter-local over
+(they leak into upstream and proxy access logs), and caller token exchange.
+The implementation is adapter-local over
 `registry-platform-httputil` primitives; Evidence and the adapter are then
 two systems sharing one credential shape, the trigger for lifting it into a
-platform crate in a later, separately reviewed change, not in this program.
+platform crate. Until then the implementation stays adapter-local.
 
 ## 11. Audit and data minimization
 
@@ -1632,7 +1635,7 @@ response and can be absent after cancellation or a process crash; the durable
 `exchangeCreated` intent and idempotency premark remain the recovery authority.
 A
 verified caller's refused call is one `callRefused` row (the 403 of an
-access profile and the 404 of a wrong record type, D34), so probing is
+access profile and the 404 of a wrong record type), so probing is
 auditable; a 401 is logged and not journaled, because no verified caller
 exists to name. Each row carries the exchange id, the concrete operation, the caller identity, the
 route id, and `occurred_at` (`timestamptz NOT NULL`, from the runtime clock
@@ -1663,18 +1666,17 @@ Rules with consequences for packs:
 
 - Code lives in its own file, referenced by relative path and pinned by
   digest (CFG-EMBED-1): Rhai scripts and GraphQL query files. No inline
-  scripts. Inline `jsonpath` selectors require the amendment Increment 0
-  makes to CFG-EMBED-1.
+  scripts. Inline `jsonpath` selectors are the one exception CFG-EMBED-1
+  admits.
 - The step union is externally tagged by Camel EIP name (CFG-ID-7); every
   variant refuses unknown keys.
 - The universal 1 MiB document bound (CFG-YAML-6) applies, so the code-map
   member is designed so its content can move to a digest-pinned data file
   without a format change when a deployment's option sets outgrow it.
 
-Increment 0 includes the platform change adding the `Adapter` prefix and
-`adapter` product token to the conventions tables (CFG-ENV-2, CFG-ENV-3,
-CFG-DIAG-3), the five kinds in `products/platform/config-formats.yaml`, and
-the CFG-EMBED-1 amendment.
+The platform conventions tables carry the `Adapter` prefix and `adapter`
+product token (CFG-ENV-2, CFG-ENV-3, CFG-DIAG-3), and
+`products/platform/config-formats.yaml` lists the five kinds.
 
 ## 13. Quality verification
 
@@ -1711,8 +1713,8 @@ Camel unit test names that test class and method, for example
 `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/SplitterTest.java#testSplitterWithAggregationStrategy`.
 A divergence row has a case asserting our behavior and naming the
 divergence. `check-port-table.py` parses section 8.10 and fails when a row's
-module is missing or empty, when a schema key has no row, or when a row is
-marked delivered by an increment that has not landed.
+module is missing or empty, or when a schema key has no row. Rows at a stage
+this tree has not built are reported as pending and never fail the run.
 
 ### 13.3 Pack conformance: fixture replay
 
@@ -1803,7 +1805,10 @@ blocked: government DHIS2 and OpenCRVS instances sit on internal networks.
 The platform's fixed-destination policy already decides this correctly;
 private CIDRs are reachable only when the runtime config declares them
 explicitly (`allowedPrivateCidrs`, bounded count), and plain HTTP stays
-confined to those addresses. No expression can alter the origin or inject a
+confined to those addresses. Inside them plain HTTP is allowed for every
+authentication kind, credential-bearing ones included: the operator's explicit
+declaration is the consent, and `adapterctl check` agrees with the runtime
+load. No expression can alter the origin or inject a
 path segment; an `httpUri` off the endpoint's origin or base path is
 refused and journaled. Only allowlisted headers leave the engine, and no
 exchange header can replace an injected credential. A continuation cursor
@@ -1832,84 +1837,12 @@ request.
 - Observability: per-operation structured metrics (errors by class and
   problem code, redeliveries, breaker state) and the queryable journal.
 
-## 14. Delivery increments and definition of done
+## 14. Port-table stages
 
-The Adapter lands in increments, each with runnable acceptance commands.
-
-- Increment 0, formats and the route model: the platform registration and
-  CFG-EMBED-1 amendment; the core model for profiles, packs (endpoints,
-  route templates, internal routes, code maps), projects (record types,
-  templated routes, bindings, access profiles), runtime config, and fixtures,
-  with every Increment 1 step, language, and error-handling definition in the
-  port table as reader types; the static checks (reference resolution,
-  template instantiation and parameter typing, acyclic bounded route graph,
-  mandatory maxima, static worst-case call bound, write-safety refusals,
-  uncatchable-class refusal, digest pins); `adapterctl check`; generated
-  schemas; corpus examples; `check-port-table.py`.
-- Increment 1, the read engine: the exchange contract of section 8.11
-  (facade inputs, continuation, script ABI, header allowlists,
-  origin-pinned links, profile problem mapping) in the model, the checks,
-  and the runtime; the Camel core for every Increment 1 port-table row with
-  its conformance module; the `rest`, `direct`, and
-  `http` components; the facade with OIDC and access profiles; `adapterctl
-  compile` and the generated OpenAPI; the event-notifier journal on
-  PostgreSQL with `test-postgres.sh`; fixture replay; `verify --live`; the
-  `dhis2-tracker` pack serving `records-search` and `records-get`; fault
-  injection, read property tests, contract and security tests.
-- Increment 2, DHIS2 writes: `idempotentConsumer` and the idempotency store
-  with replay and retention; write-safety checks live; DHIS2 create and
-  update routes with import-summary and conflict mapping; write fixtures;
-  write property tests.
-- Increment 3, the second system: the `graphql` component; the `opencrvs`
-  pack, reads first, then writes (draft, declare), using the already-served
-  closed linear write-resume contract where it fits. Before this
-  increment starts, the current OpenCRVS release's API is confirmed; if it
-  is not GraphQL, the `graphql` component waits for a system that needs it
-  (two-system rule) and the pack uses `http`.
-- Increment 4 `[ingestion]`, governed-ingestion components: the engine
-  boundary and job profile (section 17.2), the item contract, the job-only
-  read step, the `file` source and the CSV and JSONL decoders, the
-  read-only `postgres` source, the `kobotoolbox` and `odk-central` packs,
-  the job host with its item table, pass, triggers, and operator surface
-  (sections 17.2 to 17.4), the feature-gated BReg connector for the direct
-  destination (section 17.3), and the dependency gate (section 17.5). The
-  direct and Coordinator destinations, and the mapping they run, follow in
-  the steps section 17.7 orders. Every component lands feature-gated and
-  unclaimed: it is claimed nowhere until the drill named in section 17.7
-  has run it.
-- Later: broader source-backed Consultation features and external conformance; the WASM rung when a
-  real pack needs it.
-
-Definition of done for the program, every item verified by a command,
-never by assertion:
-
-1. Every port-table row marked for Increments 0 to 3 has its conformance
-   module, green, and `check-port-table.py` passes.
-2. An adopter with a DHIS2 instance and a project file serves Record v1
-   search, get, create, and update through the adapter, proven over the
-   upstream double and by fixture replay, with the generated OpenAPI
-   byte-stable and the journal answering every query section 11 promises.
-3. The `opencrvs` pack serves reads and writes from the same engine binary.
-   The commits that add each pack change no `.rs` file; any engine change a
-   pack needed landed in its own commit with its own port-table row.
-4. Every gate in 13.1 exists and is green from a clean shell; every property
-   test in 13.5 runs in the default suite (or the PostgreSQL suite for the
-   stores); the security tests in 13.7 run in `check-contracts.sh`.
-5. Every fixture carries honest provenance, and the count of `captured` and
-   `documented` fixtures is reported.
-6. The exposed API is configuration: the test profile of section 13.6
-   serves over the `dhis2-tracker` pack with no Rust change and no pack
-   change, errors included (the pack names no profile problem code), and
-   no adapter crate names a `breg-records` path, operation, or field
-   outside tests.
-7. Every upstream authentication kind of section 10.2 has a conformance
-   test over the double, and the maintained packs and source-shape fixtures
-   between them use at least four distinct kinds (DHIS2 `basic` and
-   `static-authorization`, OpenCRVS's confirmed kind, and the OAuth2 kinds
-   in the source-shape fixtures).
-8. Every source-shape fixture under `products/adapter/fixtures/source-shapes/`
-   passes `check`, holds its committed contract under `compile --check`, and
-   replays its fixtures.
+The `Inc` column of section 8.10 numbers the delivery stage of each
+port-table row. Rows at or below the highest stage this tree delivers are
+built and held to the code by the gate; rows above it are specified and
+reported as pending.
 
 ## 15. Credit and licensing
 
@@ -1937,84 +1870,23 @@ method (section 13.2), the port record lists every upstream test ported or
 excluded, and NOTICE material is confirmed before the first release that
 ships an adaptation, per section 5.4.
 
-## 16. Recorded decisions
+## 16. Where the rules live
 
-These principles were accepted on 2026-10-30; the status column names the
-one that decides a row.
-
-- P1, Camel behaviour, our format: port Camel's semantics and names exactly;
-  platform configuration rules win only on spelling and file layout.
-- P2, closed at every trust boundary: anything crossing a boundary is an
-  explicit allowlist and everything else is refused; security beats Camel
-  fidelity.
-- P3, the facade target owns the outward protocol: packs state source
-  behavior; project transformations and policy define the permitted data
-  view; an authored profile or built-in Rust target defines the wire contract.
-- P4, the engine owns sensitive state: it stays in the engine, bounded by time
-  and purpose, with a security review note.
-- P5, shared mechanism early, features on need: a generic mechanism with no
-  product semantics goes straight into a shared crate when that costs little;
-  the two-system rule still decides what the engine compiles in, and a feature
-  waits for a real source that needs it.
-- P6, real proof before more breadth: prefer one route proven end to end over
-  wider coverage; only captured source behaviour counts as proof.
-
-| ID | Decision | Date, status |
-|---|---|---|
-| D1 | Generic facades use profile artifacts; Consultation is a built-in Rust target with project-selected schema-bound views and operations | 2026-11-04, amended |
-| D2 | Packs and profiles are maintained artifacts under `products/adapter/` | 2026-10-30, accepted |
-| D3 | v1 scope is reads plus DHIS2 writes; OpenCRVS writes follow as their own increment | 2026-10-30, accepted |
-| D4 | Source-native identifiers pass through; no correlation store in v1 | 2026-10-30, accepted |
-| D5 | Product name and token: `Adapter`, `adapter` (`AdapterPack`, `AdapterProject`, `AdapterRuntimeConfig`, `adapter.*` codes) | 2026-10-30, accepted |
-| D6 | Generated OpenAPI contains only enabled operations and their supporting discovery; capability selection does not imply full GovStack conformance | 2026-11-04, amended |
-| D7 | The engine is a bounded port of Camel's route model: authored YAML DSL routes, Camel EIP names, options, defaults, and semantics; it replaces the earlier bespoke call-plan vocabulary (`call`, `map`, `normalize`, `paginate`, `iterate`) | 2026-10-30, accepted (P1) |
-| D8 | Packs are Kamelet-style catalogs of route templates; projects instantiate them with `templatedRoutes`; a deployment writes no routes | 2026-10-30, accepted (P1) |
-| D9 | The facade is Camel's contract-first REST DSL over the generated OpenAPI, with validation always on and `missingOperation` fail only | 2026-10-30, accepted (P1) |
-| D10 | Expression languages are `constant`, `header`, `exchangeProperty`, `jsonpath` (RFC 9535, inline, via a CFG-EMBED-1 amendment), and `rhai` (files only), which replaces Simple | 2026-10-30, accepted |
-| D11 | Camel semantics, platform spelling: CFG-NAME wins on key spelling, Camel names are kept where they conform, exchange property names stay verbatim | 2026-10-30, accepted (P1) |
-| D12 | The idempotency store retains the exact facade response for a deployment-configured retention window, separate from the value-free audit journal (BReg precedent); security review note required | 2026-10-30, accepted |
-| D13 | The generic mechanisms under redelivery, circuit breaker, and throttle are built in platform crates from the start: the rolling-window limiter in `registry-platform-ratelimit`, the breaker state machine and redelivery delay computation in `registry-platform-resilience`. The processors and the redelivery loop stay in the adapter | 2026-10-30, accepted (P5) |
-| D14 | Write resume is a host-owned addition for one closed flat sequence under `idempotentConsumer`; it stores only declared bounded identifiers, resumes the first unfinished source-idempotent step, and refuses control flow whose unstored state cannot be reconstructed | 2026-10-30, accepted (P5); closed subset completed 2026-11-03 |
-| D15 | Fixture provenance distinguishes `captured` from `documented`; fixtures are `documented` unless a real instance was run | 2026-10-30, accepted (P6) |
-| D16 | A write the source accepted but has not completed answers a profile-owned 202 status link or a bounded wait, selected by the project binding; section 9 fixes the exact artifact keys, acceptance-anchored expiry, caller and artifact binding, safe polling, and uncertain-effect recovery | 2026-10-30, accepted; contract completed 2026-11-03 |
-| D17 | Generic profiles remain artifacts; Consultation protocol behavior is maintained in Rust. Packs own reusable source access; project transformations and schemas own public views. `registry-record` remains a dev-dependency for goldens only | 2026-11-04, amended |
-| D18 | Upstream authentication is a closed list of six kinds with Evidence's `SourceAuthentication` shape and spelling (section 10.2), plus orthogonal mTLS; adapter-local in this program, lifted to the platform later | 2026-10-30, accepted (P2) |
-| D19 | The facade caller's token is never forwarded or exchanged upstream; upstream calls use the deployment's per-source credential, and per-user upstream authority waits for a source that requires it | 2026-10-30, accepted (P2) |
-| D20 | The exchange contract (section 8.11) is part of the format: facade inputs arrive under closed, profile-neutral names; no caller header enters except `Idempotency-Key` on writes; scripts receive a read-only `#{body, headers, properties}` view and return per slot | 2026-10-30, accepted (P2) |
-| D21 | Packs raise error classes and never name problem codes; an `outcome` branch and Camel's `throwException` carry source meaning; the profile's `problems` list maps every class, uncatchable and facade classes included, to exactly one problem; a handled clause answers with a success body | 2026-10-30, accepted (P3) |
-| D22 | The facade cursor is engine-owned authenticated encryption under a runtime-config key (`cursorKeyRef`), bound to operation, binding, caller, filters, and expiry; the route sees only `AdapterContinuation` and sets `AdapterNextContinuation`; security review note required | 2026-10-30, accepted (P4) |
-| D23 | Sources that page by URL use `httpUri`, an origin-pinned and base-path-pinned link checked at send time (`egress.refused` otherwise); `toD` stays not ported | 2026-10-30, accepted (P2) |
-| D24 | Request headers leave only through the endpoint's `requestHeaders` allowlist; credential, cookie, host, and hop-by-hop headers are never allowlistable; credentials are injected after filtering | 2026-10-30, accepted (P2) |
-| D25 | `direct:` shares the exchange and its sends are not redelivered; `enrich` runs on a copy and only strategy-named `properties` come back | 2026-10-30, accepted (P1) |
-| D26 | A `POST` counts as safe only under a reviewed `safeUpstream: true` operation claim; a GraphQL send's safety comes from its parsed operation type | 2026-10-30, accepted (P2) |
-| D27 | Exception matching uses the closest declared ancestor of the single `RouteFailure` class, with declaration order breaking equal-specificity ties; uncatchable classes fire no clause. The absence of Camel's cause-chain walk is a bounded divergence | 2026-10-30, corrected 2026-10-31 to the delivered single-class failure model (P1) |
-| D28 | `AdapterProject` carries a `project` block (`id`, `version`) as CFG-ENV-6 requires, rather than a top-level `id` | 2026-10-30, accepted (P1) |
-| D29 | Increment 1 builds the `records-get` route end to end first; the remaining read features then build over it | 2026-10-30, accepted (P6) |
-| D30 | Increment 1's gate requires `captured` DHIS2 fixtures for get, missing, and search page, taken from a real server | 2026-10-30, accepted (P6) |
-| D31 | Circuit breaker and throttle stay in Increment 1 as its last slice | 2026-10-30, accepted (P6) |
-| D32 | No declarative field map until a real source needs one; field mapping stays in routes and scripts. `[ingestion]` KoboToolbox is that source, recorded 2026-10-31. The ingestion mapping stays a script: one pure interface that returns an operation input or a refusal with diagnostics, in Rhai on `registry-platform-script`, run in the job for the direct destination and in a Coordinator Function for events (section 17.3) | 2026-10-30, accepted (P5); ingestion note accepted 2026-11-01 |
-| D33 | The runtime config requires a non-empty `allowedClients` list on the facade, as Messaging does; scopes alone leave the issuer's mint policy as the only client gate | 2026-10-30, accepted |
-| D34 | A verified caller's refused call is a `callRefused` journal row; a 401 is logged only | 2026-10-30, accepted |
-| D35 | Generic `AdapterProfile` authoring remains available. The Consultation target generates its concrete OpenAPI from maintained protocol definitions and the validated project; deployments do not author standard envelopes or problem mappings | 2026-11-04, amended |
-| D36 | Plain HTTP to an address inside `allowedPrivateCidrs` is allowed for every authentication kind, including credential-bearing ones; the operator's explicit declaration is the consent, and `adapterctl check` agrees with the runtime load | 2026-10-30, accepted |
-| D37 | Beyond the existing numeric-loopback and HTTPS+mTLS admissions, a configured source may use no application credential when pack and runtime both explicitly say `none` and the fixed HTTPS binding carries `anonymousHttps: operator-approved`; absence keeps that additional path closed, TLS verification and facade authentication remain mandatory, and no failed credential kind falls back to anonymous | 2026-10-31, accepted |
-| D38 `[ingestion]` | Job source components `file`, `sftp`, and read-only `postgres` enter under the explicit two-system exception of section 5.3, job-only and refused in facade routes; `registry-adapter-connectors` alone links a product client, only `registry-breg-client` behind an off-by-default feature, for the direct destination | 2026-10-31, proposed; restated 2026-11-01; open in section 17.6 |
-| D39 `[ingestion]` | The job profile keeps the platform-frozen 10-second per-attempt ceiling for HTTP and GraphQL sends and lets a pack endpoint a job reaches declare a response bound up to the platform's 16 MiB cap (the runtime binding may lower it, never raise it); facade ceilings are unchanged | 2026-10-31, resolved against the platform caps of `registry-platform-httputil` |
+The rules of the product are stated in the sections they govern.
 
 ## 17. Governed ingestion `[ingestion]`
 
-Applied 2026-10-31 as a contract amendment and restated on 2026-11-01 to
-the accepted governed-ingestion design. The adapter reads in place by
-default. An ingestion job copies a record only when the receiver must own
+The adapter reads in place by default. An ingestion job copies a record only when the receiver must own
 it, such as registration into a registry; Evidence checks and data-space
 reads stay read paths, served by a live facade or by Evidence's own
 acquisition, never by an ingestion job. The useful outcome is an
 accountable path from source input to the intended product operation,
 including refusals, corrections, outages, and conflicting changes.
 Delivery is not approval, and approval is not application: a job reports
-what its destination accepted and nothing more. Section 17.7 states what
-is built, the order in which the rest follows, and the claim rule: nothing
-in this section is claimed until the drill named there has run it.
+what its destination accepted and nothing more. Section 17.7 states the
+acceptance rows and scenarios a job component must pass. Until the
+controlled drill defined there has run, ingestion is built and
+component-tested, not deployment-proven.
 
 ### 17.1 Ownership, rules, and source independence
 
@@ -2133,7 +2005,7 @@ the resolved dependency gate of section 17.5 enforces that separation.
 
 The job profile is explicit and bounded, separate from the facade
 ceilings of section 8.8, which are unchanged. Under the platform caps of
-`registry-platform-httputil` (D39): a job send's per-attempt timeout stays
+`registry-platform-httputil`: a job send's per-attempt timeout stays
 at or below the platform-frozen 10 seconds, and a pack endpoint a job
 reaches may declare `maximumResponseBytes` up to the platform's 16 MiB
 response-body cap; the runtime binding may lower it, never raise it. The profile also bounds what the facade never sees: the
@@ -2315,7 +2187,11 @@ existing households needs a lookup, and therefore Coordinator.
 only Adapter crate that links a product client, `registry-breg-client`,
 behind an off-by-default job-host feature. Engine and facade binaries cannot
 reach it. Its bounded operation set follows the reviewed Action mode and
-caller-filtered metadata; it never acquires approval or Apply authority.
+caller-filtered metadata; it never acquires approval or Apply authority. A
+direct job selects one Action: it invokes that Action immediately or starts
+and submits its Proposal, according to the metadata and the declared mode. A
+metadata mismatch or operation refusal never selects another operation or
+destination.
 
 **Signed event to Coordinator.** One signed event per item, in the
 platform's `HookEnvelope` format signed with `sign_v1`, admits one Run of a
@@ -2348,10 +2224,11 @@ the other, and a denied Proposal never falls back to a direct write: the
 item is refused or held, and a person decides.
 
 **Bulk.** A bulk load is a third hand-off, not a destination: the job
-writes a bounded file with its digest and item count, and an operator
-runs `bregctl data import`. The job never launches another product's CLI,
-and that file is the one place a job writes payloads, in the operator's
-custody.
+would write a bounded file with its digest and item count, and an operator
+would run `bregctl data import`. This hand-off is not implemented; no job
+writes such a file today. The job never launches another product's CLI,
+and the file would be the one place a job writes payloads, in the
+operator's custody.
 
 **Mapping.** One interface, run where the destination is:
 
@@ -2362,7 +2239,7 @@ map(item, context) -> input | refusal(diagnostics)
 The interface is pure. Its context (business date, locale, code-system
 versions) is explicit, and it has no network, file, clock, or credential
 access. It runs in Rhai on `registry-platform-script` under that crate's
-published limits (D32), and its output is validated against the
+published limits, and its output is validated against the
 operation's input schema before a request is prepared. A missing answer
 never clears a registry field. A mapping never selects a person, approves
 a change, or emits SQL. Diagnostics name the rule and the field, never the
@@ -2429,6 +2306,21 @@ accepted work to force a fresh registration. Publishing a new message ID
 alone does not clear the old delivery, and the Adapter does not implicitly
 acknowledge or release it.
 
+The default-off `job-sftp` host reads over in-process `russh` and
+`russh-sftp`, with versions pinned in the workspace manifest and lockfile; the
+host key is pinned before any credential is resolved or sent. AWS-LC backs the
+selected cipher paths and key exchange and signatures also use RustCrypto, so
+the host makes no whole-session FIPS validation claim. Supported deployments
+use a dedicated read-only account confined to the source tree by the server,
+because SFTP v3 client pathname checks do not provide an atomic filesystem
+jail.
+
+The default-off `job-rabbitmq` host uses `lapin` over verified TLS. The
+process installs its reviewed FIPS TLS provider before clients are constructed
+and refuses a conflicting provider. The source settles each message manually
+after the durable item outcome; a held item is not an acceptance, and pending
+settlement is bounded and leaves the position unchanged.
+
 The mode packages as one native companion executable on PostgreSQL. For a
 small IT team, a direct job adds one binary, one database, one source
 credential, and one BReg credential. A Coordinator job swaps the BReg
@@ -2459,99 +2351,58 @@ supporting service, binding or database crate. The gate follows
 Coordinator's gate in shape and is named beside it in the root
 `AGENTS.md` gate table.
 
-### 17.6 Open decisions
+### 17.6 Where the ingestion rules live
 
-1. **The job-source exception is approved (D38).** `file`, `sftp`, and
-   `postgres` are job-only mechanisms. Their inclusion does not give the
-   facade file, SSH, or database reachability; each source still needs its
-   own bounded-read, recovery and feature-isolation acceptance.
-2. **The BReg client exception is approved.** The job host may reach
-   `registry-breg-client` through its explicit off-by-default
-   `direct-breg` connector feature. This exception grants no engine or
-   facade dependency and no direct database access to BReg.
-3. **The SSH dependency is selected.** The default-off `job-sftp` host
-   uses in-process `russh` and `russh-sftp`, with versions pinned in the
-   workspace manifest and lockfile. The host key is pinned before any
-   credential is resolved or sent. AWS-LC backs the selected cipher paths;
-   key exchange and signatures also use RustCrypto, so this is not a
-   whole-session FIPS validation claim. Read-only completion conventions,
-   finite transport bounds and recovery remain part of source acceptance.
-4. **The queue is RabbitMQ.** The default-off `job-rabbitmq` host uses
-   `lapin` over verified TLS. The process installs its reviewed FIPS TLS
-   provider before clients are constructed and refuses a conflicting
-   provider. The source owns manual settlement after the durable item
-   outcome; a held item is not an acceptance. Broker redelivery and the
-   dead-letter path require actual broker acceptance tests, separately
-   from client dependency verification.
-5. **The direct job selects one Action.** It invokes the selected BReg
-   Action immediately or starts and submits its Proposal, according to
-   caller-filtered metadata and the declared mode. A metadata mismatch or
-   operation refusal never selects another operation or destination.
+The rules of the ingestion mode are stated in sections 5.3 and 17.1 to 17.5.
 
-Controlled Kobo validation established the maintained key, revision, edit
-rescan, unchanged-repeat and direct Proposal/review/application behavior
-for version 2.026.37c. Server upgrades, historical forms, large bulk limits,
-and deployment-specific rescan cost remain unproved. Direct-destination
-native tests separately exercise item refusal and same-Proposal recovery
-without storing prepared commands in the job database.
-
-### 17.7 Build status, sequence, and claims
+### 17.7 Acceptance rows and scenarios
 
 The [Camel ingestion port records](CAMEL-INGESTION-PORTS.md) map selected
 upstream classes and methods to the maintained Rust cases and name the
-bounded divergences. A named test is not a claim that its whole increment
-or controlled deployment drill has passed.
+bounded divergences. A named test is not a claim that a whole component or
+controlled deployment has passed.
 
-Implemented behind their declared features: the shared engine and job compiler;
-the job profile and item contract; HTTP, CSV/JSONL files, read-only PostgreSQL
-and read-only SFTP sources; the `kobotoolbox` and `odk-central` packs; and the
-job host with its durable item table, pass, interval trigger, rescan, preview,
-value-free status and inspection. Destination mappings run in the job host,
-which records acknowledged, refused and held outcomes. The default-off direct
-BReg and signed Coordinator event destinations have native product acceptance
-for submission, repeat recovery and changed-item holds. The PostgreSQL source
-also has combined native acceptance through both destinations.
+**Status.** Built behind their declared features: the shared engine and job
+compiler; the job profile and item contract; HTTP, CSV/JSONL files,
+read-only PostgreSQL and read-only SFTP sources; the `kobotoolbox` and
+`odk-central` packs; and the job host with its durable item table, pass,
+interval trigger, rescan, preview, and value-free status and inspection.
+Destination mappings run in the job host, which records acknowledged,
+refused, and held outcomes. The default-off direct BReg and signed
+Coordinator event destinations have native product acceptance for
+submission, repeat recovery, and changed-item holds; the PostgreSQL source
+also has combined native acceptance through both destinations. The RabbitMQ
+job compiler and durable pass integrate manual source settlement with the
+item store; broker acceptance covers AMQPS, least-privilege permissions,
+durable destination acknowledgement before broker acknowledgement, refusal
+to the dead-letter path, redelivery, and changed-message holds. Hook ingress
+is implemented behind the default-off `job-hook` feature, with synthetic
+HTTP and actual CLI and PostgreSQL acceptance for authenticated wake-up,
+source re-read, body exclusion, and a durable pass.
 
-SFTP acceptance includes the actual job CLI, a loopback SSH/SFTP server,
-PostgreSQL item store, destination receiver, restart and same-name replacement.
-Supported deployments require a dedicated read-only account confined to the
-source tree by the server. SFTP v3 client pathname checks do not provide an
-atomic filesystem jail. This acceptance does not establish a controlled Kobo
-review/application drill or a whole-session SSH FIPS validation.
+Supported SFTP deployments use a dedicated read-only account confined to the
+source tree by the server, because SFTP v3 client pathname checks do not
+provide an atomic filesystem jail.
 
-The RabbitMQ job compiler and durable pass integrate manual source settlement
-with the PostgreSQL item store. Broker acceptance covers AMQPS, least-privilege
-permissions, durable destination acknowledgement before broker acknowledgement,
-refusal to the dead-letter path, redelivery and changed-message holds. Pending
-settlement is bounded and remains uncertain without advancing the position.
-Hook ingress is implemented behind the default-off `job-hook` feature.
-Synthetic HTTP and actual CLI/PostgreSQL acceptance prove authenticated wake-up,
-source re-read, body exclusion and a durable pass without weakening facade OIDC.
-They do not establish delivery through a production TLS proxy or a live Kobo
-webhook. The bulk-file hand-off remains unimplemented.
-The controlled source and review-provider drill below remains required before
-deployment claims; direct Kobo registration/review/application proof is separate
-from Coordinator revised-item and hook-delivery acceptance.
+Not implemented: the bulk-file hand-off (section 17.3, Bulk).
 
-| Step | Deliverable | Gate |
-|---|---|---|
-| 0 | Both destinations on the thin slice, against real binaries and the deployment's real review policy: a fixture script that starts and submits a Proposal through `registry-breg-client` with derived keys, and one that signs an event into a workflow using `breg.submit-proposal/v1` and `wait-for` | Each reaches a submitted Proposal, a repeat recovers the same Proposal or Run, and the comparison records parts, operator steps, and recovery; it also settles whether the Kobo form is new-only, which can go direct, or needs a lookup, which needs Coordinator |
-| 1 | Engine boundary: job compiler and entry point without the facade's listener or journal, a job profile, the contract amendments | Existing Adapter suites stay green; a route runs with no listener |
-| 2 | Walking skeleton: one Kobo form, item table, pass, interval trigger, the destination step 0 chose | One submission reaches a submitted Proposal on real binaries and PostgreSQL |
-| 3 | Recovery and corrections: lost responses, crash points, position rules, reverts, revised items, the stop rule | The recovery scenarios below pass |
-| 4 | The drill: a controlled Kobo deployment and one review provider, ending applied or explicitly failed | Every scenario below passes in a recorded drill |
-| 5 | SQL, files, and SFTP into the same destinations | No source logic in the pass |
-| 6 | Hooks as a trigger, then the queue as a source | Their scenarios below |
+Not yet proven: none of this has been run against a controlled deployment.
+The **controlled drill** is a recorded run of every scenario below against a
+controlled Kobo deployment and one review provider, with each item ending
+applied or explicitly failed. Until it has run, the capabilities in this
+section are verified by their acceptance rows, synthetic servers, and native
+product acceptance only. That acceptance does not establish delivery through
+a production TLS proxy, a live Kobo webhook, a controlled Kobo
+review-and-application path, or a whole-session SSH FIPS validation. Direct
+Kobo registration, review, and application proof is separate from
+Coordinator revised-item and hook-delivery acceptance.
 
-**Claim rule.** Components may be built ahead of their step. Each stays
-feature-gated and claimed nowhere, on the site, in a deck, or to a
-partner, until the step 4 drill has run it. A component built under this
-section is done when it carries its port-table row and conformance module,
-its Camel unit tests at the tag are ported or recorded as inapplicable
-with citations, each refusal has an `adapter.*` code and a corpus case,
-every read is bounded at the edge, diagnostics carry no values, its
-feature is off by default with a test proving the facade cannot reach it,
-and its row below passes.
+Every job component stays feature-gated and off by default, with a test
+proving the facade cannot reach it. A component is accepted when it carries
+its port-table row and conformance module, its Camel unit tests at the tag
+are ported or recorded as inapplicable with citations, each refusal has an
+`adapter.*` code and a corpus case, every read is bounded at the edge,
+diagnostics carry no values, and its row below passes.
 
 | Component | Acceptance row |
 |---|---|

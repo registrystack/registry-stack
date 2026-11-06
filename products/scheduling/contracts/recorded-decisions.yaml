@@ -2,10 +2,10 @@ apiVersion: registry.registrystack.org/product-contract/v1
 product: scheduling
 scope: mvp
 purpose: >-
-  Behaviour a reader could reasonably mistake for an oversight, recorded as a
-  deliberate choice with the reasoning that settled it. A later change may
-  overturn any of these, but it overturns the entry in the same commit rather
-  than rediscovering the question.
+  Behaviour a reader could reasonably mistake for an oversight, recorded as
+  deliberate. Each entry states what the product does or refuses, and cites
+  the tests that hold it. A change that alters one of these behaviours
+  updates or removes its entry in the same commit.
 decisions:
   - id: SCHEDULING-DEC-01
     subject: Releasing a hold whose lifetime has passed answers 204
@@ -14,31 +14,24 @@ decisions:
       any claim that is still a hold in the active state and closes it as
       released, so a hold whose lifetime has passed but whose row the sweeper
       has not yet touched releases cleanly and answers 204 No Content.
-    reasoning: >-
-      Consumption is a live predicate, never a stored counter: every capacity
-      and quota query counts a hold only while its state is active and its
-      expiry is still ahead of the transaction's clock. An expired hold has
-      therefore already stopped consuming capacity everywhere capacity is
-      computed, whether or not any process has written the expired state yet.
-      Releasing it can return nothing, because nothing is outstanding, so
-      there is no second decrement to protect against. Answering a refusal
-      instead would tell the caller to keep a hold it has correctly finished
-      with, and would make the caller's answer depend on whether a background
-      sweep happened to have run.
     alsoTrue: >-
       A release carries no caller-chosen idempotency key: the hold's own
-      identifier is the key, so a retried release replays the first answer. A
-      hold that is still a hold but no longer in the active state answers
+      identifier is the key, so a retried release replays the first answer.
+      A hold that is still a hold but no longer in the active state answers
       hold.released rather than a not-found, so a caller watching one id
-      across its lifetime sees a released outcome, not a new refusal, whether
-      a background sweep has already run. An id that never named a hold at
-      all, or that names something else, answers operation.not-authorized
-      before the transaction opens and before any permission is checked,
-      the same answer a hold the caller's grant does not reach would give, so
-      a caller cannot learn the id's existence from its own authorization.
-      Confirmation resolves a hold by the same rule, for the same reason. A
-      hold belonging to another caller is refused inside the transaction,
-      where the refusal is audited.
+      across its lifetime sees a released outcome, not a new refusal,
+      whether a background sweep has already run. An id that never named a
+      hold at all, or that names something else, answers
+      operation.not-authorized before the transaction opens and before any
+      permission is checked, the same answer a hold the caller's grant does
+      not reach would give, so a caller cannot learn the id's existence from
+      its own authorization. Confirmation resolves a hold by the same rule.
+      A hold belonging to another caller is refused inside the transaction,
+      where the refusal is audited. A hold consumes capacity only while its
+      state is active and its expiry is still ahead of the transaction's
+      clock, so an expired hold consumes nothing everywhere capacity is
+      computed, whether or not any process has written the expired state
+      yet.
     evidence:
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: an_expired_hold_returns_capacity_and_refuses_confirmation}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_release_returns_capacity_answers_replay_and_blocks_confirmation}
@@ -51,18 +44,14 @@ decisions:
       The cancel path does not read the policy revision at all. It is guarded
       by the observed appointment revision, the caller's ownership, and the
       cancellation cutoff, and by nothing else.
-    reasoning: >-
-      Cancellation releases capacity; it evaluates no admission and resolves no
-      offering against a policy, so there is no policy-shaped decision left to
-      fence. An appointment stays cancellable under whatever policy currently
-      governs its offering. The alternative traps a caller in a booking it
-      wants to shed because the operator republished the policy underneath it,
-      which is a worse outcome for both sides than letting the seat go back.
+    alsoTrue: >-
+      An appointment stays cancellable under whatever policy currently
+      governs its offering, including after the operator republishes the
+      policy.
     contrast: >-
-      Reschedule does check, and deliberately lets the policy guard outrank the
-      revision guard, because a reschedule re-evaluates admission against the
-      policy. Hold creation, direct appointment creation, and hold confirmation
-      check for the same reason.
+      Reschedule does check, and lets the policy guard outrank the revision
+      guard. Hold creation, direct appointment creation, and hold
+      confirmation check too.
     evidence:
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: cancellation_respects_the_cutoff_and_replays_its_verdict}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_reschedule_moves_under_the_observed_revision_and_refuses_stale_ones}
@@ -74,17 +63,10 @@ decisions:
       transaction raises it, and the single projection from it to a public
       problem code lives in the service module, in one exhaustive match with no
       wildcard arm.
-    reasoning: >-
-      The projection is a disclosure decision, and disclosure decisions belong
-      on the layer that answers the caller. The store layer raises what went
-      wrong; the service layer decides what the caller is allowed to learn from
-      it, which is the same layer that projects an admission refusal through
-      its public code and decides which refusals are audited. Moving the
-      projection next to the enum would put a caller-facing choice in the
-      module that talks to PostgreSQL. The source-neutral core stays free of
-      every HTTP library and owns only the numeric status pinned to each
-      problem code, so one binding cannot answer a different status from
-      another.
+    alsoTrue: >-
+      The source-neutral core stays free of every HTTP library and owns only
+      the numeric status pinned to each problem code, so one binding cannot
+      answer a different status from another.
     safeguard: >-
       The match is exhaustive over a closed enum that is not marked
       non-exhaustive, so a tenth variant fails the build rather than falling
@@ -98,12 +80,8 @@ decisions:
       A channel subquota caps how much of a published window that channel may
       take. It reserves nothing for that channel: an unclaimed subquota is
       available to the window's other channels up to the published total.
-    reasoning: >-
-      A ceiling is the bound that prevents one channel exhausting a window; a
-      floor is a different product promise, with its own failure mode when the
-      reserved share goes unused. This milestone implements and tests the
-      ceiling. Reserved floors stay an open product question rather than an
-      implied behaviour.
+    alsoTrue: >-
+      Reserved floors are not implemented.
     evidence:
       - {path: crates/registry-scheduling-core/src/admission.rs, name: subquota_channels_are_checked_before_the_total}
       - {path: crates/registry-scheduling-core/src/policy.rs, name: subquota_slices_may_not_overdraw_the_window}
@@ -113,17 +91,13 @@ decisions:
       The authoring check refuses a resource pool that serves an exact-time
       offering and a published window at the same time. It also refuses two
       overlapping windows backed by the same pool, whatever reservedMembers
-      either window declares. Those are not supported configurations in this
-      milestone; disjoint windows may reuse the pool.
-    reasoning: >-
-      Exact-time commitments count pool members while arrival commitments count
-      window units, and two windows count separate window ids. Each shared shape
-      therefore needs ledger-level staffing partition enforcement to stay
-      honest. reservedMembers records operator intent but does not create that
-      enforcement. Refusing the configuration at authoring time is a promise
-      the product can keep now; enforcing partitions in the ledger is later
-      work, and until it exists a deployment must not be able to author its way
-      into the unsound shape.
+      either window declares. Those are not supported configurations;
+      disjoint windows may reuse the pool.
+    alsoTrue: >-
+      Exact-time commitments count pool members while arrival commitments
+      count window units, and two windows count separate window ids. The
+      ledger does not enforce staffing partitions, and reservedMembers
+      records operator intent without creating that enforcement.
     evidence:
       - {path: crates/registry-scheduling-core/src/policy.rs, name: an_unpartitioned_shared_staffing_block_is_rejected}
       - {path: crates/registry-scheduling-core/src/policy.rs, name: overlapping_windows_may_not_share_a_staffing_pool}
@@ -132,14 +106,12 @@ decisions:
     decision: >-
       A stored cursor holds its identity, its listing context, its position,
       and its expiry. It is not keyed by the caller.
-    reasoning: >-
-      Both listing call sites are safe without it: catalogue availability is
-      public to any reader with the read scope, and appointment history sits
-      behind the ownership check, which is re-applied before the cursor is
-      honoured rather than trusted from the cursor. The invariant is therefore
-      held by the call sites, which is why the contract is stated where a
-      reader of the cursor module will see it. A third listing that is neither
-      public nor ownership-checked must add the binding rather than assume it.
+    alsoTrue: >-
+      Catalogue availability is public to any reader with the read scope.
+      Appointment history sits behind the ownership check, which is
+      re-applied before the cursor is honoured rather than trusted from the
+      cursor. A listing that is neither public nor ownership-checked must
+      add the binding.
     evidence:
       - {path: crates/registry-scheduling/src/cursors.rs, name: a_cursor_binds_to_its_listing_context_and_expires}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: cursors_page_their_own_listing_and_refuse_foreign_contexts}
@@ -150,16 +122,12 @@ decisions:
       offering anchors on, then reads the pool's members and their occupancy
       with plain queries inside that lock. The member rows themselves are
       never locked.
-    reasoning: >-
-      One pool row is the serialization point for every offering that sells
+    alsoTrue: >-
+      The pool row is the serialization point for every offering that sells
       that pool, so every commitment against the pool runs one at a time and
-      the member selection cannot race another selection. SKIP LOCKED on the
-      member rows would add machinery without adding correctness while the
-      pool lock already excludes every competitor, and it would invite the
-      false reading that members are independently selectable. The cost is
-      that a hot pool serializes every commitment on one row, which is the
-      same cost the window anchor already carries; if a pool ever becomes
-      that hot, the anchor is the thing to revisit, not the member query.
+      member selection cannot race another selection. Members are not
+      independently selectable, and a hot pool serializes every commitment
+      on one row.
     evidence:
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_direct_create_books_without_a_hold_and_exhausts_capacity}
       - {path: crates/registry-scheduling-core/src/admission.rs, name: the_second_caller_against_the_last_unit_is_refused}
@@ -177,24 +145,17 @@ decisions:
       resource identity if it returns. New allocation and hold confirmation
       recheck actual supply. Nothing partial is written and source updates
       never silently cancel commitments.
-    reasoning: >-
-      The ledger's claims name their supply by id and the records give that id
-      its pool membership or published window capacity. Reassigning those
-      identities under a live claim can hide promised capacity from subsequent
-      availability. Losing physical stock, however, is a fact the source must
-      be able to report without erasing that commitment. Taking the anchors first makes
-      the guard honest rather than advisory: a capacity transaction holds its
-      own anchor from its snapshot until it commits, so holding all of them
-      means no commitment is mid-evaluation against a member about to be
-      deleted, and a claim written a moment later is seen by the guard rather
-      than stranded behind it. Exact, bundle, and window transactions lock their
-      supply anchors in order before the revision guard, and the swap reserves
-      window resources while it holds every anchor.
     alsoTrue: >-
-      Window facts and their lock anchors are replaced in the same transaction
-      as locations, pools, members, and exceptions. An expired hold occupies
-      nothing, matching the live-predicate rule the rest of the ledger uses,
-      so it never blocks a swap.
+      Window facts and their lock anchors are replaced in the same
+      transaction as locations, pools, members, and exceptions. An expired
+      hold occupies nothing, matching the live-predicate rule the rest of
+      the ledger uses, so it never blocks a swap. A capacity transaction
+      holds its own anchor from its snapshot until it commits, so no
+      commitment is mid-evaluation against a member about to be deleted, and
+      a claim written a moment later is seen by the guard. Exact, bundle,
+      and window transactions lock their supply anchors in order before the
+      revision guard, and the swap reserves window resources while it holds
+      every anchor.
     residual: >-
       Applying physical loss does not resolve its operational impact. The
       institution still arranges replacement resources or explicitly changes
@@ -216,16 +177,15 @@ decisions:
       package that is already active, with no schema version pending, under
       the runtime role and role mode the ledger recorded, is refused with
       nothing needs applying and writes no row.
-    reasoning: >-
-      Going back to an earlier package is an ordinary operator decision, not a
-      rollback the ledger must model: the policy revision still advances, and
-      the ledger records the choice in order rather than rewriting history.
-      Refusing the active package keeps the history free of rows that changed
-      nothing, and lets a pipeline tell a no-op from an activation by the exit
-      code. When a schema version is pending, as after an upgrade, the same
-      package applies, because the apply is what migrates and adopts; when
-      the runtime role was rotated or its role mode changed, it applies
-      because the apply is what issues the grants.
+    alsoTrue: >-
+      Applying an earlier package advances the policy revision, and the
+      ledger records the choice in order rather than rewriting history. The
+      refusal of the active package carries an exit code that lets a
+      pipeline tell a no-op from an activation. When a schema version is
+      pending, as after an upgrade, the active package applies, because the
+      apply is what migrates and adopts. When the runtime role was rotated
+      or its role mode changed, it applies, because the apply is what issues
+      the grants.
     evidence:
       - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: apply_records_one_row_per_activation_and_a_previous_package_is_a_new_row, features: [postgres-test]}
       - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: apply_refuses_the_active_package_and_a_foreign_database_without_writing, features: [postgres-test]}
@@ -237,14 +197,11 @@ decisions:
       activation ledger and the schema history. The runtime keeps SELECT,
       INSERT, UPDATE, and DELETE on every other Scheduling table, including
       the policy revisions and scheduling_meta.
-    reasoning: >-
-      The runtime writes claims, receipts, outbox rows, and delivery state on
-      every request, and table-by-table grants would have to follow every
-      later migration or break the service. The ledger is the one record that
-      decides what the runtime may serve, so it is the one the runtime must
-      not be able to rewrite; startup refuses whatever the ledger does not
-      name, so a runtime that rewrote a policy row still cannot make a
-      restart serve a package no operator applied.
+    alsoTrue: >-
+      The runtime writes claims, receipts, outbox rows, and delivery state
+      on every request. Startup refuses whatever the ledger does not name,
+      so a runtime that rewrote a policy row still cannot make a restart
+      serve a package no operator applied.
     residual: >-
       A compromised runtime credential can still corrupt product data it
       serves from; the ledger and the audit stream are where that is
@@ -258,11 +215,10 @@ decisions:
       365 days after the earliest applicable terminal instant, with a placeholder
       default of seven days. Keep a per-claim digest and erasure time, never
       authority. Keep the claim, its history, and audit unchanged.
-    reasoning: >-
-      Live ownership must survive audit-key rotation; retaining raw personal
-      identifiers indefinitely is unnecessary once the terminal window passes.
-      Receipt observation and replay must check the current owner so a longer
-      receipt window cannot bypass erasure. Lock mutation reads against erasure.
+    alsoTrue: >-
+      Live ownership survives audit-key rotation. Receipt observation and
+      replay check the current owner, so a longer receipt window cannot
+      bypass erasure. Mutation reads are locked against erasure.
     residual: >-
       A digest permits candidate matching, and existing keyed actor pseudonyms
       remain under the separate history and audit retention contracts.

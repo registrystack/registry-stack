@@ -176,7 +176,10 @@ Every pull request should make the review path clear:
 - Treat changes to authentication, authorization, assertion evaluation or
   signing, audit integrity, release provenance, deployment defaults, or data
   minimization as security-sensitive. These changes need explicit maintainer
-  review notes, even when the maintainer is also the author.
+  review notes in the pull request description, even when the maintainer is
+  also the author. When a change moves a trust boundary, an operator
+  obligation, or an accepted residual, update the product's
+  `SECURITY-MODEL.md` in the same change.
 - Schema and migration code refuses when it would drop rows; it never drops
   them silently. A change that would lose persisted state fails with an error
   that names what would be lost, and the operator decides the next step. Cover
@@ -265,7 +268,12 @@ Keep changes focused on the owning area:
 
 Private planning, release evidence that is not already public, credentials,
 hosted deployment details, and internal review notes do not belong in this
-repository.
+repository. BReg, Casework, Coordinator, Documents, Messaging, and Scheduling each keep a
+`SECURITY-MODEL.md` (for example `products/breg/SECURITY-MODEL.md`) as the
+public security model: trust boundaries, operator obligations, and accepted
+residuals. Other products record security invariants in their own contracts
+(`contracts/security-invariant-matrix.yaml`) or security document (for example
+`products/render/SECURITY-MATRIX.md`).
 
 ## Issue Labels
 

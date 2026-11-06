@@ -190,9 +190,14 @@ def decisions_violations(decisions: dict, resolve: TextResolver) -> list[str]:
         if row_id in seen:
             violations.append(f"{label}: listed more than once")
         seen.add(row_id)
-        for field in ("subject", "decision", "reasoning"):
+        for field in ("subject", "decision"):
             if not _non_empty(row.get(field)):
                 violations.append(f"{label}: {field} is required and empty")
+        if "reasoning" in row:
+            violations.append(
+                f"{label}: reasoning is not recorded here; an entry records behaviour,"
+                " and the reasoning belongs in the pull request description"
+            )
         evidence = row.get("evidence")
         if not isinstance(evidence, list) or not evidence:
             violations.append(f"{label}: at least one evidence test must be cited")

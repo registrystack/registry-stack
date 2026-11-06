@@ -7,8 +7,8 @@ name: Registry Render golden gate
 # platform-dependent layout — fails here and must be reviewed, never
 # silenced. Invariant: cross-machine byte stability as promised by the
 # product. Owner: the Render product. Removal condition: only if the
-# Render Definition of Done deliberately narrows the byte-stability
-# promise to same-machine reproducibility.
+# Render product contract (products/render/CONCEPT.md) deliberately
+# narrows the byte-stability promise to same-machine reproducibility.
 
 on:
   pull_request:

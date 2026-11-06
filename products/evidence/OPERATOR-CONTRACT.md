@@ -53,8 +53,7 @@ under different claim names, requires a second deployment even when the
 operators trust each other. Evidence Version 1 has no application database, unless
 status is enabled (`CONCEPT.md` section 15.9), and persists no selector, source,
 evidence, or response data; the status ledger holds keyed pseudonyms and
-digests, never raw values. No runtime can enable status yet; the
-credential status plan in `IMPLEMENTATION.md` lists what remains. An external durable
+digests, never raw values. No runtime can enable status yet. An external durable
 audit service may own its own storage.
 
 A gateway may provide publication, protocol integration, routing, and
@@ -1552,7 +1551,6 @@ mocks pass and only with approved synthetic selectors and securely stored
 credentials under [the source-testing contract](SOURCE-TESTING.md).
 
 Evidence Version 1 is releasable only when all four coequal acceptance
-definitions pass the complete offline and HTTP path, all Definition of Done
-rows are green on one revision, generated contracts reproduce exactly, and the
-security acceptance matrix is reviewed. Implementation stops at that boundary.
-Future profiles require a separately approved concept and plan.
+definitions pass the complete offline and HTTP path, every row of
+`contracts/acceptance-test-traceability.yaml` passes on one revision, generated contracts reproduce exactly, and the
+security acceptance matrix is reviewed.
