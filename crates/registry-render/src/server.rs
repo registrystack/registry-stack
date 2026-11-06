@@ -711,7 +711,7 @@ async fn ready(State(service): State<Arc<Service>>) -> Response {
                     test_only: seal.is_test_only(),
                 },
                 Err(unavailable) => SealReadiness {
-                    status: "unavailable",
+                    status: "not-ready",
                     reason: Some(unavailable.reason()),
                     test_only: seal.is_test_only(),
                 },

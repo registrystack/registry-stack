@@ -116,7 +116,7 @@ impl SealLevel {
 pub enum Unavailable {
     CertificateExpired,
     CertificateNotYetValid,
-    ProviderNotReady,
+    SignerNotReady,
 }
 
 impl Unavailable {
@@ -125,7 +125,7 @@ impl Unavailable {
         match self {
             Self::CertificateExpired => "certificate-expired",
             Self::CertificateNotYetValid => "certificate-not-yet-valid",
-            Self::ProviderNotReady => "provider-not-ready",
+            Self::SignerNotReady => "signer-not-ready",
         }
     }
 
@@ -148,9 +148,9 @@ impl Unavailable {
                 "The seal certificate is not yet valid; contact the operator. Plain rendering is \
                  unaffected.",
             ),
-            Self::ProviderNotReady => RenderProblem::new(
+            Self::SignerNotReady => RenderProblem::new(
                 ProblemKind::SigningUnavailable,
-                format!("seal {seal_id}: the signing key provider is not ready"),
+                format!("seal {seal_id}: the seal's signer is not ready"),
             ),
         }
     }
@@ -688,7 +688,7 @@ impl Seal {
             return Err(Unavailable::CertificateExpired);
         }
         match self.signer.readiness() {
-            KeyReadiness::NotReady => Err(Unavailable::ProviderNotReady),
+            KeyReadiness::NotReady => Err(Unavailable::SignerNotReady),
             _ => Ok(()),
         }
     }
@@ -1278,8 +1278,8 @@ mod tests {
                 ProblemKind::SealCertificateInvalid,
             ),
             (
-                Unavailable::ProviderNotReady,
-                "provider-not-ready",
+                Unavailable::SignerNotReady,
+                "signer-not-ready",
                 ProblemKind::SigningUnavailable,
             ),
         ] {
