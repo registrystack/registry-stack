@@ -38,6 +38,10 @@ fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 
+fn sha256_digest(bytes: &[u8]) -> String {
+    format!("sha256:{}", sha256_hex(bytes))
+}
+
 fn base64_decode(text: &str) -> Vec<u8> {
     base64::engine::general_purpose::STANDARD
         .decode(text)
@@ -738,7 +742,8 @@ fn a_b_t_seal_verifies_over_its_byte_ranges_and_carries_its_timestamp() {
     let body = seal_json(&fixture, &server);
     let pdf = base64_decode(body["pdfBase64"].as_str().unwrap());
     assert!(body.get("pdfSha256").is_none(), "{body}");
-    assert_eq!(body["signedFileSha256"], sha256_hex(&pdf));
+    assert!(body.get("pdfDigest").is_none(), "{body}");
+    assert_eq!(body["signedFileDigest"], sha256_digest(&pdf));
     assert_eq!(body["documentVersion"], "notice v2");
     assert_eq!(body["warnings"], serde_json::json!([]));
     assert_eq!(body["seal"]["id"], "ministry");
@@ -750,12 +755,28 @@ fn a_b_t_seal_verifies_over_its_byte_ranges_and_carries_its_timestamp() {
         "the sealed file starts with the exact first revision"
     );
     assert_eq!(
-        body["documentSha256"], expected.pdf_sha256,
-        "documentSha256 is the first revision"
+        body["documentDigest"],
+        format!("sha256:{}", expected.pdf_sha256),
+        "documentDigest is the first revision"
     );
-    assert_eq!(body["dataSha256"], expected.data_sha256);
-    // A client holding only `render:seal` pins the package from the answer.
-    assert_eq!(body["bundleHash"], expected.bundle_hash);
+    assert_eq!(
+        body["dataDigest"],
+        format!("sha256:{}", expected.data_sha256)
+    );
+    // A client holding only `render:seal` pins the package from the answer,
+    // in the form `package.expectedDigest` takes.
+    assert_eq!(
+        body["packageDigest"],
+        format!("sha256:{}", expected.bundle_hash)
+    );
+    for old in [
+        "documentSha256",
+        "signedFileSha256",
+        "dataSha256",
+        "bundleHash",
+    ] {
+        assert!(body.get(old).is_none(), "{old}: {body}");
+    }
     let signed = read_signed_file(&pdf, expected.pdf.len());
     let parts = [
         signed.signed_parts[0].as_slice(),
@@ -763,9 +784,10 @@ fn a_b_t_seal_verifies_over_its_byte_ranges_and_carries_its_timestamp() {
     ];
     let verified = verify_detached_signature(&signed.cms_der, &parts).expect("the CMS verifies");
     assert_eq!(
-        body["seal"]["certificateSha256"],
-        verified.signer_fingerprint.to_string()
+        body["seal"]["certificateDigest"],
+        format!("sha256:{}", verified.signer_fingerprint)
     );
+    assert!(body["seal"].get("certificateSha256").is_none(), "{body}");
     let gen_time = verified
         .timestamp_gen_time
         .expect("B-T carries a timestamp");
@@ -783,7 +805,7 @@ fn a_b_t_seal_verifies_over_its_byte_ranges_and_carries_its_timestamp() {
 
     // The first revision is byte-stable on the seal route.
     let again = seal_json(&fixture, &server);
-    assert_eq!(again["documentSha256"], body["documentSha256"]);
+    assert_eq!(again["documentDigest"], body["documentDigest"]);
     let again_pdf = base64_decode(again["pdfBase64"].as_str().unwrap());
     assert!(again_pdf.starts_with(&expected.pdf));
 }
@@ -808,18 +830,24 @@ fn the_pdf_representation_carries_the_seal_in_headers() {
     assert_eq!(reply.header("content-type"), Some("application/pdf"));
     let expected = first_revision(&fixture);
     assert!(reply.body.starts_with(&expected.pdf));
-    let signed_file_sha256 = sha256_hex(&reply.body);
+    let signed_file_digest = sha256_digest(&reply.body);
     assert_eq!(
-        reply.header("x-registry-document-sha256"),
-        Some(expected.pdf_sha256.as_str())
+        reply.header("x-registry-document-digest"),
+        Some(format!("sha256:{}", expected.pdf_sha256).as_str())
     );
     assert_eq!(
-        reply.header("x-registry-signed-file-sha256"),
-        Some(signed_file_sha256.as_str())
+        reply.header("x-registry-signed-file-digest"),
+        Some(signed_file_digest.as_str())
+    );
+    assert_eq!(
+        reply.header("x-registry-data-digest"),
+        Some(format!("sha256:{}", expected.data_sha256).as_str())
     );
     assert_eq!(reply.header("x-registry-seal-id"), Some("ministry"));
     assert_eq!(reply.header("x-registry-seal-level"), Some("B-T"));
-    assert!(reply.header("x-registry-certificate-sha256").is_some());
+    assert!(reply
+        .header("x-registry-certificate-digest")
+        .is_some_and(|digest| digest.starts_with("sha256:")));
     assert!(reply.header("x-registry-timestamped-at").is_some());
     assert_eq!(reply.header("x-registry-warning-count"), Some("0"));
     assert_eq!(
@@ -827,10 +855,75 @@ fn the_pdf_representation_carries_the_seal_in_headers() {
         Some("notice v2")
     );
     assert_eq!(
-        reply.header("x-registry-bundle-hash"),
-        Some(expected.bundle_hash.as_str())
+        reply.header("x-registry-package-digest"),
+        Some(format!("sha256:{}", expected.bundle_hash).as_str())
     );
-    assert!(reply.header("x-registry-pdf-sha256").is_none());
+    for old in [
+        "x-registry-pdf-sha256",
+        "x-registry-pdf-digest",
+        "x-registry-document-sha256",
+        "x-registry-signed-file-sha256",
+        "x-registry-data-sha256",
+        "x-registry-bundle-hash",
+        "x-registry-certificate-sha256",
+    ] {
+        assert!(reply.header(old).is_none(), "{old}");
+    }
+}
+
+/// The OpenAPI document declares exactly the headers and JSON members a
+/// timestamped test-only seal answers with, the optional ones included.
+#[test]
+fn the_openapi_document_declares_what_the_seal_route_answers() {
+    let tsa = start_tsa(TsaMode::Grant);
+    let fixture = sealed(Some(&tsa));
+    let server = start_server(&fixture);
+    let pdf = post(
+        &server,
+        "/v1/seal/notice",
+        &fixture.token("render:seal", SEAL_CLIENT),
+        "application/pdf",
+    );
+    assert_eq!(pdf.status, 200);
+    let json = seal_json(&fixture, &server);
+    let openapi = request(server.port, "GET", "/openapi.json", &[], None).json();
+    let answer = &openapi["paths"]["/v1/seal/{type}"]["post"]["responses"]["200"];
+    let declared: BTreeSet<String> = answer["headers"]
+        .as_object()
+        .expect("declared headers")
+        .keys()
+        .map(|name| name.to_ascii_lowercase())
+        .collect();
+    let sent: BTreeSet<String> = pdf
+        .headers
+        .iter()
+        .map(|(name, _)| name.clone())
+        .filter(|name| name.starts_with("x-registry-"))
+        .collect();
+    assert_eq!(declared, sent, "the PDF answer's headers");
+    let schema = &answer["content"]["application/json"]["schema"];
+    let names = |object: &serde_json::Value| -> BTreeSet<String> {
+        object
+            .as_object()
+            .expect("an object")
+            .keys()
+            .cloned()
+            .collect()
+    };
+    assert_eq!(
+        names(&schema["properties"]),
+        names(&json),
+        "the JSON answer's members"
+    );
+    assert_eq!(
+        names(&schema["properties"]["seal"]["properties"]),
+        names(&json["seal"]),
+        "the seal member's members"
+    );
+    assert!(
+        !answer.to_string().contains("\"deprecated\""),
+        "the seal route deprecates nothing"
+    );
 }
 
 #[test]
@@ -843,8 +936,11 @@ fn a_b_b_seal_is_the_named_choice_and_carries_no_timestamp() {
     let pdf = base64_decode(body["pdfBase64"].as_str().unwrap());
     let expected = first_revision(&fixture);
     assert!(pdf.starts_with(&expected.pdf));
-    assert_eq!(body["documentSha256"], expected.pdf_sha256);
-    assert_eq!(body["signedFileSha256"], sha256_hex(&pdf));
+    assert_eq!(
+        body["documentDigest"],
+        format!("sha256:{}", expected.pdf_sha256)
+    );
+    assert_eq!(body["signedFileDigest"], sha256_digest(&pdf));
     let signed = read_signed_file(&pdf, expected.pdf.len());
     let parts = [
         signed.signed_parts[0].as_slice(),
@@ -853,8 +949,8 @@ fn a_b_b_seal_is_the_named_choice_and_carries_no_timestamp() {
     let verified = verify_detached_signature(&signed.cms_der, &parts).expect("the CMS verifies");
     assert_eq!(verified.timestamp_gen_time, None);
     assert_eq!(
-        body["seal"]["certificateSha256"],
-        verified.signer_fingerprint.to_string()
+        body["seal"]["certificateDigest"],
+        format!("sha256:{}", verified.signer_fingerprint)
     );
 }
 
@@ -871,8 +967,8 @@ fn the_signing_member_reaches_the_template_only_on_the_seal_route() {
         ),
     );
     assert_eq!(
-        sealed_body["dataSha256"],
-        sha256_hex(sealed_envelope.as_bytes()),
+        sealed_body["dataDigest"],
+        sha256_digest(sealed_envelope.as_bytes()),
         "the seal route's envelope carries the signing member, test flag set"
     );
     let plain = post(
@@ -1496,7 +1592,7 @@ fn a_failing_timestamp_authority_fails_the_seal_naming_the_piece() {
         assert_eq!(audit[1]["record"]["problem"], "timestamp-failed");
         assert_eq!(audit[1]["record"]["reason"], reason, "{audit:?}");
         assert!(audit[0]["record"].get("reason").is_none());
-        assert!(audit[1]["record"].get("signedFileSha256").is_none());
+        assert!(audit[1]["record"].get("signedFileDigest").is_none());
     }
 }
 
@@ -1758,10 +1854,10 @@ fn a_seal_writes_a_paired_value_free_audit() {
     assert_eq!(request_entry["record"]["sealId"], "ministry");
     assert!(request_entry["record"].get("outcome").is_none());
     for field in [
-        "signedFileSha256",
-        "certificateSha256",
-        "timestampTokenSha256",
-        "documentSha256",
+        "signedFileDigest",
+        "certificateDigest",
+        "timestampTokenDigest",
+        "documentDigest",
     ] {
         assert!(
             request_entry["record"].get(field).is_none(),
@@ -1771,18 +1867,33 @@ fn a_seal_writes_a_paired_value_free_audit() {
     let record = &response_entry["record"];
     assert_eq!(record["outcome"], "sealed");
     assert_eq!(record["sealId"], "ministry");
-    assert_eq!(record["documentSha256"], body["documentSha256"]);
-    assert_eq!(record["signedFileSha256"], body["signedFileSha256"]);
+    assert_eq!(record["documentDigest"], body["documentDigest"]);
+    assert_eq!(record["signedFileDigest"], body["signedFileDigest"]);
     assert_eq!(
-        record["certificateSha256"],
-        body["seal"]["certificateSha256"]
+        record["certificateDigest"],
+        body["seal"]["certificateDigest"]
     );
-    assert_eq!(record["dataSha256"], body["dataSha256"]);
+    // The audit keeps its released bare hex `dataSha256`.
     assert_eq!(
-        record["timestampTokenSha256"].as_str().map(str::len),
-        Some(64)
+        format!("sha256:{}", record["dataSha256"].as_str().unwrap()),
+        body["dataDigest"].as_str().unwrap()
     );
-    assert!(record.get("pdfSha256").is_none(), "{record}");
+    let token_digest = record["timestampTokenDigest"].as_str().unwrap();
+    assert!(
+        token_digest
+            .strip_prefix("sha256:")
+            .is_some_and(|hex| hex.len() == 64),
+        "{record}"
+    );
+    for absent in [
+        "pdfSha256",
+        "documentSha256",
+        "signedFileSha256",
+        "certificateSha256",
+        "timestampTokenSha256",
+    ] {
+        assert!(record.get(absent).is_none(), "{absent}: {record}");
+    }
     let text = std::fs::read_to_string(fixture.home.join("audit/render.jsonl")).unwrap();
     for protected in [
         TEST_SEAL_ORGANIZATION,
@@ -1997,7 +2108,7 @@ fn a_seal_too_large_for_a_document_pdf_standard_refuses_startup() {
 /// Write sealed files served by the seal route for an external validator
 /// such as `products/render/scripts/validate-seal.py`: a B-T and a B-B
 /// notice, B-T PDF/A-1b, PDF/A-2b and PDF/A-4 archives and a B-T PDF/UA-1
-/// notice, each with its `documentSha256`, and the seal and timestamp trust
+/// notice, each with its `documentDigest`, and the seal and timestamp trust
 /// roots. Run it with `REGISTRY_SEAL_SAMPLE_DIR` naming an existing
 /// directory.
 #[test]
@@ -2045,8 +2156,8 @@ fn write_served_seal_samples() {
         let pdf = base64_decode(body["pdfBase64"].as_str().expect("pdfBase64"));
         std::fs::write(dir.join(format!("{name}.pdf")), &pdf).unwrap();
         std::fs::write(
-            dir.join(format!("{name}.document-sha256")),
-            body["documentSha256"].as_str().expect("documentSha256"),
+            dir.join(format!("{name}.document-digest")),
+            body["documentDigest"].as_str().expect("documentDigest"),
         )
         .unwrap();
     }

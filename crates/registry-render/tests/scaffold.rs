@@ -656,6 +656,23 @@ fn compile_supports_format_json() {
     assert_eq!(summary["pdfPath"], pdf.display().to_string());
     assert!(summary["pdfSha256"].is_string());
     assert!(summary["dataSha256"].is_string());
+    // The labelled digests sit beside the deprecated bare hex members.
+    for (digest, hex) in [
+        ("pdfDigest", "pdfSha256"),
+        ("dataDigest", "dataSha256"),
+        ("packageDigest", "bundleHash"),
+    ] {
+        assert_eq!(
+            summary[digest].as_str(),
+            Some(format!("sha256:{}", summary[hex].as_str().unwrap()).as_str()),
+            "{digest}: {summary}"
+        );
+    }
+    let bytes = std::fs::read(&pdf).unwrap();
+    assert_eq!(
+        summary["pdfDigest"].as_str(),
+        Some(registry_render::hash::sha256_digest(&bytes).as_str())
+    );
     assert!(pdf.is_file());
 }
 

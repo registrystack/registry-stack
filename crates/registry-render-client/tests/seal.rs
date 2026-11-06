@@ -19,24 +19,27 @@ const FIRST_REVISION: &[u8] = b"%PDF-1.7\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\
 const UPDATE: &[u8] = b"2 0 obj<</Type/Sig>>endobj\ntrailer<<>>\n%%EOF\n";
 
 fn sha(bytes: &[u8]) -> String {
-    hex::encode(Sha256::digest(bytes))
+    format!("sha256:{}", hex::encode(Sha256::digest(bytes)))
+}
+fn digest_of(hex_digit: &str) -> String {
+    format!("sha256:{}", hex_digit.repeat(64))
 }
 fn signed_file() -> Vec<u8> {
     [FIRST_REVISION, UPDATE].concat()
 }
 fn sealed_body(level: &str) -> Value {
     let pdf = signed_file();
-    let mut seal = json!({"id":"agency","level":level,"certificateSha256":"c".repeat(64)});
+    let mut seal = json!({"id":"agency","level":level,"certificateDigest":digest_of("c")});
     if level == "B-T" {
         seal["timestampedAt"] = json!("2026-10-23T00:00:01Z");
     }
     json!({
         "pdfBase64": base64::engine::general_purpose::STANDARD.encode(&pdf),
-        "documentSha256": sha(FIRST_REVISION),
-        "signedFileSha256": sha(&pdf),
-        "dataSha256": "0".repeat(64),
+        "documentDigest": sha(FIRST_REVISION),
+        "signedFileDigest": sha(&pdf),
+        "dataDigest": digest_of("0"),
         "documentVersion": "receipt v1",
-        "bundleHash": "b".repeat(64),
+        "packageDigest": digest_of("b"),
         "warnings": ["w"],
         "seal": seal,
     })
@@ -157,10 +160,12 @@ async fn timestamped_seal_returns_typed_facts() {
         .await
         .unwrap();
     assert_eq!(sealed.pdf, signed_file());
-    assert_eq!(sealed.document_sha256, sha(FIRST_REVISION));
-    assert_eq!(sealed.signed_file_sha256, sha(&signed_file()));
+    assert_eq!(sealed.document_digest, sha(FIRST_REVISION));
+    assert_eq!(sealed.signed_file_digest, sha(&signed_file()));
+    assert_eq!(sealed.data_digest, digest_of("0"));
     assert_eq!(sealed.document_version, "receipt v1");
-    assert_eq!(sealed.bundle_hash, "b".repeat(64));
+    assert_eq!(sealed.package_digest, digest_of("b"));
+    assert_eq!(sealed.seal.certificate_digest, digest_of("c"));
     assert_eq!(sealed.warnings, ["w"]);
     assert_eq!(sealed.seal.id, "agency");
     assert!(!sealed.seal.test_only);
@@ -214,32 +219,69 @@ async fn level_and_timestamp_must_agree() {
 #[tokio::test]
 async fn hash_mismatches_are_refused() {
     let mut body = sealed_body("B-T");
-    body["signedFileSha256"] = json!("f".repeat(64));
+    body["signedFileDigest"] = json!(digest_of("f"));
     assert_eq!(
         seal_with(200, body, None, None).await.unwrap_err().kind,
         "protocol"
     );
     // A document hash that is no %%EOF prefix of the file.
     let mut body = sealed_body("B-T");
-    body["documentSha256"] = json!("f".repeat(64));
+    body["documentDigest"] = json!(digest_of("f"));
     assert_eq!(
         seal_with(200, body, None, None).await.unwrap_err().kind,
         "protocol"
     );
     // The whole file is not a first revision.
     let mut body = sealed_body("B-T");
-    body["documentSha256"] = json!(sha(&signed_file()));
+    body["documentDigest"] = json!(sha(&signed_file()));
     assert_eq!(
         seal_with(200, body, None, None).await.unwrap_err().kind,
         "protocol"
     );
-    // A pdfSha256 member is not part of the sealed contract.
-    let mut body = sealed_body("B-T");
-    body["pdfSha256"] = json!(sha(&signed_file()));
-    assert_eq!(
-        seal_with(200, body, None, None).await.unwrap_err().kind,
-        "protocol"
-    );
+    // A pdfDigest or pdfSha256 member is not part of the sealed contract.
+    for member in ["pdfDigest", "pdfSha256"] {
+        let mut body = sealed_body("B-T");
+        body[member] = json!(sha(&signed_file()));
+        assert_eq!(
+            seal_with(200, body, None, None).await.unwrap_err().kind,
+            "protocol",
+            "{member}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn every_digest_is_labelled() {
+    let unlabelled = |digest: &Value| json!(digest.as_str().unwrap().trim_start_matches("sha256:"));
+    for pointer in [
+        "/documentDigest",
+        "/signedFileDigest",
+        "/dataDigest",
+        "/packageDigest",
+        "/seal/certificateDigest",
+    ] {
+        let mut body = sealed_body("B-T");
+        let bare = unlabelled(body.pointer(pointer).unwrap());
+        *body.pointer_mut(pointer).unwrap() = bare;
+        assert_eq!(
+            seal_with(200, body, None, None).await.unwrap_err().kind,
+            "protocol",
+            "{pointer}"
+        );
+        let mut body = sealed_body("B-T");
+        let upper = json!(body
+            .pointer(pointer)
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .replace("sha256:", "SHA256:"));
+        *body.pointer_mut(pointer).unwrap() = upper;
+        assert_eq!(
+            seal_with(200, body, None, None).await.unwrap_err().kind,
+            "protocol",
+            "{pointer}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -254,15 +296,15 @@ async fn unknown_members_are_tolerated_and_a_test_seal_is_named() {
 }
 
 #[tokio::test]
-async fn the_package_hash_is_required_and_checked() {
+async fn the_package_digest_is_required_and_checked() {
     let mut body = sealed_body("B-B");
-    body.as_object_mut().unwrap().remove("bundleHash");
+    body.as_object_mut().unwrap().remove("packageDigest");
     assert_eq!(
         seal_with(200, body, None, None).await.unwrap_err().kind,
         "protocol"
     );
     let mut body = sealed_body("B-B");
-    body["bundleHash"] = json!("not-a-digest");
+    body["packageDigest"] = json!("not-a-digest");
     assert_eq!(
         seal_with(200, body, None, None).await.unwrap_err().kind,
         "protocol"
@@ -272,7 +314,7 @@ async fn the_package_hash_is_required_and_checked() {
 #[tokio::test]
 async fn first_revision_hash_may_exclude_the_line_ending() {
     let mut body = sealed_body("B-B");
-    body["documentSha256"] = json!(sha(&FIRST_REVISION[..FIRST_REVISION.len() - 1]));
+    body["documentDigest"] = json!(sha(&FIRST_REVISION[..FIRST_REVISION.len() - 1]));
     assert!(seal_with(200, body, None, None).await.is_ok());
 }
 
@@ -408,7 +450,7 @@ async fn render_takes_the_same_correlation_key() {
     type Received = std::sync::Arc<std::sync::Mutex<Vec<Option<String>>>>;
     async fn echoing(State(received): State<Received>, headers: HeaderMap) -> Response {
         let pdf = b"%PDF-fixture";
-        let body = json!({"pdfBase64":base64::engine::general_purpose::STANDARD.encode(pdf),"pdfSha256":sha(pdf),"dataSha256":"0".repeat(64),"documentVersion":"receipt v1","warnings":[]});
+        let body = json!({"pdfBase64":base64::engine::general_purpose::STANDARD.encode(pdf),"pdfDigest":sha(pdf),"dataDigest":digest_of("0"),"pdfSha256":sha(pdf).trim_start_matches("sha256:"),"dataSha256":"0".repeat(64),"documentVersion":"receipt v1","warnings":[]});
         let mut response = (
             StatusCode::OK,
             Body::from(serde_json::to_vec(&body).unwrap()),

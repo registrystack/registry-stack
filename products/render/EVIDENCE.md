@@ -13,7 +13,8 @@ branch. The ignored test `write_served_seal_samples` in
 `crates/registry-render/tests/serve_seal.rs` writes them: it serves the
 `tests/fixtures/sealed-notice` bundle with an ES256 seal key and an RFC 3161
 test authority, each under its own test root generated at test time, and
-writes each sealed file, its `documentSha256` and both roots.
+writes each sealed file, its `documentDigest` (as `<name>.document-digest`)
+and both roots.
 
 ```sh
 REGISTRY_SEAL_SAMPLE_DIR=<existing directory> \
@@ -28,22 +29,29 @@ for each PDF/A level `pdfStandard` accepts and for PDF/UA-1: document types
 
 **pyHanko 0.38.1**, through `products/render/scripts/validate-seal.py`
 (`uv run --offline --script`, both roots as `--trust-root`, the answer's
-`documentSha256` as `--document-sha256`, no fetching, soft-fail revocation):
+`documentDigest` as `--document-digest`, no fetching, soft-fail revocation):
 all fourteen files returned `ok: true`. Each B-T file passed twelve checks:
 `one-signature`, `intact`, `valid`, `trusted`, `not-revoked`,
 `covers-entire-file`, `certification-docmdp-p2`, `docmdp-ok`,
 `subfilter-cades-detached`, `no-signing-time-attribute`,
-`signature-timestamp-valid` and `first-revision-sha256`. The B-B file passed
+`signature-timestamp-valid` and `first-revision-digest`. The B-B file passed
 the same checks less `signature-timestamp-valid`. A copy of `notice-b-t.pdf`
 with one byte flipped at offset 4096 returned `ok: false`, failing `intact`,
-`trusted` and `first-revision-sha256`.
+`trusted` and `first-revision-digest`.
+
+Rerun on 2026-11-06, after `serve` began writing the signature field in the
+serving process and the digests took their labelled `sha256:<hex>` form: the
+fourteen files that run wrote returned `ok: true` with the same checks, and
+the flipped copy failed the same three. The first run used the earlier names
+for the same values: the answer's `documentSha256` (bare hex), the
+validator's `--document-sha256` and its `first-revision-sha256` check.
 
 **veraPDF 1.30.3**, from
 `verapdf/cli@sha256:d74b7026c18a0f171e73c153b617fe6520e1511feb24ca98a348b2bb897669fb`
 run with `--platform linux/amd64 --network none` on 2026-11-06, with the
 `--flavour` matching each level. The first revision is the sealed file cut at
-the prefix whose SHA-256 is the answer's `documentSha256`, which is the file
-the render worker wrote.
+the prefix whose digest is the answer's `documentDigest` (then
+`documentSha256`), which is the file the render worker wrote.
 
 | Level | Document type | `--flavour` | First revision | Sealed file |
 |---|---|---|---|---|

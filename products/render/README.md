@@ -180,16 +180,18 @@ signing:
   `X-Registry-Seal-Test-Only: true`, and `serve` warns once per test-only
   seal at startup.
 - The route needs the `render:seal` scope, which `render:render` does not
-  imply. It returns the sealed PDF with `X-Registry-Document-Sha256` (the
-  first revision, Render's rendered document) and `X-Registry-Signed-File-Sha256`
-  (the whole file), or JSON with `pdfBase64`, `documentSha256`,
-  `signedFileSha256` and a `seal` object. There is no `pdfSha256`. Both
-  carry the package hash (`X-Registry-Bundle-Hash`, `bundleHash`), so a
-  sealing client needs no `render:render` to pin the package.
+  imply. It returns the sealed PDF with `X-Registry-Document-Digest` (the
+  first revision, Render's rendered document) and
+  `X-Registry-Signed-File-Digest` (the whole file), or JSON with `pdfBase64`,
+  `documentDigest`, `signedFileDigest` and a `seal` object. Every digest is
+  labelled, `sha256:<hex>`, and there is no `pdfDigest`. Both carry the
+  package digest (`X-Registry-Package-Digest`, `packageDigest`) in the form
+  `package.expectedDigest` takes, so a sealing client needs no
+  `render:render` to pin the package.
   `/v1/documents` names each sealable document type's seal as `seal`.
 - `/ready` adds a `signing` member per seal and stays ready while a seal is
-  unavailable. Audit entries add `sealId`, `documentSha256`,
-  `signedFileSha256`, `certificateSha256` and `timestampTokenSha256`, never a
+  unavailable. Audit entries add `sealId`, `documentDigest`,
+  `signedFileDigest`, `certificateDigest` and `timestampTokenDigest`, never a
   subject. A `timestamp-failed` response entry adds `reason`, the value-free
   name of the failing check, which a `seal refused` log warning repeats.
 - The seal is a certification signature (DocMDP permission 2) in an invisible
@@ -235,7 +237,7 @@ that a worker can render.
   `issuedAt`) the PDF bytes are fixed — fresh Typst world and library per
   render, deterministic font order, the RFC 8785 canonical envelope is
   exactly the string injected into the template and exactly the bytes
-  hashed as `dataSha256`. The Typst pin **and the deflate stack** are
+  hashed as `dataDigest`. The Typst pin **and the deflate stack** are
   lockfile-pinned to the Typst release; upgrades are reviewed golden diffs.
 - **Path-safe**: a template's world contains exactly the bundle, the
   request's decoded assets (`assets/<name>`), and vendored packages —

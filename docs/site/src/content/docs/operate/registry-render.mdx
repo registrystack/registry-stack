@@ -228,9 +228,12 @@ curl -s -X POST http://127.0.0.1:8080/v1/render/<document-type> \
   -o document.pdf -D headers.txt
 ```
 
-The answer is the PDF with `x-registry-pdf-sha256`, `x-registry-data-sha256`, and
-`x-registry-document-version` headers. With `Accept: application/json` it is a JSON object with
-`pdfSha256`, `dataSha256`, `documentVersion`, `warnings`, and the PDF as `pdfBase64`.
+The answer is the PDF with `x-registry-pdf-digest`, `x-registry-data-digest`,
+`x-registry-warning-count`, and `x-registry-document-version` headers; each digest is labelled
+`sha256:<hex>`. With `Accept: application/json` it is a JSON object with `pdfDigest`,
+`dataDigest`, `documentVersion`, `warnings`, and the PDF as `pdfBase64`. The bare hex
+`pdfSha256` and `dataSha256`, and their `x-registry-pdf-sha256` and `x-registry-data-sha256`
+headers, are still sent and are deprecated.
 
 Requests must carry `Content-Length`; a chunked body is refused with `invalid-argument`, because
 one that passes the limit mid-stream could not be answered. `Idempotency-Key` is echoed and
@@ -320,11 +323,12 @@ names seals and the runtime has no `signing` block at all, `check` and `serve` w
 render route, and the seal route does not exist.
 
 Then call the route with a token that carries `render:seal`. The request body is the render
-route's. The PDF answer carries `X-Registry-Document-Sha256`, `X-Registry-Signed-File-Sha256`,
+route's. The PDF answer carries `X-Registry-Document-Digest`, `X-Registry-Signed-File-Digest`,
 `X-Registry-Seal-Id`, `X-Registry-Seal-Level` (`B-T` or `B-B`), and
-`X-Registry-Certificate-Sha256`, plus `X-Registry-Timestamped-At` for B-T. It also carries
-`X-Registry-Bundle-Hash` (`bundleHash` in JSON), so a client that holds only `render:seal` can
-compare the package with what you deployed without reading `/v1/documents`. A document type that
+`X-Registry-Certificate-Digest`, plus `X-Registry-Timestamped-At` for B-T. It also carries
+`X-Registry-Package-Digest` (`packageDigest` in JSON), the form `package.expectedDigest` takes,
+so a client that holds only `render:seal` can compare the package with what you deployed without
+reading `/v1/documents`. A document type that
 names no seal is refused with `document-not-sealable` (400); `/v1/documents` lists the seal of each
 document type the route takes as `seal`, so a client can tell them apart first. The
 [configuration reference](../../reference/render-configuration/#seal-documents) lists the keys,
@@ -367,16 +371,17 @@ ready seal can still fail with `timestamp-failed`.
 ### Reconcile audit hashes with your records
 
 A seal call writes a `request` entry and a `response` entry that share `correlation`, like any
-render. Both carry `sealId`. The `response` entry adds `documentSha256` (the first revision, the
-document Render rendered), `signedFileSha256` (the whole signed file), `certificateSha256`,
-and, for B-T, `timestampTokenSha256`. Store the two document hashes with the record. To check a
-stored file against the audit:
+render. Both carry `sealId`. The `response` entry adds `documentDigest` (the first revision, the
+document Render rendered), `signedFileDigest` (the whole signed file), `certificateDigest`,
+and, for B-T, `timestampTokenDigest`, each labelled `sha256:<hex>`. Store the two document
+digests with the record. To check a stored file against the audit:
 
 ```sh
 sha256sum signed.pdf
 ```
 
-The digest must equal `signedFileSha256` in the response entry. A sealed file has no `pdfSha256`;
+The digest, prefixed with `sha256:`, must equal `signedFileDigest` in the response entry. A
+sealed file has no `pdfDigest`;
 two seals of the same request differ in their signed bytes, because each carries its signing
 time, but their first revision is the same. The audit never holds a certificate subject, a signer
 name, a key, or a token.
@@ -455,7 +460,7 @@ every render fails closed with `audit-failed` until a restart.
 A Typst, compression-library, or template change can change output bytes. Build every template
 change into a new package directory and point `package.root` at it; `registry-render package`
 refuses an existing directory, so a published digest never gains different bytes. Before you
-switch to a new binary, render a stored request with it and compare `pdfSha256` with the stored
+switch to a new binary, render a stored request with it and compare `pdfDigest` with the stored
 value. A changed hash means documents rendered after the switch differ from earlier ones.
 
 {/* Evidence: .github/workflows/render-golden.yml;

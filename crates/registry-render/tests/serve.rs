@@ -3,7 +3,7 @@
 //! through the platform audit writer. These tests are the DoD's serve-mode
 //! acceptance coverage.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
@@ -805,6 +805,15 @@ fn render_returns_pdf_with_hash_headers_matching_golden() {
     assert!(header("content-type").starts_with("application/pdf"));
     assert_eq!(header("x-registry-pdf-sha256"), golden_receipt_sha());
     assert!(!header("x-registry-data-sha256").is_empty());
+    // The labelled digests sit beside the deprecated bare hex headers.
+    assert_eq!(
+        header("x-registry-pdf-digest"),
+        format!("sha256:{}", golden_receipt_sha())
+    );
+    assert_eq!(
+        header("x-registry-data-digest"),
+        format!("sha256:{}", header("x-registry-data-sha256"))
+    );
     assert_eq!(header("x-registry-document-version"), "receipt v3");
     assert_eq!(header("x-registry-warning-count"), "0");
     assert_eq!(header("idempotency-key"), "effect-1234");
@@ -848,6 +857,94 @@ fn json_variant_serves_openfn_clients() {
     assert_eq!(sha256_hex(&bytes), golden_receipt_sha());
     assert_eq!(json["documentVersion"].as_str().unwrap(), "receipt v3");
     assert_eq!(json["pdfSha256"].as_str().unwrap(), golden_receipt_sha());
+    assert_eq!(
+        json["pdfDigest"].as_str().unwrap(),
+        format!("sha256:{}", golden_receipt_sha())
+    );
+    assert_eq!(
+        json["dataDigest"].as_str().unwrap(),
+        format!("sha256:{}", json["dataSha256"].as_str().unwrap())
+    );
+}
+
+/// The OpenAPI document declares exactly the headers and JSON members the
+/// render route answers with, and marks the bare hex ones deprecated.
+#[test]
+fn the_openapi_document_declares_what_the_render_route_answers() {
+    let (_home, runtime, _) = deployment(
+        DEFAULT_LIMITS,
+        &repo_root().join("products/render/bundles/receipt"),
+    );
+    let server = start_server(&runtime);
+    let body = receipt_body();
+    let render = |accept: &str| {
+        request(
+            server.port,
+            "POST",
+            "/v1/render/receipt",
+            &[
+                ("Authorization", &format!("Bearer {API_KEY}")),
+                ("Content-Type", "application/json"),
+                ("Accept", accept),
+            ],
+            Some(&body),
+        )
+    };
+    let pdf = render("application/pdf");
+    assert_eq!(pdf.status, 200);
+    let json = render("application/json");
+    assert_eq!(json.status, 200);
+    let openapi = request(server.port, "GET", "/openapi.json", &[], None);
+    let openapi: serde_json::Value = serde_json::from_slice(&openapi.body).expect("openapi json");
+    let answer = &openapi["paths"]["/v1/render/{type}"]["post"]["responses"]["200"];
+
+    let declared: BTreeMap<String, bool> = answer["headers"]
+        .as_object()
+        .expect("declared headers")
+        .iter()
+        .map(|(name, header)| (name.to_ascii_lowercase(), header["deprecated"] == true))
+        .collect();
+    let sent: BTreeSet<String> = pdf
+        .headers
+        .iter()
+        .map(|(name, _)| name.clone())
+        .filter(|name| name.starts_with("x-registry-"))
+        .collect();
+    assert_eq!(
+        declared.keys().cloned().collect::<BTreeSet<_>>(),
+        sent,
+        "the PDF answer's headers"
+    );
+    let deprecated: BTreeSet<&str> = declared
+        .iter()
+        .filter(|(_, deprecated)| **deprecated)
+        .map(|(name, _)| name.as_str())
+        .collect();
+    assert_eq!(
+        deprecated,
+        BTreeSet::from(["x-registry-data-sha256", "x-registry-pdf-sha256"])
+    );
+
+    let schema = &answer["content"]["application/json"]["schema"];
+    let properties = schema["properties"].as_object().expect("declared members");
+    let json: serde_json::Value = serde_json::from_slice(&json.body).expect("json body");
+    let members: BTreeSet<String> = json
+        .as_object()
+        .expect("json object")
+        .keys()
+        .cloned()
+        .collect();
+    assert_eq!(
+        properties.keys().cloned().collect::<BTreeSet<_>>(),
+        members,
+        "the JSON answer's members"
+    );
+    let deprecated: BTreeSet<&str> = properties
+        .iter()
+        .filter(|(_, property)| property["deprecated"] == true)
+        .map(|(name, _)| name.as_str())
+        .collect();
+    assert_eq!(deprecated, BTreeSet::from(["dataSha256", "pdfSha256"]));
 }
 
 #[test]
@@ -1099,7 +1196,7 @@ fn a_refused_response_entry_withholds_the_pdf() {
         !reply
             .headers
             .iter()
-            .any(|(name, _)| name == "x-registry-pdf-sha256"),
+            .any(|(name, _)| name == "x-registry-pdf-sha256" || name == "x-registry-pdf-digest"),
         "no document metadata leaves either"
     );
     let ready = request(port, "GET", "/ready", &[], None);
@@ -1707,6 +1804,10 @@ fn maintained_sdk_uses_the_real_oidc_adapter_for_render_and_typed_refusals() {
         ))
         .unwrap();
     assert_eq!(rendered.pdf_sha256, golden_receipt_sha());
+    assert_eq!(
+        rendered.pdf_digest,
+        format!("sha256:{}", golden_receipt_sha())
+    );
     assert_eq!(rendered.document_version, "receipt v3");
     for (scope, audience, status, code) in [
         (

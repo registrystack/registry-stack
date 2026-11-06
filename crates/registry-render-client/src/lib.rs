@@ -57,12 +57,19 @@ impl RenderClientConfig {
 }
 
 /// A rendered document. A member the server adds later is ignored; the
-/// members below are checked before the document is returned.
+/// members below are checked before the document is returned. Every digest
+/// is labelled, `sha256:<hex>`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RenderedDocument {
     pub pdf_base64: String,
+    /// SHA-256 over the PDF, checked against the bytes.
+    pub pdf_digest: String,
+    /// SHA-256 over the canonical request envelope the template read.
+    pub data_digest: String,
+    /// Deprecated: `pdf_digest` without its `sha256:` label.
     pub pdf_sha256: String,
+    /// Deprecated: `data_digest` without its `sha256:` label.
     pub data_sha256: String,
     pub document_version: String,
     pub warnings: Vec<String>,
@@ -98,7 +105,8 @@ impl SealLevel {
 pub struct SealFacts {
     pub id: String,
     pub level: SealLevel,
-    pub certificate_sha256: String,
+    /// SHA-256 over the seal certificate's DER, `sha256:<hex>`.
+    pub certificate_digest: String,
     /// The timestamp authority's `genTime`, RFC 3339 at the precision the
     /// authority gave; present exactly at level `B-T`.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -109,23 +117,24 @@ pub struct SealFacts {
     pub test_only: bool,
 }
 
-/// A sealed document. There is no `pdfSha256`: `document_sha256` covers the
-/// first revision (the rendered document) and `signed_file_sha256` the whole
-/// signed file in `pdf`. `bundle_hash` is the package the server rendered
-/// from, so a caller holding only `render:seal` can pin it. It serializes
-/// with the member names the server sends, `pdf` as `pdfBase64`, which is
-/// the shape the language bindings return.
+/// A sealed document. Every digest is labelled, `sha256:<hex>`. There is no
+/// `pdfDigest`: `document_digest` covers the first revision (the rendered
+/// document) and `signed_file_digest` the whole signed file in `pdf`.
+/// `package_digest` is the package the server rendered from, in the form
+/// `package.expectedDigest` takes, so a caller holding only `render:seal` can
+/// pin it. It serializes with the member names the server sends, `pdf` as
+/// `pdfBase64`, which is the shape the language bindings return.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct SealedDocument {
     #[serde(rename = "pdfBase64", serialize_with = "serialize_base64")]
     pub pdf: Vec<u8>,
-    pub document_sha256: String,
-    pub signed_file_sha256: String,
-    pub data_sha256: String,
+    pub document_digest: String,
+    pub signed_file_digest: String,
+    pub data_digest: String,
     pub document_version: String,
-    pub bundle_hash: String,
+    pub package_digest: String,
     pub warnings: Vec<String>,
     pub seal: SealFacts,
 }
@@ -135,18 +144,20 @@ fn serialize_base64<S: serde::Serializer>(bytes: &[u8], serializer: S) -> Result
 }
 
 /// The sealed answer as sent. A member the server adds later is ignored,
-/// except `pdfSha256`, which the sealed contract excludes.
+/// except `pdfDigest` and `pdfSha256`, which the sealed contract excludes.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SealedWire {
     pdf_base64: String,
-    document_sha256: String,
-    signed_file_sha256: String,
-    data_sha256: String,
+    document_digest: String,
+    signed_file_digest: String,
+    data_digest: String,
     document_version: String,
-    bundle_hash: String,
+    package_digest: String,
     warnings: Vec<String>,
     seal: SealWire,
+    #[serde(default)]
+    pdf_digest: Option<Value>,
     #[serde(default)]
     pdf_sha256: Option<Value>,
 }
@@ -155,7 +166,7 @@ struct SealedWire {
 struct SealWire {
     id: String,
     level: String,
-    certificate_sha256: String,
+    certificate_digest: String,
     #[serde(default)]
     timestamped_at: Option<String>,
     #[serde(default)]
@@ -369,8 +380,8 @@ impl RenderClient {
             .decode(&document.pdf_base64)
             .map_err(|_| error("protocol"))?;
         if !pdf.starts_with(b"%PDF-")
-            || !is_digest(&document.pdf_sha256)
-            || !is_digest(&document.data_sha256)
+            || digest_hex(&document.pdf_digest) != Some(document.pdf_sha256.as_str())
+            || digest_hex(&document.data_digest) != Some(document.data_sha256.as_str())
             || hex::encode(Sha256::digest(&pdf)) != document.pdf_sha256
             || !bounded_version_and_warnings(
                 document_type,
@@ -397,9 +408,10 @@ impl RenderClient {
     /// echo it exactly; it is audited by the server, not a deduplication
     /// promise.
     ///
-    /// Before returning, the client checks that the bytes hash to
-    /// `signedFileSha256`, that they start as a PDF, that
-    /// `documentSha256` equals the SHA-256 of a prefix of the file ending at
+    /// Before returning, the client checks that every digest is labelled,
+    /// `sha256:<hex>`, that the bytes hash to `signedFileDigest`, that they
+    /// start as a PDF, that
+    /// `documentDigest` equals the SHA-256 of a prefix of the file ending at
     /// one of its `%%EOF` markers (found by byte search, without parsing PDF),
     /// and that the seal facts are consistent with the level. It does not
     /// verify the signature, the certificate chain or the timestamp token;
@@ -432,15 +444,17 @@ impl RenderClient {
             }
             _ => false,
         };
+        let document_hex = digest_hex(&wire.document_digest);
         if !pdf.starts_with(b"%PDF-")
+            || wire.pdf_digest.is_some()
             || wire.pdf_sha256.is_some()
-            || !is_digest(&wire.document_sha256)
-            || !is_digest(&wire.signed_file_sha256)
-            || !is_digest(&wire.data_sha256)
-            || !is_digest(&wire.bundle_hash)
-            || !is_digest(&wire.seal.certificate_sha256)
-            || hex::encode(Sha256::digest(&pdf)) != wire.signed_file_sha256
-            || !first_revision_matches(&pdf, &wire.document_sha256)
+            || document_hex.is_none()
+            || digest_hex(&wire.data_digest).is_none()
+            || digest_hex(&wire.package_digest).is_none()
+            || digest_hex(&wire.seal.certificate_digest).is_none()
+            || digest_hex(&wire.signed_file_digest)
+                != Some(hex::encode(Sha256::digest(&pdf)).as_str())
+            || !document_hex.is_some_and(|hex| first_revision_matches(&pdf, hex))
             || !timestamp_consistent
             || wire.seal.id.is_empty()
             || wire.seal.id.len() > 256
@@ -450,16 +464,16 @@ impl RenderClient {
         }
         Ok(SealedDocument {
             pdf,
-            document_sha256: wire.document_sha256,
-            signed_file_sha256: wire.signed_file_sha256,
-            data_sha256: wire.data_sha256,
+            document_digest: wire.document_digest,
+            signed_file_digest: wire.signed_file_digest,
+            data_digest: wire.data_digest,
             document_version: wire.document_version,
-            bundle_hash: wire.bundle_hash,
+            package_digest: wire.package_digest,
             warnings: wire.warnings,
             seal: SealFacts {
                 id: wire.seal.id,
                 level,
-                certificate_sha256: wire.seal.certificate_sha256,
+                certificate_digest: wire.seal.certificate_digest,
                 timestamped_at: wire.seal.timestamped_at,
                 test_only: wire.seal.test_only,
             },
@@ -619,11 +633,15 @@ impl Route {
     }
 }
 
-fn is_digest(text: &str) -> bool {
-    text.len() == 64
-        && text
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+/// The lowercase hex of a labelled digest, `sha256:` and 64 lowercase hex
+/// digits; `None` for anything else.
+fn digest_hex(text: &str) -> Option<&str> {
+    text.strip_prefix("sha256:").filter(|hex| {
+        hex.len() == 64
+            && hex
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    })
 }
 
 fn bounded_version_and_warnings(document_type: &str, version: &str, warnings: &[String]) -> bool {
@@ -635,11 +653,11 @@ fn bounded_version_and_warnings(document_type: &str, version: &str, warnings: &[
         && warnings.iter().all(|warning| warning.len() <= 2048)
 }
 
-/// Whether `document_sha256` is the SHA-256 of a prefix of `pdf` that ends at
-/// a `%%EOF` marker, optionally followed by its end-of-line. Found by byte
-/// search; the PDF is not parsed. A prefix equal to the whole file is not a
-/// first revision.
-fn first_revision_matches(pdf: &[u8], document_sha256: &str) -> bool {
+/// Whether `document_hex`, a lowercase hex SHA-256, is that of a prefix of
+/// `pdf` that ends at a `%%EOF` marker, optionally followed by its
+/// end-of-line. Found by byte search; the PDF is not parsed. A prefix equal
+/// to the whole file is not a first revision.
+fn first_revision_matches(pdf: &[u8], document_hex: &str) -> bool {
     const MARKER: &[u8] = b"%%EOF";
     // A real file has a handful of markers; bound the hashing work.
     const MAXIMUM_CANDIDATES: usize = 64;
@@ -659,7 +677,7 @@ fn first_revision_matches(pdf: &[u8], document_sha256: &str) -> bool {
             _ => 0,
         };
         for end in [marker_end, marker_end + eol] {
-            if end < pdf.len() && hex::encode(Sha256::digest(&pdf[..end])) == document_sha256 {
+            if end < pdf.len() && hex::encode(Sha256::digest(&pdf[..end])) == document_hex {
                 return true;
             }
             if eol == 0 {

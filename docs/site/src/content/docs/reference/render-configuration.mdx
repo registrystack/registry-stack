@@ -154,27 +154,29 @@ requires the `render:seal` scope, which `render:render` does not imply, from a c
 truncated to seconds. `GET /v1/documents` names the seal of each document type this route takes
 as `seal`; a document type without it is refused here with `document-not-sealable`.
 
-The default answer is `application/pdf` with these headers:
+The default answer is `application/pdf` with these headers. Every digest is labelled,
+`sha256:<hex>`:
 
 | Header | Value |
 |---|---|
-| `X-Registry-Document-Sha256` | SHA-256 of the first revision, the document Render rendered. |
-| `X-Registry-Signed-File-Sha256` | SHA-256 of the whole signed file. |
-| `X-Registry-Data-Sha256` | SHA-256 of the canonical request data. |
+| `X-Registry-Document-Digest` | SHA-256 of the first revision, the document Render rendered. |
+| `X-Registry-Signed-File-Digest` | SHA-256 of the whole signed file. |
+| `X-Registry-Data-Digest` | SHA-256 of the canonical request data. |
 | `X-Registry-Document-Version` | Document type and version. |
-| `X-Registry-Bundle-Hash` | The package hash `/v1/documents` reports as `bundleHash`. |
+| `X-Registry-Package-Digest` | The package digest, in the form `package.expectedDigest` takes. |
 | `X-Registry-Warning-Count` | Number of render warnings. |
 | `X-Registry-Seal-Id` | The seal id. |
 | `X-Registry-Seal-Level` | `B-T` or `B-B`, the baseline level names of ETSI EN 319 142-1. |
-| `X-Registry-Certificate-Sha256` | SHA-256 of the seal certificate. |
+| `X-Registry-Certificate-Digest` | SHA-256 of the seal certificate's DER. |
 | `X-Registry-Timestamped-At` | The timestamp authority's `genTime`, RFC 3339 at the authority's precision; B-T only. |
 | `X-Registry-Seal-Test-Only` | `true`; only for a seal declared `trust: test-only`. |
 
-With `Accept: application/json` the body is `pdfBase64`, `documentSha256`, `signedFileSha256`,
-`dataSha256`, `documentVersion`, `bundleHash`, `warnings`, and `seal` (`id`, `level`,
-`certificateSha256`, `timestampedAt` for B-T, and `testOnly: true` for a test-only seal). A client granted only `render:seal` pins the
-package from `bundleHash` without reading `/v1/documents`. There is no `pdfSha256`. Because the payload carries the `signing`
-member, a sealed render's `dataSha256` differs from a plain render of the same request.
+With `Accept: application/json` the body is `pdfBase64`, `documentDigest`, `signedFileDigest`,
+`dataDigest`, `documentVersion`, `packageDigest`, `warnings`, and `seal` (`id`, `level`,
+`certificateDigest`, `timestampedAt` for B-T, and `testOnly: true` for a test-only seal). A
+client granted only `render:seal` pins the package from `packageDigest` without reading
+`/v1/documents`. There is no `pdfDigest`. Because the payload carries the `signing` member, a
+sealed render's `dataDigest` differs from a plain render of the same request.
 
 The problems specific to this route, from a closed vocabulary shared with the render route:
 
@@ -196,8 +198,9 @@ cannot sign, and a `seal certificate expiring` warning for one whose certificate
 30 days.
 
 Each seal call adds `sealId` to its audit entries, and `testOnly: true` when the seal is
-test-only. The response entry adds `documentSha256`,
-`signedFileSha256`, `certificateSha256`, and, for B-T, `timestampTokenSha256`.
+test-only. The response entry adds `documentDigest`,
+`signedFileDigest`, `certificateDigest`, and, for B-T, `timestampTokenDigest`, each labelled
+`sha256:<hex>`.
 
 A `timestamp-failed` response entry adds `reason`, the failing check, and the log has one
 `seal refused` warning with the same `reason`. Neither carries a value from the exchange.

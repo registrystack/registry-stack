@@ -42,7 +42,7 @@ A session-authorized POST host route, for example
 authority and assembles the Render request. Preserve the host's session, CSRF,
 and Origin checks. Use the app-owned server credential for the selected Render deployment,
 call `POST /v1/render/{type}`, and stream the PDF to the browser, or attach it
-to the owning Record and retain `pdfSha256` and `dataSha256` alongside it.
+to the owning Record and retain `pdfDigest` and `dataDigest` alongside it.
 
 Use the existing public GET/HEAD host-route option for an app-owned check page;
 its context intentionally excludes the authenticated session and host config.

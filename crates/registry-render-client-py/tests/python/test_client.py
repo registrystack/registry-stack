@@ -21,12 +21,13 @@ class RenderJourney(unittest.TestCase):
                 requests.append(self.headers.get("Authorization"))
                 self.rfile.read(int(self.headers["Content-Length"]))
                 pdf = b"%PDF-python-client"
+                pdf_hex = "0" * 64 if malformed_pdf[0] else hashlib.sha256(pdf).hexdigest()
                 body = json.dumps(
                     {
                         "pdfBase64": base64.b64encode(pdf).decode(),
-                        "pdfSha256": "0" * 64
-                        if malformed_pdf[0]
-                        else hashlib.sha256(pdf).hexdigest(),
+                        "pdfDigest": "sha256:" + pdf_hex,
+                        "dataDigest": "sha256:" + "0" * 64,
+                        "pdfSha256": pdf_hex,
                         "dataSha256": "0" * 64,
                         "documentVersion": "receipt v1",
                         "warnings": [],
@@ -71,9 +72,11 @@ class RenderJourney(unittest.TestCase):
                     caller.render(provider, "receipt", invalid)
                 self.assertEqual(tokens, [])
                 self.assertEqual(requests, [])
+            rendered = caller.render(provider, "receipt", request)
+            self.assertEqual(rendered["documentVersion"], "receipt v1")
             self.assertEqual(
-                caller.render(provider, "receipt", request)["documentVersion"],
-                "receipt v1",
+                rendered["pdfDigest"],
+                "sha256:" + hashlib.sha256(b"%PDF-python-client").hexdigest(),
             )
             self.assertEqual(requests, ["Bearer canary-render-token"])
             self.assertEqual(len(tokens), 1)
@@ -102,7 +105,11 @@ SIGNED_FILE = FIRST_REVISION + b"2 0 obj<</Type/Sig>>endobj\ntrailer<<>>\n%%EOF\
 
 
 def _sha(data):
-    return hashlib.sha256(data).hexdigest()
+    return "sha256:" + hashlib.sha256(data).hexdigest()
+
+
+def _digest_of(digit):
+    return "sha256:" + digit * 64
 
 
 class SealJourney(unittest.TestCase):
@@ -118,7 +125,9 @@ class SealJourney(unittest.TestCase):
                 if self.path == "/v1/render/receipt":
                     payload = {
                         "pdfBase64": base64.b64encode(FIRST_REVISION).decode(),
-                        "pdfSha256": _sha(FIRST_REVISION),
+                        "pdfDigest": _sha(FIRST_REVISION),
+                        "dataDigest": _digest_of("0"),
+                        "pdfSha256": hashlib.sha256(FIRST_REVISION).hexdigest(),
                         "dataSha256": "0" * 64,
                         "documentVersion": "receipt v1",
                         "warnings": [],
@@ -126,18 +135,18 @@ class SealJourney(unittest.TestCase):
                 else:
                     payload = {
                         "pdfBase64": base64.b64encode(SIGNED_FILE).decode(),
-                        "documentSha256": _sha(FIRST_REVISION),
-                        "signedFileSha256": "0" * 64
+                        "documentDigest": _sha(FIRST_REVISION),
+                        "signedFileDigest": _digest_of("0")
                         if tampered[0]
                         else _sha(SIGNED_FILE),
-                        "dataSha256": "0" * 64,
+                        "dataDigest": _digest_of("0"),
                         "documentVersion": "receipt v1",
-                        "bundleHash": "b" * 64,
+                        "packageDigest": _digest_of("b"),
                         "warnings": [],
                         "seal": {
                             "id": "agency",
                             "level": "B-B",
-                            "certificateSha256": "c" * 64,
+                            "certificateDigest": _digest_of("c"),
                         },
                     }
                 body = json.dumps(payload).encode()
@@ -184,16 +193,16 @@ class SealJourney(unittest.TestCase):
                 sealed,
                 {
                     "pdfBase64": base64.b64encode(SIGNED_FILE).decode(),
-                    "documentSha256": _sha(FIRST_REVISION),
-                    "signedFileSha256": _sha(SIGNED_FILE),
-                    "dataSha256": "0" * 64,
+                    "documentDigest": _sha(FIRST_REVISION),
+                    "signedFileDigest": _sha(SIGNED_FILE),
+                    "dataDigest": _digest_of("0"),
                     "documentVersion": "receipt v1",
-                    "bundleHash": "b" * 64,
+                    "packageDigest": _digest_of("b"),
                     "warnings": [],
                     "seal": {
                         "id": "agency",
                         "level": "B-B",
-                        "certificateSha256": "c" * 64,
+                        "certificateDigest": _digest_of("c"),
                     },
                 },
             )

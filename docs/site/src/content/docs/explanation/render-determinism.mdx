@@ -32,7 +32,7 @@ version. Nothing else reaches it: no host fonts, no environment, no clock, no ne
 ## What fixes the bytes?
 
 Render canonicalizes the envelope with RFC 8785 (JSON Canonicalization Scheme) and hands the
-template that exact string. The `dataSha256` a caller stores is the sha256 of those bytes, so the
+template that exact string. The `dataDigest` a caller stores is the sha256 of those bytes, so the
 hash and the template's view of the request are the same thing.
 
 `issuedAt` is the document's issuance claim and its only clock: `datetime.today()` in a template
@@ -83,7 +83,7 @@ If either write fails, the call fails and no document is returned.
 ## Who owns the result?
 
 The caller does. Render returns the PDF and forgets it; the record the document was made from
-should keep `pdfSha256` for the file and `dataSha256` for the exact input. The audit log holds
+should keep `pdfDigest` for the file and `dataDigest` for the exact input. The audit log holds
 hashes, versions, and a fingerprint of the caller's key, never data values or image bytes. What a
 template prints is a disclosure decision that belongs to its author: once on paper, it has left
 every access profile behind.
@@ -91,7 +91,7 @@ every access profile behind.
 ## How do you check a document later?
 
 Re-render it. The same package, document type, locale, data, assets, and `issuedAt` reproduce the
-stored `pdfSha256` byte for byte, which is what makes a replay after a failure safe and lets an
+stored `pdfDigest` byte for byte, which is what makes a replay after a failure safe and lets an
 auditor match paper to the log. `GET /health` names the live package digest as `bundleHash`, and
 every audit entry carries the bundle hash and renderer version.
 

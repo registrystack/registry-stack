@@ -62,10 +62,23 @@ async fn client(status: u16, body: Value) -> (RenderClient, tokio::task::JoinHan
 fn request() -> Value {
     json!({"issuedAt":"2026-10-23T00:00:00Z","data":{"number":"R-1"}})
 }
+/// A rendered answer: the labelled digests and their deprecated bare hex.
+fn rendered(pdf: &[u8], version: &str) -> Value {
+    let pdf_hex = hex::encode(Sha256::digest(pdf));
+    json!({
+        "pdfBase64": base64::engine::general_purpose::STANDARD.encode(pdf),
+        "pdfDigest": format!("sha256:{pdf_hex}"),
+        "dataDigest": format!("sha256:{}", "0".repeat(64)),
+        "pdfSha256": pdf_hex,
+        "dataSha256": "0".repeat(64),
+        "documentVersion": version,
+        "warnings": [],
+    })
+}
 #[tokio::test]
 async fn one_authenticated_document_and_integrity_refusal() {
     let pdf = b"%PDF-fixture";
-    let mut body = json!({"pdfBase64":base64::engine::general_purpose::STANDARD.encode(pdf),"pdfSha256":hex::encode(Sha256::digest(pdf)),"dataSha256":"0".repeat(64),"documentVersion":"receipt v1","warnings":[]});
+    let body = rendered(pdf, "receipt v1");
     let (client, task) = client(200, body.clone()).await;
     let result = client
         .render(
@@ -77,6 +90,11 @@ async fn one_authenticated_document_and_integrity_refusal() {
         .await
         .unwrap();
     assert_eq!(result.document_version, "receipt v1");
+    assert_eq!(
+        result.pdf_digest,
+        format!("sha256:{}", hex::encode(Sha256::digest(pdf)))
+    );
+    assert_eq!(result.data_digest, format!("sha256:{}", "0".repeat(64)));
     task.abort();
     // A member a later server adds is tolerated; the hash checks stay.
     let mut later = body.clone();
@@ -92,22 +110,44 @@ async fn one_authenticated_document_and_integrity_refusal() {
         .await
         .is_ok());
     task.abort();
-    body["pdfSha256"] = json!("f".repeat(64));
-    let (client, task) = self::client(200, body).await;
-    assert_eq!(
-        client
-            .render(
-                &BearerToken::new("canary-render-token").unwrap(),
-                "receipt",
-                &request(),
-                None
-            )
-            .await
-            .unwrap_err()
-            .kind,
-        "protocol"
-    );
-    task.abort();
+    // The labelled digest must match the bytes, be labelled, and agree with
+    // its deprecated bare hex; a missing digest is refused.
+    let mut refused = Vec::new();
+    for (member, value) in [
+        ("pdfDigest", json!(format!("sha256:{}", "f".repeat(64)))),
+        ("pdfDigest", json!(hex::encode(Sha256::digest(pdf)))),
+        ("pdfSha256", json!("f".repeat(64))),
+        ("dataDigest", json!(format!("sha256:{}", "f".repeat(64)))),
+        ("dataSha256", json!("f".repeat(64))),
+        ("dataDigest", json!("0".repeat(64))),
+    ] {
+        let mut changed = body.clone();
+        changed[member] = value;
+        refused.push(changed);
+    }
+    for member in ["pdfDigest", "dataDigest"] {
+        let mut changed = body.clone();
+        changed.as_object_mut().unwrap().remove(member);
+        refused.push(changed);
+    }
+    for changed in refused {
+        let (client, task) = self::client(200, changed.clone()).await;
+        assert_eq!(
+            client
+                .render(
+                    &BearerToken::new("canary-render-token").unwrap(),
+                    "receipt",
+                    &request(),
+                    None
+                )
+                .await
+                .unwrap_err()
+                .kind,
+            "protocol",
+            "{changed}"
+        );
+        task.abort();
+    }
 }
 #[tokio::test]
 async fn bounded_product_problem_matches_status_and_trace() {
@@ -191,7 +231,7 @@ async fn document_version_is_bound_to_the_requested_document_and_unsigned_versio
         "receipt v4294967296",
         "arbitrary",
     ] {
-        let body = json!({"pdfBase64":base64::engine::general_purpose::STANDARD.encode(pdf),"pdfSha256":hex::encode(Sha256::digest(pdf)),"dataSha256":"0".repeat(64),"documentVersion":version,"warnings":[]});
+        let body = rendered(pdf, version);
         let (client, task) = client(200, body).await;
         assert_eq!(
             client

@@ -435,8 +435,13 @@ fn run_inner(cli: Cli) -> Result<i32, RenderProblem> {
                 )
             })?;
             if matches!(format, crate::check::OutputFormat::Json) {
+                // The labelled digests sit beside the bare hex members,
+                // which are deprecated and kept for existing callers.
                 let summary = serde_json::json!({
                     "pdfPath": out.display().to_string(),
+                    "pdfDigest": crate::hash::sha256_digest(&pdf),
+                    "dataDigest": crate::hash::sha256_label(&rendered.data_sha256),
+                    "packageDigest": crate::hash::sha256_label(&rendered.bundle_hash),
                     "pdfSha256": rendered.pdf_sha256,
                     "dataSha256": rendered.data_sha256,
                     "documentVersion": format!("{} v{}", rendered.document_id, rendered.document_version),
