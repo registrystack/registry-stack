@@ -288,6 +288,27 @@ fn set_signing_constraints(schema: &mut Value) {
                 {"required": ["withoutTimestamp"], "not": {"required": ["timestampAuthority"]}}
             ]),
         );
+        // A production seal signs through Transit; a key file is for a
+        // test-only seal.
+        seal.insert(
+            "if".to_owned(),
+            json!({"properties": {"trust": {"const": "production"}}, "required": ["trust"]}),
+        );
+        seal.insert(
+            "then".to_owned(),
+            json!({"properties": {"signer": {"properties": {"type": {"const": "transit"}}}}}),
+        );
+    }
+    if let Some(Value::Array(variants)) = schema.pointer_mut("/$defs/SealSignerRuntime/oneOf") {
+        let socket = variants
+            .iter_mut()
+            .filter(|variant| variant.pointer("/properties/type/const") == Some(&json!("transit")))
+            .find_map(|variant| variant.pointer_mut("/properties/unixSocketPath"))
+            .and_then(Value::as_object_mut);
+        if let Some(socket) = socket {
+            socket.insert("pattern".to_owned(), json!("^/(?:[^/]+/)*[^/]+$"));
+            socket.insert("not".to_owned(), json!({"pattern": "(^|/)\\.{1,2}(/|$)"}));
+        }
     }
     set_definition_property(
         schema,
@@ -733,7 +754,8 @@ mod tests {
                 "signer": {"type": "local-jwk", "privateKeyRef": "secret:file/seal.jwk"},
                 "certificateChainFile": "/etc/render/seal/chain.pem",
                 "timestampAuthority": {"url": "https://tsa.example.test/tsr"},
-                "allowedClients": ["records-service"]
+                "allowedClients": ["records-service"],
+                "trust": "test-only"
             }}}
         })
     }
@@ -748,7 +770,98 @@ mod tests {
         let authority = format!("{seal}/timestampAuthority");
         let without = json!("seal-stops-validating-when-certificate-expires");
         let no_authority = with(&base, &authority, None);
+        let transit = with(
+            &with(
+                &base,
+                &format!("{seal}/signer"),
+                Some(json!({
+                    "type": "transit",
+                    "unixSocketPath": "/run/render/transit.sock",
+                    "mount": "transit",
+                    "keyName": "render-seal",
+                    "keyVersion": 3,
+                    "attemptTimeoutMilliseconds": 2000
+                })),
+            ),
+            &format!("{seal}/trust"),
+            Some(json!("production")),
+        );
+        let signer = format!("{seal}/signer");
         let cases = [
+            (
+                &transit,
+                "/signing/seals/ministry/trust",
+                Some(json!("test-only")),
+                true,
+            ),
+            (&transit, &format!("{seal}/trust"), None, false),
+            (
+                &transit,
+                &format!("{signer}/unixSocketPath"),
+                Some(json!("run/render/transit.sock")),
+                false,
+            ),
+            (
+                &transit,
+                &format!("{signer}/unixSocketPath"),
+                Some(json!("/run/../transit.sock")),
+                false,
+            ),
+            (
+                &transit,
+                &format!("{signer}/unixSocketPath"),
+                Some(json!("/run/render/")),
+                false,
+            ),
+            (
+                &transit,
+                &format!("{signer}/mount"),
+                Some(json!("transit/render")),
+                false,
+            ),
+            (
+                &transit,
+                &format!("{signer}/keyName"),
+                Some(json!("Render.Seal")),
+                false,
+            ),
+            (
+                &transit,
+                &format!("{signer}/keyVersion"),
+                Some(json!(0)),
+                false,
+            ),
+            (
+                &transit,
+                &format!("{signer}/attemptTimeoutMilliseconds"),
+                Some(json!(30_000)),
+                true,
+            ),
+            (
+                &transit,
+                &format!("{signer}/attemptTimeoutMilliseconds"),
+                Some(json!(30_001)),
+                false,
+            ),
+            (
+                &transit,
+                &format!("{signer}/attemptTimeoutMilliseconds"),
+                Some(json!(0)),
+                false,
+            ),
+            (
+                &transit,
+                &format!("{signer}/attemptTimeoutMilliseconds"),
+                None,
+                false,
+            ),
+            (
+                &transit,
+                &format!("{signer}/privateKeyRef"),
+                Some(json!("secret:file/seal.jwk")),
+                false,
+            ),
+            (&base, &format!("{seal}/trust"), None, false),
             (
                 &base,
                 "/signing/seals/ministry/trust",
@@ -959,7 +1072,11 @@ mod tests {
         let documents = cases
             .into_iter()
             .map(|(document, pointer, value, accepted)| (with(document, pointer, value), accepted))
-            .chain([(base.clone(), true), (renamed, false)]);
+            .chain([
+                (base.clone(), true),
+                (transit.clone(), true),
+                (renamed, false),
+            ]);
         for (document, accepted) in documents {
             std::fs::write(&path, serde_json::to_string_pretty(&document).unwrap()).unwrap();
             let check = check_runtime(&path, false, None);

@@ -162,7 +162,9 @@ async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
     // nothing half-made behind. A document type whose PDF standard cannot
     // hold its seal's reserved signature space is refused here, before any
     // render could write a nonconformant file.
-    let seals = crate::seal::load(&runtime).map_err(|problem| positions.place(problem))?;
+    let seals = crate::seal::load(&runtime)
+        .await
+        .map_err(|problem| positions.place(problem))?;
     drop(positions);
     crate::seal::refuse_unsealable(&bundle, &seals)?;
     // Plain rendering starts whatever a seal's state; these lines are where
@@ -700,7 +702,11 @@ async fn ready(State(service): State<Arc<Service>>) -> Response {
         ("not-ready", StatusCode::SERVICE_UNAVAILABLE)
     };
     // Availability reads the certificate validity and the key provider's
-    // readiness; it never requests a timestamp.
+    // readiness, after one probe of a signer that said it is not ready; it
+    // never requests a timestamp.
+    for seal in service.seals.values() {
+        seal.recover_signer().await;
+    }
     let now = time::OffsetDateTime::now_utc();
     let signing = service
         .seals
@@ -1112,6 +1118,7 @@ async fn seal_route(
         );
         return call.refuse(&service, problem).await;
     }
+    seal.recover_signer().await;
     // One clock reading decides availability and is the signing time.
     let now = time::OffsetDateTime::now_utc();
     if let Err(unavailable) = seal.availability(now) {

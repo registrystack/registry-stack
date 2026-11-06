@@ -84,23 +84,33 @@ rules are not in the tables.
   rely on it for B-T.
 - `certificateChainFile` is an absolute path with no `.` or `..` segment. The file is PEM, the
   seal certificate first.
-- `signer` names how the seal key signs. `type: local-jwk` is the only type: `privateKeyRef` is a
-  file-provider secret reference (`secret:file/<name>`) to one ES256, ES384, RS256, or RS384 private
-  JWK, and EdDSA is refused. An environment reference is refused as
-  `render.runtime.seal-key-requires-file-provider`.
-- `registry-render keygen --key <file> --csr <file> --common-name <name>` writes a seal key in that
-  form, owner-only, and a PKCS #10 certificate request for it. `--organization` and `--country`
-  add to the request's subject, and `--algorithm` picks `es256` (the default), `es384`, `rs256`, or
-  `rs384`. `--from-pem <file>` converts an unencrypted PKCS #8 key instead of generating one;
-  encrypted PKCS #8, SEC 1, PKCS #1, and PKCS #12 keys are refused with the `openssl` command that
-  converts each. Keygen never overwrites a file and never prints the key.
+- `trust` is required: `test-only` or `production`. A `production` seal signs through a `transit`
+  signer; `trust: production` with a `local-jwk` signer is refused as
+  `render.runtime.seal-signer-assurance-mismatch`. A `test-only` seal may use either signer.
+- `signer` names how the seal key signs. `type: transit` signs through a Vault or OpenBao Transit
+  signing proxy on the Render host: `unixSocketPath` is the proxy's socket, an absolute path with no
+  `.` or `..` segment; `mount` and `keyName` are local identifiers naming the key; `keyVersion`
+  pins one version of it; and `attemptTimeoutMilliseconds` (1 to 30000, required) bounds each call.
+  The key is ECDSA P-256, so the seal signs ES256, and it must be non-exportable, not derived, and
+  without plaintext backup. The proxy holds the Transit token; Render sends none.
+- `type: local-jwk` is for a test-only seal: `privateKeyRef` is a file-provider secret reference
+  (`secret:file/<name>`) to one ES256, ES384, RS256, or RS384 private JWK, and EdDSA is refused. An
+  environment reference is refused as `render.runtime.seal-key-requires-file-provider`.
+- `registry-render keygen --key <file> --csr <file> --common-name <name>` writes a seal key in the
+  `local-jwk` form, owner-only, and a PKCS #10 certificate request for it. `--organization` and
+  `--country` add to the request's subject, and `--algorithm` picks `es256` (the default), `es384`,
+  `rs256`, or `rs384`. `--from-pem <file>` converts an unencrypted PKCS #8 key instead of
+  generating one; encrypted PKCS #8, SEC 1, PKCS #1, and PKCS #12 keys are refused with the
+  `openssl` command that converts each. In place of `--key`, `--transit-unix-socket-path <socket>
+  --transit-mount <mount> --transit-key-name <key> --transit-key-version <version>` names a Transit
+  key, as a `transit` signer does: keygen reads its public key, has Transit sign the request, and
+  writes the request alone. Keygen never overwrites a file and never prints a key.
 - `allowedClients` is a list of at least one named client. `unrestricted` and any item containing
   `*` are refused. When `authentication.oidc.allowedClients` lists clients, each seal client must be in it.
-- `trust: test-only` is the only value. It sets `signing.testOnly` in the template payload, and
-  every answer about the seal says so: `testOnly: true` in the JSON `seal` member, the `/ready`
-  entry, and each audit entry of the call, and `X-Registry-Seal-Test-Only: true` on the PDF answer.
-  `serve` logs one `test-only seal` warning per such seal at startup. A seal without `trust` carries
-  none of these.
+- `trust: test-only` sets `signing.testOnly` in the template payload, and every answer about the
+  seal says so: `testOnly: true` in the JSON `seal` member, the `/ready` entry, and each audit entry
+  of the call, and `X-Registry-Seal-Test-Only: true` on the PDF answer. `serve` logs one `test-only
+  seal` warning per such seal at startup. A `trust: production` seal carries none of these.
 - A document type's `seal` must name a seal in `signing.seals`. A package that names an unbound
   seal is refused at `serve`; `check` reports it, and warns about a runtime seal no document type
   names.
@@ -117,7 +127,7 @@ Serve and `check` report these as runtime problems at the position of the key.
 |---|---|
 | `render.runtime.signing-requires-oidc` | `signing` is declared with the legacy API key. |
 | `render.runtime.no-seals` | `signing.seals` is empty. |
-| `render.runtime.relative-path` | `certificateChainFile` is relative or has a `.` or `..` segment. |
+| `render.runtime.relative-path` | `certificateChainFile`, or a `transit` signer's `unixSocketPath`, is relative or has a `.` or `..` segment. |
 | `render.runtime.seal-timestamp-undecided` | Neither `timestampAuthority` nor `withoutTimestamp` is declared. |
 | `render.runtime.seal-timestamp-conflict` | Both are declared. |
 | `render.runtime.insecure-timestamp-url` | The timestamp URL is `http` and not loopback. |
@@ -125,6 +135,7 @@ Serve and `check` report these as runtime problems at the position of the key.
 | `render.runtime.seal-client-wildcard` | A client is `unrestricted` or contains a wildcard. |
 | `render.runtime.seal-client-not-admitted` | A seal client is not in `authentication.oidc.allowedClients`. |
 | `render.runtime.seal-key-requires-file-provider` | `signer.privateKeyRef` names the environment provider; a seal key is read through the file provider only. |
+| `render.runtime.seal-signer-assurance-mismatch` | A `trust: production` seal signs with a `local-jwk` key file; a production seal signs through `transit`. |
 | `render.runtime.seal-not-bound` | A document type names a seal `signing.seals` does not bind (error). |
 | `render.runtime.seal-unused` | A runtime seal is named by no document type (warning). |
 | `render.runtime.seals-not-served` | Document types name seals and the runtime has no `signing` block: they render unsealed (warning). |
@@ -157,7 +168,11 @@ Without `--environment`, `check` reads no chain file and says so: the human outp
 `render.runtime.seal-key-unreadable` (with the secret provider's reason; a key file must be a
 regular file owned by the serving user, with mode 0600 or 0400 and one link),
 `render.runtime.seal-key-invalid`, `render.runtime.seal-key-unsupported`,
-`render.runtime.seal-key-mismatch` (the key is not the one the certificate certifies),
+`render.runtime.seal-key-mismatch` (the key file, or the Transit key version, is not the key the
+certificate certifies), `render.runtime.seal-transit-unavailable` (the Transit proxy does not
+answer, refuses the key read, or names a key that is not a non-exportable, non-derived
+`ecdsa-p256` key without plaintext backup, or a version outside its live versions; checked by
+reading the key and signing once),
 `render.runtime.seal-timestamp-ca-bundle-unreadable` (with the secret provider's reason),
 `render.runtime.seal-timestamp-ca-bundle-invalid` (the bundle is not PEM, holds no certificate,
 or is too large), and `render.runtime.seal-timestamp-client` (the timestamp client cannot be built
@@ -215,7 +230,10 @@ The problems specific to this route, from a closed vocabulary shared with the re
 
 `/ready` adds `signing`, one member per seal: `{"status": "ready"}` or `{"status": "not-ready",
 "reason": ...}` with `certificate-expired`, `certificate-not-yet-valid`, or `signer-not-ready`,
-plus `"testOnly": true` for a test-only seal. It never changes the status code. At startup,
+plus `"testOnly": true` for a test-only seal. It never changes the status code. A `transit`
+seal turns `signer-not-ready` when a signature fails; each `/ready` call and each seal request
+then has Transit sign one probe message, one at a time, and the seal is ready again once a probe
+succeeds, with no restart. At startup,
 `serve` logs a `seal unavailable` warning with `seal_id` and the same `reason` for each seal that
 cannot sign, and a `seal certificate expiring` warning for one whose certificate expires within
 30 days.

@@ -155,29 +155,48 @@ signing:
   seals:
     ministry:
       signer:
-        type: local-jwk
-        privateKeyRef: secret:file/seal.jwk
+        type: transit
+        unixSocketPath: /run/registry-render/transit.sock
+        mount: transit
+        keyName: render-seal
+        keyVersion: 1
+        attemptTimeoutMilliseconds: 2000
       certificateChainFile: /etc/registry-render/seal/chain.pem
       timestampAuthority:
         url: https://tsa.example.org/tsr
       allowedClients: [records-service]
+      trust: production
 ```
 
-- `signer` names how the key signs. `type: local-jwk` reads
+- `trust` is required: `production` for an official seal, `test-only` for a
+  test certificate. A production seal signs through `transit` only; a
+  `local-jwk` key file under `trust: production` is refused
+  (`render.runtime.seal-signer-assurance-mismatch`).
+- `signer` names how the key signs. `type: transit` signs through a Vault or
+  OpenBao Transit signing proxy on a Unix socket, which holds the Transit
+  token: `mount`, `keyName` and `keyVersion` pin one non-exportable,
+  non-derived `ecdsa-p256` key version, so the seal signs ES256 and the key
+  never leaves Transit. `serve` reads that version's public key, checks that
+  the certificate certifies it and signs once at startup, and refuses to
+  start otherwise. A Transit seal whose proxy stops answering is
+  `signer-not-ready` until a probe, made by each `/ready` call and seal
+  request, signs again. `type: local-jwk`, for a test seal, reads
   `privateKeyRef`, a file-provider secret reference (`secret:file/<name>`)
   to one ES256, ES384, RS256 or RS384 private JWK; an environment reference
-  is refused. `certificateChainFile` is an absolute PEM path, the seal
+  is refused. A render worker that gained code execution runs as the serving
+  user and can read such a key file, which is why a production seal's key
+  stays in Transit. `certificateChainFile` is an absolute PEM path, the seal
   certificate first, then each issuer, and the seal certificate is a leaf
-  (`CA:FALSE`): a CA certificate is refused. A render worker that gained
-  code execution runs as the serving user and can read a `secret:file` key;
-  keep a production seal key off such a host until HSM or managed-key
-  custody lands.
-- `registry-render keygen --key <file> --csr <file> --common-name <name>`
-  writes a seal key in that form, owner-only, and a PKCS #10 certificate
-  request for it; `--from-pem` converts an unencrypted PKCS #8 key instead.
-  It never overwrites a file and never prints the key. The operate guide's
-  "Make a test seal in ten minutes" has a test root issue the seal
-  certificate from that request.
+  (`CA:FALSE`): a CA certificate is refused.
+- `registry-render keygen --csr <file> --common-name <name>
+  --transit-unix-socket-path <socket> --transit-mount <mount>
+  --transit-key-name <key> --transit-key-version <version>` has the Transit
+  key sign a PKCS #10 certificate request and writes only the request.
+  `--key <file>` in place of the Transit flags writes a new `local-jwk` key
+  owner-only with its request; `--from-pem` converts an unencrypted PKCS #8
+  key instead. Keygen never overwrites a file and never prints a key. The
+  operate guide's "Make a test seal in ten minutes" has a test root issue
+  the seal certificate from such a request.
 - `timestampAuthority` (an RFC 3161 authority; `https`, or `http` on loopback
   only; `attemptTimeoutMilliseconds` 1000 to 60000, default 10000; an
   optional `caBundleRef` naming a PEM CA bundle that verifies the authority

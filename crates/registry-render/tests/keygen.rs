@@ -7,6 +7,11 @@ use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+use registry_platform_crypto::document_signature::test_support::{
+    pem_block, TestPki, TestSeal, TestTransit,
+};
+use registry_platform_crypto::SigningAlgorithm;
+
 /// A passphrase for the encrypted test keys this file generates.
 const TEST_PASSPHRASE: &str = "pass:test-only-passphrase";
 
@@ -429,4 +434,228 @@ fn keygen_refuses_encrypted_legacy_and_pkcs12_keys_with_the_conversion_that_fixe
         &[&key, &certificate, &bundle],
     );
     refused_then_converted(&home, &bundle, "openssl pkcs12");
+}
+
+// ----- A Transit-held seal key -----
+
+/// The Transit key the proxy serves and keygen names.
+const TRANSIT_MOUNT: &str = "transit";
+const TRANSIT_KEY: &str = "render-seal";
+const TRANSIT_KEY_VERSION: u32 = 3;
+
+/// A seal whose key a Transit proxy at `home/transit.sock` would hold.
+fn transit_seal() -> TestSeal {
+    TestPki::generate()
+        .expect("test pki")
+        .issue_seal(SigningAlgorithm::Es256)
+        .expect("test seal")
+}
+
+fn start_transit(home: &Path, seal: &TestSeal) -> TestTransit {
+    TestTransit::start(
+        &home.join("transit.sock"),
+        TRANSIT_MOUNT,
+        TRANSIT_KEY,
+        TRANSIT_KEY_VERSION,
+        seal.private_jwk(),
+    )
+    .expect("test Transit proxy")
+}
+
+/// `keygen` for the Transit key at `home/transit.sock`, writing only the
+/// request.
+fn transit_keygen(home: &Path, extra: &[&str]) -> Output {
+    registry_render()
+        .arg("keygen")
+        .arg("--csr")
+        .arg(home.join("seal.csr"))
+        .args(["--common-name", "Civil Registry Seal"])
+        .arg("--transit-unix-socket-path")
+        .arg(home.join("transit.sock"))
+        .args(["--transit-mount", TRANSIT_MOUNT])
+        .args(["--transit-key-name", TRANSIT_KEY])
+        .args(["--transit-key-version", &TRANSIT_KEY_VERSION.to_string()])
+        .args(extra)
+        .output()
+        .expect("run registry-render keygen")
+}
+
+#[test]
+fn keygen_requests_a_certificate_for_a_transit_key_and_writes_no_key_file() {
+    let (_dir, home) = fresh_home();
+    let seal = transit_seal();
+    let transit = start_transit(&home, &seal);
+    let output = transit_keygen(&home, &["--organization", "Ministry of Health"]);
+    assert!(output.status.success(), "{}", text(&output.stderr));
+    assert_eq!(
+        transit.signatures(),
+        2,
+        "a self-test signature and the request's"
+    );
+
+    let csr = home.join("seal.csr");
+    assert_eq!(
+        verified_subject(&csr),
+        "CN=Civil Registry Seal,O=Ministry of Health"
+    );
+    let certificate = home.join("seal.pem");
+    std::fs::write(
+        &certificate,
+        pem_block("CERTIFICATE", seal.certificate_der()),
+    )
+    .unwrap();
+    assert_eq!(
+        public_key_of(&["req", "-in", "{}", "-noout", "-pubkey"], &csr),
+        public_key_of(&["x509", "-in", "{}", "-noout", "-pubkey"], &certificate),
+        "the request certifies the Transit key"
+    );
+    let mut entries: Vec<_> = std::fs::read_dir(&home)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect();
+    entries.sort();
+    assert_eq!(
+        entries,
+        ["seal.csr", "seal.pem", "transit.sock"],
+        "no key file"
+    );
+
+    let stdout = text(&output.stdout);
+    for expected in [
+        "transit/render-seal version 3",
+        "signer.type: transit",
+        "trust: production",
+    ] {
+        assert!(stdout.contains(expected), "{expected}: {stdout}");
+    }
+    printed_no_key_material(&output, &serde_json::json!({"d": seal.private_jwk().d}));
+}
+
+#[test]
+fn keygen_refuses_a_transit_key_it_cannot_use_before_writing_anything() {
+    let (_dir, home) = fresh_home();
+    let seal = transit_seal();
+    let exportable = TestTransit::start_with(
+        &home.join("transit.sock"),
+        TRANSIT_MOUNT,
+        TRANSIT_KEY,
+        TRANSIT_KEY_VERSION,
+        seal.private_jwk(),
+        |metadata| metadata["data"]["exportable"] = serde_json::Value::Bool(true),
+    )
+    .expect("test Transit proxy");
+    let output = transit_keygen(&home, &[]);
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output.stderr));
+    let stderr = text(&output.stderr);
+    assert!(stderr.contains("--transit-key-name"), "{stderr}");
+    assert_eq!(exportable.signatures(), 0);
+    assert!(!home.join("seal.csr").exists());
+    drop(exportable);
+
+    // A version the key does not have names the version flag.
+    let transit = TestTransit::start(
+        &home.join("other.sock"),
+        TRANSIT_MOUNT,
+        TRANSIT_KEY,
+        TRANSIT_KEY_VERSION - 1,
+        seal.private_jwk(),
+    )
+    .expect("test Transit proxy");
+    let output = registry_render()
+        .arg("keygen")
+        .arg("--csr")
+        .arg(home.join("seal.csr"))
+        .args(["--common-name", "Civil Registry Seal"])
+        .arg("--transit-unix-socket-path")
+        .arg(transit.socket_path())
+        .args(["--transit-mount", TRANSIT_MOUNT])
+        .args(["--transit-key-name", TRANSIT_KEY])
+        .args(["--transit-key-version", &TRANSIT_KEY_VERSION.to_string()])
+        .output()
+        .expect("run registry-render keygen");
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output.stderr));
+    let stderr = text(&output.stderr);
+    assert!(stderr.contains("--transit-key-version"), "{stderr}");
+    assert!(!home.join("seal.csr").exists());
+}
+
+#[test]
+fn keygen_names_the_socket_flag_when_no_transit_proxy_answers() {
+    let (_dir, home) = fresh_home();
+    let output = transit_keygen(&home, &[]);
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output.stderr));
+    let stderr = text(&output.stderr);
+    assert!(stderr.contains("did not answer"), "{stderr}");
+    assert!(stderr.contains("--transit-unix-socket-path"), "{stderr}");
+    assert!(!home.join("seal.csr").exists());
+}
+
+#[test]
+fn keygen_takes_either_a_key_file_or_a_transit_key() {
+    let (_dir, home) = fresh_home();
+    for (label, extra) in [
+        ("a key file too", &["--key", "seal.jwk"][..]),
+        ("an algorithm", &["--algorithm", "es384"][..]),
+        ("a PEM key", &["--from-pem", "seal.pem"][..]),
+    ] {
+        let output = transit_keygen(&home, extra);
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{label}: {}",
+            text(&output.stderr)
+        );
+        assert!(
+            text(&output.stderr).contains("cannot be used with"),
+            "{label}: {}",
+            text(&output.stderr)
+        );
+    }
+    let without_key = registry_render()
+        .arg("keygen")
+        .arg("--csr")
+        .arg(home.join("seal.csr"))
+        .args(["--common-name", "Civil Registry Seal"])
+        .output()
+        .unwrap();
+    assert_eq!(without_key.status.code(), Some(2));
+    assert!(
+        text(&without_key.stderr).contains("--key"),
+        "{}",
+        text(&without_key.stderr)
+    );
+    let partial = registry_render()
+        .arg("keygen")
+        .arg("--csr")
+        .arg(home.join("seal.csr"))
+        .args(["--common-name", "Civil Registry Seal"])
+        .arg("--transit-unix-socket-path")
+        .arg(home.join("transit.sock"))
+        .output()
+        .unwrap();
+    assert_eq!(partial.status.code(), Some(2));
+    assert!(
+        text(&partial.stderr).contains("--transit-mount"),
+        "{}",
+        text(&partial.stderr)
+    );
+    let nested = registry_render()
+        .arg("keygen")
+        .arg("--csr")
+        .arg(home.join("seal.csr"))
+        .args(["--common-name", "Civil Registry Seal"])
+        .arg("--transit-unix-socket-path")
+        .arg(home.join("transit.sock"))
+        .args(["--transit-mount", "transit/render"])
+        .args(["--transit-key-name", TRANSIT_KEY])
+        .args(["--transit-key-version", "1"])
+        .output()
+        .unwrap();
+    assert_eq!(nested.status.code(), Some(2));
+    assert!(
+        text(&nested.stderr).contains("local id"),
+        "the mount is a local id, as in the runtime file: {}",
+        text(&nested.stderr)
+    );
+    assert!(!home.join("seal.csr").exists());
 }

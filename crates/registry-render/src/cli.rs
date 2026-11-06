@@ -122,15 +122,22 @@ pub enum Command {
     /// Generate a seal key and the certificate request for its seal
     /// certificate.
     ///
-    /// Writes the private JWK owner-only to --key, the file a seal's
-    /// `signer.privateKeyRef` names, and a PKCS #10 request to --csr for the
-    /// certificate authority. Neither file may exist, and no key material is
-    /// printed. With --from-pem, converts an existing unencrypted PKCS #8 key
-    /// instead of generating one.
+    /// Writes the private JWK owner-only to --key, the file a `local-jwk`
+    /// signer's `privateKeyRef` names, and a PKCS #10 request to --csr for
+    /// the certificate authority. With --from-pem, converts an existing
+    /// unencrypted PKCS #8 key instead of generating one. With
+    /// --transit-unix-socket-path, the key is a Transit key a `transit`
+    /// signer names: it signs the request through the signing proxy, and only
+    /// --csr is written. No output file may exist, and no key material is
+    /// printed.
     Keygen {
         /// New private JWK file, created with mode 0600.
-        #[arg(long, value_name = "FILE")]
-        key: PathBuf,
+        #[arg(
+            long,
+            value_name = "FILE",
+            required_unless_present = "transit_unix_socket_path"
+        )]
+        key: Option<PathBuf>,
         /// New PEM certificate request file.
         #[arg(long, value_name = "FILE")]
         csr: PathBuf,
@@ -152,6 +159,41 @@ pub enum Command {
         /// command that converts them.
         #[arg(long, value_name = "FILE")]
         from_pem: Option<PathBuf>,
+        /// The Transit signing proxy's Unix socket, as `signer.unixSocketPath`
+        /// names it: the seal key is a Transit key, which signs the request,
+        /// and no key file is written. A production seal's key is one.
+        #[arg(
+            long,
+            value_name = "PATH",
+            conflicts_with_all = ["key", "algorithm", "from_pem"],
+            requires_all = ["transit_mount", "transit_key_name", "transit_key_version"]
+        )]
+        transit_unix_socket_path: Option<PathBuf>,
+        /// The Transit mount, as `signer.mount` names it.
+        #[arg(
+            long,
+            value_name = "ID",
+            requires = "transit_unix_socket_path",
+            value_parser = parse_transit_id
+        )]
+        transit_mount: Option<String>,
+        /// The Transit key, an ecdsa-p256 key, as `signer.keyName` names it.
+        #[arg(
+            long,
+            value_name = "ID",
+            requires = "transit_unix_socket_path",
+            value_parser = parse_transit_id
+        )]
+        transit_key_name: Option<String>,
+        /// The Transit key version the certificate is for, as
+        /// `signer.keyVersion` pins it.
+        #[arg(
+            long,
+            value_name = "VERSION",
+            requires = "transit_unix_socket_path",
+            value_parser = clap::value_parser!(u32).range(1..)
+        )]
+        transit_key_version: Option<u32>,
     },
     /// Retired spelling. Use `registry-render package`.
     #[command(hide = true)]
@@ -213,7 +255,7 @@ pub enum Command {
         /// the seal route adds, as a seal of this `trust` would. Nothing is
         /// signed; the output is the first revision a seal would sign.
         #[arg(long, value_name = "TRUST", value_enum)]
-        preview_seal: Option<PreviewSealTrust>,
+        preview_seal: Option<crate::runtime::SealTrust>,
         /// The `signing.signerName` a seal certificate's organization (else
         /// common name) would give. Without it, the member names no signer.
         #[arg(
@@ -278,14 +320,14 @@ impl SealKeyAlgorithm {
     }
 }
 
-/// The `trust` a `compile --preview-seal` renders under, as a seal's
-/// runtime `trust` member names it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
-pub enum PreviewSealTrust {
-    /// A seal made with a test certificate: `signing.testOnly` is true.
-    TestOnly,
-    /// A production seal: `signing.testOnly` is false.
-    Production,
+/// A `--transit-mount` or `--transit-key-name` is a local id, as the runtime
+/// file's `signer.mount` and `signer.keyName` are.
+fn parse_transit_id(value: &str) -> Result<String, String> {
+    registry_platform_yaml::LocalId::new(value)
+        .map(|_| value.to_owned())
+        .map_err(|_| {
+            "needs a local id: a lowercase letter, then up to 63 lowercase letters, digits, `_` or `-`".to_owned()
+        })
 }
 
 /// A `--signer-name` holds what a seal certificate's display name could:
@@ -429,20 +471,52 @@ fn run_inner(cli: Cli) -> Result<i32, RenderProblem> {
             country,
             algorithm,
             from_pem,
-        } => crate::keygen::run(
-            &crate::keygen::KeygenRequest {
-                key: &key,
-                csr: &csr,
-                subject: registry_platform_crypto::CertificateRequestSubject {
-                    common_name,
-                    organization,
-                    country,
+            transit_unix_socket_path,
+            transit_mount,
+            transit_key_name,
+            transit_key_version,
+        } => {
+            let key = match (
+                &transit_unix_socket_path,
+                &transit_mount,
+                &transit_key_name,
+                transit_key_version,
+                &key,
+            ) {
+                (Some(unix_socket_path), Some(mount), Some(key_name), Some(key_version), None) => {
+                    crate::keygen::SealKey::Transit {
+                        unix_socket_path,
+                        mount,
+                        key_name,
+                        key_version,
+                    }
+                }
+                (None, None, None, None, Some(path)) => crate::keygen::SealKey::File {
+                    path,
+                    algorithm: algorithm.map(SealKeyAlgorithm::signing_algorithm),
+                    from_pem: from_pem.as_deref(),
                 },
-                algorithm: algorithm.map(SealKeyAlgorithm::signing_algorithm),
-                from_pem: from_pem.as_deref(),
-            },
-            &mut std::io::stdout().lock(),
-        ),
+                _ => {
+                    return Err(RenderProblem::new(
+                        crate::problem::ProblemKind::InvalidArgument,
+                        "keygen needs --key, or --transit-unix-socket-path with --transit-mount, \
+                         --transit-key-name and --transit-key-version",
+                    ))
+                }
+            };
+            crate::keygen::run(
+                &crate::keygen::KeygenRequest {
+                    key,
+                    csr: &csr,
+                    subject: registry_platform_crypto::CertificateRequestSubject {
+                        common_name,
+                        organization,
+                        country,
+                    },
+                },
+                &mut std::io::stdout().lock(),
+            )
+        }
         Command::Seal { bundle } => Err(RenderProblem::new(
             crate::problem::ProblemKind::InvalidArgument,
             format!(
@@ -499,7 +573,7 @@ fn run_inner(cli: Cli) -> Result<i32, RenderProblem> {
             }
             let signing = preview_seal.map(|trust| crate::envelope::SigningPayload {
                 signer_name,
-                test_only: trust == PreviewSealTrust::TestOnly,
+                test_only: trust == crate::runtime::SealTrust::TestOnly,
             });
             if signing.is_some() && !matches!(format, crate::check::OutputFormat::Json) {
                 eprintln!(
