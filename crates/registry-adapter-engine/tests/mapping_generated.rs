@@ -924,6 +924,10 @@ fn edge_names() -> Vec<String> {
         "say \"hi\"",
         "back\\slash",
         "\\\"",
+        "ends\\",
+        "zero\u{200b}width",
+        "\u{feff}bom",
+        "join\u{200c}er",
     ]
     .iter()
     .map(ToString::to_string)

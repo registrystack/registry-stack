@@ -360,7 +360,8 @@ pub struct Assignment {
     /// keys, each optionally filtered with `[key = "value"]`. A key that
     /// holds a dot is quoted, for example `'"household.household_size"'`.
     /// A quoted key or value takes any character except a control
-    /// character; `\"` and `\\` are its only escapes. Keys compare byte for
+    /// character, a text-direction control or a line or paragraph separator;
+    /// `\"` and `\\` are its only escapes. Keys compare byte for
     /// byte, with no Unicode normalisation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub from: Option<String>,
@@ -437,8 +438,9 @@ impl PathError {
                  {MAXIMUM_MAPPING_QUOTED_CHARACTERS} characters"
             ),
             Self::QuotedCharacter { position } => format!(
-                "the quoted text at position {position} holds a control character, or a \
-                 backslash not followed by a quote or a backslash"
+                "the quoted text at position {position} holds a control character, a \
+                 text-direction or line-separator character, or a backslash not followed by \
+                 a quote or a backslash"
             ),
             Self::MalformedFilter { position } => {
                 format!("the filter at position {position} is not [name = \"value\"]")
@@ -571,7 +573,7 @@ impl Parser {
                         return Err(PathError::QuotedTooLong { position: start });
                     }
                 }
-                Some(character) if !character.is_control() => {
+                Some(character) if !is_refused_in_quotes(character) => {
                     text.push(character);
                     self.position += 1;
                     if text.chars().count() > MAXIMUM_MAPPING_QUOTED_CHARACTERS {
@@ -1625,6 +1627,23 @@ pub fn parse_generated_header(script_text: &str) -> GeneratedHeaderState {
     )
 }
 
+/// Whether `character` is refused inside quoted selector text: a control character (general category Cc), a Unicode bidirectional
+/// control (the set rustc denies in literals), or a line or paragraph
+/// separator. Other format characters, joiners included, are allowed.
+fn is_refused_in_quotes(character: char) -> bool {
+    character.is_control()
+        || matches!(
+            character,
+            '\u{61c}'
+                | '\u{200e}'
+                | '\u{200f}'
+                | '\u{202a}'..='\u{202e}'
+                | '\u{2066}'..='\u{2069}'
+                | '\u{2028}'
+                | '\u{2029}'
+        )
+}
+
 /// Quote `text` as a Rhai string literal. Control characters are refused;
 /// quotes and backslashes are escaped.
 fn rhai_string(text: &str) -> Option<String> {
@@ -2165,6 +2184,171 @@ mod tests {
                 "{control:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_text_direction_or_line_separator_character_is_refused_in_quoted_text() {
+        for refused in [
+            '\u{61c}', '\u{200e}', '\u{200f}', '\u{202a}', '\u{202b}', '\u{202c}', '\u{202d}',
+            '\u{202e}', '\u{2066}', '\u{2067}', '\u{2068}', '\u{2069}', '\u{2028}', '\u{2029}',
+        ] {
+            let key = format!("\"a{refused}b\"");
+            assert!(
+                matches!(
+                    parse_selector(&key),
+                    Err(PathError::QuotedCharacter { position: 2 })
+                ),
+                "key {refused:?}"
+            );
+            let filter = format!("a[k = \"v{refused}\"]");
+            assert!(
+                matches!(
+                    parse_selector(&filter),
+                    Err(PathError::QuotedCharacter { .. })
+                ),
+                "filter {refused:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn joiners_and_other_format_characters_stay_allowed_in_quoted_text() {
+        for allowed in [
+            '\u{200b}', '\u{200c}', '\u{200d}', '\u{2060}', '\u{feff}', '\u{ad}',
+        ] {
+            let key = format!("\"a{allowed}b\"");
+            assert_eq!(segs(&key)[0].name, format!("a{allowed}b"), "{allowed:?}");
+        }
+    }
+
+    #[test]
+    fn the_refusal_message_names_the_character_class_without_the_character() {
+        let message = PathError::QuotedCharacter { position: 2 }.describe();
+        assert!(
+            message.contains("text-direction or line-separator"),
+            "{message}"
+        );
+    }
+
+    /// The quoted-character rule before Unicode was admitted: printable
+    /// ASCII other than the quote and the backslash, and no backslash
+    /// anywhere.
+    fn earlier_quoted_character(character: char) -> bool {
+        (' '..='~').contains(&character) && character != '"' && character != '\\'
+    }
+
+    /// Whether every quoted stretch of `selector` holds only characters the
+    /// earlier grammar admitted and the selector holds no backslash.
+    fn earlier_quoting_is_respected(selector: &str) -> bool {
+        let mut inside = false;
+        for character in selector.chars() {
+            if character == '\\' {
+                return false;
+            }
+            if character == '"' {
+                inside = !inside;
+            } else if inside && !earlier_quoted_character(character) {
+                return false;
+            }
+        }
+        !inside
+    }
+
+    fn example_selectors() -> Vec<String> {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/adapter/examples");
+        let mut found = Vec::new();
+        let mut pending = vec![root];
+        while let Some(directory) = pending.pop() {
+            for entry in std::fs::read_dir(&directory).expect("read example directory") {
+                let path = entry.expect("directory entry").path();
+                if path.is_dir() {
+                    pending.push(path);
+                } else if path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.ends_with(".mapping.yaml"))
+                {
+                    let text = std::fs::read_to_string(&path).expect("read mapping example");
+                    for line in text.lines() {
+                        let line = line.trim_start().trim_start_matches("- ");
+                        for key in ["from:", "target:"] {
+                            let Some(value) = line.strip_prefix(key) else {
+                                continue;
+                            };
+                            let value = value.trim();
+                            let value = match value
+                                .strip_prefix('\'')
+                                .and_then(|rest| rest.strip_suffix('\''))
+                            {
+                                Some(inner) => inner.replace("''", "'"),
+                                None => value.to_string(),
+                            };
+                            if !value.is_empty() {
+                                found.push(value);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        found
+    }
+
+    #[test]
+    fn selectors_the_earlier_grammar_accepted_parse_to_the_same_segments() {
+        let mut corpus = example_selectors();
+        let from_examples = corpus.len();
+        assert!(
+            from_examples >= 10,
+            "found only {from_examples} example selectors"
+        );
+        // Printable-ASCII selectors from a fixed generator.
+        let alphabet: Vec<char> = (' '..='~').collect();
+        let mut state: u64 = 0x2563_2563;
+        let mut next = || {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (state >> 33) as usize
+        };
+        for _ in 0..30_000 {
+            let length = 1 + next() % 14;
+            corpus.push(
+                (0..length)
+                    .map(|_| alphabet[next() % alphabet.len()])
+                    .collect(),
+            );
+        }
+        let mut parsed = 0;
+        for selector in corpus.iter().filter(|s| earlier_quoting_is_respected(s)) {
+            let Ok(segments) = parse_selector(selector) else {
+                continue;
+            };
+            parsed += 1;
+            // With no backslash in play, a quoted stretch is taken verbatim:
+            // every name and filter text is a stretch of the selector.
+            for segment in &segments {
+                assert!(selector.contains(&segment.name), "{selector:?}");
+                if let Some(filter) = &segment.filter {
+                    assert!(selector.contains(&filter.key), "{selector:?}");
+                    assert!(selector.contains(&filter.value), "{selector:?}");
+                }
+            }
+            let names: Vec<String> = segments.iter().map(|s| s.name.clone()).collect();
+            if segments.iter().all(|s| s.filter.is_none()) {
+                assert_eq!(parse_target_path(selector), Ok(names), "{selector:?}");
+            }
+        }
+        assert!(parsed > 500, "only {parsed} selectors parsed");
+        let from_examples_parsed = corpus[..from_examples]
+            .iter()
+            .filter(|selector| parse_selector(selector).is_ok())
+            .count();
+        assert!(
+            from_examples_parsed >= 10,
+            "only {from_examples_parsed} examples parsed"
+        );
     }
 
     #[test]
