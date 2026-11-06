@@ -349,23 +349,12 @@ pub async fn supervise(
             format!("cannot locate the render binary: {err}"),
         )
     })?;
-    let mut child = tokio::process::Command::new(exe)
-        .arg("__worker")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        // Worker stderr is piped and drained, never inherited: a panic
-        // message can carry host paths or data fragments, and the operator
-        // log is value-free by contract. The parent's problem documents are
-        // the diagnosis surface.
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|err| {
-            RenderProblem::new(
-                ProblemKind::Internal,
-                format!("cannot spawn render worker: {err}"),
-            )
-        })?;
+    let mut child = worker_command(&exe).spawn().map_err(|err| {
+        RenderProblem::new(
+            ProblemKind::Internal,
+            format!("cannot spawn render worker: {err}"),
+        )
+    })?;
     let mut stderr = child.stderr.take().expect("stderr piped");
     let drain = tokio::spawn(async move {
         use tokio::io::AsyncReadExt;
@@ -431,5 +420,138 @@ pub async fn supervise(
     match response {
         WorkerResponse::Rendered(rendered) => Ok(*rendered),
         WorkerResponse::Failed { problem } => Err(problem.into_render_problem()),
+    }
+}
+
+/// The command every supervised worker (serve and compile) is spawned from.
+fn worker_command(exe: &Path) -> tokio::process::Command {
+    let mut command = tokio::process::Command::new(exe);
+    command
+        .arg("__worker")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        // Worker stderr is piped and drained, never inherited: a panic
+        // message can carry host paths or data fragments, and the operator
+        // log is value-free by contract. The parent's problem documents are
+        // the diagnosis surface.
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    isolate_environment(&mut command, std::env::vars_os());
+    command
+}
+
+/// The variables a worker keeps from the parent: the dynamic loader's search
+/// paths, because the worker is this same executable and must load the same
+/// shared libraries (on macOS development builds, the AWS-LC FIPS library).
+const WORKER_ENVIRONMENT: [&str; 3] = [
+    "DYLD_FALLBACK_LIBRARY_PATH",
+    "DYLD_LIBRARY_PATH",
+    "LD_LIBRARY_PATH",
+];
+
+/// The worker runs template code, so it starts from an empty environment:
+/// a credential the operator gives the parent as a variable, or through
+/// `${VAR}` in the runtime file, is not passed to it. Typst gives templates
+/// no environment access; this keeps a Typst defect from becoming one. It
+/// does not make the worker a sandbox: it still runs as the parent's user.
+fn isolate_environment(
+    command: &mut tokio::process::Command,
+    parent: impl IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+) {
+    command.env_clear();
+    command.envs(
+        parent
+            .into_iter()
+            .filter(|(name, _)| WORKER_ENVIRONMENT.iter().any(|kept| name == kept)),
+    );
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::collections::BTreeSet;
+    use std::ffi::OsString;
+
+    use super::{isolate_environment, worker_command, WORKER_ENVIRONMENT};
+
+    fn kept_names(command: &tokio::process::Command) -> BTreeSet<String> {
+        command
+            .as_std()
+            .get_envs()
+            .filter(|(_, value)| value.is_some())
+            .map(|(name, _)| name.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    /// Names (never values) of the variables a command's child prints.
+    async fn printed_names(command: &mut tokio::process::Command) -> BTreeSet<String> {
+        let output = command.output().await.expect("stand-in runs");
+        assert!(output.status.success(), "stand-in exits cleanly");
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(|line| line.split_once('=').map(|(name, _)| name.to_owned()))
+            .collect()
+    }
+
+    /// Spawns the production worker command with a stand-in executable that
+    /// prints its environment, under this test process's real environment
+    /// (cargo sets many variables). Names only: a failure must not print a
+    /// value.
+    #[tokio::test]
+    async fn a_worker_sees_no_parent_variable_beyond_the_loader_paths() {
+        assert!(
+            std::env::var_os("PATH").is_some(),
+            "the test process needs an environment for the worker not to inherit"
+        );
+        let dir = tempfile::tempdir().expect("tempdir");
+        let stand_in = dir.path().join("print-environment");
+        std::fs::write(&stand_in, "#!/bin/sh\nexec /usr/bin/env\n").expect("write stand-in");
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&stand_in, std::fs::Permissions::from_mode(0o700))
+                .expect("make stand-in executable");
+        }
+        // The shell sets a few variables itself (PWD, SHLVL) even when started
+        // with none; anything beyond those came from the parent.
+        let from_nothing = printed_names(tokio::process::Command::new(&stand_in).env_clear()).await;
+        let names = printed_names(&mut worker_command(&stand_in)).await;
+        let unexpected: Vec<&String> = names
+            .iter()
+            .filter(|name| {
+                !WORKER_ENVIRONMENT.contains(&name.as_str()) && !from_nothing.contains(*name)
+            })
+            .collect();
+        assert!(unexpected.is_empty(), "the worker inherited {unexpected:?}");
+    }
+
+    // Checked on the command, not by spawning: macOS strips DYLD_ variables
+    // from the system binaries a test could spawn to print its environment.
+    #[test]
+    fn a_worker_keeps_the_parents_loader_paths() {
+        let expected: BTreeSet<String> = std::env::vars_os()
+            .map(|(name, _)| name.to_string_lossy().into_owned())
+            .filter(|name| WORKER_ENVIRONMENT.contains(&name.as_str()))
+            .collect();
+        let command = worker_command(std::path::Path::new("/usr/bin/env"));
+        assert_eq!(kept_names(&command), expected);
+    }
+
+    #[test]
+    fn only_the_loader_search_paths_are_kept() {
+        let mut command = tokio::process::Command::new("/usr/bin/env");
+        isolate_environment(
+            &mut command,
+            [
+                ("DYLD_FALLBACK_LIBRARY_PATH", "/opt/fips/lib"),
+                ("DYLD_LIBRARY_PATH", "/opt/other/lib"),
+                ("DYLD_INSERT_LIBRARIES", "/opt/insert.dylib"),
+                ("LD_LIBRARY_PATH", "/opt/fips/lib"),
+                ("LD_PRELOAD", "/opt/preload.so"),
+                ("HOME", "/home/render"),
+                ("VAULT_TOKEN", "not-a-real-token"),
+            ]
+            .map(|(name, value)| (OsString::from(name), OsString::from(value))),
+        );
+        let expected: BTreeSet<String> = WORKER_ENVIRONMENT.map(str::to_owned).into();
+        assert_eq!(kept_names(&command), expected);
     }
 }

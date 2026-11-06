@@ -58,11 +58,35 @@ struct RenderHttpRequest {
 }
 
 pub fn serve(runtime_path: &Path) -> Result<i32, RenderProblem> {
+    mark_not_dumpable()?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(|err| RenderProblem::new(ProblemKind::Internal, format!("runtime: {err}")))?;
     runtime.block_on(serve_async(runtime_path))
+}
+
+/// On Linux, marks the serving process non-dumpable before it reads any
+/// secret: it writes no core dump, and another process running as the same
+/// user, a compromised render worker included, cannot read its `/proc`
+/// environment or memory or attach to it. A worker is a fresh executable and
+/// does not inherit the mark.
+#[cfg(target_os = "linux")]
+fn mark_not_dumpable() -> Result<(), RenderProblem> {
+    rustix::process::set_dumpable_behavior(rustix::process::DumpableBehavior::NotDumpable).map_err(
+        |err| {
+            RenderProblem::new(
+                ProblemKind::Internal,
+                format!("cannot mark the serving process non-dumpable: {err}"),
+            )
+        },
+    )
+}
+
+/// Other platforms have no same-user `/proc` reads to close.
+#[cfg(not(target_os = "linux"))]
+fn mark_not_dumpable() -> Result<(), RenderProblem> {
+    Ok(())
 }
 
 async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
@@ -982,6 +1006,16 @@ pub fn healthcheck(runtime_path: &Path) -> Result<i32, RenderProblem> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn serving_marks_the_process_not_dumpable() {
+        mark_not_dumpable().expect("prctl succeeds");
+        assert_eq!(
+            rustix::process::dumpable_behavior().expect("prctl reads"),
+            rustix::process::DumpableBehavior::NotDumpable
+        );
+    }
 
     #[test]
     fn pdf_responses_report_warning_count_without_warning_text() {

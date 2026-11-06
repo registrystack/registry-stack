@@ -28,9 +28,19 @@ that are accepted, with their conditions, follow the table.
 | 20 | Serve listens on a public or all-interfaces address | `runtime::load` and the offline runtime check refuse a non-loopback/private/unspecified `listener.bind` with `render.runtime.public-bind` at its position, before startup touches the filesystem, and `runtime::validate_bind` refuses it again in `serve`; `listener.bind` is required, so no address is chosen implicitly | `runtime::tests::loopback_private_and_link_local_binds_are_allowed`, `runtime::tests::public_and_unspecified_binds_are_refused`, `runtime::tests::a_public_bind_in_the_file_is_refused_at_its_value`, `runtime::tests::the_listener_bind_is_required`, `serve::a_refused_bind_is_caught_before_startup_touches_the_filesystem` |
 | 21 | A caller-controlled value makes a refusal unbounded (response and log amplification) | Problem details are capped at 2048 characters with an explicit truncation marker before they reach the wire; the values that can grow (an undeclared locale, an asset name) are caller-supplied | `serve::problem_details_are_bounded`; `server::tests::a_long_detail_is_cut_on_a_character_boundary`; `server::tests::a_detail_at_the_cap_is_kept_verbatim` |
 | 22 | A shutdown grace that disarms the drain or overflows the bounded wait | `runtime::load` refuses `listener.shutdownGraceMilliseconds` outside 1000 to 3600000 at startup (`config.out-of-range`), so less than a second cannot drop renders in flight and a huge value cannot panic the wait that adds the grace twice | `runtime::tests::cfg_qty_4_shutdown_grace_outside_its_bounds_is_refused`; `runtime::tests::shutdown_grace_at_the_range_ends_is_accepted` |
+| 23 | A credential in the serving process (a secret provider variable, a `${VAR}` value, anything the host injects, or a secret it has loaded) reaches the worker process that runs template code | `worker::worker_command`, the one constructor every supervised worker (serve and compile) is spawned from, clears the environment and keeps only the dynamic loader's search paths (`DYLD_FALLBACK_LIBRARY_PATH`, `DYLD_LIBRARY_PATH`, `LD_LIBRARY_PATH`), which the same executable needs to load its shared libraries; on Linux, `server::serve` marks the process non-dumpable before it reads any secret, so a same-user process cannot read its `/proc/<pid>/environ` or memory | `worker::tests::a_worker_sees_no_parent_variable_beyond_the_loader_paths` (spawns the production command under the test process's real environment); `worker::tests::a_worker_keeps_the_parents_loader_paths`; `worker::tests::only_the_loader_search_paths_are_kept`; `server::tests::serving_marks_the_process_not_dumpable` (Linux only) |
 
 ## Documented residuals (accepted, with conditions)
 
+- **A render worker is not a sandbox.** It runs as the serving process's
+  user, with the same filesystem and network. A worker that gained code
+  execution through a Typst or decoder defect could read files that user can
+  read, including key files under `secretProviders.file.root`, and connect to
+  any socket that user can reach. Row 23 keeps the parent's environment and
+  memory out of its reach; the rest is not enforced. The worker needs only its
+  pipes, so refusing socket creation and restricting its filesystem view
+  (seccomp, Landlock) are the next steps, not yet taken because they need
+  per-architecture filters proven on the release image.
 - **The audit log is not tamper-evident on the host.** It carries no hash
   chain or signature, so a host user able to write the audit file can
   remove, rewrite, or reorder lines undetected. Deployments that need
