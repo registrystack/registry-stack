@@ -2,6 +2,8 @@
 //! Crypto primitives shared by Registry Platform consumers.
 
 pub mod delivery_signature;
+#[cfg(feature = "cms-signing")]
+pub mod document_signature;
 pub mod field_encryption;
 pub mod mac;
 pub mod sealed_value;
@@ -29,6 +31,13 @@ use aws_lc_rs::signature::{
 use base64::engine::general_purpose::STANDARD;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
+#[cfg(feature = "cms-signing")]
+pub use document_signature::{
+    accept_timestamp_response, add_signature_timestamp, random_timestamp_nonce, sign_detached,
+    timestamp_request, CertificateChain, CertificateError, CertificateFingerprint, CmsError,
+    DetachedSignature, SignatureTimestamp, SignerVerificationError, TimestampError,
+    MAX_TIMESTAMP_RESPONSE_BYTES,
+};
 use ed25519_dalek::{
     Signature as Ed25519Signature, Signer, SigningKey as Ed25519SigningKey,
     VerifyingKey as Ed25519VerifyingKey,

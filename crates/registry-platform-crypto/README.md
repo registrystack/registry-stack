@@ -73,6 +73,89 @@ Ok(())
 }
 ```
 
+## Document signatures (cms-signing)
+
+The opt-in `cms-signing` feature, in `document_signature`, provides the CMS,
+certificate and RFC 3161 pieces a product needs to seal a document as a PAdES
+baseline signature (ETSI EN 319 142-1, levels B-B and B-T). The product owns
+the document format: for a PDF it reserves the signature dictionary, computes
+the byte ranges the signature covers, and embeds the returned CMS.
+
+```rust
+use registry_platform_crypto::{
+    accept_timestamp_response, add_signature_timestamp, random_timestamp_nonce,
+    sign_detached, timestamp_request, CertificateChain,
+};
+
+async fn seal(
+    chain_pem: &[u8],
+    signer: &dyn registry_platform_crypto::SigningProvider,
+    byte_ranges: &[&[u8]],
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let chain = CertificateChain::from_pem(chain_pem)?;
+    let signature = sign_detached(byte_ranges, &chain, signer).await?;
+    let nonce = random_timestamp_nonce()?;
+    let request = timestamp_request(&signature.signature_value, nonce)?;
+    // The product's own bounded HTTP client posts the request as
+    // application/timestamp-query and returns the response body.
+    let response = post_timestamp_query(&request).await?;
+    let timestamp = accept_timestamp_response(&response, &signature.signature_value, nonce)?;
+    Ok(add_signature_timestamp(&signature.cms_der, &timestamp.token_der)?)
+}
+```
+
+What it does:
+
+- `CertificateChain::from_pem` reads the seal certificate first, then each
+  issuer in turn. It refuses empty input, any PEM block that is not a
+  `CERTIFICATE` (a private key included), a block that is not a DER X.509
+  certificate, a repeated certificate, and a chain whose issuer and subject
+  names do not link each certificate to the next. It exposes the seal
+  certificate's DER, SHA-256 fingerprint, validity, and display name (subject
+  organization, else common name).
+- `CertificateChain::check_for_signing` refuses a seal certificate that does
+  not hold the signer's public key, that has neither the digitalSignature nor
+  the nonRepudiation key usage, or whose validity does not include the given
+  time. Errors name the certificate by fingerprint only, never by subject.
+- `sign_detached` signs the concatenated parts as detached `SignedData`:
+  id-data content, the chain in `certificates`, one signer identified by
+  issuer and serial number, and exactly the signed attributes content type,
+  message digest and signing certificate v2. It writes no signing time; PAdES
+  carries the claimed time in the signature dictionary. ES256 and RS256 use
+  SHA-256, ES384 and RS384 use SHA-384, and EdDSA is refused. It runs
+  `check_for_signing` at the current time first, converts a provider's JWS
+  ECDSA signature to DER, and verifies the encoded result before returning.
+- `timestamp_request` builds an RFC 3161 request over the SHA-256 of the
+  signature value, with a nonce and `certReq`. `accept_timestamp_response`
+  refuses a response that is too large or malformed, not granted, without a
+  token, not `SignedData` over a TSTInfo, or for another imprint or nonce; a
+  token whose signature does not verify; and a token signed by a certificate
+  without a critical extended key usage of exactly id-kp-timeStamping, or
+  whose validity does not include the token's time. `add_signature_timestamp` re-checks the token
+  against the signature and adds it as the signature timestamp unsigned
+  attribute, which makes the signature B-T.
+
+What it does not do:
+
+- No certification path validation. Chain order is checked by names, not by
+  verifying each certificate's signature, and no trust anchor is configured.
+  Whether the seal CA and the timestamp authority are trusted is the relying
+  party's decision, made by its validator.
+- No revocation checking: no CRL or OCSP fetch, no revocation data embedded.
+- No long-term validation: no B-LT or B-LTA level, no document security store,
+  no archive timestamps.
+- No qualification claims. Whether a seal is advanced or qualified under eIDAS,
+  or recognised under any other scheme, depends on the certificate, its issuer
+  and the key custody, not on this encoding. Nothing in this crate asserts it.
+- No network access. The caller sends the timestamp request and bounds the
+  response read.
+
+The `test-support` feature adds `document_signature::test_support`: an
+in-memory `TestPki` with a root CA, an issuing CA, ES256, ES384, RS256 and RS384
+seal certificates with private JWKs for `LocalJwkSigner`, a timestamp
+authority with a critical timeStamping extended key usage, and
+`respond_to_timestamp_request`. Enable it from `[dev-dependencies]` only.
+
 ## Supported Algorithms
 
 This crate currently supports EdDSA with OKP/Ed25519 keys, ES256 with EC/P-256
@@ -129,6 +212,26 @@ interoperability and security policy.
 ```sh
 cargo test -p registry-platform-crypto
 cargo test -p registry-platform-crypto --features transit
+cargo test -p registry-platform-crypto --all-features
+```
+
+To check document signatures with OpenSSL, write the interoperability
+artifacts into an empty directory and verify them there:
+
+```sh
+export REGISTRY_CMS_INTEROP_DIR=/path/to/empty/dir
+cargo test -p registry-platform-crypto --all-features \
+  write_openssl_interop_artifacts -- --ignored
+dir="$REGISTRY_CMS_INTEROP_DIR"
+for alg in es256 es384 rs256; do
+  for level in b-b b-t; do
+    openssl cms -verify -binary -inform DER -in "$dir/$alg-$level.p7s" \
+      -content "$dir/content.bin" -CAfile "$dir/root.pem" -out /dev/null
+  done
+  openssl ts -verify -queryfile "$dir/$alg.tsq" -in "$dir/$alg.tsr" \
+    -CAfile "$dir/root.pem"
+  openssl ts -reply -in "$dir/$alg.tsr" -text
+done
 ```
 
 ## License
