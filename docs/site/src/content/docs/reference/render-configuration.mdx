@@ -69,6 +69,13 @@ rules are not in the tables.
   `withoutTimestamp: seal-stops-validating-when-certificate-expires` (B-B).
 - `timestampAuthority.url` is `https`; `http` is accepted only for `localhost`, `127.0.0.0/8`, and
   `[::1]`. `attemptTimeoutMilliseconds` is 1000 to 60000 and defaults to 10000.
+- The timestamp authority must answer in DER, as RFC 3161 specifies; a BER answer, such as one
+  with indefinite lengths, is refused as `malformed-response`. Its token must be signed with
+  RSA PKCS#1 v1.5 or ECDSA over SHA-256, SHA-384, or SHA-512; RSA-PSS and SHA-1 are refused as
+  `token-signature-invalid`. Its signer must carry an ESS signing-certificate attribute (v1 or
+  v2, RFC 5816) naming the authority's certificate, or the token is refused as
+  `tsa-certificate-not-named-by-token`. Seal one test document through each authority before you
+  rely on it for B-T.
 - `certificateChainFile` is an absolute path with no `.` or `..` segment. The file is PEM, the
   seal certificate first. `privateKeyRef` is a secret reference to one ES256, ES384, RS256, or
   RS384 private JWK; EdDSA is refused.
