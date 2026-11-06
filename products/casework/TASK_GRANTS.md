@@ -142,7 +142,9 @@ for the task's queue can call
 body.
 Revocation does not require holding the task or reading its source.
 Resource servers call `GET /v1/task-grants/{grantId}/status`; inactive status
-returns no grant detail. Machine callers cannot substitute resources or subjects.
+returns no grant detail. For the status check, machine callers cannot substitute
+resources or subjects. That says nothing about which rows the resource server
+binds; see the row-binding paragraph near the top of this page.
 
 Retired templates and observed definitive subject changes invalidate grants.
 Deferred grants pin an assignment generation: release, reassignment, queue movement, absence-cover
