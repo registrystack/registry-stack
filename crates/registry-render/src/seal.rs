@@ -275,14 +275,22 @@ fn read_chain(id: &str, seal: &SealRuntime) -> Result<CertificateChain, ChainFin
         )
     })?;
     CertificateChain::from_pem(&pem).map_err(|error| {
+        let action = if matches!(error, CertificateError::LeafIsCertificateAuthority) {
+            "Seal with a leaf certificate issued for the seal key, with basicConstraints \
+             CA:FALSE, and list it first, then each issuer in turn. For a test seal, \
+             `registry-render keygen` writes the key and its certificate request, and your own \
+             test root issues the leaf."
+        } else {
+            "Write the seal certificate first, then each issuer in turn, as PEM CERTIFICATE \
+             blocks."
+        };
         chain_error(
             "render.runtime.seal-chain-invalid",
             format!(
                 "signing.seals.{id}.certificateChainFile is not a usable certificate chain: {}",
                 chain_error_text(&error)
             ),
-            "Write the seal certificate first, then each issuer in turn, as PEM CERTIFICATE \
-             blocks.",
+            action,
         )
     })
 }
@@ -528,30 +536,34 @@ impl Seal {
             )
         };
         let key = |code: &str, message: String, action: &str| {
-            refusal(id, "privateKeyRef", code, message, action)
+            refusal(id, "signer/privateKeyRef", code, message, action)
         };
         let chain = read_chain(id, seal).map_err(certificate)?;
         // The resolver's buffer erases the JWK text, private members
         // included, when it drops after parsing.
-        let secret = crate::runtime::resolve_protected_secret(runtime, &seal.private_key_ref)
-            .map_err(|error| {
-                let action = if error == SecretError::UnsafeFile {
-                    "Make the key file a regular file owned by the serving user, with mode 0600 \
+        let secret = crate::runtime::resolve_protected_secret(
+            runtime,
+            seal.signer.private_key_ref(),
+        )
+        .map_err(|error| {
+            let action = if error == SecretError::UnsafeFile {
+                "Make the key file a regular file owned by the serving user, with mode 0600 \
                      or 0400 and one link."
-                } else {
-                    "Provide the seal's private key under the secret provider the reference names."
-                };
-                key(
-                    "render.runtime.seal-key-unreadable",
-                    format!("signing.seals.{id}.privateKeyRef cannot be resolved: {error}"),
-                    action,
-                )
-            })?;
+            } else {
+                "Provide the seal's private key under the secret provider the reference names."
+            };
+            key(
+                "render.runtime.seal-key-unreadable",
+                format!("signing.seals.{id}.signer.privateKeyRef cannot be resolved: {error}"),
+                action,
+            )
+        })?;
         let not_a_key = || {
             key(
                 "render.runtime.seal-key-invalid",
-                format!("signing.seals.{id}.privateKeyRef does not hold a private JWK"),
-                "Store the seal's private key as one ES256, ES384, RS256 or RS384 private JWK.",
+                format!("signing.seals.{id}.signer.privateKeyRef does not hold a private JWK"),
+                "Store the seal's private key as one ES256, ES384, RS256 or RS384 private JWK; \
+                 `registry-render keygen --from-pem` converts an unencrypted PKCS #8 key.",
             )
         };
         let text = std::str::from_utf8(secret.expose_secret()).map_err(|_| not_a_key())?;
@@ -568,7 +580,7 @@ impl Seal {
             return Err(key(
                 "render.runtime.seal-key-unsupported",
                 format!(
-                    "signing.seals.{id}.privateKeyRef is an EdDSA key; PAdES seals use ES256, \
+                    "signing.seals.{id}.signer.privateKeyRef is an EdDSA key; PAdES seals use ES256, \
                      ES384, RS256 or RS384"
                 ),
                 "Issue the seal certificate for an ECDSA P-256, ECDSA P-384 or RSA key.",
@@ -583,17 +595,15 @@ impl Seal {
         match chain.check_for_signing(&signer.public_jwk(), inside_validity) {
             Ok(())
             | Err(CertificateError::Expired { .. } | CertificateError::NotYetValid { .. }) => {}
-            Err(CertificateError::KeyMismatch { .. }) => {
-                return Err(key(
-                    "render.runtime.seal-key-mismatch",
-                    format!(
-                        "signing.seals.{id}.privateKeyRef does not hold the key the seal \
+            Err(CertificateError::KeyMismatch { .. }) => return Err(key(
+                "render.runtime.seal-key-mismatch",
+                format!(
+                    "signing.seals.{id}.signer.privateKeyRef does not hold the key the seal \
                          certificate certifies"
-                    ),
-                    "Point privateKeyRef at the private key of the seal certificate, or the \
+                ),
+                "Point signer.privateKeyRef at the private key of the seal certificate, or the \
                      chain file at the certificate issued for this key.",
-                ))
-            }
+            )),
             Err(CertificateError::MissingSigningKeyUsage { .. }) => {
                 return Err(certificate(usage_finding(id)))
             }
@@ -841,9 +851,10 @@ fn chain_error_text(error: &CertificateError) -> String {
             "certificate {position} was not issued by the certificate after it; list the seal \
              certificate first, then each issuer in turn"
         ),
-        CertificateError::LeafIsCertificateAuthority => "certificate 1 is a CA certificate, \
-             and the first certificate in the file is taken as the seal certificate; list the \
-             seal certificate first, then each issuer in turn"
+        CertificateError::LeafIsCertificateAuthority => "certificate 1 is a CA certificate \
+             (basicConstraints CA:TRUE), and the first certificate in the file is taken as the \
+             seal certificate: a CA certificate certifies other certificates, and validators \
+             refuse it as the signer of a document"
             .to_owned(),
         CertificateError::KeyMismatch { .. } => {
             "the seal certificate does not hold the signing key's public key".to_owned()

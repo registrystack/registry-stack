@@ -264,8 +264,11 @@ certificate, its issuer, and how you hold the key.
 
 You need an OIDC deployment (a seal never works with the legacy API key), a seal certificate chain
 in a PEM file with the seal certificate first, and its private key as one ES256, ES384, RS256, or
-RS384 JWK. Name the seal in the document type's `manifest.yaml` entry with `seal: ministry`, then
-bind it in the runtime file:
+RS384 JWK under the file secret provider. `registry-render keygen --key <file> --csr <file>
+--common-name <seal name>` writes a new key owner-only and the certificate request your
+certificate authority issues the seal certificate from; add `--from-pem <file>` to convert a key
+you already hold as unencrypted PKCS #8 instead. Name the seal in the document type's
+`manifest.yaml` entry with `seal: ministry`, then bind it in the runtime file:
 
 ```yaml
 authentication:
@@ -276,7 +279,9 @@ authentication:
 signing:
   seals:
     ministry:
-      privateKeyRef: secret:file/seal.jwk
+      signer:
+        type: local-jwk
+        privateKeyRef: secret:file/seal.jwk
       certificateChainFile: /etc/registry-render/seal/chain.pem
       timestampAuthority:
         url: https://tsa.example.invalid/tsr
@@ -284,6 +289,9 @@ signing:
       allowedClients: [records-service]
 ```
 
+- `signer.privateKeyRef` names the key under the file secret provider, such as
+  `secret:file/seal.jwk`. An environment reference is refused
+  (`render.runtime.seal-key-requires-file-provider`).
 - `allowedClients` is required and names each client allowed to seal. When `authentication.oidc.allowedClients`
   lists clients, each seal client must also be in that list, or Render refuses the file. Keep these
   separate from any citizen-facing client. `unrestricted` and wildcards are refused.
@@ -348,6 +356,67 @@ visible test marking (the payload contract is `products/render/PAYLOAD.md` in th
 seal when `serve` starts. Use a loopback timestamp authority (`http://127.0.0.1:<port>/...`
 is accepted on loopback only) or `withoutTimestamp` while you develop. Never copy a test seal's
 runtime into production.
+
+### Make a test seal in ten minutes
+
+Render refuses a CA certificate as the seal certificate, so a self-signed root alone cannot seal.
+This makes a test root and a seal key, and has the root issue the seal certificate: a leaf with
+`basicConstraints` `CA:FALSE`. It needs OpenSSL and `registry-render`. Run it in an empty
+directory:
+
+{/* Evidence: crates/registry-render/tests/serve_seal.rs,
+    the_documented_test_seal_seals_with_a_keygen_key_and_a_test_root_leaf, runs this block and the
+    runtime below as written. */}
+
+```sh
+mkdir -m 700 secrets
+cat > test-root.cnf <<'EOF'
+[req]
+distinguished_name = subject
+x509_extensions = root
+prompt = no
+[subject]
+CN = Test seal root (development only)
+[root]
+basicConstraints = critical,CA:TRUE
+keyUsage = critical,keyCertSign,cRLSign
+subjectKeyIdentifier = hash
+EOF
+openssl req -x509 -config test-root.cnf -newkey ec -pkeyopt ec_paramgen_curve:P-256 \
+  -nodes -days 365 -keyout test-root.key -out test-root.pem
+registry-render keygen --key secrets/seal.jwk --csr seal.csr \
+  --common-name "Test seal" --organization "Example Ministry (test)" --country FR
+cat > seal.ext <<'EOF'
+basicConstraints = critical,CA:FALSE
+keyUsage = critical,digitalSignature,nonRepudiation
+extendedKeyUsage = 1.3.6.1.5.5.7.3.36
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid
+EOF
+openssl x509 -req -in seal.csr -CA test-root.pem -CAkey test-root.key -CAcreateserial \
+  -days 90 -sha256 -extfile seal.ext -out seal.pem
+cat seal.pem test-root.pem > chain.pem
+```
+
+`1.3.6.1.5.5.7.3.36` is the document-signing extended key usage (RFC 9336). Set
+`secretProviders.file.root` to the absolute path of `secrets`, and bind the seal as a test seal
+without a timestamp:
+
+```yaml
+signing:
+  seals:
+    ministry:
+      signer:
+        type: local-jwk
+        privateKeyRef: secret:file/seal.jwk
+      certificateChainFile: /absolute/path/to/chain.pem
+      withoutTimestamp: seal-stops-validating-when-certificate-expires
+      allowedClients: [records-service]
+      trust: test-only
+```
+
+Then run `check --environment` and `serve` as above. `test-root.key` can issue certificates: keep
+it out of every deployment, and never trust the test root outside development.
 
 ### Renew the certificate
 

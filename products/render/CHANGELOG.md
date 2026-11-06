@@ -16,7 +16,9 @@
   and `POST /v1/seal/{type}` for document seals.
 - Add optional PAdES document sealing. A document type names a `seal` in its
   manifest, and a `signing.seals` block in the runtime file binds each seal to
-  a private key reference, a certificate chain file, a timestamp policy
+  a signer (`type: local-jwk`, whose `privateKeyRef` names a private JWK
+  through the file secret provider; an environment reference is refused as
+  `render.runtime.seal-key-requires-file-provider`), a certificate chain file, a timestamp policy
   (`timestampAuthority` for baseline B-T, or the named `withoutTimestamp`
   choice for B-B) and the OIDC clients allowed to use it. A timestamp
   authority under a private root is trusted through an optional
@@ -58,7 +60,8 @@
   `is_outcome_unknown()` in place of a public field. The Node and Python
   bindings gain `seal`, and both methods there take the optional correlation
   key. `check --environment` reads each seal's certificate chain, and it and `serve` warn about a seal certificate whose extended key usage names no document-signing purpose, and refuse a chain file whose first
-  certificate, taken as the seal certificate, is a CA certificate. veraPDF
+  certificate, taken as the seal certificate, is a CA certificate, saying
+  why validators refuse it and that a leaf issued with `CA:FALSE` seals. veraPDF
   has passed a test template at every accepted PDF/A level and at PDF/UA-1,
   rendered and sealed (`EVIDENCE.md`). A seal key `serve` cannot read is refused with the secret provider's reason, and its text is erased once parsed. New problem
   kinds with exit codes, for seal requests: `signing-unavailable` (26),
@@ -70,6 +73,15 @@
   cannot hold the seal. Render writes PAdES baseline B-B and B-T
   signatures; `EVIDENCE.md` records the pyHanko, EU DSS and veraPDF runs on
   sealed files `serve` answered. Render makes no eIDAS qualification claim.
+- `registry-render keygen --key <file> --csr <file> --common-name <name>`
+  writes a seal key as the private JWK `signer.privateKeyRef` reads, owner-only,
+  and a PKCS #10 certificate request for it signed with that key
+  (`--organization`, `--country`, and `--algorithm` es256, es384, rs256 or
+  rs384). `--from-pem` converts an unencrypted PKCS #8 key instead; an
+  encrypted PKCS #8, SEC 1, PKCS #1 or PKCS #12 key is refused with the
+  `openssl` command that converts it. Keygen never overwrites a file and never
+  prints the key. The operate guide's "Make a test seal in ten minutes" has a
+  test root issue a seal certificate from the request.
 - `compile --preview-seal <test-only|production>` renders a template's
   sealed variant offline: it adds the payload's `signing` member as the seal
   route does, with `--signer-name` as `signerName`, and signs nothing. The

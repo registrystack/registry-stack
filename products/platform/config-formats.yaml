@@ -2397,7 +2397,9 @@ formats:
         whenOmitted: open
       - pointer: /signing/seals/*/allowedClients
         whenOmitted: refused
-      - pointer: /signing/seals/*/privateKeyRef
+      - pointer: /signing/seals/*/signer
+        whenOmitted: refused
+      - pointer: /signing/seals/*/signer/privateKeyRef
         whenOmitted: refused
       - pointer: /signing/seals/*/timestampAuthority/url
         whenOmitted: refused

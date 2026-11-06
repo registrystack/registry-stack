@@ -23714,6 +23714,95 @@
           "subcommands": []
         },
         {
+          "name": "keygen",
+          "invocation": "registry-render keygen",
+          "about": "Generate a seal key and the certificate request for its seal certificate",
+          "long_about": "Generate a seal key and the certificate request for its seal certificate. Writes the private JWK owner-only to --key, the file a seal's `signer.privateKeyRef` names, and a PKCS #10 request to --csr for the certificate authority. Neither file may exist, and no key material is printed. With --from-pem, converts an existing unencrypted PKCS #8 key instead of generating one.",
+          "usage": "registry-render keygen [OPTIONS] --key <FILE> --csr <FILE> --common-name <TEXT>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--key <FILE>",
+              "description": "New private JWK file, created with mode 0600",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--csr <FILE>",
+              "description": "New PEM certificate request file",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--common-name <TEXT>",
+              "description": "The seal's name, the request's commonName",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--organization <TEXT>",
+              "description": "The institution, the request's organizationName",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--country <CODE>",
+              "description": "The ISO 3166 two-letter country code, the request's countryName",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--algorithm <ALGORITHM>",
+              "description": "Seal algorithm. Default: es256 for a generated key; for --from-pem, the one the key's curve fixes, or rs256 for an RSA key",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [
+                "es256",
+                "es384",
+                "rs256",
+                "rs384"
+              ],
+              "environment": null
+            },
+            {
+              "display": "--from-pem <FILE>",
+              "description": "Unencrypted PKCS #8 PEM private key to convert. Encrypted PKCS #8, SEC 1, PKCS #1 and PKCS #12 files are refused with the `openssl` command that converts them",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help (see a summary with '-h')",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
           "name": "compile",
           "invocation": "registry-render compile",
           "about": "Render one document offline",

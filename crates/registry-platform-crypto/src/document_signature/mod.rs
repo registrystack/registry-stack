@@ -23,6 +23,8 @@
 
 mod asn1;
 mod certificate;
+mod request;
+mod seal_key;
 mod signed_data;
 mod timestamp;
 mod verify;
@@ -31,9 +33,17 @@ mod verify;
 pub mod test_support;
 
 #[cfg(test)]
+mod seal_key_tests;
+#[cfg(test)]
 mod tests;
 
 pub use certificate::{CertificateChain, CertificateError, CertificateFingerprint};
+pub use request::{
+    certificate_request, CertificateRequest, CertificateRequestError, CertificateRequestSubject,
+};
+pub use seal_key::{
+    generate_seal_key, private_seal_key_json, seal_key_from_pkcs8_pem, SealKeyError,
+};
 pub use signed_data::{add_signature_timestamp, sign_detached, CmsError, DetachedSignature};
 pub use timestamp::{
     accept_timestamp_response, random_timestamp_nonce, timestamp_request, SignatureTimestamp,

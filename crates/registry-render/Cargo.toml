@@ -46,6 +46,7 @@ tokio = { workspace = true, features = ["process", "io-util"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
+zeroize = { workspace = true }
 
 [dev-dependencies]
 async-trait = { workspace = true }

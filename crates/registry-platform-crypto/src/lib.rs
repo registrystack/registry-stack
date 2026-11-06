@@ -33,9 +33,11 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 #[cfg(feature = "cms-signing")]
 pub use document_signature::{
-    accept_timestamp_response, add_signature_timestamp, random_timestamp_nonce, sign_detached,
-    timestamp_request, CertificateChain, CertificateError, CertificateFingerprint, CmsError,
-    DetachedSignature, SignatureTimestamp, SignerVerificationError, TimestampError,
+    accept_timestamp_response, add_signature_timestamp, certificate_request, generate_seal_key,
+    private_seal_key_json, random_timestamp_nonce, seal_key_from_pkcs8_pem, sign_detached,
+    timestamp_request, CertificateChain, CertificateError, CertificateFingerprint,
+    CertificateRequest, CertificateRequestError, CertificateRequestSubject, CmsError,
+    DetachedSignature, SealKeyError, SignatureTimestamp, SignerVerificationError, TimestampError,
     MAX_TIMESTAMP_RESPONSE_BYTES,
 };
 use ed25519_dalek::{
@@ -1535,10 +1537,10 @@ impl GeneratedKeyAlgorithm {
 const GENERATED_RSA_KEY_SIZE: AwsRsaKeySize = AwsRsaKeySize::Rsa2048;
 
 /// Width in bytes of a P-256 scalar and of each of its point coordinates.
-const P256_COORDINATE_BYTES: usize = 32;
+pub(crate) const P256_COORDINATE_BYTES: usize = 32;
 
 /// Width in bytes of a P-384 scalar and of each of its point coordinates.
-const P384_COORDINATE_BYTES: usize = 48;
+pub(crate) const P384_COORDINATE_BYTES: usize = 48;
 
 /// Generate a fresh private JWK carrying its `alg` and a `kid` that is the RFC
 /// 7638 thumbprint of its public half.
@@ -1604,6 +1606,16 @@ fn generate_ecdsa_jwk(
 ) -> Result<PrivateJwk, CryptoError> {
     let key_pair = EcdsaKeyPair::generate(signing)
         .map_err(|_| CryptoError::Crypto("ECDSA key generation failed"))?;
+    ecdsa_private_jwk(&key_pair, curve, coordinate_bytes)
+}
+
+/// The private JWK of an aws-lc-rs ECDSA key pair on `curve`, without `alg`
+/// or `kid`.
+pub(crate) fn ecdsa_private_jwk(
+    key_pair: &EcdsaKeyPair,
+    curve: &str,
+    coordinate_bytes: usize,
+) -> Result<PrivateJwk, CryptoError> {
     // aws-lc-rs zeroizes this buffer on drop, and the base64url encoding below
     // lands straight in the JWK member `PrivateJwk::drop` zeroizes, so the
     // scalar exists in exactly those two places.
@@ -1643,18 +1655,25 @@ fn generate_ecdsa_jwk(
 fn generate_rs384_jwk() -> Result<PrivateJwk, CryptoError> {
     let key_pair = AwsRsaKeyPair::generate(GENERATED_RSA_KEY_SIZE)
         .map_err(|_| CryptoError::Crypto("RS384 key generation failed"))?;
-    // aws-lc-rs exports an RSA private key as PKCS#8 only, while a JWK carries
-    // the eight PKCS#1 members, so the PKCS#8 wrapper comes off here. This is
-    // the inverse of `rsa_private_key_der`, which reassembles the same PKCS#1
-    // structure to hand a JWK back to aws-lc-rs. The exported buffer zeroizes
-    // on drop and every member below borrows from it rather than copying.
+    // aws-lc-rs exports an RSA private key as PKCS#8 only. The exported
+    // buffer zeroizes on drop.
     let pkcs8: Pkcs8V1Der<'_> = key_pair
         .as_der()
         .map_err(|_| CryptoError::Crypto("RSA private key export failed"))?;
-    let info = Pkcs8PrivateKeyInfo::try_from(pkcs8.as_ref())
-        .map_err(|_| CryptoError::Crypto("exported RSA private key is not PKCS#8"))?;
+    rsa_private_jwk_from_pkcs8(pkcs8.as_ref())
+}
+
+/// The private JWK of an RSA key given as PKCS#8 DER, without `alg` or
+/// `kid`.
+pub(crate) fn rsa_private_jwk_from_pkcs8(pkcs8: &[u8]) -> Result<PrivateJwk, CryptoError> {
+    // A JWK carries the eight PKCS#1 members, so the PKCS#8 wrapper comes off
+    // here. This is the inverse of `rsa_private_key_der`, which reassembles
+    // the same PKCS#1 structure to hand a JWK back to aws-lc-rs. Every member
+    // below borrows from the caller's buffer rather than copying.
+    let info = Pkcs8PrivateKeyInfo::try_from(pkcs8)
+        .map_err(|_| CryptoError::Crypto("the RSA private key is not PKCS#8"))?;
     let key = Pkcs1RsaPrivateKey::from_der(info.private_key)
-        .map_err(|_| CryptoError::Crypto("exported RSA private key is not PKCS#1"))?;
+        .map_err(|_| CryptoError::Crypto("the RSA private key is not PKCS#1"))?;
 
     Ok(PrivateJwk {
         kty: "RSA".to_owned(),

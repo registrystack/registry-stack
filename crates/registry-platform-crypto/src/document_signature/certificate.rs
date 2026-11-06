@@ -450,9 +450,9 @@ fn directory_string(value: &der::Any) -> Option<String> {
     Some(text)
 }
 
-const PEM_BEGIN: &str = "-----BEGIN ";
-const PEM_END: &str = "-----END ";
-const PEM_DASHES: &str = "-----";
+pub(super) const PEM_BEGIN: &str = "-----BEGIN ";
+pub(super) const PEM_END: &str = "-----END ";
+pub(super) const PEM_DASHES: &str = "-----";
 
 /// Split PEM text into the DER bodies of its blocks, refusing any block that
 /// is malformed or not labelled `CERTIFICATE`.

@@ -33,6 +33,7 @@ pub mod cli;
 pub mod envelope;
 pub mod hash;
 pub mod init;
+pub mod keygen;
 pub mod labels;
 pub mod manifest;
 pub mod openapi;
