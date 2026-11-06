@@ -4294,7 +4294,7 @@
       },
       "artifact": {
         "path": "products/adapter/schemas/preview-expectations.v1alpha1.schema.json",
-        "sha256": "e53ed62c92b3e8603a68aaa6d22fc7358ad7f1d3defbe2f67e049dfd05b18715",
+        "sha256": "05ca00c30b9126084ea5d52e17db5002f7afb46e9aceac121fe42489afc5caa1",
         "mediaType": "application/schema+json"
       }
     },

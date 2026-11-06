@@ -57,8 +57,11 @@ pub enum SampleExpectation {
     /// that target field, in the mapping's target syntax; without one, any
     /// refusal of the mapping will do.
     Refused {
+        /// An assignment's `target`, written in the mapping's target
+        /// syntax (dotted names or quoted keys).
+        #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 256)))]
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        target: Option<ExternalId>,
+        target: Option<String>,
     },
 }
 
@@ -172,7 +175,7 @@ mod tests {
         assert_eq!(
             parsed.samples[&key("missing")],
             SampleExpectation::Refused {
-                target: Some(key("respondentName"))
+                target: Some("respondentName".to_string())
             }
         );
     }
@@ -206,7 +209,6 @@ mod tests {
             json!({"type": "rejected"}),
             json!({"type": "Accepted"}),
             json!({"type": "accepted", "target": "x"}),
-            json!({"type": "refused", "target": ""}),
             json!({"type": "refused", "target": 7}),
             json!({"type": "refused", "extra": "b"}),
             json!({"refused": "a"}),
@@ -281,6 +283,25 @@ mod tests {
         );
         assert_eq!(findings[0].path, "/samples/b/target");
         assert!(!findings[0].message.contains("nowhere"), "{findings:?}");
+    }
+
+    #[test]
+    fn a_target_outside_the_target_syntax_or_past_its_bound_is_refused_as_unknown() {
+        let too_long = "a".repeat(300);
+        let parsed = expectations(json!({
+            "empty": {"type": "refused", "target": ""},
+            "long": {"type": "refused", "target": too_long},
+            "unclosed": {"type": "refused", "target": "\"open"},
+        }));
+        let findings = check_preview_expectations(
+            &parsed,
+            &names(&["empty", "long", "unclosed"]),
+            &names(&["respondentName"]),
+        );
+        assert_eq!(findings.len(), 3, "{findings:?}");
+        for finding in &findings {
+            assert_eq!(finding.code, "adapter.mapping.expectation-target-unknown");
+        }
     }
 
     #[test]

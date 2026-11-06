@@ -257,12 +257,16 @@ done
   --pack products/adapter/packs/dhis2-tracker/pack.yaml --deny-warnings >/dev/null
 # The KoboToolbox samples record their expected results beside them, so the
 # refused sample is a deliberate input: a result that differs from
-# preview/expected.yaml fails the preview.
+# preview/expected.yaml fails the preview. The whole directory is passed, so a
+# sample added with an expectation is judged too (the expectations file is
+# never a sample).
+preview_inputs=()
+for sample in products/adapter/examples/kobotoolbox-job/preview/*; do
+  preview_inputs+=(--input "$sample")
+done
 "$adapterctl_bin" mapping preview \
   products/adapter/examples/kobotoolbox-job/mappings/register-household.mapping.yaml \
-  --input products/adapter/examples/kobotoolbox-job/preview/accepted-string-id.json \
-  --input products/adapter/examples/kobotoolbox-job/preview/accepted-integer-id.json \
-  --input products/adapter/examples/kobotoolbox-job/preview/missing-respondent.json >/dev/null
+  "${preview_inputs[@]}" >/dev/null
 printf 'Mapping model checks passed\n'
 
 # The OpenCRVS birth example is held to the same two commands. Its fixtures
