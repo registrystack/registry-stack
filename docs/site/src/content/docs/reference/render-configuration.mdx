@@ -11,6 +11,8 @@ locale: en
 standards_referenced:
   - json-schema
   - pades
+  - pdf-a
+  - pdf-ua
 wide: true
 ---
 
@@ -133,7 +135,6 @@ Each sealed document type is checked against its `pdfStandard`, at its `seal` me
 | Code | Severity | Meaning |
 |---|---|---|
 | `render.bundle.seal-space-exceeds-standard` | error | The seal reserves more signature space than the standard's string limit holds: 65535 bytes under PDF/A-1, 32767 under PDF/A-2 and PDF/A-3. `check --environment` reports it, and `serve` refuses to start. |
-| `render.bundle.seal-standard-unverified` | warning | No validator run has checked a file sealed under this PDF/A level: A-1a, A-2a, A-2u, A-3a, A-3b, A-3u, A-4e or A-4f. veraPDF has passed sealed A-1b, A-2b, A-4 and PDF/UA-1 files. `check` reports it from the bundle alone; `serve` logs it at startup for a seal it serves. |
 
 Without `--environment`, `check` reads no chain file and says so: the human output ends with
 `seal chains not read: pass --environment to check them`, and the JSON report has

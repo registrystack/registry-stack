@@ -20,19 +20,16 @@ REGISTRY_SEAL_SAMPLE_DIR=<existing directory> \
   cargo test -p registry-render --test serve_seal write_served_seal_samples -- --ignored
 ```
 
-| Sample | Document type | Level | PDF standard |
-|---|---|---|---|
-| `notice-b-t.pdf` | `notice` | B-T | none |
-| `notice-b-b.pdf` | `notice` | B-B | none |
-| `archive-1b-b-t.pdf` | `archive-1b` | B-T | PDF/A-1b |
-| `archive-b-t.pdf` | `archive` | B-T | PDF/A-2b |
-| `archive-4-b-t.pdf` | `archive-4` | B-T | PDF/A-4 |
-| `accessible-b-t.pdf` | `accessible` | B-T | PDF/UA-1 |
+It writes a B-T and a B-B `notice` with no PDF standard, and one B-T file
+for each PDF/A level `pdfStandard` accepts and for PDF/UA-1: document types
+`archive-1a`, `archive-1b`, `archive` (A-2b), `archive-2a`, `archive-2u`,
+`archive-3a`, `archive-3b`, `archive-3u`, `archive-4`, `archive-4e`,
+`archive-4f` and `accessible` (UA-1), each the same notice template.
 
 **pyHanko 0.38.1**, through `products/render/scripts/validate-seal.py`
 (`uv run --offline --script`, both roots as `--trust-root`, the answer's
 `documentSha256` as `--document-sha256`, no fetching, soft-fail revocation):
-all six files returned `ok: true`. Each B-T file passed twelve checks:
+all fourteen files returned `ok: true`. Each B-T file passed twelve checks:
 `one-signature`, `intact`, `valid`, `trusted`, `not-revoked`,
 `covers-entire-file`, `certification-docmdp-p2`, `docmdp-ok`,
 `subfilter-cades-detached`, `no-signing-time-attribute`,
@@ -43,14 +40,34 @@ with one byte flipped at offset 4096 returned `ok: false`, failing `intact`,
 
 **veraPDF 1.30.3**, from
 `verapdf/cli@sha256:d74b7026c18a0f171e73c153b617fe6520e1511feb24ca98a348b2bb897669fb`
-run with `--platform linux/amd64 --network none`: PASS for each sealed file
-and for its first revision (the sealed file cut at the rendered length), eight
-runs in all: `archive-1b` against `1b`, `archive` against `2b`, `archive-4`
-against `4` and `accessible` against `ua1`.
+run with `--platform linux/amd64 --network none` on 2026-11-06, with the
+`--flavour` matching each level. The first revision is the sealed file cut at
+the prefix whose SHA-256 is the answer's `documentSha256`, which is the file
+the render worker wrote.
+
+| Level | Document type | `--flavour` | First revision | Sealed file |
+|---|---|---|---|---|
+| PDF/A-1a | `archive-1a` | `1a` | PASS | PASS |
+| PDF/A-1b | `archive-1b` | `1b` | PASS | PASS |
+| PDF/A-2a | `archive-2a` | `2a` | PASS | PASS |
+| PDF/A-2b | `archive` | `2b` | PASS | PASS |
+| PDF/A-2u | `archive-2u` | `2u` | PASS | PASS |
+| PDF/A-3a | `archive-3a` | `3a` | PASS | PASS |
+| PDF/A-3b | `archive-3b` | `3b` | PASS | PASS |
+| PDF/A-3u | `archive-3u` | `3u` | PASS | PASS |
+| PDF/A-4 | `archive-4` | `4` | PASS | PASS |
+| PDF/A-4e | `archive-4e` | `4e` | PASS | PASS |
+| PDF/A-4f | `archive-4f` | `4f` | PASS | PASS |
+| PDF/UA-1 | `accessible` | `ua1` | PASS | PASS |
+
+Every level keeps its conformance once sealed, so `check` and `serve` warn
+about none of them.
 
 **EU DSS 6.5.1**, the `dss-pades-pdfbox` library with its default validation
 policy, both roots as trusted certificates, revocation checking for untrusted
-chains off, run under a macOS sandbox profile that denies network access:
+chains off, run under a macOS sandbox profile that denies network access,
+on six files written by the same code before the fixture gained the other
+levels: both notices, `archive-1b`, `archive`, `archive-4` and `accessible`:
 
 - Format `PAdES-BASELINE-T` for the five B-T files and `PAdES-BASELINE-B` for
   `notice-b-b.pdf`.
@@ -67,15 +84,32 @@ chains off, run under a macOS sandbox profile that denies network access:
   roots have none of these, and Render embeds no revocation data (no B-LT or
   B-LTA).
 
+To repeat the DSS run, take the library jars of the EU DSS 6.5.1
+demonstration bundle and a small Java program that:
+
+1. loads `seal-root.pem` and `tsa-root.pem` from the sample directory into a
+   `CommonTrustedCertificateSource`;
+2. sets that source on a `CommonCertificateVerifier`, with
+   `setCheckRevocationForUntrustedChains(false)` and no online certificate,
+   CRL or OCSP source;
+3. validates each sealed file with
+   `SignedDocumentValidator.fromDocument(...)` and `validateDocument()` under
+   the default policy, and prints the simple report's format, indication and
+   AdES errors and warnings.
+
+Run it with network access denied; this run used macOS `sandbox-exec` with a
+profile that denies network access.
+
 What these runs do not show:
 
 - No run used a production certificate chain or a public timestamp authority,
   so no DSS run reached a passed indication, and `trusted` in pyHanko means
   only that the test roots were supplied.
 - No ETSI conformance checker or plugtest was run.
-- No run covers a seal under PDF/A-1a, A-2a, A-2u, A-3a, A-3b, A-3u, A-4e or
-  A-4f; `check` and `serve` warn about one
-  (`render.bundle.seal-standard-unverified`).
+- veraPDF checks the machine-checkable rules of each level. The parts of the
+  accessible levels (A-1a, A-2a, A-3a, UA-1) that need a person, such as
+  whether alternative text and reading order make sense, depend on the
+  template, and no run judged them.
 - None of this is an eIDAS qualification claim.
 
 ## Configuration conventions (2026-10-08)

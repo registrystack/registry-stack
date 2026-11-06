@@ -190,23 +190,6 @@ pub fn sealable(
     }
 }
 
-/// Whether a validator run is recorded that shows a file sealed under
-/// `standard` keeps its PDF/A level. veraPDF passed sealed PDF/A-1b,
-/// PDF/A-2b and PDF/A-4 files that `serve` answered
-/// (`products/render/EVIDENCE.md`). The other PDF/A levels have no such run,
-/// though [`sealable`] knows no rule a seal breaks there. A standard that is
-/// not a PDF/A level has no PDF/A level to keep.
-pub fn seal_standard_verified(standard: Option<PdfStandardSpec>) -> bool {
-    use PdfStandardSpec as S;
-    let Some(standard) = standard else {
-        return true;
-    };
-    match standard {
-        S::A1a | S::A2a | S::A2u | S::A3a | S::A3b | S::A3u | S::A4f | S::A4e => false,
-        S::V1_4 | S::V1_5 | S::V1_6 | S::V1_7 | S::V2_0 | S::A1b | S::A2b | S::A4 | S::Ua1 => true,
-    }
-}
-
 impl SignatureField {
     fn validate(&self) -> Result<(), PdfSignatureError> {
         if self.contents_capacity == 0 || self.contents_capacity > MAX_CONTENTS_CAPACITY {

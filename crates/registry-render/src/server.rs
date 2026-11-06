@@ -163,19 +163,6 @@ async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
     // render could write a nonconformant file.
     let seals = crate::seal::load(&runtime)?;
     crate::seal::refuse_unsealable(&bundle.manifest, &seals)?;
-    // A document type sealed under a PDF/A level no validator run has
-    // checked sealed is served all the same; `check` reports the same
-    // finding.
-    for document in crate::seal::unverified_seal_standards(&bundle.manifest) {
-        if seals.contains_key(&document.seal_id) {
-            tracing::warn!(
-                code = crate::seal::UNVERIFIED_STANDARD_CODE,
-                pointer = %document.pointer(),
-                "{}",
-                document.message()
-            );
-        }
-    }
     // Plain rendering starts whatever a seal's state; these lines are where
     // an operator learns a seal cannot sign, or soon cannot, without polling
     // `/ready`. Each names the seal id and a value-free reason only.

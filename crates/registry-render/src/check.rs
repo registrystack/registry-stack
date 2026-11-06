@@ -331,7 +331,6 @@ fn check_bundle(dir: &Path) -> BundleCheck {
     diagnostics.extend(check_label_key_sets(&bundle));
     let (scanned, scanned_files) = scan_unread_yaml(dir, &bundle);
     diagnostics.extend(scanned);
-    diagnostics.extend(unverified_seal_standards(dir, &bundle.manifest));
     let schema_files = bundle
         .documents
         .values()
@@ -625,25 +624,6 @@ fn unsealable_members(
             .map(|document| ManifestFinding {
                 severity: Severity::Error,
                 code: crate::seal::UNSEALABLE_CODE,
-                pointer: document.pointer(),
-                message: document.message(),
-                action: document.action(),
-            })
-            .collect(),
-    )
-}
-
-/// Each document type sealed under a PDF/A level no recorded validator run
-/// has checked sealed, as a warning at the document type's `seal` member.
-fn unverified_seal_standards(dir: &Path, manifest: &Manifest) -> Vec<Diagnostic> {
-    let found = crate::seal::unverified_seal_standards(manifest);
-    at_manifest_members(
-        dir,
-        found
-            .iter()
-            .map(|document| ManifestFinding {
-                severity: Severity::Warning,
-                code: crate::seal::UNVERIFIED_STANDARD_CODE,
                 pointer: document.pointer(),
                 message: document.message(),
                 action: document.action(),
