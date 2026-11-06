@@ -87,7 +87,7 @@ exits 101):
 | 15 | `render-timeout` | render exceeded its wall-clock budget and was killed |
 | 16 | `render-panicked` | render worker panicked; the worker is recycled |
 | 17 | `unauthorized` | missing or invalid bearer credential (serve, HTTP 401) |
-| 18 | `rate-limited` | caller exceeded a limit (reserved; HTTP 429) |
+| 18 | `rate-limited` | as many seals as render slots are already in flight (serve, HTTP 429) |
 | 19 | `audit-failed` | audit destination refused or failed (fail closed) |
 | 20 | `runtime-invalid` | serve runtime configuration invalid |
 | 21 | `internal` | internal invariant broke; never carries data |

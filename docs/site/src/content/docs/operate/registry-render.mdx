@@ -293,6 +293,9 @@ signing:
   `seal refused` log warning name the failing check as `reason`, such as `timed-out` or
   `nonce-mismatch`; the
   [configuration reference](../../reference/render-configuration/#seal-documents) lists them.
+- A seal releases its render slot before it signs and waits on the timestamp authority. Seals in
+  flight are bounded by `limits.maximumConcurrentRenders` on their own: one more is refused with
+  `rate-limited` (429) rather than queued behind a slow authority.
 
 Run `registry-render check --bundle <package> --runtime-config runtime.yaml --environment`. It
 reads each chain file, never the key, and it fails on an unreadable or malformed chain, a seal

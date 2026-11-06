@@ -12,7 +12,10 @@
   sealed PDF with `documentSha256` over the first revision,
   `signedFileSha256` over the whole file and the package's `bundleHash`
   (`X-Registry-Bundle-Hash` on the PDF answer). A failing timestamp fails the request
-  and never falls back to B-B. `/ready` adds a `signing` member per seal and
+  and never falls back to B-B. Seals in flight, which hold no render slot
+  while they sign and wait on the authority, are bounded by
+  `limits.maximumConcurrentRenders`; one more is refused with `rate-limited`
+  (429). `/ready` adds a `signing` member per seal and
   stays ready while a seal is unavailable; `serve` logs a warning at startup
   for a seal that cannot sign or expires within 30 days. Audit entries add the value-free
   `sealId`, `documentSha256`, `signedFileSha256`, `certificateSha256` and
