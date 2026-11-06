@@ -19,7 +19,6 @@ use registry_platform_yaml::Diagnostic;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::pdf_signature::{PreparedPdf, SignatureField};
 use crate::problem::{ProblemKind, RenderProblem};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,44 +42,21 @@ pub struct WorkerRequest {
     pub max_output_bytes: usize,
     #[serde(default = "default_memory_limit")]
     pub memory_limit_bytes: u64,
-    /// Present only on a seal request: render with the `signing` member and
-    /// append the signature field the parent fixed.
+    /// Present only on a seal request: render with the `signing` member.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seal: Option<WorkerSeal>,
 }
 
-/// What the parent asks the worker to prepare for a seal. The parent fixes
-/// every value, including the signing time and the reserved space, so the
-/// worker holds no key and makes no choice; it renders and writes the field.
+/// What a seal tells the worker: the template payload's `signing` member,
+/// and nothing more. The worker renders the first revision with it and
+/// answers like a plain render; the parent writes the signature field after
+/// that revision, signs and embeds, so the worker holds no key and writes no
+/// byte after the first revision.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WorkerSeal {
     /// The template payload's `signing` member.
     pub signing: crate::envelope::SigningPayload,
-    /// RFC 3339, whole seconds, UTC: the signature dictionary's `/M`.
-    pub signing_time: String,
-    /// Bytes reserved for the CMS signature.
-    pub contents_capacity: usize,
-    /// The signature field's partial name.
-    pub field_name: String,
-}
-
-impl WorkerSeal {
-    fn field(&self) -> Result<SignatureField, RenderProblem> {
-        let signing_time = chrono::DateTime::parse_from_rfc3339(&self.signing_time)
-            .map_err(|_| {
-                RenderProblem::new(
-                    ProblemKind::Internal,
-                    "the seal request's signing time is not RFC 3339",
-                )
-            })?
-            .with_timezone(&chrono::Utc);
-        Ok(SignatureField {
-            signing_time,
-            contents_capacity: self.contents_capacity,
-            field_name: self.field_name.clone(),
-        })
-    }
 }
 
 fn default_max_output() -> usize {
@@ -94,6 +70,7 @@ fn default_memory_limit() -> u64 {
 /// A problem as it crosses the process boundary: kind slug plus fields, so
 /// the parent reconstructs the same exit codes and HTTP statuses.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct WorkerProblem {
     pub kind: String,
     pub detail: String,
@@ -128,7 +105,9 @@ impl WorkerProblem {
     }
 }
 
+/// A render's answer, for a plain render and for a seal's first revision.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct WorkerRendered {
     pub document_id: String,
     pub pdf_base64: String,
@@ -143,32 +122,16 @@ pub struct WorkerRendered {
     pub warnings: Vec<String>,
 }
 
-/// A seal request's answer: the sealed render with its signature field
-/// appended. The parent trusts none of it until
-/// [`PreparedPdf::check`] accepts the shape.
+/// The worker's answer, externally tagged: `{"rendered": {...}}` or
+/// `{"failed": {"problem": {...}}}`. No member is buffered (no internal tag,
+/// no untagged or flattened member), and the answer and problem structs
+/// refuse unknown members, so the parent types a frame as it reads it. An
+/// internally tagged enum would first read the whole frame into an untyped
+/// tree, as parsing into a `serde_json::Value` does.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct WorkerPrepared {
-    pub document_id: String,
-    pub prepared: PreparedPdf,
-    /// The length of the first revision, Render's own PDF, at the start of
-    /// `prepared`.
-    pub first_revision_len: usize,
-    pub data_sha256: String,
-    pub document_version: u32,
-    pub bundle_version: u32,
-    pub bundle_hash: String,
-    #[serde(default)]
-    pub deps: Vec<String>,
-    #[serde(default)]
-    pub warnings: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "outcome", rename_all = "camelCase")]
 pub enum WorkerResponse {
     Rendered(Box<WorkerRendered>),
-    Prepared(Box<WorkerPrepared>),
     Failed { problem: WorkerProblem },
 }
 
@@ -373,16 +336,24 @@ fn render_in_worker(request: &WorkerRequest) -> WorkerResponse {
         assets: request.assets.clone(),
         issued_at,
     };
-    if let Some(seal) = &request.seal {
-        return prepare_in_worker(&bundle, document, &render_request, request, seal);
-    }
-    match crate::render::render_with_limits(
-        &bundle,
-        document,
-        &render_request,
-        request.strict,
-        request.max_output_bytes,
-    ) {
+    let rendered = match &request.seal {
+        Some(seal) => crate::render::render_for_sealing(
+            &bundle,
+            document,
+            &render_request,
+            &seal.signing,
+            request.strict,
+            request.max_output_bytes,
+        ),
+        None => crate::render::render_with_limits(
+            &bundle,
+            document,
+            &render_request,
+            request.strict,
+            request.max_output_bytes,
+        ),
+    };
+    match rendered {
         Ok(rendered) => WorkerResponse::Rendered(Box::new(WorkerRendered {
             document_id: rendered.document_id.clone(),
             pdf_base64: base64::engine::general_purpose::STANDARD.encode(&rendered.pdf),
@@ -400,84 +371,16 @@ fn render_in_worker(request: &WorkerRequest) -> WorkerResponse {
     }
 }
 
-/// Render the sealed first revision and append the parent's signature field.
-fn prepare_in_worker(
-    bundle: &crate::bundle::Bundle,
-    document: &crate::bundle::LoadedDocument,
-    render_request: &crate::render::RenderRequest,
-    request: &WorkerRequest,
-    seal: &WorkerSeal,
-) -> WorkerResponse {
-    let failed = |problem: RenderProblem| WorkerResponse::Failed {
-        problem: (&problem).into(),
-    };
-    let field = match seal.field() {
-        Ok(field) => field,
-        Err(problem) => return failed(problem),
-    };
-    let rendered = match crate::render::render_for_sealing(
-        bundle,
-        document,
-        render_request,
-        &seal.signing,
-        request.strict,
-        request.max_output_bytes,
-    ) {
-        Ok(rendered) => rendered,
-        Err(problem) => return failed(problem),
-    };
-    let prepared = match crate::pdf_signature::prepare(&rendered.pdf, &field) {
-        Ok(prepared) => prepared,
-        Err(error) => {
-            return failed(RenderProblem::new(
-                ProblemKind::Internal,
-                format!("the signature field could not be prepared: {error}"),
-            ))
-        }
-    };
-    WorkerResponse::Prepared(Box::new(WorkerPrepared {
-        document_id: rendered.document_id,
-        prepared,
-        first_revision_len: rendered.pdf.len(),
-        data_sha256: rendered.data_sha256,
-        document_version: rendered.document_version,
-        bundle_version: rendered.bundle_version,
-        bundle_hash: rendered.bundle_hash,
-        deps: rendered.deps,
-        warnings: rendered.warnings,
-    }))
-}
-
-/// The parent side of a plain render: see [`exchange`].
+/// The parent side of a render, plain or a seal's first revision: see
+/// [`exchange`].
 pub async fn supervise(
     request: WorkerRequest,
     timeout: Duration,
 ) -> Result<WorkerRendered, RenderProblem> {
     match exchange(request, timeout).await? {
         WorkerResponse::Rendered(rendered) => Ok(*rendered),
-        WorkerResponse::Prepared(_) => Err(unexpected_answer()),
         WorkerResponse::Failed { problem } => Err(problem.into_render_problem()),
     }
-}
-
-/// The parent side of a seal request: see [`exchange`]. The answer is
-/// untrusted until its shape is checked.
-pub async fn supervise_seal(
-    request: WorkerRequest,
-    timeout: Duration,
-) -> Result<WorkerPrepared, RenderProblem> {
-    match exchange(request, timeout).await? {
-        WorkerResponse::Prepared(prepared) => Ok(*prepared),
-        WorkerResponse::Rendered(_) => Err(unexpected_answer()),
-        WorkerResponse::Failed { problem } => Err(problem.into_render_problem()),
-    }
-}
-
-fn unexpected_answer() -> RenderProblem {
-    RenderProblem::new(
-        ProblemKind::Internal,
-        "the render worker answered with another kind of result than requested",
-    )
 }
 
 /// Spawn a worker, send the request, await the response, kill at the
@@ -538,9 +441,7 @@ async fn exchange_with(
         }
         let mut bytes = vec![0u8; len];
         stdout.read_exact(&mut bytes).await?;
-        let value: serde_json::Value = serde_json::from_slice(&bytes)
-            .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
-        Ok(value)
+        Ok(bytes)
     };
     let deadline = tokio::time::Instant::now() + timeout;
     let frame = tokio::time::timeout_at(deadline, async {
@@ -548,7 +449,7 @@ async fn exchange_with(
         read.await
     });
     let response = match frame.await {
-        Ok(Ok(value)) => value,
+        Ok(Ok(bytes)) => bytes,
         Ok(Err(err)) => {
             let _ = child.kill().await;
             return Err(RenderProblem::new(
@@ -580,7 +481,8 @@ async fn exchange_with(
             "render worker killed: it did not exit after answering, by the render deadline"
         );
     }
-    serde_json::from_value(response).map_err(|err| {
+    // Typed straight from the frame's bytes, never through an untyped value.
+    serde_json::from_slice(&response).map_err(|err| {
         RenderProblem::new(
             ProblemKind::RenderPanicked,
             format!("render worker returned an unreadable response: {err}"),
@@ -716,8 +618,14 @@ mod tests {
             },
         };
         let body = serde_json::to_vec(&answer).expect("answer serializes");
+        framing_stand_in(dir, &body, after)
+    }
+
+    /// A stand-in worker that writes `body` as one frame and then runs
+    /// `after` (shell).
+    fn framing_stand_in(dir: &std::path::Path, body: &[u8], after: &str) -> std::path::PathBuf {
         let mut frame = (body.len() as u32).to_le_bytes().to_vec();
-        frame.extend_from_slice(&body);
+        frame.extend_from_slice(body);
         let frame_file = dir.join("answer.frame");
         std::fs::write(&frame_file, frame).expect("write frame");
         let stand_in = dir.join("answering-worker");
@@ -777,6 +685,34 @@ mod tests {
         }
     }
 
+    /// U2: the parent types a worker's answer as it reads the frame. A member
+    /// the protocol does not have is refused at its name, before its value
+    /// is read, so a hostile frame of nested arrays costs the parent no more
+    /// than the frame's own bytes. A frame read into an untyped tree first
+    /// would walk the whole nesting and stop at the parser's depth limit.
+    #[tokio::test]
+    async fn a_worker_answer_is_typed_as_the_frame_is_read() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let nested = format!("{}{}", "[".repeat(1000), "]".repeat(1000));
+        let body = format!(r#"{{"rendered":{{"smuggled":{nested}}}}}"#);
+        let stand_in = framing_stand_in(dir.path(), body.as_bytes(), "exit 0");
+        let answer = exchange_with(
+            worker_command(&stand_in),
+            super::seal_tests::receipt_request(None),
+            std::time::Duration::from_secs(10),
+        )
+        .await;
+        let Err(problem) = answer else {
+            panic!("a frame with an unknown member was accepted: {answer:?}");
+        };
+        assert_eq!(problem.kind, crate::problem::ProblemKind::RenderPanicked);
+        assert!(
+            problem.detail.contains("unknown field `smuggled`"),
+            "{}",
+            problem.detail
+        );
+    }
+
     #[test]
     fn only_the_loader_search_paths_are_kept() {
         let mut command = tokio::process::Command::new("/usr/bin/env");
@@ -824,11 +760,13 @@ pub(crate) mod seal_tests {
         }
     }
 
-    /// The packaged receipt, prepared in process for `seal` as a worker
-    /// answers the parent.
-    pub(crate) fn prepared_receipt(seal: WorkerSeal) -> WorkerPrepared {
+    /// The packaged receipt's first revision for `seal`, rendered in
+    /// process as a worker answers the parent.
+    pub(crate) fn sealed_receipt(seal: WorkerSeal) -> Vec<u8> {
         match render_in_worker(&receipt_request(Some(seal))) {
-            WorkerResponse::Prepared(prepared) => *prepared,
+            WorkerResponse::Rendered(rendered) => base64::engine::general_purpose::STANDARD
+                .decode(&rendered.pdf_base64)
+                .expect("the worker answers base64"),
             other => panic!("seal render: {other:?}"),
         }
     }
@@ -839,60 +777,53 @@ pub(crate) mod seal_tests {
                 signer_name: Some("Registry Stack Test Ministry".to_owned()),
                 test_only: true,
             },
-            signing_time: "2026-11-06T09:15:42Z".to_owned(),
-            contents_capacity: 16 * 1024,
-            field_name: "RegistrySeal".to_owned(),
         }
     }
 
+    fn rendered(response: WorkerResponse) -> WorkerRendered {
+        match response {
+            WorkerResponse::Rendered(rendered) => *rendered,
+            other => panic!("render: {other:?}"),
+        }
+    }
+
+    /// A seal request answers like a plain render, with the first revision
+    /// only: a byte-stable single-revision PDF rendered with the `signing`
+    /// member, holding no signature field. The parent writes the field.
     #[test]
-    fn a_seal_request_returns_the_prepared_field_over_a_sealed_render() {
-        let plain = match render_in_worker(&receipt_request(None)) {
-            WorkerResponse::Rendered(rendered) => rendered,
-            other => panic!("plain render: {other:?}"),
-        };
-        let prepared = match render_in_worker(&receipt_request(Some(seal()))) {
-            WorkerResponse::Prepared(prepared) => prepared,
-            other => panic!("seal render: {other:?}"),
-        };
+    fn a_seal_request_returns_the_sealed_first_revision_only() {
+        let plain = rendered(render_in_worker(&receipt_request(None)));
+        let sealed = rendered(render_in_worker(&receipt_request(Some(seal()))));
         assert_ne!(
-            prepared.data_sha256, plain.data_sha256,
+            sealed.data_sha256, plain.data_sha256,
             "the sealed envelope carries the signing member"
         );
-        assert_eq!(prepared.document_id, "receipt");
-        assert_eq!(prepared.document_version, plain.document_version);
-        assert_eq!(prepared.bundle_hash, plain.bundle_hash);
-        let first_revision_len = prepared.first_revision_len;
-        let checked = prepared
-            .prepared
-            .clone()
-            .check(first_revision_len)
-            .expect("the parent accepts the shape");
-        assert_eq!(checked.contents_capacity(), 16 * 1024);
-        let again = match render_in_worker(&receipt_request(Some(seal()))) {
-            WorkerResponse::Prepared(again) => again,
-            other => panic!("seal render: {other:?}"),
+        assert_eq!(sealed.document_id, "receipt");
+        assert_eq!(sealed.document_version, plain.document_version);
+        assert_eq!(sealed.bundle_hash, plain.bundle_hash);
+        let first_revision = sealed_receipt(seal());
+        assert_eq!(crate::hash::sha256_hex(&first_revision), sealed.pdf_sha256);
+        for marker in [&b"/ByteRange"[..], b"/AcroForm", b"/DocMDP"] {
+            assert!(
+                !first_revision
+                    .windows(marker.len())
+                    .any(|window| window == marker),
+                "the first revision holds {}",
+                String::from_utf8_lossy(marker)
+            );
+        }
+        let field = crate::pdf_signature::SignatureField {
+            signing_time: chrono::DateTime::from_timestamp(1_793_000_000, 0).expect("a time"),
+            contents_capacity: 16 * 1024,
+            field_name: "RegistrySeal".to_owned(),
         };
+        crate::pdf_signature::prepare(&first_revision, &field)
+            .expect("the parent can prepare a single revision");
         assert_eq!(
-            again.prepared, prepared.prepared,
-            "the same request prepares the same bytes"
+            sealed_receipt(seal()),
+            first_revision,
+            "the same request renders the same bytes"
         );
-    }
-
-    #[test]
-    fn a_field_the_worker_cannot_write_is_an_internal_problem() {
-        let mut bad = seal();
-        bad.field_name = "has.period".to_owned();
-        match render_in_worker(&receipt_request(Some(bad))) {
-            WorkerResponse::Failed { problem } => assert_eq!(problem.kind, "internal"),
-            other => panic!("{other:?}"),
-        }
-        let mut bad_time = seal();
-        bad_time.signing_time = "yesterday".to_owned();
-        match render_in_worker(&receipt_request(Some(bad_time))) {
-            WorkerResponse::Failed { problem } => assert_eq!(problem.kind, "internal"),
-            other => panic!("{other:?}"),
-        }
     }
 
     #[test]

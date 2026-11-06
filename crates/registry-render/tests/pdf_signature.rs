@@ -1,6 +1,6 @@
-//! The PAdES signature field on Render's own PDF/A-4 output: the worker's
-//! `prepare` appends an incremental update after the exact first revision,
-//! and the parent's `check` and `embed` work from byte offsets alone.
+//! The PAdES signature field on Render's own PDF/A-4 output: `prepare`
+//! appends an incremental update after the exact first revision, and
+//! `embed` writes the signature into the space it reserved.
 //!
 //! The certificate bundle is rendered the way `tests/golden.rs` renders it,
 //! once per test binary.
@@ -116,10 +116,10 @@ fn the_certificate_bundle_standard_is_sealable_at_the_test_capacity() {
 fn prepared_file_starts_with_the_exact_first_revision() {
     let original = certificate_pdf();
     let prepared = prepared();
-    assert!(prepared.bytes.len() > original.len());
-    assert_eq!(&prepared.bytes[..original.len()], original);
+    assert!(prepared.bytes().len() > original.len());
+    assert_eq!(&prepared.bytes()[..original.len()], original);
     assert!(
-        prepared.bytes.ends_with(b"%%EOF\n"),
+        prepared.bytes().ends_with(b"%%EOF\n"),
         "the update ends with one end-of-file marker and a single EOL"
     );
 }
@@ -132,7 +132,7 @@ fn prepare_is_deterministic() {
 #[test]
 fn prepared_file_reparses_with_the_field_widget_form_docmdp_and_signature() {
     let prepared = prepared();
-    let pdf = hayro_syntax::Pdf::new(prepared.bytes.clone()).expect("hayro reads the update");
+    let pdf = hayro_syntax::Pdf::new(prepared.bytes().to_vec()).expect("hayro reads the update");
     let xref = pdf.xref();
     let catalog: Dict<'_> = xref.get(xref.root_id()).expect("catalog");
 
@@ -188,7 +188,7 @@ fn prepared_file_reparses_with_the_field_widget_form_docmdp_and_signature() {
         b"D:20261106093015Z"
     );
     let byte_range = sig.get::<[i64; 4]>(b"ByteRange").expect("ByteRange");
-    assert_eq!(byte_range.map(|n| n as usize), prepared.byte_range);
+    assert_eq!(byte_range.map(|n| n as usize), prepared.byte_range());
     let contents = sig
         .get::<hayro_syntax::object::String<'_>>(b"Contents")
         .expect("Contents");
@@ -221,7 +221,7 @@ fn prepared_file_reparses_with_the_field_widget_form_docmdp_and_signature() {
 fn catalog_and_first_page_keep_every_existing_entry() {
     let original_bytes = certificate_pdf().to_vec();
     let original = hayro_syntax::Pdf::new(original_bytes).expect("original");
-    let prepared = hayro_syntax::Pdf::new(prepared().bytes).expect("prepared");
+    let prepared = hayro_syntax::Pdf::new(prepared().bytes().to_vec()).expect("prepared");
 
     let pairs = [
         (
@@ -266,11 +266,11 @@ fn catalog_and_first_page_keep_every_existing_entry() {
 fn update_is_a_cross_reference_table_chained_to_the_original() {
     let original = certificate_pdf();
     let prepared = prepared();
-    let update = &prepared.bytes[original.len()..];
+    let update = &prepared.bytes()[original.len()..];
 
-    let xref = startxref(&prepared.bytes);
+    let xref = startxref(prepared.bytes());
     assert!(xref > original.len());
-    assert!(prepared.bytes[xref..].starts_with(b"xref\n"));
+    assert!(prepared.bytes()[xref..].starts_with(b"xref\n"));
 
     let trailer_at = find(update, b"trailer\n").expect("trailer keyword");
     let trailer = std::str::from_utf8(&update[trailer_at..]).expect("ascii trailer");
@@ -286,14 +286,13 @@ fn update_is_a_cross_reference_table_chained_to_the_original() {
 }
 
 #[test]
-fn check_accepts_the_prepared_file_and_covers_all_but_the_contents() {
+fn signed_parts_cover_all_but_the_contents() {
     let original = certificate_pdf();
     let prepared = prepared();
-    let [_, gap_start, gap_end, tail] = prepared.byte_range;
-    let bytes = prepared.bytes.clone();
+    let [_, gap_start, gap_end, tail] = prepared.byte_range();
+    let bytes = prepared.bytes().to_vec();
 
-    let checked = prepared.check(original.len()).expect("check");
-    let [head, rest] = checked.signed_parts();
+    let [head, rest] = prepared.signed_parts();
     assert_eq!(head, &bytes[..gap_start]);
     assert_eq!(rest, &bytes[gap_end..]);
     assert_eq!(rest.len(), tail);
@@ -304,119 +303,13 @@ fn check_accepts_the_prepared_file_and_covers_all_but_the_contents() {
 }
 
 #[test]
-fn check_refuses_each_malformed_shape() {
-    let original_len = certificate_pdf().len();
-    let good = prepared();
-    let [_, gap_start, gap_end, _] = good.byte_range;
-
-    let mut shifted = good.clone();
-    shifted.byte_range[1] += 2;
-    shifted.byte_range[2] += 2;
-    shifted.byte_range[3] -= 2;
-
-    let mut nonzero = good.clone();
-    nonzero.bytes[gap_start + 1 + CAPACITY] = b'1';
-
-    let mut not_hex = good.clone();
-    not_hex.bytes[gap_end - 2] = b'x';
-
-    let mut longer = good.clone();
-    longer.bytes.push(b'\n');
-
-    let mut shorter = good.clone();
-    shorter.bytes.pop();
-
-    let mut nonzero_start = good.clone();
-    nonzero_start.byte_range[0] = 1;
-
-    let mut text_mismatch = good.clone();
-    let text_at = find(&text_mismatch.bytes[original_len..], b"/ByteRange [0 ")
-        .expect("ByteRange text")
-        + original_len;
-    let digit = text_mismatch.bytes[text_at + 14];
-    text_mismatch.bytes[text_at + 14] = if digit == b'9' { b'1' } else { digit + 1 };
-
-    let mut second_byte_range = good.clone();
-    let filter_at = find(&second_byte_range.bytes[original_len..], b"/Adobe.PPKLite")
-        .expect("Filter value")
-        + original_len;
-    second_byte_range.bytes[filter_at..filter_at + 14].copy_from_slice(b"/ByteRange    ");
-
-    let gap_inside = "the byte range gap is not a hex string";
-    let not_zero = "the byte range gap is not an even run of zero digits";
-    let wrong_end = "the byte range does not end at the end of the file";
-    let no_update = "the file has no update after the first revision";
-    let cases: Vec<(&str, PreparedPdf, usize, &str)> = vec![
-        ("shifted range", shifted, original_len, gap_inside),
-        ("non-zero contents", nonzero, original_len, not_zero),
-        ("non-hex contents", not_hex, original_len, not_zero),
-        ("longer than the range", longer, original_len, wrong_end),
-        ("shorter than the range", shorter, original_len, wrong_end),
-        (
-            "range not starting at zero",
-            nonzero_start,
-            original_len,
-            "the byte range does not start at zero",
-        ),
-        (
-            "ByteRange text differs from the array",
-            text_mismatch,
-            original_len,
-            "the ByteRange text does not state the byte range",
-        ),
-        (
-            "a second ByteRange in the update",
-            second_byte_range,
-            original_len,
-            "the update does not name exactly one ByteRange",
-        ),
-        (
-            "first revision cut inside the update",
-            good.clone(),
-            gap_start,
-            "the first revision does not end with %%EOF",
-        ),
-        (
-            "signature dictionary inside the first revision",
-            good.clone(),
-            good.bytes.len() - 1,
-            "the signature dictionary sits inside the first revision",
-        ),
-        (
-            "first revision is the whole file",
-            good.clone(),
-            good.bytes.len(),
-            no_update,
-        ),
-        (
-            "first revision longer than the file",
-            good.clone(),
-            good.bytes.len() + 1,
-            no_update,
-        ),
-    ];
-    for (label, candidate, first_revision_len, reason) in cases {
-        assert_eq!(
-            candidate.check(first_revision_len),
-            Err(PdfSignatureError::BadShape(reason)),
-            "{label}"
-        );
-    }
-}
-
-#[test]
 fn embed_round_trips_and_keeps_zero_padding() {
-    let original_len = certificate_pdf().len();
     let prepared = prepared();
-    let before = prepared.bytes.clone();
-    let [_, gap_start, gap_end, _] = prepared.byte_range;
+    let before = prepared.bytes().to_vec();
+    let [_, gap_start, gap_end, _] = prepared.byte_range();
     let cms: Vec<u8> = (0..1500u32).map(|i| (i * 7 + 3) as u8).collect();
 
-    let signed = prepared
-        .check(original_len)
-        .expect("check")
-        .embed(&cms)
-        .expect("embed");
+    let signed = prepared.embed(&cms).expect("embed");
     assert_eq!(signed.len(), before.len());
     assert_eq!(&signed[..=gap_start], &before[..=gap_start]);
     assert_eq!(&signed[gap_end - 1..], &before[gap_end - 1..]);
@@ -438,42 +331,30 @@ fn embed_round_trips_and_keeps_zero_padding() {
 
 #[test]
 fn embed_takes_exactly_the_capacity_and_refuses_more_or_nothing() {
-    let original_len = certificate_pdf().len();
     let fits = vec![0x30u8; CAPACITY];
-    assert!(prepared()
-        .check(original_len)
-        .expect("check")
-        .embed(&fits)
-        .is_ok());
+    assert!(prepared().embed(&fits).is_ok());
 
     let oversize = vec![0x30u8; CAPACITY + 1];
-    match prepared()
-        .check(original_len)
-        .expect("check")
-        .embed(&oversize)
-    {
+    match prepared().embed(&oversize) {
         Err(PdfSignatureError::SignatureTooLarge { len, capacity }) => {
             assert_eq!((len, capacity), (CAPACITY + 1, CAPACITY));
         }
         other => panic!("expected a size refusal, got {other:?}"),
     }
     assert!(matches!(
-        prepared().check(original_len).expect("check").embed(&[]),
+        prepared().embed(&[]),
         Err(PdfSignatureError::EmptySignature)
     ));
 }
 
 #[test]
 fn prepare_refuses_its_own_output_and_a_signed_file() {
-    let original_len = certificate_pdf().len();
     let prepared = prepared();
     assert!(matches!(
-        prepare(&prepared.bytes, &field()),
+        prepare(prepared.bytes(), &field()),
         Err(PdfSignatureError::NotSingleRevision)
     ));
     let signed = prepared
-        .check(original_len)
-        .expect("check")
         .embed(&[0x30, 0x03, 0x02, 0x01, 0x00])
         .expect("embed");
     assert!(matches!(
@@ -505,17 +386,4 @@ fn prepare_refuses_garbage_without_panicking() {
             other => panic!("{label}: expected a malformed-input refusal, got {other:?}"),
         }
     }
-}
-
-#[test]
-fn prepared_pdf_crosses_the_worker_pipe_as_json() {
-    let prepared = prepared();
-    let value = serde_json::to_value(&prepared).expect("serializes");
-    assert!(value["bytes"].is_string(), "PDF bytes travel as base64");
-    assert_eq!(
-        value["byteRange"],
-        serde_json::json!(prepared.byte_range.to_vec())
-    );
-    let back: PreparedPdf = serde_json::from_value(value).expect("deserializes");
-    assert_eq!(back, prepared);
 }

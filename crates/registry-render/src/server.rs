@@ -39,7 +39,7 @@ use crate::bundle::Bundle;
 use crate::problem::{ProblemKind, RenderProblem, PROBLEM_TYPE_BASE};
 use crate::runtime;
 use crate::seal::{Seal, SealedDocument, Seals};
-use crate::worker::{self, WorkerPrepared, WorkerRendered, WorkerRequest};
+use crate::worker::{self, WorkerRendered, WorkerRequest};
 
 pub struct Service {
     bundle: Bundle,
@@ -1120,7 +1120,7 @@ async fn seal_route(
             Ok(prepared) => prepared,
             Err(problem) => return call.refuse(&service, problem).await,
         };
-    worker_request.seal = Some(seal.worker_seal(now));
+    worker_request.seal = Some(seal.worker_seal());
     let started = RenderAuditEvent::started(
         &call.document_type,
         document_version,
@@ -1138,7 +1138,7 @@ async fn seal_route(
         Ok(request) => request,
         Err(audit_problem) => return problem_response(&audit_problem, call.trace.as_deref()),
     };
-    let outcome = run_seal(&service, &seal, worker_request)
+    let outcome = run_seal(&service, &seal, worker_request, now)
         .await
         .map(|(rendered, sealed)| {
             let event = RenderAuditEvent {
@@ -1206,14 +1206,16 @@ struct SealedRender {
     warnings: Vec<String>,
 }
 
-/// Prepare the seal's field on a supervised worker once a render slot is
-/// free, release the slot, then sign, timestamp and embed in this process.
-/// Signing and the timestamp exchange never hold a render slot; the whole
-/// call holds one of the service's places for seals in flight.
+/// Render the first revision on a supervised worker once a render slot is
+/// free, release the slot, then prepare the field, sign, timestamp and embed
+/// in this process, signed at `signing_time`. Preparing, signing and the
+/// timestamp exchange never hold a render slot; the whole call holds one of
+/// the service's places for seals in flight.
 async fn run_seal(
     service: &Service,
     seal: &Seal,
     worker_request: WorkerRequest,
+    signing_time: time::OffsetDateTime,
 ) -> Result<(SealedRender, SealedDocument), RenderProblem> {
     // A seal beyond the places is refused, not queued: the queue behind a
     // slow authority would otherwise grow without a bound.
@@ -1234,19 +1236,60 @@ async fn run_seal(
         .await
         .map_err(|_| RenderProblem::new(ProblemKind::Internal, "concurrency latch closed"))?;
     let timeout = service.limits.render_timeout();
-    let result = worker::supervise_seal(worker_request, timeout).await;
+    let result = worker::supervise(worker_request, timeout).await;
     drop(permit);
-    let prepared: WorkerPrepared = result?;
+    let mut answer = from_served_package(result?, &service.bundle.bundle_hash)?;
+    let first_revision = first_revision(
+        &std::mem::take(&mut answer.pdf_base64),
+        service.limits.output_bytes(),
+    )?;
     let rendered = SealedRender {
-        document_id: prepared.document_id.clone(),
-        document_version: prepared.document_version,
-        bundle_version: prepared.bundle_version,
-        bundle_hash: prepared.bundle_hash.clone(),
-        data_sha256: prepared.data_sha256.clone(),
-        warnings: prepared.warnings.clone(),
+        document_id: answer.document_id,
+        document_version: answer.document_version,
+        bundle_version: answer.bundle_version,
+        bundle_hash: answer.bundle_hash,
+        data_sha256: answer.data_sha256,
+        warnings: answer.warnings,
     };
-    let sealed = seal.seal(prepared, &service.bundle.bundle_hash).await?;
+    let sealed = seal.seal(first_revision, signing_time).await?;
     Ok((rendered, sealed))
+}
+
+/// The worker rendered from one verified immutable snapshot; its package
+/// digest must also be the one serve started with, not merely a different
+/// valid package installed during the request. This detects an honest
+/// worker's drift: the digest is the worker's own report.
+fn from_served_package(
+    rendered: WorkerRendered,
+    served_hash: &str,
+) -> Result<WorkerRendered, RenderProblem> {
+    if rendered.bundle_hash != served_hash {
+        return Err(RenderProblem::new(
+            ProblemKind::BundleTampered,
+            "the package changed under serve; refusing the render from a drifted package",
+        ));
+    }
+    Ok(rendered)
+}
+
+/// The first revision a worker answered for a seal, decoded and held to the
+/// output limit before this process reads it as a PDF.
+fn first_revision(pdf_base64: &str, limit: usize) -> Result<Vec<u8>, RenderProblem> {
+    let pdf = base64::engine::general_purpose::STANDARD
+        .decode(pdf_base64)
+        .map_err(|_| {
+            RenderProblem::new(
+                ProblemKind::Internal,
+                "worker returned an undecodable PDF; refusing to seal it",
+            )
+        })?;
+    if pdf.len() > limit {
+        return Err(RenderProblem::new(
+            ProblemKind::OutputTooLarge,
+            format!("rendered PDF is {} bytes; the limit is {limit}", pdf.len()),
+        ));
+    }
+    Ok(pdf)
 }
 
 /// The sealed document in the representation the caller accepts, by the
@@ -1429,18 +1472,7 @@ async fn run_render(
     let timeout = service.limits.render_timeout();
     let result = worker::supervise(worker_request, timeout).await;
     drop(permit);
-    // The worker already rendered from one verified immutable snapshot. Its
-    // package digest must also be the one serve started with, not merely
-    // a different valid package installed during the request.
-    match result {
-        Ok(rendered) if rendered.bundle_hash != service.bundle.bundle_hash => {
-            Err(RenderProblem::new(
-                ProblemKind::BundleTampered,
-                "the package changed under serve; refusing the render from a drifted package",
-            ))
-        }
-        other => other,
-    }
+    from_served_package(result?, &service.bundle.bundle_hash)
 }
 
 /// Route parameters are caller-controlled even before authentication, so
@@ -1588,6 +1620,49 @@ mod tests {
             assert_eq!(response.headers()["x-registry-warning-count"], count);
             assert!(!format!("{:?}", response.headers()).contains("canary"));
         }
+    }
+
+    /// Both routes refuse an answer whose package digest is not the one
+    /// serve started with; the seal route does so before it signs.
+    #[test]
+    fn an_answer_from_another_package_is_refused_as_tampered() {
+        let answer = WorkerRendered {
+            document_id: "receipt".to_owned(),
+            pdf_base64: String::new(),
+            pdf_sha256: "a".repeat(64),
+            data_sha256: "b".repeat(64),
+            document_version: 1,
+            bundle_version: 1,
+            bundle_hash: "c".repeat(64),
+            deps: vec![],
+            warnings: vec![],
+        };
+        let served = from_served_package(answer.clone(), &"c".repeat(64)).expect("served");
+        assert_eq!(served.bundle_hash, answer.bundle_hash);
+        let Err(problem) = from_served_package(answer, &"0".repeat(64)) else {
+            panic!("an answer from another package was accepted");
+        };
+        assert_eq!(problem.kind, ProblemKind::BundleTampered);
+    }
+
+    /// The parent reads a seal's first revision as a PDF only once it is
+    /// decoded and within the output limit.
+    #[test]
+    fn a_first_revision_is_held_to_the_output_limit() {
+        let pdf = base64::engine::general_purpose::STANDARD.encode(b"%PDF-2.0 sixteen");
+        assert_eq!(
+            first_revision(&pdf, 16).expect("at the limit"),
+            b"%PDF-2.0 sixteen"
+        );
+        let Err(problem) = first_revision(&pdf, 15) else {
+            panic!("a first revision over the limit was accepted");
+        };
+        assert_eq!(problem.kind, ProblemKind::OutputTooLarge);
+        assert_eq!(problem.detail, "rendered PDF is 16 bytes; the limit is 15");
+        let Err(problem) = first_revision("not base64!", 1024) else {
+            panic!("an undecodable answer was accepted");
+        };
+        assert_eq!(problem.kind, ProblemKind::Internal);
     }
 
     use std::sync::atomic::{AtomicUsize, Ordering};

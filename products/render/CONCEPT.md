@@ -48,10 +48,12 @@ The boundary:
 - Render seals only what it just rendered from a verified package, never bytes
   a caller supplies. There is no route that accepts a PDF to sign.
 - The private key is loaded in the serving (parent) process and never sent
-  to the render worker. The render worker receives no key; it renders the first revision and writes an empty signature
-  field the parent fixed. The parent checks the field's shape by byte offsets
-  and checks the package hash, signs, optionally timestamps, and splices the
-  signature in.
+  to the render worker. The render worker receives no key and answers with
+  the first revision only. The parent hashes all of it as `documentSha256`,
+  appends the signature field itself, signs, optionally timestamps, and
+  splices the signature in, so every signed byte after the first revision is
+  the parent's. A worker answer that is not a single-revision PDF is refused
+  before anything is signed.
 - The seal is a certification signature (DocMDP permission 2) in an invisible
   field. A template can print a visible seal block from the payload's
   `signing` member, which exists only on the seal route.
