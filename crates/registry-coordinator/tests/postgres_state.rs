@@ -2291,6 +2291,10 @@ async fn inspection_refuses_recovery_after_deadline_receipt_expiry_and_unsupport
     }
     let advice = refusal.suggested_action.as_deref().unwrap();
     assert!(advice.contains("\"Apply and start\""), "{advice}");
+    assert!(
+        advice.contains("Only a release that accepts that definition can end the run"),
+        "{advice}"
+    );
     assert_eq!(old.store.status(run).await.unwrap().state, "attention");
     assert!(old.store.status(run).await.unwrap().uncertain);
     // Cancel refuses the same way: the refused definition's cleanup never
