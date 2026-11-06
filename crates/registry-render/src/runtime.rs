@@ -1451,6 +1451,15 @@ pub fn resolve_secret(runtime: &RenderRuntime, reference: &str) -> Result<Vec<u8
     Ok(secret.expose_secret().to_vec())
 }
 
+/// Resolve a secret reference into a buffer that is erased when dropped,
+/// keeping the resolver's value-free reason for a refusal.
+pub fn resolve_protected_secret(
+    runtime: &RenderRuntime,
+    reference: &str,
+) -> Result<registry_platform_config::ProtectedSecret, registry_platform_config::SecretError> {
+    runtime.secret_providers.resolver()?.resolve(reference)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

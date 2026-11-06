@@ -122,8 +122,9 @@ Without `--environment`, `check` reads no chain file and says so: the human outp
 `seal chains not read: pass --environment to check them`, and the JSON report has
 `"sealChains": "not-read"`.
 
-`serve` alone also reads the key and reports `render.runtime.seal-key-unreadable`,
-`render.runtime.seal-key-invalid`, `render.runtime.seal-key-unsupported`,
+`serve` alone also reads the key and reports `render.runtime.seal-key-unreadable` (with the
+secret provider's reason; a key file must be a regular file owned by the serving user, with mode
+0600 or 0400 and one link), `render.runtime.seal-key-invalid`, `render.runtime.seal-key-unsupported`,
 `render.runtime.seal-key-mismatch` (the key is not the one the certificate certifies), and
 `render.runtime.seal-timestamp-client` (the timestamp client cannot be built from the URL).
 
