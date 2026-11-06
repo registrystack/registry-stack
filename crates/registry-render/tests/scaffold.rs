@@ -1548,9 +1548,14 @@ fn cfg_schema_1_the_report_example_is_the_check_output() {
 // ---------- tiny serve helpers shared with the serve suite ----------
 
 use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::TcpStream;
 use std::process::{Child, Stdio};
 use std::time::{Duration, Instant};
+
+mod common;
+use common::{
+    answers_render_health, free_port, logged_health_request, move_to_fresh_port, server_output,
+};
 
 const API_KEY: &str = "test-key-0123456789abcdef0123456789abcdef";
 
@@ -1584,11 +1589,7 @@ fn serve_deployment() -> (PathBuf, PathBuf, u16) {
     );
     write_secret(&home.join("api.key"), API_KEY);
     std::fs::create_dir(home.join("audit")).unwrap();
-    let port = TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port();
+    let port = free_port();
     let runtime = format!(
         "apiVersion: id.registrystack.org/formats/render/runtime/v1alpha1\nkind: RenderRuntimeConfig\nlistener:\n  bind: 127.0.0.1:{port}\npackage:\n  root: {}\nsecretProviders:\n  file:\n    root: {}\nauthentication:\n  apiKeyRef: secret:file/api.key\nlimits:\n  renderTimeoutSeconds: 20\naudit:\n  path: {}\n",
         bundle.display(),
@@ -1612,11 +1613,27 @@ impl Drop for Server {
     }
 }
 
+/// Start `serve` and wait until it answers `/health` itself. Another socket
+/// can take the port before the child binds it, so a refused bind retries on
+/// a fresh one.
 fn start_server(runtime_path: &Path) -> Server {
+    for _ in 0..4 {
+        if let Some(server) = try_start_server(runtime_path) {
+            return server;
+        }
+        move_to_fresh_port(runtime_path);
+    }
+    panic!("the server port was taken on every attempt");
+}
+
+fn try_start_server(runtime_path: &Path) -> Option<Server> {
+    // Standard error goes to a file: an undrained pipe could fill and stall
+    // the server.
+    let stderr = tempfile::tempfile().expect("server stderr file");
     let mut child = render_bin()
         .args(["serve", "--runtime-config", runtime_path.to_str().unwrap()])
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(stderr.try_clone().expect("server stderr handle"))
         .spawn()
         .expect("spawn serve");
     let port: u16 = std::fs::read_to_string(runtime_path)
@@ -1628,20 +1645,19 @@ fn start_server(runtime_path: &Path) -> Server {
         .expect("port from runtime");
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
-        if let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)) {
-            let _ =
-                stream.write_all(b"GET /health HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
-            let mut buf = [0u8; 128];
-            if stream.read(&mut buf).is_ok_and(|n| n > 0) {
-                return Server { child, port };
+        if let Some(status) = child.try_wait().expect("server status") {
+            let output = server_output(&stderr);
+            if output.contains("Address already in use") {
+                return None;
             }
+            panic!("server exited early with {status}:\n{output}");
+        }
+        if answers_render_health(port) && logged_health_request(&stderr) {
+            return Some(Server { child, port });
         }
         if Instant::now() > deadline {
             let _ = child.kill();
             panic!("server not healthy in 30s");
-        }
-        if let Ok(Some(status)) = child.try_wait() {
-            panic!("server exited early: {status}");
         }
         std::thread::sleep(Duration::from_millis(100));
     }

@@ -26,6 +26,11 @@ use registry_platform_crypto::{
 };
 use sha2::{Digest, Sha256};
 
+mod common;
+use common::{
+    answers_render_health, free_port, logged_health_request, move_to_fresh_port, server_output,
+};
+
 const LIMITS: &str = "limits:\n  renderTimeoutSeconds: 20\n  maximumOutputBytes: 8388608\n  maximumRequestBytes: 8388608\n  maximumConcurrentRenders: 2\n";
 const NOTICE_BODY: &str =
     r#"{"issuedAt":"2026-09-16T10:32:00Z","data":{"reference":"N-1","body":"Hello."}}"#;
@@ -60,19 +65,6 @@ fn physical_tempdir() -> PathBuf {
     let path = dir.path().canonicalize().expect("physical tempdir path");
     let _ = dir.keep();
     path
-}
-
-fn free_port() -> u16 {
-    static ISSUED_PORTS: Mutex<BTreeSet<u16>> = Mutex::new(BTreeSet::new());
-    let mut issued = ISSUED_PORTS.lock().expect("issued test ports");
-    for _ in 0..1024 {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind for port discovery");
-        let port = listener.local_addr().expect("local addr").port();
-        if issued.insert(port) {
-            return port;
-        }
-    }
-    panic!("could not allocate a distinct fixture port");
 }
 
 fn now_seconds() -> time::OffsetDateTime {
@@ -545,12 +537,7 @@ struct Server {
 impl Server {
     /// The JSON log lines the server has written so far.
     fn log(&self) -> Vec<serde_json::Value> {
-        use std::io::{Seek as _, SeekFrom};
-        let mut stderr = self.stderr.try_clone().expect("server stderr handle");
-        let mut output = String::new();
-        stderr.seek(SeekFrom::Start(0)).unwrap();
-        stderr.read_to_string(&mut output).unwrap();
-        output
+        server_output(&self.stderr)
             .lines()
             .filter_map(|line| serde_json::from_str(line).ok())
             .collect()
@@ -571,72 +558,15 @@ fn start_server(fixture: &Fixture) -> Server {
         if let Some(server) = try_start_server(fixture) {
             return server;
         }
-        let text = std::fs::read_to_string(&fixture.runtime_path).unwrap();
-        let bind = text.lines().find(|l| l.contains("bind:")).unwrap();
-        let (address, _) = bind.rsplit_once(':').unwrap();
-        let moved = text.replacen(bind, &format!("{address}:{}", free_port()), 1);
-        std::fs::write(&fixture.runtime_path, moved).unwrap();
+        move_to_fresh_port(&fixture.runtime_path);
     }
     panic!("the server port was taken on every attempt");
-}
-
-/// Whether the listener on `port` is a Render server: `/health` answers
-/// 200 with the renderer version. A bare connect is not enough: `free_port`
-/// releases its port before the server binds it, and another test's socket
-/// (often a `free_port` probe given the same just-freed port) can hold it
-/// meanwhile. The server then exits with "Address already in use", and a
-/// request sent to the other socket is reset. Any failure here means "not
-/// this server yet"; the caller checks for that exit and bounds the wait.
-/// The answer may still come from another test's server given the same
-/// port; [`logged_health_request`] settles which server answered.
-fn answers_render_health(port: u16) -> bool {
-    let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)) else {
-        return false;
-    };
-    if stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
-        .is_err()
-        || stream
-            .write_all(b"GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
-            .is_err()
-    {
-        return false;
-    }
-    let mut raw = Vec::new();
-    if stream.read_to_end(&mut raw).is_err() {
-        return false;
-    }
-    raw.starts_with(b"HTTP/1.1 200") && raw.windows(17).any(|w| w == b"\"rendererVersion\"")
-}
-
-/// Whether this server's own standard error records a `/health` request,
-/// which shows the listener that answered [`answers_render_health`] is this
-/// child. The file is read with `read_exact_at`, which leaves untouched the
-/// file offset the child writes at.
-fn logged_health_request(stderr: &std::fs::File) -> bool {
-    use std::os::unix::fs::FileExt as _;
-    let Ok(metadata) = stderr.metadata() else {
-        return false;
-    };
-    let Ok(length) = usize::try_from(metadata.len()) else {
-        return false;
-    };
-    let mut output = vec![0; length];
-    if stderr.read_exact_at(&mut output, 0).is_err() {
-        return false;
-    }
-    String::from_utf8_lossy(&output)
-        .lines()
-        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
-        .any(|line| {
-            line["fields"]["message"] == "request completed" && line["fields"]["route"] == "/health"
-        })
 }
 
 fn try_start_server(fixture: &Fixture) -> Option<Server> {
     // Standard error goes to a file: an undrained pipe could fill and stall
     // the server.
-    let mut stderr = tempfile::tempfile().expect("server stderr file");
+    let stderr = tempfile::tempfile().expect("server stderr file");
     let mut child = Command::new(env!("CARGO_BIN_EXE_registry-render"))
         .arg("serve")
         .arg("--runtime-config")
@@ -649,10 +579,7 @@ fn try_start_server(fixture: &Fixture) -> Option<Server> {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         if let Some(status) = child.try_wait().expect("server status") {
-            use std::io::{Seek as _, SeekFrom};
-            let mut output = String::new();
-            stderr.seek(SeekFrom::Start(0)).unwrap();
-            stderr.read_to_string(&mut output).unwrap();
+            let output = server_output(&stderr);
             if output.contains("Address already in use") {
                 return None;
             }
