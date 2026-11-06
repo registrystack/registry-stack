@@ -5,7 +5,7 @@ use crate::{
     definition::{Definition, MAX_SNAPSHOT_BYTES},
     protected_state::StateKeys,
     runtime::RuntimeConfig,
-    store::{Store, StoreSecurity, AUDIT_SCHEMA},
+    store::{HeldRun, Store, StoreSecurity, AUDIT_SCHEMA},
     CoordinatorError, Result,
 };
 use registry_platform_activation::{self as activation, Layout, NewActivation, RoleMode};
@@ -424,8 +424,10 @@ pub fn load_package(package: &PackageConfig) -> Result<LoadedPackage> {
         return Err(fail("restore the pinned package"));
     }
     let text = std::str::from_utf8(&bytes).map_err(|_| fail("rebuild the package"))?;
+    let definition = Definition::from_snapshot(text)
+        .map_err(|finding| Definition::package_refused(finding, verified.digest(), text))?;
     Ok(LoadedPackage {
-        definition: Arc::new(Definition::from_snapshot(text)?),
+        definition: Arc::new(definition),
         digest: verified.digest().into(),
     })
 }
@@ -655,9 +657,10 @@ pub async fn check(
     )?;
     Ok(active)
 }
-/// Check retained runnable/recoverable bindings before normal serving or an
-/// explicit operator status observation. Readiness bounds the frequency of its
-/// live-binding scan; worker transactions retain their fresh protected gates.
+/// Check retained runnable/recoverable bindings before normal serving, and
+/// hold each live run whose retained definition this version refuses.
+/// Readiness bounds the frequency of its live-binding scan; worker
+/// transactions retain their fresh protected gates.
 pub async fn check_serving(
     store: &Store,
     runtime: &RuntimeConfig,
@@ -666,6 +669,17 @@ pub async fn check_serving(
     let active = check(store, runtime, digest).await?;
     store.check_runtime_bindings(runtime).await?;
     Ok(active)
+}
+/// The serving check for an explicit operator status observation. It changes
+/// nothing: it reports the live runs this version holds or would hold.
+pub async fn check_status(
+    store: &Store,
+    runtime: &RuntimeConfig,
+    digest: &str,
+) -> Result<(activation::Activation, Vec<HeldRun>)> {
+    let active = check(store, runtime, digest).await?;
+    let held = store.observe_runtime_bindings(runtime).await?;
+    Ok((active, held))
 }
 /// What one plan or apply does to one workflow's active package.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -958,7 +972,63 @@ pub async fn apply(
 
 #[cfg(test)]
 mod tests {
-    use super::valid_metrics_listener;
+    use super::{limits, load_package, valid_metrics_listener, write_package, PackageConfig};
+    use crate::definition::Definition;
+    use std::collections::BTreeMap;
+
+    /// The review-wait fixture snapshot with its review cancel retargeted at a
+    /// literal request, which an earlier version packaged and this one refuses.
+    fn not_run_owned_snapshot() -> String {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join("workflow.yaml"),
+            include_str!("../tests/fixtures/review-wait/workflow.yaml"),
+        )
+        .unwrap();
+        std::fs::write(
+            root.path().join("functions.rhai"),
+            include_str!("../tests/fixtures/review-wait/functions.rhai"),
+        )
+        .unwrap();
+        let snapshot = Definition::load(root.path()).unwrap().snapshot().unwrap();
+        let owned = r#""request":{"step":"submit-review","type":"step"}"#;
+        assert_eq!(snapshot.matches(owned).count(), 1, "{snapshot}");
+        snapshot.replacen(
+            owned,
+            r#""request":{"type":"literal","value":{"policy":{"digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","id":"application-review","version":"1"},"requestId":"00000000-0000-4000-8000-000000000010","subject":{"digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","id":"00000000-0000-4000-8000-000000000001","source":"applications","type":"application","version":"3"},"submissionDigest":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}}"#,
+            1,
+        )
+    }
+
+    #[test]
+    fn a_pinned_package_that_does_not_restore_gives_operator_context() {
+        let root = tempfile::tempdir().unwrap();
+        let package = root.path().join("package");
+        let files = BTreeMap::from([(
+            "definition.json".to_owned(),
+            not_run_owned_snapshot().into_bytes(),
+        )]);
+        let digest = write_package(&package, &files, None, &limits(), "coordinatorctl package")
+            .unwrap()
+            .digest()
+            .to_owned();
+        let pin = PackageConfig {
+            root: package,
+            expected_digest: Some(digest.clone()),
+        };
+        let Err(refusal) = load_package(&pin) else {
+            panic!("a package whose review cancel is not run-owned restored");
+        };
+        // The finding keeps its own code, so tooling that keys on it still can.
+        assert_eq!(refusal.code, "definition.review-request-not-run-owned");
+        for part in [digest.as_str(), "reviewed-notice"] {
+            assert!(refusal.message.contains(part), "{refusal:?}");
+        }
+        let advice = refusal.suggested_action.as_deref().unwrap();
+        assert!(advice.contains("\"Apply and start\""), "{advice}");
+        assert!(advice.contains("DEPLOYMENT.md"), "{advice}");
+        assert!(!advice.contains("Map request"), "{advice}");
+    }
 
     #[test]
     fn the_metrics_listener_may_not_share_a_wildcard_listener_port() {

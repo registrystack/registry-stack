@@ -517,7 +517,7 @@ pub(crate) fn for_error(code: &str) -> Option<ProblemCode> {
         "restore-review-required" => ProblemCode::RestoreReviewRequired,
         "restore-unresolved" => ProblemCode::RestoreUnresolved,
         "retry-refused" => ProblemCode::RetryRefused,
-        "definition-incompatible" => ProblemCode::RunDefinitionIncompatible,
+        "definition-refused" => ProblemCode::RunDefinitionIncompatible,
         "receipt-expired" => ProblemCode::ReceiptExpired,
         "evaluation-uncertain" => ProblemCode::EvaluationUncertain,
         "mutation-uncertain" => ProblemCode::MutationUncertain,

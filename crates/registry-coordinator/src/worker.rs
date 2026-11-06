@@ -300,7 +300,18 @@ impl Worker {
         };
         let definition = match self.store.definition(&payload.snapshot) {
             Ok(value) => value,
-            Err(_) => return Ok(failed("snapshot-incompatible", job.job.uncertain)),
+            // The serving check holds such a run before it can be claimed.
+            // A claim that still reaches one holds the run, audited first,
+            // and keeps the step's uncertainty; nothing runs for it.
+            Err(finding) => {
+                self.store
+                    .hold_definition_refused(job.key.id(), &finding.code)
+                    .await
+                    .map_err(|_| DispatchError::Unavailable)?;
+                let mut result = failed("definition-refused", job.job.uncertain);
+                result.detail.recovery_hold = true;
+                return Ok(result);
+            }
         };
         if job.job.binding_digest != self.adapters.binding_digest_for(&definition.workflow) {
             return Ok(failed("binding-conflict", job.job.uncertain));

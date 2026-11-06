@@ -419,6 +419,39 @@ impl Harness {
         }
         panic!("the worker kept finding due work");
     }
+
+    /// Replace the run's retained definition with one this version refuses to
+    /// restore, sealed the way the store seals it.
+    async fn incompatible_snapshot(&self, run: Uuid) {
+        use base64::Engine as _;
+        use registry_platform_crypto::sealed_value::{seal, Context};
+        let mut snapshot: Value =
+            serde_json::from_str(&self.definition.snapshot().unwrap()).unwrap();
+        snapshot["interpreterAbi"] = json!("unsupported-interpreter-abi");
+        let id = run.to_string();
+        let envelope = seal(
+            &[0x11; 32],
+            &Context {
+                domain: "registry-coordinator/state/v1",
+                scope: &[&self.namespace, &id, "snapshot", ""],
+                key_version: 1,
+            },
+            &serde_json::to_vec(&snapshot.to_string()).unwrap(),
+        )
+        .unwrap();
+        let sealed = json!({"sealedCoordinatorV1":base64::engine::general_purpose::STANDARD.encode(envelope)});
+        self.client()
+            .await
+            .execute(
+                &format!(
+                    "UPDATE {}.runs SET snapshot=$2 WHERE run_id=$1",
+                    self.namespace
+                ),
+                &[&run, &sealed],
+            )
+            .await
+            .unwrap();
+    }
 }
 
 fn completion_headers(token: &str, recipient: &str, event: Uuid) -> HeaderMap {
@@ -1094,6 +1127,32 @@ async fn authored_wait_cancellation_refuses_a_corrupted_snapshot_without_stoppin
     assert!(!status.cancel_requested);
     assert!(!status.authored_cancel_requested);
     assert!(h.wait_row(run).await.is_some());
+}
+
+#[tokio::test]
+async fn cancelling_a_wait_whose_definition_does_not_restore_never_routes_its_cleanup() {
+    let h = harness_with_cancel(true, true).await;
+    let fake = Fake::new(vec![]);
+    let worker = Worker::new(h.store.clone(), fake.clone());
+    let run = h.admit().await;
+    h.drain(&worker).await;
+    let (calls, reads) = (fake.requests().len(), fake.reads());
+    h.incompatible_snapshot(run).await;
+
+    let refusal = h
+        .store
+        .cancel_owned(run, &operator(), "synthetic-held-wait")
+        .await
+        .expect_err("a refused definition's cleanup must never run");
+    assert_eq!(refusal.code, "definition-refused", "{refusal:?}");
+    assert!(refusal.message.contains("definition.abi"), "{refusal:?}");
+    let status = h.store.status(run).await.unwrap();
+    assert_eq!(status.step, "await-review");
+    assert!(!status.cancel_requested);
+    assert!(!status.authored_cancel_requested);
+    assert!(h.wait_row(run).await.is_some());
+    h.drain(&worker).await;
+    assert_eq!((fake.requests().len(), fake.reads()), (calls, reads));
 }
 
 #[tokio::test]

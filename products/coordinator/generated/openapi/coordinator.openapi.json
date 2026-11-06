@@ -101,6 +101,13 @@
               "databaseId": {
                 "type": "string"
               },
+              "heldRunCount": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "heldRuns": {
+                "$ref": "#/components/schemas/HeldRuns"
+              },
               "oldestDueAt": {
                 "format": "date-time",
                 "type": [
@@ -153,7 +160,9 @@
               "uncertain",
               "terminalPayloads",
               "oldestTerminalPayloadAt",
-              "proposalWaitsByTurn"
+              "proposalWaitsByTurn",
+              "heldRunCount",
+              "heldRuns"
             ],
             "type": "object"
           }
@@ -236,6 +245,48 @@
           "executionRecoveryReviewed"
         ],
         "type": "object"
+      },
+      "HeldRun": {
+        "additionalProperties": false,
+        "description": "A live run held because this Coordinator version does not restore its retained definition. Nothing runs for it; every other run continues.",
+        "properties": {
+          "advice": {
+            "type": "string"
+          },
+          "findingCode": {
+            "type": "string"
+          },
+          "reason": {
+            "const": "definition-refused"
+          },
+          "runId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "workflow": {
+            "type": "string"
+          },
+          "workflowRevision": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "runId",
+          "workflow",
+          "workflowRevision",
+          "reason",
+          "findingCode",
+          "advice"
+        ],
+        "type": "object"
+      },
+      "HeldRuns": {
+        "description": "The first live runs by run id held because this Coordinator version does not restore their retained definition; heldRunCount counts them all.",
+        "items": {
+          "$ref": "#/components/schemas/HeldRun"
+        },
+        "maxItems": 100,
+        "type": "array"
       },
       "Hold": {
         "properties": {
@@ -4111,6 +4162,29 @@
             },
             "description": "A problem: request.method-not-allowed."
           },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "run.definition-incompatible"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: run.definition-incompatible."
+          },
           "413": {
             "content": {
               "application/problem+json": {
@@ -4931,6 +5005,7 @@
                             "reconcile.raced",
                             "reconcile.refused",
                             "reconcile.unsupported",
+                            "run.definition-incompatible",
                             "run.payload-erased"
                           ]
                         }
@@ -4940,7 +5015,7 @@
                 }
               }
             },
-            "description": "A problem: binding.conflict, definition.refused, reconcile.raced, reconcile.refused, reconcile.unsupported, run.payload-erased."
+            "description": "A problem: binding.conflict, definition.refused, reconcile.raced, reconcile.refused, reconcile.unsupported, run.definition-incompatible, run.payload-erased."
           },
           "413": {
             "content": {

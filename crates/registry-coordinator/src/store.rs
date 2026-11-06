@@ -2,7 +2,7 @@
 //! Coordinator-owned durable rows, driven by the shared Dispatch lease engine.
 
 use crate::{
-    definition::{Definition, DefinitionCache, Step},
+    definition::{Definition, DefinitionCache, Step, DEFINITION_REFUSED, HELD_RUN_ADVICE},
     metrics::{DispatchDepth, Metrics, RunOutcome},
     protected_state::StateKeys,
     protocol::{CallRequest, HoldDetail, ProposalObservation},
@@ -37,7 +37,7 @@ mod check_now;
 mod readiness;
 mod recovery;
 pub use check_now::CheckNowAnswer;
-pub use recovery::{DoctorStatus, ProposalWaitsByTurn};
+pub use recovery::{DoctorStatus, HeldRun, ProposalWaitsByTurn, HELD_RUNS_LISTED};
 
 enum InspectionBinding<'a> {
     RecordedOrRuntime(&'a crate::runtime::RuntimeConfig),
@@ -1483,8 +1483,13 @@ impl Store {
                         )
                     })?,
                 )?;
-                let definition = self.definition(&snapshot)?;
-                runtime.binding_digest_for(&definition.workflow).map_err(|error| error.suggest("restore this run's original connections before inspecting or recovering unresolved work"))?
+                match self.definition(&snapshot) {
+                    Ok(definition) => runtime.binding_digest_for(&definition.workflow).map_err(|error| error.suggest("restore this run's original connections before inspecting or recovering unresolved work"))?,
+                    // A run whose retained definition does not restore keeps
+                    // its recorded binding; its recovery reason says why it
+                    // cannot retry.
+                    Err(_) => status.binding_digest.clone(),
+                }
             }
         };
         let snapshot: Option<Value> = row.get(0);
@@ -1722,7 +1727,9 @@ impl Store {
                 refused("payload-erased", "only the spent-key tombstone is retained")
             })?,
         )?;
-        let definition = self.definition(&snapshot).map_err(|_| refused("definition-incompatible", "this binary cannot safely interpret the pinned run snapshot; retain its compatible worker"))?;
+        let definition = self
+            .definition(&snapshot)
+            .map_err(|finding| Definition::run_refused(&finding, run, &status.workflow))?;
         if row.get::<_, bool>(3) {
             if let Some(Step::Call { call, .. }) = definition.workflow.steps.get(&status.step) {
                 if !call.operation.can_retry_after_unknown() {
@@ -1763,13 +1770,16 @@ impl Store {
             DispatchConfig {
                 table: self.table.clone(),
                 sql: DispatchSql {
-                    claim: SelectSql {predicate:"NOT control.restore_hold AND NOT run.restore_review_required AND NOT run.cancel_requested AND run.payload_erased_at IS NULL",..SELECT},
+                    // A run held because its retained definition does not
+                    // restore is never claimed and never expires: it stays
+                    // as it is until an operator acts.
+                    claim: SelectSql {predicate:"NOT control.restore_hold AND NOT run.restore_review_required AND NOT run.cancel_requested AND run.payload_erased_at IS NULL AND run.failure_code IS DISTINCT FROM 'definition-refused'",..SELECT},
                     lapsed: SELECT,
                     expiry: Some(ExpirySql {
                         states: &[JobState::Pending],
                         select: SelectSql {
                             predicate:
-                                "NOT state.pure AND run.deadline_at <= transaction_timestamp()",
+                                "NOT state.pure AND run.deadline_at <= transaction_timestamp() AND run.failure_code IS DISTINCT FROM 'definition-refused'",
                             ..SELECT
                         },
                         order_by: "run.deadline_at",
@@ -2402,10 +2412,14 @@ impl DispatchStore for Store {
         let snapshot: String = self
             .open_value(run, "snapshot", "", &job.snapshot)
             .map_err(|_| DispatchError::Unavailable)?;
-        let definition = self
+        // A lapsed lease of a run whose retained definition does not restore
+        // holds, so one such run cannot stop every other lapse from settling.
+        let on_uncertain = match self
             .definition(&snapshot)
-            .map_err(|_| DispatchError::Unavailable)?;
-        let on_uncertain = match definition.workflow.steps.get(&step) {
+            .ok()
+            .as_ref()
+            .and_then(|definition| definition.workflow.steps.get(&step))
+        {
             Some(Step::Call { call, .. })
                 if call.operation.recovery() == crate::protocol::RecoverySemantics::ReadAgain =>
             {
