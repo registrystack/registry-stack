@@ -4,8 +4,8 @@
 use super::asn1::{oid, EcdsaSigValue, SigningCertificateV2, TimeStampReq, TspGeneralizedTime};
 use super::signed_data::jws_ecdsa_to_der;
 use super::test_support::{
-    critical_extended_key_usage, pem_block, respond_to_timestamp_request, respond_with, TestPki,
-    TestSeal,
+    critical_extended_key_usage, pem_block, refuse_timestamp_request,
+    respond_to_timestamp_request, respond_with, verify_detached_signature, TestPki, TestSeal,
 };
 use super::verify::verify_signed_data;
 use super::*;
@@ -1170,4 +1170,47 @@ async fn write_openssl_interop_artifacts() {
         write(&format!("{label}.tsr"), &response);
         write(&format!("{label}-chain.pem"), seal.chain_pem().as_bytes());
     }
+}
+
+// ----- Test support verifier -----
+
+#[tokio::test]
+async fn the_test_verifier_checks_the_parts_the_signer_and_an_embedded_timestamp() {
+    let pki = test_pki();
+    let seal = seal(&pki, SigningAlgorithm::Es256);
+    let signature = sign(&seal).await;
+    let fingerprint = seal.chain().expect("chain").leaf_sha256_fingerprint();
+
+    let verified = verify_detached_signature(&signature.cms_der, &[FIRST_RANGE, SECOND_RANGE])
+        .expect("B-B verifies");
+    assert_eq!(verified.signer_fingerprint, fingerprint);
+    assert_eq!(verified.timestamp_gen_time, None);
+    assert!(
+        verify_detached_signature(&signature.cms_der, &[FIRST_RANGE, b"tampered"]).is_err(),
+        "a changed byte range is refused"
+    );
+    assert!(verify_detached_signature(b"not der", &[FIRST_RANGE]).is_err());
+
+    let nonce = 7;
+    let request = timestamp_request(&signature.signature_value, nonce).expect("request");
+    let gen_time = now_seconds();
+    let response = respond_to_timestamp_request(&request, &pki, gen_time).expect("response");
+    let timestamp =
+        accept_timestamp_response(&response, &signature.signature_value, nonce).expect("granted");
+    let stamped = add_signature_timestamp(&signature.cms_der, &timestamp.token_der).expect("B-T");
+    let verified =
+        verify_detached_signature(&stamped, &[FIRST_RANGE, SECOND_RANGE]).expect("B-T verifies");
+    assert_eq!(verified.signer_fingerprint, fingerprint);
+    assert_eq!(verified.timestamp_gen_time, Some(gen_time));
+}
+
+#[test]
+fn the_refusing_test_authority_answers_with_a_rejection() {
+    let pki = test_pki();
+    let request = timestamp_request(b"signature value", 9).expect("request");
+    let response = refuse_timestamp_request(&request, &pki).expect("response");
+    assert!(matches!(
+        accept_timestamp_response(&response, b"signature value", 9),
+        Err(TimestampError::NotGranted { status: 2 })
+    ));
 }
