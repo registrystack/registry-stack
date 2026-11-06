@@ -742,7 +742,7 @@ fn a_b_t_seal_verifies_over_its_byte_ranges_and_carries_its_timestamp() {
     assert_eq!(body["documentVersion"], "notice v2");
     assert_eq!(body["warnings"], serde_json::json!([]));
     assert_eq!(body["seal"]["id"], "ministry");
-    assert_eq!(body["seal"]["level"], "b-t");
+    assert_eq!(body["seal"]["level"], "B-T");
 
     let expected = first_revision(&fixture);
     assert!(
@@ -770,7 +770,7 @@ fn a_b_t_seal_verifies_over_its_byte_ranges_and_carries_its_timestamp() {
         .timestamp_gen_time
         .expect("B-T carries a timestamp");
     let reported = time::OffsetDateTime::parse(
-        body["seal"]["timestampTime"].as_str().unwrap(),
+        body["seal"]["timestampedAt"].as_str().unwrap(),
         &time::format_description::well_known::Rfc3339,
     )
     .unwrap();
@@ -818,9 +818,9 @@ fn the_pdf_representation_carries_the_seal_in_headers() {
         Some(signed_file_sha256.as_str())
     );
     assert_eq!(reply.header("x-registry-seal-id"), Some("ministry"));
-    assert_eq!(reply.header("x-registry-seal-level"), Some("b-t"));
+    assert_eq!(reply.header("x-registry-seal-level"), Some("B-T"));
     assert!(reply.header("x-registry-certificate-sha256").is_some());
-    assert!(reply.header("x-registry-timestamp-time").is_some());
+    assert!(reply.header("x-registry-timestamped-at").is_some());
     assert_eq!(reply.header("x-registry-warning-count"), Some("0"));
     assert_eq!(
         reply.header("x-registry-document-version"),
@@ -838,8 +838,8 @@ fn a_b_b_seal_is_the_named_choice_and_carries_no_timestamp() {
     let fixture = sealed(None);
     let server = start_server(&fixture);
     let body = seal_json(&fixture, &server);
-    assert_eq!(body["seal"]["level"], "b-b");
-    assert!(body["seal"].get("timestampTime").is_none(), "{body}");
+    assert_eq!(body["seal"]["level"], "B-B");
+    assert!(body["seal"].get("timestampedAt").is_none(), "{body}");
     let pdf = base64_decode(body["pdfBase64"].as_str().unwrap());
     let expected = first_revision(&fixture);
     assert!(pdf.starts_with(&expected.pdf));
@@ -1929,7 +1929,7 @@ fn a_pdf_a_2_document_seals_within_its_string_limit() {
         String::from_utf8_lossy(&reply.body)
     );
     let body = reply.json();
-    assert_eq!(body["seal"]["level"], "b-t");
+    assert_eq!(body["seal"]["level"], "B-T");
     let pdf = base64_decode(body["pdfBase64"].as_str().unwrap());
     let expected = first_revision_of(&fixture, "archive");
     assert!(

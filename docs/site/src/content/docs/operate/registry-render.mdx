@@ -321,8 +321,8 @@ render route, and the seal route does not exist.
 
 Then call the route with a token that carries `render:seal`. The request body is the render
 route's. The PDF answer carries `X-Registry-Document-Sha256`, `X-Registry-Signed-File-Sha256`,
-`X-Registry-Seal-Id`, `X-Registry-Seal-Level` (`b-t` or `b-b`), and
-`X-Registry-Certificate-Sha256`, plus `X-Registry-Timestamp-Time` for B-T. It also carries
+`X-Registry-Seal-Id`, `X-Registry-Seal-Level` (`B-T` or `B-B`), and
+`X-Registry-Certificate-Sha256`, plus `X-Registry-Timestamped-At` for B-T. It also carries
 `X-Registry-Bundle-Hash` (`bundleHash` in JSON), so a client that holds only `render:seal` can
 compare the package with what you deployed without reading `/v1/documents`. A document type that
 names no seal is refused with `document-not-sealable` (400); `/v1/documents` lists the seal of each

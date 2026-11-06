@@ -27,8 +27,8 @@ fn signed_file() -> Vec<u8> {
 fn sealed_body(level: &str) -> Value {
     let pdf = signed_file();
     let mut seal = json!({"id":"agency","level":level,"certificateSha256":"c".repeat(64)});
-    if level == "b-t" {
-        seal["timestampTime"] = json!("2026-10-23T00:00:01Z");
+    if level == "B-T" {
+        seal["timestampedAt"] = json!("2026-10-23T00:00:01Z");
     }
     json!({
         "pdfBase64": base64::engine::general_purpose::STANDARD.encode(&pdf),
@@ -125,7 +125,7 @@ async fn seal_with(
 
 #[tokio::test]
 async fn timestamped_seal_returns_typed_facts() {
-    let sealed = seal_with(200, sealed_body("b-t"), None, None)
+    let sealed = seal_with(200, sealed_body("B-T"), None, None)
         .await
         .unwrap();
     assert_eq!(sealed.pdf, signed_file());
@@ -137,71 +137,76 @@ async fn timestamped_seal_returns_typed_facts() {
     assert_eq!(sealed.seal.id, "agency");
     assert!(!sealed.seal.test_only);
     assert_eq!(sealed.seal.level, SealLevel::BaselineT);
-    assert_eq!(sealed.seal.level.as_str(), "b-t");
+    assert_eq!(sealed.seal.level.as_str(), "B-T");
     assert_eq!(
-        sealed.seal.timestamp_time.as_deref(),
+        sealed.seal.timestamped_at.as_deref(),
         Some("2026-10-23T00:00:01Z")
     );
 }
 
 #[tokio::test]
 async fn basic_seal_has_no_timestamp() {
-    let sealed = seal_with(200, sealed_body("b-b"), None, None)
+    let sealed = seal_with(200, sealed_body("B-B"), None, None)
         .await
         .unwrap();
     assert_eq!(sealed.seal.level, SealLevel::BaselineB);
-    assert_eq!(sealed.seal.timestamp_time, None);
+    assert_eq!(sealed.seal.timestamped_at, None);
 }
 
 #[tokio::test]
 async fn level_and_timestamp_must_agree() {
-    let mut body = sealed_body("b-b");
-    body["seal"]["timestampTime"] = json!("2026-10-23T00:00:01Z");
+    let mut body = sealed_body("B-B");
+    body["seal"]["timestampedAt"] = json!("2026-10-23T00:00:01Z");
     assert_eq!(
         seal_with(200, body, None, None).await.unwrap_err().kind,
         "protocol"
     );
-    let mut body = sealed_body("b-t");
+    let mut body = sealed_body("B-T");
     body["seal"]
         .as_object_mut()
         .unwrap()
-        .remove("timestampTime");
+        .remove("timestampedAt");
     assert_eq!(
         seal_with(200, body, None, None).await.unwrap_err().kind,
         "protocol"
     );
-    let mut body = sealed_body("b-t");
-    body["seal"]["level"] = json!("b-lt");
-    assert_eq!(
-        seal_with(200, body, None, None).await.unwrap_err().kind,
-        "protocol"
-    );
+    // An unknown level, and a known one in another spelling, are refused:
+    // the level names are ETSI's, compared exactly.
+    for level in ["b-lt", "B-LT", "b-t"] {
+        let mut body = sealed_body("B-T");
+        body["seal"]["level"] = json!(level);
+        assert_eq!(
+            seal_with(200, body, None, None).await.unwrap_err().kind,
+            "protocol",
+            "{level}"
+        );
+    }
 }
 
 #[tokio::test]
 async fn hash_mismatches_are_refused() {
-    let mut body = sealed_body("b-t");
+    let mut body = sealed_body("B-T");
     body["signedFileSha256"] = json!("f".repeat(64));
     assert_eq!(
         seal_with(200, body, None, None).await.unwrap_err().kind,
         "protocol"
     );
     // A document hash that is no %%EOF prefix of the file.
-    let mut body = sealed_body("b-t");
+    let mut body = sealed_body("B-T");
     body["documentSha256"] = json!("f".repeat(64));
     assert_eq!(
         seal_with(200, body, None, None).await.unwrap_err().kind,
         "protocol"
     );
     // The whole file is not a first revision.
-    let mut body = sealed_body("b-t");
+    let mut body = sealed_body("B-T");
     body["documentSha256"] = json!(sha(&signed_file()));
     assert_eq!(
         seal_with(200, body, None, None).await.unwrap_err().kind,
         "protocol"
     );
     // A pdfSha256 member is not part of the sealed contract.
-    let mut body = sealed_body("b-t");
+    let mut body = sealed_body("B-T");
     body["pdfSha256"] = json!(sha(&signed_file()));
     assert_eq!(
         seal_with(200, body, None, None).await.unwrap_err().kind,
@@ -211,7 +216,7 @@ async fn hash_mismatches_are_refused() {
 
 #[tokio::test]
 async fn unknown_members_are_tolerated_and_a_test_seal_is_named() {
-    let mut body = sealed_body("b-t");
+    let mut body = sealed_body("B-T");
     body["laterMember"] = json!({"any": "shape"});
     body["seal"]["laterFact"] = json!(1);
     body["seal"]["testOnly"] = json!(true);
@@ -222,13 +227,13 @@ async fn unknown_members_are_tolerated_and_a_test_seal_is_named() {
 
 #[tokio::test]
 async fn the_package_hash_is_required_and_checked() {
-    let mut body = sealed_body("b-b");
+    let mut body = sealed_body("B-B");
     body.as_object_mut().unwrap().remove("bundleHash");
     assert_eq!(
         seal_with(200, body, None, None).await.unwrap_err().kind,
         "protocol"
     );
-    let mut body = sealed_body("b-b");
+    let mut body = sealed_body("B-B");
     body["bundleHash"] = json!("not-a-digest");
     assert_eq!(
         seal_with(200, body, None, None).await.unwrap_err().kind,
@@ -238,7 +243,7 @@ async fn the_package_hash_is_required_and_checked() {
 
 #[tokio::test]
 async fn first_revision_hash_may_exclude_the_line_ending() {
-    let mut body = sealed_body("b-b");
+    let mut body = sealed_body("B-B");
     body["documentSha256"] = json!(sha(&FIRST_REVISION[..FIRST_REVISION.len() - 1]));
     assert!(seal_with(200, body, None, None).await.is_ok());
 }
@@ -321,7 +326,7 @@ async fn absent_route_is_a_not_found_problem() {
 #[tokio::test]
 async fn oversize_body_is_bounded() {
     // A body that would otherwise be valid but is larger than the limit.
-    let mut body = sealed_body("b-t");
+    let mut body = sealed_body("B-T");
     body["warnings"] = json!(vec!["w".repeat(100); 20]);
     assert!(serde_json::to_vec(&body).unwrap().len() > 1024);
     let (client, task) = serve("/v1/seal/receipt", 200, body, None, |cfg| {
@@ -343,10 +348,10 @@ async fn oversize_body_is_bounded() {
 
 #[tokio::test]
 async fn idempotency_key_is_sent_and_must_be_echoed() {
-    let sealed = seal_with(200, sealed_body("b-t"), Some("key-1"), Some("key-1")).await;
+    let sealed = seal_with(200, sealed_body("B-T"), Some("key-1"), Some("key-1")).await;
     assert!(sealed.is_ok());
     for echo in [None, Some("other")] {
-        let error = seal_with(200, sealed_body("b-t"), Some("key-1"), echo)
+        let error = seal_with(200, sealed_body("B-T"), Some("key-1"), echo)
             .await
             .unwrap_err();
         assert_eq!(error.kind, "protocol");
