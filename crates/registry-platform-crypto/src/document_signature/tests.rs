@@ -302,6 +302,7 @@ fn check_for_signing_refuses_a_leaf_without_a_signing_key_usage() {
             chain.check_for_signing(&seal.private_jwk().public(), now),
             Err(CertificateError::MissingSigningKeyUsage { .. })
         ));
+        assert!(!chain.may_sign(), "the usage alone is read without the key");
     }
 }
 
@@ -318,10 +319,11 @@ fn check_for_signing_accepts_either_signing_key_usage_alone() {
                 params.key_usages = vec![usage];
             })
             .expect("seal");
-        seal.chain()
-            .expect("chain")
+        let chain = seal.chain().expect("chain");
+        chain
             .check_for_signing(&seal.private_jwk().public(), now)
             .expect("accepted");
+        assert!(chain.may_sign());
     }
 }
 
