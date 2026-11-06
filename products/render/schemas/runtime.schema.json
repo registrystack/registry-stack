@@ -562,6 +562,10 @@
           "minimum": 1000,
           "type": "integer"
         },
+        "caBundleRef": {
+          "$ref": "#/$defs/SecretReference",
+          "description": "PEM CA bundle for the authority. Omitted, the platform's trusted\nroots verify it."
+        },
         "url": {
           "$ref": "#/$defs/Url",
           "allOf": [

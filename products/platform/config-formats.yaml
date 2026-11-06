@@ -2401,6 +2401,8 @@ formats:
         whenOmitted: refused
       - pointer: /signing/seals/*/timestampAuthority/url
         whenOmitted: refused
+      - pointer: /signing/seals/*/timestampAuthority/caBundleRef
+        whenOmitted: open
       - pointer: /signing/seals/*/withoutTimestamp
         whenOmitted: closed
       - pointer: /signing/seals/*/trust

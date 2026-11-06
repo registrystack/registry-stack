@@ -476,6 +476,14 @@ pub struct TimestampAuthorityRuntime {
     #[serde(default = "default_timestamp_attempt")]
     pub attempt_timeout_milliseconds:
         BoundedU64<MINIMUM_TIMESTAMP_ATTEMPT_MILLISECONDS, MAXIMUM_TIMESTAMP_ATTEMPT_MILLISECONDS>,
+    /// PEM CA bundle for the authority. Omitted, the platform's trusted
+    /// roots verify it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_config::SecretReference")
+    )]
+    pub ca_bundle_ref: Option<String>,
 }
 
 impl TimestampAuthorityRuntime {
@@ -676,9 +684,17 @@ pub fn check_runtime_with_bundle(
 /// the `sha256:` digest of its effective configuration; a refusal carries
 /// every finding, each positioned in the file and naming its fix.
 pub fn load(path: &Path) -> Result<(RenderRuntime, String), RenderProblem> {
+    load_with_positions(path).map(|(runtime, digest, _)| (runtime, digest))
+}
+
+/// [`load`], with the positions of the file's members, for a refusal found
+/// after the load (a seal that cannot load) to name its line too.
+pub fn load_with_positions(
+    path: &Path,
+) -> Result<(RenderRuntime, String, RuntimePositions), RenderProblem> {
     match read_runtime(path, true, None, None, false) {
-        (Some(loaded), _) => Ok((loaded.config, loaded.effective_digest)),
-        (None, check) => {
+        (Some(loaded), _, positions) => Ok((loaded.config, loaded.effective_digest, positions)),
+        (None, check, _) => {
             let detail = if check.unavailable {
                 "the runtime configuration could not be read"
             } else {
@@ -687,6 +703,27 @@ pub fn load(path: &Path) -> Result<(RenderRuntime, String), RenderProblem> {
             Err(RenderProblem::new(ProblemKind::RuntimeInvalid, detail)
                 .with_diagnostics(check.diagnostics))
         }
+    }
+}
+
+/// Where each member of a loaded runtime file stands in it.
+pub struct RuntimePositions(RuntimeFileCheck<RenderRuntime>);
+
+impl RuntimePositions {
+    /// `problem`, with each of its runtime file diagnostics that has no
+    /// position placed at its member's value, naming the file as it was
+    /// given, as the load's own findings are.
+    #[must_use]
+    pub fn place(&self, mut problem: RenderProblem) -> RenderProblem {
+        for diagnostic in &mut problem.diagnostics {
+            if diagnostic.source.is_none() && diagnostic.artifact.as_deref() == Some(RUNTIME_KIND) {
+                diagnostic.source = self
+                    .0
+                    .error_at(RUNTIME_KIND, &diagnostic.code, &diagnostic.path, "", "")
+                    .source;
+            }
+        }
+        problem
     }
 }
 
@@ -704,8 +741,12 @@ fn read_runtime(
     audit_root: Option<&Path>,
     manifest: Option<&Manifest>,
     seal_chains: bool,
-) -> (Option<LoadedRuntimeConfig<RenderRuntime>>, RuntimeCheck) {
-    let check = runtime_loader().check_offline::<RenderRuntime>(path, substitute, stand_in_for);
+) -> (
+    Option<LoadedRuntimeConfig<RenderRuntime>>,
+    RuntimeCheck,
+    RuntimePositions,
+) {
+    let mut check = runtime_loader().check_offline::<RenderRuntime>(path, substitute, stand_in_for);
     let mut diagnostics = check.diagnostics.clone();
     let mut unavailable = check.unavailable;
     let mut seal_capacities = BTreeMap::new();
@@ -810,6 +851,7 @@ fn read_runtime(
     // A warning reports a finding but does not refuse the file.
     let loaded = check
         .loaded
+        .take()
         .filter(|_| diagnostics.iter().all(|d| d.severity != Severity::Error));
     (
         loaded,
@@ -819,6 +861,7 @@ fn read_runtime(
             seal_capacities,
             seal_chains_not_read,
         },
+        RuntimePositions(check),
     )
 }
 
@@ -1009,6 +1052,18 @@ fn signing_findings(runtime: &RenderRuntime, signing: &SigningRuntime) -> Vec<Fi
             &seal.private_key_ref,
         ) {
             findings.push(block_finding(&error));
+        }
+        let ca_bundle_ref = seal
+            .timestamp_authority
+            .as_ref()
+            .and_then(|authority| authority.ca_bundle_ref.as_deref());
+        if let Some(reference) = ca_bundle_ref {
+            if let Err(error) = runtime.secret_providers.check_reference(
+                &format!("signing.seals.{id}.timestampAuthority.caBundleRef"),
+                reference,
+            ) {
+                findings.push(block_finding(&error));
+            }
         }
         if !is_plain_absolute(&seal.certificate_chain_file) {
             findings.push(finding(
@@ -2279,6 +2334,7 @@ mod tests {
         );
         let authority = seal.timestamp_authority.as_ref().expect("timestamps");
         assert_eq!(authority.attempt_timeout(), Duration::from_secs(10));
+        assert!(authority.ca_bundle_ref.is_none());
         assert!(seal.without_timestamp.is_none());
         assert!(seal.allows_client("records-service"));
         assert!(!seal.allows_client("portal"));
@@ -2325,6 +2381,16 @@ mod tests {
                 SEAL.replace("secret:file/seal.jwk", "/etc/render/seal.jwk"),
                 "render.runtime.invalid-secret-reference",
                 "/signing/seals/ministry/privateKeyRef",
+            ),
+            (
+                SEAL.replace(ts_url, &format!("{ts_url}        caBundleRef: secret:env/TSA_CA\n")),
+                "render.runtime.undeclared-secret-provider",
+                "/signing/seals/ministry/timestampAuthority/caBundleRef",
+            ),
+            (
+                SEAL.replace(ts_url, &format!("{ts_url}        caBundleRef: /etc/render/tsa-ca.pem\n")),
+                "render.runtime.invalid-secret-reference",
+                "/signing/seals/ministry/timestampAuthority/caBundleRef",
             ),
             (
                 SEAL.replace("/etc/render/seal/chain.pem", "chain.pem"),

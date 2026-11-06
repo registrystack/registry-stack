@@ -18,7 +18,10 @@
   manifest, and a `signing.seals` block in the runtime file binds each seal to
   a private key reference, a certificate chain file, a timestamp policy
   (`timestampAuthority` for baseline B-T, or the named `withoutTimestamp`
-  choice for B-B) and the OIDC clients allowed to use it. With seals, `serve`
+  choice for B-B) and the OIDC clients allowed to use it. A timestamp
+  authority under a private root is trusted through an optional
+  `timestampAuthority.caBundleRef`, a PEM CA bundle that replaces the
+  platform's trusted roots for that authority. With seals, `serve`
   adds `POST /v1/seal/{type}`, which needs the new `render:seal` scope (not
   implied by `render:render`; the legacy API key never seals) and returns the
   sealed PDF with `documentDigest` over the first revision,
@@ -58,9 +61,13 @@
   certificate, taken as the seal certificate, is a CA certificate. veraPDF
   has passed a test template at every accepted PDF/A level and at PDF/UA-1,
   rendered and sealed (`EVIDENCE.md`). A seal key `serve` cannot read is refused with the secret provider's reason, and its text is erased once parsed. New problem
-  kinds with exit codes: `signing-unavailable` (26), `seal-certificate-invalid`
-  (27), `timestamp-failed` (28), `document-not-sealable` (29) and
-  `seal-client-not-allowed` (30). Render writes PAdES baseline B-B and B-T
+  kinds with exit codes, for seal requests: `signing-unavailable` (26),
+  `seal-certificate-invalid` (27), `timestamp-failed` (28),
+  `document-not-sealable` (29) and `seal-client-not-allowed` (30). A seal that
+  cannot load at startup stops `serve` as `runtime-invalid` (20), whichever
+  piece failed, with the error at its member's line in the runtime file, or
+  in the package's `manifest.yaml` for a document type whose PDF standard
+  cannot hold the seal. Render writes PAdES baseline B-B and B-T
   signatures; `EVIDENCE.md` records the pyHanko, EU DSS and veraPDF runs on
   sealed files `serve` answered. Render makes no eIDAS qualification claim.
 - `compile --preview-seal <test-only|production>` renders a template's

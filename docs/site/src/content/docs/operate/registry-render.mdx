@@ -296,9 +296,10 @@ signing:
   accepts only a DER answer whose token is signed with RSA PKCS#1 v1.5 or ECDSA and names the
   authority's certificate in an ESS signing-certificate attribute; the
   [configuration reference](../../reference/render-configuration/#seal-documents) lists the limits.
-- Render reaches the timestamp authority over TLS with the serving host's root certificates and has
-  no setting of its own for them. If the authority's TLS certificate chains to a national or other
-  private root, add that root to the host's or the container image's trust store.
+- Render reaches the timestamp authority over TLS with the serving host's root certificates. If
+  the authority's TLS certificate chains to a national or other private root, set
+  `timestampAuthority.caBundleRef` to a secret reference to that root as PEM, such as
+  `secret:file/tsa-ca.pem`. The bundle then replaces the host's roots for that authority alone.
 - A failing timestamp authority fails the request with `timestamp-failed` (502). Render does not
   retry and never returns an untimestamped file in its place. The audit's response entry and one
   `seal refused` log warning name the failing check as `reason`, such as `timed-out` or
@@ -316,7 +317,9 @@ extended key usage names no document-signing purpose (`render.runtime.seal-certi
 validators such as Acrobat flag its seals, so `serve` also logs a `seal certificate purpose
 excludes document signing` warning for it at startup. When `serve`
 starts, it also checks that the key matches the certificate, and it refuses to start if it does
-not. If the runtime names a seal the package does not use, or the package names a seal the
+not. A seal that cannot load, for any of these reasons or an unreadable key or CA bundle, stops
+`serve` with exit code 20 (`runtime-invalid`) and an error at the member's line in the runtime
+file. If the runtime names a seal the package does not use, or the package names a seal the
 runtime does not bind, `check` reports it, and `serve` refuses the second case. If the package
 names seals and the runtime has no `signing` block at all, `check` and `serve` warn
 (`render.runtime.seals-not-served`): sealing is off, those document types render unsealed on the
@@ -416,8 +419,11 @@ verdict on the issuer, not a failure of the file's integrity.
     crates/registry-render/src/seal.rs, Seal::load, check_chain and EXPIRY_WARNING_DAYS;
     crates/registry-render/src/server.rs, seal_route, respond_sealed and ready;
     crates/registry-render/src/audit.rs, RenderAuditEvent::for_seal;
-    crates/registry-render/tests/serve_seal.rs, a_b_t_seal_verifies_over_its_byte_ranges_and_carries_its_timestamp
-    and a_failing_timestamp_authority_fails_the_seal_naming_the_piece;
+    crates/registry-render/tests/serve_seal.rs, a_b_t_seal_verifies_over_its_byte_ranges_and_carries_its_timestamp,
+    a_failing_timestamp_authority_fails_the_seal_naming_the_piece,
+    a_timestamp_authority_under_a_private_root_is_trusted_through_its_ca_bundle,
+    an_unusable_timestamp_ca_bundle_refuses_startup_by_position
+    and an_unreadable_or_invalid_chain_refuses_startup_by_position;
     crates/registry-render/tests/check_seals.rs, check_with_the_environment_reads_each_seal_certificate_chain;
     products/render/SECURITY-MATRIX.md. */}
 

@@ -89,14 +89,14 @@ exits 101):
 | 17 | `unauthorized` | missing or invalid bearer credential (serve, HTTP 401) |
 | 18 | `rate-limited` | as many seals as render slots are already in flight (serve, HTTP 429) |
 | 19 | `audit-failed` | audit destination refused or failed (fail closed) |
-| 20 | `runtime-invalid` | serve runtime configuration invalid |
+| 20 | `runtime-invalid` | serve runtime configuration invalid, a seal that cannot load at startup included |
 | 21 | `internal` | internal invariant broke; never carries data |
 | 22 | `body-too-large` | request body over the configured ceiling (serve, HTTP 413) |
 | 23 | `forbidden` | verified credential lacks `render:render` (`render:seal` on the seal route), or the legacy API key calls the seal route (serve, HTTP 403) |
 | 24 | `authentication-unavailable` | verifier cannot reach a verdict (serve, HTTP 503) |
 | 25 | `not-found` | route is not exposed by the adapter (HTTP 404) |
 | 26 | `signing-unavailable` | the seal's key provider cannot sign now (serve, HTTP 503) |
-| 27 | `seal-certificate-invalid` | the seal certificate is unusable, or outside its validity (serve, HTTP 503) |
+| 27 | `seal-certificate-invalid` | the seal certificate is outside its validity, or cannot sign, when a seal is requested (serve, HTTP 503) |
 | 28 | `timestamp-failed` | the timestamp authority gave no usable token; never falls back to B-B (serve, HTTP 502) |
 | 29 | `document-not-sealable` | the document type names no seal (serve, HTTP 400) |
 | 30 | `seal-client-not-allowed` | the verified client is not in the seal's `allowedClients` (serve, HTTP 403) |
@@ -168,7 +168,9 @@ signing:
   a production seal key off such a host until HSM or managed-key custody
   lands.
 - `timestampAuthority` (an RFC 3161 authority; `https`, or `http` on loopback
-  only; `attemptTimeoutMilliseconds` 1000 to 60000, default 10000) makes the
+  only; `attemptTimeoutMilliseconds` 1000 to 60000, default 10000; an
+  optional `caBundleRef` naming a PEM CA bundle that verifies the authority
+  in place of the platform's trusted roots) makes the
   seal PAdES baseline B-T. `withoutTimestamp:
   seal-stops-validating-when-certificate-expires` makes it B-B and states the
   consequence. Declare exactly one.

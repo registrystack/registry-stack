@@ -98,13 +98,22 @@ enum TsaMode {
 
 struct Tsa {
     port: u16,
+    /// Whether the authority answers over HTTPS.
+    tls: bool,
     requests: Arc<AtomicUsize>,
     content_types: Arc<Mutex<Vec<String>>>,
     /// The root certificate the authority's timestamp chain leads to.
     root_pem: String,
 }
 
-fn read_http_request(stream: &mut TcpStream) -> (String, Vec<u8>) {
+impl Tsa {
+    fn url(&self) -> String {
+        let scheme = if self.tls { "https" } else { "http" };
+        format!("{scheme}://127.0.0.1:{}/tsr", self.port)
+    }
+}
+
+fn read_http_request(stream: &mut impl Read) -> (String, Vec<u8>) {
     let mut raw = Vec::new();
     let mut buf = [0u8; 4096];
     let split = loop {
@@ -132,6 +141,63 @@ fn read_http_request(stream: &mut TcpStream) -> (String, Vec<u8>) {
 }
 
 fn start_tsa(mode: TsaMode) -> Tsa {
+    start_tsa_over(mode, None)
+}
+
+/// [`start_tsa`] over HTTPS, under a certificate for `127.0.0.1` that a
+/// private certificate authority issued. Returns the authority's PEM
+/// certificate too, which no platform root store holds.
+fn start_tsa_under_private_ca(mode: TsaMode) -> (Tsa, String) {
+    use tokio_rustls::rustls;
+    use tokio_rustls::rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
+
+    let mut authority =
+        rcgen::CertificateParams::new(Vec::<String>::new()).expect("private CA parameters");
+    authority.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+    let authority_key = rcgen::KeyPair::generate().expect("private CA key");
+    let authority_certificate = authority
+        .self_signed(&authority_key)
+        .expect("private CA certificate");
+    let server_key = rcgen::KeyPair::generate().expect("server key");
+    let server = rcgen::CertificateParams::new(vec!["127.0.0.1".to_owned()])
+        .expect("server parameters")
+        .signed_by(
+            &server_key,
+            &rcgen::Issuer::from_params(&authority, &authority_key),
+        )
+        .expect("the private CA signs the server certificate");
+    let config = rustls::ServerConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .expect("TLS protocol versions")
+    .with_no_client_auth()
+    .with_single_cert(
+        vec![server.der().clone()],
+        PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(server_key.serialize_der())),
+    )
+    .expect("TLS server configuration");
+    (
+        start_tsa_over(mode, Some(Arc::new(config))),
+        pem_certificate(authority_certificate.der()),
+    )
+}
+
+/// One DER certificate as a PEM block.
+fn pem_certificate(der: &[u8]) -> String {
+    let encoded = base64::engine::general_purpose::STANDARD.encode(der);
+    let lines: Vec<&str> = encoded
+        .as_bytes()
+        .chunks(64)
+        .map(|chunk| std::str::from_utf8(chunk).expect("base64 is ASCII"))
+        .collect();
+    format!(
+        "-----BEGIN CERTIFICATE-----\n{}\n-----END CERTIFICATE-----\n",
+        lines.join("\n")
+    )
+}
+
+fn start_tsa_over(mode: TsaMode, tls: Option<Arc<tokio_rustls::rustls::ServerConfig>>) -> Tsa {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind tsa");
     let port = listener.local_addr().unwrap().port();
     let requests = Arc::new(AtomicUsize::new(0));
@@ -139,68 +205,91 @@ fn start_tsa(mode: TsaMode) -> Tsa {
     let (counter, seen) = (Arc::clone(&requests), Arc::clone(&content_types));
     let pki = TestPki::generate().expect("tsa pki");
     let root_pem = pki.root_certificate_pem();
+    let over_tls = tls.is_some();
     std::thread::spawn(move || {
         for stream in listener.incoming() {
-            let Ok(mut stream) = stream else { continue };
+            let Ok(stream) = stream else { continue };
             counter.fetch_add(1, Ordering::SeqCst);
-            let (head, query) = read_http_request(&mut stream);
-            let content_type = head
-                .lines()
-                .filter_map(|line| line.split_once(':'))
-                .find(|(name, _)| name.trim().eq_ignore_ascii_case("content-type"))
-                .map(|(_, value)| value.trim().to_owned())
-                .unwrap_or_default();
-            seen.lock().unwrap().push(content_type);
-            if matches!(mode, TsaMode::Silent) {
-                std::thread::sleep(Duration::from_secs(10));
-                continue;
+            match &tls {
+                None => answer_timestamp_request(stream, mode, &pki, &seen),
+                Some(config) => {
+                    let Ok(connection) =
+                        tokio_rustls::rustls::ServerConnection::new(Arc::clone(config))
+                    else {
+                        continue;
+                    };
+                    let mut stream = tokio_rustls::rustls::StreamOwned::new(connection, stream);
+                    // A client that does not trust the certificate ends the
+                    // handshake before it sends a query.
+                    if stream.conn.complete_io(&mut stream.sock).is_err() {
+                        continue;
+                    }
+                    answer_timestamp_request(stream, mode, &pki, &seen);
+                }
             }
-            let reply = "application/timestamp-reply";
-            let (status, content_type, body) = match mode {
-                TsaMode::Grant => (
-                    "200 OK",
-                    reply,
-                    respond_to_timestamp_request(&query, &pki, now_seconds()).expect("grant"),
-                ),
-                TsaMode::Reject => (
-                    "200 OK",
-                    reply,
-                    refuse_timestamp_request(&query, &pki).expect("reject"),
-                ),
-                TsaMode::ServerError => (
-                    "500 Internal Server Error",
-                    "text/plain",
-                    b"unavailable".to_vec(),
-                ),
-                TsaMode::Oversize => ("200 OK", reply, vec![0x30; 70 * 1024]),
-                TsaMode::Garbage => ("200 OK", reply, b"not a timestamp reply".to_vec()),
-                TsaMode::Unbound => (
-                    "200 OK",
-                    reply,
-                    respond_to_timestamp_request_with(
-                        &query,
-                        &pki,
-                        now_seconds(),
-                        EssAttribute::Absent,
-                    )
-                    .expect("grant"),
-                ),
-                TsaMode::Silent => unreachable!("a silent authority never answers"),
-            };
-            let head = format!(
-                "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                body.len()
-            );
-            let _ = stream.write_all(head.as_bytes());
-            let _ = stream.write_all(&body);
         }
     });
     Tsa {
         port,
+        tls: over_tls,
         requests,
         content_types,
         root_pem,
     }
+}
+
+fn answer_timestamp_request(
+    mut stream: impl Read + Write,
+    mode: TsaMode,
+    pki: &TestPki,
+    seen: &Mutex<Vec<String>>,
+) {
+    let (head, query) = read_http_request(&mut stream);
+    let content_type = head
+        .lines()
+        .filter_map(|line| line.split_once(':'))
+        .find(|(name, _)| name.trim().eq_ignore_ascii_case("content-type"))
+        .map(|(_, value)| value.trim().to_owned())
+        .unwrap_or_default();
+    seen.lock().unwrap().push(content_type);
+    if matches!(mode, TsaMode::Silent) {
+        std::thread::sleep(Duration::from_secs(10));
+        return;
+    }
+    let reply = "application/timestamp-reply";
+    let (status, content_type, body) = match mode {
+        TsaMode::Grant => (
+            "200 OK",
+            reply,
+            respond_to_timestamp_request(&query, pki, now_seconds()).expect("grant"),
+        ),
+        TsaMode::Reject => (
+            "200 OK",
+            reply,
+            refuse_timestamp_request(&query, pki).expect("reject"),
+        ),
+        TsaMode::ServerError => (
+            "500 Internal Server Error",
+            "text/plain",
+            b"unavailable".to_vec(),
+        ),
+        TsaMode::Oversize => ("200 OK", reply, vec![0x30; 70 * 1024]),
+        TsaMode::Garbage => ("200 OK", reply, b"not a timestamp reply".to_vec()),
+        TsaMode::Unbound => (
+            "200 OK",
+            reply,
+            respond_to_timestamp_request_with(&query, pki, now_seconds(), EssAttribute::Absent)
+                .expect("grant"),
+        ),
+        TsaMode::Silent => unreachable!("a silent authority never answers"),
+    };
+    let head = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    let _ = stream.write_all(head.as_bytes());
+    let _ = stream.write_all(&body);
+    let _ = stream.flush();
 }
 
 // ----- Deployment -----
@@ -314,7 +403,7 @@ fn sealed(tsa: Option<&Tsa>) -> Fixture {
 /// [`sealed`] with a seal certificate `pki` issues.
 fn sealed_by(pki: &TestPki, tsa: Option<&Tsa>) -> Fixture {
     deployment(Some(SealSpec {
-        tsa_url: tsa.map(|tsa| format!("http://127.0.0.1:{}/tsr", tsa.port)),
+        tsa_url: tsa.map(Tsa::url),
         seal: pki.issue_seal(SigningAlgorithm::Es256).unwrap(),
         key_of: None,
     }))
@@ -526,6 +615,30 @@ fn refused_startup(fixture: &Fixture) -> (Option<i32>, String) {
         std::thread::sleep(Duration::from_millis(50));
     };
     (status.code(), reader.join().expect("stderr reader"))
+}
+
+/// The `file:line:` a diagnostic placed at a member of `file` starts with:
+/// the first line that starts with `member` after the first that starts
+/// with `after`, both ignoring indentation.
+fn position_in(file: &Path, after: &str, member: &str) -> String {
+    let text = std::fs::read_to_string(file).expect("the file reads");
+    let lines: Vec<&str> = text.lines().map(str::trim_start).collect();
+    let from = lines
+        .iter()
+        .position(|line| line.starts_with(after))
+        .expect("the anchor line is in the file");
+    let line = from
+        + lines[from..]
+            .iter()
+            .position(|line| line.starts_with(member))
+            .expect("the member is in the file")
+        + 1;
+    format!("{}:{line}:", file.display())
+}
+
+/// [`position_in`] the fixture's runtime file, under the seal `ministry`.
+fn seal_member_position(fixture: &Fixture, member: &str) -> String {
+    position_in(&fixture.runtime_path, "ministry:", member)
 }
 
 struct Reply {
@@ -1408,7 +1521,7 @@ fn a_key_that_does_not_match_its_certificate_refuses_startup_by_position() {
     let (code, stderr) = refused_startup(&fixture);
     assert_eq!(
         code,
-        Some(registry_render::ProblemKind::SealCertificateInvalid.exit_code()),
+        Some(registry_render::ProblemKind::RuntimeInvalid.exit_code()),
         "{stderr}"
     );
     assert!(
@@ -1417,6 +1530,10 @@ fn a_key_that_does_not_match_its_certificate_refuses_startup_by_position() {
     );
     assert!(
         stderr.contains("/signing/seals/ministry/privateKeyRef"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(&seal_member_position(&fixture, "privateKeyRef:")),
         "{stderr}"
     );
     for value in [TEST_SEAL_ORGANIZATION, "Registry Stack Test Seal"] {
@@ -1447,6 +1564,10 @@ fn an_unusable_key_file_names_its_reason_and_fix() {
         "{stderr}"
     );
     assert!(stderr.contains("mode 0600"), "{stderr}");
+    assert!(
+        stderr.contains(&seal_member_position(&fixture, "privateKeyRef:")),
+        "{stderr}"
+    );
 
     std::fs::remove_file(&key_file).unwrap();
     let (code, stderr) = refused_startup(&fixture);
@@ -1474,11 +1595,12 @@ fn an_unreadable_or_invalid_chain_refuses_startup_by_position() {
         seal: pki.issue_seal(SigningAlgorithm::Es256).unwrap(),
         key_of: None,
     }));
-    std::fs::write(fixture.home.join("chain.pem"), "not a certificate\n").unwrap();
+    let chain = fixture.home.join("chain.pem");
+    std::fs::write(&chain, "not a certificate\n").unwrap();
     let (code, stderr) = refused_startup(&fixture);
     assert_eq!(
         code,
-        Some(registry_render::ProblemKind::SealCertificateInvalid.exit_code()),
+        Some(registry_render::ProblemKind::RuntimeInvalid.exit_code()),
         "{stderr}"
     );
     assert!(
@@ -1489,20 +1611,23 @@ fn an_unreadable_or_invalid_chain_refuses_startup_by_position() {
         stderr.contains("/signing/seals/ministry/certificateChainFile"),
         "{stderr}"
     );
-    std::fs::remove_file(fixture.home.join("chain.pem")).unwrap();
+    let position = seal_member_position(&fixture, "certificateChainFile:");
+    assert!(stderr.contains(&position), "{stderr}");
+    std::fs::remove_file(&chain).unwrap();
     let (code, stderr) = refused_startup(&fixture);
     assert_eq!(
         code,
-        Some(registry_render::ProblemKind::SealCertificateInvalid.exit_code()),
+        Some(registry_render::ProblemKind::RuntimeInvalid.exit_code()),
         "{stderr}"
     );
     assert!(
         stderr.contains("render.runtime.seal-chain-unreadable"),
         "{stderr}"
     );
+    assert!(stderr.contains(&position), "{stderr}");
     assert!(
-        !stderr.contains(&fixture.home.display().to_string()),
-        "the message repeats no path: {stderr}"
+        !stderr.contains(&chain.display().to_string()),
+        "the message repeats no chain path: {stderr}"
     );
 }
 
@@ -1522,7 +1647,7 @@ fn a_certificate_without_a_signing_key_usage_refuses_startup() {
     let (code, stderr) = refused_startup(&fixture);
     assert_eq!(
         code,
-        Some(registry_render::ProblemKind::SealCertificateInvalid.exit_code()),
+        Some(registry_render::ProblemKind::RuntimeInvalid.exit_code()),
         "{stderr}"
     );
     assert!(
@@ -1558,7 +1683,7 @@ fn a_failing_timestamp_authority_fails_the_seal_naming_the_piece() {
     for (mode, piece, reason) in cases {
         let tsa = mode.map(start_tsa);
         let url = match &tsa {
-            Some(tsa) => format!("http://127.0.0.1:{}/tsr", tsa.port),
+            Some(tsa) => tsa.url(),
             None => format!("http://127.0.0.1:{closed}/tsr"),
         };
         let pki = seal_pki();
@@ -1628,6 +1753,106 @@ fn a_failing_timestamp_authority_fails_the_seal_naming_the_piece() {
         assert!(audit[0]["record"].get("reason").is_none());
         assert!(audit[1]["record"].get("signedFileDigest").is_none());
     }
+}
+
+/// Give the fixture's timestamp authority the CA bundle `reference` names.
+fn with_timestamp_ca_bundle(fixture: &Fixture, reference: &str) {
+    let text = std::fs::read_to_string(&fixture.runtime_path).unwrap();
+    let timeout = "        attemptTimeoutMilliseconds: 2000\n";
+    assert_eq!(text.matches(timeout).count(), 1, "{text}");
+    let text = text.replace(
+        timeout,
+        &format!("{timeout}        caBundleRef: {reference}\n"),
+    );
+    std::fs::write(&fixture.runtime_path, text).unwrap();
+}
+
+/// An authority whose TLS certificate chains to a private root is trusted
+/// through the seal's `caBundleRef` alone: without it the platform's roots
+/// refuse the authority and the seal fails, and with it the seal carries
+/// the authority's timestamp.
+#[test]
+fn a_timestamp_authority_under_a_private_root_is_trusted_through_its_ca_bundle() {
+    let (tsa, authority_pem) = start_tsa_under_private_ca(TsaMode::Grant);
+    let fixture = sealed(Some(&tsa));
+    let seal = |server: &Server| {
+        post(
+            server,
+            "/v1/seal/notice",
+            &fixture.token("render:seal", SEAL_CLIENT),
+            "application/json",
+        )
+    };
+    let server = start_server(&fixture);
+    let refused = seal(&server);
+    assert_eq!(
+        refused.status,
+        502,
+        "{}",
+        String::from_utf8_lossy(&refused.body)
+    );
+    assert_eq!(refused.json()["code"], "render.timestamp-failed");
+    assert!(
+        tsa.content_types.lock().unwrap().is_empty(),
+        "no query crosses an untrusted connection"
+    );
+    drop(server);
+
+    write_secret(&fixture.home.join("tsa-ca.pem"), &authority_pem);
+    with_timestamp_ca_bundle(&fixture, "secret:file/tsa-ca.pem");
+    let server = start_server(&fixture);
+    let sealed = seal(&server);
+    assert_eq!(
+        sealed.status,
+        200,
+        "{}",
+        String::from_utf8_lossy(&sealed.body)
+    );
+    assert_eq!(sealed.json()["seal"]["level"], "B-T");
+    assert_eq!(
+        *tsa.content_types.lock().unwrap(),
+        ["application/timestamp-query"],
+        "one query, over the trusted connection"
+    );
+}
+
+/// A CA bundle that cannot be read, or is no PEM certificate, refuses
+/// startup at `caBundleRef`, in the runtime file, with the runtime's exit
+/// code.
+#[test]
+fn an_unusable_timestamp_ca_bundle_refuses_startup_by_position() {
+    let (tsa, _) = start_tsa_under_private_ca(TsaMode::Grant);
+    let fixture = sealed(Some(&tsa));
+    with_timestamp_ca_bundle(&fixture, "secret:file/tsa-ca.pem");
+    let position = seal_member_position(&fixture, "caBundleRef:");
+    for (contents, code) in [
+        (None, "render.runtime.seal-timestamp-ca-bundle-unreadable"),
+        (
+            Some("not a certificate\n"),
+            "render.runtime.seal-timestamp-ca-bundle-invalid",
+        ),
+    ] {
+        if let Some(contents) = contents {
+            write_secret(&fixture.home.join("tsa-ca.pem"), contents);
+        }
+        let (exit, stderr) = refused_startup(&fixture);
+        assert_eq!(
+            exit,
+            Some(registry_render::ProblemKind::RuntimeInvalid.exit_code()),
+            "{stderr}"
+        );
+        assert!(stderr.contains(code), "{code}: {stderr}");
+        assert!(
+            stderr.contains("/signing/seals/ministry/timestampAuthority/caBundleRef"),
+            "{stderr}"
+        );
+        assert!(stderr.contains(&position), "{stderr}");
+    }
+    assert_eq!(
+        tsa.requests.load(Ordering::SeqCst),
+        0,
+        "startup calls no authority"
+    );
 }
 
 /// A seal waiting on the timestamp authority holds no render slot, so seals
@@ -2043,7 +2268,7 @@ fn a_chain_too_large_for_the_reserved_space_refuses_startup() {
     let (code, stderr) = refused_startup(&fixture);
     assert_eq!(
         code,
-        Some(registry_render::ProblemKind::SealCertificateInvalid.exit_code()),
+        Some(registry_render::ProblemKind::RuntimeInvalid.exit_code()),
         "{stderr}"
     );
     assert!(
@@ -2052,6 +2277,10 @@ fn a_chain_too_large_for_the_reserved_space_refuses_startup() {
     );
     assert!(
         stderr.contains("/signing/seals/ministry/certificateChainFile"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(&seal_member_position(&fixture, "certificateChainFile:")),
         "{stderr}"
     );
 }
@@ -2129,6 +2358,11 @@ fn a_seal_too_large_for_a_document_pdf_standard_refuses_startup() {
         "{stderr}"
     );
     assert!(stderr.contains("/documents/2/seal"), "{stderr}");
+    let manifest = fixture.home.join("package/manifest.yaml");
+    assert!(
+        stderr.contains(&position_in(&manifest, "- id: archive", "seal:")),
+        "{stderr}"
+    );
     assert!(
         stderr.contains("PDF/A-2 and PDF/A-3 limit a string to 32767 bytes"),
         "{stderr}"
