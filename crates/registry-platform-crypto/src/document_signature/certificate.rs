@@ -210,6 +210,15 @@ impl CertificateChain {
         Ok(())
     }
 
+    /// Whether the seal certificate carries the digitalSignature or
+    /// nonRepudiation key usage, read without the signing key: what an
+    /// offline check can say about a chain whose key it may not read. A
+    /// malformed key usage extension counts as neither.
+    #[must_use]
+    pub fn may_sign(&self) -> bool {
+        self.leaf_may_sign().unwrap_or(false)
+    }
+
     /// Refuse a provider key the seal certificate does not hold.
     fn check_key(&self, public_jwk: &PublicJwk) -> Result<(), CertificateError> {
         let fingerprint = self.leaf_sha256_fingerprint();
