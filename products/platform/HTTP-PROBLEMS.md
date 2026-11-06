@@ -14,7 +14,7 @@ The common RFC 9457 response is `application/problem+json` with six fields:
 | `title` | Fixed safe category text. |
 | `status` | Integer equal to the HTTP status. |
 | `detail` | Fixed safe guidance, with no submitted or source values. |
-| `code` | At most 128 ASCII bytes, `family.reason`. Each segment starts with a lowercase letter and contains lowercase letters, digits or hyphens. |
+| `code` | At most 128 ASCII bytes, `family.reason`. Each segment starts with a lowercase letter and contains lowercase letters, digits or hyphens. BReg's snake_case codes are a recorded exception (see below). |
 | `traceId` | Canonical nonzero 32 lowercase hexadecimal characters, equal to the trace in the response `traceparent`. |
 
 `registry-platform-httpsec` supplies `ProblemBody`, `TraceContext`, and the
@@ -38,7 +38,11 @@ for known problem types. Additive members, `detail`, `traceId`, and the response
 `traceparent` are opaque to classification. The entire problem body is bounded
 at 4 KiB. Unknown future Discovery problem types retain their bounded,
 status-only fallback.
-Render uses the same core with its own vocabulary and extensions.
+Render uses the same core with its own vocabulary and extensions: its `code`
+values are `render.<reason>` and its type base is its own released
+`https://render.registrystack.org/problems`. That vocabulary includes
+`render.unauthorized` for invalid credentials, in place of
+`authentication.refused`.
 
 ## Deliberate response exceptions
 
@@ -51,10 +55,36 @@ Scheduling returns the same public appointment outcome when the appointment
 is missing or denied. Keep that concealment when presenting or classifying a
 failure. Its readiness route follows its own deployment health contract.
 
-Invalid credentials use generic 401 `authentication.refused`. Profile or
+Invalid credentials use generic 401 `authentication.refused`, except Render,
+whose own vocabulary answers 401 `render.unauthorized`. Profile or
 route authority failures retain the product's documented 403 or concealment;
 a verifier outage retains its documented 503. Internal stage diagnostics do
 not become public error details.
+
+BReg's codes are snake_case in their reason segment (`runtime.not_ready`,
+`resource.not_found`, `ingestion.chunk_mismatch`), where the grammar above
+allows hyphens only. They are released wire values, so BReg keeps them and its
+clients match them as written; a new BReg code follows its existing spelling
+until a breaking release respells them all at once.
+
+## Upstream failures and readiness
+
+An upstream that answered badly (an unusable, malformed or contract-violating
+response) is 502. An upstream or a local dependency that is unavailable
+(unreachable, timed out, circuit open, store down) is 503. Adapter
+`adapter.upstream.unmapped` and Render `render.timestamp-failed` are 502;
+Evidence `source.unavailable` is 503.
+
+`/ready` answers 200 when the instance can serve and 503 when it cannot. The
+body is optional. When present it is `{"status":"ready"}` or
+`{"status":"not-ready"}`, and may add per-dependency members that use the same
+two status words. Readiness carries no source-data probes. Recorded outliers:
+
+- BReg answers 503 with a problem body (`runtime.not_ready`).
+- OID4VCI answers 503 with `{"status":"not_ready"}`.
+- Coordinator answers `{"ready":true}`.
+- Scheduling serves `/readyz` under its deployment health contract (above).
+- Casework, Messaging and Documents answer without a body.
 
 ## Idempotency and retries
 

@@ -311,10 +311,18 @@ string matching `^-?(0|[1-9][0-9]*)(\.[0-9]+)?$`. Its schema says so in
 **CFG-VAL-5 (MUST). Times and dates use one form each.** A timestamp is an
 RFC 3339 string with an offset (`2026-10-08T09:00:00Z`); a date is
 `YYYY-MM-DD`; a time of day is 24-hour `HH:MM`; a time zone is an IANA name
-(`Africa/Dakar`).
+(`Africa/Dakar`). An instant always carries an offset. A member whose value is
+produced by an external protocol (a timestamp authority's `genTime`, a
+registry's event time) keeps that protocol's fractional-second precision, and
+its owning contract says so; every other instant is written by the product, in
+whole seconds or milliseconds with `Z`.
 
 **CFG-VAL-6 (MUST). Digests are `sha256:` followed by 64 lowercase hex
-digits,** in a member named `digest` or ending in `Digest`.
+digits,** in a member named `digest` or ending in `Digest`. The rule covers API
+and tooling payloads as well as configuration: a new payload member holding a
+SHA-256 value is named `...Digest` and carries the prefixed form. The
+[recorded payload exceptions](#recorded-exceptions-outside-the-lint-register)
+list the members that predate it.
 
 **CFG-VAL-7 (MUST). URLs are absolute.** A URL holds no whitespace and no
 control character, so the text kept is the URL read. Whether a position
@@ -426,6 +434,8 @@ here is added to the list in the same change that first uses it. See CFG-QTY.
 | Cache entry lifetime | `cacheTtlSeconds` | |
 | Largest accepted body or file | `maximum<Thing>Bytes` | `max<Thing>Bytes`, `maxSize` outside `pool` |
 | Outbound hook destination bindings, one entry per destination id | `destinations.hooks` | `eventDestinations` |
+| Trust anchors for an outbound TLS peer: a secret reference holding PEM roots | `caBundleRef` | |
+| Trust anchors for an outbound TLS peer: an absolute path to a PEM file | `caBundleFile` | |
 
 Adding a shared concept adds a row here in the same change.
 *Enforced by:* the schema convention lint (one unit per key stem across all
@@ -444,6 +454,8 @@ Retention windows other than the audit journal's live in a top-level
 value that states what the operator accepts,** not a boolean:
 `tlsTermination: operator-controlled-upstream`, not `insecure: true`.
 *Why:* the value reads as an acknowledgement in review and greps as one.
+The booleans that predate this rule are listed under
+[recorded exceptions](#recorded-exceptions-outside-the-lint-register).
 
 **CFG-NAME-8 (SHOULD). A member holding a relative path ends in `File`,
 `Directory`, or `Path`** (`descriptionFile`, not `description`).
@@ -605,6 +617,10 @@ greppable in an audit.
 *Enforced by:* the schema convention lint (a member that accepts
 `unrestricted` declares `minItems: 1` on its list form); review classifies
 each member as granting or restricting.
+Whether the scopes a product requires are configurable is the product's
+decision: Casework `requiredScopes` and Scheduling `readsScope` are operator
+settings, while Render fixes its two scopes in code because they name its two
+routes. No rule makes one form the default.
 
 **CFG-EMPTY-3 (MUST). Omitting a security-relevant member fails closed or is
 refused.** No default grants access, widens a network boundary, accepts an
@@ -765,6 +781,11 @@ A product code is `<product>.<area>.<condition>` with the product token
 key, and type problems. A code is never reused for a different condition.
 An operator CLI reports an internal failure as `<binary>.internal-error`, using
 its executable name as the namespace.
+A refusal of a plain-HTTP or otherwise insecure URL uses the reason
+`insecure-url`: `<product>.runtime.insecure-url` for a runtime file (for
+example `documents.runtime.insecure-url`). The spellings that predate this are
+listed under [recorded
+exceptions](#recorded-exceptions-outside-the-lint-register).
 
 **CFG-DIAG-4 (MUST). Exit codes:** 0 when no error was reported (warnings
 allowed), 1 when the input was refused, 2 for a usage error, 3 when something
@@ -1023,6 +1044,29 @@ unrecorded deviation and on a recorded one that no longer deviates.
 A whole format whose grammar another project owns, or that a published
 exchange model fixes, carries `exceptionClass` in `config-formats.yaml`
 instead of one entry per finding.
+
+### Recorded exceptions outside the lint register
+
+The register above mirrors what the convention lint finds, and the lint cannot
+see a rule that review enforces or a name in an API or tooling payload. The
+deviations below are the same kind of record, kept here with a reason, and each
+stays until its owning product renames it in a release that may break its
+format.
+
+| Rule | Where | Reason |
+|---|---|---|
+| CFG-NAME-5 (trust anchors) | `trustedRootCertificateRef` in platform `DatabaseConfig`, Casework, Coordinator, Messaging and Adapter | Names a secret reference holding PEM roots; the shared spelling is `caBundleRef`. Renaming breaks promised runtime formats. |
+| CFG-NAME-7 | `allowInsecureHttp` in the shared platform `OidcIssuerConfig`, and every format that embeds it | A boolean for plain-HTTP issuer and key-set URLs, shared by every protected product; renaming changes all their runtime files at once. |
+| CFG-NAME-7 | the plaintext-connection boolean in platform `DatabaseConfig` | A boolean that allows a connection without TLS; same reason. |
+| CFG-DIAG-3 (`insecure-url`) | `adapter.runtime.insecure-origin`, `breg.review-runtime.plain-http-endpoint`, `authentication.insecure-http` (`bregctl`), `evidence.client.base-url-not-https` | Released codes that scripts may match; a code is never reused for a different condition, and changing one is a rename. |
+| Instant naming (hooks) | `deliveryTime` and `X-Registry-Delivery-Time` in hooks | A signed protocol field; the name is part of what the receiver verifies, so it keeps `Time` where every other instant ends in `At`. |
+| CFG-VAL-6 | BReg tooling `journeyFileSha256`, `migrationPlanSha256`, `sqlSha256`, `signingInputSha256` | Tooling reports that predate the rule and write the bare digest under a `...Sha256` name. |
+| CFG-VAL-6 | Coordinator release tooling `binarySha256` | Tooling report that predates the rule. |
+| CFG-VAL-6 | Coordinator `bodyHash` and `boundsHash` | Released API members. |
+| CFG-VAL-6 | Scheduling `admissionHash` | Released API member. |
+| CFG-VAL-6 | platform-audit `prevHash` and `recordHash` | Members of the audit record whose bytes are hashed in sequence; renaming changes the record. |
+| CFG-VAL-6 | BReg `schemaFingerprint` | A fingerprint of a schema, named for what it identifies rather than as a digest. |
+| CFG-VAL-6 | Render `pdfSha256` and `dataSha256` (and their `X-Registry-Pdf-Sha256` and `X-Registry-Data-Sha256` headers) | Released members, deprecated in favour of `pdfDigest` and `dataDigest`. |
 
 ## Enforcement summary
 

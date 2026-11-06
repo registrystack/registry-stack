@@ -74,6 +74,10 @@ Review `registry-platform-audit`'s file writer against this contract:
   that namespace for writer and inspection tooling alike.
 - A delivery terminal whose commit cannot be read back is answered
   `WorkerInterrupted` with the `Unknown` disposition, never a guessed state.
+- Authorization audit records the outcome `denied` (reason
+  `authorization.refused`), where product audit uses `refused`. The platform
+  primitive audits an authorization decision, which is allowed or denied, not
+  a refused request; the two words are not merged.
 - A review fix adds no configuration key or companion file unless the defect
   cannot be fixed without one.
 
