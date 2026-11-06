@@ -662,20 +662,23 @@ fn bounded_version_and_warnings(document_type: &str, version: &str, warnings: &[
 
 /// Whether `document_hex`, a lowercase hex SHA-256, is that of a prefix of
 /// `pdf` that ends at a `%%EOF` marker, optionally followed by its
-/// end-of-line. Found by byte search; the PDF is not parsed. A prefix equal
-/// to the whole file is not a first revision.
+/// end-of-line. Found by byte search; the PDF is not parsed, so a marker
+/// inside a stream is a candidate too. A prefix equal to the whole file is
+/// not a first revision.
+///
+/// One pass hashes the file once: at each candidate end, the running hash
+/// is cloned and finished, so the work is linear in the file's length,
+/// which the response limit bounds, however many markers it holds.
 fn first_revision_matches(pdf: &[u8], document_hex: &str) -> bool {
     const MARKER: &[u8] = b"%%EOF";
-    // A real file has a handful of markers; bound the hashing work.
-    const MAXIMUM_CANDIDATES: usize = 64;
-    let mut candidates = 0;
+    let Ok(expected) = hex::decode(document_hex) else {
+        return false;
+    };
+    let mut running = Sha256::new();
+    let mut hashed = 0;
     for (start, window) in pdf.windows(MARKER.len()).enumerate() {
         if window != MARKER {
             continue;
-        }
-        candidates += 1;
-        if candidates > MAXIMUM_CANDIDATES {
-            return false;
         }
         let marker_end = start + MARKER.len();
         let eol = match pdf[marker_end..] {
@@ -684,7 +687,12 @@ fn first_revision_matches(pdf: &[u8], document_hex: &str) -> bool {
             _ => 0,
         };
         for end in [marker_end, marker_end + eol] {
-            if end < pdf.len() && hex::encode(Sha256::digest(&pdf[..end])) == document_hex {
+            if end >= pdf.len() {
+                break;
+            }
+            running.update(&pdf[hashed..end]);
+            hashed = end;
+            if running.clone().finalize().as_slice() == expected.as_slice() {
                 return true;
             }
             if eol == 0 {

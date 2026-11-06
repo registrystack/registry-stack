@@ -28,14 +28,18 @@ fn signed_file() -> Vec<u8> {
     [FIRST_REVISION, UPDATE].concat()
 }
 fn sealed_body(level: &str) -> Value {
-    let pdf = signed_file();
+    sealed_body_for(FIRST_REVISION, level)
+}
+/// A sealed answer whose file is `first_revision` followed by `UPDATE`.
+fn sealed_body_for(first_revision: &[u8], level: &str) -> Value {
+    let pdf = [first_revision, UPDATE].concat();
     let mut seal = json!({"id":"agency","level":level,"certificateDigest":digest_of("c")});
     if level == "B-T" {
         seal["timestampedAt"] = json!("2026-10-23T00:00:01Z");
     }
     json!({
         "pdfBase64": base64::engine::general_purpose::STANDARD.encode(&pdf),
-        "documentDigest": sha(FIRST_REVISION),
+        "documentDigest": sha(first_revision),
         "signedFileDigest": sha(&pdf),
         "dataDigest": digest_of("0"),
         "documentVersion": "receipt v1",
@@ -316,6 +320,36 @@ async fn first_revision_hash_may_exclude_the_line_ending() {
     let mut body = sealed_body("B-B");
     body["documentDigest"] = json!(sha(&FIRST_REVISION[..FIRST_REVISION.len() - 1]));
     assert!(seal_with(200, body, None, None).await.is_ok());
+}
+
+/// A stream may hold `%%EOF` as data, as a JPEG comment does, any number of
+/// times before the end marker of the first revision.
+#[tokio::test]
+async fn a_first_revision_may_hold_many_end_markers_in_a_stream() {
+    let data = b"%%EOF\n%%EOF\r\n%%EOF".repeat(100);
+    let first_revision = [
+        &b"%PDF-1.7\n1 0 obj<</Length "[..],
+        data.len().to_string().as_bytes(),
+        b">>stream\n",
+        &data,
+        b"\nendstream endobj\ntrailer<<>>\n%%EOF\r\n",
+    ]
+    .concat();
+    for end in [first_revision.len(), first_revision.len() - 2] {
+        let mut body = sealed_body_for(&first_revision, "B-T");
+        body["documentDigest"] = json!(sha(&first_revision[..end]));
+        let sealed = seal_with(200, body, None, None)
+            .await
+            .expect("a sealed file with markers in a stream");
+        assert_eq!(sealed.pdf, [&first_revision[..], UPDATE].concat());
+    }
+
+    let mut body = sealed_body_for(&first_revision, "B-T");
+    body["documentDigest"] = json!(digest_of("f"));
+    assert_eq!(
+        seal_with(200, body, None, None).await.unwrap_err().kind,
+        "protocol"
+    );
 }
 
 #[tokio::test]
