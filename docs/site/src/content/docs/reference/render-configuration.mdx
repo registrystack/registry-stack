@@ -141,7 +141,8 @@ secret provider's reason; a key file must be a regular file owned by the serving
 `POST /v1/seal/{type}` takes the render route's request body and returns the document sealed. It
 requires the `render:seal` scope, which `render:render` does not imply, from a client the seal's
 `allowedClients` names. The legacy API key never seals. The signing time is the server's clock,
-truncated to seconds.
+truncated to seconds. `GET /v1/documents` names the seal of each document type this route takes
+as `seal`; a document type without it is refused here with `document-not-sealable`.
 
 The default answer is `application/pdf` with these headers:
 

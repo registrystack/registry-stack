@@ -15,7 +15,8 @@
   and never falls back to B-B. Seals in flight, which hold no render slot
   while they sign and wait on the authority, are bounded by
   `limits.maximumConcurrentRenders`; one more is refused with `rate-limited`
-  (429). `/ready` adds a `signing` member per seal and
+  (429). `/v1/documents` names each document type's served seal as
+  `seal`. `/ready` adds a `signing` member per seal and
   stays ready while a seal is unavailable; `serve` logs a warning at startup
   for a seal that cannot sign or expires within 30 days. Audit entries add the value-free
   `sealId`, `documentSha256`, `signedFileSha256`, `certificateSha256` and

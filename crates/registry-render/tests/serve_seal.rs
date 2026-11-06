@@ -6,7 +6,7 @@
 //! Every key is generated at test time; nothing leaves the loopback
 //! interface.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
@@ -868,6 +868,66 @@ fn the_plain_route_returns_identical_bytes_with_and_without_signing() {
         tsa.requests.load(Ordering::SeqCst),
         0,
         "rendering never timestamps"
+    );
+}
+
+/// The seal ids `/v1/documents` lists, by document type: a type that names
+/// no seal has no `seal` member.
+fn listed_seals(fixture: &Fixture, server: &Server) -> BTreeMap<String, Option<String>> {
+    let bearer = format!("Bearer {}", fixture.token("render:render", OTHER_CLIENT));
+    let reply = request(
+        server.port,
+        "GET",
+        "/v1/documents",
+        &[("Authorization", bearer.as_str())],
+        None,
+    );
+    assert_eq!(
+        reply.status,
+        200,
+        "{}",
+        String::from_utf8_lossy(&reply.body)
+    );
+    reply.json()["documents"]
+        .as_array()
+        .expect("documents")
+        .iter()
+        .map(|document| {
+            (
+                document["id"].as_str().unwrap().to_owned(),
+                document
+                    .get("seal")
+                    .map(|seal| seal.as_str().unwrap().to_owned()),
+            )
+        })
+        .collect()
+}
+
+/// A caller learns which document types the seal route takes from
+/// `/v1/documents`, and only where the deployment serves seals.
+#[test]
+fn the_document_list_names_each_served_seal() {
+    let fixture = sealed(None);
+    let server = start_server(&fixture);
+    let ministry = Some("ministry".to_owned());
+    assert_eq!(
+        listed_seals(&fixture, &server),
+        BTreeMap::from([
+            ("accessible".to_owned(), ministry.clone()),
+            ("archive".to_owned(), ministry.clone()),
+            ("letter".to_owned(), None),
+            ("notice".to_owned(), ministry),
+        ])
+    );
+    drop(server);
+
+    let unsealed = deployment(None);
+    let server = start_server(&unsealed);
+    assert!(
+        listed_seals(&unsealed, &server)
+            .values()
+            .all(Option::is_none),
+        "without signing no document type is sealable"
     );
 }
 
