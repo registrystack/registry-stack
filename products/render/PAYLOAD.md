@@ -73,7 +73,8 @@ Rules worth internalizing:
   certificate's display name (its organization, else its common name)
   and is absent when the certificate names neither. `testOnly` is `true`
   when the runtime declares the seal `trust: test-only`; print a visible
-  test marking then, because a test seal is not an official document. The
+  test marking then, because a test seal is not an official document (the
+  `registry-render init` scaffold prints the block below, labelled). The
   member is part of the canonical envelope, so a sealed render's
   `dataSha256` differs from a plain render of the same request. The
   signature itself is added after the template runs, as an invisible

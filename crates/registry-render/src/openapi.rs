@@ -46,7 +46,7 @@ pub const OPENAPI_JSON: &str = r#"{
       "get": {
         "summary": "Readiness (issuer keys and audit destination included)",
         "responses": {
-          "200": { "description": "ready. A deployment that seals adds a signing member, one entry per seal: {status: ready} or {status: unavailable, reason: certificate-expired | certificate-not-yet-valid | provider-not-ready}. A seal never changes the status code; readiness never requests a timestamp." },
+          "200": { "description": "ready. A deployment that seals adds a signing member, one entry per seal: {status: ready} or {status: unavailable, reason: certificate-expired | certificate-not-yet-valid | provider-not-ready}, with testOnly: true for a seal the runtime declares trust: test-only. A seal never changes the status code; readiness never requests a timestamp." },
           "503": { "description": "not ready" }
         }
       }
@@ -150,7 +150,7 @@ pub const OPENAPI_JSON: &str = r#"{
         },
         "responses": {
           "200": {
-            "description": "Sealed PDF. Default representation is application/pdf with X-Registry-Document-Sha256 (the first revision, Render's rendered document), X-Registry-Signed-File-Sha256 (the whole signed file), X-Registry-Data-Sha256, X-Registry-Document-Version, X-Registry-Bundle-Hash (the package hash /v1/documents reports as bundleHash), X-Registry-Warning-Count, X-Registry-Seal-Id, X-Registry-Seal-Level (b-t or b-b), X-Registry-Certificate-Sha256 and, for b-t, X-Registry-Timestamp-Time. With Accept: application/json, the body is {pdfBase64, documentSha256, signedFileSha256, dataSha256, documentVersion, bundleHash, warnings, seal: {id, level, certificateSha256, timestampTime}}; timestampTime is present for b-t only. There is no pdfSha256.",
+            "description": "Sealed PDF. Default representation is application/pdf with X-Registry-Document-Sha256 (the first revision, Render's rendered document), X-Registry-Signed-File-Sha256 (the whole signed file), X-Registry-Data-Sha256, X-Registry-Document-Version, X-Registry-Bundle-Hash (the package hash /v1/documents reports as bundleHash), X-Registry-Warning-Count, X-Registry-Seal-Id, X-Registry-Seal-Level (b-t or b-b), X-Registry-Certificate-Sha256, for b-t X-Registry-Timestamp-Time, and for a test-only seal X-Registry-Seal-Test-Only: true. With Accept: application/json, the body is {pdfBase64, documentSha256, signedFileSha256, dataSha256, documentVersion, bundleHash, warnings, seal: {id, level, certificateSha256, timestampTime, testOnly}}; timestampTime is present for b-t only, and testOnly, always true, for a seal the runtime declares trust: test-only. There is no pdfSha256.",
             "content": {
               "application/pdf": { "schema": { "type": "string", "format": "binary" } },
               "application/json": { "schema": { "type": "object" } }

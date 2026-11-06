@@ -622,6 +622,11 @@ impl Seal {
         &self.id
     }
 
+    /// Whether the runtime file declares the seal `trust: test-only`.
+    pub fn is_test_only(&self) -> bool {
+        self.signing.test_only
+    }
+
     pub fn level(&self) -> SealLevel {
         if self.timestamp.is_some() {
             SealLevel::BT

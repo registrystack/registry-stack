@@ -18,7 +18,10 @@
   `timestampTokenSha256`; a `timestamp-failed` response entry adds `reason`,
   the value-free name of the failing check, which a `seal refused` log warning
   repeats. The payload gains a `signing` member on the seal route
-  only. `check --environment` reads each seal's certificate chain. New problem
+  only. A seal declared `trust: test-only` says so in the JSON `seal`
+  member, an `X-Registry-Seal-Test-Only` header, `/ready`, the audit and
+  one startup warning, and the `init` scaffold prints the seal block with
+  its test line. `check --environment` reads each seal's certificate chain. New problem
   kinds with exit codes: `signing-unavailable` (26), `seal-certificate-invalid`
   (27), `timestamp-failed` (28), `document-not-sealable` (29) and
   `seal-client-not-allowed` (30). Render claims PAdES baseline B-B and B-T

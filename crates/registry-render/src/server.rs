@@ -157,6 +157,17 @@ async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
     // render could write a nonconformant file.
     let seals = crate::seal::load(&runtime)?;
     crate::seal::refuse_unsealable(&bundle.manifest, &seals)?;
+    for id in seals
+        .iter()
+        .filter(|(_, seal)| seal.is_test_only())
+        .map(|(id, _)| id)
+    {
+        tracing::warn!(
+            target: "registry_render::seal",
+            seal_id = %id,
+            "test-only seal: its documents are not official"
+        );
+    }
     let audit = RenderAudit::open(runtime.audit.destination()?).await?;
     let service = Arc::new(Service {
         caller_fingerprint: registry_platform_authcommon::fingerprint_api_key(
@@ -630,10 +641,14 @@ struct Readiness<'a> {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct SealReadiness {
     status: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     reason: Option<&'static str>,
+    /// Present, `true`, for a seal declared `trust: test-only`.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    test_only: bool,
 }
 
 async fn ready(State(service): State<Arc<Service>>) -> Response {
@@ -657,10 +672,12 @@ async fn ready(State(service): State<Arc<Service>>) -> Response {
                 Ok(()) => SealReadiness {
                     status: "ready",
                     reason: None,
+                    test_only: seal.is_test_only(),
                 },
                 Err(unavailable) => SealReadiness {
                     status: "unavailable",
                     reason: Some(unavailable.reason()),
+                    test_only: seal.is_test_only(),
                 },
             };
             (id.as_str(), readiness)
@@ -900,6 +917,7 @@ async fn render_route(
                 pdf_sha256: Some(rendered.pdf_sha256.clone()),
                 data_sha256: Some(rendered.data_sha256.clone()),
                 seal_id: None,
+                test_only: false,
                 document_sha256: None,
                 signed_file_sha256: None,
                 certificate_sha256: None,
@@ -942,6 +960,8 @@ struct SealCall {
     document_type: String,
     /// The seal the document type names, once the type is known.
     seal_id: Option<String>,
+    /// Whether that seal is test-only, once serve's seal is found.
+    test_only: bool,
     caller: String,
     envelope: String,
     correlation: Option<String>,
@@ -960,7 +980,7 @@ impl SealCall {
             self.trace.as_deref(),
         );
         if let Some(seal_id) = &self.seal_id {
-            event = event.for_seal(seal_id);
+            event = event.for_seal(seal_id, self.test_only);
         }
         if let Err(audit_problem) = service.audit.response(&self.envelope, event).await {
             return problem_response(&audit_problem, self.trace.as_deref());
@@ -990,6 +1010,7 @@ async fn seal_route(
     });
     let mut call = SealCall {
         seal_id: declared.as_ref().ok().and_then(|(_, seal)| seal.clone()),
+        test_only: false,
         document_type,
         caller: caller.fingerprint.clone(),
         envelope: crate::audit::correlation(),
@@ -1030,6 +1051,7 @@ async fn seal_route(
         );
         return call.refuse(&service, problem).await;
     };
+    call.test_only = seal.is_test_only();
     if !caller
         .client_id
         .as_deref()
@@ -1061,7 +1083,7 @@ async fn seal_route(
         call.correlation.as_deref(),
         call.trace.as_deref(),
     )
-    .for_seal(&seal_id);
+    .for_seal(&seal_id, seal.is_test_only());
     // As on the render route: the request entry is accepted before the
     // render starts, and a call dropped from here on writes its unfinished
     // response.
@@ -1087,7 +1109,7 @@ async fn seal_route(
                     .map(|timestamp| timestamp.token_sha256.clone()),
                 ..started.clone()
             };
-            (event, respond_sealed(&headers, &seal_id, &rendered, sealed))
+            (event, respond_sealed(&headers, &seal, &rendered, sealed))
         });
     let (event, outcome) = match outcome {
         Ok((event, response)) => (event, Ok(response)),
@@ -1173,10 +1195,11 @@ async fn run_seal(
 /// `pdfSha256`: a sealed file has two hashes, `documentSha256` over the
 /// first revision and `signedFileSha256` over the whole file. Both carry the
 /// package's `bundleHash`, so a client granted only `render:seal` can pin the
-/// package without reading `/v1/documents`.
+/// package without reading `/v1/documents`, and both say when the seal is
+/// test-only, whether or not the template prints it.
 fn respond_sealed(
     headers: &HeaderMap,
-    seal_id: &str,
+    seal: &Seal,
     rendered: &SealedRender,
     sealed: SealedDocument,
 ) -> Response {
@@ -1188,13 +1211,16 @@ fn respond_sealed(
             accept.contains("application/json") && !accept.contains("application/pdf")
         });
     if accepts_json {
-        let mut seal = serde_json::json!({
-            "id": seal_id,
+        let mut member = serde_json::json!({
+            "id": seal.id(),
             "level": sealed.level.as_str(),
             "certificateSha256": sealed.certificate_fingerprint,
         });
         if let Some(timestamp) = &sealed.timestamp {
-            seal["timestampTime"] = serde_json::Value::String(timestamp.time.clone());
+            member["timestampTime"] = serde_json::Value::String(timestamp.time.clone());
+        }
+        if seal.is_test_only() {
+            member["testOnly"] = serde_json::Value::Bool(true);
         }
         let body = serde_json::json!({
             "pdfBase64": base64::engine::general_purpose::STANDARD.encode(&sealed.pdf),
@@ -1204,7 +1230,7 @@ fn respond_sealed(
             "documentVersion": document_version,
             "bundleHash": rendered.bundle_hash,
             "warnings": rendered.warnings,
-            "seal": seal,
+            "seal": member,
         });
         return Json(body).into_response();
     }
@@ -1231,8 +1257,11 @@ fn respond_sealed(
     );
     insert_header(map, "X-Registry-Document-Version", &document_version);
     insert_header(map, "X-Registry-Bundle-Hash", &rendered.bundle_hash);
-    insert_header(map, "X-Registry-Seal-Id", seal_id);
+    insert_header(map, "X-Registry-Seal-Id", seal.id());
     insert_header(map, "X-Registry-Seal-Level", sealed.level.as_str());
+    if seal.is_test_only() {
+        insert_header(map, "X-Registry-Seal-Test-Only", "true");
+    }
     insert_header(
         map,
         "X-Registry-Certificate-Sha256",

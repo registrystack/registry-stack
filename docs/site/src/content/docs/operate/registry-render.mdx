@@ -316,7 +316,11 @@ problems, and response shapes.
 
 Issue a test certificate from your own test authority and set `trust: test-only` on the seal. The
 template then receives `signing.testOnly: true` in its payload on the seal route, and can print a
-visible test marking (the payload contract is `products/render/PAYLOAD.md` in the repository). Use a loopback timestamp authority (`http://127.0.0.1:<port>/...`
+visible test marking (the payload contract is `products/render/PAYLOAD.md` in the repository); the
+`registry-render init` scaffold prints it. Render also says so where a template cannot hide it:
+`testOnly: true` in the JSON answer's `seal`, in `/ready` and in the audit, an
+`X-Registry-Seal-Test-Only: true` header on the PDF answer, and one `test-only seal` warning per
+seal when `serve` starts. Use a loopback timestamp authority (`http://127.0.0.1:<port>/...`
 is accepted on loopback only) or `withoutTimestamp` while you develop. Never copy a test seal's
 runtime into production.
 

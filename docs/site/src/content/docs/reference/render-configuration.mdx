@@ -74,7 +74,11 @@ rules are not in the tables.
   RS384 private JWK; EdDSA is refused.
 - `allowedClients` is a list of at least one named client. `unrestricted` and any item containing
   `*` are refused. When `auth.oidc.allowedClients` lists clients, each seal client must be in it.
-- `trust: test-only` is the only value. It sets `signing.testOnly` in the template payload.
+- `trust: test-only` is the only value. It sets `signing.testOnly` in the template payload, and
+  every answer about the seal says so: `testOnly: true` in the JSON `seal` member, the `/ready`
+  entry, and each audit entry of the call, and `X-Registry-Seal-Test-Only: true` on the PDF answer.
+  `serve` logs one `test-only seal` warning per such seal at startup. A seal without `trust` carries
+  none of these.
 - A document type's `seal` must name a seal in `signing.seals`. A package that names an unbound
   seal is refused at `serve`; `check` reports it, and warns about a runtime seal no document type
   names.
@@ -139,10 +143,11 @@ The default answer is `application/pdf` with these headers:
 | `X-Registry-Seal-Level` | `b-t` or `b-b`. |
 | `X-Registry-Certificate-Sha256` | SHA-256 of the seal certificate. |
 | `X-Registry-Timestamp-Time` | The timestamp token's time; B-T only. |
+| `X-Registry-Seal-Test-Only` | `true`; only for a seal declared `trust: test-only`. |
 
 With `Accept: application/json` the body is `pdfBase64`, `documentSha256`, `signedFileSha256`,
 `dataSha256`, `documentVersion`, `bundleHash`, `warnings`, and `seal` (`id`, `level`,
-`certificateSha256`, and `timestampTime` for B-T). A client granted only `render:seal` pins the
+`certificateSha256`, `timestampTime` for B-T, and `testOnly: true` for a test-only seal). A client granted only `render:seal` pins the
 package from `bundleHash` without reading `/v1/documents`. There is no `pdfSha256`. Because the payload carries the `signing`
 member, a sealed render's `dataSha256` differs from a plain render of the same request.
 
@@ -158,10 +163,11 @@ The problems specific to this route, from a closed vocabulary shared with the re
 | `timestamp-failed` | 502 | 28 | The timestamp authority gave no usable token. No file is returned and no retry is made. |
 
 `/ready` adds `signing`, one member per seal: `{"status": "ready"}` or `{"status": "unavailable",
-"reason": ...}` with `certificate-expired`, `certificate-not-yet-valid`, or `provider-not-ready`.
-It never changes the status code.
+"reason": ...}` with `certificate-expired`, `certificate-not-yet-valid`, or `provider-not-ready`,
+plus `"testOnly": true` for a test-only seal. It never changes the status code.
 
-Each seal call adds `sealId` to its audit entries. The response entry adds `documentSha256`,
+Each seal call adds `sealId` to its audit entries, and `testOnly: true` when the seal is
+test-only. The response entry adds `documentSha256`,
 `signedFileSha256`, `certificateSha256`, and, for B-T, `timestampTokenSha256`.
 
 A `timestamp-failed` response entry adds `reason`, the failing check, and the log has one
