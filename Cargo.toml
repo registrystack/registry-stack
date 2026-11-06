@@ -227,7 +227,10 @@ getrandom = { version = "0.4" }
 # introspection query schema; the pack checks parse authored documents only.
 graphql-parser = { version = "0.4", default-features = false }
 hickory-resolver = { version = "0.26.1", default-features = false, features = ["system-config", "tokio"] }
-hayro-syntax = { version = "0.7.2" }
+# Render's bounded PDF reader (registry-render pdf_signature/syntax.rs)
+# accepts only files this exact version reads without rebuilding its
+# cross-reference table; a new version has to be read against it first.
+hayro-syntax = { version = "=0.7.2" }
 hex = { version = "0.4" }
 hmac = { version = "0.13" }
 http = { version = "1" }

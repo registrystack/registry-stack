@@ -891,16 +891,33 @@ mod tests {
     /// A hand-written single-revision file of these objects, numbered from
     /// 1; object 1 is the catalog.
     fn hand_written_objects(bodies: &[Vec<u8>]) -> Vec<u8> {
+        let objects: Vec<Vec<u8>> = bodies
+            .iter()
+            .enumerate()
+            .map(|(index, body)| {
+                [
+                    format!("{} 0 obj\n", index + 1).as_bytes(),
+                    body,
+                    b"\nendobj\n",
+                ]
+                .concat()
+            })
+            .collect();
+        single_revision(&objects)
+    }
+
+    /// A single-revision file of these objects, each written in full from
+    /// its `N 0 obj` line: the `N`th must be object `N`, and object 1 is the
+    /// catalog. The cross-reference table follows the last one directly.
+    fn single_revision(objects: &[Vec<u8>]) -> Vec<u8> {
         let mut pdf = b"%PDF-1.7\n".to_vec();
         let mut offsets = Vec::new();
-        for body in bodies {
+        for object in objects {
             offsets.push(pdf.len());
-            pdf.extend_from_slice(format!("{} 0 obj\n", offsets.len()).as_bytes());
-            pdf.extend_from_slice(body);
-            pdf.extend_from_slice(b"\nendobj\n");
+            pdf.extend_from_slice(object);
         }
         let xref = pdf.len();
-        let size = bodies.len() + 1;
+        let size = objects.len() + 1;
         pdf.extend_from_slice(format!("xref\n0 {size}\n0000000000 65535 f\r\n").as_bytes());
         for offset in offsets {
             pdf.extend_from_slice(format!("{offset:010} 00000 n\r\n").as_bytes());
@@ -1051,6 +1068,138 @@ mod tests {
             prepare_on_a_small_stack(hand_written(&deep)),
             Err(PdfSignatureError::Malformed("objects nest too deeply"))
         );
+    }
+
+    /// `refuse_signatures` sees only the objects `hayro-syntax` reads, and
+    /// its stream reader gives up on a stream that names an external file,
+    /// one whose keyword is not followed by an end-of-line, and one without
+    /// `endstream`. The bounded reader refuses each of those, with
+    /// `/FFilter` and `/FDecodeParms`, so no stream is missed by the check.
+    #[test]
+    fn prepare_refuses_a_stream_hayro_syntax_cannot_read() {
+        let with = |stream: &[u8]| {
+            hand_written_objects(&[
+                b"<</Type/Catalog/Pages 2 0 R>>".to_vec(),
+                b"<</Type/Pages/Kids[3 0 R]/Count 1>>".to_vec(),
+                b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 100]>>".to_vec(),
+                stream.to_vec(),
+            ])
+        };
+        for stream in [
+            &b"<</Length 4>>stream\nabcd\nendstream"[..],
+            b"<</Length 4>>\r\nstream\r\nabcd\r\nendstream",
+        ] {
+            prepare(&with(stream), &field()).expect("a stream it reads");
+        }
+        assert_eq!(
+            prepare(
+                &with(b"<</Type/Sig/Length 0>>stream\n\nendstream"),
+                &field()
+            ),
+            Err(PdfSignatureError::AlreadyHas("a signature"))
+        );
+        for (stream, refusal) in [
+            (
+                &b"<</Type/Sig/F(signed.pdf)/Length 0>>stream\n\nendstream"[..],
+                "a stream names an external file",
+            ),
+            (
+                b"<</FFilter/FlateDecode/Length 0>>stream\n\nendstream",
+                "a stream names an external file",
+            ),
+            (
+                b"<</FDecodeParms<<>>/Length 0>>stream\n\nendstream",
+                "a stream names an external file",
+            ),
+            (
+                b"<</Type/Sig/Length 0>>stream endstream",
+                "a stream keyword is not followed by an end-of-line",
+            ),
+            (
+                b"<</Type/Sig/Length 0>>stream\rendstream",
+                "a stream keyword is not followed by an end-of-line",
+            ),
+            (
+                b"<</Type/Sig/Length 4>>stream\nabcd",
+                "a stream has no endstream",
+            ),
+            (
+                b"<</Type/Sig/Length 0>>%stream\nstream\n\nendstream",
+                "a comment sits before a stream keyword",
+            ),
+        ] {
+            assert_eq!(
+                prepare(&with(stream), &field()),
+                Err(PdfSignatureError::Malformed(refusal)),
+                "{}",
+                String::from_utf8_lossy(stream)
+            );
+        }
+    }
+
+    /// When `hayro-syntax` cannot read the cross-reference table as written,
+    /// or an object it was pointed at neither reads nor skips, it rebuilds
+    /// the table by scanning every byte of the file for `N G obj` and reads
+    /// what follows each one without a depth limit, stream data included.
+    /// The bounded reader accepts only files whose table and objects
+    /// `hayro-syntax` reads as written, so stream data that looks like a
+    /// deeply nested object is never read as one.
+    #[test]
+    fn prepare_refuses_a_file_hayro_syntax_would_rebuild_by_scanning() {
+        let mut data = b"1 0 obj ".to_vec();
+        data.extend(std::iter::repeat_n(b'[', 1_000_000));
+        let stream = [
+            format!("4 0 obj\n<</Length {}>>stream\n", data.len()).as_bytes(),
+            &data,
+            b"\nendstream\nendobj\n",
+        ]
+        .concat();
+        let objects = |last: &[u8]| {
+            let mut objects = vec![
+                b"1 0 obj\n<</Type/Catalog/Pages 2 0 R>>\nendobj\n".to_vec(),
+                b"2 0 obj\n<</Type/Pages/Kids[3 0 R]/Count 1>>\nendobj\n".to_vec(),
+                b"3 0 obj\n<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 100]>>\nendobj\n".to_vec(),
+                stream.clone(),
+            ];
+            if !last.is_empty() {
+                objects.push(last.to_vec());
+            }
+            single_revision(&objects)
+        };
+        prepare_on_a_small_stack(objects(b"")).expect("the stream is read as a stream");
+
+        let replaced = |from: &[u8], to: &[u8]| {
+            let mut pdf = objects(b"");
+            let at = pdf
+                .windows(from.len())
+                .position(|window| window == from)
+                .expect("present");
+            pdf.splice(at..at + from.len(), to.iter().copied());
+            pdf
+        };
+        for (label, original, refusal) in [
+            (
+                "a free entry whose offset does not fit 32 bits",
+                replaced(b"0000000000 65535 f", b"9999999999 65535 f"),
+                "a cross-reference entry is malformed",
+            ),
+            (
+                "a comment between trailer and its dictionary",
+                replaced(b"trailer\n<<", b"trailer\n%c\n<<"),
+                "a dictionary does not start with <<",
+            ),
+            (
+                "an object whose number runs into the table",
+                objects(b"5 0 obj\n123"),
+                "a number is malformed",
+            ),
+        ] {
+            assert_eq!(
+                prepare_on_a_small_stack(original),
+                Err(PdfSignatureError::Malformed(refusal)),
+                "{label}"
+            );
+        }
     }
 
     #[test]
