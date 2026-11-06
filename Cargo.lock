@@ -7652,7 +7652,6 @@ dependencies = [
  "aws-lc-rs",
  "base64 0.23.1",
  "cms",
- "const-oid 0.9.6",
  "der 0.7.10",
  "ed25519-dalek 2.2.0",
  "hmac 0.13.0",

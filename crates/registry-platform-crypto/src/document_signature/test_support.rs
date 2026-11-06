@@ -11,11 +11,13 @@
 use super::asn1::{
     oid, Accuracy, PkiStatusInfo, TimeStampReq, TimeStampResp, TspGeneralizedTime, TstInfo,
 };
-use super::certificate::{CertificateChain, CertificateError};
+use super::certificate::{CertificateChain, CertificateError, CertificateFingerprint};
 use super::signed_data::{
-    assemble_signed_data, content_info, jws_ecdsa_to_der, signed_attributes, CmsError,
+    assemble_signed_data, content_info, decode_signed_data, jws_ecdsa_to_der, signed_attributes,
+    CmsError,
 };
-use super::verify::DigestAlgorithm;
+use super::timestamp::{check_imprint, read_token, verify_token};
+use super::verify::{single_attribute, verify_signed_data, DigestAlgorithm};
 use crate::{
     generate_private_jwk, sign, CryptoError, GeneratedKeyAlgorithm, LocalJwkSigner, PrivateJwk,
     SigningAlgorithm, SigningError,
@@ -232,6 +234,70 @@ pub fn respond_to_timestamp_request(
     gen_time: OffsetDateTime,
 ) -> Result<Vec<u8>, TestPkiError> {
     respond_with(request_der, pki.tsa(), gen_time, |_| {})
+}
+
+/// Answer a DER `TimeStampReq` as a timestamp authority that refuses it:
+/// status `rejection` (2) and no token.
+pub fn refuse_timestamp_request(
+    request_der: &[u8],
+    pki: &TestPki,
+) -> Result<Vec<u8>, TestPkiError> {
+    respond_with(request_der, pki.tsa(), OffsetDateTime::now_utc(), |parts| {
+        parts.status = 2;
+        parts.include_token = false;
+    })
+}
+
+/// What [`verify_detached_signature`] established about a detached CMS.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VerifiedDetachedSignature {
+    /// The fingerprint of the certificate whose key the signature verified
+    /// under.
+    pub signer_fingerprint: CertificateFingerprint,
+    /// The verified `genTime` of the signature timestamp token, when the
+    /// signer carries one.
+    pub timestamp_gen_time: Option<OffsetDateTime>,
+}
+
+/// Verify a detached CMS signature over `content_parts` as a test's relying
+/// party: the one signer verifies over the parts under the certificate the
+/// signed data names, and a signature timestamp token, when present, covers
+/// that signature value and verifies under a timestamping certificate valid
+/// at its time. It validates no path to a trust anchor and checks no
+/// revocation, like the rest of this module.
+pub fn verify_detached_signature(
+    cms_der: &[u8],
+    content_parts: &[&[u8]],
+) -> Result<VerifiedDetachedSignature, CmsError> {
+    let signed_data = decode_signed_data(cms_der).ok_or(CmsError::MalformedSignedData)?;
+    let certificate =
+        verify_signed_data(&signed_data, content_parts).map_err(CmsError::SelfVerification)?;
+    let signer_fingerprint = CertificateFingerprint::of(&certificate.to_der()?);
+    let signer = signed_data
+        .signer_infos
+        .0
+        .iter()
+        .next()
+        .ok_or(CmsError::MalformedSignedData)?;
+    let token = signer.unsigned_attrs.as_ref().and_then(|attributes| {
+        single_attribute(attributes, oid::SIGNATURE_TIME_STAMP_TOKEN)
+    });
+    let timestamp_gen_time = match token {
+        None => None,
+        Some(token) => {
+            let token = token
+                .decode_as::<cms::content_info::ContentInfo>()
+                .map_err(|_| CmsError::MalformedTimestampToken)?;
+            let token = read_token(&token).map_err(CmsError::TimestampRefused)?;
+            check_imprint(&token.tst_info, signer.signature.as_bytes())
+                .map_err(|_| CmsError::TimestampMismatch)?;
+            Some(verify_token(&token).map_err(CmsError::TimestampRefused)?)
+        }
+    };
+    Ok(VerifiedDetachedSignature {
+        signer_fingerprint,
+        timestamp_gen_time,
+    })
 }
 
 /// The parts of a timestamp response, for tests that make it wrong.
