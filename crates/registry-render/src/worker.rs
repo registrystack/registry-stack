@@ -697,10 +697,10 @@ mod tests {
 }
 
 #[cfg(test)]
-mod seal_tests {
+pub(crate) mod seal_tests {
     use super::*;
 
-    fn receipt_request(seal: Option<WorkerSeal>) -> WorkerRequest {
+    pub(crate) fn receipt_request(seal: Option<WorkerSeal>) -> WorkerRequest {
         let bundle =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/render/bundles/receipt");
         let data: Value = serde_json::from_str(
@@ -719,6 +719,15 @@ mod seal_tests {
             max_output_bytes: crate::render::DEFAULT_MAX_OUTPUT_BYTES,
             memory_limit_bytes: default_memory_limit(),
             seal,
+        }
+    }
+
+    /// The packaged receipt, prepared in process for `seal` as a worker
+    /// answers the parent.
+    pub(crate) fn prepared_receipt(seal: WorkerSeal) -> WorkerPrepared {
+        match render_in_worker(&receipt_request(Some(seal))) {
+            WorkerResponse::Prepared(prepared) => *prepared,
+            other => panic!("seal render: {other:?}"),
         }
     }
 

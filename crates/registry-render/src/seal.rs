@@ -367,6 +367,33 @@ pub fn check_chain(id: &str, seal: &SealRuntime, now: OffsetDateTime) -> ChainCh
     }
 }
 
+#[cfg(test)]
+impl Seal {
+    /// A B-B seal over a test PKI seal that signs with `signer`, allowing
+    /// the client `records-service`, for unit tests.
+    pub(crate) fn for_test(
+        id: &str,
+        seal: &registry_platform_crypto::document_signature::test_support::TestSeal,
+        signer: Arc<dyn SigningProvider>,
+    ) -> Self {
+        let chain = seal.chain().expect("test seal chain");
+        let contents_capacity = contents_capacity(chain.der_len(), chain.leaf_der().len(), false);
+        Self {
+            id: id.to_owned(),
+            fingerprint: chain.leaf_sha256_fingerprint(),
+            signing: SigningPayload {
+                signer_name: chain.display_name().map(str::to_owned),
+                test_only: true,
+            },
+            chain,
+            signer,
+            contents_capacity,
+            timestamp: None,
+            allowed_clients: vec!["records-service".to_owned()],
+        }
+    }
+}
+
 /// The code of a document type whose PDF standard cannot hold the
 /// signature space its seal reserves.
 pub const UNSEALABLE_CODE: &str = "render.bundle.seal-space-exceeds-standard";
@@ -638,8 +665,20 @@ impl Seal {
         }
     }
 
-    /// Check, sign, timestamp and embed what the worker prepared.
-    pub async fn seal(&self, prepared: WorkerPrepared) -> Result<SealedDocument, RenderProblem> {
+    /// Check, sign, timestamp and embed what the worker prepared from the
+    /// package serve verified, whose hash is `bundle_hash`. An answer from
+    /// any other package is refused before anything is signed.
+    pub async fn seal(
+        &self,
+        prepared: WorkerPrepared,
+        bundle_hash: &str,
+    ) -> Result<SealedDocument, RenderProblem> {
+        if prepared.bundle_hash != bundle_hash {
+            return Err(RenderProblem::new(
+                ProblemKind::BundleTampered,
+                "the package changed under serve; refusing the render from a drifted package",
+            ));
+        }
         let internal = |detail: String| RenderProblem::new(ProblemKind::Internal, detail);
         let first_revision_len = prepared.first_revision_len;
         let checked = prepared
@@ -944,6 +983,124 @@ impl TimestampAuthority {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use registry_platform_crypto::document_signature::test_support::TestPki;
+    use registry_platform_crypto::{PublicJwk, SigningError};
+
+    use crate::worker::seal_tests::prepared_receipt;
+
+    /// A signer that counts its signatures, so a test can show that a
+    /// refused answer was never signed.
+    struct CountingSigner {
+        inner: LocalJwkSigner,
+        signatures: AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl SigningProvider for CountingSigner {
+        fn algorithm(&self) -> SigningAlgorithm {
+            self.inner.algorithm()
+        }
+
+        fn key_id(&self) -> &str {
+            self.inner.key_id()
+        }
+
+        fn public_jwk(&self) -> PublicJwk {
+            self.inner.public_jwk()
+        }
+
+        async fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, SigningError> {
+            self.signatures.fetch_add(1, Ordering::SeqCst);
+            self.inner.sign(payload).await
+        }
+    }
+
+    /// A worker answer rendered from another package than the one serve
+    /// verified is refused as tampered before anything is signed; the same
+    /// answer under the served package hash seals.
+    #[tokio::test]
+    async fn a_worker_answer_from_another_package_is_refused_before_signing() {
+        let pki = TestPki::generate().expect("test PKI");
+        let test_seal = pki.issue_seal(SigningAlgorithm::Es256).expect("test seal");
+        let signer = Arc::new(CountingSigner {
+            inner: test_seal.signer().expect("test signer"),
+            signatures: AtomicUsize::new(0),
+        });
+        let seal = Seal::for_test("ministry", &test_seal, Arc::clone(&signer) as _);
+        let prepared = prepared_receipt(seal.worker_seal(OffsetDateTime::now_utc()));
+        let served_hash = prepared.bundle_hash.clone();
+        let mut drifted = prepared.clone();
+        drifted.bundle_hash = "0".repeat(64);
+        assert_ne!(drifted.bundle_hash, served_hash);
+
+        let Err(problem) = seal.seal(drifted, &served_hash).await else {
+            panic!("an answer from another package was sealed");
+        };
+        assert_eq!(problem.kind, ProblemKind::BundleTampered);
+        assert_eq!(
+            signer.signatures.load(Ordering::SeqCst),
+            0,
+            "nothing signed"
+        );
+
+        let sealed = seal
+            .seal(prepared, &served_hash)
+            .await
+            .expect("an answer from the served package");
+        assert_eq!(signer.signatures.load(Ordering::SeqCst), 1);
+        assert!(sealed.pdf.starts_with(b"%PDF-"));
+    }
+
+    /// What a seal sends the worker is the signing payload, the signing
+    /// time, the reserved space and the field name; none of the seal key's
+    /// private members, for an elliptic curve key or an RSA key.
+    #[test]
+    fn the_seal_key_never_crosses_into_the_worker() {
+        use std::collections::BTreeSet;
+
+        use crate::worker::seal_tests::receipt_request;
+
+        let pki = TestPki::generate().expect("test PKI");
+        for algorithm in [SigningAlgorithm::Es256, SigningAlgorithm::Rs256] {
+            let test_seal = pki.issue_seal(algorithm).expect("test seal");
+            let signer = Arc::new(test_seal.signer().expect("test signer"));
+            let seal = Seal::for_test("ministry", &test_seal, signer);
+            let request = receipt_request(Some(seal.worker_seal(OffsetDateTime::now_utc())));
+            let sent = serde_json::to_value(&request).expect("worker request");
+            let members: BTreeSet<&str> = sent["seal"]
+                .as_object()
+                .expect("the seal member")
+                .keys()
+                .map(String::as_str)
+                .collect();
+            assert_eq!(
+                members,
+                BTreeSet::from(["contentsCapacity", "fieldName", "signing", "signingTime"]),
+                "{algorithm:?}"
+            );
+            let jwk = test_seal.private_jwk();
+            let private: Vec<&str> = [&jwk.d, &jwk.p, &jwk.q, &jwk.dp, &jwk.dq, &jwk.qi]
+                .into_iter()
+                .flatten()
+                .map(String::as_str)
+                .collect();
+            let expected = match algorithm {
+                SigningAlgorithm::Rs256 => 6,
+                _ => 1,
+            };
+            assert_eq!(private.len(), expected, "{algorithm:?} private members");
+            let sent = sent.to_string();
+            for value in private {
+                assert!(
+                    !sent.contains(value),
+                    "{algorithm:?}: a private key member reached the worker request"
+                );
+            }
+        }
+    }
 
     #[test]
     fn the_reserved_space_follows_the_documented_formula() {
