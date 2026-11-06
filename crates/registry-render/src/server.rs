@@ -1835,6 +1835,42 @@ mod tests {
         keys_server.abort();
     }
 
+    /// The request log takes its route and trace id from these two helpers:
+    /// however long the caller's path or traceparent, the logged values are
+    /// a fixed template and at most a 32-character trace id.
+    #[test]
+    fn the_request_log_takes_a_route_template_and_a_parsed_trace_id() {
+        let long = "x".repeat(10_000);
+        assert_eq!(
+            route_template(&format!("/v1/render/{long}")),
+            "/v1/render/{type}"
+        );
+        assert_eq!(
+            route_template(&format!("/v1/seal/{long}")),
+            "/v1/seal/{type}"
+        );
+        assert_eq!(route_template(&format!("/{long}")), "other");
+        let trace = "1234567890abcdef1234567890abcdef";
+        let hex = "a".repeat(10_000);
+        let traceparent = |value: String| {
+            let mut headers = HeaderMap::new();
+            headers.insert("traceparent", HeaderValue::from_str(&value).unwrap());
+            headers
+        };
+        assert_eq!(
+            trace_id(&traceparent(format!("00-{trace}-{long}-01"))).as_deref(),
+            Some(trace)
+        );
+        assert_eq!(
+            trace_id(&traceparent(format!("00-{trace}{hex}-1234567890abcdef-01"))),
+            None
+        );
+        assert_eq!(
+            trace_id(&traceparent(format!("00-{hex}-1234567890abcdef-01"))),
+            None
+        );
+    }
+
     #[tokio::test]
     async fn maximum_pointer_problem_fits_the_serving_client_budget() {
         for character in ["😀", "\u{001f}"] {
