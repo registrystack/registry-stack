@@ -246,6 +246,137 @@ and `audit-failed` (503).
     crates/registry-render/src/problem.rs, ProblemKind, exit_code and status;
     crates/registry-render/src/openapi.rs, OPENAPI_JSON. */}
 
+## Seal documents
+
+Sealing is optional. Without a `signing` block, Render loads no key, makes no timestamp call, and
+serves no seal route. With one, `POST /v1/seal/<document-type>` renders the document and returns
+it with a PAdES signature made with your institution's key. Render seals only what it just
+rendered from the verified package, never bytes a caller sends, and the private key stays in the
+serving process, never in a render worker. The seal is PAdES baseline B-B or B-T. Render makes no
+claim that it is a qualified seal under eIDAS or any other scheme: that depends on your
+certificate, its issuer, and how you hold the key.
+
+### Enable a seal
+
+You need an OIDC deployment (a seal never works with the legacy API key), a seal certificate chain
+in a PEM file with the seal certificate first, and its private key as one ES256, ES384, RS256, or
+RS384 JWK. Name the seal in the document type's `manifest.yaml` entry with `seal: ministry`, then
+bind it in the runtime file:
+
+```yaml
+auth:
+  oidc:
+    issuer: https://issuer.example.invalid
+    audience: urn:example:render
+    allowedClients: [portal, records-service]
+signing:
+  seals:
+    ministry:
+      privateKeyRef: secret:file/seal.jwk
+      certificateChainFile: /etc/registry-render/seal/chain.pem
+      timestampAuthority:
+        url: https://tsa.example.invalid/tsr
+        attemptTimeoutMilliseconds: 10000
+      allowedClients: [records-service]
+```
+
+- `allowedClients` is required and names each client allowed to seal. When `auth.oidc.allowedClients`
+  lists clients, each seal client must also be in that list, or Render refuses the file. Keep these
+  separate from any citizen-facing client. `unrestricted` and wildcards are refused.
+- Callers need the `render:seal` scope. `render:render` does not imply it.
+- `timestampAuthority` timestamps each seal (B-T), so it keeps validating after the certificate
+  expires. Declare `withoutTimestamp: seal-stops-validating-when-certificate-expires` instead to
+  seal without a timestamp (B-B), and accept that the seal stops validating at expiry. Declare
+  exactly one.
+- A failing timestamp authority fails the request with `timestamp-failed` (502). Render does not
+  retry and never returns an untimestamped file in its place.
+
+Run `registry-render check --bundle <package> --runtime-config runtime.yaml --environment`. It
+reads each chain file, never the key, and it fails on an unreadable or malformed chain, a seal
+certificate without a signing key usage, or a chain too large for the signature space. It warns
+about a certificate that is expired, not yet valid, or expires within 30 days. When `serve`
+starts, it also checks that the key matches the certificate, and it refuses to start if it does
+not. If the runtime names a seal the package does not use, or the package names a seal the
+runtime does not bind, `check` reports it, and `serve` refuses the second case.
+
+Then call the route with a token that carries `render:seal`. The request body is the render
+route's. The PDF answer carries `X-Registry-Document-Sha256`, `X-Registry-Signed-File-Sha256`,
+`X-Registry-Seal-Id`, `X-Registry-Seal-Level` (`b-t` or `b-b`), and
+`X-Registry-Certificate-Sha256`, plus `X-Registry-Timestamp-Time` for B-T. A document type that
+names no seal is refused with `document-not-sealable` (400). The
+[configuration reference](../../reference/render-configuration/#seal-documents) lists the keys,
+problems, and response shapes.
+
+### Use a test seal in development
+
+Issue a test certificate from your own test authority and set `trust: test-only` on the seal. The
+template then receives `signing.testOnly: true` in its payload on the seal route, and can print a
+visible test marking (the payload contract is `products/render/PAYLOAD.md` in the repository). Use a loopback timestamp authority (`http://127.0.0.1:<port>/...`
+is accepted on loopback only) or `withoutTimestamp` while you develop. Never copy a test seal's
+runtime into production.
+
+### Renew the certificate
+
+Run `check --environment` on a schedule. Thirty days before expiry it warns with
+`render.runtime.seal-certificate-expiring`. To renew, write the new chain file with the seal
+certificate first, point `certificateChainFile` at it (or replace the file), and restart `serve`:
+Render reads the chain at startup. After the old certificate expires the seal is unavailable and
+plain rendering is unaffected. A file sealed earlier with a timestamp is built to keep validating after the certificate expires,
+subject to the validator's trust decisions; a file sealed without one stops validating at expiry.
+
+### Read readiness
+
+When seals are configured, `/ready` adds a `signing` member with one entry per seal id. Each is
+`{"status": "ready"}` or `{"status": "unavailable", "reason": ...}`, where the reason is
+`certificate-expired`, `certificate-not-yet-valid`, or `provider-not-ready`. A seal never changes
+the status code: Render stays ready for plain rendering while a seal cannot sign, and a seal
+request answers `signing-unavailable` or `seal-certificate-invalid` (503) until it can. Readiness
+reads the certificate validity and the key provider; it never calls the timestamp authority, so a
+ready seal can still fail with `timestamp-failed`.
+
+### Reconcile audit hashes with your records
+
+A seal call writes a `request` entry and a `response` entry that share `correlation`, like any
+render. Both carry `sealId`. The `response` entry adds `documentSha256` (the first revision, the
+document Render rendered), `signedFileSha256` (the whole signed file), `certificateSha256`,
+and, for B-T, `timestampTokenSha256`. Store the two document hashes with the record. To check a
+stored file against the audit:
+
+```sh
+sha256sum signed.pdf
+```
+
+The digest must equal `signedFileSha256` in the response entry. A sealed file has no `pdfSha256`;
+two seals of the same request differ in their signed bytes, because each carries its signing
+time, but their first revision is the same. The audit never holds a certificate subject, a signer
+name, a key, or a token.
+
+### What a citizen's PDF viewer shows
+
+A PDF viewer decides trust from its own trust list. When your seal's issuing root is not in a
+viewer's list, the viewer may show the signature as "validity unknown". That is the viewer's
+verdict on the issuer, not a failure of the file's integrity.
+
+### Know the limits
+
+- The signature field is invisible. A template prints any visible seal block from the payload's
+  `signing` member.
+- Render embeds no revocation data (no B-LT or B-LTA) and does not pin the timestamp authority's
+  identity; validators decide trust in both.
+- The seal key comes from a secret reference to a local JWK. That suits development and pilots.
+- A render worker starts from an empty environment but is not a sandbox. A worker that gained code
+  execution could get arbitrary content sealed, because it renders the content.
+- Sealing documents that render to PDF/A-1, A-2, or A-3 has not been verified.
+
+{/* Evidence: crates/registry-render/src/runtime.rs, SigningRuntime, SealRuntime and signing_findings;
+    crates/registry-render/src/seal.rs, Seal::load, check_chain and EXPIRY_WARNING_DAYS;
+    crates/registry-render/src/server.rs, seal_route, respond_sealed and ready;
+    crates/registry-render/src/audit.rs, RenderAuditEvent::for_seal;
+    crates/registry-render/tests/serve_seal.rs, a_b_t_seal_verifies_over_its_byte_ranges_and_carries_its_timestamp
+    and a_failing_timestamp_authority_fails_the_seal_naming_the_piece;
+    crates/registry-render/tests/check_seals.rs, check_with_the_environment_reads_each_seal_certificate_chain;
+    products/render/SECURITY-MATRIX.md. */}
+
 ## Keep the audit file
 
 Each line is one entry with `schema` (`render.registrystack.org/audit/v1`), `eventId`, `time`,

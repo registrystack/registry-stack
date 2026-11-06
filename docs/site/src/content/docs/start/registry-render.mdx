@@ -34,7 +34,7 @@ and `registry-render package` turns it into a package whose digest names its exa
 a counter without a service. `registry-render serve` is a small HTTP service behind a static API
 key that renders from one package in supervised worker processes. For every call it appends an
 audit entry that carries hashes and versions, never the document's data. It keeps no database and
-makes no outbound calls.
+makes no outbound call while rendering.
 
 ## What Render refuses
 
@@ -45,9 +45,12 @@ boundary.
 
 ## When it is not the right product
 
-Render does not store documents, sign them, issue credentials, or decide who may see a field:
+Render does not store documents, issue credentials, or decide who may see a field:
 what a template prints is the template author's disclosure decision, and paper leaves every
-access control behind. Records stay in your registry; Render only lays them out.
+access control behind. Records stay in your registry; Render only lays them out. It can add an
+optional PAdES seal to a document it just rendered, as described in
+[Deploy Registry Render](../../operate/registry-render/#seal-documents), but it makes no
+qualified-signature claim.
 
 ## Where to start
 
