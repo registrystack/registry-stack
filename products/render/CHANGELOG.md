@@ -21,7 +21,10 @@
   only. A seal declared `trust: test-only` says so in the JSON `seal`
   member, an `X-Registry-Seal-Test-Only` header, `/ready`, the audit and
   one startup warning, and the `init` scaffold prints the seal block with
-  its test line. `check --environment` reads each seal's certificate chain. New problem
+  its test line. `registry-render-client` gains `RenderClient::seal`, whose
+  `SealedDocument` carries `bundle_hash` and `seal.test_only`; its success
+  bodies now tolerate members it does not know, on both routes, and its seal
+  types are `#[non_exhaustive]`. `check --environment` reads each seal's certificate chain. New problem
   kinds with exit codes: `signing-unavailable` (26), `seal-certificate-invalid`
   (27), `timestamp-failed` (28), `document-not-sealable` (29) and
   `seal-client-not-allowed` (30). Render claims PAdES baseline B-B and B-T

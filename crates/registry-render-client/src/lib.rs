@@ -56,8 +56,10 @@ impl RenderClientConfig {
     }
 }
 
+/// A rendered document. A member the server adds later is ignored; the
+/// members below are checked before the document is returned.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct RenderedDocument {
     pub pdf_base64: String,
     pub pdf_sha256: String,
@@ -66,8 +68,10 @@ pub struct RenderedDocument {
     pub warnings: Vec<String>,
 }
 
-/// The PAdES level of a seal, as the server names it in `seal.level`.
+/// The PAdES level of a seal, as the server names it in `seal.level`. A
+/// level this client does not know is refused as `protocol`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
 pub enum SealLevel {
     /// PAdES baseline B (no timestamp).
     #[serde(rename = "b-b")]
@@ -89,6 +93,7 @@ impl SealLevel {
 /// beyond shape and consistency with the level.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct SealFacts {
     pub id: String,
     pub level: SealLevel,
@@ -96,41 +101,55 @@ pub struct SealFacts {
     /// RFC 3339 timestamp token time; present exactly at level `b-t`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timestamp_time: Option<String>,
+    /// Whether the server declares the seal `trust: test-only`: a test
+    /// seal's documents are not official.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub test_only: bool,
 }
 
 /// A sealed document. There is no `pdfSha256`: `document_sha256` covers the
 /// first revision (the rendered document) and `signed_file_sha256` the whole
-/// signed file in `pdf`.
+/// signed file in `pdf`. `bundle_hash` is the package the server rendered
+/// from, so a caller holding only `render:seal` can pin it.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct SealedDocument {
     pub pdf: Vec<u8>,
     pub document_sha256: String,
     pub signed_file_sha256: String,
     pub data_sha256: String,
     pub document_version: String,
+    pub bundle_hash: String,
     pub warnings: Vec<String>,
     pub seal: SealFacts,
 }
 
+/// The sealed answer as sent. A member the server adds later is ignored,
+/// except `pdfSha256`, which the sealed contract excludes.
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 struct SealedWire {
     pdf_base64: String,
     document_sha256: String,
     signed_file_sha256: String,
     data_sha256: String,
     document_version: String,
+    bundle_hash: String,
     warnings: Vec<String>,
     seal: SealWire,
+    #[serde(default)]
+    pdf_sha256: Option<Value>,
 }
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 struct SealWire {
     id: String,
     level: String,
     certificate_sha256: String,
     #[serde(default)]
     timestamp_time: Option<String>,
+    #[serde(default)]
+    test_only: bool,
 }
 
 #[derive(Clone, Debug, Serialize, thiserror::Error)]
@@ -375,9 +394,11 @@ impl RenderClient {
             _ => false,
         };
         if !pdf.starts_with(b"%PDF-")
+            || wire.pdf_sha256.is_some()
             || !is_digest(&wire.document_sha256)
             || !is_digest(&wire.signed_file_sha256)
             || !is_digest(&wire.data_sha256)
+            || !is_digest(&wire.bundle_hash)
             || !is_digest(&wire.seal.certificate_sha256)
             || hex::encode(Sha256::digest(&pdf)) != wire.signed_file_sha256
             || !first_revision_matches(&pdf, &wire.document_sha256)
@@ -394,12 +415,14 @@ impl RenderClient {
             signed_file_sha256: wire.signed_file_sha256,
             data_sha256: wire.data_sha256,
             document_version: wire.document_version,
+            bundle_hash: wire.bundle_hash,
             warnings: wire.warnings,
             seal: SealFacts {
                 id: wire.seal.id,
                 level,
                 certificate_sha256: wire.seal.certificate_sha256,
                 timestamp_time: wire.seal.timestamp_time,
+                test_only: wire.seal.test_only,
             },
         })
     }

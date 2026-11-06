@@ -31,9 +31,16 @@ and a credential carrying the `render:seal` scope. The route exists only when
 the server configures seals; otherwise the answer is the `render.not-found`
 problem. It returns a `SealedDocument`: the signed PDF bytes, `document_sha256`
 (the first revision), `signed_file_sha256` (the whole file), `data_sha256`,
-`document_version`, warnings, and `seal` facts (`id`, a `SealLevel` of `BaselineB`
-for b-b or `BaselineT` for b-t, `certificate_sha256`, `timestamp_time` at b-t
-only). There is no `pdfSha256`.
+`document_version`, `bundle_hash` (the package, so a sealing client needs no
+`render:render` to pin it), warnings, and `seal` facts (`id`, a `SealLevel` of
+`BaselineB` for b-b or `BaselineT` for b-t, `certificate_sha256`,
+`timestamp_time` at b-t only, and `test_only` for a seal the server declares
+`trust: test-only`). There is no `pdfSha256`.
+
+A success body may carry members this client does not know; it ignores them
+and still checks every member above. `SealedDocument`, `SealFacts` and
+`SealLevel` are `#[non_exhaustive]`, so a later member or level is not a
+breaking change; a level this client does not know is refused as `protocol`.
 
 Before returning, the client checks that the bytes hash to `signedFileSha256`,
 that `documentSha256` is the hash of a prefix ending at one of the file's
