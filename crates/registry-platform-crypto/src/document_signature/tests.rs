@@ -4,8 +4,8 @@
 use super::asn1::{oid, EcdsaSigValue, SigningCertificateV2, TimeStampReq, TspGeneralizedTime};
 use super::signed_data::jws_ecdsa_to_der;
 use super::test_support::{
-    critical_extended_key_usage, pem_block, refuse_timestamp_request,
-    respond_to_timestamp_request, respond_with, verify_detached_signature, TestPki, TestSeal,
+    critical_extended_key_usage, pem_block, refuse_timestamp_request, respond_to_timestamp_request,
+    respond_with, verify_detached_signature, TestPki, TestSeal,
 };
 use super::verify::verify_signed_data;
 use super::*;
@@ -97,6 +97,11 @@ fn chain_parses_leaf_first_with_its_accessors() {
     assert!(chain.not_before() < OffsetDateTime::now_utc());
     assert!(chain.not_after() > OffsetDateTime::now_utc());
     assert!(chain.not_before() < chain.not_after());
+    assert_eq!(
+        chain.der_len(),
+        seal.certificate_der().len() + pki.issuing_ca_certificate_der().len(),
+        "the chain's DER size counts the seal certificate and its issuer"
+    );
 }
 
 #[test]

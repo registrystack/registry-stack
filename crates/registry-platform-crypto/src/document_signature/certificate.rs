@@ -151,6 +151,17 @@ impl CertificateChain {
         &self.leaf().der
     }
 
+    /// The DER size of every certificate in the chain, together: what the
+    /// chain adds to a signature's `certificates`. A caller reserving space
+    /// for the signature in a document sizes it from this.
+    #[must_use]
+    pub fn der_len(&self) -> usize {
+        self.certificates
+            .iter()
+            .map(|certificate| certificate.der.len())
+            .sum()
+    }
+
     /// SHA-256 over the seal certificate's DER encoding.
     #[must_use]
     pub fn leaf_sha256_fingerprint(&self) -> CertificateFingerprint {

@@ -279,9 +279,10 @@ pub fn verify_detached_signature(
         .iter()
         .next()
         .ok_or(CmsError::MalformedSignedData)?;
-    let token = signer.unsigned_attrs.as_ref().and_then(|attributes| {
-        single_attribute(attributes, oid::SIGNATURE_TIME_STAMP_TOKEN)
-    });
+    let token = signer
+        .unsigned_attrs
+        .as_ref()
+        .and_then(|attributes| single_attribute(attributes, oid::SIGNATURE_TIME_STAMP_TOKEN));
     let timestamp_gen_time = match token {
         None => None,
         Some(token) => {
