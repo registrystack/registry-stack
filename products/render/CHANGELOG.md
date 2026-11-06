@@ -14,22 +14,19 @@
   `check --seal` flag now say that `seal` was the old name for `package`,
   name the `registry-render package` command, and point to `signing.seals`
   and `POST /v1/seal/{type}` for document seals.
-- BREAKING: each seal in `signing.seals` declares `trust`, `test-only` or
-  `production`; a seal without it is refused with `config.missing-key`. A
-  `production` seal signs through a `transit` signer, and one with a
-  `local-jwk` key file is refused as
-  `render.runtime.seal-signer-assurance-mismatch`. Add `trust: test-only` to
-  each test seal's runtime file.
 - Add optional PAdES document sealing. A document type names a `seal` in its
   manifest, and a `signing.seals` block in the runtime file binds each seal to
-  a trust (`test-only` or `production`), a signer (`type: transit`, an ECDSA
+  a required trust (`test-only` or `production`; a seal without one is
+  refused with `config.missing-key`), a signer (`type: transit`, an ECDSA
   P-256 key in Vault or OpenBao Transit reached through a signing proxy on a
   Unix socket and pinned by `mount`, `keyName` and `keyVersion`; or, for a
   test-only seal, `type: local-jwk`, whose `privateKeyRef` names a private JWK
   through the file secret provider; an environment reference is refused as
   `render.runtime.seal-key-requires-file-provider`), a certificate chain file, a timestamp policy
   (`timestampAuthority` for baseline B-T, or the named `withoutTimestamp`
-  choice for B-B) and the OIDC clients allowed to use it. A timestamp
+  choice for B-B) and the OIDC clients allowed to use it. A `production`
+  seal signs only through Transit: one with a `local-jwk` key file is refused
+  as `render.runtime.seal-signer-assurance-mismatch`. A timestamp
   authority under a private root is trusted through an optional
   `timestampAuthority.caBundleRef`, a PEM CA bundle that replaces the
   platform's trusted roots for that authority. With seals, `serve`
