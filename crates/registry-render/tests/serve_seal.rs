@@ -1256,7 +1256,7 @@ fn a_chain_too_large_for_the_reserved_space_refuses_startup() {
                 .custom_extensions
                 .push(rcgen::CustomExtension::from_oid_content(
                     &[1, 3, 6, 1, 4, 1, 55555, 1],
-                    vec![0x5a; 90 * 1024],
+                    vec![0x5a; 256 * 1024],
                 ));
         })
         .unwrap();
@@ -1325,7 +1325,7 @@ fn a_pdf_a_2_document_seals_within_its_string_limit() {
 
 #[test]
 fn a_seal_too_large_for_a_document_pdf_standard_refuses_startup() {
-    // A B-T seal whose chain makes it reserve about 39 KB: within what a
+    // A B-T seal whose chain makes it reserve about 37 KB: within what a
     // field may reserve, beyond what the PDF/A-2b `archive` can hold.
     let pki = seal_pki();
     let seal = pki
@@ -1334,7 +1334,7 @@ fn a_seal_too_large_for_a_document_pdf_standard_refuses_startup() {
                 .custom_extensions
                 .push(rcgen::CustomExtension::from_oid_content(
                     &[1, 3, 6, 1, 4, 1, 55555, 1],
-                    vec![0x5a; 6 * 1024],
+                    vec![0x5a; 16 * 1024],
                 ));
         })
         .unwrap();

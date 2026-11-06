@@ -79,9 +79,9 @@ rules are not in the tables.
   seal is refused at `serve`; `check` reports it, and warns about a runtime seal no document type
   names.
 - The seal is a certification signature (DocMDP permission 2) in an invisible field named
-  `RegistrySeal`. The space it reserves is the certificate chain, twice the seal certificate, and
-  2 KiB of structure and signature allowance, plus 16 KiB when timestamped. A chain that needs
-  more than 256 KiB is refused.
+  `RegistrySeal`. The space it reserves is the certificate chain, twice the seal certificate's
+  issuer name and serial number, and 2112 bytes of structure and signature allowance, plus 16 KiB
+  when timestamped. A chain that needs more than 256 KiB is refused.
 
 ### Runtime and check problem codes
 

@@ -7,7 +7,7 @@ use crate::{decode_fixed, decode_nonempty, PublicJwk, SigningAlgorithm};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use der::asn1::ObjectIdentifier;
-use der::{Decode as _, Tag, Tagged as _};
+use der::{Decode as _, Encode as _, Tag, Tagged as _};
 use sha2::{Digest as _, Sha256};
 use std::collections::HashSet;
 use std::fmt;
@@ -91,6 +91,7 @@ pub enum CertificateError {
 pub struct CertificateChain {
     certificates: Vec<ChainCertificate>,
     display_name: Option<String>,
+    leaf_issuer_serial_der_len: usize,
 }
 
 #[derive(Clone)]
@@ -138,10 +139,18 @@ impl CertificateChain {
                 });
             }
         }
-        let display_name = display_name(&certificates[0].parsed.tbs_certificate.subject);
+        let leaf = &certificates[0].parsed.tbs_certificate;
+        let display_name = display_name(&leaf.subject);
+        let leaf_issuer_serial_der_len =
+            [leaf.issuer.encoded_len(), leaf.serial_number.encoded_len()]
+                .into_iter()
+                .map(|len| len.ok().and_then(|len| usize::try_from(len).ok()))
+                .sum::<Option<usize>>()
+                .ok_or(CertificateError::MalformedCertificate { position: 1 })?;
         Ok(Self {
             certificates,
             display_name,
+            leaf_issuer_serial_der_len,
         })
     }
 
@@ -160,6 +169,15 @@ impl CertificateChain {
             .iter()
             .map(|certificate| certificate.der.len())
             .sum()
+    }
+
+    /// The DER size of the seal certificate's issuer name and serial number,
+    /// together: what a signature's signer identifier and its
+    /// signing-certificate-v2 attribute each carry to name the seal
+    /// certificate, besides their own headers.
+    #[must_use]
+    pub fn leaf_issuer_serial_der_len(&self) -> usize {
+        self.leaf_issuer_serial_der_len
     }
 
     /// SHA-256 over the seal certificate's DER encoding.

@@ -58,21 +58,31 @@ pub const STRUCTURE_ALLOWANCE: usize = 1024;
 /// timestamp failure; it is never dropped to make a B-B seal.
 pub const TIMESTAMP_TOKEN_ALLOWANCE: usize = 16 * 1024;
 
+/// Room for the headers around the two copies of the seal certificate's
+/// issuer and serial number: the `IssuerAndSerialNumber` sequence, and the
+/// `IssuerSerial` sequence with its `GeneralNames` and directory-name tag.
+pub const ISSUER_SERIAL_HEADER_ALLOWANCE: usize = 64;
+
 /// The bytes a seal's signature field reserves for its CMS signature,
 /// computed once at load and the same for every request:
 ///
 /// ```text
-/// chain DER + 2 x seal certificate DER + SIGNATURE_ALLOWANCE
+/// chain DER + 2 x (seal certificate issuer DER + serial number DER)
+///   + ISSUER_SERIAL_HEADER_ALLOWANCE + SIGNATURE_ALLOWANCE
 ///   + STRUCTURE_ALLOWANCE + (TIMESTAMP_TOKEN_ALLOWANCE when timestamped)
 /// ```
 ///
 /// The CMS carries the chain once in `certificates`, and names the seal
-/// certificate's issuer and serial number twice (the signer identifier and
-/// the signing-certificate-v2 attribute); each is smaller than the
-/// certificate, so twice its DER bounds them.
-pub fn contents_capacity(chain_der_len: usize, leaf_der_len: usize, timestamped: bool) -> usize {
+/// certificate by its issuer and serial number twice: in the signer
+/// identifier and in the signing-certificate-v2 attribute.
+pub fn contents_capacity(
+    chain_der_len: usize,
+    leaf_issuer_serial_der_len: usize,
+    timestamped: bool,
+) -> usize {
     chain_der_len
-        + 2 * leaf_der_len
+        + 2 * leaf_issuer_serial_der_len
+        + ISSUER_SERIAL_HEADER_ALLOWANCE
         + SIGNATURE_ALLOWANCE
         + STRUCTURE_ALLOWANCE
         + if timestamped {
@@ -287,7 +297,7 @@ fn reserved_space(
 ) -> Result<usize, ChainFinding> {
     let capacity = contents_capacity(
         chain.der_len(),
-        chain.leaf_der().len(),
+        chain.leaf_issuer_serial_der_len(),
         seal.timestamp_authority.is_some(),
     );
     if capacity > MAX_CONTENTS_CAPACITY {
@@ -377,7 +387,8 @@ impl Seal {
         signer: Arc<dyn SigningProvider>,
     ) -> Self {
         let chain = seal.chain().expect("test seal chain");
-        let contents_capacity = contents_capacity(chain.der_len(), chain.leaf_der().len(), false);
+        let contents_capacity =
+            contents_capacity(chain.der_len(), chain.leaf_issuer_serial_der_len(), false);
         Self {
             id: id.to_owned(),
             fingerprint: chain.leaf_sha256_fingerprint(),
@@ -1102,15 +1113,57 @@ mod tests {
         }
     }
 
+    /// The CMS carries the chain once and names the seal certificate by its
+    /// issuer and serial number twice, so a seal certificate with larger
+    /// extensions grows the reserved space by its own growth once, and the
+    /// space still holds the signature a seal makes with it.
+    #[tokio::test]
+    async fn the_reserved_space_counts_the_seal_certificate_once() {
+        let pki = TestPki::generate().expect("test PKI");
+        let small = pki.issue_seal(SigningAlgorithm::Es256).expect("seal");
+        let large = pki
+            .issue_seal_with(SigningAlgorithm::Es256, |params| {
+                params
+                    .custom_extensions
+                    .push(rcgen::CustomExtension::from_oid_content(
+                        &[1, 3, 6, 1, 4, 1, 55555, 1],
+                        vec![0x5a; 8 * 1024],
+                    ));
+            })
+            .expect("seal with a large extension");
+        let seal_of =
+            |test_seal: &registry_platform_crypto::document_signature::test_support::TestSeal| {
+                Seal::for_test(
+                    "ministry",
+                    test_seal,
+                    Arc::new(test_seal.signer().expect("test signer")),
+                )
+            };
+        let (small_seal, large_seal) = (seal_of(&small), seal_of(&large));
+        let growth = large.chain().unwrap().der_len() - small.chain().unwrap().der_len();
+        assert!(growth > 8 * 1024);
+        assert_eq!(
+            large_seal.contents_capacity() - small_seal.contents_capacity(),
+            growth
+        );
+
+        let prepared = prepared_receipt(large_seal.worker_seal(OffsetDateTime::now_utc()));
+        let bundle_hash = prepared.bundle_hash.clone();
+        large_seal
+            .seal(prepared, &bundle_hash)
+            .await
+            .expect("the signature fits the reserved space");
+    }
+
     #[test]
     fn the_reserved_space_follows_the_documented_formula() {
         assert_eq!(
-            contents_capacity(1200, 600, false),
-            1200 + 1200 + 1024 + 1024
+            contents_capacity(1200, 150, false),
+            1200 + 300 + 64 + 1024 + 1024
         );
         assert_eq!(
-            contents_capacity(1200, 600, true),
-            1200 + 1200 + 1024 + 1024 + 16 * 1024
+            contents_capacity(1200, 150, true),
+            1200 + 300 + 64 + 1024 + 1024 + 16 * 1024
         );
         assert!(
             contents_capacity(0, 0, true) < MAX_CONTENTS_CAPACITY,
