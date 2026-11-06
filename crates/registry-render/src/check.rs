@@ -618,9 +618,28 @@ fn unsealable_members(
     manifest: &Manifest,
     seal_capacities: &BTreeMap<String, usize>,
 ) -> Vec<Diagnostic> {
-    let found = crate::seal::unsealable_documents(manifest, |id| seal_capacities.get(id).copied());
+    let bytes = read_root_manifest(dir).ok();
+    unsealable_at(
+        &bundle_file_name(dir, MANIFEST_FILE),
+        bytes.as_deref(),
+        manifest,
+        |id| seal_capacities.get(id).copied(),
+    )
+}
+
+/// Each document type whose `pdfStandard` cannot hold the signature space
+/// `capacity` gives for its seal, placed at its `seal` member in the
+/// manifest `bytes`, read as `file`.
+pub(crate) fn unsealable_at(
+    file: &str,
+    bytes: Option<&[u8]>,
+    manifest: &Manifest,
+    capacity: impl Fn(&str) -> Option<usize>,
+) -> Vec<Diagnostic> {
+    let found = crate::seal::unsealable_documents(manifest, capacity);
     at_manifest_members(
-        dir,
+        file,
+        bytes,
         found
             .iter()
             .map(|document| ManifestFinding {
@@ -643,17 +662,18 @@ struct ManifestFinding {
     action: &'static str,
 }
 
-/// Each finding at its manifest member's line and column. Should the
-/// manifest no longer read for positions, each finding still names its
-/// member and the file, without a line.
-fn at_manifest_members(dir: &Path, findings: Vec<ManifestFinding>) -> Vec<Diagnostic> {
+/// Each finding at its member's line and column in the manifest `bytes`,
+/// read as `file`. Should the manifest not read for positions, each finding
+/// still names its member and the file, without a line.
+fn at_manifest_members(
+    file: &str,
+    bytes: Option<&[u8]>,
+    findings: Vec<ManifestFinding>,
+) -> Vec<Diagnostic> {
     if findings.is_empty() {
         return Vec::new();
     }
-    let file = bundle_file_name(dir, MANIFEST_FILE);
-    let read = read_root_manifest(dir)
-        .ok()
-        .and_then(|bytes| read_manifest(&file, &bytes).ok());
+    let read = bytes.and_then(|bytes| read_manifest(file, bytes).ok());
     findings
         .into_iter()
         .map(|finding| match &read {
@@ -674,7 +694,7 @@ fn at_manifest_members(dir: &Path, findings: Vec<ManifestFinding>) -> Vec<Diagno
                 diagnostic.severity = finding.severity;
                 diagnostic.artifact = Some(MANIFEST_KIND.to_owned());
                 diagnostic.source = Some(Source {
-                    file: file.clone(),
+                    file: file.to_owned(),
                     line: None,
                     column: None,
                 });

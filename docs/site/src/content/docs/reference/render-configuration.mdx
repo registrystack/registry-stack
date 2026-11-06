@@ -72,6 +72,9 @@ rules are not in the tables.
   `withoutTimestamp: seal-stops-validating-when-certificate-expires` (B-B).
 - `timestampAuthority.url` is `https`; `http` is accepted only for `localhost`, `127.0.0.0/8`, and
   `[::1]`. `attemptTimeoutMilliseconds` is 1000 to 60000 and defaults to 10000.
+- `timestampAuthority.caBundleRef` is a secret reference to a PEM CA bundle that verifies the
+  authority's TLS certificate in place of the platform's trusted roots. Omitted, the platform's
+  trusted roots verify it.
 - The timestamp authority must answer in DER, as RFC 3161 specifies; a BER answer, such as one
   with indefinite lengths, is refused as `malformed-response`. Its token must be signed with
   RSA PKCS#1 v1.5 or ECDSA over SHA-256, SHA-384, or SHA-512; RSA-PSS and SHA-1 are refused as
@@ -140,11 +143,21 @@ Without `--environment`, `check` reads no chain file and says so: the human outp
 `seal chains not read: pass --environment to check them`, and the JSON report has
 `"sealChains": "not-read"`.
 
-`serve` alone also reads the key and reports `render.runtime.seal-key-unreadable` (with the
-secret provider's reason; a key file must be a regular file owned by the serving user, with mode
-0600 or 0400 and one link), `render.runtime.seal-key-invalid`, `render.runtime.seal-key-unsupported`,
-`render.runtime.seal-key-mismatch` (the key is not the one the certificate certifies), and
-`render.runtime.seal-timestamp-client` (the timestamp client cannot be built from the URL).
+`serve` alone also reads the key and the timestamp authority's CA bundle, and reports
+`render.runtime.seal-key-unreadable` (with the secret provider's reason; a key file must be a
+regular file owned by the serving user, with mode 0600 or 0400 and one link),
+`render.runtime.seal-key-invalid`, `render.runtime.seal-key-unsupported`,
+`render.runtime.seal-key-mismatch` (the key is not the one the certificate certifies),
+`render.runtime.seal-timestamp-ca-bundle-unreadable` (with the secret provider's reason),
+`render.runtime.seal-timestamp-ca-bundle-invalid` (the bundle is not PEM, holds no certificate,
+or is too large), and `render.runtime.seal-timestamp-client` (the timestamp client cannot be built
+from the URL).
+
+A seal that cannot load refuses `serve` at startup as `runtime-invalid` (exit code 20), whichever
+piece failed, with each error at its member's line in the runtime file, or, for
+`render.bundle.seal-space-exceeds-standard`, at the document type's `seal` member in the
+package's `manifest.yaml`. `seal-certificate-invalid` (27) and `signing-unavailable` (26) answer
+seal requests only.
 
 ### The seal route
 

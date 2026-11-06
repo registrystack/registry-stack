@@ -87,7 +87,8 @@ conditions, follow the table.
   holds only for an audit sent to `stdout` and on to storage the serving
   user cannot write.
 - **The timestamp authority's identity is not pinned.** Render reaches the
-  authority over TLS with the host's root certificates and accepts a token
+  authority over TLS with the host's root certificates, or with only the CA
+  bundle `timestampAuthority.caBundleRef` names, and accepts a token
   that matches the signature, nonce and key usage; it does not pin the
   authority's certificate or decide whether it is trusted. Validators decide
   trust in the seal certificate and the timestamp authority.

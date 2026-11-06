@@ -89,8 +89,9 @@ What sealing does not do:
   pilots only: a render worker that gained code execution runs as the
   serving user and can read one.
 - It does not pin the timestamp authority's identity or decide trust. The
-  authority is reached over TLS with the host's roots, and validators decide
-  whether the seal certificate and the timestamp authority are trusted.
+  authority is reached over TLS with the host's roots, or with the CA bundle
+  the seal names in their place, and validators decide whether the seal
+  certificate and the timestamp authority are trusted.
 - It does not prove a deployer's template conforms. veraPDF has passed a
   fixture template at every PDF/A level `pdfStandard` accepts, and at
   PDF/UA-1, both as rendered and once sealed ([EVIDENCE.md](EVIDENCE.md)),

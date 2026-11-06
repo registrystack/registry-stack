@@ -33,12 +33,13 @@ use registry_platform_crypto::{
 use registry_platform_yaml::{Diagnostic, Severity};
 use time::OffsetDateTime;
 
+use crate::bundle::{bundle_file_name, Bundle};
 use crate::envelope::SigningPayload;
 use crate::hash::{sha256_digest, sha256_label};
-use crate::manifest::{Manifest, MANIFEST_KIND};
+use crate::manifest::{Manifest, MANIFEST_FILE};
 use crate::pdf_signature::{PdfSignatureError, SignatureField, MAX_CONTENTS_CAPACITY};
 use crate::problem::{ProblemKind, RenderProblem};
-use crate::runtime::{RenderRuntime, SealRuntime, RUNTIME_KIND};
+use crate::runtime::{RenderRuntime, SealRuntime, TimestampAuthorityRuntime, RUNTIME_KIND};
 use crate::worker::WorkerSeal;
 
 /// The partial name, `/T`, of the one signature field a seal writes.
@@ -185,8 +186,9 @@ impl std::fmt::Debug for Seal {
 pub type Seals = BTreeMap<String, Arc<Seal>>;
 
 /// Load every seal the runtime file declares; an empty map when it declares
-/// no signing block. Refuses with a problem positioned at the failing member,
-/// whose message names the failing piece and repeats no value.
+/// no signing block. Refuses as `runtime-invalid`, with a diagnostic at the
+/// failing member whose message names the failing piece and repeats no
+/// value; [`crate::runtime::RuntimePositions::place`] gives it its line.
 pub fn load(runtime: &RenderRuntime) -> Result<Seals, RenderProblem> {
     let mut seals = Seals::new();
     let Some(signing) = &runtime.signing else {
@@ -199,8 +201,9 @@ pub fn load(runtime: &RenderRuntime) -> Result<Seals, RenderProblem> {
     Ok(seals)
 }
 
+/// A seal that cannot load: the runtime file is refused, whichever piece
+/// failed, so every startup refusal has the one exit code.
 fn refusal(
-    kind: ProblemKind,
     seal_id: &str,
     member: &str,
     code: &str,
@@ -214,8 +217,11 @@ fn refusal(
         action,
     );
     diagnostic.artifact = Some(RUNTIME_KIND.to_owned());
-    RenderProblem::new(kind, format!("seal {seal_id} cannot be loaded"))
-        .with_diagnostics(vec![diagnostic])
+    RenderProblem::new(
+        ProblemKind::RuntimeInvalid,
+        format!("seal {seal_id} cannot be loaded"),
+    )
+    .with_diagnostics(vec![diagnostic])
 }
 
 /// How long before a seal certificate expires `check` warns about it.
@@ -492,27 +498,17 @@ pub fn unsealable_documents(
 
 /// Refuse to serve a package with a document type whose PDF standard cannot
 /// hold the signature space its loaded seal reserves, each finding placed at
-/// that document type's `seal` member.
-pub fn refuse_unsealable(manifest: &Manifest, seals: &Seals) -> Result<(), RenderProblem> {
-    let found = unsealable_documents(manifest, |id| {
-        seals.get(id).map(|seal| seal.contents_capacity())
-    });
-    if found.is_empty() {
+/// that document type's `seal` member in the package's manifest.
+pub fn refuse_unsealable(bundle: &Bundle, seals: &Seals) -> Result<(), RenderProblem> {
+    let diagnostics = crate::check::unsealable_at(
+        &bundle_file_name(&bundle.root, MANIFEST_FILE),
+        Some(&bundle.manifest_bytes),
+        &bundle.manifest,
+        |id| seals.get(id).map(|seal| seal.contents_capacity()),
+    );
+    if diagnostics.is_empty() {
         return Ok(());
     }
-    let diagnostics = found
-        .iter()
-        .map(|document| {
-            let mut diagnostic = Diagnostic::error(
-                UNSEALABLE_CODE,
-                document.pointer(),
-                document.message(),
-                document.action(),
-            );
-            diagnostic.artifact = Some(MANIFEST_KIND.to_owned());
-            diagnostic
-        })
-        .collect();
     Err(RenderProblem::new(
         ProblemKind::RuntimeInvalid,
         "a seal reserves more signature space than a document type's PDF standard allows",
@@ -524,7 +520,6 @@ impl Seal {
     fn load(runtime: &RenderRuntime, id: &str, seal: &SealRuntime) -> Result<Self, RenderProblem> {
         let certificate = |finding: ChainFinding| {
             refusal(
-                ProblemKind::SealCertificateInvalid,
                 id,
                 "certificateChainFile",
                 finding.code,
@@ -532,8 +527,8 @@ impl Seal {
                 finding.action,
             )
         };
-        let key = |kind: ProblemKind, code: &str, message: String, action: &str| {
-            refusal(kind, id, "privateKeyRef", code, message, action)
+        let key = |code: &str, message: String, action: &str| {
+            refusal(id, "privateKeyRef", code, message, action)
         };
         let chain = read_chain(id, seal).map_err(certificate)?;
         // The resolver's buffer erases the JWK text, private members
@@ -547,7 +542,6 @@ impl Seal {
                     "Provide the seal's private key under the secret provider the reference names."
                 };
                 key(
-                    ProblemKind::RuntimeInvalid,
                     "render.runtime.seal-key-unreadable",
                     format!("signing.seals.{id}.privateKeyRef cannot be resolved: {error}"),
                     action,
@@ -555,7 +549,6 @@ impl Seal {
             })?;
         let not_a_key = || {
             key(
-                ProblemKind::RuntimeInvalid,
                 "render.runtime.seal-key-invalid",
                 format!("signing.seals.{id}.privateKeyRef does not hold a private JWK"),
                 "Store the seal's private key as one ES256, ES384, RS256 or RS384 private JWK.",
@@ -573,7 +566,6 @@ impl Seal {
         let signer = LocalJwkSigner::new(jwk).map_err(|_| not_a_key())?;
         if signer.algorithm() == SigningAlgorithm::EdDsa {
             return Err(key(
-                ProblemKind::SealCertificateInvalid,
                 "render.runtime.seal-key-unsupported",
                 format!(
                     "signing.seals.{id}.privateKeyRef is an EdDSA key; PAdES seals use ES256, \
@@ -593,7 +585,6 @@ impl Seal {
             | Err(CertificateError::Expired { .. } | CertificateError::NotYetValid { .. }) => {}
             Err(CertificateError::KeyMismatch { .. }) => {
                 return Err(key(
-                    ProblemKind::SealCertificateInvalid,
                     "render.runtime.seal-key-mismatch",
                     format!(
                         "signing.seals.{id}.privateKeyRef does not hold the key the seal \
@@ -608,7 +599,6 @@ impl Seal {
             }
             Err(error) => {
                 return Err(key(
-                    ProblemKind::SealCertificateInvalid,
                     "render.runtime.seal-key-unsupported",
                     format!(
                         "signing.seals.{id}: the seal key cannot sign under this certificate: {}",
@@ -621,11 +611,7 @@ impl Seal {
         let contents_capacity = reserved_space(id, &chain, seal).map_err(certificate)?;
         let timestamp = match &seal.timestamp_authority {
             None => None,
-            Some(authority) => Some(TimestampAuthority::new(
-                id,
-                authority.url.to_url().as_str(),
-                authority.attempt_timeout(),
-            )?),
+            Some(authority) => Some(TimestampAuthority::load(runtime, id, authority)?),
         };
         Ok(Self {
             id: id.to_owned(),
@@ -968,14 +954,40 @@ const TIMESTAMP_QUERY: &str = "application/timestamp-query";
 const TIMESTAMP_REPLY: &str = "application/timestamp-reply";
 
 impl TimestampAuthority {
+    /// The authority a seal declares, its CA bundle resolved when it names
+    /// one.
+    fn load(
+        runtime: &RenderRuntime,
+        seal_id: &str,
+        authority: &TimestampAuthorityRuntime,
+    ) -> Result<Self, RenderProblem> {
+        let Some(reference) = authority.ca_bundle_ref.as_deref() else {
+            return Self::new(seal_id, authority, None);
+        };
+        let bundle =
+            crate::runtime::resolve_protected_secret(runtime, reference).map_err(|error| {
+                refusal(
+                    seal_id,
+                    "timestampAuthority/caBundleRef",
+                    "render.runtime.seal-timestamp-ca-bundle-unreadable",
+                    format!(
+                        "signing.seals.{seal_id}.timestampAuthority.caBundleRef cannot be \
+                         resolved: {error}"
+                    ),
+                    "Provide the timestamp authority's PEM CA bundle under the secret provider \
+                     the reference names.",
+                )
+            })?;
+        Self::new(seal_id, authority, Some(bundle.expose_secret()))
+    }
+
     fn new(
         seal_id: &str,
-        url: &str,
-        attempt_timeout: std::time::Duration,
+        authority: &TimestampAuthorityRuntime,
+        trusted_root_certificates: Option<&[u8]>,
     ) -> Result<Self, RenderProblem> {
         let unusable = || {
             refusal(
-                ProblemKind::RuntimeInvalid,
                 seal_id,
                 "timestampAuthority",
                 "render.runtime.seal-timestamp-client",
@@ -983,16 +995,27 @@ impl TimestampAuthority {
                 "Check the timestamp authority URL and the host's trusted root certificates.",
             )
         };
-        let url = reqwest::Url::parse(url).map_err(|_| unusable())?;
+        let url = reqwest::Url::parse(authority.url.to_url().as_str()).map_err(|_| unusable())?;
+        let attempt_timeout = authority.attempt_timeout();
         let client = registry_platform_httputil::client::build_client(
             registry_platform_httputil::client::OutboundOptions {
                 request_timeout: attempt_timeout,
                 connect_timeout: attempt_timeout,
                 user_agent: Some("registry-render"),
-                trusted_root_certificates: None,
+                trusted_root_certificates,
             },
         )
-        .map_err(|_| unusable())?;
+        .map_err(|reason| match trusted_root_certificates {
+            None => unusable(),
+            Some(_) => refusal(
+                seal_id,
+                "timestampAuthority/caBundleRef",
+                "render.runtime.seal-timestamp-ca-bundle-invalid",
+                format!("signing.seals.{seal_id}.timestampAuthority.caBundleRef: {reason}"),
+                "Store the PEM certificates of the authorities that issue the timestamp \
+                 authority's TLS certificate under the reference.",
+            ),
+        })?;
         Ok(Self {
             seal_id: seal_id.to_owned(),
             url,

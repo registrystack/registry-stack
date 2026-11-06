@@ -110,7 +110,7 @@ fn mark_not_dumpable() -> Result<(), RenderProblem> {
 
 async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
     init_tracing();
-    let (runtime, config_id) = runtime::load(runtime_path)?;
+    let (runtime, config_id, positions) = runtime::load_with_positions(runtime_path)?;
     let oidc = crate::auth::verifier(&runtime).await?;
     let api_key = if oidc.is_none() {
         normalize_api_key(runtime::resolve_secret(
@@ -162,8 +162,9 @@ async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
     // nothing half-made behind. A document type whose PDF standard cannot
     // hold its seal's reserved signature space is refused here, before any
     // render could write a nonconformant file.
-    let seals = crate::seal::load(&runtime)?;
-    crate::seal::refuse_unsealable(&bundle.manifest, &seals)?;
+    let seals = crate::seal::load(&runtime).map_err(|problem| positions.place(problem))?;
+    drop(positions);
+    crate::seal::refuse_unsealable(&bundle, &seals)?;
     // Plain rendering starts whatever a seal's state; these lines are where
     // an operator learns a seal cannot sign, or soon cannot, without polling
     // `/ready`. Each names the seal id and a value-free reason only.
