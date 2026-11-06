@@ -14,6 +14,24 @@ and recognizes engine-level resource exhaustion as a bounded failure category.
 Products register their own helpers through a registration closure at engine
 construction.
 
+A profile chooses one of two base engines. A deadline is checked only between
+operations, so neither base carries a native function that reads the clock,
+sleeps, or never returns. `Deterministic` is Rhai's standard language surface
+without the language-core package (`sleep`, `exit`, `take`, `tag`, `set_tag`,
+`parse_json`, `get_fn_metadata_list`) and the time package (`timestamp`,
+`elapsed`, instant arithmetic). String `pad` is replaced by a version that
+refuses an empty padding string, and string `replace` by one that works out
+the size of its result and refuses one over the string bound before building
+it. A script that calls a left-out function fails at run time with a
+function-not-found error. `Raw` carries no packages at all, for a product that
+registers every callable itself.
+
+The deterministic base has no clock, no sleep, and no ambient input: a script
+sees only its arguments and what the product registers, so the same call gives
+the same result on the same host. Floating-point transcendental functions
+(`sin`, `exp`, `ln`, and the like) use the host's maths library, so their last
+digits can differ across platforms.
+
 The crate deliberately does not own product policy: entry-point names, helper
 inventories, source review, input and output conversion, result validation,
 cancellation handling, and every public error stay with the owning product.
@@ -54,3 +72,12 @@ maintained Rhai files use no callback-based collection method. A separately
 governed script that does use one may reach its existing limit sooner and
 should be evaluated before promotion. The existing platform unit and consumer
 test suites own these checks; this review adds no separate blocking CI gate.
+
+A Rhai upgrade must also recheck the deterministic base. The unit test
+`deterministic_base_engine_leaves_out_the_language_core_and_time_packages`
+pins exactly which function names the base leaves out of Rhai's standard
+engine, so a function added to a left-out package, or a package added to the
+standard engine, fails it. A function added to a kept package passes it, so
+review every new standard function for clock reads, sleeping, unbounded loops,
+or allocation before the engine's size checks, and confirm the `pad` and
+`replace` overrides still match the package's signatures.

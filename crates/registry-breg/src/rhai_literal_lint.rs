@@ -2,8 +2,13 @@
 //! Only direct returned ABI structures are inspected. This is not dataflow
 //! analysis: variables, helper returns and dynamically assembled arrays remain
 //! subject to the ordinary runtime validator and executable branch tests.
+//!
+//! Calls are inspected the same way: only a call written with a literal
+//! function name, directly, as a method, or through `Fn("name")`, is checked
+//! against the functions the plan engine leaves out. A name computed at run
+//! time still fails when the call runs.
 
-use rhai::{ASTNode, Expr, Stmt};
+use rhai::{ASTNode, Engine, Expr, FnPtr, Stmt};
 use std::collections::BTreeSet;
 
 pub(crate) struct LiteralFault {
@@ -75,6 +80,79 @@ pub(crate) fn inspect(
         }
     }
     faults
+}
+
+/// A call, by literal name, to a function Rhai's standard engine offers but
+/// the plan engine does not, so the call can only fail when it runs.
+pub(crate) struct UnavailableCall {
+    pub function: String,
+    pub position: rhai::Position,
+}
+
+/// Every call in `script`, in any function, to a named function that Rhai's
+/// standard engine provides and the plan engine leaves out, unless the script
+/// defines a function of that name itself. The left-out names are derived
+/// from the two engines rather than listed, so they follow the plan engine.
+pub(crate) fn unavailable_calls(script: &str) -> Vec<UnavailableCall> {
+    let mut engine = crate::rhai_planner::engine(None);
+    // As above: inspect the calls as authored, not as the optimizer rewrote
+    // them.
+    engine.set_optimization_level(rhai::OptimizationLevel::None);
+    let Ok(ast) = engine.compile(script) else {
+        return Vec::new();
+    };
+    let available = function_names(&engine);
+    let defined = ast
+        .iter_functions()
+        .map(|function| function.name.to_owned())
+        .collect::<BTreeSet<_>>();
+    let unavailable = function_names(&Engine::new())
+        .into_iter()
+        .filter(|name| is_identifier(name))
+        .filter(|name| !available.contains(name) && !defined.contains(name))
+        .collect::<BTreeSet<_>>();
+    let mut calls = Vec::new();
+    ast.walk(&mut |path| {
+        let named = match path.last() {
+            Some(ASTNode::Expr(Expr::FnCall(call, position))) if !call.is_qualified() => {
+                if call.name == "Fn" && call.args.len() == 1 {
+                    literal_string(&call.args[0]).map(|name| (name, *position))
+                } else {
+                    Some((call.name.to_string(), *position))
+                }
+            }
+            Some(ASTNode::Expr(Expr::MethodCall(call, position))) => {
+                Some((call.name.to_string(), *position))
+            }
+            Some(ASTNode::Expr(Expr::DynamicConstant(value, position))) => value
+                .read_lock::<FnPtr>()
+                .map(|pointer| (pointer.fn_name().to_owned(), *position)),
+            _ => None,
+        };
+        if let Some((function, position)) = named {
+            if unavailable.contains(&function) {
+                calls.push(UnavailableCall { function, position });
+            }
+        }
+        true
+    });
+    calls
+}
+
+fn function_names(engine: &Engine) -> BTreeSet<String> {
+    engine
+        .collect_fn_metadata(None, |info| Some(info.metadata.name.to_string()), true)
+        .into_iter()
+        .collect()
+}
+
+/// Operators and property accessors are resolved by argument type, so a
+/// left-out overload of one says nothing about a call by that name.
+fn is_identifier(name: &str) -> bool {
+    name.chars()
+        .next()
+        .is_some_and(|first| first.is_alphabetic() || first == '_')
+        && name.chars().all(|c| c.is_alphanumeric() || c == '_')
 }
 
 fn member(value: &Expr, key: &str) -> Option<Expr> {

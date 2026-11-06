@@ -625,6 +625,65 @@ fn directly_returned_literal_outcomes_are_checked_against_the_action_catalogues(
 }
 
 #[test]
+fn calls_by_name_to_functions_the_plan_engine_leaves_out_are_refused_at_compile() {
+    const EFFECTS: &str = r#"#{effects:[#{id:"person",set:#{name:ctx.inputs["given-name"]}}]}"#;
+    for (script, function) in [
+        (
+            format!("fn handle(ctx) {{ timestamp(); {EFFECTS} }}"),
+            "timestamp",
+        ),
+        (format!("fn handle(ctx) {{ sleep(2); {EFFECTS} }}"), "sleep"),
+        (
+            format!("fn handle(ctx) {{ let seconds = 2.0; seconds.sleep(); {EFFECTS} }}"),
+            "sleep",
+        ),
+        (
+            format!(r#"fn handle(ctx) {{ Fn("sleep").call(2); {EFFECTS} }}"#),
+            "sleep",
+        ),
+        (
+            format!(r#"fn handle(ctx) {{ call(Fn("timestamp")); {EFFECTS} }}"#),
+            "timestamp",
+        ),
+        (
+            format!("fn wait() {{ sleep(1) }} fn handle(ctx) {{ wait(); {EFFECTS} }}"),
+            "sleep",
+        ),
+        (
+            format!(r#"fn handle(ctx) {{ parse_json("{{}}"); {EFFECTS} }}"#),
+            "parse_json",
+        ),
+    ] {
+        let failure = compile(project(), &script)
+            .expect_err("a call the plan engine cannot resolve is refused before execution");
+        let diagnostic = failure
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code == "breg.action.plan-function-unavailable")
+            .unwrap_or_else(|| panic!("{script}: {failure:?}"));
+        assert!(
+            diagnostic.message.contains(&format!("`{function}`")),
+            "{script}"
+        );
+        assert!(diagnostic.message.contains("line"), "{script}");
+        assert_eq!(
+            diagnostic.path, "functions[id=register-person-plan].source",
+            "{script}"
+        );
+    }
+    for script in [
+        format!("fn timestamp() {{ 1 }} fn handle(ctx) {{ timestamp(); {EFFECTS} }}"),
+        format!(r#"fn handle(ctx) {{ let word = "sleep"; {EFFECTS} }}"#),
+        format!("fn handle(ctx) {{ let tagged = ctx.inputs; tagged.tag; {EFFECTS} }}"),
+        format!(r#"fn handle(ctx) {{ let names = ["a"]; names.join(","); {EFFECTS} }}"#),
+    ] {
+        compile(project(), &script).unwrap_or_else(|failure| {
+            panic!("a call the plan engine resolves compiles: {script}: {failure:?}")
+        });
+    }
+}
+
+#[test]
 fn handler_compiler_rejects_inputs_outside_the_scalar_abi() {
     let script = result(r#"#{effects:[#{id:"person",set:#{name:"Mina"}}]}"#);
     for (field_type, code, member, repair) in [

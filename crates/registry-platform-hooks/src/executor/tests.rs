@@ -380,6 +380,27 @@ mod rhai_engine {
         );
     }
 
+    /// The attempt timeout is checked between operations, so a hook program
+    /// runs on the deterministic engine: it has no native call that reads the
+    /// clock or blocks its thread, and each one is refused at once.
+    #[test]
+    fn a_rhai_handler_cannot_read_the_clock_or_block_its_thread() {
+        for call in ["timestamp()", "sleep(2)", r#"Fn("sleep").call(2.0)"#] {
+            let script = format!(r#"fn handle(ctx) {{ {call}; #{{"answer": "none"}} }}"#);
+            let started = std::time::Instant::now();
+            assert_eq!(
+                Err(ErrorCategory::Execution),
+                run_rhai(&script, &envelope(), Duration::from_secs(30)),
+                "{call}"
+            );
+            assert!(
+                started.elapsed() < Duration::from_secs(1),
+                "{call} held the handler for {:?}",
+                started.elapsed()
+            );
+        }
+    }
+
     /// The operation budget, flipped around the loop bound that crosses it.
     /// The budget is a fixed profile constant, not operator configuration.
     #[test]

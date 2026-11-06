@@ -19,7 +19,10 @@ pub const MAXIMUM_VALUE_DEPTH: usize = 64;
 /// The bounded Rhai execution profile every planner and handler evaluation
 /// runs under: the constants above, applied by the platform script adapter.
 /// The `join` helper registration and the per-call deadline wiring are added
-/// by `engine` below; every other setting is exactly this profile.
+/// by `engine` below; every other setting is exactly this profile. The
+/// deterministic base carries no function that reads the clock, sleeps, or
+/// never returns, so the deadline, which is checked between operations,
+/// bounds every evaluation.
 const SCRIPT_PROFILE: platform::RhaiProfile = platform::RhaiProfile {
     limits: platform::RhaiLimits {
         operations: MAXIMUM_OPERATIONS,
@@ -30,7 +33,7 @@ const SCRIPT_PROFILE: platform::RhaiProfile = platform::RhaiProfile {
         array_items: MAXIMUM_ARRAY_ITEMS,
         map_entries: MAXIMUM_MAP_ENTRIES,
     },
-    base: platform::RhaiBaseEngine::Standard,
+    base: platform::RhaiBaseEngine::Deterministic,
     disabled_symbols: &["import", "export", "eval", "print", "debug"],
     allow_anonymous_fn: false,
     maximum_source_bytes: MAXIMUM_SOURCE_BYTES,
@@ -184,3 +187,7 @@ pub(crate) fn json_to_dynamic(value: &Value, depth: usize) -> Result<Dynamic, Pl
         _ => Err(PlanError::Resource),
     }
 }
+
+#[cfg(test)]
+#[path = "tests/rhai_planner_sandbox_tests.rs"]
+mod rhai_planner_sandbox_tests;

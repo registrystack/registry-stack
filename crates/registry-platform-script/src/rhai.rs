@@ -10,9 +10,14 @@
 use std::collections::BTreeSet;
 use std::time::Instant;
 
+use rhai::packages::{
+    ArithmeticPackage, BasicArrayPackage, BasicBlobPackage, BasicFnPackage, BasicIteratorPackage,
+    BasicMapPackage, BasicMathPackage, BasicStringPackage, BitFieldPackage, LogicPackage,
+    MoreStringPackage, Package,
+};
 use rhai::{
-    module_resolvers::DummyModuleResolver, CallFnOptions, Dynamic, Engine, EvalAltResult, FuncArgs,
-    Scope, AST,
+    CallFnOptions, Dynamic, Engine, EvalAltResult, FuncArgs, ImmutableString, NativeCallContext,
+    Scope, AST, INT,
 };
 
 /// The numeric limits a profile asks the engine to enforce.
@@ -40,15 +45,32 @@ pub struct RhaiLimits {
 
 /// Which base engine spelling a profile constructs before limits are applied.
 ///
-/// The choice is product policy. `Standard` is the full engine with its module
-/// loading removed and its print and debug output silenced; `Raw` is the bare
-/// engine with no packages and no resolver, for products that register every
-/// callable themselves.
+/// The choice is product policy. A deadline wired through the progress hook
+/// is checked only between operations, so neither base offers a native
+/// function that reads the clock, sleeps, or never returns: such a call would
+/// outlast the deadline. `Deterministic` is the standard language surface
+/// without those functions; `Raw` is the bare engine with no packages, for
+/// products that register every callable themselves.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RhaiBaseEngine {
-    /// `Engine::new()` with a `DummyModuleResolver`, so every `import` fails,
-    /// and silenced `on_print`/`on_debug` handlers.
-    Standard,
+    /// `Engine::new_raw()` with every package Rhai's standard engine carries
+    /// except two: the language-core package, which ships `sleep` beside
+    /// `exit`, `take`, `tag`, `set_tag`, `parse_json`, and
+    /// `get_fn_metadata_list`, and the time package (`timestamp`, `elapsed`,
+    /// and instant arithmetic). String `pad` with a string is replaced by a
+    /// version that refuses an empty padding string, which the package
+    /// version pads with forever, and every string `replace` overload by one
+    /// that refuses a result over the string bound before building it, where
+    /// the package version builds the whole result first. No module resolver
+    /// is installed, so every `import` fails, and no print or debug handler,
+    /// so output goes nowhere.
+    ///
+    /// The base has no clock, no sleep, and no ambient input: a script sees
+    /// only its arguments and what the product registers, so the same call
+    /// gives the same result on the same host. Floating-point transcendental
+    /// functions (`sin`, `exp`, `ln`, and the like) use the host's maths
+    /// library, so their last digits can differ across platforms.
+    Deterministic,
     /// `Engine::new_raw()` with no packages, no built-ins, and no resolver.
     Raw,
 }
@@ -109,16 +131,10 @@ pub fn build_engine(
     deadline: Option<Instant>,
     register: impl FnOnce(&mut Engine),
 ) -> Engine {
-    let mut engine = match profile.base {
-        RhaiBaseEngine::Standard => {
-            let mut engine = Engine::new();
-            engine.set_module_resolver(DummyModuleResolver::new());
-            engine.on_print(|_| {});
-            engine.on_debug(|_, _, _| {});
-            engine
-        }
-        RhaiBaseEngine::Raw => Engine::new_raw(),
-    };
+    let mut engine = Engine::new_raw();
+    if profile.base == RhaiBaseEngine::Deterministic {
+        register_deterministic_packages(&mut engine);
+    }
     engine
         .set_max_operations(profile.limits.operations)
         .set_max_call_levels(profile.limits.call_levels)
@@ -139,6 +155,158 @@ pub fn build_engine(
         engine.on_progress(move |_| (Instant::now() >= deadline).then_some(Dynamic::UNIT));
     }
     engine
+}
+
+/// Register the deterministic base's packages in the order Rhai's standard
+/// package combines them, so a later package's overload still wins, then the
+/// checked string padding and replacement over the package's own.
+fn register_deterministic_packages(engine: &mut Engine) {
+    ArithmeticPackage::new().register_into_engine(engine);
+    BasicStringPackage::new().register_into_engine(engine);
+    BasicIteratorPackage::new().register_into_engine(engine);
+    BasicFnPackage::new().register_into_engine(engine);
+    BitFieldPackage::new().register_into_engine(engine);
+    LogicPackage::new().register_into_engine(engine);
+    BasicMathPackage::new().register_into_engine(engine);
+    BasicArrayPackage::new().register_into_engine(engine);
+    BasicBlobPackage::new().register_into_engine(engine);
+    BasicMapPackage::new().register_into_engine(engine);
+    MoreStringPackage::new().register_into_engine(engine);
+    // Functions registered on the engine are found before any package's, by
+    // name, function pointer, and method syntax alike.
+    engine
+        .register_fn("pad", pad_with_text)
+        .register_fn("replace", replace_text)
+        .register_fn("replace", replace_text_with_char)
+        .register_fn("replace", replace_char_with_text)
+        .register_fn("replace", replace_char);
+}
+
+/// `text.pad(length, padding)`: pad `text` with repetitions of `padding` up
+/// to `length` characters, as the package does, except that an empty
+/// `padding` is refused when padding is needed. The package version never
+/// returns in that case, and the deadline cannot interrupt a native call.
+fn pad_with_text(
+    context: NativeCallContext,
+    text: &mut ImmutableString,
+    length: INT,
+    padding: &str,
+) -> Result<(), Box<EvalAltResult>> {
+    let Ok(length) = usize::try_from(length) else {
+        // A negative length asks for no padding.
+        return Ok(());
+    };
+    let limit = context.engine().max_string_size();
+    if limit > 0 && length > limit {
+        return Err(EvalAltResult::ErrorDataTooLarge(
+            "Length of string".to_owned(),
+            context.call_position(),
+        )
+        .into());
+    }
+    let missing = length.saturating_sub(text.chars().count());
+    if missing == 0 {
+        return Ok(());
+    }
+    if padding.is_empty() {
+        return Err(EvalAltResult::ErrorRuntime(
+            "pad needs a padding string that is not empty".into(),
+            context.call_position(),
+        )
+        .into());
+    }
+    let padded = text.make_mut();
+    padded.extend(padding.chars().cycle().take(missing));
+    if limit > 0 && padded.len() > limit {
+        return Err(EvalAltResult::ErrorDataTooLarge(
+            "Length of string".to_owned(),
+            context.call_position(),
+        )
+        .into());
+    }
+    Ok(())
+}
+
+/// The byte length of `text.replace(find, with)`, worked out without building
+/// it. An empty `find` matches at every character boundary, as it does when
+/// replacing.
+fn replaced_len(text: &str, find: &str, with: &str) -> usize {
+    let matches = text.matches(find).count();
+    text.len()
+        .saturating_sub(matches.saturating_mul(find.len()))
+        .saturating_add(matches.saturating_mul(with.len()))
+}
+
+/// Replace every `find` in `text` with `with`, as the package does, once the
+/// result is known to fit the string bound. The package version builds the
+/// whole result before the engine's size check sees it, and a native call
+/// cannot be interrupted, so a script could make it build up to the bound
+/// squared.
+fn replace_checked(
+    context: &NativeCallContext,
+    text: &mut ImmutableString,
+    find: &str,
+    with: &str,
+) -> Result<(), Box<EvalAltResult>> {
+    // The package leaves an empty string as it is, even for an empty `find`.
+    if text.is_empty() {
+        return Ok(());
+    }
+    let limit = context.engine().max_string_size();
+    if limit > 0 && replaced_len(text, find, with) > limit {
+        return Err(EvalAltResult::ErrorDataTooLarge(
+            "Length of string that replace would build".to_owned(),
+            context.call_position(),
+        )
+        .into());
+    }
+    *text = text.replace(find, with).into();
+    Ok(())
+}
+
+/// `text.replace(find, with)` with a string for each.
+fn replace_text(
+    context: NativeCallContext,
+    text: &mut ImmutableString,
+    find: &str,
+    with: &str,
+) -> Result<(), Box<EvalAltResult>> {
+    replace_checked(&context, text, find, with)
+}
+
+/// `text.replace(find, with)` with a string to find and a character for it.
+fn replace_text_with_char(
+    context: NativeCallContext,
+    text: &mut ImmutableString,
+    find: &str,
+    with: char,
+) -> Result<(), Box<EvalAltResult>> {
+    replace_checked(&context, text, find, with.encode_utf8(&mut [0; 4]))
+}
+
+/// `text.replace(find, with)` with a character to find and a string for it.
+fn replace_char_with_text(
+    context: NativeCallContext,
+    text: &mut ImmutableString,
+    find: char,
+    with: &str,
+) -> Result<(), Box<EvalAltResult>> {
+    replace_checked(&context, text, find.encode_utf8(&mut [0; 4]), with)
+}
+
+/// `text.replace(find, with)` with a character for each.
+fn replace_char(
+    context: NativeCallContext,
+    text: &mut ImmutableString,
+    find: char,
+    with: char,
+) -> Result<(), Box<EvalAltResult>> {
+    replace_checked(
+        &context,
+        text,
+        find.encode_utf8(&mut [0; 4]),
+        with.encode_utf8(&mut [0; 4]),
+    )
 }
 
 /// Compile `source` under the entry-point contract `(entrypoint, arities)`.
@@ -251,7 +419,7 @@ mod tests {
                 array_items: 256,
                 map_entries: 256,
             },
-            base: RhaiBaseEngine::Standard,
+            base: RhaiBaseEngine::Deterministic,
             disabled_symbols: &["import", "export", "eval", "print", "debug"],
             allow_anonymous_fn: false,
             maximum_source_bytes: 65_536,
@@ -487,13 +655,14 @@ mod tests {
     #[test]
     fn raw_base_engine_carries_no_standard_packages() {
         let raw = profile_with(|profile| profile.base = RhaiBaseEngine::Raw);
-        // A string method from the standard packages: present on Standard,
-        // absent on Raw.
-        let standard_error = evaluate(&breg_shaped_profile(), "fn entry(ctx) { ctx.len() }", None)
-            .map(|_| ())
-            .unwrap_err();
+        // A string method from the standard packages: present on
+        // Deterministic, absent on Raw.
+        let deterministic_error =
+            evaluate(&breg_shaped_profile(), "fn entry(ctx) { ctx.len() }", None)
+                .map(|_| ())
+                .unwrap_err();
         assert_eq!(
-            classify_failure(&standard_error),
+            classify_failure(&deterministic_error),
             RhaiFailureCategory::Other
         );
         let raw_error = evaluate(&raw, "fn entry(ctx) { ctx.len() }", None)
@@ -518,9 +687,10 @@ mod tests {
     }
 
     #[test]
-    fn standard_base_engine_silences_print_and_debug() {
-        // With print and debug left enabled as symbols, their output is still
-        // swallowed by the silenced handlers, so this test's output stays clean.
+    fn deterministic_base_engine_silences_print_and_debug() {
+        // With print and debug left enabled as symbols, their output still
+        // goes nowhere: the base installs no output handler, so this test's
+        // output stays clean.
         let profile = profile_with(|profile| {
             profile.disabled_symbols = &["import", "export", "eval"];
         });
@@ -534,7 +704,7 @@ mod tests {
     }
 
     #[test]
-    fn standard_base_engine_refuses_module_imports() {
+    fn deterministic_base_engine_refuses_module_imports() {
         let profile = profile_with(|profile| profile.disabled_symbols = &[]);
         let error = evaluate(
             &profile,
@@ -546,6 +716,303 @@ mod tests {
         assert_ne!(
             classify_failure(&error),
             RhaiFailureCategory::ResourceExhausted
+        );
+    }
+
+    /// `evaluate` on a thread of its own. A call that has not returned within
+    /// a second fails the case instead of hanging the suite.
+    fn evaluate_within(
+        profile: &RhaiProfile,
+        source: &str,
+        deadline: Option<Instant>,
+    ) -> Result<Dynamic, Box<EvalAltResult>> {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let profile = *profile;
+        let owned = source.to_owned();
+        std::thread::spawn(move || {
+            sender
+                .send(evaluate(&profile, &owned, deadline))
+                .expect("the watchdog is still waiting for this call");
+        });
+        receiver
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap_or_else(|_| panic!("the call did not return within a second: {source}"))
+    }
+
+    fn function_names(engine: &Engine) -> BTreeSet<String> {
+        engine
+            .collect_fn_metadata(None, |info| Some(info.metadata.name.to_string()), true)
+            .into_iter()
+            .collect()
+    }
+
+    /// Exactly what the deterministic base leaves out of Rhai's standard
+    /// engine: the language-core package, which carries `sleep`, and the time
+    /// package. Instant arithmetic and comparison go with the time package
+    /// too; their operator names stay, overloaded for other types, except
+    /// `-=`, which no other package registers.
+    #[test]
+    fn deterministic_base_engine_leaves_out_the_language_core_and_time_packages() {
+        let standard = function_names(&Engine::new());
+        let deterministic = function_names(&build_engine(&breg_shaped_profile(), None, |_| {}));
+        assert_eq!(
+            standard
+                .difference(&deterministic)
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            [
+                "-=",
+                "elapsed",
+                "exit",
+                "get$elapsed",
+                "get$tag",
+                "get_fn_metadata_list",
+                "parse_json",
+                "set$tag",
+                "set_tag",
+                "sleep",
+                "tag",
+                "take",
+                "timestamp",
+            ]
+        );
+        assert!(
+            deterministic.is_subset(&standard),
+            "the base adds no function name: {:?}",
+            deterministic.difference(&standard).collect::<Vec<_>>()
+        );
+    }
+
+    /// The deadline is checked between operations, so a call that reads the
+    /// clock or sleeps is refused as absent by name, by function pointer, and
+    /// by method syntax alike.
+    #[test]
+    fn deterministic_base_engine_refuses_the_clock_and_sleep_by_every_call_form() {
+        let deadline = Some(Instant::now() + std::time::Duration::from_secs(5));
+        for (function, source) in [
+            ("timestamp", "fn entry(ctx) { timestamp() }"),
+            ("timestamp", r#"fn entry(ctx) { Fn("timestamp").call() }"#),
+            ("timestamp", r#"fn entry(ctx) { call(Fn("timestamp")) }"#),
+            ("sleep", "fn entry(ctx) { sleep(2); 1 }"),
+            ("sleep", "fn entry(ctx) { sleep(2.0); 1 }"),
+            (
+                "sleep",
+                "fn entry(ctx) { let seconds = 2; seconds.sleep(); 1 }",
+            ),
+            ("sleep", r#"fn entry(ctx) { Fn("sleep").call(2); 1 }"#),
+            (
+                "sleep",
+                r#"fn entry(ctx) { let seconds = 2.0; seconds.call(Fn("sleep")); 1 }"#,
+            ),
+        ] {
+            match evaluate_within(&breg_shaped_profile(), source, deadline) {
+                Err(error)
+                    if matches!(
+                        &*error,
+                        EvalAltResult::ErrorFunctionNotFound(signature, _)
+                            if signature.starts_with(&format!("{function} ("))
+                    ) => {}
+                other => panic!("expected {function} to be absent, got {other:?}: {source}"),
+            }
+        }
+    }
+
+    /// String padding with a string pads exactly as the package does
+    /// whenever that terminates, and refuses the empty padding string the
+    /// package would loop on without end, by every call form. Character
+    /// padding is the package's own.
+    #[test]
+    fn deterministic_base_engine_pads_like_the_package_and_refuses_empty_padding() {
+        for (source, expected) in [
+            (
+                r#"fn entry(ctx) { let text = "a"; text.pad(5, "xy"); text }"#,
+                "axyxy",
+            ),
+            (
+                r#"fn entry(ctx) { let text = "a"; text.pad(4, "xy"); text }"#,
+                "axyx",
+            ),
+            (
+                r#"fn entry(ctx) { let text = "é"; text.pad(3, "ü"); text }"#,
+                "éüü",
+            ),
+            (
+                r#"fn entry(ctx) { let text = "a"; pad(text, 3, "-"); text }"#,
+                "a--",
+            ),
+            (
+                r#"fn entry(ctx) { let text = "a"; text.pad(3, 'z'); text }"#,
+                "azz",
+            ),
+            (
+                r#"fn entry(ctx) { let text = "abc"; text.pad(2, ""); text }"#,
+                "abc",
+            ),
+            (
+                r#"fn entry(ctx) { let text = "abc"; text.pad(-1, ""); text }"#,
+                "abc",
+            ),
+        ] {
+            let value = evaluate_within(&breg_shaped_profile(), source, None)
+                .unwrap_or_else(|error| panic!("{source}: {error:?}"));
+            assert_eq!(
+                value.cast::<rhai::ImmutableString>().as_str(),
+                expected,
+                "{source}"
+            );
+        }
+        for source in [
+            r#"fn entry(ctx) { let text = "a"; text.pad(5, ""); text }"#,
+            r#"fn entry(ctx) { let text = "a"; pad(text, 5, ""); text }"#,
+            r#"fn entry(ctx) { let text = "a"; Fn("pad").call(text, 5, ""); text }"#,
+            r#"fn entry(ctx) { let text = "a"; text.call(Fn("pad"), 5, ""); text }"#,
+        ] {
+            let error = evaluate_within(&breg_shaped_profile(), source, None)
+                .map(|_| ())
+                .unwrap_err();
+            assert_eq!(
+                classify_failure(&error),
+                RhaiFailureCategory::Other,
+                "{source}: {error:?}"
+            );
+        }
+        let narrow = profile_with(|profile| profile.limits.string_bytes = 8);
+        for source in [
+            // More characters than the string bound, refused before padding.
+            r#"fn entry(ctx) { let text = "a"; text.pad(9, "xy"); text }"#,
+            // Within the bound in characters, over it in bytes.
+            r#"fn entry(ctx) { let text = "a"; text.pad(8, "ü"); text }"#,
+        ] {
+            let error = evaluate_within(&narrow, source, None)
+                .map(|_| ())
+                .unwrap_err();
+            assert!(
+                matches!(*error, EvalAltResult::ErrorDataTooLarge(..)),
+                "{source}: {error:?}"
+            );
+        }
+    }
+
+    /// String `replace` replaces exactly as the package does within the
+    /// string bound. Past it, each overload the package registers works out
+    /// the size of its result and refuses before building it, by every call
+    /// form; the package version builds the whole result first, up to the
+    /// bound squared, and only then meets the engine's size check.
+    #[test]
+    fn deterministic_base_engine_bounds_replace_before_it_builds_the_result() {
+        for (source, expected) in [
+            (
+                r#"fn entry(ctx) { let text = "a-b-a"; text.replace("a", "xy"); text }"#,
+                "xy-b-xy",
+            ),
+            (
+                r#"fn entry(ctx) { let text = "a-b-a"; text.replace("a", 'z'); text }"#,
+                "z-b-z",
+            ),
+            (
+                r#"fn entry(ctx) { let text = "a-b-a"; text.replace('a', "xy"); text }"#,
+                "xy-b-xy",
+            ),
+            (
+                r#"fn entry(ctx) { let text = "a-b-a"; text.replace('a', 'é'); text }"#,
+                "é-b-é",
+            ),
+            (
+                r#"fn entry(ctx) { let text = "aaa"; text.replace("aa", "b"); text }"#,
+                "ba",
+            ),
+            (
+                r#"fn entry(ctx) { let text = "ab"; text.replace("", "-"); text }"#,
+                "-a-b-",
+            ),
+            (
+                r#"fn entry(ctx) { let text = ""; text.replace("", "x"); text }"#,
+                "",
+            ),
+            (
+                r#"fn entry(ctx) { let text = "a"; replace(text, "a", "b"); text }"#,
+                "b",
+            ),
+        ] {
+            let value = evaluate_within(&breg_shaped_profile(), source, None)
+                .unwrap_or_else(|error| panic!("{source}: {error:?}"));
+            assert_eq!(
+                value.cast::<rhai::ImmutableString>().as_str(),
+                expected,
+                "{source}"
+            );
+        }
+
+        let narrow = profile_with(|profile| profile.limits.string_bytes = 8);
+        let at_bound = r#"fn entry(ctx) { let text = "aaaa"; text.replace("a", "bb"); text }"#;
+        let value = evaluate_within(&narrow, at_bound, None).unwrap();
+        assert_eq!(value.cast::<rhai::ImmutableString>().as_str(), "bbbbbbbb");
+
+        // Five one-byte characters, each replaced by two bytes: ten bytes.
+        let refused =
+            |profile: &RhaiProfile, source: &str| match evaluate_within(profile, source, None) {
+                Err(error)
+                    if matches!(
+                        &*error,
+                        EvalAltResult::ErrorDataTooLarge(what, _)
+                            if what == "Length of string that replace would build"
+                    ) => {}
+                other => {
+                    panic!("expected replace to refuse before building, got {other:?}: {source}")
+                }
+            };
+        for source in [
+            r#"fn entry(ctx) { let text = "aaaaa"; text.replace("a", "bb"); text }"#,
+            r#"fn entry(ctx) { let text = "aaaaa"; text.replace("a", 'ü'); text }"#,
+            r#"fn entry(ctx) { let text = "aaaaa"; text.replace('a', "bb"); text }"#,
+            r#"fn entry(ctx) { let text = "aaaaa"; text.replace('a', 'ü'); text }"#,
+            r#"fn entry(ctx) { let text = "aaaaa"; replace(text, "a", "bb"); text }"#,
+            r#"fn entry(ctx) { let text = "aaaaa"; Fn("replace").call(text, "a", "bb"); text }"#,
+            r#"fn entry(ctx) { let text = "aaaaa"; call(Fn("replace"), text, 'a', 'ü'); text }"#,
+            r#"fn entry(ctx) { let text = "aaaaa"; text.call(Fn("replace"), "a", 'ü'); text }"#,
+        ] {
+            refused(&narrow, source);
+        }
+        // At the BReg-shaped bound, a string replaced by itself would build
+        // 16384 squared bytes.
+        refused(
+            &breg_shaped_profile(),
+            r#"fn entry(ctx) { let text = "a"; text.pad(16384, "a"); text.replace("a", text); text }"#,
+        );
+    }
+
+    /// Every other standard package stays: arithmetic, logic, bit fields,
+    /// math, strings, iterators, function pointers, arrays, BLOBs, and maps.
+    #[test]
+    fn deterministic_base_engine_keeps_the_rest_of_the_standard_surface() {
+        let source = r#"
+            fn double(x) { x * 2 }
+            fn entry(ctx) {
+                let items = [3, 1, 2];
+                items.sort();
+                let total = 0;
+                for i in range(0, 4) { total += i; }
+                let padded = "x";
+                padded.pad(3, "-");
+                let words = "  Ab,cd ";
+                words.trim();
+                [
+                    items.map(Fn("double")),
+                    words.to_upper().split(","),
+                    #{b: 1, a: 2}.keys(),
+                    max(4, 7),
+                    0b1010.get_bit(1),
+                    sqrt(16.0).to_int(),
+                    parse_int("42"),
+                    blob(3, 0x2a).len(),
+                    total,
+                    padded,
+                ]
+            }"#;
+        let value = evaluate_within(&breg_shaped_profile(), source, None).unwrap();
+        assert_eq!(
+            format!("{value:?}"),
+            r#"[[2, 4, 6], ["AB", "CD"], ["a", "b"], 7, true, 4, 42, 3, 6, "x--"]"#
         );
     }
 

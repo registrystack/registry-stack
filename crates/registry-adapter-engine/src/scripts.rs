@@ -43,7 +43,9 @@ const MAP_ENTRIES: usize = MAXIMUM_RESPONSE_BYTES / 4;
 
 /// The engine contract the entrypoints compile and run under. The
 /// operations, depth and source ceilings are the limits every maintained
-/// runtime profile publishes; the data ceilings follow the reply cap.
+/// runtime profile publishes; the data ceilings follow the reply cap. The
+/// deterministic base has no native call that reads the clock or blocks, so
+/// the call deadline bounds every entrypoint run.
 pub const SCRIPT_PROFILE: RhaiProfile = RhaiProfile {
     limits: RhaiLimits {
         operations: 100_000,
@@ -54,7 +56,7 @@ pub const SCRIPT_PROFILE: RhaiProfile = RhaiProfile {
         array_items: ARRAY_ITEMS,
         map_entries: MAP_ENTRIES,
     },
-    base: RhaiBaseEngine::Standard,
+    base: RhaiBaseEngine::Deterministic,
     disabled_symbols: &["import", "export", "eval", "print", "debug"],
     allow_anonymous_fn: false,
     maximum_source_bytes: 65_536,
@@ -738,5 +740,38 @@ mod tests {
             Instant::now(),
         );
         assert!(matches!(expired, Err(ScriptFailure::Budget)), "{expired:?}");
+    }
+
+    /// The call deadline is checked between operations, so an entrypoint
+    /// runs on the deterministic engine: it has no native call that reads
+    /// the clock or blocks its thread, and each one fails the call at once.
+    #[test]
+    fn a_script_cannot_read_the_clock_or_block_its_thread() {
+        for call in ["timestamp()", "sleep(2)", r#"Fn("sleep").call(2.0)"#] {
+            let source = format!("fn probe(exchange) {{ {call}; 1 }}");
+            let directory = tempfile::tempdir().expect("a scratch directory");
+            std::fs::write(directory.path().join("probe.rhai"), &source)
+                .expect("the script is written");
+            let pack = pack_for_script(source.as_bytes());
+            let mut scripts = ScriptSet::default();
+            scripts
+                .add(&pack, directory.path(), "probe.rhai", "probe")
+                .expect("the script compiles");
+            let exchange = json!({"body": null, "headers": {}, "properties": {}});
+            let started = Instant::now();
+
+            let refused =
+                scripts.call(&Arc::new(BTreeMap::new()), "probe.rhai", "probe", &exchange);
+
+            assert!(
+                started.elapsed() < Duration::from_secs(1),
+                "{call} held the call for {:?}",
+                started.elapsed()
+            );
+            assert!(
+                matches!(refused, Err(ScriptFailure::Failed)),
+                "{call}: {refused:?}"
+            );
+        }
     }
 }

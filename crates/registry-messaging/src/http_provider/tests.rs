@@ -985,6 +985,48 @@ async fn a_runaway_prepare_script_exhausts_its_budget_and_nothing_is_sent() {
     assert!(received(&upstream).await.is_empty());
 }
 
+/// A prepare script runs inline on the dispatch worker and its deadline is
+/// checked between operations, so it has no native call that reads the clock
+/// or blocks the thread: each one fails the script at once.
+#[tokio::test]
+async fn a_prepare_script_cannot_read_the_clock_or_block_and_nothing_is_sent() {
+    let upstream = MockHttpUpstream::start().await;
+    for call in ["timestamp()", "sleep(2)", r#"Fn("sleep").call(2.0)"#] {
+        let prepare = JSON_PREPARE.replacen(
+            "fn prepare(message, profile) {",
+            &format!("fn prepare(message, profile) {{ {call};"),
+            1,
+        );
+        let provider = activate(
+            &settings(&base(&upstream), NONE),
+            &plain_package(false),
+            scripts(&prepare, None),
+            &no_secrets(),
+        );
+        let content = content();
+        let started = std::time::Instant::now();
+
+        let sent = provider.send(&message(&content)).await;
+
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "{call} held the send for {:?}",
+            started.elapsed()
+        );
+        assert_eq!(
+            sent.outcome,
+            permanent_code("provider.prepare-failed"),
+            "{call}"
+        );
+        assert_eq!(
+            sent.detail.failure,
+            Some(HttpFailure::Script(ScriptFailure::Failed)),
+            "{call}"
+        );
+    }
+    assert!(received(&upstream).await.is_empty());
+}
+
 // ---------------------------------------------------------------------------
 // Delivery certainty of transport failures.
 // ---------------------------------------------------------------------------
