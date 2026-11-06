@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- BREAKING: a package without its `SHA256SUMS` is refused as
+  `package-checksums-missing` (HTTP code `render.package-checksums-missing`) in
+  place of `bundle-unsealed`, so the refusal no longer reads as a document
+  without a seal. The exit code stays 5. The retired `seal` command and
+  `check --seal` flag now say that `seal` was the old name for `package`,
+  name the `registry-render package` command, and point to `signing.seals`
+  and `POST /v1/seal/{type}` for document seals.
 - Add optional PAdES document sealing. A document type names a `seal` in its
   manifest, and a `signing.seals` block in the runtime file binds each seal to
   a private key reference, a certificate chain file, a timestamp policy

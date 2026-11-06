@@ -120,6 +120,20 @@ What these runs do not show:
   template, and no run judged them.
 - None of this is an eIDAS qualification claim.
 
+## Package checksum wording (2026-11-06)
+
+Before Render signed documents, "seal" named the package checksum envelope:
+the retired `check --seal` flag and `registry-render seal` command built it,
+and the `bundle-unsealed` problem (exit 5) refused a package without its
+`SHA256SUMS`. Entries dated before 2026-11-06 use "seal", "sealed" and
+"unsealed" in that sense. That problem is now `package-checksums-missing`
+(`render.package-checksums-missing` over HTTP), still exit 5, and the retired
+command and flag name `registry-render package` and point to `signing.seals`
+for document seals. `serve::bundle_drift_after_serve_starts_is_refused_per_render`
+holds the code a worker answers when `SHA256SUMS` is removed after startup,
+and `scaffold::retired_seal_command_names_the_package_replacement` holds both
+retired messages. Elsewhere in this record, a seal is a PAdES document seal.
+
 ## Configuration conventions (2026-10-08)
 
 The bundle manifest and the label tables are read by the shared

@@ -1403,10 +1403,10 @@ fn bundle_drift_after_serve_starts_is_refused_per_render() {
         "{}",
         String::from_utf8_lossy(&unpackaged.body)
     );
+    let refusal = String::from_utf8_lossy(&unpackaged.body);
     assert!(
-        String::from_utf8_lossy(&unpackaged.body).contains("bundle-unsealed"),
-        "the worker must refuse a directory without SHA256SUMS per request: {}",
-        String::from_utf8_lossy(&unpackaged.body)
+        refusal.contains("render.package-checksums-missing") && !refusal.contains("unsealed"),
+        "the worker must refuse a directory without SHA256SUMS per request: {refusal}"
     );
 }
 

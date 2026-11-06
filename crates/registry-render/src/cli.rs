@@ -283,7 +283,7 @@ fn run_inner(cli: Cli) -> Result<i32, RenderProblem> {
             if seal {
                 return Err(RenderProblem::new(
                     crate::problem::ProblemKind::InvalidArgument,
-                    "`registry-render check --seal` is no longer accepted; run `registry-render check`, then build a new directory with `registry-render package --bundle <source> --output <directory>`",
+                    "`check --seal` was the old way to build a package: run `registry-render check`, then build a deployment package with `registry-render package --bundle <source> --output <directory>`. To seal documents with a PAdES signature, declare `signing.seals` in the runtime file and call `POST /v1/seal/{type}`.",
                 ));
             }
             let request = crate::check::CheckRequest {
@@ -330,8 +330,7 @@ fn run_inner(cli: Cli) -> Result<i32, RenderProblem> {
         Command::Seal { bundle } => Err(RenderProblem::new(
             crate::problem::ProblemKind::InvalidArgument,
             format!(
-                "`registry-render seal --bundle {}` is no longer accepted; build a new directory with `registry-render package --bundle {} --output <directory>`",
-                bundle.display(),
+                "`seal` was the old name for `package`: build a deployment package with `registry-render package --bundle {} --output <directory>`. To seal documents with a PAdES signature, declare `signing.seals` in the runtime file and call `POST /v1/seal/{{type}}`.",
                 bundle.display()
             ),
         )),
