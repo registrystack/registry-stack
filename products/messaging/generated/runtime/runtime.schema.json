@@ -19,14 +19,14 @@
           "type": "string"
         },
         "retentionDays": {
-          "description": "How many days a sealed audit file is kept.",
+          "description": "How many days a rotated audit file is kept.",
           "format": "uint32",
           "maximum": 36500,
           "minimum": 1,
           "type": "integer"
         },
         "rotateBytes": {
-          "description": "The size at which the active file is sealed and a new one begun.",
+          "description": "The size at which the active file is rotated and a new one begun.",
           "format": "uint64",
           "maximum": 4294967295,
           "minimum": 1048576,
