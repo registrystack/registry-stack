@@ -1,6 +1,8 @@
 # A test bundle for the seal route: `notice` is issued under the seal
 # `ministry` and prints its seal block only when the payload carries the
-# `signing` member; `letter` declares no seal.
+# `signing` member; `letter` declares no seal; `archive` is the same notice
+# as PDF/A-2b, whose 32767-byte string limit bounds the seal's reserved
+# signature space.
 apiVersion: id.registrystack.org/formats/render/bundle/v1alpha1
 kind: RenderBundle
 bundleVersion: 1
@@ -14,3 +16,9 @@ documents:
     version: 1
     entryFile: templates/notice.typ
     schemaFile: schemas/notice.schema.json
+  - id: archive
+    version: 1
+    entryFile: templates/notice.typ
+    schemaFile: schemas/notice.schema.json
+    pdfStandard: a-2b
+    seal: ministry

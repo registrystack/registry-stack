@@ -260,3 +260,92 @@ fn check_with_the_environment_reads_each_seal_certificate_chain() {
         )]
     );
 }
+
+#[test]
+fn check_with_the_environment_refuses_a_seal_too_large_for_a_document_pdf_standard() {
+    use registry_platform_crypto::document_signature::test_support::TestPki;
+    use registry_platform_crypto::SigningAlgorithm;
+
+    let temporary = tempfile::tempdir().unwrap();
+    let home = temporary.path().canonicalize().unwrap();
+    let bundle = sealed_bundle(&home);
+    let manifest = bundle.join("manifest.yaml");
+    let sealed = std::fs::read_to_string(&manifest).unwrap();
+    let with_standard = |standard: &str| {
+        std::fs::write(
+            &manifest,
+            sealed.replacen(
+                "    seal: ministry\n",
+                &format!("    seal: ministry\n    pdfStandard: {standard}\n"),
+                1,
+            ),
+        )
+        .unwrap();
+    };
+    // A B-T seal whose chain makes it reserve about 39 KB: more than a
+    // PDF/A-2 string may hold, less than PDF/A-1 or PDF/A-4 allow.
+    let chain = home.join("chain.pem");
+    let pki = TestPki::generate().unwrap();
+    let seal = pki
+        .issue_seal_with(SigningAlgorithm::Es256, |params| {
+            oversized(params, 6 * 1024)
+        })
+        .unwrap();
+    std::fs::write(&chain, seal.chain_pem()).unwrap();
+
+    with_standard("a-2b");
+    let (exit, report) = check_chain(&home, &bundle, &chain);
+    assert_eq!(exit, Some(1), "{report}");
+    assert_eq!(
+        codes(&report),
+        [(
+            "error".to_owned(),
+            "render.bundle.seal-space-exceeds-standard".to_owned()
+        )],
+        "{report}"
+    );
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(diagnostic["path"], "/documents/0/seal", "{report}");
+    assert!(
+        diagnostic["source"]["file"]
+            .as_str()
+            .unwrap()
+            .ends_with("manifest.yaml"),
+        "{report}"
+    );
+    assert!(diagnostic["source"]["line"].is_number(), "{report}");
+    let message = diagnostic["message"].as_str().unwrap();
+    assert!(message.contains("sealed by ministry"), "{message}");
+    assert!(
+        message.contains("PDF/A-2 and PDF/A-3 limit a string to 32767 bytes"),
+        "{message}"
+    );
+    assert!(
+        !message.contains("Registry Stack Test"),
+        "value-free: {message}"
+    );
+
+    // Without --environment the chain is not read, so its size is unknown.
+    let runtime = runtime(
+        &home,
+        &format!(
+            "signing:\n  seals:\n{}",
+            SEAL.replace("/etc/render/seal/chain.pem", &chain.display().to_string())
+        ),
+    );
+    let (exit, report) = check(&bundle, &runtime);
+    assert_eq!(exit, Some(0), "{report}");
+    assert!(codes(&report).is_empty(), "{report}");
+
+    // The same seal fits PDF/A-1, PDF/A-4 and plain PDF.
+    for standard in ["a-1b", "a-4"] {
+        with_standard(standard);
+        let (exit, report) = check_chain(&home, &bundle, &chain);
+        assert_eq!(exit, Some(0), "{standard}: {report}");
+        assert!(codes(&report).is_empty(), "{standard}: {report}");
+    }
+    std::fs::write(&manifest, &sealed).unwrap();
+    let (exit, report) = check_chain(&home, &bundle, &chain);
+    assert_eq!(exit, Some(0), "{report}");
+    assert!(codes(&report).is_empty(), "{report}");
+}

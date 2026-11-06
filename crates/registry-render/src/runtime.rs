@@ -626,6 +626,10 @@ pub struct RuntimeCheck {
     pub diagnostics: Vec<Diagnostic>,
     /// The file could not be read at all, as opposed to read and refused.
     pub unavailable: bool,
+    /// The signature space each seal reserves, by seal id, for every chain
+    /// the check read and could size: only with `substitute`, which reads
+    /// the chain files.
+    pub seal_capacities: BTreeMap<String, usize>,
 }
 
 /// Check the runtime file at the absolute `path` as `registry-render serve`
@@ -696,6 +700,7 @@ fn read_runtime(
     let check = runtime_loader().check_offline::<RenderRuntime>(path, substitute, stand_in_for);
     let mut diagnostics = check.diagnostics.clone();
     let mut unavailable = check.unavailable;
+    let mut seal_capacities = BTreeMap::new();
     if let Some(loaded) = &check.loaded {
         let mut audit_refused = false;
         for finding in findings(&loaded.config) {
@@ -743,7 +748,11 @@ fn read_runtime(
                 if check.defers(&pointer) {
                     continue;
                 }
-                for finding in crate::seal::check_chain(id.as_str(), seal, now) {
+                let chain = crate::seal::check_chain(id.as_str(), seal, now);
+                if let Some(capacity) = chain.contents_capacity {
+                    seal_capacities.insert(id.as_str().to_owned(), capacity);
+                }
+                for finding in chain.findings {
                     let mut diagnostic = check.error_at(
                         RUNTIME_KIND,
                         finding.code,
@@ -794,6 +803,7 @@ fn read_runtime(
         RuntimeCheck {
             diagnostics,
             unavailable,
+            seal_capacities,
         },
     )
 }

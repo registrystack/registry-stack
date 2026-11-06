@@ -33,6 +33,7 @@ use time::OffsetDateTime;
 
 use crate::envelope::SigningPayload;
 use crate::hash::sha256_hex;
+use crate::manifest::{Manifest, MANIFEST_KIND};
 use crate::pdf_signature::{PdfSignatureError, MAX_CONTENTS_CAPACITY};
 use crate::problem::{ProblemKind, RenderProblem};
 use crate::runtime::{RenderRuntime, SealRuntime, RUNTIME_KIND};
@@ -218,6 +219,14 @@ pub struct ChainFinding {
     pub action: &'static str,
 }
 
+/// What [`check_chain`] found about one seal's chain, and the signature
+/// space the seal reserves when the chain could be sized.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChainCheck {
+    pub findings: Vec<ChainFinding>,
+    pub contents_capacity: Option<usize>,
+}
+
 fn chain_error(code: &'static str, message: String, action: &'static str) -> ChainFinding {
     ChainFinding {
         severity: Severity::Error,
@@ -301,18 +310,27 @@ fn reserved_space(
 /// starts and the seal is unavailable) or within
 /// [`EXPIRY_WARNING_DAYS`] of expiring. Whether the key matches the
 /// certificate is only known to serve, which reads the key.
-pub fn check_chain(id: &str, seal: &SealRuntime, now: OffsetDateTime) -> Vec<ChainFinding> {
+pub fn check_chain(id: &str, seal: &SealRuntime, now: OffsetDateTime) -> ChainCheck {
     let chain = match read_chain(id, seal) {
         Ok(chain) => chain,
-        Err(finding) => return vec![finding],
+        Err(finding) => {
+            return ChainCheck {
+                findings: vec![finding],
+                contents_capacity: None,
+            }
+        }
     };
     let mut findings = Vec::new();
     if !chain.may_sign() {
         findings.push(usage_finding(id));
     }
-    if let Err(finding) = reserved_space(id, &chain, seal) {
-        findings.push(finding);
-    }
+    let contents_capacity = match reserved_space(id, &chain, seal) {
+        Ok(capacity) => Some(capacity),
+        Err(finding) => {
+            findings.push(finding);
+            None
+        }
+    };
     let replace = "Replace the seal certificate and its chain before serving seals; plain \
                    rendering is unaffected.";
     if now < chain.not_before() {
@@ -343,7 +361,109 @@ pub fn check_chain(id: &str, seal: &SealRuntime, now: OffsetDateTime) -> Vec<Cha
             replace,
         ));
     }
-    findings
+    ChainCheck {
+        findings,
+        contents_capacity,
+    }
+}
+
+/// The code of a document type whose PDF standard cannot hold the
+/// signature space its seal reserves.
+pub const UNSEALABLE_CODE: &str = "render.bundle.seal-space-exceeds-standard";
+
+/// A document type whose `pdfStandard` cannot hold the signature space its
+/// seal reserves ([`crate::pdf_signature::sealable`]). Sealing it would
+/// write a file that is not conformant, so it is refused before any render;
+/// the signature is never truncated to fit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnsealableDocument {
+    /// The document type's position in the manifest's `documents`.
+    pub index: usize,
+    pub document_id: String,
+    pub seal_id: String,
+    pub contents_capacity: usize,
+    pub reason: &'static str,
+}
+
+impl UnsealableDocument {
+    /// The manifest member the finding is placed at: the document type's
+    /// `seal`.
+    pub fn pointer(&self) -> String {
+        format!("/documents/{}/seal", self.index)
+    }
+
+    pub fn message(&self) -> String {
+        format!(
+            "document type {} is sealed by {}, which reserves {} bytes for its signature: {}",
+            self.document_id, self.seal_id, self.contents_capacity, self.reason
+        )
+    }
+
+    pub fn action(&self) -> &'static str {
+        "List only the seal certificate and the issuers a validator needs in the seal's chain, \
+         or choose a pdfStandard whose string limit holds the reserved space."
+    }
+}
+
+/// Every document type in `manifest` whose seal reserves more signature
+/// space than its `pdfStandard` allows. `capacity` answers a seal's
+/// reserved space, or `None` when it is not known, as when `check` did not
+/// read the chain; such a seal adds no finding.
+pub fn unsealable_documents(
+    manifest: &Manifest,
+    capacity: impl Fn(&str) -> Option<usize>,
+) -> Vec<UnsealableDocument> {
+    let mut found = Vec::new();
+    for (index, document) in manifest.documents.iter().enumerate() {
+        let Some(seal_id) = &document.seal else {
+            continue;
+        };
+        let Some(contents_capacity) = capacity(seal_id) else {
+            continue;
+        };
+        if let Err(reason) =
+            crate::pdf_signature::sealable(document.pdf_standard, contents_capacity)
+        {
+            found.push(UnsealableDocument {
+                index,
+                document_id: document.id.clone(),
+                seal_id: seal_id.clone(),
+                contents_capacity,
+                reason,
+            });
+        }
+    }
+    found
+}
+
+/// Refuse to serve a package with a document type whose PDF standard cannot
+/// hold the signature space its loaded seal reserves, each finding placed at
+/// that document type's `seal` member.
+pub fn refuse_unsealable(manifest: &Manifest, seals: &Seals) -> Result<(), RenderProblem> {
+    let found = unsealable_documents(manifest, |id| {
+        seals.get(id).map(|seal| seal.contents_capacity())
+    });
+    if found.is_empty() {
+        return Ok(());
+    }
+    let diagnostics = found
+        .iter()
+        .map(|document| {
+            let mut diagnostic = Diagnostic::error(
+                UNSEALABLE_CODE,
+                document.pointer(),
+                document.message(),
+                document.action(),
+            );
+            diagnostic.artifact = Some(MANIFEST_KIND.to_owned());
+            diagnostic
+        })
+        .collect();
+    Err(RenderProblem::new(
+        ProblemKind::RuntimeInvalid,
+        "a seal reserves more signature space than a document type's PDF standard allows",
+    )
+    .with_diagnostics(diagnostics))
 }
 
 impl Seal {
@@ -865,5 +985,51 @@ mod tests {
             assert_eq!(reason.reason(), name);
             assert_eq!(reason.problem("ministry").kind, kind);
         }
+    }
+
+    #[test]
+    fn a_document_type_is_unsealable_when_its_standard_cannot_hold_the_reserved_space() {
+        let manifest = crate::manifest::Manifest::parse(
+            concat!(
+                "apiVersion: id.registrystack.org/formats/render/bundle/v1alpha1\n",
+                "kind: RenderBundle\n",
+                "bundleVersion: 1\n",
+                "documents:\n",
+                "  - {id: plain, version: 1, entryFile: templates/plain.typ, seal: ministry}\n",
+                "  - {id: archive2, version: 1, entryFile: templates/archive2.typ, pdfStandard: a-2b, seal: ministry}\n",
+                "  - {id: archive1, version: 1, entryFile: templates/archive1.typ, pdfStandard: a-1b, seal: ministry}\n",
+                "  - {id: other, version: 1, entryFile: templates/other.typ, pdfStandard: a-2b, seal: regional}\n",
+                "  - {id: unsealed, version: 1, entryFile: templates/unsealed.typ, pdfStandard: a-2b}\n",
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        let reserving =
+            |capacity: usize| move |seal: &str| (seal == "ministry").then_some(capacity);
+
+        assert!(unsealable_documents(&manifest, reserving(32_767)).is_empty());
+
+        let found = unsealable_documents(&manifest, reserving(40_000));
+        assert_eq!(found.len(), 1, "{found:?}");
+        let archive2 = &found[0];
+        assert_eq!(archive2.pointer(), "/documents/1/seal");
+        assert_eq!(archive2.document_id, "archive2");
+        assert_eq!(archive2.seal_id, "ministry");
+        assert!(
+            archive2.message().contains("40000 bytes"),
+            "{}",
+            archive2.message()
+        );
+        assert!(
+            archive2
+                .message()
+                .contains("PDF/A-2 and PDF/A-3 limit a string to 32767 bytes"),
+            "{}",
+            archive2.message()
+        );
+
+        let found = unsealable_documents(&manifest, reserving(70_000));
+        let pointers: Vec<_> = found.iter().map(UnsealableDocument::pointer).collect();
+        assert_eq!(pointers, ["/documents/1/seal", "/documents/2/seal"]);
     }
 }
