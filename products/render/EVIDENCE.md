@@ -6,6 +6,78 @@ All hashes below were produced on macOS (aarch64) with the workspace lockfile
 in this tree; the two-OS CI golden job re-proves them on Linux for every
 change.
 
+## Document seals: external validators (2026-11-06)
+
+Three external validators checked sealed files that `serve` answered on this
+branch. The ignored test `write_served_seal_samples` in
+`crates/registry-render/tests/serve_seal.rs` writes them: it serves the
+`tests/fixtures/sealed-notice` bundle with an ES256 seal key and an RFC 3161
+test authority, each under its own test root generated at test time, and
+writes each sealed file, its `documentSha256` and both roots.
+
+```sh
+REGISTRY_SEAL_SAMPLE_DIR=<existing directory> \
+  cargo test -p registry-render --test serve_seal write_served_seal_samples -- --ignored
+```
+
+| Sample | Document type | Level | PDF standard |
+|---|---|---|---|
+| `notice-b-t.pdf` | `notice` | B-T | none |
+| `notice-b-b.pdf` | `notice` | B-B | none |
+| `archive-1b-b-t.pdf` | `archive-1b` | B-T | PDF/A-1b |
+| `archive-b-t.pdf` | `archive` | B-T | PDF/A-2b |
+| `archive-4-b-t.pdf` | `archive-4` | B-T | PDF/A-4 |
+| `accessible-b-t.pdf` | `accessible` | B-T | PDF/UA-1 |
+
+**pyHanko 0.38.1**, through `products/render/scripts/validate-seal.py`
+(`uv run --offline --script`, both roots as `--trust-root`, the answer's
+`documentSha256` as `--document-sha256`, no fetching, soft-fail revocation):
+all six files returned `ok: true`. Each B-T file passed twelve checks:
+`one-signature`, `intact`, `valid`, `trusted`, `not-revoked`,
+`covers-entire-file`, `certification-docmdp-p2`, `docmdp-ok`,
+`subfilter-cades-detached`, `no-signing-time-attribute`,
+`signature-timestamp-valid` and `first-revision-sha256`. The B-B file passed
+the same checks less `signature-timestamp-valid`. A copy of `notice-b-t.pdf`
+with one byte flipped at offset 4096 returned `ok: false`, failing `intact`,
+`trusted` and `first-revision-sha256`.
+
+**veraPDF 1.30.3**, from
+`verapdf/cli@sha256:d74b7026c18a0f171e73c153b617fe6520e1511feb24ca98a348b2bb897669fb`
+run with `--platform linux/amd64 --network none`: PASS for each sealed file
+and for its first revision (the sealed file cut at the rendered length), eight
+runs in all: `archive-1b` against `1b`, `archive` against `2b`, `archive-4`
+against `4` and `accessible` against `ua1`.
+
+**EU DSS 6.5.1**, the `dss-pades-pdfbox` library with its default validation
+policy, both roots as trusted certificates, revocation checking for untrusted
+chains off, run under a macOS sandbox profile that denies network access:
+
+- Format `PAdES-BASELINE-T` for the five B-T files and `PAdES-BASELINE-B` for
+  `notice-b-b.pdf`.
+- Indication `INDETERMINATE`, sub-indication
+  `CERTIFICATE_CHAIN_GENERAL_FAILURE`, for every file.
+- No constraint failed in format checking (`BBB_FC`), identification of the
+  signing certificate (`BBB_ICS`), cryptographic verification (`BBB_CV`) or
+  signature acceptance validation (`BBB_SAV`).
+- The constraints that failed (`ADEST_ROBVPIIC`, `ARCH_IRTVBBA` on the B-T
+  files only, `ARCH_LTVV`, `BBB_XCV_IRDPFC`, `BBB_XCV_SUB`, `LTV_ABSV`,
+  `QUAL_CERT_TRUSTED_LIST_REACHED`) and warned (`BBB_XCV_AIA_PRES`,
+  `BBB_XCV_REVOC_PRES`, `BSV_IXCVRC`, `QUAL_IS_ADES`) ask for revocation data,
+  an authority information access extension or an EU trusted list. The test
+  roots have none of these, and Render embeds no revocation data (no B-LT or
+  B-LTA).
+
+What these runs do not show:
+
+- No run used a production certificate chain or a public timestamp authority,
+  so no DSS run reached a passed indication, and `trusted` in pyHanko means
+  only that the test roots were supplied.
+- No ETSI conformance checker or plugtest was run.
+- No run covers a seal under PDF/A-1a, A-2a, A-2u, A-3a, A-3b, A-3u, A-4e or
+  A-4f; `check` and `serve` warn about one
+  (`render.bundle.seal-standard-unverified`).
+- None of this is an eIDAS qualification claim.
+
 ## Configuration conventions (2026-10-08)
 
 The bundle manifest and the label tables are read by the shared
