@@ -220,6 +220,11 @@
       "uri": "https://id.registrystack.org/problems/registry-adapter/",
       "classification": "planned-resolution",
       "reason": "The Adapter problem type base is reserved, not yet published: ProblemCode::ALL carries no titles or descriptions and its type URIs keep dotted codes, while the facade answers with profile-authored problems and emits no type URI under this base. The change that gives the inventory catalog metadata adds its problemSources entry and deletes this exclusion."
+    },
+    {
+      "glob": "crates/registry-render/src/problem.rs",
+      "classification": "released-external-vocabulary",
+      "reason": "Render publishes its problem types under its own released base, https://render.registrystack.org/problems, with its own code vocabulary, so they are not Registry Stack identifiers and have no problemSources entry under id.registrystack.org. Moving the released base would break clients that match it."
     }
   ],
   "schemaSources": [

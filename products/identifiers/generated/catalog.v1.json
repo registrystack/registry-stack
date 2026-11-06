@@ -5244,11 +5244,11 @@
       "description": "Evidence OID4VCI delivery runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-evidence-oid4vci/src/schema.rs",
-        "sha256": "0cc005a1e55672ce3a11ad5fd0c4e714155ec6e4b003328bd025a88d29d455b3"
+        "sha256": "9e58fd6d09d319ddeffec54795a92fc910a0a9ccb361734ea8f7ce698c043540"
       },
       "artifact": {
         "path": "products/evidence/generated/oid4vci-runtime/oid4vci-runtime.schema.json",
-        "sha256": "701ee38be07cd80d8fd73a393abfb243511d3accd7a34124893c39781d883191",
+        "sha256": "5bbc1b0c73e9eccde2ecd25339dbabed83e250b670d509058ca31cd8e96566a9",
         "mediaType": "application/schema+json"
       }
     },
@@ -5604,11 +5604,11 @@
       "description": "Registry Render bundle manifest, label table, and runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-render/src/schema.rs",
-        "sha256": "187b3c8a7cb457962a2cadc80432af5c81124641ca356f539f634a5c2403a309"
+        "sha256": "0d3a1c6595151809eb84c86739d65768ab7e08a3718e83ed57f84241ca81a711"
       },
       "artifact": {
         "path": "products/render/schemas/bundle.schema.json",
-        "sha256": "48c416e7a409cde355bb7e7a1a1bd8eac6248e65867fd76b55b777d4b6e335d2",
+        "sha256": "cdc74748bb3e149abc012ed32d5f3518867e70465a51a88628df99903bd9df5f",
         "mediaType": "application/schema+json"
       }
     },
@@ -5622,7 +5622,7 @@
       "description": "Registry Render bundle manifest, label table, and runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-render/src/schema.rs",
-        "sha256": "187b3c8a7cb457962a2cadc80432af5c81124641ca356f539f634a5c2403a309"
+        "sha256": "0d3a1c6595151809eb84c86739d65768ab7e08a3718e83ed57f84241ca81a711"
       },
       "artifact": {
         "path": "products/render/schemas/labels.schema.json",
@@ -5640,11 +5640,11 @@
       "description": "Registry Render bundle manifest, label table, and runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-render/src/schema.rs",
-        "sha256": "187b3c8a7cb457962a2cadc80432af5c81124641ca356f539f634a5c2403a309"
+        "sha256": "0d3a1c6595151809eb84c86739d65768ab7e08a3718e83ed57f84241ca81a711"
       },
       "artifact": {
         "path": "products/render/schemas/runtime.schema.json",
-        "sha256": "e853c774b697a8debb56537eb3a14c4e8c32f9fa8771eba1cd05eb397505b3c6",
+        "sha256": "a673a209804c2caa389114ca90bfc2d970677964f84f5cfa183bad85fe560f1d",
         "mediaType": "application/schema+json"
       }
     },
