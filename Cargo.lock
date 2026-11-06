@@ -7973,6 +7973,7 @@ dependencies = [
  "typst-assets",
  "typst-pdf",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]

@@ -85,9 +85,9 @@ What sealing does not do:
 - It embeds no revocation data and no document security store, so there is no
   B-LT or B-LTA level.
 - It does not support external signatures yet: the key is a local JWK
-  reached through a secret reference. Local key files suit development and
-  pilots only: a render worker that gained code execution runs as the
-  serving user and can read one.
+  the seal's `local-jwk` signer reads through the file secret provider.
+  Local key files suit development and pilots only: a render worker that
+  gained code execution runs as the serving user and can read one.
 - It does not pin the timestamp authority's identity or decide trust. The
   authority is reached over TLS with the host's roots, or with the CA bundle
   the seal names in their place, and validators decide whether the seal
@@ -103,7 +103,7 @@ What sealing does not do:
 One crate (`crates/registry-render`), one binary (`registry-render`),
 following the
 house product anatomy: `init`/`check`/`validate`/`package`/`compile`/`serve`/
-`healthcheck`; a strict runtime YAML
+`healthcheck`, plus `keygen` for seal keys; a strict runtime YAML
 (`id.registrystack.org/formats/render/runtime/v1alpha1`, read by the shared
 runtime configuration loader) for deployment-local bindings; the
 `registry-platform-*` primitives (config loader and secrets, httpsec layers and

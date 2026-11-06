@@ -730,7 +730,7 @@ mod tests {
             }},
             "audit": {"path": "/var/lib/render/audit/render.jsonl"},
             "signing": {"seals": {"ministry": {
-                "privateKeyRef": "secret:file/seal.jwk",
+                "signer": {"type": "local-jwk", "privateKeyRef": "secret:file/seal.jwk"},
                 "certificateChainFile": "/etc/render/seal/chain.pem",
                 "timestampAuthority": {"url": "https://tsa.example.test/tsr"},
                 "allowedClients": ["records-service"]
@@ -896,11 +896,24 @@ mod tests {
             ),
             (
                 &base,
-                &format!("{seal}/privateKeyRef"),
+                &format!("{seal}/signer/privateKeyRef"),
                 Some(json!("/etc/seal.jwk")),
                 false,
             ),
-            (&base, &format!("{seal}/privateKeyRef"), None, false),
+            (&base, &format!("{seal}/signer/privateKeyRef"), None, false),
+            (&base, &format!("{seal}/signer"), None, false),
+            (
+                &base,
+                &format!("{seal}/signer/type"),
+                Some(json!("pkcs11")),
+                false,
+            ),
+            (
+                &base,
+                &format!("{seal}/privateKeyRef"),
+                Some(json!("secret:file/seal.jwk")),
+                false,
+            ),
             (
                 &base,
                 &format!("{seal}/keyFile"),
@@ -992,10 +1005,10 @@ mod tests {
             (
                 with(
                     &base,
-                    "/signing/seals/ministry/privateKeyRef",
+                    "/signing/seals/ministry/signer/privateKeyRef",
                     Some(json!("secret:env/SEAL_KEY")),
                 ),
-                "render.runtime.undeclared-secret-provider",
+                "render.runtime.seal-key-requires-file-provider",
             ),
             (key_mode, "render.runtime.signing-requires-oidc"),
         ] {

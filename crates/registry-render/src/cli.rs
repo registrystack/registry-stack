@@ -1,5 +1,5 @@
-//! The `registry-render` CLI: init, check, validate, package, compile,
-//! serve, healthcheck. Exit codes come from the problem model.
+//! The `registry-render` CLI: init, check, validate, package, keygen,
+//! compile, serve, healthcheck. Exit codes come from the problem model.
 
 use std::collections::BTreeMap;
 use std::io::Write as _;
@@ -119,6 +119,40 @@ pub enum Command {
         #[arg(long, value_name = "TEXT")]
         revision: Option<String>,
     },
+    /// Generate a seal key and the certificate request for its seal
+    /// certificate.
+    ///
+    /// Writes the private JWK owner-only to --key, the file a seal's
+    /// `signer.privateKeyRef` names, and a PKCS #10 request to --csr for the
+    /// certificate authority. Neither file may exist, and no key material is
+    /// printed. With --from-pem, converts an existing unencrypted PKCS #8 key
+    /// instead of generating one.
+    Keygen {
+        /// New private JWK file, created with mode 0600.
+        #[arg(long, value_name = "FILE")]
+        key: PathBuf,
+        /// New PEM certificate request file.
+        #[arg(long, value_name = "FILE")]
+        csr: PathBuf,
+        /// The seal's name, the request's commonName.
+        #[arg(long, value_name = "TEXT")]
+        common_name: String,
+        /// The institution, the request's organizationName.
+        #[arg(long, value_name = "TEXT")]
+        organization: Option<String>,
+        /// The ISO 3166 two-letter country code, the request's countryName.
+        #[arg(long, value_name = "CODE")]
+        country: Option<String>,
+        /// Seal algorithm. Default: es256 for a generated key; for --from-pem,
+        /// the one the key's curve fixes, or rs256 for an RSA key.
+        #[arg(long, value_enum)]
+        algorithm: Option<SealKeyAlgorithm>,
+        /// Unencrypted PKCS #8 PEM private key to convert. Encrypted PKCS #8,
+        /// SEC 1, PKCS #1 and PKCS #12 files are refused with the `openssl`
+        /// command that converts them.
+        #[arg(long, value_name = "FILE")]
+        from_pem: Option<PathBuf>,
+    },
     /// Retired spelling. Use `registry-render package`.
     #[command(hide = true)]
     Seal {
@@ -215,6 +249,32 @@ fn parse_absolute_directory(value: &str) -> Result<PathBuf, String> {
         Ok(path)
     } else {
         Err("--require-audit-under needs an absolute directory path".to_owned())
+    }
+}
+
+/// The algorithm a `keygen` seal key signs with, one of the four a seal
+/// accepts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum SealKeyAlgorithm {
+    /// ECDSA over P-256 with SHA-256.
+    Es256,
+    /// ECDSA over P-384 with SHA-384.
+    Es384,
+    /// RSASSA-PKCS1-v1_5 with SHA-256, over a 2048-bit modulus when generated.
+    Rs256,
+    /// RSASSA-PKCS1-v1_5 with SHA-384, over a 2048-bit modulus when generated.
+    Rs384,
+}
+
+impl SealKeyAlgorithm {
+    fn signing_algorithm(self) -> registry_platform_crypto::SigningAlgorithm {
+        use registry_platform_crypto::SigningAlgorithm;
+        match self {
+            Self::Es256 => SigningAlgorithm::Es256,
+            Self::Es384 => SigningAlgorithm::Es384,
+            Self::Rs256 => SigningAlgorithm::Rs256,
+            Self::Rs384 => SigningAlgorithm::Rs384,
+        }
     }
 }
 
@@ -361,6 +421,28 @@ fn run_inner(cli: Cli) -> Result<i32, RenderProblem> {
             );
             Ok(0)
         }
+        Command::Keygen {
+            key,
+            csr,
+            common_name,
+            organization,
+            country,
+            algorithm,
+            from_pem,
+        } => crate::keygen::run(
+            &crate::keygen::KeygenRequest {
+                key: &key,
+                csr: &csr,
+                subject: registry_platform_crypto::CertificateRequestSubject {
+                    common_name,
+                    organization,
+                    country,
+                },
+                algorithm: algorithm.map(SealKeyAlgorithm::signing_algorithm),
+                from_pem: from_pem.as_deref(),
+            },
+            &mut std::io::stdout().lock(),
+        ),
         Command::Seal { bundle } => Err(RenderProblem::new(
             crate::problem::ProblemKind::InvalidArgument,
             format!(

@@ -83,8 +83,17 @@ rules are not in the tables.
   `tsa-certificate-not-named-by-token`. Seal one test document through each authority before you
   rely on it for B-T.
 - `certificateChainFile` is an absolute path with no `.` or `..` segment. The file is PEM, the
-  seal certificate first. `privateKeyRef` is a secret reference to one ES256, ES384, RS256, or
-  RS384 private JWK; EdDSA is refused.
+  seal certificate first.
+- `signer` names how the seal key signs. `type: local-jwk` is the only type: `privateKeyRef` is a
+  file-provider secret reference (`secret:file/<name>`) to one ES256, ES384, RS256, or RS384 private
+  JWK, and EdDSA is refused. An environment reference is refused as
+  `render.runtime.seal-key-requires-file-provider`.
+- `registry-render keygen --key <file> --csr <file> --common-name <name>` writes a seal key in that
+  form, owner-only, and a PKCS #10 certificate request for it. `--organization` and `--country`
+  add to the request's subject, and `--algorithm` picks `es256` (the default), `es384`, `rs256`, or
+  `rs384`. `--from-pem <file>` converts an unencrypted PKCS #8 key instead of generating one;
+  encrypted PKCS #8, SEC 1, PKCS #1, and PKCS #12 keys are refused with the `openssl` command that
+  converts each. Keygen never overwrites a file and never prints the key.
 - `allowedClients` is a list of at least one named client. `unrestricted` and any item containing
   `*` are refused. When `authentication.oidc.allowedClients` lists clients, each seal client must be in it.
 - `trust: test-only` is the only value. It sets `signing.testOnly` in the template payload, and
@@ -115,6 +124,7 @@ Serve and `check` report these as runtime problems at the position of the key.
 | `render.runtime.seal-clients-not-listed` | `allowedClients` is missing, empty, or not a list. |
 | `render.runtime.seal-client-wildcard` | A client is `unrestricted` or contains a wildcard. |
 | `render.runtime.seal-client-not-admitted` | A seal client is not in `authentication.oidc.allowedClients`. |
+| `render.runtime.seal-key-requires-file-provider` | `signer.privateKeyRef` names the environment provider; a seal key is read through the file provider only. |
 | `render.runtime.seal-not-bound` | A document type names a seal `signing.seals` does not bind (error). |
 | `render.runtime.seal-unused` | A runtime seal is named by no document type (warning). |
 | `render.runtime.seals-not-served` | Document types name seals and the runtime has no `signing` block: they render unsealed (warning). |
@@ -124,7 +134,7 @@ Serve and `check` report these as runtime problems at the position of the key.
 | Code | Severity | Meaning |
 |---|---|---|
 | `render.runtime.seal-chain-unreadable` | error | The chain file cannot be read. |
-| `render.runtime.seal-chain-invalid` | error | The file is not a usable certificate chain: its certificates do not link in order, or its first certificate, taken as the seal certificate, is a CA certificate. |
+| `render.runtime.seal-chain-invalid` | error | The file is not a usable certificate chain: its certificates do not link in order, or its first certificate, taken as the seal certificate, is a CA certificate (`basicConstraints` `CA:TRUE`), which validators refuse as a document's signer. Seal with a leaf issued with `CA:FALSE`; for a test seal, a test root of your own issues it. |
 | `render.runtime.seal-certificate-usage` | error | The seal certificate has neither the digitalSignature nor the nonRepudiation key usage. |
 | `render.runtime.seal-chain-too-large` | error | The chain exceeds the signature space a seal may reserve. |
 | `render.runtime.seal-certificate-expired` | warning | The certificate is expired; the seal is unavailable. |

@@ -17,7 +17,8 @@ use registry_platform_audit::{
 use registry_platform_config::{
     ConfigBlockError, ConfigBlockErrorKind, ListenerBind, ListenerNetworkExposure,
     LoadedRuntimeConfig, OidcClientsConfig, OidcIssuerConfig, PackageConfig, RemovedKey,
-    RuntimeConfigLoader, RuntimeEnvelope, RuntimeFileCheck, SecretProvidersConfig,
+    RuntimeConfigLoader, RuntimeEnvelope, RuntimeFileCheck, SecretProvider, SecretProvidersConfig,
+    SecretReference,
 };
 use registry_platform_yaml::{
     escape_pointer_segment, shape_union, BoundedU32, BoundedU64, Diagnostic, ExternalId, LocalId,
@@ -395,21 +396,17 @@ pub struct SigningRuntime {
     pub seals: BTreeMap<LocalId, SealRuntime>,
 }
 
-/// One seal: the key material, the certificate chain, the timestamp policy,
-/// and the clients allowed to use it.
+/// One seal: the signer, the certificate chain, the timestamp policy, and
+/// the clients allowed to use it.
 #[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct SealRuntime {
-    /// Secret reference to the seal's private key as a JSON Web Key, under a
-    /// declared provider. A reference, never a path to a key file. Local key
-    /// files suit development and pilots; the serving process alone reads
-    /// the key.
-    #[cfg_attr(
-        feature = "schema",
-        schemars(with = "registry_platform_config::SecretReference")
-    )]
-    pub private_key_ref: String,
+    /// Binds the seal to the private-key transport that produces its
+    /// signature. Selects the signer transport for this seal: `local-jwk`
+    /// resolves a file-provider secret directly. Local key files suit
+    /// development and pilots; the serving process alone reads the key.
+    pub signer: SealSignerRuntime,
     /// Absolute path of the PEM certificate chain file, the seal's own
     /// certificate first, then each issuer. It is absolute like Render's
     /// other runtime paths, so a runtime file names deployment locations,
@@ -460,6 +457,45 @@ impl SealRuntime {
     #[must_use]
     pub fn is_test_only(&self) -> bool {
         self.trust == Some(SealTrust::TestOnly)
+    }
+}
+
+/// The private-key transport a seal signs through. The `type` member names
+/// the variant.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(
+    remote = "Self",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+#[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
+pub enum SealSignerRuntime {
+    /// Resolves a file-provider secret directly.
+    LocalJwk {
+        /// Names the file-provider secret holding the local signing private
+        /// key material, read only when `signer.type` is `local-jwk`; the
+        /// value is a reference, and configuration never carries the key
+        /// bytes themselves. The secret is one private JSON Web Key, the
+        /// form `registry-render keygen` writes.
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "registry_platform_config::SecretReference")
+        )]
+        private_key_ref: String,
+    },
+}
+
+registry_platform_yaml::tagged_union!(SealSignerRuntime);
+
+impl SealSignerRuntime {
+    /// The secret reference the signer reads its key from.
+    #[must_use]
+    pub fn private_key_ref(&self) -> &str {
+        match self {
+            Self::LocalJwk { private_key_ref } => private_key_ref,
+        }
     }
 }
 
@@ -1047,10 +1083,26 @@ fn signing_findings(runtime: &RenderRuntime, signing: &SigningRuntime) -> Vec<Fi
     for (id, seal) in &signing.seals {
         let id = id.as_str();
         let base = seal_pointer(id);
-        if let Err(error) = runtime.secret_providers.check_reference(
-            &format!("signing.seals.{id}.privateKeyRef"),
-            &seal.private_key_ref,
-        ) {
+        let key_ref = seal.signer.private_key_ref();
+        let names_environment = SecretReference::parse(key_ref)
+            .is_ok_and(|reference| reference.provider() == SecretProvider::Environment);
+        if names_environment {
+            // A process environment is readable by more of the host than a
+            // mode-0600 file, and a JWK is no shape for one.
+            findings.push(finding(
+                "render.runtime.seal-key-requires-file-provider",
+                format!("{base}/signer/privateKeyRef"),
+                format!(
+                    "signing.seals.{id}.signer.privateKeyRef names the environment provider; a \
+                     seal key is read only through the file provider, as `secret:file/<name>`"
+                ),
+                "Write the private JWK to a file under secretProviders.file.root (`registry-render \
+                 keygen` writes one, owner-only) and reference it as `secret:file/<name>`.",
+            ));
+        } else if let Err(error) = runtime
+            .secret_providers
+            .check_reference(&format!("signing.seals.{id}.signer.privateKeyRef"), key_ref)
+        {
             findings.push(block_finding(&error));
         }
         let ca_bundle_ref = seal
@@ -2295,7 +2347,7 @@ mod tests {
         );
     }
 
-    const SEAL: &str = "    ministry:\n      privateKeyRef: secret:file/seal.jwk\n      certificateChainFile: /etc/render/seal/chain.pem\n      timestampAuthority:\n        url: https://tsa.example.test/tsr\n      allowedClients: [records-service]\n";
+    const SEAL: &str = "    ministry:\n      signer:\n        type: local-jwk\n        privateKeyRef: secret:file/seal.jwk\n      certificateChainFile: /etc/render/seal/chain.pem\n      timestampAuthority:\n        url: https://tsa.example.test/tsr\n      allowedClients: [records-service]\n";
 
     /// OIDC authentication admitting `portal` and `records-service`, then a
     /// `signing` block holding `seals` (the indented body under `seals:`).
@@ -2327,7 +2379,12 @@ mod tests {
         let (_dir, home) = home();
         let runtime = load_text(&home, &signing_text(&home, SEAL)).expect("signing loads");
         let seal = runtime.seal("ministry").expect("the seal is bound");
-        assert_eq!(seal.private_key_ref, "secret:file/seal.jwk");
+        assert_eq!(
+            seal.signer,
+            SealSignerRuntime::LocalJwk {
+                private_key_ref: "secret:file/seal.jwk".to_owned()
+            }
+        );
         assert_eq!(
             seal.certificate_chain_file,
             PathBuf::from("/etc/render/seal/chain.pem")
@@ -2347,6 +2404,81 @@ mod tests {
         );
         let runtime = load_text(&home, &text).expect("a test-only seal loads");
         assert!(runtime.seal("ministry").unwrap().is_test_only());
+    }
+
+    #[test]
+    fn a_seal_key_must_name_the_file_provider_even_with_environment_declared() {
+        let (_dir, home) = home();
+        let text = signing_text(
+            &home,
+            &SEAL.replace("secret:file/seal.jwk", "secret:env/SEAL_KEY"),
+        )
+        .replace(
+            "secretProviders:\n",
+            "secretProviders:\n  environment: {}\n",
+        );
+        let problem = refused(&home, &text);
+        assert_eq!(
+            codes(&problem),
+            [(
+                "render.runtime.seal-key-requires-file-provider",
+                "/signing/seals/ministry/signer/privateKeyRef"
+            )]
+        );
+        let diagnostic = &problem.diagnostics[0];
+        assert!(
+            diagnostic.message.contains("secret:file/"),
+            "{}",
+            diagnostic.message
+        );
+        assert!(
+            !diagnostic.message.contains("SEAL_KEY"),
+            "{}",
+            diagnostic.message
+        );
+        let action = &diagnostic.suggested_action;
+        assert!(action.contains("secretProviders.file.root"), "{action}");
+        assert!(action.contains("registry-render keygen"), "{action}");
+    }
+
+    #[test]
+    fn a_seal_names_its_key_only_through_a_local_jwk_signer() {
+        let (_dir, home) = home();
+        let signer =
+            "      signer:\n        type: local-jwk\n        privateKeyRef: secret:file/seal.jwk\n";
+        let cases = [
+            // The key reference sits inside `signer`, never beside it.
+            (
+                SEAL.replace(signer, "      privateKeyRef: secret:file/seal.jwk\n"),
+                "/signing/seals/ministry",
+            ),
+            (
+                SEAL.replace("type: local-jwk", "type: pkcs11"),
+                "/signing/seals/ministry/signer/type",
+            ),
+            (
+                SEAL.replace("        type: local-jwk\n", ""),
+                "/signing/seals/ministry/signer",
+            ),
+            (
+                SEAL.replace(
+                    signer,
+                    &format!("{signer}        certificateRef: secret:file/seal.pem\n"),
+                ),
+                "/signing/seals/ministry/signer",
+            ),
+        ];
+        for (seals, pointer) in cases {
+            let problem = refused(&home, &signing_text(&home, &seals));
+            assert!(
+                problem
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.path.starts_with(pointer)),
+                "{seals}: {:?}",
+                codes(&problem)
+            );
+        }
     }
 
     #[test]
@@ -2374,13 +2506,18 @@ mod tests {
         let cases: Vec<(String, &str, &str)> = vec![
             (
                 SEAL.replace("secret:file/seal.jwk", "secret:env/SEAL_KEY"),
-                "render.runtime.undeclared-secret-provider",
-                "/signing/seals/ministry/privateKeyRef",
+                "render.runtime.seal-key-requires-file-provider",
+                "/signing/seals/ministry/signer/privateKeyRef",
+            ),
+            (
+                SEAL.replace("secret:file/seal.jwk", "secret:file/../seal.jwk"),
+                "render.runtime.invalid-secret-reference",
+                "/signing/seals/ministry/signer/privateKeyRef",
             ),
             (
                 SEAL.replace("secret:file/seal.jwk", "/etc/render/seal.jwk"),
                 "render.runtime.invalid-secret-reference",
-                "/signing/seals/ministry/privateKeyRef",
+                "/signing/seals/ministry/signer/privateKeyRef",
             ),
             (
                 SEAL.replace(ts_url, &format!("{ts_url}        caBundleRef: secret:env/TSA_CA\n")),
@@ -2673,11 +2810,15 @@ mod tests {
     }
 
     #[test]
-    fn the_secret_reference_uses_the_declared_provider() {
+    fn the_timestamp_ca_bundle_reference_uses_the_declared_provider() {
         let (_dir, home) = home();
+        let ts_url = "        url: https://tsa.example.test/tsr\n";
         let text = signing_text(
             &home,
-            &SEAL.replace("secret:file/seal.jwk", "secret:env/SEAL_KEY"),
+            &SEAL.replace(
+                ts_url,
+                &format!("{ts_url}        caBundleRef: secret:env/TSA_CA\n"),
+            ),
         )
         .replace(
             "secretProviders:\n",

@@ -154,19 +154,30 @@ file binds each id to key material:
 signing:
   seals:
     ministry:
-      privateKeyRef: secret:file/seal.jwk
+      signer:
+        type: local-jwk
+        privateKeyRef: secret:file/seal.jwk
       certificateChainFile: /etc/registry-render/seal/chain.pem
       timestampAuthority:
         url: https://tsa.example.org/tsr
       allowedClients: [records-service]
 ```
 
-- `privateKeyRef` is a secret reference to one ES256, ES384, RS256 or RS384
-  private JWK. `certificateChainFile` is an absolute PEM path, the seal
-  certificate first, then each issuer. A render worker that gained code
-  execution runs as the serving user and can read a `secret:file` key; keep
-  a production seal key off such a host until HSM or managed-key custody
-  lands.
+- `signer` names how the key signs. `type: local-jwk` reads
+  `privateKeyRef`, a file-provider secret reference (`secret:file/<name>`)
+  to one ES256, ES384, RS256 or RS384 private JWK; an environment reference
+  is refused. `certificateChainFile` is an absolute PEM path, the seal
+  certificate first, then each issuer, and the seal certificate is a leaf
+  (`CA:FALSE`): a CA certificate is refused. A render worker that gained
+  code execution runs as the serving user and can read a `secret:file` key;
+  keep a production seal key off such a host until HSM or managed-key
+  custody lands.
+- `registry-render keygen --key <file> --csr <file> --common-name <name>`
+  writes a seal key in that form, owner-only, and a PKCS #10 certificate
+  request for it; `--from-pem` converts an unencrypted PKCS #8 key instead.
+  It never overwrites a file and never prints the key. The operate guide's
+  "Make a test seal in ten minutes" has a test root issue the seal
+  certificate from that request.
 - `timestampAuthority` (an RFC 3161 authority; `https`, or `http` on loopback
   only; `attemptTimeoutMilliseconds` 1000 to 60000, default 10000; an
   optional `caBundleRef` naming a PEM CA bundle that verifies the authority
@@ -208,7 +219,7 @@ signing:
 
 The boundary, the residual risks and what sealing does not claim are in
 [CONCEPT.md](CONCEPT.md#sealing) and [SECURITY-MATRIX.md](SECURITY-MATRIX.md)
-(rows 24-29). Render makes no eIDAS qualification claim.
+(rows 24-30). Render makes no eIDAS qualification claim.
 
 ## Linux worker execution on Apple Silicon
 

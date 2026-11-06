@@ -402,7 +402,7 @@
     },
     "SealRuntime": {
       "additionalProperties": false,
-      "description": "One seal: the key material, the certificate chain, the timestamp policy,\nand the clients allowed to use it.",
+      "description": "One seal: the signer, the certificate chain, the timestamp policy, and\nthe clients allowed to use it.",
       "oneOf": [
         {
           "not": {
@@ -453,9 +453,9 @@
           "pattern": "^/(?:[^/]+/)*[^/]+$",
           "type": "string"
         },
-        "privateKeyRef": {
-          "$ref": "#/$defs/SecretReference",
-          "description": "Secret reference to the seal's private key as a JSON Web Key, under a\ndeclared provider. A reference, never a path to a key file. Local key\nfiles suit development and pilots; the serving process alone reads\nthe key."
+        "signer": {
+          "$ref": "#/$defs/SealSignerRuntime",
+          "description": "Binds the seal to the private-key transport that produces its\nsignature. Selects the signer transport for this seal: `local-jwk`\nresolves a file-provider secret directly. Local key files suit\ndevelopment and pilots; the serving process alone reads the key."
         },
         "timestampAuthority": {
           "$ref": "#/$defs/TimestampAuthorityRuntime",
@@ -471,11 +471,35 @@
         }
       },
       "required": [
-        "privateKeyRef",
+        "signer",
         "certificateChainFile",
         "allowedClients"
       ],
       "type": "object"
+    },
+    "SealSignerRuntime": {
+      "description": "The private-key transport a seal signs through. The `type` member names\nthe variant.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Resolves a file-provider secret directly.",
+          "properties": {
+            "privateKeyRef": {
+              "$ref": "#/$defs/SecretReference",
+              "description": "Names the file-provider secret holding the local signing private\nkey material, read only when `signer.type` is `local-jwk`; the\nvalue is a reference, and configuration never carries the key\nbytes themselves. The secret is one private JSON Web Key, the\nform `registry-render keygen` writes."
+            },
+            "type": {
+              "const": "local-jwk",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "privateKeyRef"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "SealTrust": {
       "description": "How a seal is trusted.",

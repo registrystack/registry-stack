@@ -6,7 +6,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const SEAL: &str = "    ministry:\n      privateKeyRef: secret:file/seal.jwk\n      certificateChainFile: /etc/render/seal/chain.pem\n      timestampAuthority:\n        url: https://tsa.example.test/tsr\n      allowedClients: [records-service]\n";
+const SEAL: &str = "    ministry:\n      signer:\n        type: local-jwk\n        privateKeyRef: secret:file/seal.jwk\n      certificateChainFile: /etc/render/seal/chain.pem\n      timestampAuthority:\n        url: https://tsa.example.test/tsr\n      allowedClients: [records-service]\n";
 
 fn registry_render() -> Command {
     Command::new(env!("CARGO_BIN_EXE_registry-render"))
@@ -306,6 +306,16 @@ fn check_with_the_environment_reads_each_seal_certificate_chain() {
         message.contains("taken as the seal certificate"),
         "{message}"
     );
+    // Why: a CA certificate certifies other certificates, not documents.
+    assert!(message.contains("CA:TRUE"), "{message}");
+    assert!(message.contains("validators refuse"), "{message}");
+    // The fix: a leaf for the seal key, issued by a (test) root.
+    let action = report["diagnostics"][0]["suggestedAction"]
+        .as_str()
+        .unwrap();
+    assert!(action.contains("CA:FALSE"), "{action}");
+    assert!(action.contains("registry-render keygen"), "{action}");
+    assert!(action.contains("test root"), "{action}");
 
     let (exit, report) = check_chain(&home, &bundle, &home.join("absent.pem"));
     assert_eq!(exit, Some(1), "{report}");

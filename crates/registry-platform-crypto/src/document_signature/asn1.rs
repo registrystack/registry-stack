@@ -125,6 +125,8 @@ pub(super) mod oid {
     pub(crate) const ORGANIZATION_NAME: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.5.4.10");
     /// id-at-commonName, RFC 5280 appendix A.1.
     pub(crate) const COMMON_NAME: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.5.4.3");
+    /// id-at-countryName, RFC 5280 appendix A.1.
+    pub(crate) const COUNTRY_NAME: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.5.4.6");
 }
 
 /// `ECDSA-Sig-Value`, RFC 5480 section 2.2 (and RFC 3279 section 2.2.3).

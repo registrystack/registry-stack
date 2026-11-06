@@ -375,7 +375,7 @@ fn deployment(seal: Option<SealSpec>) -> Fixture {
                     .to_owned(),
             };
             format!(
-                "signing:\n  seals:\n    ministry:\n      privateKeyRef: secret:file/seal.jwk\n      certificateChainFile: {}\n{timestamp}      allowedClients: [{SEAL_CLIENT}]\n      trust: test-only\n",
+                "signing:\n  seals:\n    ministry:\n      signer:\n        type: local-jwk\n        privateKeyRef: secret:file/seal.jwk\n      certificateChainFile: {}\n{timestamp}      allowedClients: [{SEAL_CLIENT}]\n      trust: test-only\n",
                 home.join("chain.pem").display()
             )
         }
@@ -1529,7 +1529,7 @@ fn a_key_that_does_not_match_its_certificate_refuses_startup_by_position() {
         "{stderr}"
     );
     assert!(
-        stderr.contains("/signing/seals/ministry/privateKeyRef"),
+        stderr.contains("/signing/seals/ministry/signer/privateKeyRef"),
         "{stderr}"
     );
     assert!(
@@ -2245,6 +2245,167 @@ fn a_test_only_seal_says_so_in_every_answer_and_a_production_seal_adds_nothing()
         assert!(record.get("testOnly").is_none(), "{record}");
     }
     assert_eq!(production.startup_warnings, 0);
+}
+
+// ----- The documented test seal -----
+
+/// The operate page. Its test-seal steps are run as written by
+/// [`the_documented_test_seal_seals_with_a_keygen_key_and_a_test_root_leaf`].
+const OPERATE_PAGE: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../docs/site/src/content/docs/operate/registry-render.mdx"
+);
+const TEST_SEAL_HEADING: &str = "### Make a test seal in ten minutes";
+
+/// The body of the one `language` code block in the page section under
+/// `heading`.
+fn documented_block(page: &str, heading: &str, language: &str) -> String {
+    let (_, section) = page
+        .split_once(&format!("\n{heading}\n"))
+        .unwrap_or_else(|| panic!("the operate page has no `{heading}` section"));
+    let end = ["\n## ", "\n### "]
+        .iter()
+        .filter_map(|next| section.find(next))
+        .min()
+        .unwrap_or(section.len());
+    let fence = format!("\n```{language}\n");
+    let mut blocks = section[..end].split(fence.as_str()).skip(1);
+    let block = blocks
+        .next()
+        .unwrap_or_else(|| panic!("`{heading}` holds no {language} block"));
+    assert!(
+        blocks.next().is_none(),
+        "`{heading}` holds more than one {language} block"
+    );
+    let (body, _) = block
+        .split_once("\n```\n")
+        .unwrap_or_else(|| panic!("the {language} block under `{heading}` is not closed"));
+    format!("{body}\n")
+}
+
+/// A directory holding a `registry-render` that runs this build's binary.
+/// macOS removes `DYLD_*` variables when `/bin/sh` starts, and a test build
+/// finds its libraries through the one cargo sets, so the script sets each
+/// again before it runs the binary. Elsewhere it only runs the binary.
+fn registry_render_on_path(home: &Path) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let quoted = |value: &str| format!("'{}'", value.replace('\'', r"'\''"));
+    let mut script = String::from("#!/bin/sh\n");
+    for (name, value) in std::env::vars().filter(|(name, _)| name.starts_with("DYLD_")) {
+        script.push_str(&format!("{name}={}\nexport {name}\n", quoted(&value)));
+    }
+    script.push_str(&format!(
+        "exec {} \"$@\"\n",
+        quoted(env!("CARGO_BIN_EXE_registry-render"))
+    ));
+    let bin = home.join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    std::fs::write(bin.join("registry-render"), script).unwrap();
+    std::fs::set_permissions(
+        bin.join("registry-render"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    bin
+}
+
+#[test]
+fn the_documented_test_seal_seals_with_a_keygen_key_and_a_test_root_leaf() {
+    let page = std::fs::read_to_string(OPERATE_PAGE).expect("the operate page");
+    let commands = documented_block(&page, TEST_SEAL_HEADING, "sh");
+    let seal = documented_block(&page, TEST_SEAL_HEADING, "yaml");
+    let fixture = deployment(None);
+    let binary = Path::new(env!("CARGO_BIN_EXE_registry-render"));
+
+    // The page's commands, in an empty directory, with this build's
+    // `registry-render` first on the PATH.
+    let steps = fixture.home.join("test-seal");
+    std::fs::create_dir(&steps).unwrap();
+    let path = std::env::join_paths(
+        std::iter::once(registry_render_on_path(&fixture.home)).chain(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        )),
+    )
+    .unwrap();
+    let ran = Command::new("sh")
+        .args(["-eu", "-c", &commands])
+        .current_dir(&steps)
+        .env("PATH", path)
+        .output()
+        .expect("run the documented commands");
+    assert!(
+        ran.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&ran.stdout),
+        String::from_utf8_lossy(&ran.stderr)
+    );
+
+    // The page's runtime: the file provider rooted at `secrets`, which then
+    // also holds the deployment's JWKS, and the page's seal binding with the
+    // chain's absolute path.
+    let secrets = steps.join("secrets");
+    write_secret(
+        &secrets.join("jwks.json"),
+        &std::fs::read_to_string(fixture.home.join("jwks.json")).unwrap(),
+    );
+    let text = std::fs::read_to_string(&fixture.runtime_path).unwrap();
+    let rooted = text.replacen(
+        &format!("    root: {}\n", fixture.home.display()),
+        &format!("    root: {}\n", secrets.display()),
+        1,
+    );
+    assert_ne!(rooted, text);
+    let placeholder = "/absolute/path/to/chain.pem";
+    assert!(seal.contains(placeholder), "{seal}");
+    let chain = steps.join("chain.pem").display().to_string();
+    std::fs::write(
+        &fixture.runtime_path,
+        rooted + &seal.replace(placeholder, &chain),
+    )
+    .unwrap();
+
+    let checked = Command::new(binary)
+        .args(["check", "--bundle"])
+        .arg(fixture.home.join("package"))
+        .arg("--runtime-config")
+        .arg(&fixture.runtime_path)
+        .args(["--environment", "--format", "json"])
+        .output()
+        .unwrap();
+    let report: serde_json::Value =
+        serde_json::from_slice(&checked.stdout).unwrap_or_else(|error| {
+            panic!(
+                "{error}: {}{}",
+                String::from_utf8_lossy(&checked.stdout),
+                String::from_utf8_lossy(&checked.stderr)
+            )
+        });
+    assert_eq!(checked.status.code(), Some(0), "{report}");
+    assert_eq!(report["diagnostics"], serde_json::json!([]), "{report}");
+
+    let server = start_server(&fixture);
+    let body = seal_json(&fixture, &server);
+    assert_eq!(body["seal"]["level"], "B-B");
+    assert_eq!(body["seal"]["testOnly"], true, "{body}");
+    let issued = std::fs::read_to_string(steps.join("seal.pem")).unwrap();
+    let leaf = base64_decode(
+        &issued
+            .lines()
+            .filter(|line| !line.starts_with("-----"))
+            .collect::<String>(),
+    );
+    assert_eq!(body["seal"]["certificateDigest"], sha256_digest(&leaf));
+    let pdf = base64_decode(body["pdfBase64"].as_str().unwrap());
+    let signed = read_signed_file(&pdf, first_revision(&fixture).pdf.len());
+    let parts = [
+        signed.signed_parts[0].as_slice(),
+        signed.signed_parts[1].as_slice(),
+    ];
+    let verified = verify_detached_signature(&signed.cms_der, &parts).expect("the CMS verifies");
+    assert_eq!(
+        format!("sha256:{}", verified.signer_fingerprint),
+        sha256_digest(&leaf)
+    );
 }
 
 #[test]
