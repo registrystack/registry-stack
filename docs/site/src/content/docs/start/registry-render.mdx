@@ -30,19 +30,19 @@ and `registry-render package` turns it into a package whose digest names its exa
 
 ## What runs
 
-`registry-render compile` renders one document at a terminal, for authoring and for printing at
-a counter without a service. `registry-render serve` is a small HTTP service behind a static API
-key that renders from one package in supervised worker processes. For every call it appends an
-audit entry that carries hashes and versions, never the document's data. It keeps no database and
-makes no outbound call while rendering; a timestamped seal calls the timestamp authority you
-configure.
+`registry-render compile` renders one document at a terminal, for authoring and for printing at a
+counter without a service. `registry-render serve` is a small HTTP service that admits callers by
+OIDC access token, or by a legacy API key, and renders from one package in supervised worker
+processes. For every call it appends an audit entry that carries hashes and versions, never the
+document's data. It keeps no database and makes no outbound call while rendering; a timestamped
+seal calls the timestamp authority you configure.
 
 ## What Render refuses
 
 Render refuses data its schema rejects, a request without an issuance time, a package whose files
-changed, a wrong API key, and a public listening address. It never reads the host's clock, fonts,
-or network. [How Registry Render works](../../explanation/render-determinism/) explains each
-boundary.
+changed, a caller whose token or API key it does not accept, and a public listening address. It
+never reads the host's clock, fonts, or network.
+[How Registry Render works](../../explanation/render-determinism/) explains each boundary.
 
 ## When it is not the right product
 

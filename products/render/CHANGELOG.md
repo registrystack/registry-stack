@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- BREAKING: the runtime file's `auth` block is now `authentication`, the
+  name other Registry Stack runtime files use; its `oidc` and `apiKeyRef`
+  members are unchanged. A file that still says `auth` is refused with
+  `config.removed-key` at `/auth`, naming the new key. Rename the key in
+  each runtime file before upgrading.
 - BREAKING: a package without its `SHA256SUMS` is refused as
   `package-checksums-missing` (HTTP code `render.package-checksums-missing`) in
   place of `bundle-unsealed`, so the refusal no longer reads as a document

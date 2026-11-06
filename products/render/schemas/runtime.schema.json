@@ -82,7 +82,7 @@
       },
       "type": "object"
     },
-    "AuthRuntime": {
+    "AuthenticationRuntime": {
       "additionalProperties": false,
       "oneOf": [
         {
@@ -427,7 +427,7 @@
       ],
       "properties": {
         "allowedClients": {
-          "description": "The OIDC clients allowed to seal with this seal: a list of at least\none client, each also admitted by `auth.oidc.allowedClients`. There is\nno `unrestricted` form and no wildcard: a seal issues documents in the\ninstitution's name, so every seal-capable client is named. Keep these\nclients separate from any citizen-facing client.",
+          "description": "The OIDC clients allowed to seal with this seal: a list of at least\none client, each also admitted by `authentication.oidc.allowedClients`. There is\nno `unrestricted` form and no wildcard: a seal issues documents in the\ninstitution's name, so every seal-capable client is named. Keep these\nclients separate from any citizen-facing client.",
           "items": {
             "$ref": "#/$defs/ExternalId",
             "not": {
@@ -622,8 +622,8 @@
     "audit": {
       "$ref": "#/$defs/AuditRuntime"
     },
-    "auth": {
-      "$ref": "#/$defs/AuthRuntime"
+    "authentication": {
+      "$ref": "#/$defs/AuthenticationRuntime"
     },
     "kind": {
       "const": "RenderRuntimeConfig",
@@ -664,7 +664,7 @@
     "kind",
     "listener",
     "package",
-    "auth",
+    "authentication",
     "audit"
   ],
   "title": "Registry Render runtime configuration",

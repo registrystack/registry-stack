@@ -98,7 +98,7 @@ package:
 secretProviders:
   file:
     root: /run/secrets/registry-render
-auth:
+authentication:
   apiKeyRef: secret:file/render-api-key
 limits:
   renderTimeoutSeconds: 20
@@ -268,7 +268,7 @@ RS384 JWK. Name the seal in the document type's `manifest.yaml` entry with `seal
 bind it in the runtime file:
 
 ```yaml
-auth:
+authentication:
   oidc:
     issuer: https://issuer.example.invalid
     audience: urn:example:render
@@ -284,7 +284,7 @@ signing:
       allowedClients: [records-service]
 ```
 
-- `allowedClients` is required and names each client allowed to seal. When `auth.oidc.allowedClients`
+- `allowedClients` is required and names each client allowed to seal. When `authentication.oidc.allowedClients`
   lists clients, each seal client must also be in that list, or Render refuses the file. Keep these
   separate from any citizen-facing client. `unrestricted` and wildcards are refused.
 - Callers need the `render:seal` scope. `render:render` does not imply it.

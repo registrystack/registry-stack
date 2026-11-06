@@ -59,6 +59,10 @@ const RENDER_REMOVED_KEYS: &[RemovedKey] = &[
         replacement: "declare package.root as the absolute path of the package directory",
     },
     RemovedKey {
+        path: "auth",
+        replacement: "Rename `auth` to `authentication`; its members are unchanged.",
+    },
+    RemovedKey {
         path: "listener.shutdownGraceSeconds",
         replacement: "Declare `listener.shutdownGraceMilliseconds` instead, the value times 1000.",
     },
@@ -105,7 +109,7 @@ pub struct RenderRuntime {
     /// no secret references.
     #[serde(default)]
     pub secret_providers: SecretProvidersConfig,
-    pub auth: AuthRuntime,
+    pub authentication: AuthenticationRuntime,
     #[serde(default)]
     pub limits: LimitsRuntime,
     pub audit: AuditRuntime,
@@ -233,7 +237,7 @@ fn default_shutdown_grace(
 #[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct AuthRuntime {
+pub struct AuthenticationRuntime {
     /// Secret reference to the caller API key, under a declared provider.
     /// Omit when OIDC authentication is configured.
     #[cfg_attr(
@@ -428,7 +432,7 @@ pub struct SealRuntime {
     #[cfg_attr(feature = "schema", schemars(with = "WithoutTimestamp"))]
     pub without_timestamp: Option<WithoutTimestamp>,
     /// The OIDC clients allowed to seal with this seal: a list of at least
-    /// one client, each also admitted by `auth.oidc.allowedClients`. There is
+    /// one client, each also admitted by `authentication.oidc.allowedClients`. There is
     /// no `unrestricted` form and no wildcard: a seal issues documents in the
     /// institution's name, so every seal-capable client is named. Keep these
     /// clients separate from any citizen-facing client.
@@ -919,7 +923,7 @@ fn findings(runtime: &RenderRuntime) -> Vec<Finding> {
             .filter_map(|result| result.as_ref().err())
             .map(block_finding),
     );
-    let needs_secrets = runtime.auth.oidc.as_ref().is_none_or(|oidc| {
+    let needs_secrets = runtime.authentication.oidc.as_ref().is_none_or(|oidc| {
         matches!(
             oidc.provider.jwks_source,
             registry_platform_config::JwksSource::Static { .. }
@@ -934,17 +938,17 @@ fn findings(runtime: &RenderRuntime) -> Vec<Finding> {
             findings.push(block_finding(&error));
         }
     }
-    match (&runtime.auth.oidc, &runtime.auth.api_key_ref) {
+    match (&runtime.authentication.oidc, &runtime.authentication.api_key_ref) {
         (Some(oidc), None) => {
-            findings.extend([oidc.provider.check("auth.oidc", true), oidc.clients.check("auth.oidc")].iter().filter_map(|result| result.as_ref().err()).map(block_finding));
+            findings.extend([oidc.provider.check("authentication.oidc", true), oidc.clients.check("authentication.oidc")].iter().filter_map(|result| result.as_ref().err()).map(block_finding));
             if let registry_platform_config::JwksSource::Static { document_ref } = &oidc.provider.jwks_source {
-                if let Err(error) = runtime.secret_providers.check_reference("auth.oidc.jwksSource.documentRef", document_ref) { findings.push(block_finding(&error)); }
+                if let Err(error) = runtime.secret_providers.check_reference("authentication.oidc.jwksSource.documentRef", document_ref) { findings.push(block_finding(&error)); }
             }
         }
         (None, Some(api_key_ref)) => {
-            if let Err(error) = runtime.secret_providers.check_reference("auth.apiKeyRef", api_key_ref) { findings.push(block_finding(&error)); }
+            if let Err(error) = runtime.secret_providers.check_reference("authentication.apiKeyRef", api_key_ref) { findings.push(block_finding(&error)); }
         }
-        _ => findings.push(Finding { code: "render.runtime.authentication", pointer: "/auth".to_owned(), message: "auth must configure exactly one of oidc or apiKeyRef".to_owned(), action: "Configure auth.oidc for the Render resource, or one legacy apiKeyRef; remove the other mode.".to_owned() }),
+        _ => findings.push(Finding { code: "render.runtime.authentication", pointer: "/authentication".to_owned(), message: "authentication must configure exactly one of oidc or apiKeyRef".to_owned(), action: "Configure authentication.oidc for the Render resource, or one legacy apiKeyRef; remove the other mode.".to_owned() }),
     }
     if let Err(error) = runtime.audit.settings() {
         findings.push(audit_finding(&error));
@@ -971,16 +975,16 @@ fn signing_findings(runtime: &RenderRuntime, signing: &SigningRuntime) -> Vec<Fi
         message,
         action: action.to_owned(),
     };
-    // With the legacy key, `auth` already carries its own refusal when it is
+    // With the legacy key, `authentication` already carries its own refusal when it is
     // neither mode; only the key mode makes sealing impossible.
-    if runtime.auth.oidc.is_none() && runtime.auth.api_key_ref.is_some() {
+    if runtime.authentication.oidc.is_none() && runtime.authentication.api_key_ref.is_some() {
         findings.push(finding(
             "render.runtime.signing-requires-oidc",
             "/signing".to_owned(),
             "signing needs OIDC authentication: the legacy API key cannot say which client is \
              sealing, so it can never be allowed to seal"
                 .to_owned(),
-            "Configure auth.oidc and name the sealing clients in each seal's allowedClients, or \
+            "Configure authentication.oidc and name the sealing clients in each seal's allowedClients, or \
              remove the signing block.",
         ));
     }
@@ -992,7 +996,7 @@ fn signing_findings(runtime: &RenderRuntime, signing: &SigningRuntime) -> Vec<Fi
             "Declare at least one seal, or remove the signing block to leave sealing off.",
         ));
     }
-    let admitted: Option<BTreeSet<&str>> = runtime.auth.oidc.as_ref().and_then(|oidc| {
+    let admitted: Option<BTreeSet<&str>> = runtime.authentication.oidc.as_ref().and_then(|oidc| {
         // An empty list is how the token verifier holds `unrestricted`.
         let clients = &oidc.clients.allowed_clients;
         (!clients.is_empty()).then(|| clients.iter().map(String::as_str).collect())
@@ -1090,10 +1094,10 @@ fn signing_findings(runtime: &RenderRuntime, signing: &SigningRuntime) -> Vec<Fi
                     pointer,
                     format!(
                         "signing.seals.{id}.allowedClients names a client that \
-                         auth.oidc.allowedClients does not admit, so its token never reaches the \
+                         authentication.oidc.allowedClients does not admit, so its token never reaches the \
                          seal"
                     ),
-                    "Add the client to auth.oidc.allowedClients, or remove it from the seal.",
+                    "Add the client to authentication.oidc.allowedClients, or remove it from the seal.",
                 ));
             }
         }
@@ -1461,7 +1465,7 @@ mod tests {
 
     fn minimal(home: &Path) -> String {
         format!(
-            "{HEAD}listener:\n  bind: 127.0.0.1:8080\npackage:\n  root: /srv/render/package\nsecretProviders:\n  file:\n    root: {secrets}\nauth:\n  apiKeyRef: secret:file/api.key\naudit:\n  path: /var/lib/render/audit/render.jsonl\n",
+            "{HEAD}listener:\n  bind: 127.0.0.1:8080\npackage:\n  root: /srv/render/package\nsecretProviders:\n  file:\n    root: {secrets}\nauthentication:\n  apiKeyRef: secret:file/api.key\naudit:\n  path: /var/lib/render/audit/render.jsonl\n",
             secrets = home.join("secrets").display(),
         )
     }
@@ -1679,6 +1683,11 @@ mod tests {
                 "/audit/retainDays",
                 "audit.retentionDays",
             ),
+            (
+                minimal(&home).replace("authentication:\n", "auth:\n"),
+                "/auth",
+                "Rename `auth` to `authentication`",
+            ),
         ] {
             let problem = refused(&home, &text);
             let removed = problem
@@ -1752,7 +1761,7 @@ mod tests {
             codes(&problem),
             [(
                 "render.runtime.undeclared-secret-provider",
-                "/auth/apiKeyRef"
+                "/authentication/apiKeyRef"
             )]
         );
         assert!(
@@ -1783,7 +1792,7 @@ mod tests {
                 ("render.runtime.no-secret-provider", "/secretProviders"),
                 (
                     "render.runtime.undeclared-secret-provider",
-                    "/auth/apiKeyRef"
+                    "/authentication/apiKeyRef"
                 ),
             ]
         );
@@ -1809,7 +1818,7 @@ mod tests {
             "apiKeyRef: ${RENDER_API_KEY_REF:-secret:file/api.key}",
         );
         let problem = refused(&home, &text);
-        assert_eq!(problem.diagnostics[0].path, "/auth/apiKeyRef");
+        assert_eq!(problem.diagnostics[0].path, "/authentication/apiKeyRef");
     }
 
     #[test]
@@ -1824,7 +1833,11 @@ mod tests {
         assert_eq!(
             resolve_secret(
                 &runtime,
-                runtime.auth.api_key_ref.as_deref().expect("key mode")
+                runtime
+                    .authentication
+                    .api_key_ref
+                    .as_deref()
+                    .expect("key mode")
             )
             .expect("declared root"),
             b"from-the-declared-root"
@@ -1959,7 +1972,10 @@ mod tests {
             load_text(&home, &text).is_ok(),
             "OIDC runtime loads without caller API key"
         );
-        let both = text.replace("auth:\n", "auth:\n  apiKeyRef: secret:file/api.key\n");
+        let both = text.replace(
+            "authentication:\n",
+            "authentication:\n  apiKeyRef: secret:file/api.key\n",
+        );
         assert!(
             load_text(&home, &both).is_err(),
             "no ambiguous authentication fallback"
@@ -1984,7 +2000,11 @@ mod tests {
                 text.clone()
             };
             assert!(
-                load_text(&home, &base.replace("auth:\n", &format!("auth:\n{extra}"))).is_err(),
+                load_text(
+                    &home,
+                    &base.replace("authentication:\n", &format!("authentication:\n{extra}"))
+                )
+                .is_err(),
                 "explicit null: {extra}"
             );
         }
@@ -2149,7 +2169,7 @@ mod tests {
                 ("render.runtime.relative-path", "/package/root"),
                 (
                     "render.runtime.undeclared-secret-provider",
-                    "/auth/apiKeyRef"
+                    "/authentication/apiKeyRef"
                 ),
                 ("render.runtime.missing-audit-path", "/audit"),
             ]
@@ -2560,7 +2580,7 @@ mod tests {
             .find(|d| d.code == "render.runtime.signing-requires-oidc")
             .map(|d| d.suggested_action.as_str())
             .unwrap();
-        assert!(action.contains("auth.oidc"), "{action}");
+        assert!(action.contains("authentication.oidc"), "{action}");
     }
 
     #[test]

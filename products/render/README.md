@@ -103,11 +103,11 @@ exits 101):
 
 ## Authenticate the serving adapter
 
-Choose exactly one non-null authentication mode. For OIDC, replace `auth` in
+Choose exactly one non-null authentication mode. For OIDC, replace `authentication` in
 `examples/runtime.yaml` with:
 
 ```yaml
-auth:
+authentication:
   oidc:
     issuer: https://issuer.example.invalid
     audience: urn:example:render
@@ -121,7 +121,7 @@ may contain the configured resource alongside other audiences. Unrelated signed
 task-grant claims confer no Render authority. OIDC discovery and JWKS fetches
 belong to the serving adapter; deployments may instead configure a URI or static
 JWKS through the shared issuer block. Omitted unused secret providers are allowed;
-any provider declared in the runtime is validated. Legacy `auth.apiKeyRef` remains
+any provider declared in the runtime is validated. Legacy `authentication.apiKeyRef` remains
 available, with the existing secret-provider and entropy checks. Do not configure
 both modes or use null as an absent member.
 
@@ -173,7 +173,7 @@ signing:
   seal-stops-validating-when-certificate-expires` makes it B-B and states the
   consequence. Declare exactly one.
 - `allowedClients` is required, lists named OIDC clients, and refuses
-  `unrestricted` and wildcards. Signing needs `auth.oidc`; the legacy API key
+  `unrestricted` and wildcards. Signing needs `authentication.oidc`; the legacy API key
   never seals. `trust: test-only` marks a test certificate so the template can
   print the seal as a test seal (the `init` scaffold does). The answer, the
   `/ready` entry and the audit say `testOnly: true` too, the PDF answer adds

@@ -68,7 +68,7 @@ rules are not in the tables.
 - Omit `signing` to leave sealing off. With it, at least one seal is required, and `serve` mounts
   `POST /v1/seal/{type}`. Without it, that path is an unknown route and `/ready` has no `signing`
   member.
-- `signing` needs `auth.oidc`. Each seal has exactly one of `timestampAuthority` (B-T) and
+- `signing` needs `authentication.oidc`. Each seal has exactly one of `timestampAuthority` (B-T) and
   `withoutTimestamp: seal-stops-validating-when-certificate-expires` (B-B).
 - `timestampAuthority.url` is `https`; `http` is accepted only for `localhost`, `127.0.0.0/8`, and
   `[::1]`. `attemptTimeoutMilliseconds` is 1000 to 60000 and defaults to 10000.
@@ -83,7 +83,7 @@ rules are not in the tables.
   seal certificate first. `privateKeyRef` is a secret reference to one ES256, ES384, RS256, or
   RS384 private JWK; EdDSA is refused.
 - `allowedClients` is a list of at least one named client. `unrestricted` and any item containing
-  `*` are refused. When `auth.oidc.allowedClients` lists clients, each seal client must be in it.
+  `*` are refused. When `authentication.oidc.allowedClients` lists clients, each seal client must be in it.
 - `trust: test-only` is the only value. It sets `signing.testOnly` in the template payload, and
   every answer about the seal says so: `testOnly: true` in the JSON `seal` member, the `/ready`
   entry, and each audit entry of the call, and `X-Registry-Seal-Test-Only: true` on the PDF answer.
@@ -111,7 +111,7 @@ Serve and `check` report these as runtime problems at the position of the key.
 | `render.runtime.insecure-timestamp-url` | The timestamp URL is `http` and not loopback. |
 | `render.runtime.seal-clients-not-listed` | `allowedClients` is missing, empty, or not a list. |
 | `render.runtime.seal-client-wildcard` | A client is `unrestricted` or contains a wildcard. |
-| `render.runtime.seal-client-not-admitted` | A seal client is not in `auth.oidc.allowedClients`. |
+| `render.runtime.seal-client-not-admitted` | A seal client is not in `authentication.oidc.allowedClients`. |
 | `render.runtime.seal-not-bound` | A document type names a seal `signing.seals` does not bind (error). |
 | `render.runtime.seal-unused` | A runtime seal is named by no document type (warning). |
 | `render.runtime.seals-not-served` | Document types name seals and the runtime has no `signing` block: they render unsealed (warning). |

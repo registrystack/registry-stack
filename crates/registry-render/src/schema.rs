@@ -177,7 +177,7 @@ fn install_runtime_constraints(schema: &mut Value) {
         );
     }
     if let Some(auth) = schema
-        .pointer_mut("/$defs/AuthRuntime")
+        .pointer_mut("/$defs/AuthenticationRuntime")
         .and_then(Value::as_object_mut)
     {
         auth.insert(
@@ -191,7 +191,7 @@ fn install_runtime_constraints(schema: &mut Value) {
     // Absence is described by the optional members, not by null or an empty
     // object that the referenced schemas reject as an explicit value.
     for pointer in [
-        "/$defs/AuthRuntime/properties/apiKeyRef",
+        "/$defs/AuthenticationRuntime/properties/apiKeyRef",
         "/properties/secretProviders",
     ] {
         schema
@@ -214,7 +214,7 @@ fn install_runtime_constraints(schema: &mut Value) {
 /// timestamp policy, its clients are named (no wildcard, no `unrestricted`),
 /// and a timestamp authority is `https`, or `http` on a loopback host.
 /// Rules that need another member (every client is admitted by
-/// `auth.oidc.allowedClients`, the secret provider is declared, OIDC is
+/// `authentication.oidc.allowedClients`, the secret provider is declared, OIDC is
 /// configured) are left to the reader and stated in the member descriptions.
 fn set_signing_constraints(schema: &mut Value) {
     if let Some(member) = schema
@@ -415,7 +415,7 @@ mod tests {
         let documents = schema_documents().unwrap();
         let runtime: Value = serde_json::from_str(&documents[RUNTIME_SCHEMA_FILE]).unwrap();
         for pointer in [
-            "/$defs/AuthRuntime/properties/apiKeyRef",
+            "/$defs/AuthenticationRuntime/properties/apiKeyRef",
             "/properties/secretProviders",
         ] {
             let member = runtime.pointer(pointer).unwrap().as_object().unwrap();
@@ -650,7 +650,11 @@ mod tests {
             ("/package/root", Some(json!("package")), false),
             ("/package/root", Some(json!("/var/../package")), false),
             ("/package/expectedDigest", Some(json!("sha256:abc")), false),
-            ("/auth/apiKeyRef", Some(json!("secret:vault/key")), false),
+            (
+                "/authentication/apiKeyRef",
+                Some(json!("secret:vault/key")),
+                false,
+            ),
             (
                 "/limits",
                 Some(json!({"renderTimeoutSeconds": 3_600})),
@@ -719,7 +723,7 @@ mod tests {
             "listener": {"bind": "127.0.0.1:8080"},
             "package": {"root": "/srv/render/package"},
             "secretProviders": {"file": {"root": "/run/secrets"}},
-            "auth": {"oidc": {
+            "authentication": {"oidc": {
                 "issuer": "https://issuer.example.test",
                 "audience": "https://render.example.test",
                 "allowedClients": ["portal", "records-service"]
@@ -969,10 +973,10 @@ mod tests {
         let temporary = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
         let path = temporary.path().join("runtime.yaml");
         let key_mode = {
-            let document = with(&base, "/auth/oidc", None);
+            let document = with(&base, "/authentication/oidc", None);
             with(
                 &document,
-                "/auth/apiKeyRef",
+                "/authentication/apiKeyRef",
                 Some(json!("secret:file/api.key")),
             )
         };
@@ -1011,7 +1015,7 @@ mod tests {
             .as_str()
             .unwrap();
         assert!(
-            clients.contains("auth.oidc.allowedClients"),
+            clients.contains("authentication.oidc.allowedClients"),
             "the cross-member rule is stated: {clients}"
         );
     }
@@ -1065,7 +1069,7 @@ mod tests {
                 "render.runtime.public-bind",
             ),
             (
-                "/auth/apiKeyRef",
+                "/authentication/apiKeyRef",
                 "secret:env/RENDER_API_KEY",
                 "render.runtime.undeclared-secret-provider",
             ),
@@ -1095,7 +1099,7 @@ mod tests {
             bind.contains("public or all-interfaces bind is refused"),
             "{bind}"
         );
-        let key = description("AuthRuntime", "apiKeyRef");
+        let key = description("AuthenticationRuntime", "apiKeyRef");
         assert!(key.contains("under a declared provider"), "{key}");
     }
 }

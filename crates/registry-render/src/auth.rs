@@ -12,11 +12,11 @@ use std::time::Duration;
 pub(crate) async fn verifier(
     runtime: &RenderRuntime,
 ) -> Result<Option<TokenVerifier>, RenderProblem> {
-    let Some(oidc) = &runtime.auth.oidc else {
+    let Some(oidc) = &runtime.authentication.oidc else {
         return Ok(None);
     };
     let refuse = || {
-        RenderProblem::new(ProblemKind::RuntimeInvalid, "auth.oidc signing keys could not be loaded; check the issuer and configured JWKS source")
+        RenderProblem::new(ProblemKind::RuntimeInvalid, "authentication.oidc signing keys could not be loaded; check the issuer and configured JWKS source")
     };
     let provider = &oidc.provider;
     let network = IssuerNetworkPolicy::new(provider.issuer.as_str(), provider.allow_insecure_http)

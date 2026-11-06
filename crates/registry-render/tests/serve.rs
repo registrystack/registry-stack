@@ -94,7 +94,7 @@ fn deployment(limits: &str, bundle_source: &Path) -> (PathBuf, PathBuf, u16) {
     std::fs::create_dir(home.join("audit")).unwrap();
     let port = free_port();
     let runtime = format!(
-        "apiVersion: id.registrystack.org/formats/render/runtime/v1alpha1\nkind: RenderRuntimeConfig\nlistener:\n  bind: 127.0.0.1:{port}\n  shutdownGraceMilliseconds: 5000\npackage:\n  root: {}\nsecretProviders:\n  file:\n    root: {}\nauth:\n  apiKeyRef: secret:file/api.key\n{limits}audit:\n  path: {}\n",
+        "apiVersion: id.registrystack.org/formats/render/runtime/v1alpha1\nkind: RenderRuntimeConfig\nlistener:\n  bind: 127.0.0.1:{port}\n  shutdownGraceMilliseconds: 5000\npackage:\n  root: {}\nsecretProviders:\n  file:\n    root: {}\nauthentication:\n  apiKeyRef: secret:file/api.key\n{limits}audit:\n  path: {}\n",
         bundle.display(),
         home.display(),
         audit_file(&home).display()
@@ -494,7 +494,7 @@ fn the_runtime_file_serves_the_same_from_any_working_directory() {
     std::fs::write(
         deploy.join("runtime.yaml"),
         format!(
-            "apiVersion: id.registrystack.org/formats/render/runtime/v1alpha1\nkind: RenderRuntimeConfig\nlistener:\n  bind: 127.0.0.1:{port}\npackage:\n  root: {bundle}\nsecretProviders:\n  file:\n    root: {deploy}\nauth:\n  apiKeyRef: secret:file/api.key\naudit:\n  path: {audit}\n",
+            "apiVersion: id.registrystack.org/formats/render/runtime/v1alpha1\nkind: RenderRuntimeConfig\nlistener:\n  bind: 127.0.0.1:{port}\npackage:\n  root: {bundle}\nsecretProviders:\n  file:\n    root: {deploy}\nauthentication:\n  apiKeyRef: secret:file/api.key\naudit:\n  path: {audit}\n",
             bundle = bundle.display(),
             deploy = deploy.display(),
             audit = home.join("audit/render.jsonl").display(),

@@ -37,7 +37,7 @@ fn runtime(home: &Path, signing: &str) -> PathBuf {
     std::fs::write(
         &path,
         format!(
-            "apiVersion: id.registrystack.org/formats/render/runtime/v1alpha1\nkind: RenderRuntimeConfig\nlistener:\n  bind: 127.0.0.1:8080\npackage:\n  root: /srv/render/package\nsecretProviders:\n  file:\n    root: {}\nauth:\n  oidc:\n    issuer: https://issuer.example.test\n    audience: https://render.example.test\n    allowedClients: [portal, records-service]\naudit:\n  path: /var/lib/render/audit/render.jsonl\n{signing}",
+            "apiVersion: id.registrystack.org/formats/render/runtime/v1alpha1\nkind: RenderRuntimeConfig\nlistener:\n  bind: 127.0.0.1:8080\npackage:\n  root: /srv/render/package\nsecretProviders:\n  file:\n    root: {}\nauthentication:\n  oidc:\n    issuer: https://issuer.example.test\n    audience: https://render.example.test\n    allowedClients: [portal, records-service]\naudit:\n  path: /var/lib/render/audit/render.jsonl\n{signing}",
             home.join("secrets").display()
         ),
     )
