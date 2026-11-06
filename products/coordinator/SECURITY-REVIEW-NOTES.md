@@ -485,6 +485,72 @@ get grant in addition to the Action's start grant.
 
 These are maintained references, not claims that the tests ran in this note.
 
+## Casework review cancels
+
+### Threat
+
+Every workflow in a deployment calls Casework under the same review producer
+identity, so Casework cannot tell which run submitted a review request. A
+workflow whose `casework.cancel-review-request/v1` step builds `request` from
+its input, a literal, a Function or another step could withdraw a review that
+another run submitted.
+
+### Enforcement and defaults
+
+- Check refuses a review cancel unless its input is a fields mapping whose
+  `request` member reads the whole output, with no path, of a
+  `casework.submit-review-request/v1` call step in the same workflow
+  (`definition.review-request-not-run-owned`, at `steps.<name>.input`).
+  Ordinary step reference checks hold that the submit step was accepted on
+  every route to the cancel, so the request is the one this run submitted.
+  `cancel_not_run_owned` in `src/definition.rs` enforces this rule and the
+  Proposal rule (`definition.proposal-not-run-owned`) as one structural check.
+- The submit output is exactly the accepted request the cancel input names,
+  so the rule allows no path into it and no object rebuilt member by member,
+  whose members could come from elsewhere.
+- The check runs on restore as well as on check and package
+  (`Definition::from_snapshot`), so this runtime refuses a pinned package or
+  a run snapshot whose review cancel breaks the rule, with the same code. The
+  Proposal rule shares that path, but it shipped with
+  `breg.cancel-proposal/v1`, so no earlier snapshot could break it; review
+  cancels shipped earlier without this rule.
+- Casework still authorizes each cancel under the producer's own identity;
+  the check adds no authority.
+
+Builder cost: a workflow that withdraws a review maps `request` from its own
+submit step, as every maintained example does. Compatibility: a definition
+that maps `request` any other way no longer checks or packages. A pinned
+package that breaks the rule stops the service at startup in either mode. A
+live run whose snapshot breaks it fails the retained live-binding scan, so
+normal serving, readiness, every admission and apply are refused until the
+run is settled; recovery-only mode still starts, but such a run cannot be
+cancelled from its wait under this runtime. Operator cost: before upgrading,
+check each project with the new `coordinatorctl`; if one is refused, settle
+or cancel its runs with the earlier binaries, as for an interpreter ABI
+change, then re-author the cancel, package and apply.
+
+### Tests
+
+- `crates/registry-coordinator/tests/wait_for_authoring.rs`
+  (`a_run_cancels_only_a_review_request_it_submitted`,
+  `a_review_cancel_built_by_a_function_is_refused`, and
+  `a_snapshot_whose_review_cancel_is_not_run_owned_does_not_restore`).
+- `crates/registry-coordinator/tests/catalog_scenarios.rs` checks the
+  maintained top-level examples, including `reviewed-notice` and
+  `standalone-review`.
+
+These are maintained references, not claims that the tests ran in this note.
+
+### Accepted residuals
+
+The rule is structural over the reviewed, pinned definition and adds no
+runtime check; Casework remains the authority for each cancel. One deployment
+is one trust domain, so workflows that must not share a Casework producer
+identity run in separate deployments. A retained run whose snapshot breaks
+the rule stops normal serving for the whole deployment rather than holding
+alone, because every refused restore fails the retained live-binding scan
+closed; the pre-upgrade check and drain above avoid it.
+
 ## Pure profile helper set
 
 The pure profile adds Rhai's `MoreStringPackage` and a hand-picked set of

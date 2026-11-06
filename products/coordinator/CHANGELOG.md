@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- BREAKING: `coordinatorctl check` refuses a
+  `casework.cancel-review-request/v1` step unless its `request` maps the whole
+  output, with no path, of a `casework.submit-review-request/v1` step in the
+  same workflow (`definition.review-request-not-run-owned`), as
+  `breg.cancel-proposal/v1` already requires of `proposalId`. Every workflow in
+  a deployment shares one Casework producer, so this check keeps each run's
+  cancel to the request it submitted. The rule also holds when a package or
+  run snapshot is restored: the service does not start on a pinned package
+  that breaks it, and while a live run admitted under such a definition
+  remains, normal serving, readiness, admissions and apply are refused. Before
+  upgrading, check each project with this version. If one is refused, settle
+  or cancel its runs with the 0.45.0 binaries, then map `request` from the
+  submit step, package and apply again.
+
 ## 0.45.0 - 2026-11-03
 
 - BREAKING: Registry Record v1 renames `entityTypeIdentifier` to
