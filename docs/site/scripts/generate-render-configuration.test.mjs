@@ -23,7 +23,7 @@ test('Render reference carries the keys an author and an operator set', async ()
     assert.ok(keys('bundle').has(path), path);
   }
   assert.ok(keys('labels').has('labels.*'));
-  for (const path of ['listener.bind', 'package.root', 'auth.apiKeyRef', 'audit.path']) {
+  for (const path of ['listener.bind', 'package.root', 'authentication.apiKeyRef', 'audit.path']) {
     assert.ok(keys('runtime').has(path), path);
   }
 });
