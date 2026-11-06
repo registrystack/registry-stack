@@ -915,9 +915,16 @@ fn the_document_list_names_each_served_seal() {
         BTreeMap::from([
             ("accessible".to_owned(), ministry.clone()),
             ("archive".to_owned(), ministry.clone()),
+            ("archive-1a".to_owned(), ministry.clone()),
             ("archive-1b".to_owned(), ministry.clone()),
+            ("archive-2a".to_owned(), ministry.clone()),
+            ("archive-2u".to_owned(), ministry.clone()),
+            ("archive-3a".to_owned(), ministry.clone()),
             ("archive-3b".to_owned(), ministry.clone()),
+            ("archive-3u".to_owned(), ministry.clone()),
             ("archive-4".to_owned(), ministry.clone()),
+            ("archive-4e".to_owned(), ministry.clone()),
+            ("archive-4f".to_owned(), ministry.clone()),
             ("letter".to_owned(), None),
             ("notice".to_owned(), ministry),
         ])
@@ -932,37 +939,6 @@ fn the_document_list_names_each_served_seal() {
             .all(Option::is_none),
         "without signing no document type is sealable"
     );
-}
-
-/// `serve` logs each document type it seals under a PDF/A level no
-/// recorded validator run has checked sealed, at the type's `seal` member;
-/// the levels with a recorded run, and a deployment that seals nothing, log
-/// none.
-#[test]
-fn serve_warns_at_startup_about_a_seal_under_an_unverified_pdf_a_level() {
-    let unverified = |server: &Server| -> Vec<serde_json::Value> {
-        server
-            .log()
-            .into_iter()
-            .filter(|line| {
-                line["level"] == "WARN"
-                    && line["fields"]["code"] == "render.bundle.seal-standard-unverified"
-            })
-            .collect()
-    };
-    let fixture = sealed(None);
-    let server = start_server(&fixture);
-    let warned = unverified(&server);
-    assert_eq!(warned.len(), 1, "{warned:?}");
-    assert_eq!(warned[0]["fields"]["pointer"], "/documents/5/seal");
-    let message = warned[0]["fields"]["message"].as_str().unwrap();
-    assert!(message.contains("archive-3b"), "{message}");
-    assert!(message.contains("a-3b"), "{message}");
-    drop(server);
-
-    let unsealed = deployment(None);
-    let server = start_server(&unsealed);
-    assert!(unverified(&server).is_empty(), "nothing is sealed");
 }
 
 #[test]
@@ -1827,6 +1803,14 @@ fn write_served_seal_samples() {
         ("archive-b-t", &timestamped, "archive"),
         ("archive-1b-b-t", &timestamped, "archive-1b"),
         ("archive-4-b-t", &timestamped, "archive-4"),
+        ("archive-1a-b-t", &timestamped, "archive-1a"),
+        ("archive-2a-b-t", &timestamped, "archive-2a"),
+        ("archive-2u-b-t", &timestamped, "archive-2u"),
+        ("archive-3a-b-t", &timestamped, "archive-3a"),
+        ("archive-3b-b-t", &timestamped, "archive-3b"),
+        ("archive-3u-b-t", &timestamped, "archive-3u"),
+        ("archive-4e-b-t", &timestamped, "archive-4e"),
+        ("archive-4f-b-t", &timestamped, "archive-4f"),
         ("accessible-b-t", &timestamped, "accessible"),
         ("notice-b-b", &untimestamped, "notice"),
     ] {

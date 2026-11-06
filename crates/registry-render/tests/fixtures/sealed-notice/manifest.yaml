@@ -2,10 +2,9 @@
 # `ministry` and prints its seal block only when the payload carries the
 # `signing` member; `letter` declares no seal; `archive` is the same notice
 # as PDF/A-2b, whose 32767-byte string limit bounds the seal's reserved
-# signature space; `archive-1b` and `archive-4` are the same notice as
-# PDF/A-1b and PDF/A-4; `archive-3b` is the same notice as PDF/A-3b, a
-# level no validator run has checked sealed; `accessible` is the same
-# notice as PDF/UA-1.
+# signature space; each other `archive-<level>` is the same notice under
+# PDF/A-<level>, so the fixture covers every PDF/A level `pdfStandard`
+# accepts; `accessible` is the same notice as PDF/UA-1.
 apiVersion: id.registrystack.org/formats/render/bundle/v1alpha1
 kind: RenderBundle
 bundleVersion: 1
@@ -48,4 +47,46 @@ documents:
     entryFile: templates/notice.typ
     schemaFile: schemas/notice.schema.json
     pdfStandard: ua-1
+    seal: ministry
+  - id: archive-1a
+    version: 1
+    entryFile: templates/notice.typ
+    schemaFile: schemas/notice.schema.json
+    pdfStandard: a-1a
+    seal: ministry
+  - id: archive-2a
+    version: 1
+    entryFile: templates/notice.typ
+    schemaFile: schemas/notice.schema.json
+    pdfStandard: a-2a
+    seal: ministry
+  - id: archive-2u
+    version: 1
+    entryFile: templates/notice.typ
+    schemaFile: schemas/notice.schema.json
+    pdfStandard: a-2u
+    seal: ministry
+  - id: archive-3a
+    version: 1
+    entryFile: templates/notice.typ
+    schemaFile: schemas/notice.schema.json
+    pdfStandard: a-3a
+    seal: ministry
+  - id: archive-3u
+    version: 1
+    entryFile: templates/notice.typ
+    schemaFile: schemas/notice.schema.json
+    pdfStandard: a-3u
+    seal: ministry
+  - id: archive-4e
+    version: 1
+    entryFile: templates/notice.typ
+    schemaFile: schemas/notice.schema.json
+    pdfStandard: a-4e
+    seal: ministry
+  - id: archive-4f
+    version: 1
+    entryFile: templates/notice.typ
+    schemaFile: schemas/notice.schema.json
+    pdfStandard: a-4f
     seal: ministry

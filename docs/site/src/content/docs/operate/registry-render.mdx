@@ -8,7 +8,7 @@ source_repos:
 last_reviewed: "2026-09-17"
 doc_type: how-to
 locale: en
-standards_referenced: [pades]
+standards_referenced: [pades, rfc-3161]
 ---
 
 import ConfigurationFormatChecks from '../../../components/ConfigurationFormatChecks.astro';
@@ -401,10 +401,9 @@ verdict on the issuer, not a failure of the file's integrity.
   ship it to storage the serving user cannot write.
 - On macOS, such a worker can also read the serving process's environment, including every
   `${VAR}` and `secret:env` value. Seal on Linux, where `serve` closes that.
-- veraPDF has passed sealed PDF/A-1b, PDF/A-2b, PDF/A-4 and PDF/UA-1 files, and no other PDF/A
-  level. `check` and `serve` warn about a document type sealed under another level
-  (`render.bundle.seal-standard-unverified`); validate a sealed sample before you issue it, then
-  accept the warning in `check-acceptances.yaml`.
+- veraPDF has passed a test template at every PDF/A level Render accepts, and at PDF/UA-1, both
+  as rendered and once sealed. Your own template is not checked against its level: validate a
+  sealed sample of each document type with a PDF/A validator before you issue it.
 
 {/* Evidence: crates/registry-render/src/runtime.rs, SigningRuntime, SealRuntime and signing_findings;
     crates/registry-render/src/seal.rs, Seal::load, check_chain and EXPIRY_WARNING_DAYS;

@@ -34,7 +34,7 @@ use time::OffsetDateTime;
 
 use crate::envelope::SigningPayload;
 use crate::hash::sha256_hex;
-use crate::manifest::{Manifest, PdfStandardSpec, MANIFEST_KIND};
+use crate::manifest::{Manifest, MANIFEST_KIND};
 use crate::pdf_signature::{PdfSignatureError, MAX_CONTENTS_CAPACITY};
 use crate::problem::{ProblemKind, RenderProblem};
 use crate::runtime::{RenderRuntime, SealRuntime, RUNTIME_KIND};
@@ -485,66 +485,6 @@ pub fn unsealable_documents(
         }
     }
     found
-}
-
-/// The code of a document type sealed under a PDF/A level no recorded
-/// validator run has checked sealed.
-pub const UNVERIFIED_STANDARD_CODE: &str = "render.bundle.seal-standard-unverified";
-
-/// A document type sealed under a PDF/A level no recorded validator run has
-/// checked after sealing ([`crate::pdf_signature::seal_standard_verified`]).
-/// It is sealed all the same: `check` and `serve` warn.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UnverifiedSealStandard {
-    /// The document type's position in the manifest's `documents`.
-    pub index: usize,
-    pub document_id: String,
-    pub seal_id: String,
-    pub standard: PdfStandardSpec,
-}
-
-impl UnverifiedSealStandard {
-    /// The manifest member the finding is placed at: the document type's
-    /// `seal`.
-    pub fn pointer(&self) -> String {
-        format!("/documents/{}/seal", self.index)
-    }
-
-    pub fn message(&self) -> String {
-        format!(
-            "document type {} is sealed by {} under {}, a PDF/A level no validator run has \
-             checked sealed; the sealed file may not remain {} conformant",
-            self.document_id, self.seal_id, self.standard, self.standard
-        )
-    }
-
-    pub fn action(&self) -> &'static str {
-        "Validate a sealed sample of the document type with a PDF/A validator such as veraPDF \
-         before issuing it, then accept this warning in check-acceptances.yaml; or choose \
-         a-1b, a-2b or a-4, which have a recorded run."
-    }
-}
-
-/// Every document type in `manifest` that names a seal under a PDF/A level
-/// no recorded validator run has checked sealed.
-pub fn unverified_seal_standards(manifest: &Manifest) -> Vec<UnverifiedSealStandard> {
-    manifest
-        .documents
-        .iter()
-        .enumerate()
-        .filter_map(|(index, document)| {
-            let seal_id = document.seal.as_ref()?;
-            let standard = document.pdf_standard.filter(|standard| {
-                !crate::pdf_signature::seal_standard_verified(Some(*standard))
-            })?;
-            Some(UnverifiedSealStandard {
-                index,
-                document_id: document.id.clone(),
-                seal_id: seal_id.clone(),
-                standard,
-            })
-        })
-        .collect()
 }
 
 /// Refuse to serve a package with a document type whose PDF standard cannot

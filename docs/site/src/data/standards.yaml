@@ -553,7 +553,81 @@
     `products/render/EVIDENCE.md`: pyHanko validated sealed files `serve`
     answered, EU DSS reported the PAdES-BASELINE-B and PAdES-BASELINE-T
     formats with an indeterminate indication because the test chain has no
-    revocation data or trusted list, and veraPDF passed sealed PDF/A-1b,
-    PDF/A-2b, PDF/A-4 and PDF/UA-1 files. Render embeds no revocation data
+    revocation data or trusted list, and veraPDF passed sealed files at every
+    accepted PDF/A level and at PDF/UA-1. Render embeds no revocation data
     (no B-LT or B-LTA level), no ETSI conformance checker was run, and no
     eIDAS qualification is claimed.
+- id: pdf-a
+  name: PDF/A (ISO 19005)
+  standards_body: ISO
+  official_url: https://www.iso.org/standard/71832.html
+  version_or_profile: ISO 19005-1 A-1a and A-1b, ISO 19005-2 A-2a, A-2b and A-2u, ISO 19005-3 A-3a, A-3b and A-3u, ISO 19005-4 A-4, A-4e and A-4f
+  status: used
+  claim_level: emits
+  adoption_mode: profiled
+  used_by:
+    - registry-render
+  surfaces:
+    - rendered PDF under a document type's pdfStandard
+    - sealed PDF from the Render seal route
+  evidence_docs:
+    - label: Registry Render configuration reference
+      url: /reference/render-configuration/
+  last_checked: 2026-11-06
+  notes: >-
+    Registry Render writes a document type's PDF at the PDF/A level its
+    manifest names, through Typst. `products/render/EVIDENCE.md` records
+    veraPDF 1.30.3 passing every accepted level (A-1a, A-1b, A-2a, A-2b,
+    A-2u, A-3a, A-3b, A-3u, A-4, A-4e and A-4f) for one fixture template, on
+    both the rendered file and the sealed file. veraPDF checks the
+    machine-checkable rules only; conformance of a deployer's own template is
+    that template's to prove, and the accessible levels need a person to
+    judge alternative text and reading order.
+- id: pdf-ua
+  name: PDF/UA-1 (ISO 14289-1)
+  standards_body: ISO
+  official_url: https://www.iso.org/standard/64599.html
+  version_or_profile: ISO 14289-1 (PDF/UA-1)
+  status: used
+  claim_level: emits
+  adoption_mode: profiled
+  used_by:
+    - registry-render
+  surfaces:
+    - rendered PDF under pdfStandard ua-1
+    - sealed PDF from the Render seal route
+  evidence_docs:
+    - label: Registry Render configuration reference
+      url: /reference/render-configuration/
+  last_checked: 2026-11-06
+  notes: >-
+    Registry Render writes tagged PDF/UA-1 through Typst when a document type
+    names `ua-1`. `products/render/EVIDENCE.md` records veraPDF 1.30.3
+    passing its `ua1` profile for one fixture template, rendered and sealed.
+    The checks a person must make (meaningful alternative text, reading
+    order, language) depend on the deployer's template and are not claimed.
+- id: rfc-3161
+  name: Time-Stamp Protocol (RFC 3161)
+  standards_body: IETF
+  official_url: https://www.rfc-editor.org/rfc/rfc3161
+  version_or_profile: RFC 3161 client over HTTP, SHA-256 message imprint with a nonce and certReq
+  status: used
+  claim_level: implements
+  adoption_mode: profiled
+  used_by:
+    - registry-render
+    - registry-platform
+  surfaces:
+    - signature timestamp request from the Render seal route
+    - timestamp response and token checks in registry-platform-crypto
+  evidence_docs:
+    - label: Deploy Registry Render, Seal documents
+      url: /operate/registry-render/
+  last_checked: 2026-11-06
+  notes: >-
+    For a B-T seal, Registry Render sends an RFC 3161 timestamp query to the
+    configured authority and checks the granted token before embedding it as
+    the signature timestamp; a refused or failed timestamp fails the seal.
+    Render is a client only and runs no timestamp authority. The tests and
+    the validator runs in `products/render/EVIDENCE.md` use a loopback test
+    authority; no public authority is exercised in this repository.

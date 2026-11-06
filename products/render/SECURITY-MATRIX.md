@@ -97,9 +97,9 @@ conditions, follow the table.
 - **No revocation data, no qualification.** A seal is PAdES baseline B-B or
   B-T. It embeds no revocation information (no B-LT or B-LTA) and makes no
   eIDAS qualification claim.
-- **Sealing under some PDF/A levels is unverified.** veraPDF passed sealed
-  PDF/A-1b, A-2b, A-4 and PDF/UA-1 files that `serve` answered. No check
-  proves A-1a, A-2a, A-2u, A-3a, A-3b, A-3u, A-4e or A-4f: `check` and
-  `serve` warn about a document type sealed under one
-  (`render.bundle.seal-standard-unverified`), and `check` refuses only a
-  reserved space their string limit cannot hold.
+- **PDF/A conformance rests on the template.** veraPDF passed a fixture
+  template at every accepted PDF/A level and at PDF/UA-1, rendered and
+  sealed (`EVIDENCE.md`), so the seal keeps a level the rendered file meets;
+  `check` refuses a reserved space the level's string limit cannot hold. A
+  deployer's own template is not checked against its level, and veraPDF
+  checks machine-checkable rules only.
