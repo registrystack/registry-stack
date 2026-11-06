@@ -608,17 +608,16 @@ another run submitted.
 Builder cost: a workflow that withdraws a review maps `request` from its own
 submit step, as every maintained example does. Compatibility: a definition
 that maps `request` any other way no longer checks or packages. A pinned
-package that breaks the rule stops the service at startup in either mode. A
-live run whose snapshot breaks it fails the retained live-binding scan, so
-normal serving, readiness, every admission and apply are refused until the
-run is settled; recovery-only mode still starts, but such a run cannot be
-cancelled from its wait under this runtime. Operator cost: before upgrading,
-run the new `coordinatorctl check` on each project and the new
-`coordinatorctl deployment-status` against the deployment, which also checks
-every run in flight, including runs admitted from an earlier package; if
-either refuses, settle or cancel the affected runs with the earlier binaries,
-as for an interpreter ABI change, then re-author the cancel, package and
-apply.
+package that breaks the rule stops the service at startup in either mode,
+naming its package digest, workflow and the finding code. A live run whose
+snapshot breaks it is held alone with `definition-refused` (see "Runs whose
+retained definition does not restore"): nothing runs for it, retry,
+reconcile and cancel refuse it, and normal serving, readiness, other runs,
+admissions and apply continue. Operator cost: only a release that accepts a
+held run's definition can end that run. Before upgrading, run the new
+`coordinatorctl check` on each project and the new
+`coordinatorctl deployment-status` against the deployment, whose `heldRuns`
+lists the runs in flight that this version would hold.
 
 ### Tests
 
@@ -638,9 +637,85 @@ The rule is structural over the reviewed, pinned definition and adds no
 runtime check; Casework remains the authority for each cancel. One deployment
 is one trust domain, so workflows that must not share a Casework producer
 identity run in separate deployments. A retained run whose snapshot breaks
-the rule stops normal serving for the whole deployment rather than holding
-alone, because every refused restore fails the retained live-binding scan
-closed; the pre-upgrade check and drain above avoid it.
+the rule is held and runs nothing under this version; the pre-upgrade check
+and drain above keep runs out of that hold.
+
+## Runs whose retained definition does not restore
+
+### Threat
+
+A retained run executes the definition frozen in its snapshot. When a later
+version refuses that definition on restore, for a new structural rule or an
+interpreter ABI change, running it anyway could take an effect the rule now
+forbids, such as withdrawing a review another run submitted. Refusing the
+whole deployment for one such run turns every other run and every admission
+into an outage.
+
+### Enforcement and defaults
+
+- The serving check at startup and in readiness (`check_runtime_bindings` in
+  `src/store/recovery.rs`) restores every live run's snapshot under the
+  admission lock. `Definition::from_snapshot` is pure, so its refusal is a
+  property of the snapshot: the run is held with reason `definition-refused`
+  and the scan continues. A snapshot that cannot be opened, a failed query or
+  a failed transaction verification still fails the check and holds nothing.
+- `hold_definition_refused` locks the run and writes the durable audit request
+  (`action: definition-refused`, the keyed run and step references and the
+  static `findingCode`) before the hold commits, then sets the run state to
+  `attention` and its failure code to `definition-refused`, and records the
+  response. A run already held, erased or terminal is skipped, so each run is
+  audited once. No column is added; protected state stays schema version 5.
+- Dispatch never claims a held run and does not expire it at its deadline; a
+  lease that lapsed on one holds instead of retrying. A worker that meets a
+  refused definition holds the run through the same helper before it
+  prepares or sends anything, keeping the job's uncertain flag as it was.
+  `retry-same`, `reconcile` and `cancel` restore the live run's snapshot first
+  and refuse with `definition-refused` (`run.definition-incompatible`) before
+  any command is considered or any cancel step, authored cleanup included, is
+  routed.
+- A hold changes no uncertain outcome, prepared command, spent start or
+  command key, or restore-review mark. Restore hold and admission hold are
+  unchanged. Admission and apply scan without holding and pass over refused
+  runs. `deployment-status` lists held and holdable runs and holds none;
+  doctor runs the serving check and lists them.
+- Restore refusals carry operator context instead of the authoring
+  suggestion. A pinned package keeps the finding as its code and names its
+  package digest and workflow; a run names its run id and workflow, and the
+  reports carry the finding as `findingCode`. Both point to "Apply and start"
+  in `DEPLOYMENT.md`. `coordinatorctl check` output is unchanged.
+
+### Tests
+
+- `crates/registry-coordinator/tests/deployment_postgres.rs`
+  (`a_run_whose_retained_definition_does_not_restore_is_held_alone` and
+  `an_unreadable_snapshot_or_store_outage_fails_the_check_and_holds_nothing`).
+- `crates/registry-coordinator/tests/postgres_state.rs`
+  (`inspection_refuses_recovery_after_deadline_receipt_expiry_and_unsupported_abi`
+  holds runs with an unsupported interpreter ABI through the worker and
+  refuses `retry-same` and `cancel` for them).
+- `crates/registry-coordinator/tests/review_wait_postgres.rs`
+  (`cancelling_a_wait_whose_definition_does_not_restore_never_routes_its_cleanup`).
+- `crates/registry-coordinator/src/deployment.rs`
+  (`a_pinned_package_that_does_not_restore_gives_operator_context`).
+
+These are maintained references, not claims that the tests ran in this note.
+
+### Accepted residuals
+
+- The finding code is not stored on the run. It is in the hold's audit record,
+  and each report recomputes it from the retained snapshot.
+- This version has no path that ends or releases a held run: retry,
+  reconcile and cancel refuse it. Only a release that accepts its definition
+  can end it.
+- A run held while an earlier process's lease on its step is still open keeps
+  that lease until it lapses. The lapse holds the step with its own failure
+  code, replacing `definition-refused` on the run, and the next serving check
+  holds the run again with a second audit record. Nothing runs for it in
+  between, because every path restores the snapshot before acting.
+- A held run that had failed and is still recoverable keeps its job failure
+  code, while the run's failure code becomes `definition-refused`.
+- Doctor restores retained snapshots to list held runs, so a snapshot that
+  cannot be opened fails the doctor report as it fails the serving check.
 
 ## Pure profile helper set
 

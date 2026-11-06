@@ -648,10 +648,17 @@ must agree. It uses runtime credentials only, never migration
 credentials, and does not migrate, activate or change recovery holds. JSON output
 returns `status: checked`, `databaseId`, `workflowsDigest`, `workflows` (each workflow's
 package digest), `schemaVersion`,
-`runtimeRole` and the checked `active` activation. Refused checks exit nonzero
-with `coordinator.deployment.refused` for deployment-contract refusals or
-`coordinator.command.live-binding-conflict` for incompatible retained bindings, with operator recovery
-advice. This report does not
+`runtimeRole`, the checked `active` activation and `heldRuns`. `heldRuns` lists
+each live run whose retained definition this version does not restore, held or
+not yet held, with `runId`, `workflow`, `workflowRevision`, `reason`
+(`definition-refused`), `findingCode` (the restore finding, such as
+`definition.review-request-not-run-owned`) and `advice`. The report holds no
+run; the service holds them when it starts. Refused checks exit nonzero
+with `coordinator.deployment.refused` for deployment-contract refusals,
+`coordinator.command.live-binding-conflict` for incompatible retained bindings,
+or the restore finding code for a pinned package this version does not restore,
+with operator recovery advice. A refused package is named by its package digest
+and workflow. This report does not
 replace the service's audit and recovery readiness checks.
 
 Startup verifies package closure, checksum pin, executable ABI, active package,
@@ -661,7 +668,26 @@ admission lock before opening
 the normal listener. Endpoint, registered identity, scopes and task authority
 must retain each live run's original binding. New admissions repeat that check
 inside their insertion transaction; worker polls keep their per-job fences
-without rescanning history every poll. Restore the original bindings or use
+without rescanning history every poll.
+
+A live run whose retained definition this version does not restore does not
+stop startup, readiness, admissions or apply. The service holds that run alone:
+it writes the hold, with the restore finding code, to the durable audit before
+the run shows state `attention` with failure code `definition-refused`. Nothing
+runs for a held run. The worker never claims it and its deadline does not
+expire it; `retry-same`, `reconcile` and `cancel` answer 409
+`run.definition-incompatible`, so no cleanup step runs for it either. Its
+uncertain effects, prepared commands, spent keys and restore-review marks stay
+as they are, and every other run continues. Find held runs with
+`attention=true`, the doctor report or `deployment-status`. This version cannot
+end a held run: only a Coordinator release that accepts its definition can.
+Before upgrading, run that release's `deployment-status` against the
+deployment; its `heldRuns` lists the runs it would hold. A retained snapshot that cannot be
+opened, or a database that cannot be reached, still refuses the check and holds
+nothing. A pinned package this version does not restore still stops the service
+in either mode, naming its package digest, workflow and restore finding code.
+
+For an incompatible binding, restore the original bindings or use
 `coordinator --runtime-config FILE --recovery-only` to investigate with dispatch
 and admissions disabled. Recovery-only still verifies the active package,
 database, schema, role and custody, and its readiness remains false.
@@ -729,7 +755,8 @@ coordinatorctl doctor --url https://coordinator.example.org --token-file /run/op
 `/health` answers `{"live":true}` while the process answers. `/ready` answers
 `{"ready":true}`, or HTTP 503 with `{"ready":false}` while the service cannot
 accept work. Every `/ready` probe checks mutable schema, activation, role,
-state-key custody, audit and recovery holds. The retained live-binding scan is
+state-key custody, audit and recovery holds. A held run does not make the
+service unready. The retained live-binding scan is
 coalesced and cached for 30 seconds, including failures; a cache miss still waits
 for that scan, so the cache bounds frequency rather than latency. Startup,
 explicit deployment status, admissions and worker transactions retain their
@@ -745,6 +772,10 @@ state, `state.uncertain` counts steps whose effect waits for an operator, and
 `state.oldestTerminalPayloadAt` is when the oldest of those runs ended.
 `state.proposalWaitsByTurn` counts BReg Proposal waits by their last observed turn, with
 `unobserved` for waits not yet read, from stored observations; doctor makes no BReg call.
+`state.heldRunCount` counts live runs held because this version does not restore
+their retained definition, and `state.heldRuns` lists the first 100 by run id
+with the fields `deployment-status` reports. A held run leaves `activationReady`
+`true`.
 
 ### Add, upgrade, roll back and remove a workflow
 

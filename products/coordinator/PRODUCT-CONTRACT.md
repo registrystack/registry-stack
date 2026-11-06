@@ -304,6 +304,7 @@ carries its sentence as its `message`.
 | `proposal-unreadable` | run hold | "BReg refused or concealed the request. Check the connection profile's get grant and row boundary, then retry." |
 | `proposal-handoff-refused` | run hold | "The review authority refused to take the request this run submitted. A person may need to submit it; see the code shown." |
 | `in-force-ambiguous` | run hold | "Two records are in force for this subject on this date. Correct the register, then retry." |
+| `definition-refused` | run hold | "This Coordinator version does not restore the definition this run was admitted under, so it runs nothing for it and refuses to retry, reconcile or cancel it. Only a release that accepts that definition can end the run." |
 | `check.not-waiting` | HTTP 409 | "That step is not waiting." |
 
 Run hold and failure codes stay in the closed kebab-case list; the dotted `breg.in-force.ambiguous`
@@ -550,8 +551,13 @@ cannot migrate, activate or replace the custody markers.
 
 Package closure and checksums, executable ABI, database identity, runtime role
 and live connection compatibility are checked before execution. Apply refuses
-incompatible live bindings. Health separates process liveness from readiness;
-doctor reports activation, audit, recovery holds, aged work and retention counts.
+incompatible live bindings. A pinned package this version does not restore
+stops the service. A live run whose retained definition this version does not
+restore is held alone with `definition-refused`, audited before the hold;
+nothing runs for it, retry, reconcile and cancel refuse it, and serving,
+readiness, other runs, admissions and apply continue. Health separates process liveness from readiness; doctor reports
+activation, audit, recovery holds, held runs, aged work and retention counts,
+and `deployment-status` lists held runs with their restore finding code.
 
 Inputs, responses, prepared requests and outcomes are authenticated ciphertext,
 including copies retained by Dispatch. Associated data binds ciphertext to its
