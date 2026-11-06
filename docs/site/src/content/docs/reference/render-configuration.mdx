@@ -133,6 +133,7 @@ The default answer is `application/pdf` with these headers:
 | `X-Registry-Signed-File-Sha256` | SHA-256 of the whole signed file. |
 | `X-Registry-Data-Sha256` | SHA-256 of the canonical request data. |
 | `X-Registry-Document-Version` | Document type and version. |
+| `X-Registry-Bundle-Hash` | The package hash `/v1/documents` reports as `bundleHash`. |
 | `X-Registry-Warning-Count` | Number of render warnings. |
 | `X-Registry-Seal-Id` | The seal id. |
 | `X-Registry-Seal-Level` | `b-t` or `b-b`. |
@@ -140,8 +141,9 @@ The default answer is `application/pdf` with these headers:
 | `X-Registry-Timestamp-Time` | The timestamp token's time; B-T only. |
 
 With `Accept: application/json` the body is `pdfBase64`, `documentSha256`, `signedFileSha256`,
-`dataSha256`, `documentVersion`, `warnings`, and `seal` (`id`, `level`, `certificateSha256`, and
-`timestampTime` for B-T). There is no `pdfSha256`. Because the payload carries the `signing`
+`dataSha256`, `documentVersion`, `bundleHash`, `warnings`, and `seal` (`id`, `level`,
+`certificateSha256`, and `timestampTime` for B-T). A client granted only `render:seal` pins the
+package from `bundleHash` without reading `/v1/documents`. There is no `pdfSha256`. Because the payload carries the `signing`
 member, a sealed render's `dataSha256` differs from a plain render of the same request.
 
 The problems specific to this route, from a closed vocabulary shared with the render route:

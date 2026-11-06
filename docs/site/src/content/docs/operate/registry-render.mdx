@@ -305,7 +305,9 @@ runtime does not bind, `check` reports it, and `serve` refuses the second case.
 Then call the route with a token that carries `render:seal`. The request body is the render
 route's. The PDF answer carries `X-Registry-Document-Sha256`, `X-Registry-Signed-File-Sha256`,
 `X-Registry-Seal-Id`, `X-Registry-Seal-Level` (`b-t` or `b-b`), and
-`X-Registry-Certificate-Sha256`, plus `X-Registry-Timestamp-Time` for B-T. A document type that
+`X-Registry-Certificate-Sha256`, plus `X-Registry-Timestamp-Time` for B-T. It also carries
+`X-Registry-Bundle-Hash` (`bundleHash` in JSON), so a client that holds only `render:seal` can
+compare the package with what you deployed without reading `/v1/documents`. A document type that
 names no seal is refused with `document-not-sealable` (400). The
 [configuration reference](../../reference/render-configuration/#seal-documents) lists the keys,
 problems, and response shapes.
