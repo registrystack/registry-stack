@@ -148,6 +148,7 @@ async fn verified_subject_owns_runs_and_exact_policy_restricts_flow_action() {
     .with_scope_claim("scope")
     .with_allowed_clients(vec!["producer".into()]);
     let policy = ClientPolicy {
+        subjects: vec!["actual-subject".into()],
         required_scopes: vec!["coordinator:start".into()],
         workflows: vec!["follow-up".into()],
         actions: Vec::from([Action::Start, Action::Status]),
@@ -184,6 +185,254 @@ async fn verified_subject_owns_runs_and_exact_policy_restricts_flow_action() {
         );
         assert!(auth.authenticate(&token).await.is_err());
     }
+    issuer.stop().await;
+}
+
+/// A policy admits only the exact token subjects it lists. A listed client
+/// presenting a token for anyone else is refused like a scope mismatch, and
+/// operator policies are pinned the same way.
+#[tokio::test]
+async fn a_policy_admits_only_the_subjects_it_lists() {
+    let issuer = TestAuthorizationServerBuilder::default()
+        .client(TestClient::new("producer"))
+        .client(TestClient::new("operator"))
+        .start()
+        .await;
+    let keys = Arc::new(JwksFetcher::new_with_fetch_url_policy(
+        issuer.jwks_uri(),
+        JwksFetcherConfig::defaults(),
+        FetchUrlPolicy::dev(),
+    ));
+    let verifier = TokenVerifierConfig::access_token_profile(
+        issuer.issuer(),
+        vec!["urn:coordinator:test".into()],
+        vec![Algorithm::EdDSA],
+        access_token_typ_set("at+jwt"),
+    )
+    .with_scope_claim("scope")
+    .with_allowed_clients(vec!["producer".into(), "operator".into()]);
+    let producer = ClientPolicy {
+        subjects: vec!["producer-service-account".into()],
+        required_scopes: vec!["coordinator:start".into()],
+        workflows: vec!["follow-up".into()],
+        actions: Vec::from([Action::Start, Action::Status]),
+        operator: false,
+    };
+    let operator = ClientPolicy {
+        subjects: vec!["operations-lead".into(), "on-call-operator".into()],
+        required_scopes: vec!["coordinator:operate".into()],
+        workflows: vec!["follow-up".into()],
+        actions: Vec::from([Action::Status, Action::Inspect]),
+        operator: true,
+    };
+    let auth = Authenticator::new(
+        verifier,
+        keys,
+        [("producer".into(), producer), ("operator".into(), operator)].into(),
+        false,
+    );
+    for (client, subject, scope, admitted) in [
+        (
+            "producer",
+            "producer-service-account",
+            "coordinator:start",
+            true,
+        ),
+        ("producer", "a-person", "coordinator:start", false),
+        (
+            "producer",
+            "Producer-Service-Account",
+            "coordinator:start",
+            false,
+        ),
+        ("producer", "operations-lead", "coordinator:start", false),
+        ("operator", "operations-lead", "coordinator:operate", true),
+        ("operator", "a-person", "coordinator:operate", false),
+        (
+            "operator",
+            "producer-service-account",
+            "coordinator:operate",
+            false,
+        ),
+    ] {
+        let token = issuer.issue_access_token(
+            client,
+            subject,
+            "urn:coordinator:test",
+            scope,
+            Utc::now().timestamp() + 300,
+        );
+        match auth.authenticate(&token).await {
+            Ok(caller) => {
+                assert!(admitted, "{client} / {subject} must be refused");
+                assert_eq!(caller.actor.client_id, client);
+                assert_eq!(caller.actor.subject, subject);
+            }
+            Err(error) => {
+                assert!(!admitted, "{client} / {subject} must be admitted: {error}");
+                assert_eq!(error.code, "access.denied", "{client} / {subject}");
+            }
+        }
+    }
+    issuer.stop().await;
+}
+
+/// A client assertion signed by hand, so the test can drive the token
+/// endpoint's client credentials and token exchange grants directly.
+fn client_assertion(
+    key: &registry_platform_crypto::PrivateJwk,
+    client: &str,
+    endpoint: &str,
+    jti: &str,
+) -> String {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+    let now = Utc::now().timestamp();
+    let header = serde_json::json!({
+        "alg": key.algorithm().unwrap().jwa_name(), "kid": key.kid, "typ": "JWT"
+    });
+    let claims = serde_json::json!({
+        "iss": client, "sub": client, "aud": endpoint, "iat": now, "exp": now + 60, "jti": jti
+    });
+    let input = format!(
+        "{}.{}",
+        URL_SAFE_NO_PAD.encode(header.to_string()),
+        URL_SAFE_NO_PAD.encode(claims.to_string())
+    );
+    let signature = registry_platform_crypto::sign(input.as_bytes(), key).unwrap();
+    format!("{input}.{}", URL_SAFE_NO_PAD.encode(signature))
+}
+
+async fn granted_access_token(endpoint: &str, form: &[(&str, &str)]) -> String {
+    let response = reqwest::Client::new()
+        .post(endpoint)
+        .form(form)
+        .send()
+        .await
+        .unwrap();
+    let status = response.status();
+    let body: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(status, reqwest::StatusCode::OK, "{body}");
+    body["access_token"].as_str().unwrap().to_owned()
+}
+
+fn token_claims(token: &str) -> serde_json::Value {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+    let payload = token.split('.').nth(1).unwrap();
+    serde_json::from_slice(&URL_SAFE_NO_PAD.decode(payload).unwrap()).unwrap()
+}
+
+/// A delegated token names a person in `sub` and the exchanging service in
+/// `act`. Admission refuses any token carrying `act`, even when its client,
+/// scopes, assertion issuer and subject would all be admitted. A token
+/// exchange without an actor keeps the service's own subject and no `act`,
+/// so it is admitted like the service's own token.
+#[tokio::test]
+async fn a_token_carrying_act_is_refused_and_an_exchange_without_one_is_not() {
+    use registry_platform_crypto::{generate_private_jwk, GeneratedKeyAlgorithm};
+    const AUDIENCE: &str = "urn:coordinator:test";
+    const SERVICE: &str = "producer-service-account";
+    const PERSON: &str = "a-person";
+    const ACCESS_TOKEN: &str = "urn:ietf:params:oauth:token-type:access_token";
+    const TOKEN_EXCHANGE: &str = "urn:ietf:params:oauth:grant-type:token-exchange";
+    const JWT_BEARER: &str = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
+    let key = generate_private_jwk(GeneratedKeyAlgorithm::Es256).unwrap();
+    let issuer = TestAuthorizationServerBuilder::default()
+        .client(
+            TestClient::new("producer")
+                .with_public_jwk(key.public())
+                .with_resource(AUDIENCE)
+                .with_service_subject(SERVICE),
+        )
+        .start()
+        .await;
+    let endpoint = issuer.token_endpoint();
+    let keys = Arc::new(JwksFetcher::new_with_fetch_url_policy(
+        issuer.jwks_uri(),
+        JwksFetcherConfig::defaults(),
+        FetchUrlPolicy::dev(),
+    ));
+    let verifier = TokenVerifierConfig::access_token_profile(
+        issuer.issuer(),
+        vec![AUDIENCE.into()],
+        vec![Algorithm::EdDSA],
+        access_token_typ_set("at+jwt"),
+    )
+    .with_scope_claim("scope")
+    .with_allowed_clients(vec!["producer".into()])
+    .with_assertion_issuers([("producer".into(), vec![issuer.issuer()])].into());
+    // The policy lists both subjects, so only `act` decides the refusal.
+    let policy = ClientPolicy {
+        subjects: vec![SERVICE.into(), PERSON.into()],
+        required_scopes: vec!["coordinator:start".into()],
+        workflows: vec!["follow-up".into()],
+        actions: Vec::from([Action::Start, Action::Status]),
+        operator: false,
+    };
+    let auth = Authenticator::new(verifier, keys, [("producer".into(), policy)].into(), true);
+
+    let own = client_assertion(&key, "producer", &endpoint, "own");
+    let service = granted_access_token(
+        &endpoint,
+        &[
+            ("grant_type", "client_credentials"),
+            ("client_id", "producer"),
+            ("client_assertion_type", JWT_BEARER),
+            ("client_assertion", &own),
+            ("resource", AUDIENCE),
+            ("scope", "coordinator:start"),
+        ],
+    )
+    .await;
+    assert_eq!(token_claims(&service)["sub"], SERVICE);
+    let caller = auth.authenticate(&service).await.unwrap();
+    assert_eq!(caller.actor.subject, SERVICE);
+
+    let exchange = |subject_token: String, jti: &'static str, actor: Option<String>| {
+        let assertion = client_assertion(&key, "producer", &endpoint, jti);
+        let endpoint = endpoint.clone();
+        async move {
+            let mut form = vec![
+                ("grant_type", TOKEN_EXCHANGE.to_owned()),
+                ("client_id", "producer".to_owned()),
+                ("client_assertion_type", JWT_BEARER.to_owned()),
+                ("client_assertion", assertion),
+                ("subject_token", subject_token),
+                ("subject_token_type", ACCESS_TOKEN.to_owned()),
+                ("resource", AUDIENCE.to_owned()),
+            ];
+            if let Some(actor) = actor {
+                form.push(("actor_token", actor));
+                form.push(("actor_token_type", ACCESS_TOKEN.to_owned()));
+            }
+            let form: Vec<(&str, &str)> = form.iter().map(|(k, v)| (*k, v.as_str())).collect();
+            granted_access_token(&endpoint, &form).await
+        }
+    };
+    let expires = Utc::now().timestamp() + 300;
+
+    // Delegated: the person is `sub`, the service is `act.sub`.
+    let person =
+        issuer.issue_access_token("producer", PERSON, AUDIENCE, "coordinator:start", expires);
+    let delegated = exchange(person, "delegated", Some(service.clone())).await;
+    let claims = token_claims(&delegated);
+    assert_eq!(claims["sub"], PERSON);
+    assert_eq!(claims["act"], serde_json::json!({"sub": SERVICE}));
+    let error = auth
+        .authenticate(&delegated)
+        .await
+        .err()
+        .expect("a token carrying act is refused");
+    assert_eq!(error.code, "access.denied");
+
+    // Without an actor the exchanged token keeps the service subject.
+    let subject =
+        issuer.issue_access_token("producer", SERVICE, AUDIENCE, "coordinator:start", expires);
+    let exchanged = exchange(subject, "service", None).await;
+    let claims = token_claims(&exchanged);
+    assert!(claims.get("act").is_none());
+    assert_eq!(claims["registry_assertion_issuer"], issuer.issuer());
+    let caller = auth.authenticate(&exchanged).await.unwrap();
+    assert_eq!(caller.actor.subject, SERVICE);
     issuer.stop().await;
 }
 
@@ -415,6 +664,7 @@ async fn runtime_authenticator_derives_exact_admission_from_policy_keys() {
     access.scope_claim = "scope".into();
     let mut policy = access.policies.remove("institution-producer").unwrap();
     policy.workflows = vec!["follow-up".into()];
+    policy.subjects = vec!["actual-subject".into()];
     access.policies = [("urn:client:producer.v1".into(), policy)].into();
     let auth = access
         .authenticator(&runtime.secret_providers, true)

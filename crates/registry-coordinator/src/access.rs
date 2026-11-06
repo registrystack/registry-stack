@@ -53,6 +53,20 @@ impl Action {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ClientPolicy {
+    /// The exact token `sub` values this policy admits, compared byte for
+    /// byte as the issuer writes them: the client's own service-account
+    /// subject, or the named operators an operator policy serves. Each is at
+    /// most 512 bytes. A verified token from this client whose subject is not
+    /// listed is refused, and the list has no unrestricted form.
+    #[serde(deserialize_with = "crate::runtime::unique_strings")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "registry_platform_yaml::UniqueList<registry_platform_yaml::ExternalId>",
+            length(min = 1, max = 64)
+        )
+    )]
+    pub subjects: Vec<String>,
     #[serde(deserialize_with = "crate::runtime::unique_strings")]
     #[cfg_attr(
         feature = "schema",
@@ -224,6 +238,18 @@ impl AccessConfig {
             {
                 errors.push(access_error(&format!("{field}/actions"), "list distinct authorized actions; recovery administration requires operator: true"));
             }
+            if p.subjects.is_empty() || p.subjects.len() > 64 {
+                errors.push(access_error(
+                    &format!("{field}/subjects"),
+                    "list one to sixty-four exact token subjects this client's tokens carry; the list has no unrestricted form because admission binds each policy to the identities it names",
+                ));
+            }
+            if let Some(index) = p.subjects.iter().position(|s| !admitted_subject(s)) {
+                errors.push(access_error(
+                    &format!("{field}/subjects/{index}"),
+                    "write each subject exactly as the issuer puts it in the token's sub claim, at most 512 bytes and without control characters",
+                ));
+            }
             if p.required_scopes.is_empty()
                 || p.required_scopes.len() > 64
                 || p.required_scopes.join(" ").len() > 1024
@@ -394,6 +420,11 @@ fn denied() -> CoordinatorError {
         "the caller policy does not authorize this operation",
     )
 }
+/// The bound admission puts on a token subject, and so on every subject a
+/// policy may list: non-empty, at most 512 bytes, no control characters.
+fn admitted_subject(subject: &str) -> bool {
+    !subject.is_empty() && subject.len() <= 512 && !subject.chars().any(char::is_control)
+}
 impl Authenticator {
     pub fn new(
         profile: TokenVerifierConfig,
@@ -446,11 +477,18 @@ impl Authenticator {
             .claims
             .sub
             .as_deref()
-            .filter(|s| !s.is_empty() && s.len() <= 512 && !s.chars().any(char::is_control))
+            .filter(|s| admitted_subject(s))
             .ok_or_else(unauthenticated)?;
+        // A token carrying `act` was issued for someone other than the client
+        // that presents it, typically a person delegated to that client. The
+        // Coordinator admits only a client's own identities.
+        if verified.claims.extra.contains_key("act") {
+            return Err(denied());
+        }
         let p = self
             .policies
             .get(client)
+            .filter(|p| p.subjects.iter().any(|s| s == subject))
             .filter(|p| {
                 p.required_scopes
                     .iter()
@@ -531,6 +569,7 @@ mod tests {
                 operator,
             },
             policy: ClientPolicy {
+                subjects: vec!["subject".into()],
                 required_scopes: vec!["coordinator:operate".into()],
                 workflows: workflows
                     .iter()

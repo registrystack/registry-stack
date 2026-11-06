@@ -387,7 +387,7 @@ async fn coordinator(
         "listener":{"bind":address.to_string(),"tlsTermination":"development-loopback"},
         "authentication":{"issuer":issuer.issuer(),"audience":"urn:coordinator:scheduling-lifecycle",
             "scopeClaim":"scope","jwksSource":{"type":"uri","uri":issuer.jwks_uri()},
-            "policies":{"lifecycle-operator":{"requiredScopes":["coordinator:operate"],
+            "policies":{"lifecycle-operator":{"subjects":["operations-lead"],"requiredScopes":["coordinator:operate"],
                 "workflows":["scheduling-lifecycle"],"actions":["status","inspect"],"operator":true}}},
         "auditFile":root.join("audit/coordinator.ndjson"),
         "auditKeyRef":"secret:file/audit-key",

@@ -3695,9 +3695,11 @@ formats:
         whenOmitted: closed
       - pointer: /deployment/authentication/policies/*/actions
         whenOmitted: refused
+      - pointer: /deployment/authentication/policies/*/subjects
+        whenOmitted: refused
       - pointer: /deployment/packages/*/expectedDigest
         whenOmitted: refused
-    restrictingMembers: [/deployment/authentication/assertionIssuers]
+    restrictingMembers: [/deployment/authentication/assertionIssuers, /deployment/authentication/policies/*/subjects]
   - id: coordinator/scenarios
     product: coordinator
     title: Coordinator offline scenarios

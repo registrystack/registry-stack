@@ -237,7 +237,7 @@ fn exact_client_keys_keep_external_identity_grammar_and_source_addressing() {
         .find(|d| d.path == pointer)
         .unwrap();
     assert!(diagnostic.source.as_ref().unwrap().line.is_some());
-    let duplicate = SCHEDULING_RUNTIME.replace("      institution-producer:", "      institution-producer:\n        requiredScopes: [coordinator:start]\n        workflows: [deferred-appointment]\n        actions: [start, status]\n      institution-producer:");
+    let duplicate = SCHEDULING_RUNTIME.replace("      institution-producer:", "      institution-producer:\n        subjects: [institution-producer-service-account]\n        requiredScopes: [coordinator:start]\n        workflows: [deferred-appointment]\n        actions: [start, status]\n      institution-producer:");
     assert_eq!(refused(&duplicate).code, "yaml.duplicate-key");
 }
 
@@ -967,6 +967,144 @@ fn caller_policy_flow_ids_use_the_workflow_name_grammar() {
     load(&serde_norway::to_string(&document).unwrap()).unwrap();
 }
 
+/// Every caller policy lists the exact token subjects it admits. Subjects are
+/// compared as the issuer writes them, so UUIDs and email addresses stay
+/// valid, and the list has no unrestricted form.
+#[test]
+fn caller_policies_list_the_exact_subjects_they_admit() {
+    let original: Value = yaml_value(SINGLE_FLOW).unwrap();
+    #[cfg(feature = "schema")]
+    let schema: Value =
+        serde_json::from_str(&registry_coordinator::runtime::runtime_schema().unwrap()).unwrap();
+    #[cfg(feature = "schema")]
+    let validator = jsonschema::JSONSchema::options()
+        .with_draft(jsonschema::Draft::Draft202012)
+        .compile(&schema)
+        .unwrap();
+    let with_subjects = |policy: &str, subjects: Option<Value>| {
+        let mut document = original.clone();
+        let entry = &mut document["deployment"]["authentication"]["policies"][policy];
+        match subjects {
+            Some(subjects) => entry["subjects"] = subjects,
+            None => {
+                entry.as_object_mut().unwrap().remove("subjects");
+            }
+        }
+        document
+    };
+
+    let listed = json!([
+        "5f0c8d2e-3b1a-4c7d-9e6f-1a2b3c4d5e6f",
+        "producer-service@issuer.example.org",
+        "é".repeat(256),
+    ]);
+    for policy in ["institution-producer", "institution-operator"] {
+        let accepted = with_subjects(policy, Some(listed.clone()));
+        let config = load(&serde_norway::to_string(&accepted).unwrap()).unwrap();
+        assert_eq!(
+            config.document().unwrap()["deployment"]["authentication"]["policies"][policy]
+                ["subjects"],
+            listed,
+            "{policy}"
+        );
+        #[cfg(feature = "schema")]
+        assert!(validator.is_valid(&accepted), "{policy}");
+    }
+
+    for policy in ["institution-producer", "institution-operator"] {
+        let field = format!("/deployment/authentication/policies/{policy}");
+
+        // Omitting the list fails closed.
+        let missing = with_subjects(policy, None);
+        let error = refused(&serde_norway::to_string(&missing).unwrap());
+        assert_eq!(error.code, "config.missing-key", "{policy}");
+        assert_eq!(error.field.as_deref(), Some(field.as_str()), "{policy}");
+        #[cfg(feature = "schema")]
+        assert!(!validator.is_valid(&missing), "{policy}");
+
+        // An empty or oversized list is refused, and the advice says why no
+        // unrestricted form exists.
+        for subjects in [
+            json!([]),
+            json!((0..65).map(|i| format!("subject-{i}")).collect::<Vec<_>>()),
+        ] {
+            let document = with_subjects(policy, Some(subjects.clone()));
+            let error = refused(&serde_norway::to_string(&document).unwrap());
+            assert_eq!(error.code, "coordinator.access.configuration", "{subjects}");
+            assert_eq!(
+                error.field.as_deref(),
+                Some(format!("{field}/subjects").as_str()),
+                "{subjects}"
+            );
+            let advice = error.suggested_action.as_deref().unwrap();
+            assert!(advice.contains("one to sixty-four"), "{advice}");
+            assert!(advice.contains("no unrestricted form"), "{advice}");
+            #[cfg(feature = "schema")]
+            assert!(!validator.is_valid(&document), "{subjects}");
+        }
+
+        // A repeated subject is a duplicate set item.
+        let duplicate = with_subjects(policy, Some(json!([CANARY, CANARY])));
+        let error = refused(&serde_norway::to_string(&duplicate).unwrap());
+        assert_eq!(error.code, "config.duplicate-item", "{policy}");
+        assert!(error
+            .field
+            .as_deref()
+            .unwrap()
+            .starts_with(&format!("{field}/subjects")));
+        assert!(!error.to_string().contains(CANARY));
+        #[cfg(feature = "schema")]
+        assert!(!validator.is_valid(&duplicate), "{policy}");
+
+        // A subject longer than 512 bytes could never match an admitted token.
+        for overlong in ["a".repeat(513), format!("{CANARY}{}", "é".repeat(250))] {
+            let document = with_subjects(policy, Some(json!(["listed", overlong])));
+            let error = refused(&serde_norway::to_string(&document).unwrap());
+            assert!(
+                matches!(
+                    error.code.as_str(),
+                    "config.invalid-value" | "coordinator.access.configuration"
+                ),
+                "{}",
+                error.code
+            );
+            assert_eq!(
+                error.field.as_deref(),
+                Some(format!("{field}/subjects/1").as_str())
+            );
+            if error.code == "coordinator.access.configuration" {
+                let advice = error.suggested_action.as_deref().unwrap();
+                assert!(advice.contains("512 bytes"), "{advice}");
+            }
+            assert!(!error.to_string().contains(CANARY));
+        }
+
+        // Control characters are refused before admission sees them.
+        for control in ['\t', '\n', '\0', '\u{7f}', '\u{85}'] {
+            let document = with_subjects(policy, Some(json!([format!("a{control}{CANARY}")])));
+            let error = refused(&serde_norway::to_string(&document).unwrap());
+            assert!(
+                matches!(
+                    error.code.as_str(),
+                    "config.invalid-value" | "yaml.control-character"
+                ),
+                "{}",
+                error.code
+            );
+            if error.code == "config.invalid-value" {
+                assert_eq!(
+                    error.field.as_deref(),
+                    Some(format!("{field}/subjects/0").as_str())
+                );
+            } else {
+                let source = error.diagnostics[0].source.as_ref().unwrap();
+                assert!(source.line.is_some() && source.column.is_some());
+            }
+            assert!(!error.to_string().contains(CANARY));
+        }
+    }
+}
+
 const DEPLOYMENT_ACTIONS: [&str; 6] = [
     "doctor",
     "restore-hold",
@@ -999,7 +1137,8 @@ fn flows_scope_run_actions_and_deployment_operators_list_none() {
     };
 
     let deployment_operator = with_operator(json!({
-                "requiredScopes": ["coordinator:operate"],
+        "subjects": ["platform-operator"],
+        "requiredScopes": ["coordinator:operate"],
         "actions": DEPLOYMENT_ACTIONS,
         "operator": true,
     }));
