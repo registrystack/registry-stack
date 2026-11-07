@@ -1322,7 +1322,11 @@ async fn a_number_the_source_path_cannot_carry_is_refused_before_the_source_is_r
         assert_eq!(terminal["safeErrorCategory"], "source-protocol", "{number}");
         assert_eq!(terminal["operation"], access["operation"], "{number}");
         assert_absent(
-            &format!("{}{}", String::from_utf8_lossy(response.as_bytes()), fixture.audit()),
+            &format!(
+                "{}{}",
+                String::from_utf8_lossy(response.as_bytes()),
+                fixture.audit()
+            ),
             &[number, CODE],
             "the refusal and its audit",
         );
