@@ -142,10 +142,25 @@ function show(document, outcome) {
   result.hidden = false;
 }
 
-function start(document, location) {
+// The origin of the configured endpoint, or null when the meta value is missing or not a URL.
+function endpointOrigin(endpoint) {
+  try {
+    return new URL(endpoint).origin;
+  } catch {
+    return null;
+  }
+}
+
+export function start(document, location) {
   const meta = document.querySelector('meta[name="check-endpoint"]');
   const endpoint = meta === null ? '' : meta.content;
-  document.getElementById('origin').textContent = `Check origin: ${new URL(endpoint).origin}`;
+  const origin = endpointOrigin(endpoint);
+  if (origin === null) {
+    document.getElementById('check-form').addEventListener('submit', (event) => event.preventDefault());
+    show(document, { problem: MESSAGES.unavailable });
+    return;
+  }
+  document.getElementById('origin').textContent = `Check origin: ${origin}`;
   const numberInput = document.getElementById('number');
   const codeInput = document.getElementById('code');
   const form = document.getElementById('check-form');
