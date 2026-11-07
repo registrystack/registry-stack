@@ -67,6 +67,7 @@ test('describeAnswer labels known fields and keeps unknown keys', () => {
     observedAt: '2026-11-08T09:14:03Z',
   });
   assert.deepEqual(described, {
+    statusCode: 'valid',
     status: 'Valid',
     rows: [
       ['Holder', 'Jordan Sample'],
@@ -74,6 +75,17 @@ test('describeAnswer labels known fields and keeps unknown keys', () => {
     ],
     observedAt: '2026-11-08T09:14:03Z',
   });
+});
+
+test('describeAnswer keeps the raw status so a revoked answer is never marked valid', () => {
+  const described = describeAnswer({
+    schema: ANSWER_SCHEMA,
+    status: 'revoked',
+    fields: {},
+    observedAt: '2026-11-08T09:14:03Z',
+  });
+  assert.equal(described.statusCode, 'revoked');
+  assert.equal(described.status, 'Revoked');
 });
 
 test('describeAnswer refuses anything that is not the answer schema', () => {
