@@ -1520,6 +1520,7 @@ pub struct LocalAuditOperationView {
 enum LocalAuditOperationEvent {
     Authorized(LocalAuthorizedOperationEvent),
     AuthorizationRefusal(LocalAuthorizationRefusalOperationEvent),
+    PublicCheck(LocalPublicCheckOperationEvent),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -1557,6 +1558,28 @@ struct LocalAuthorizationRefusalOperationEvent {
     safe_error_category: String,
 }
 
+/// The minimized view of one public certificate check entry. It names the
+/// definition, the Source read, and how the check ended; it carries no
+/// subject, not even as a pseudonym, because a public check has no caller and
+/// the presented document number is never recorded.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LocalPublicCheckOperationEvent {
+    occurred_at: String,
+    phase: AuditPhase,
+    decision: PublicCheckAuditDecision,
+    requirement: String,
+    authority_revision: String,
+    effective_grant_digest: String,
+    purpose: String,
+    source_id: String,
+    adapter_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    disclosed_concepts: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    safe_error_category: Option<String>,
+}
+
 /// One stored line as the platform writer lays it out.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1586,6 +1609,10 @@ impl LocalAuditInspectionBounds {
         maximum_records: 10_000,
         maximum_output_bytes: 256 * 1024,
     };
+}
+
+struct PendingPublicCheck {
+    event: EvidencePublicCheckAuditEvent,
 }
 
 struct PendingLocalOperation {
@@ -1661,6 +1688,11 @@ struct LocalAuditCollector {
     request_batches: BTreeSet<String>,
     /// Request-batch operations with an access entry and no terminal entry.
     pending_request_batches: BTreeMap<String, PendingRequestBatch>,
+    /// Public-check operations with an access entry and no terminal entry.
+    pending_public_checks: BTreeMap<String, PendingPublicCheck>,
+    /// Every public-check operation read, so one operation identifier never
+    /// spans record families.
+    public_checks: BTreeSet<String>,
     last_completed: Option<LocalAuditOperationView>,
     /// Whether the entries read come from the oldest retained file, where a
     /// terminal entry may follow an access entry retention deleted.
@@ -1747,8 +1779,79 @@ impl LocalAuditCollector {
                 }
                 self.collect_request_batch(event, true)
             }
+            PUBLIC_CHECK_AUDIT_SCHEMA => {
+                let event: EvidencePublicCheckAuditEvent =
+                    serde_json::from_value(entry.record).map_err(|_| invalid_audit_data())?;
+                let expected_phase = if event.phase == AuditPhase::AccessAttempt {
+                    EntryPhase::Request
+                } else {
+                    EntryPhase::Response
+                };
+                if entry.phase != expected_phase || entry.correlation != event.operation {
+                    return Err(invalid_audit_data());
+                }
+                self.collect_public_check(event)
+            }
             _ => Err(invalid_audit_data()),
         }
+    }
+
+    /// Check a public-check entry and record its operation. A check writes one
+    /// access entry before its Source read and at most one terminal entry, and
+    /// the terminal entry must agree with the access entry on everything the
+    /// check was admitted under.
+    fn collect_public_check(
+        &mut self,
+        event: EvidencePublicCheckAuditEvent,
+    ) -> Result<(), AuditError> {
+        event
+            .validate_phase_fields()
+            .map_err(|_| invalid_audit_data())?;
+        let operation = event.operation.clone();
+        // One operation identifier belongs to one record family.
+        if self.request_batches.contains(&operation)
+            || self.pending.contains_key(&operation)
+            || (self.completed.contains(&operation) && !self.public_checks.contains(&operation))
+        {
+            return Err(invalid_audit_data());
+        }
+        self.record_operation(&operation);
+        self.public_checks.insert(operation.clone());
+        if event.phase == AuditPhase::AccessAttempt {
+            if self.completed.contains(&operation)
+                || self.pending_public_checks.contains_key(&operation)
+            {
+                return Err(invalid_audit_data());
+            }
+            self.pending_public_checks
+                .insert(operation, PendingPublicCheck { event });
+            return Ok(());
+        }
+        let Some(access) = self.pending_public_checks.remove(&operation) else {
+            // As for a single request, only the oldest retained file may open
+            // with a terminal entry whose access entry retention deleted.
+            if !self.oldest_file || !self.completed.insert(operation.clone()) {
+                return Err(invalid_audit_data());
+            }
+            self.cut.insert(operation);
+            return Ok(());
+        };
+        if !coherent_public_check_pair(&access.event, &event)
+            || !self.completed.insert(operation.clone())
+        {
+            return Err(invalid_audit_data());
+        }
+        self.last_completed = Some(LocalAuditOperationView {
+            schema: LOCAL_AUDIT_OPERATION_VIEW_SCHEMA,
+            operation,
+            events: vec![
+                LocalAuditOperationEvent::from(&access.event),
+                LocalAuditOperationEvent::from(&event),
+            ],
+            unmatched_earlier_operations: 0,
+            assurance_profile: event.assurance_profile,
+        });
+        Ok(())
     }
 
     /// Check a request-batch entry and record its operation. A batch is
@@ -1769,6 +1872,7 @@ impl LocalAuditCollector {
         let operation = event.operation.clone();
         // One operation identifier belongs to one record family.
         if self.pending.contains_key(&operation)
+            || self.public_checks.contains(&operation)
             || (self.completed.contains(&operation) && !self.request_batches.contains(&operation))
         {
             return Err(invalid_audit_data());
@@ -1834,7 +1938,7 @@ impl LocalAuditCollector {
         }
         .map_err(|_| invalid_audit_data())?;
         let operation = event.operation.clone();
-        if self.request_batches.contains(&operation) {
+        if self.request_batches.contains(&operation) || self.public_checks.contains(&operation) {
             return Err(invalid_audit_data());
         }
         self.record_operation(&operation);
@@ -1937,7 +2041,7 @@ impl LocalAuditCollector {
             .validate_phase_fields()
             .map_err(|_| invalid_audit_data())?;
         let operation = event.operation.clone();
-        if self.request_batches.contains(&operation) {
+        if self.request_batches.contains(&operation) || self.public_checks.contains(&operation) {
             return Err(invalid_audit_data());
         }
         self.record_operation(&operation);
@@ -1972,7 +2076,10 @@ impl LocalAuditCollector {
             .pending
             .len()
             .saturating_add(self.pending_request_batches.len())
-            .saturating_sub(usize::from(self.pending.contains_key(&last)));
+            .saturating_add(self.pending_public_checks.len())
+            .saturating_sub(usize::from(
+                self.pending.contains_key(&last) || self.pending_public_checks.contains_key(&last),
+            ));
         let mut view = if let Some(stages) = self.pending.remove(&last) {
             let assurance_profile = stages
                 .first()
@@ -1985,6 +2092,14 @@ impl LocalAuditCollector {
                 events: stages.into_iter().map(|stage| stage.view).collect(),
                 unmatched_earlier_operations: 0,
                 assurance_profile,
+            }
+        } else if let Some(access) = self.pending_public_checks.remove(&last) {
+            LocalAuditOperationView {
+                schema: LOCAL_AUDIT_OPERATION_VIEW_SCHEMA,
+                operation: last,
+                events: vec![LocalAuditOperationEvent::from(&access.event)],
+                unmatched_earlier_operations: 0,
+                assurance_profile: access.event.assurance_profile,
             }
         } else {
             self.last_completed
@@ -2002,6 +2117,10 @@ impl LocalAuditCollector {
                 LocalAuditOperationEvent::AuthorizationRefusal(event) => {
                     event.phase == AuditPhase::Denial
                         && event.decision == AuthorizationRefusalAuditDecision::NotAuthorized
+                }
+                LocalAuditOperationEvent::PublicCheck(event) => {
+                    event.phase == AuditPhase::AccessAttempt
+                        && event.decision == PublicCheckAuditDecision::Authorized
                 }
             });
         if !starts_with_complete_native_event || view.assurance_profile != AssuranceProfile::Local {
@@ -2048,6 +2167,41 @@ impl From<&EvidenceAuthorizationRefusalAuditEvent> for LocalAuditOperationEvent 
             safe_error_category: event.safe_error_category.clone(),
         })
     }
+}
+
+impl From<&EvidencePublicCheckAuditEvent> for LocalAuditOperationEvent {
+    fn from(event: &EvidencePublicCheckAuditEvent) -> Self {
+        Self::PublicCheck(LocalPublicCheckOperationEvent {
+            occurred_at: event.occurred_at.clone(),
+            phase: event.phase,
+            decision: event.decision,
+            requirement: event.requirement.clone(),
+            authority_revision: event.authority_revision.clone(),
+            effective_grant_digest: event.effective_grant_digest.clone(),
+            purpose: event.purpose.clone(),
+            source_id: event.source_id.clone(),
+            adapter_id: event.adapter_id.clone(),
+            disclosed_concepts: event.disclosed_concepts.clone(),
+            safe_error_category: event.safe_error_category.clone(),
+        })
+    }
+}
+
+fn coherent_public_check_pair(
+    access: &EvidencePublicCheckAuditEvent,
+    terminal: &EvidencePublicCheckAuditEvent,
+) -> bool {
+    timestamps_in_order(&access.occurred_at, &terminal.occurred_at)
+        && access.assurance_profile == terminal.assurance_profile
+        && access.requirement == terminal.requirement
+        && access.bundle_revision == terminal.bundle_revision
+        && access.authority_revision == terminal.authority_revision
+        && access.effective_grant_digest == terminal.effective_grant_digest
+        && access.purpose == terminal.purpose
+        && access.subjects == terminal.subjects
+        && access.source_id == terminal.source_id
+        && access.adapter_id == terminal.adapter_id
+        && access.reason == terminal.reason
 }
 
 fn coherent_operation_pair(access: &EvidenceAuditEvent, terminal: &EvidenceAuditEvent) -> bool {
@@ -5620,6 +5774,291 @@ mod tests {
             captured.entries().len(),
             2,
             "an invalid record is never written"
+        );
+    }
+    fn local_public_check_event(
+        operation: &str,
+        phase: AuditPhase,
+        decision: PublicCheckAuditDecision,
+    ) -> EvidencePublicCheckAuditEvent {
+        let mut event = public_check_event(phase, decision);
+        event.assurance_profile = AssuranceProfile::Local;
+        event.operation = operation.to_owned();
+        event
+    }
+
+    fn raw_public_check_entry(event: &EvidencePublicCheckAuditEvent) -> AuditEntry {
+        let record = serde_json::to_value(event).expect("public-check event serializes");
+        if event.phase == AuditPhase::AccessAttempt {
+            AuditEntry::request(PUBLIC_CHECK_AUDIT_SCHEMA, &event.operation, record)
+        } else {
+            AuditEntry::response(PUBLIC_CHECK_AUDIT_SCHEMA, &event.operation, record)
+        }
+    }
+
+    #[tokio::test]
+    async fn local_inspection_reads_a_released_public_check_without_its_subject() {
+        use PublicCheckAuditDecision as Decision;
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("audit.jsonl");
+        let log = file_log(&path).await;
+        let operation = "local-public-check-0000000000000001";
+        for (phase, decision) in [
+            (AuditPhase::AccessAttempt, Decision::Authorized),
+            (AuditPhase::DisclosureRelease, Decision::Released),
+        ] {
+            log.append_public_check(local_public_check_event(operation, phase, decision))
+                .await
+                .expect("public-check event appends");
+        }
+        drop(log);
+
+        let view = last_local_audit_operation(&path).expect("a public check reads");
+        let value = serde_json::to_value(view).expect("view serializes");
+        assert_eq!(value["operation"], serde_json::json!(operation));
+        assert_eq!(value["unmatchedEarlierOperations"], serde_json::json!(0));
+        let events = value["events"].as_array().expect("events are an array");
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0]["phase"], "access-attempt");
+        assert_eq!(events[0]["decision"], "authorized");
+        assert_eq!(events[1]["phase"], "disclosure-release");
+        assert_eq!(events[1]["decision"], "released");
+        assert_eq!(
+            events[1]["disclosedConcepts"],
+            serde_json::json!([
+                "urn:example:concept:certificate-status:v1",
+                "urn:example:concept:certificate-printed:v1"
+            ])
+        );
+        for event in events {
+            assert_eq!(
+                event["requirement"],
+                "urn:example:requirement:certificate-status:v1"
+            );
+            assert_eq!(event["purpose"], "certificate-check");
+            assert_eq!(event["sourceId"], "certificate-record");
+            assert_eq!(event["adapterId"], "synthetic-register");
+            assert!(event["occurredAt"].is_string());
+        }
+        // The view never carries the presented subject, even as a pseudonym.
+        let rendered = value.to_string();
+        for protected in [
+            "subjects",
+            "selector",
+            "hmac-sha256",
+            "durationMilliseconds",
+        ] {
+            assert!(!rendered.contains(protected), "view disclosed {protected}");
+        }
+    }
+
+    #[tokio::test]
+    async fn local_inspection_reads_every_public_check_miss_and_failure() {
+        use PublicCheckAuditDecision as Decision;
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let terminals = [
+            (AuditPhase::Denial, Decision::NoMatch, "no-match"),
+            (AuditPhase::Denial, Decision::Ambiguous, "ambiguous"),
+            (AuditPhase::Denial, Decision::Unresolved, "unresolved"),
+            (AuditPhase::Denial, Decision::FactMissing, "fact-missing"),
+            (AuditPhase::Denial, Decision::CodeMismatch, "code-mismatch"),
+            (
+                AuditPhase::TransientFailure,
+                Decision::DependencyFailure,
+                "dependency-failure",
+            ),
+            (
+                AuditPhase::TransientFailure,
+                Decision::EvaluationFailure,
+                "evaluation-failure",
+            ),
+        ];
+        for (index, (phase, decision, wire)) in terminals.into_iter().enumerate() {
+            let path = directory.path().join(format!("audit-{index}.jsonl"));
+            let log = file_log(&path).await;
+            let operation = format!("local-public-check-miss-{index:08}");
+            for (phase, decision) in [
+                (AuditPhase::AccessAttempt, Decision::Authorized),
+                (phase, decision),
+            ] {
+                log.append_public_check(local_public_check_event(&operation, phase, decision))
+                    .await
+                    .expect("public-check event appends");
+            }
+            drop(log);
+            let value = serde_json::to_value(
+                last_local_audit_operation(&path).expect("a public check miss reads"),
+            )
+            .expect("view serializes");
+            let events = value["events"].as_array().expect("events are an array");
+            assert_eq!(events.len(), 2, "{wire}");
+            assert_eq!(events[1]["decision"], wire);
+            assert_eq!(events[1]["safeErrorCategory"], "evidence-unavailable");
+            assert!(events[1].get("disclosedConcepts").is_none(), "{wire}");
+        }
+    }
+
+    #[tokio::test]
+    async fn local_inspection_reports_a_public_check_with_no_terminal_entry() {
+        use PublicCheckAuditDecision as Decision;
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("audit.jsonl");
+        let log = file_log(&path).await;
+        let finished = "local-public-check-finished-00000001";
+        let open = "local-public-check-open-0000000001";
+        for (operation, phase, decision) in [
+            (finished, AuditPhase::AccessAttempt, Decision::Authorized),
+            (finished, AuditPhase::Denial, Decision::NoMatch),
+            (open, AuditPhase::AccessAttempt, Decision::Authorized),
+        ] {
+            log.append_public_check(local_public_check_event(operation, phase, decision))
+                .await
+                .expect("public-check event appends");
+        }
+        drop(log);
+        let value = serde_json::to_value(
+            last_local_audit_operation(&path).expect("an open public check reads"),
+        )
+        .expect("view serializes");
+        assert_eq!(value["operation"], serde_json::json!(open));
+        assert_eq!(value["events"].as_array().map(Vec::len), Some(1));
+        assert_eq!(value["unmatchedEarlierOperations"], serde_json::json!(0));
+
+        let path = directory.path().join("earlier-open.jsonl");
+        let log = file_log(&path).await;
+        for (operation, phase, decision) in [
+            (open, AuditPhase::AccessAttempt, Decision::Authorized),
+            (finished, AuditPhase::AccessAttempt, Decision::Authorized),
+            (finished, AuditPhase::Denial, Decision::NoMatch),
+        ] {
+            log.append_public_check(local_public_check_event(operation, phase, decision))
+                .await
+                .expect("public-check event appends");
+        }
+        drop(log);
+        let value = serde_json::to_value(
+            last_local_audit_operation(&path).expect("an earlier open check is counted"),
+        )
+        .expect("view serializes");
+        assert_eq!(value["operation"], serde_json::json!(finished));
+        assert_eq!(value["unmatchedEarlierOperations"], serde_json::json!(1));
+    }
+
+    #[tokio::test]
+    async fn local_inspection_refuses_incoherent_public_check_history() {
+        use PublicCheckAuditDecision as Decision;
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let operation = "local-public-check-incoherent-0001";
+        let access =
+            || local_public_check_event(operation, AuditPhase::AccessAttempt, Decision::Authorized);
+        let terminal =
+            || local_public_check_event(operation, AuditPhase::Denial, Decision::NoMatch);
+
+        let mut cases: Vec<(&str, Vec<EvidencePublicCheckAuditEvent>)> = Vec::new();
+        let mut other_purpose = terminal();
+        other_purpose.purpose = "other-purpose".to_owned();
+        cases.push((
+            "a terminal under another purpose",
+            vec![access(), other_purpose],
+        ));
+        let mut other_source = terminal();
+        other_source.source_id = "other-source".to_owned();
+        cases.push((
+            "a terminal naming another source",
+            vec![access(), other_source],
+        ));
+        let mut other_authority = terminal();
+        other_authority.authority_revision = format!("sha256:{}", "d".repeat(64));
+        cases.push((
+            "a terminal under another authority",
+            vec![access(), other_authority],
+        ));
+        let mut other_subject = terminal();
+        other_subject.subjects[0].selector_bundle_pseudonym =
+            Some(format!("hmac-sha256:v1:{}", "e".repeat(64)));
+        cases.push((
+            "a terminal about another subject",
+            vec![access(), other_subject],
+        ));
+        let mut earlier = terminal();
+        earlier.occurred_at = "2000-01-01T00:00:00.000Z".to_owned();
+        cases.push(("a terminal before its access", vec![access(), earlier]));
+        cases.push(("two terminals", vec![access(), terminal(), terminal()]));
+        cases.push(("two accesses", vec![access(), access()]));
+        cases.push(("a terminal without its access", vec![terminal()]));
+        let mut production = access();
+        production.assurance_profile = AssuranceProfile::Production;
+        cases.push(("a production entry in a local history", vec![production]));
+
+        for (index, (label, events)) in cases.into_iter().enumerate() {
+            let path = directory.path().join(format!("incoherent-{index}.jsonl"));
+            append_raw_entries(&path, events.iter().map(raw_public_check_entry).collect()).await;
+            assert!(last_local_audit_operation(&path).is_err(), "{label}");
+        }
+
+        let path = directory.path().join("wrong-shape.jsonl");
+        let mut without_category = terminal();
+        without_category.safe_error_category = None;
+        append_raw_entries(
+            &path,
+            vec![
+                raw_public_check_entry(&access()),
+                raw_public_check_entry(&without_category),
+            ],
+        )
+        .await;
+        assert!(
+            last_local_audit_operation(&path).is_err(),
+            "an invalid shape"
+        );
+
+        let path = directory.path().join("wrong-envelope.jsonl");
+        let record = serde_json::to_value(access()).expect("access serializes");
+        append_raw_entries(
+            &path,
+            vec![AuditEntry::response(
+                PUBLIC_CHECK_AUDIT_SCHEMA,
+                operation,
+                record,
+            )],
+        )
+        .await;
+        assert!(
+            last_local_audit_operation(&path).is_err(),
+            "a response-phase access"
+        );
+
+        let path = directory.path().join("wrong-correlation.jsonl");
+        let record = serde_json::to_value(access()).expect("access serializes");
+        append_raw_entries(
+            &path,
+            vec![AuditEntry::request(
+                PUBLIC_CHECK_AUDIT_SCHEMA,
+                "another-operation-0000000001",
+                record,
+            )],
+        )
+        .await;
+        assert!(
+            last_local_audit_operation(&path).is_err(),
+            "a foreign correlation"
+        );
+
+        let path = directory.path().join("shared-operation.jsonl");
+        let log = file_log(&path).await;
+        let authorized = local_access(&log, operation);
+        drop(log);
+        append_raw_entries(
+            &path,
+            vec![
+                raw_authorized_entry(AUDIT_SCHEMA, &authorized),
+                raw_public_check_entry(&access()),
+            ],
+        )
+        .await;
+        assert!(
+            last_local_audit_operation(&path).is_err(),
+            "one operation identifier belongs to one record family"
         );
     }
 }
