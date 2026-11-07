@@ -24437,8 +24437,8 @@
               "environment": null
             },
             {
-              "display": "--preview-seal <TRUST>",
-              "description": "Render the template's sealed variant: add the `signing` member the seal route adds, as a seal of this `trust` would. Nothing is signed; the output is the first revision a seal would sign",
+              "display": "--preview-seal <KIND>",
+              "description": "Render the template's sealed variant: add the `signing` member the seal route adds, as a seal of this kind would. Nothing is signed; the output is the first revision a seal would sign",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -24472,7 +24472,7 @@
               "kind": "requires-all",
               "when": "--signer-name <TEXT>",
               "arguments": [
-                "--preview-seal <TRUST>"
+                "--preview-seal <KIND>"
               ]
             },
             {

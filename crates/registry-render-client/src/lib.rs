@@ -111,7 +111,7 @@ pub struct SealFacts {
     /// authority gave; present exactly at level `B-T`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timestamped_at: Option<String>,
-    /// Whether the server declares the seal `trust: test-only`: a test
+    /// Whether the server declares `assuranceProfile: local`: a test
     /// seal's documents are not official.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub test_only: bool,

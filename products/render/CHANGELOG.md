@@ -23,17 +23,19 @@
   and `POST /v1/seal/{type}` for document seals.
 - Add optional PAdES document sealing. A document type names a `seal` in its
   manifest, and a `signing.seals` block in the runtime file binds each seal to
-  a required trust (`test-only` or `production`; a seal without one is
-  refused with `config.missing-key`), a signer (`type: transit`, an ECDSA
+  a signer (`type: transit`, an ECDSA
   P-256 key in Vault or OpenBao Transit reached through a signing proxy on a
-  Unix socket and pinned by `mount`, `keyName` and `keyVersion`; or, for a
-  test-only seal, `type: local-jwk`, whose `privateKeyRef` names a private JWK
+  Unix socket and pinned by `mount`, `keyName` and `keyVersion`; or, under
+  the `local` profile, `type: local-jwk`, whose `privateKeyRef` names a private JWK
   through the file secret provider; an environment reference is refused as
   `render.runtime.seal-key-requires-file-provider`), a certificate chain file, a timestamp policy
   (`timestampAuthority` for baseline B-T, or the named `withoutTimestamp`
-  choice for B-B) and the OIDC clients allowed to use it. A `production`
-  seal signs only through Transit: one with a `local-jwk` key file is refused
-  as `render.runtime.seal-signer-assurance-mismatch`. A timestamp
+  choice for B-B) and the OIDC clients allowed to use it. A runtime that
+  declares a seal also declares `assuranceProfile`, Evidence's member and
+  values (a runtime with a seal and no profile is refused with
+  `config.missing-key`): `production` seals sign only through Transit and
+  `local` seals only with a `local-jwk` key file and are test seals. The
+  other signer is refused as `render.runtime.signer-assurance-mismatch`. A timestamp
   authority under a private root is trusted through an optional
   `timestampAuthority.caBundleRef`, a PEM CA bundle that replaces the
   platform's trusted roots for that authority. With seals, `serve`
@@ -61,7 +63,7 @@
   `timestampTokenDigest`, labelled as in the answer; a `timestamp-failed` response entry adds `reason`,
   the value-free name of the failing check, which a `seal refused` log warning
   repeats. The payload gains a `signing` member on the seal route
-  only. A seal declared `trust: test-only` says so in the JSON `seal`
+  only. A seal under `assuranceProfile: local` says so in the JSON `seal`
   member, an `X-Registry-Seal-Test-Only` header, `/ready`, the audit and
   one startup warning, and the `init` scaffold prints the seal block with
   its test line. `registry-render-client` gains `RenderClient::seal`, whose

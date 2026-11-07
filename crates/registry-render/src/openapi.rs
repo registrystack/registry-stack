@@ -46,7 +46,7 @@ pub const OPENAPI_JSON: &str = r##"{
       "get": {
         "summary": "Readiness (issuer keys and audit destination included)",
         "responses": {
-          "200": { "description": "ready. A deployment that seals adds a signing member, one entry per seal: {status: ready} or {status: not-ready, reason: certificate-expired | certificate-not-yet-valid | signer-not-ready}, with testOnly: true for a seal the runtime declares trust: test-only. A seal never changes the status code; readiness never requests a timestamp." },
+          "200": { "description": "ready. A deployment that seals adds a signing member, one entry per seal: {status: ready} or {status: not-ready, reason: certificate-expired | certificate-not-yet-valid | signer-not-ready}, with testOnly: true for a seal the runtime declares assuranceProfile: local. A seal never changes the status code; readiness never requests a timestamp." },
           "503": { "description": "not ready" }
         }
       }
@@ -237,7 +237,7 @@ pub const OPENAPI_JSON: &str = r##"{
                 "schema": { "type": "string", "format": "date-time" }
               },
               "X-Registry-Seal-Test-Only": {
-                "description": "true, for a seal the runtime declares trust: test-only; absent otherwise.",
+                "description": "true, for a seal the runtime declares assuranceProfile: local; absent otherwise.",
                 "schema": { "type": "string", "enum": ["true"] }
               }
             },
@@ -268,7 +268,7 @@ pub const OPENAPI_JSON: &str = r##"{
                           "format": "date-time"
                         },
                         "testOnly": {
-                          "description": "Always true when present, for a seal the runtime declares trust: test-only.",
+                          "description": "Always true when present, for a seal the runtime declares assuranceProfile: local.",
                           "type": "boolean",
                           "const": true
                         }

@@ -524,7 +524,7 @@ fn keygen_requests_a_certificate_for_a_transit_key_and_writes_no_key_file() {
     for expected in [
         "transit/render-seal version 3",
         "signer.type: transit",
-        "trust: production",
+        "assuranceProfile: production",
     ] {
         assert!(stdout.contains(expected), "{expected}: {stdout}");
     }

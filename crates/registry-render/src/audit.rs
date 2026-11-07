@@ -58,7 +58,7 @@ pub struct RenderAuditEvent {
     /// named a sealable document.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub seal_id: Option<String>,
-    /// Whether that seal is declared `trust: test-only`: present, `true`, on
+    /// Whether the runtime declares `assuranceProfile: local`: present, `true`, on
     /// every entry naming a test-only seal, and absent otherwise.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub test_only: bool,

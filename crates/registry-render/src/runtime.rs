@@ -118,9 +118,23 @@ pub struct RenderRuntime {
     /// no timestamp call, and cannot seal any document.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signing: Option<SigningRuntime>,
+    /// The assurance boundary of this deployment's seals, the same member
+    /// and values Evidence declares. Required when `signing` declares a
+    /// seal, and unused otherwise. `local` signs with a `local-jwk` key
+    /// file and marks every seal a test seal; `production` signs through
+    /// `transit` only, so a production key never leaves Transit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assurance_profile: Option<AssuranceProfile>,
 }
 
 impl RenderRuntime {
+    /// Whether the deployment's seals are test seals: its assurance profile
+    /// is `local`.
+    #[must_use]
+    pub fn seals_are_test_only(&self) -> bool {
+        self.assurance_profile == Some(AssuranceProfile::Local)
+    }
+
     /// The seal that `seal_id` binds, or `None` when the runtime has no
     /// `signing` block or binds no such seal.
     #[must_use]
@@ -405,9 +419,9 @@ pub struct SealRuntime {
     /// Binds the seal to the private-key transport that produces its
     /// signature. Selects the signer transport for this seal: `local-jwk`
     /// resolves a file-provider secret directly, `transit` calls a
-    /// workload-local Transit signing proxy over a Unix socket. A
-    /// `production` seal signs through `transit` only; a `local-jwk` key
-    /// file is for a `test-only` seal.
+    /// workload-local Transit signing proxy over a Unix socket. Under
+    /// `assuranceProfile: production` a seal signs through `transit` only;
+    /// under `local` it signs with a `local-jwk` key file only.
     pub signer: SealSignerRuntime,
     /// Absolute path of the PEM certificate chain file, the seal's own
     /// certificate first, then each issuer. It is absolute like Render's
@@ -437,12 +451,6 @@ pub struct SealRuntime {
     /// clients separate from any citizen-facing client.
     #[cfg_attr(feature = "schema", schemars(with = "UniqueList<ExternalId>"))]
     pub allowed_clients: SealClients,
-    /// Whether the seal's documents are official. `test-only` marks a seal
-    /// made with a test certificate: the template is told so and prints the
-    /// seal as a test seal. `production` marks an official seal, which signs
-    /// through a `transit` signer, never a key file. Every seal says which
-    /// it is.
-    pub trust: SealTrust,
 }
 
 impl SealRuntime {
@@ -453,12 +461,6 @@ impl SealRuntime {
             .as_slice()
             .iter()
             .any(|allowed| allowed == client_id)
-    }
-
-    /// Whether the seal is declared test-only.
-    #[must_use]
-    pub fn is_test_only(&self) -> bool {
-        self.trust == SealTrust::TestOnly
     }
 }
 
@@ -474,7 +476,7 @@ impl SealRuntime {
 )]
 #[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
 pub enum SealSignerRuntime {
-    /// Resolves a file-provider secret directly; for a `test-only` seal.
+    /// Resolves a file-provider secret directly; for `assuranceProfile: local`.
     LocalJwk {
         /// Names the file-provider secret holding the local signing private
         /// key material, read only when `signer.type` is `local-jwk`; the
@@ -569,17 +571,27 @@ pub enum WithoutTimestamp {
     SealStopsValidatingWhenCertificateExpires,
 }
 
-/// How a seal is trusted: what a seal's runtime `trust` member says, and
-/// what `compile --preview-seal` renders under.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, clap::ValueEnum)]
+/// The assurance boundary the runtime file declares for its seals. The
+/// member and the values are Evidence's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
+pub enum AssuranceProfile {
+    /// Seals sign with a `local-jwk` key file and are test seals: documents
+    /// print them as test seals (`signing.testOnly` is true).
+    Local,
+    /// Seals sign through Transit: `signing.testOnly` is false.
+    Production,
+}
+
+/// How `compile --preview-seal` renders the sealed variant: as a test seal
+/// or as an official one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+#[clap(rename_all = "kebab-case")]
 pub enum SealTrust {
-    /// A seal made with a test certificate: documents print it as a test
-    /// seal (`signing.testOnly` is true).
+    /// A test seal: `signing.testOnly` is true.
     TestOnly,
-    /// An official seal, signed through Transit: `signing.testOnly` is
-    /// false.
+    /// An official seal: `signing.testOnly` is false.
     Production,
 }
 
@@ -1070,9 +1082,9 @@ fn seal_pointer(id: &str) -> String {
     format!("/signing/seals/{}", escape_pointer_segment(id))
 }
 
-/// The findings about one seal's signer: its transport suits the seal's
-/// `trust`, a key file is read through the file provider, and a Transit
-/// socket path is absolute.
+/// The findings about one seal's signer: its transport suits the runtime's
+/// `assuranceProfile`, a key file is read through the file provider, and a
+/// Transit socket path is absolute.
 fn signer_findings(
     runtime: &RenderRuntime,
     id: &str,
@@ -1080,24 +1092,33 @@ fn signer_findings(
     findings: &mut Vec<Finding>,
 ) {
     let base = seal_pointer(id);
+    let mismatch = match (runtime.assurance_profile, &seal.signer) {
+        (Some(AssuranceProfile::Local), SealSignerRuntime::Transit { .. }) => {
+            Some(("local", "a Transit key"))
+        }
+        (Some(AssuranceProfile::Production), SealSignerRuntime::LocalJwk { .. }) => {
+            Some(("production", "a local-jwk key file"))
+        }
+        _ => None,
+    };
+    if let Some((profile, signer)) = mismatch {
+        // A key file can be copied off the host unnoticed, so a production
+        // key stays in Transit; a local deployment signs with a key file.
+        findings.push(Finding {
+            code: "render.runtime.signer-assurance-mismatch",
+            pointer: format!("{base}/signer/type"),
+            message: format!(
+                "signing.seals.{id} signs with {signer} but the runtime declares \
+                 assuranceProfile: {profile}; local seals sign with a key file and production \
+                 seals sign through Transit, so a production key never leaves the key store"
+            ),
+            action: "Write type: local-jwk under assuranceProfile: local, or type: transit \
+                     under assuranceProfile: production."
+                .to_owned(),
+        });
+    }
     match &seal.signer {
         SealSignerRuntime::LocalJwk { private_key_ref } => {
-            if seal.trust == SealTrust::Production {
-                // A key file can be copied off the host unnoticed; an
-                // official seal's key stays in Transit.
-                findings.push(Finding {
-                    code: "render.runtime.seal-signer-assurance-mismatch",
-                    pointer: format!("{base}/signer/type"),
-                    message: format!(
-                        "signing.seals.{id} is declared trust: production but signs with a \
-                         local-jwk key file; a production seal signs through Transit, so its key \
-                         never leaves the key store"
-                    ),
-                    action: "Sign the seal through a Transit key with signer.type: transit, or \
-                             declare it trust: test-only if its certificate is a test one."
-                        .to_owned(),
-                });
-            }
             let names_environment = SecretReference::parse(private_key_ref)
                 .is_ok_and(|reference| reference.provider() == SecretProvider::Environment);
             if names_environment {
@@ -1164,6 +1185,16 @@ fn signing_findings(runtime: &RenderRuntime, signing: &SigningRuntime) -> Vec<Fi
                 .to_owned(),
             "Configure authentication.oidc and name the sealing clients in each seal's allowedClients, or \
              remove the signing block.",
+        ));
+    }
+    if runtime.assurance_profile.is_none() && !signing.seals.is_empty() {
+        findings.push(finding(
+            "config.missing-key",
+            String::new(),
+            "the required member `assuranceProfile` is missing; signing.seals declares a seal"
+                .to_owned(),
+            "Add assuranceProfile: local for test seals signed with a key file, or \
+             assuranceProfile: production for seals signed through Transit.",
         ));
     }
     if signing.seals.is_empty() {
@@ -2425,17 +2456,33 @@ mod tests {
         );
     }
 
-    const SEAL: &str = "    ministry:\n      signer:\n        type: local-jwk\n        privateKeyRef: secret:file/seal.jwk\n      certificateChainFile: /etc/render/seal/chain.pem\n      timestampAuthority:\n        url: https://tsa.example.test/tsr\n      allowedClients: [records-service]\n      trust: test-only\n";
+    const SEAL: &str = "    ministry:\n      signer:\n        type: local-jwk\n        privateKeyRef: secret:file/seal.jwk\n      certificateChainFile: /etc/render/seal/chain.pem\n      timestampAuthority:\n        url: https://tsa.example.test/tsr\n      allowedClients: [records-service]\n";
 
-    /// A production seal: it signs through a Transit key, never a key file.
-    const TRANSIT_SEAL: &str = "    ministry:\n      signer:\n        type: transit\n        unixSocketPath: /run/render/transit.sock\n        mount: transit\n        keyName: render-seal\n        keyVersion: 3\n        attemptTimeoutMilliseconds: 2000\n      certificateChainFile: /etc/render/seal/chain.pem\n      timestampAuthority:\n        url: https://tsa.example.test/tsr\n      allowedClients: [records-service]\n      trust: production\n";
+    /// A seal that signs through a Transit key, as `assuranceProfile: production` requires.
+    const TRANSIT_SEAL: &str = "    ministry:\n      signer:\n        type: transit\n        unixSocketPath: /run/render/transit.sock\n        mount: transit\n        keyName: render-seal\n        keyVersion: 3\n        attemptTimeoutMilliseconds: 2000\n      certificateChainFile: /etc/render/seal/chain.pem\n      timestampAuthority:\n        url: https://tsa.example.test/tsr\n      allowedClients: [records-service]\n";
 
-    /// OIDC authentication admitting `portal` and `records-service`, then a
-    /// `signing` block holding `seals` (the indented body under `seals:`).
+    /// OIDC authentication admitting `portal` and `records-service`, then the
+    /// `assuranceProfile` that suits the seals' signers (`production` when a
+    /// signer is Transit, else `local`), then a `signing` block holding
+    /// `seals` (the indented body under `seals:`).
     fn signing_text(home: &Path, seals: &str) -> String {
+        let profile = if seals.contains("type: transit") {
+            "production"
+        } else {
+            "local"
+        };
+        signing_text_under(home, Some(profile), seals)
+    }
+
+    /// As [`signing_text`], under the named `assuranceProfile` (none, when
+    /// `None`).
+    fn signing_text_under(home: &Path, profile: Option<&str>, seals: &str) -> String {
         let oidc = "oidc:\n    issuer: https://issuer.example.test\n    audience: https://render.example.test\n    allowedClients: [portal, records-service]";
+        let profile = profile
+            .map(|profile| format!("assuranceProfile: {profile}\n"))
+            .unwrap_or_default();
         format!(
-            "{}signing:\n  seals:\n{seals}",
+            "{}{profile}signing:\n  seals:\n{seals}",
             minimal(home).replace("apiKeyRef: secret:file/api.key", oidc)
         )
     }
@@ -2476,8 +2523,8 @@ mod tests {
         assert!(seal.without_timestamp.is_none());
         assert!(seal.allows_client("records-service"));
         assert!(!seal.allows_client("portal"));
-        assert_eq!(seal.trust, SealTrust::TestOnly);
-        assert!(seal.is_test_only());
+        assert_eq!(runtime.assurance_profile, Some(AssuranceProfile::Local));
+        assert!(runtime.seals_are_test_only());
         assert!(runtime.seal("other").is_none());
     }
 
@@ -2487,8 +2534,11 @@ mod tests {
         let runtime =
             load_text(&home, &signing_text(&home, TRANSIT_SEAL)).expect("a transit seal loads");
         let seal = runtime.seal("ministry").expect("the seal is bound");
-        assert_eq!(seal.trust, SealTrust::Production);
-        assert!(!seal.is_test_only());
+        assert_eq!(
+            runtime.assurance_profile,
+            Some(AssuranceProfile::Production)
+        );
+        assert!(!runtime.seals_are_test_only());
         let SealSignerRuntime::Transit {
             unix_socket_path,
             mount,
@@ -2504,12 +2554,6 @@ mod tests {
         assert_eq!(key_name.as_str(), "render-seal");
         assert_eq!(key_version.get(), 3);
         assert_eq!(attempt_timeout_milliseconds.get(), 2000);
-
-        // A test seal may sign through Transit too.
-        let test_only = TRANSIT_SEAL.replace("trust: production", "trust: test-only");
-        let runtime = load_text(&home, &signing_text(&home, &test_only))
-            .expect("a test-only transit seal loads");
-        assert!(runtime.seal("ministry").unwrap().is_test_only());
     }
 
     /// The operate page's "Enable a seal" block, a production seal, loads as
@@ -2535,7 +2579,10 @@ mod tests {
             + block;
         let runtime = load_text(&home, &text).expect("the documented seal loads");
         let seal = runtime.seal("ministry").expect("the seal is bound");
-        assert_eq!(seal.trust, SealTrust::Production);
+        assert_eq!(
+            runtime.assurance_profile,
+            Some(AssuranceProfile::Production)
+        );
         assert!(
             matches!(seal.signer, SealSignerRuntime::Transit { .. }),
             "{:?}",
@@ -2544,20 +2591,20 @@ mod tests {
     }
 
     #[test]
-    fn a_production_seal_never_signs_with_a_key_file() {
+    fn a_production_runtime_never_signs_with_a_key_file() {
         let (_dir, home) = home();
-        let production = SEAL.replace("trust: test-only", "trust: production");
-        let problem = refused(&home, &signing_text(&home, &production));
+        let text = signing_text_under(&home, Some("production"), SEAL);
+        let problem = refused(&home, &text);
         assert_eq!(
             codes(&problem),
             [(
-                "render.runtime.seal-signer-assurance-mismatch",
+                "render.runtime.signer-assurance-mismatch",
                 "/signing/seals/ministry/signer/type"
             )]
         );
         let diagnostic = &problem.diagnostics[0];
         assert!(
-            diagnostic.message.contains("trust: production"),
+            diagnostic.message.contains("assuranceProfile: production"),
             "{}",
             diagnostic.message
         );
@@ -2567,28 +2614,95 @@ mod tests {
             diagnostic.message
         );
         let action = &diagnostic.suggested_action;
-        assert!(action.contains("signer.type: transit"), "{action}");
-        assert!(action.contains("trust: test-only"), "{action}");
+        assert!(
+            action.contains("type: local-jwk under assuranceProfile: local"),
+            "{action}"
+        );
+        assert!(
+            action.contains("type: transit under assuranceProfile: production"),
+            "{action}"
+        );
     }
 
     #[test]
-    fn a_seal_declares_its_trust() {
+    fn a_local_runtime_never_signs_through_transit() {
+        let (_dir, home) = home();
+        let text = signing_text_under(&home, Some("local"), TRANSIT_SEAL);
+        let problem = refused(&home, &text);
+        assert_eq!(
+            codes(&problem),
+            [(
+                "render.runtime.signer-assurance-mismatch",
+                "/signing/seals/ministry/signer/type"
+            )]
+        );
+        assert!(
+            problem.diagnostics[0]
+                .message
+                .contains("assuranceProfile: local"),
+            "{}",
+            problem.diagnostics[0].message
+        );
+    }
+
+    #[test]
+    fn a_mismatch_is_refused_per_seal() {
+        let (_dir, home) = home();
+        let seals = format!("{SEAL}{}", TRANSIT_SEAL.replace("ministry", "spare"));
+        let problem = refused(&home, &signing_text_under(&home, Some("local"), &seals));
+        assert_eq!(
+            codes(&problem),
+            [(
+                "render.runtime.signer-assurance-mismatch",
+                "/signing/seals/spare/signer/type"
+            )]
+        );
+    }
+
+    #[test]
+    fn seals_need_an_assurance_profile() {
         let (_dir, home) = home();
         for seal in [SEAL, TRANSIT_SEAL] {
-            let trust = seal.lines().last().expect("the trust line");
-            let undeclared = seal.replace(&format!("{trust}\n"), "");
-            let problem = refused(&home, &signing_text(&home, &undeclared));
-            assert_eq!(
-                codes(&problem),
-                [("config.missing-key", "/signing/seals/ministry")],
-                "{trust}"
-            );
+            let problem = refused(&home, &signing_text_under(&home, None, seal));
+            assert_eq!(codes(&problem), [("config.missing-key", "")], "{seal}");
             assert!(
-                problem.diagnostics[0].message.contains("trust"),
+                problem.diagnostics[0].message.contains("assuranceProfile"),
                 "{}",
                 problem.diagnostics[0].message
             );
         }
+    }
+
+    #[test]
+    fn a_runtime_without_seals_needs_no_assurance_profile() {
+        let (_dir, home) = home();
+        let runtime = load_text(&home, &minimal(&home)).expect("a runtime without seals loads");
+        assert!(runtime.assurance_profile.is_none());
+        assert!(runtime.signing.is_none());
+    }
+
+    #[test]
+    fn a_per_seal_trust_member_is_refused() {
+        let (_dir, home) = home();
+        let seal = format!("{SEAL}      trust: test-only\n");
+        let problem = refused(&home, &signing_text(&home, &seal));
+        assert_eq!(
+            codes(&problem),
+            [("config.unknown-key", "/signing/seals/ministry/trust")]
+        );
+    }
+
+    #[test]
+    fn an_assurance_profile_is_local_or_production() {
+        let (_dir, home) = home();
+        let problem = refused(
+            &home,
+            &signing_text_under(&home, Some("evidence-grade"), SEAL),
+        );
+        assert_eq!(
+            codes(&problem),
+            [("config.unknown-variant", "/assuranceProfile")]
+        );
     }
 
     #[test]
@@ -2804,11 +2918,6 @@ mod tests {
                 SEAL.replace(clients, &format!("{clients}      keyFile: /etc/seal.jwk\n")),
                 "config.unknown-key",
                 "/signing/seals/ministry/keyFile",
-            ),
-            (
-                SEAL.replace("trust: test-only", "trust: official"),
-                "config.unknown-variant",
-                "/signing/seals/ministry/trust",
             ),
             (
                 TRANSIT_SEAL.replace("/run/render/transit.sock", "transit.sock"),

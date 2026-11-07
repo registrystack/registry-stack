@@ -37,7 +37,7 @@ pub struct SigningPayload {
     /// name); absent when the certificate names neither.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signer_name: Option<String>,
-    /// Whether the runtime file declares the seal `trust: test-only`.
+    /// Whether the runtime file declares `assuranceProfile: local`.
     pub test_only: bool,
 }
 

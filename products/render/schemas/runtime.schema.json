@@ -1,5 +1,20 @@
 {
   "$defs": {
+    "AssuranceProfile": {
+      "description": "The assurance boundary the runtime file declares for its seals. The\nmember and the values are Evidence's.",
+      "oneOf": [
+        {
+          "const": "local",
+          "description": "Seals sign with a `local-jwk` key file and are test seals: documents\nprint them as test seals (`signing.testOnly` is true).",
+          "type": "string"
+        },
+        {
+          "const": "production",
+          "description": "Seals sign through Transit: `signing.testOnly` is false.",
+          "type": "string"
+        }
+      ]
+    },
     "AuditDestinationKind": {
       "description": "The configured audit destination kind, as written in product configuration.",
       "oneOf": [
@@ -403,16 +418,6 @@
     "SealRuntime": {
       "additionalProperties": false,
       "description": "One seal: the signer, the certificate chain, the timestamp policy, and\nthe clients allowed to use it.",
-      "if": {
-        "properties": {
-          "trust": {
-            "const": "production"
-          }
-        },
-        "required": [
-          "trust"
-        ]
-      },
       "oneOf": [
         {
           "not": {
@@ -465,15 +470,11 @@
         },
         "signer": {
           "$ref": "#/$defs/SealSignerRuntime",
-          "description": "Binds the seal to the private-key transport that produces its\nsignature. Selects the signer transport for this seal: `local-jwk`\nresolves a file-provider secret directly, `transit` calls a\nworkload-local Transit signing proxy over a Unix socket. A\n`production` seal signs through `transit` only; a `local-jwk` key\nfile is for a `test-only` seal."
+          "description": "Binds the seal to the private-key transport that produces its\nsignature. Selects the signer transport for this seal: `local-jwk`\nresolves a file-provider secret directly, `transit` calls a\nworkload-local Transit signing proxy over a Unix socket. Under\n`assuranceProfile: production` a seal signs through `transit` only;\nunder `local` it signs with a `local-jwk` key file only."
         },
         "timestampAuthority": {
           "$ref": "#/$defs/TimestampAuthorityRuntime",
           "description": "The RFC 3161 timestamp authority that timestamps each seal (PAdES\nB-T), so the seal keeps validating after its certificate expires.\nExactly one of `timestampAuthority` and `withoutTimestamp` is\nrequired."
-        },
-        "trust": {
-          "$ref": "#/$defs/SealTrust",
-          "description": "Whether the seal's documents are official. `test-only` marks a seal\nmade with a test certificate: the template is told so and prints the\nseal as a test seal. `production` marks an official seal, which signs\nthrough a `transit` signer, never a key file. Every seal says which\nit is."
         },
         "withoutTimestamp": {
           "$ref": "#/$defs/WithoutTimestamp",
@@ -483,20 +484,8 @@
       "required": [
         "signer",
         "certificateChainFile",
-        "allowedClients",
-        "trust"
+        "allowedClients"
       ],
-      "then": {
-        "properties": {
-          "signer": {
-            "properties": {
-              "type": {
-                "const": "transit"
-              }
-            }
-          }
-        }
-      },
       "type": "object"
     },
     "SealSignerRuntime": {
@@ -504,7 +493,7 @@
       "oneOf": [
         {
           "additionalProperties": false,
-          "description": "Resolves a file-provider secret directly; for a `test-only` seal.",
+          "description": "Resolves a file-provider secret directly; for `assuranceProfile: local`.",
           "properties": {
             "privateKeyRef": {
               "$ref": "#/$defs/SecretReference",
@@ -569,21 +558,6 @@
             "attemptTimeoutMilliseconds"
           ],
           "type": "object"
-        }
-      ]
-    },
-    "SealTrust": {
-      "description": "How a seal is trusted: what a seal's runtime `trust` member says, and\nwhat `compile --preview-seal` renders under.",
-      "oneOf": [
-        {
-          "const": "test-only",
-          "description": "A seal made with a test certificate: documents print it as a test\nseal (`signing.testOnly` is true).",
-          "type": "string"
-        },
-        {
-          "const": "production",
-          "description": "An official seal, signed through Transit: `signing.testOnly` is\nfalse.",
-          "type": "string"
         }
       ]
     },
@@ -718,10 +692,113 @@
   "$id": "https://id.registrystack.org/schemas/render/runtime/runtime.v1alpha1.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "signing": {
+            "properties": {
+              "seals": {
+                "minProperties": 1
+              }
+            },
+            "required": [
+              "seals"
+            ]
+          }
+        },
+        "required": [
+          "signing"
+        ]
+      },
+      "then": {
+        "required": [
+          "assuranceProfile"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "assuranceProfile": {
+            "const": "local"
+          }
+        },
+        "required": [
+          "assuranceProfile"
+        ]
+      },
+      "then": {
+        "properties": {
+          "signing": {
+            "properties": {
+              "seals": {
+                "additionalProperties": {
+                  "properties": {
+                    "signer": {
+                      "properties": {
+                        "type": {
+                          "const": "local-jwk"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "assuranceProfile": {
+            "const": "production"
+          }
+        },
+        "required": [
+          "assuranceProfile"
+        ]
+      },
+      "then": {
+        "properties": {
+          "signing": {
+            "properties": {
+              "seals": {
+                "additionalProperties": {
+                  "properties": {
+                    "signer": {
+                      "properties": {
+                        "type": {
+                          "const": "transit"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
   "properties": {
     "apiVersion": {
       "const": "id.registrystack.org/formats/render/runtime/v1alpha1",
       "type": "string"
+    },
+    "assuranceProfile": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AssuranceProfile"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The assurance boundary of this deployment's seals, the same member\nand values Evidence declares. Required when `signing` declares a\nseal, and unused otherwise. `local` signs with a `local-jwk` key\nfile and marks every seal a test seal; `production` signs through\n`transit` only, so a production key never leaves Transit."
     },
     "audit": {
       "$ref": "#/$defs/AuditRuntime"

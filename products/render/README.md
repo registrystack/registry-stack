@@ -151,6 +151,7 @@ A document type opts in with `seal: <id>` in `manifest.yaml`, and the runtime
 file binds each id to key material:
 
 ```yaml
+assuranceProfile: production
 signing:
   seals:
     ministry:
@@ -165,13 +166,13 @@ signing:
       timestampAuthority:
         url: https://tsa.example.org/tsr
       allowedClients: [records-service]
-      trust: production
 ```
 
-- `trust` is required: `production` for an official seal, `test-only` for a
-  test certificate. A production seal signs through `transit` only; a
-  `local-jwk` key file under `trust: production` is refused
-  (`render.runtime.seal-signer-assurance-mismatch`).
+- `assuranceProfile` (`local` or `production`, Evidence's member and values)
+  is required once the runtime declares a seal. Under `production` every seal
+  signs through `transit` only; under `local` every seal signs with a
+  `local-jwk` key file and is a test seal. The other signer is refused
+  (`render.runtime.signer-assurance-mismatch`).
 - `signer` names how the key signs. `type: transit` signs through a Vault or
   OpenBao Transit signing proxy on a Unix socket, which holds the Transit
   token: `mount`, `keyName` and `keyVersion` pin one non-exportable,
@@ -208,10 +209,10 @@ signing:
   consequence. Declare exactly one.
 - `allowedClients` is required, lists named OIDC clients, and refuses
   `unrestricted` and wildcards. Signing needs `authentication.oidc`; the legacy API key
-  never seals. `trust: test-only` marks a test certificate so the template can
+  never seals. `assuranceProfile: local` marks test seals so the template can
   print the seal as a test seal (the `init` scaffold does). The answer, the
   `/ready` entry and the audit say `testOnly: true` too, the PDF answer adds
-  `X-Registry-Seal-Test-Only: true`, and `serve` warns once per test-only
+  `X-Registry-Seal-Test-Only: true`, and `serve` warns once per test
   seal at startup.
 - The route needs the `render:seal` scope, which `render:render` does not
   imply. It returns the sealed PDF with `X-Registry-Document-Digest` (the

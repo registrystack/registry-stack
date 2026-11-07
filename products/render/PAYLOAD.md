@@ -78,7 +78,7 @@ Rules worth internalizing:
   both routes. `mode` is always `"seal"`. `signerName` is the seal
   certificate's display name (its organization, else its common name)
   and is absent when the certificate names neither. `testOnly` is `true`
-  when the runtime declares the seal `trust: test-only`; print a visible
+  when the runtime declares `assuranceProfile: local`; print a visible
   test marking then, because a test seal is not an official document (the
   `registry-render init` scaffold prints the block below, labelled). The
   member is part of the canonical envelope, so a sealed render's

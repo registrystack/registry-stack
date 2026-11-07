@@ -252,9 +252,9 @@ pub enum Command {
         #[arg(long)]
         emit_envelope: Option<PathBuf>,
         /// Render the template's sealed variant: add the `signing` member
-        /// the seal route adds, as a seal of this `trust` would. Nothing is
+        /// the seal route adds, as a seal of this kind would. Nothing is
         /// signed; the output is the first revision a seal would sign.
-        #[arg(long, value_name = "TRUST", value_enum)]
+        #[arg(long, value_name = "KIND", value_enum)]
         preview_seal: Option<crate::runtime::SealTrust>,
         /// The `signing.signerName` a seal certificate's organization (else
         /// common name) would give. Without it, the member names no signer.
