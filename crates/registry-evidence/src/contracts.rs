@@ -28,6 +28,7 @@ use crate::{
         Evidence, EvidenceDefinitions, EvidenceRequest, EvidenceRequestBatch, FlattenedJws,
         JwksDocument, SdJwtVcBatchEnvelope, UnsignedEvidenceEnvelope,
     },
+    public_check::{PUBLIC_CHECK_ANSWER_SCHEMA, PUBLIC_CHECK_ROUTE},
     EVIDENCE_REQUEST_BATCH_MEDIA_TYPE, EVIDENCE_REQUEST_BATCH_SCHEMA_V1,
     EVIDENCE_SD_JWT_VC_BATCH_MEDIA_TYPE, SD_JWT_VC_BATCH_SCHEMA_V1,
 };
@@ -49,6 +50,10 @@ pub const UNSIGNED_ENVELOPE_SCHEMA_FILE: &str = "evidence-unsigned-envelope-v1.s
 pub const SD_JWT_VC_BATCH_SCHEMA_FILE: &str = "sd-jwt-vc-batch-envelope-v1.schema.json";
 pub const PROBLEM_SCHEMA_FILE: &str = "problem-v1.schema.json";
 pub const JWKS_SCHEMA_FILE: &str = "jwks-v1.schema.json";
+pub const PUBLIC_CHECK_REQUEST_SCHEMA_FILE: &str =
+    "evidence-public-check-request-v1alpha1.schema.json";
+pub const PUBLIC_CHECK_ANSWER_SCHEMA_FILE: &str =
+    "evidence-public-check-answer-v1alpha1.schema.json";
 
 const REQUEST_SCHEMA_ID: &str = "https://registrystack.org/schemas/evidence/request-v1.json";
 const REQUEST_BATCH_SCHEMA_ID: &str =
@@ -64,6 +69,10 @@ const SD_JWT_VC_BATCH_SCHEMA_ID: &str =
     "https://registrystack.org/schemas/evidence/sd-jwt-vc-batch-envelope-v1.json";
 const PROBLEM_SCHEMA_ID: &str = "https://registrystack.org/schemas/evidence/problem-v1.json";
 const JWKS_SCHEMA_ID: &str = "https://registrystack.org/schemas/evidence/jwks-v1.json";
+const PUBLIC_CHECK_REQUEST_SCHEMA_ID: &str =
+    "https://registrystack.org/schemas/evidence/public-check-request-v1alpha1.json";
+const PUBLIC_CHECK_ANSWER_SCHEMA_ID: &str =
+    "https://registrystack.org/schemas/evidence/public-check-answer-v1alpha1.json";
 const TRACE_ID_PATTERN: &str = "^(?!0{32}$)[0-9a-f]{32}$";
 const TRACEPARENT_PATTERN: &str = "^00-(?!0{32}-)[0-9a-f]{32}-(?!0{16}-)[0-9a-f]{16}-[0-9a-f]{2}$";
 const PROBLEM_TYPE_BASE: &str = "https://id.registrystack.org/problems/registry-evidence/";
@@ -202,6 +211,14 @@ pub fn documents() -> Result<BTreeMap<&'static str, String>, ContractGenerationE
         (SD_JWT_VC_BATCH_SCHEMA_FILE, batch),
         (PROBLEM_SCHEMA_FILE, problem),
         (JWKS_SCHEMA_FILE, jwks),
+        (
+            PUBLIC_CHECK_REQUEST_SCHEMA_FILE,
+            public_check_request_schema(),
+        ),
+        (
+            PUBLIC_CHECK_ANSWER_SCHEMA_FILE,
+            public_check_answer_schema(),
+        ),
         (OPENAPI_FILE, openapi),
     ];
     values
@@ -891,6 +908,65 @@ fn jwks_schema() -> Value {
     })
 }
 
+/// The public-check request body. The hand-written contract
+/// `products/evidence/contracts/public-check-request.schema.yaml` is this
+/// exact value.
+pub(crate) fn public_check_request_schema() -> Value {
+    json!({
+        "$schema": SCHEMA_DIALECT,
+        "$id": PUBLIC_CHECK_REQUEST_SCHEMA_ID,
+        "title": "Evidence public check request Version 1 alpha 1",
+        "description": "The body of POST /v1/public-check, sent as exactly application/json: one printed document number and the check code printed beside it. The contract is experimental. A body that fails this schema is refused before the Source is read and writes no audit record.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["documentNumber", "checkCode"],
+        "properties": {
+            "documentNumber": {
+                "description": "The printed document number. The selector profile of the activated subject bounds it further; a value outside that profile is refused as an invalid selector before the Source is read.",
+                "type": "string",
+                "minLength": 1
+            },
+            "checkCode": {
+                "description": "The printed check code, 24 RFC 4648 base32 characters. ASCII letters are uppercased before comparison and nothing is stripped, so a value with spaces, hyphens, or padding is refused.",
+                "type": "string",
+                "pattern": "^[A-Za-z2-7]{24}$"
+            }
+        }
+    })
+}
+
+/// The public-check answer body. The hand-written contract
+/// `products/evidence/contracts/public-check-answer.schema.yaml` is this
+/// exact value.
+pub(crate) fn public_check_answer_schema() -> Value {
+    json!({
+        "$schema": SCHEMA_DIALECT,
+        "$id": PUBLIC_CHECK_ANSWER_SCHEMA_ID,
+        "title": "Evidence public check answer Version 1 alpha 1",
+        "description": "The 200 body of POST /v1/public-check when the presented document number and check code match exactly one record. It carries only the status and the printed fields the active authority activated for the check, never another output of the definition. It is not an Evidence response format and is never signed. The contract is experimental.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["schema", "status", "fields", "observedAt"],
+        "properties": {
+            "schema": {"const": PUBLIC_CHECK_ANSWER_SCHEMA},
+            "status": {
+                "description": "The value of the activated status output.",
+                "type": "string"
+            },
+            "fields": {
+                "description": "The members of the activated printed-fields output, a reviewed structured value.",
+                "type": "object"
+            },
+            "observedAt": {
+                "description": "The time Evidence evaluated this check, in UTC truncated to the second.",
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+            }
+        }
+    })
+}
+
 fn insert_schema_family(
     components: &mut serde_json::Map<String, Value>,
     root_name: &str,
@@ -1061,6 +1137,49 @@ fn evidence_response_headers(extra: Option<(&str, Value)>) -> Value {
                 "schema": {"type": "string", "enum": ["Accept"]}
             }),
         );
+    headers
+}
+
+/// Headers for every `/v1/public-check` response. Any origin may read the
+/// response, the route never permits credentials, and its trace is always
+/// one the service mints.
+fn public_check_response_headers() -> Value {
+    let mut headers = response_headers(Some((
+        "Access-Control-Allow-Origin",
+        json!({
+            "description": "Any origin may read the response. Access-Control-Allow-Credentials is never sent.",
+            "schema": {"type": "string", "enum": ["*"]}
+        }),
+    )));
+    headers
+        .as_object_mut()
+        .expect("response headers are an object")
+        .insert(
+            "traceparent".to_string(),
+            json!({
+                "description": "W3C trace context the service mints for this request. An inbound traceparent is never read, and tracestate is never reflected.",
+                "schema": {"type": "string", "pattern": TRACEPARENT_PATTERN}
+            }),
+        );
+    headers
+}
+
+/// Headers of the public-check CORS preflight.
+fn public_check_preflight_headers() -> Value {
+    let mut headers = public_check_response_headers();
+    let object = headers
+        .as_object_mut()
+        .expect("response headers are an object");
+    for (name, value) in [
+        ("Access-Control-Allow-Methods", "POST"),
+        ("Access-Control-Allow-Headers", "content-type"),
+        ("Access-Control-Max-Age", "600"),
+    ] {
+        object.insert(
+            name.to_string(),
+            json!({"schema": {"type": "string", "enum": [value]}}),
+        );
+    }
     headers
 }
 
@@ -1235,6 +1354,18 @@ fn openapi_document(
         "JwksDocument",
         jwks,
         &[("p256-public-jwk", "P256PublicJwk")],
+    );
+    insert_schema_family(
+        &mut schemas,
+        "PublicCheckRequest",
+        &public_check_request_schema(),
+        &[],
+    );
+    insert_schema_family(
+        &mut schemas,
+        "PublicCheckAnswer",
+        &public_check_answer_schema(),
+        &[],
     );
     schemas.insert(
         "SdJwtVcCredential".to_string(),
@@ -1451,6 +1582,52 @@ fn openapi_document(
                     }
                 }
             },
+            PUBLIC_CHECK_ROUTE: {
+                "post": {
+                    "operationId": "checkDocument",
+                    "summary": "Check one printed document number and check code",
+                    "description": "Experimental, Version 1 alpha 1. This is the first unauthenticated route that reads registry data. It is served only when the active target authority activates a public check; otherwise every method on this path answers 404 exactly like an unknown route. The request carries one printed document number and one check code, and the service reads only the Content-Type header and the body. Evidence reads the record through the activated definition with its own Source credentials, compares the stored code in constant time, and answers with the activated status and printed fields only. Every miss, including an unknown number, an ambiguous or unresolved lookup, a missing fact, and a wrong code, answers one identical 404. The answer is not an Evidence response format and is never signed. The service applies no rate admission to this route; a deployment limits its rate at the proxy. Any origin may read every response, and the route never permits credentials.",
+                    "security": [],
+                    "requestBody": {
+                        "required": true,
+                        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PublicCheckRequest"}}}
+                    },
+                    "responses": {
+                        "200": {
+                            "description": "The presented document number and check code match exactly one record",
+                            "headers": public_check_response_headers(),
+                            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PublicCheckAnswer"}}}
+                        },
+                        "400": {
+                            "description": "Wrong content type, malformed or oversized body, malformed check code, or a document number outside the activated selector profile",
+                            "headers": public_check_response_headers(),
+                            "content": problem_content(&["evidence.invalid-request", "request.selector-invalid"])
+                        },
+                        "404": {
+                            "description": "No record matches the presented pair. Every miss is one identical response. Without an activated public check the path is not served and answers as an unknown route instead.",
+                            "headers": public_check_response_headers(),
+                            "content": problem_content(&["resource.not-found"])
+                        },
+                        "503": {
+                            "description": "Admission, Source, evaluation, serialization, or audit failure; nothing is released",
+                            "headers": public_check_response_headers(),
+                            "content": problem_content(&["source.unavailable", "service.unavailable"])
+                        }
+                    }
+                },
+                "options": {
+                    "operationId": "preflightDocumentCheck",
+                    "summary": "Answer the CORS preflight of the public check",
+                    "description": "Served only with the activated route. Every OPTIONS request is answered without reading the body, the Source, or the audit.",
+                    "security": [],
+                    "responses": {
+                        "200": {
+                            "description": "A cross-origin POST with a JSON body is permitted, without credentials",
+                            "headers": public_check_preflight_headers()
+                        }
+                    }
+                }
+            },
             "/health": {
                 "get": {
                     "operationId": "getHealth",
@@ -1606,6 +1783,8 @@ mod tests {
             jws_schema(),
             problem_schema(),
             jwks_schema(),
+            public_check_request_schema(),
+            public_check_answer_schema(),
         ] {
             JSONSchema::options()
                 .with_draft(Draft::Draft202012)
@@ -1848,7 +2027,8 @@ mod tests {
                 "/ready",
                 "/v1/evidence",
                 "/v1/evidence-definitions",
-                "/v1/evidence/batch"
+                "/v1/evidence/batch",
+                "/v1/public-check"
             ]
         );
         assert!(
@@ -1934,25 +2114,27 @@ mod tests {
             json!(["ES256"])
         );
 
-        for path in paths.values() {
-            let operation = path
+        for operations in paths.values() {
+            for operation in operations
                 .as_object()
-                .and_then(|operations| operations.values().next())
-                .expect("each Version 1 path has one operation");
-            for response in operation["responses"]
-                .as_object()
-                .expect("responses is an object")
+                .expect("each Version 1 path is an object of operations")
                 .values()
             {
-                let expected = if response["headers"]["ETag"].is_object() {
-                    json!(["public, max-age=600"])
-                } else {
-                    json!(["no-store"])
-                };
-                assert_eq!(
-                    response["headers"]["Cache-Control"]["schema"]["enum"],
-                    expected
-                );
+                for response in operation["responses"]
+                    .as_object()
+                    .expect("responses is an object")
+                    .values()
+                {
+                    let expected = if response["headers"]["ETag"].is_object() {
+                        json!(["public, max-age=600"])
+                    } else {
+                        json!(["no-store"])
+                    };
+                    assert_eq!(
+                        response["headers"]["Cache-Control"]["schema"]["enum"],
+                        expected
+                    );
+                }
             }
         }
 
@@ -1966,6 +2148,212 @@ mod tests {
                 ["application/problem+json"]["schema"]["allOf"][1]["properties"]["code"]["enum"],
             json!(["service.unavailable"])
         );
+    }
+
+    fn problem_codes(response: &Value) -> Vec<&str> {
+        let schema = &response["content"]["application/problem+json"]["schema"];
+        let variants = match schema["oneOf"].as_array() {
+            Some(variants) => variants.iter().collect::<Vec<_>>(),
+            None => vec![schema],
+        };
+        variants
+            .into_iter()
+            .map(|variant| {
+                variant["allOf"][1]["properties"]["code"]["enum"][0]
+                    .as_str()
+                    .expect("each problem variant names its code")
+            })
+            .collect()
+    }
+
+    #[test]
+    fn openapi_describes_the_unauthenticated_public_check_and_its_preflight() {
+        let document = openapi_document(
+            &request_schema(),
+            &request_batch_schema(),
+            &request_batch_response_schema(),
+            &evidence_schema(),
+            &definitions_schema(),
+            &jws_schema(),
+            &unsigned_envelope_schema(),
+            &sd_jwt_vc_batch_envelope_schema(),
+            &problem_schema(),
+            &jwks_schema(),
+        );
+        let path = document["paths"][PUBLIC_CHECK_ROUTE]
+            .as_object()
+            .expect("the public check path is described");
+        assert_eq!(
+            path.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["options", "post"]
+        );
+
+        let post = &path["post"];
+        assert_eq!(post["security"], json!([]));
+        assert_eq!(
+            post["requestBody"]["content"]
+                .as_object()
+                .expect("request content is an object")
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["application/json"]
+        );
+        assert_eq!(
+            post["requestBody"]["content"]["application/json"]["schema"]["$ref"],
+            json!("#/components/schemas/PublicCheckRequest")
+        );
+        let responses = post["responses"]
+            .as_object()
+            .expect("public check responses are an object");
+        assert_eq!(
+            responses.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["200", "400", "404", "503"]
+        );
+        assert_eq!(
+            responses["200"]["content"]["application/json"]["schema"]["$ref"],
+            json!("#/components/schemas/PublicCheckAnswer")
+        );
+        assert_eq!(
+            problem_codes(&responses["400"]),
+            ["evidence.invalid-request", "request.selector-invalid"]
+        );
+        assert_eq!(problem_codes(&responses["404"]), ["resource.not-found"]);
+        assert_eq!(
+            problem_codes(&responses["503"]),
+            ["source.unavailable", "service.unavailable"]
+        );
+        for response in responses.values() {
+            assert_eq!(
+                response["headers"]["Access-Control-Allow-Origin"]["schema"]["enum"],
+                json!(["*"])
+            );
+            assert!(response["headers"]["Access-Control-Allow-Credentials"].is_null());
+            assert!(response["headers"]["WWW-Authenticate"].is_null());
+        }
+
+        let options = &path["options"];
+        assert_eq!(options["security"], json!([]));
+        assert!(options["requestBody"].is_null());
+        let preflight = options["responses"]
+            .as_object()
+            .expect("preflight responses are an object");
+        assert_eq!(
+            preflight.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["200"]
+        );
+        let headers = &preflight["200"]["headers"];
+        assert!(preflight["200"]["content"].is_null());
+        for (name, value) in [
+            ("Access-Control-Allow-Origin", "*"),
+            ("Access-Control-Allow-Methods", "POST"),
+            ("Access-Control-Allow-Headers", "content-type"),
+            ("Access-Control-Max-Age", "600"),
+            ("Cache-Control", "no-store"),
+        ] {
+            assert_eq!(headers[name]["schema"]["enum"], json!([value]), "{name}");
+        }
+        assert!(headers["Access-Control-Allow-Credentials"].is_null());
+
+        // The route mints its own trace, so no response of it may promise to
+        // retain the caller's.
+        for response in responses.values().chain(preflight.values()) {
+            let trace = &response["headers"]["traceparent"];
+            assert_eq!(trace["schema"]["pattern"], json!(TRACEPARENT_PATTERN));
+            let description = trace["description"]
+                .as_str()
+                .expect("the trace header is described");
+            assert!(description.contains("never read"), "{description}");
+            assert!(!description.contains("retained"), "{description}");
+        }
+
+        let schemas = &document["components"]["schemas"];
+        assert_eq!(
+            schemas["PublicCheckAnswer"]["properties"]["schema"]["enum"],
+            json!([PUBLIC_CHECK_ANSWER_SCHEMA])
+        );
+        assert!(schemas["PublicCheckAnswer"]["$id"].is_null());
+        assert!(schemas["PublicCheckRequest"]["$schema"].is_null());
+    }
+
+    #[test]
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "the test reads back the published contract YAML to compare it with the served schema; it reads no operator configuration"
+    )]
+    fn public_check_contracts_are_the_hand_written_yaml_schemas() {
+        let request: Value = serde_norway::from_slice(include_bytes!(
+            "../../../products/evidence/contracts/public-check-request.schema.yaml"
+        ))
+        .expect("public check request contract parses");
+        let answer: Value = serde_norway::from_slice(include_bytes!(
+            "../../../products/evidence/contracts/public-check-answer.schema.yaml"
+        ))
+        .expect("public check answer contract parses");
+        assert_eq!(public_check_request_schema(), request);
+        assert_eq!(public_check_answer_schema(), answer);
+        assert_eq!(request["$id"], PUBLIC_CHECK_REQUEST_SCHEMA_ID);
+        assert_eq!(answer["$id"], PUBLIC_CHECK_ANSWER_SCHEMA_ID);
+    }
+
+    #[test]
+    fn public_check_schemas_refuse_what_the_route_refuses() {
+        let compile = |schema: Value| {
+            JSONSchema::options()
+                .with_draft(Draft::Draft202012)
+                .should_validate_formats(true)
+                .compile(&schema)
+                .expect("public check schema compiles")
+        };
+        let request = compile(public_check_request_schema());
+        let code = "K7QWM4XRT5PZ3NB6VHJYDC2A";
+        assert!(request.is_valid(&json!({"documentNumber": "RN-2026-004217", "checkCode": code})));
+        assert!(request.is_valid(&json!({
+            "documentNumber": "RN-2026-004217",
+            "checkCode": code.to_ascii_lowercase()
+        })));
+        for refused in [
+            json!({"documentNumber": "RN-2026-004217"}),
+            json!({"checkCode": code}),
+            json!({"documentNumber": "RN-2026-004217", "checkCode": code, "extra": "member"}),
+            json!({"documentNumber": 4217, "checkCode": code}),
+            json!({"documentNumber": "", "checkCode": code}),
+            json!({"documentNumber": "RN-2026-004217", "checkCode": &code[1..]}),
+            json!({"documentNumber": "RN-2026-004217", "checkCode": format!("{}0", &code[1..])}),
+            json!({"documentNumber": "RN-2026-004217", "checkCode": format!(" {}", &code[1..])}),
+            json!({"documentNumber": "RN-2026-004217", "checkCode": "K7QW-M4XR-T5PZ-3NB6-VHJY"}),
+        ] {
+            assert!(!request.is_valid(&refused), "{refused}");
+        }
+
+        let answer = compile(public_check_answer_schema());
+        let accepted = json!({
+            "schema": PUBLIC_CHECK_ANSWER_SCHEMA,
+            "status": "valid",
+            "fields": {"holderName": "Jordan Sample", "expiresOn": "2028-02-29"},
+            "observedAt": "2026-11-08T09:14:03Z"
+        });
+        assert!(answer.is_valid(&accepted));
+        for (member, value) in [
+            ("schema", json!("registry.evidence.public-check/v1")),
+            ("status", json!(true)),
+            ("fields", json!("Jordan Sample")),
+            ("observedAt", json!("2026-11-08T09:14:03.750Z")),
+            ("observedAt", json!("2026-11-08T09:14:03+00:00")),
+        ] {
+            let mut refused = accepted.clone();
+            refused[member] = value;
+            assert!(!answer.is_valid(&refused), "{refused}");
+        }
+        let mut extra = accepted.clone();
+        extra["subject"] = json!("RN-2026-004217");
+        assert!(!answer.is_valid(&extra));
+        let mut missing = accepted;
+        missing
+            .as_object_mut()
+            .expect("answer is an object")
+            .remove("observedAt");
+        assert!(!answer.is_valid(&missing));
     }
 
     #[test]

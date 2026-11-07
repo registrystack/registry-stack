@@ -1,0 +1,22 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://registrystack.org/schemas/evidence/public-check-request-v1alpha1.json
+title: Evidence public check request Version 1 alpha 1
+description: >-
+  The body of POST /v1/public-check, sent as exactly application/json: one
+  printed document number and the check code printed beside it. The contract
+  is experimental. A body that fails this schema is refused before the
+  Source is read and writes no audit record.
+type: object
+additionalProperties: false
+required:
+  - documentNumber
+  - checkCode
+properties:
+  documentNumber:
+    description: The printed document number. The selector profile of the activated subject bounds it further; a value outside that profile is refused as an invalid selector before the Source is read.
+    type: string
+    minLength: 1
+  checkCode:
+    description: The printed check code, 24 RFC 4648 base32 characters. ASCII letters are uppercased before comparison and nothing is stripped, so a value with spaces, hyphens, or padding is refused.
+    type: string
+    pattern: '^[A-Za-z2-7]{24}$'
