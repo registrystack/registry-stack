@@ -67,6 +67,8 @@ mod holder_presented_tests;
 #[cfg(test)]
 mod normalized_tests;
 #[cfg(test)]
+mod public_check_tests;
+#[cfg(test)]
 mod runtime_tests;
 
 pub const EVIDENCE_DEFINITIONS_SCHEMA_V1: &str = "registry.evidence-definitions/v1";
