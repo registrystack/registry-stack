@@ -11,7 +11,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
-pub use registry_platform_oidc::ASSERTION_ISSUER_CLAIM;
+pub use crate::validate::ASSERTION_ISSUER_CLAIM;
 
 use crate::ToolingError;
 
@@ -214,7 +214,7 @@ pub const GRANT_ATTRIBUTES: &[&str] = &[
     "registry_approver",
 ];
 
-fn protected_attribute(name: &str) -> bool {
+pub(crate) fn protected_attribute(name: &str) -> bool {
     name.starts_with("registry_grant_")
         || name == ASSERTION_ISSUER_CLAIM
         || matches!(name, "identity" | "registry_approver")
@@ -289,7 +289,7 @@ pub(crate) fn valid_uuid(value: &str) -> bool {
 /// A permission string is the scope a client will request and a resource
 /// server will see: RFC 6749 scope-token bytes, which `:` belongs to.
 fn valid_permission(value: &str) -> bool {
-    registry_platform_httputil::valid_scope_token(value)
+    crate::validate::valid_scope_token(value)
 }
 
 fn registered_permission(server: &ResourceServer, scope: &str) -> bool {
@@ -335,13 +335,54 @@ fn local_url(value: &str) -> bool {
     })
 }
 
+/// Which kind of issuer a description is validated for.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Profile<'a> {
+    /// A local development session: loopback HTTP only, `.test` synthetic
+    /// users, secrets in owner-only files.
+    Development,
+    /// A hosted deployment at this HTTPS issuer URL.
+    Deployment { issuer: &'a str },
+}
+
+/// An `https` URL without user information or fragment.
+fn https_origin(value: &str) -> bool {
+    url::Url::parse(value).is_ok_and(|url| {
+        url.scheme() == "https"
+            && url.host_str().is_some()
+            && url.username().is_empty()
+            && url.password().is_none()
+            && url.fragment().is_none()
+    })
+}
+
+/// A synthetic user's email in a deployment: one `@` between a local part
+/// and a dotted domain, no whitespace.
+fn deployment_email(value: &str) -> bool {
+    value.split_once('@').is_some_and(|(local, domain)| {
+        !local.is_empty()
+            && !domain.contains('@')
+            && domain.contains('.')
+            && !domain.starts_with('.')
+            && !domain.ends_with('.')
+    }) && !value.bytes().any(|byte| byte.is_ascii_whitespace())
+}
+
+/// The members of a private JWK. A public JWKS carries none of them.
+pub(crate) const PRIVATE_JWK_MEMBERS: [&str; 8] = ["d", "p", "q", "dp", "dq", "qi", "k", "oth"];
+
 impl IssuerDescription {
     /// Validate the closed description. Every refusal here is fixed text
     /// about the shape, so an owning CLI can report it before anything is
     /// rendered or run.
     pub fn validate(&self) -> Result<(), ToolingError> {
+        self.validate_for(Profile::Development)
+    }
+
+    pub(crate) fn validate_for(&self, profile: Profile<'_>) -> Result<(), ToolingError> {
         let refuse = |reason: &'static str| Err(ToolingError::InvalidDescription { reason });
-        if self.port == 0 {
+        let development = matches!(profile, Profile::Development);
+        if development && self.port == 0 {
             return refuse("the listener port must be non-zero");
         }
         if !bounded(&self.session.label, 64)
@@ -423,8 +464,18 @@ impl IssuerDescription {
                 );
             }
         }
-        if self.interactive_applications.len() > 8 || self.synthetic_users.len() > 32 {
-            return refuse("local browser applications or synthetic users exceed their bounds");
+        // A development session keeps its small bounds; a deployment allows
+        // as many as its deployment file may state.
+        let (most_applications, most_users) = if development {
+            (8, 32)
+        } else {
+            let most = crate::identity_deployment::MAXIMUM_PRINCIPALS;
+            (most, most)
+        };
+        if self.interactive_applications.len() > most_applications
+            || self.synthetic_users.len() > most_users
+        {
+            return refuse("browser applications or synthetic users exceed their bounds");
         }
         if !self.synthetic_users.is_empty() && self.interactive_applications.is_empty() {
             return refuse("synthetic users require a local browser application");
@@ -437,11 +488,21 @@ impl IssuerDescription {
                 || !bounded(&app.client_id, 128)
                 || !browser_clients.insert(&app.client_id)
                 || !private_file_name(&app.client_secret_file)
-                || !local_url(&app.origin)
+                || !(if development {
+                    local_url(&app.origin)
+                } else {
+                    https_origin(&app.origin)
+                })
                 || !identifiers.contains(&app.audience)
                 || app.redirect_uris.is_empty()
                 || app.redirect_uris.len() > 8
-                || app.redirect_uris.iter().any(|uri| !local_url(uri))
+                || app.redirect_uris.iter().any(|uri| {
+                    !(if development {
+                        local_url(uri)
+                    } else {
+                        https_origin(uri)
+                    })
+                })
                 || app.token_attributes.is_empty()
                 || app.token_attributes.len() > 16
                 || app.token_attributes.iter().any(|name| {
@@ -468,7 +529,11 @@ impl IssuerDescription {
                     .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
                 || !usernames.insert(&user.username)
                 || !bounded(&user.email, 128)
-                || !user.email.ends_with(".test")
+                || !(if development {
+                    user.email.ends_with(".test")
+                } else {
+                    deployment_email(&user.email)
+                })
                 || !emails.insert(&user.email)
                 || !private_file_name(&user.password_file)
                 || user.attributes.len() > 16
@@ -552,7 +617,8 @@ impl IssuerDescription {
                         && url.fragment().is_none()
                         && url.query().is_none()
                         && (url.scheme() == "https"
-                            || (url.scheme() == "http"
+                            || (development
+                                && url.scheme() == "http"
                                 && matches!(
                                     url.host_str(),
                                     Some("127.0.0.1" | "localhost" | "host.docker.internal")
@@ -562,7 +628,11 @@ impl IssuerDescription {
                     return refuse("exchange issuer and JWKS URLs require HTTPS or an explicit development host");
                 }
             }
-            if issuer.issuer == format!("http://127.0.0.1:{}", self.port) {
+            let own_issuer = match profile {
+                Profile::Development => format!("http://127.0.0.1:{}", self.port),
+                Profile::Deployment { issuer } => issuer.to_owned(),
+            };
+            if issuer.issuer == own_issuer {
                 return refuse("an external exchange issuer cannot name this issuer");
             }
         }
@@ -587,6 +657,14 @@ impl IssuerDescription {
             )?;
             if keys.is_empty() || keys.len() > 8 {
                 return refuse("each machine client registers 1..=8 public keys of its own");
+            }
+            if keys.iter().any(|key| {
+                !key.is_object()
+                    || PRIVATE_JWK_MEMBERS
+                        .iter()
+                        .any(|member| key.get(member).is_some())
+            }) {
+                return refuse("a machine client's JWKS carries private key material");
             }
             if !(60..=86_400).contains(&client.access_token_lifetime_seconds) {
                 return refuse("the access token lifetime is 60..=86400 seconds");
@@ -837,8 +915,50 @@ impl IssuerDescription {
         if self.session.label.len() > MAXIMUM_IDENTIFIER_BYTES {
             return refuse("unreachable bound");
         }
+        if !all_distinct(self.derived_ids()) {
+            return refuse("two derived identifiers are the same");
+        }
         Ok(())
     }
+
+    /// Every identifier the renderer derives for a native entity.
+    pub(crate) fn derived_ids(&self) -> Vec<&str> {
+        std::iter::once(self.organization_unit.id.as_str())
+            .chain(
+                self.resource_servers
+                    .iter()
+                    .map(|server| server.id.as_str()),
+            )
+            .chain(self.roles.iter().map(|role| role.id.as_str()))
+            .chain(
+                self.machine_clients
+                    .iter()
+                    .map(|client| client.agent_id.as_str()),
+            )
+            .chain(
+                self.compatibility_clients
+                    .iter()
+                    .map(|client| client.agent_id.as_str()),
+            )
+            .chain(
+                self.exchange_issuers
+                    .iter()
+                    .map(|issuer| issuer.id.as_str()),
+            )
+            .chain(
+                self.interactive_applications
+                    .iter()
+                    .map(|app| app.id.as_str()),
+            )
+            .chain(self.synthetic_users.iter().map(|user| user.id.as_str()))
+            .collect()
+    }
+}
+
+/// Whether no identifier repeats.
+pub(crate) fn all_distinct(ids: impl IntoIterator<Item = impl Ord>) -> bool {
+    let mut seen = BTreeSet::new();
+    ids.into_iter().all(|id| seen.insert(id))
 }
 
 #[cfg(test)]
@@ -862,6 +982,64 @@ mod tests {
             ordinary_resource_permissions: Vec::new(),
         });
         description
+    }
+
+    #[test]
+    fn a_machine_clients_jwks_may_carry_no_private_key_material() {
+        for member in PRIVATE_JWK_MEMBERS {
+            let mut description = crate::testing::synthetic_description();
+            let mut jwks: serde_json::Value =
+                serde_json::from_str(&description.machine_clients[0].public_jwks).unwrap();
+            jwks["keys"][0][member] = serde_json::json!("c2VjcmV0");
+            description.machine_clients[0].public_jwks = jwks.to_string();
+            assert!(
+                matches!(
+                    description.validate(),
+                    Err(ToolingError::InvalidDescription {
+                        reason: "a machine client's JWKS carries private key material"
+                    })
+                ),
+                "{member} was accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn a_development_session_keeps_its_bounds_on_applications_and_users() {
+        let mut description = crate::testing::synthetic_description();
+        let application = |n: usize| InteractiveApplication {
+            id: format!("0197aaaa-0000-7000-8000-0000000001{n:02x}"),
+            client_id: format!("synthetic-browser-{n}"),
+            client_secret_file: format!("secrets/app-{n}").into(),
+            origin: "http://127.0.0.1:3000".into(),
+            redirect_uris: vec!["http://127.0.0.1:3000/auth/callback".into()],
+            audience: description.resource_servers[0].identifier.clone(),
+            token_attributes: vec!["registry_role".into()],
+        };
+        let user = |n: usize| SyntheticUser {
+            id: format!("0197aaaa-0000-7000-8000-0000000002{n:02x}"),
+            username: format!("staff-{n}"),
+            email: format!("staff.{n}@example.test"),
+            password_file: format!("secrets/user-{n}").into(),
+            attributes: BTreeMap::new(),
+        };
+        description.interactive_applications = (0..8).map(application).collect();
+        description.synthetic_users = (0..32).map(user).collect();
+        assert!(description.validate().is_ok());
+        let refused = |description: &IssuerDescription| {
+            matches!(
+                description.validate(),
+                Err(ToolingError::InvalidDescription {
+                    reason: "browser applications or synthetic users exceed their bounds"
+                })
+            )
+        };
+        let mut applications = description.clone();
+        applications.interactive_applications.push(application(8));
+        assert!(refused(&applications));
+        let mut users = description;
+        users.synthetic_users.push(user(32));
+        assert!(refused(&users));
     }
 
     #[test]
@@ -1244,5 +1422,17 @@ mod tests {
             .token_attributes
             .insert("registry_grant_id".into(), ExchangeAttributeKind::String);
         assert!(grant.validate().is_err());
+    }
+
+    #[test]
+    fn two_entities_sharing_a_derived_id_are_refused() {
+        let mut description = crate::testing::synthetic_description();
+        description.organization_unit.id = description.roles[0].id.clone();
+        assert!(matches!(
+            description.validate(),
+            Err(ToolingError::InvalidDescription {
+                reason: "two derived identifiers are the same"
+            })
+        ));
     }
 }

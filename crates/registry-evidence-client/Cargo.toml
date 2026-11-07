@@ -42,7 +42,7 @@ ed25519-dalek.workspace = true
 jsonschema.workspace = true
 p256.workspace = true
 registry-evidence.workspace = true
-registry-thunderid-tooling.workspace = true
+registry-thunderid-tooling = { workspace = true, features = ["session"] }
 registry-platform-config.workspace = true
 registry-platform-sdjwt.workspace = true
 tempfile.workspace = true

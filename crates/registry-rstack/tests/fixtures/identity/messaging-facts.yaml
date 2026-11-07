@@ -1,0 +1,22 @@
+apiVersion: id.registrystack.org/formats/platform/identity-facts/v1
+kind: PlatformIdentityFacts
+product: messaging
+issuer: https://identity.example.test/realms/registry
+audience: urn:example:messaging
+allowedClients:
+- case-system
+- operations-console
+claims:
+  registry_actor_kind: string
+accessProfiles:
+- id: case-notices
+  scopes:
+  - messaging:send
+  requesterClients:
+  - case-system
+  actorKind: service
+- id: operations
+  scopes:
+  - messaging:operate
+  requesterClients:
+  - operations-console

@@ -33,6 +33,7 @@
 //! (CFG-DIAG-1). No refusal repeats a configured or substituted value; a
 //! substitution refusal names the environment variable and nothing else.
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::io::Read as _;
 use std::path::{Component, Path, PathBuf};
@@ -493,22 +494,66 @@ fn sentence(replacement: &str) -> String {
 /// environment variable name.
 #[must_use]
 pub fn contains_environment_expression(text: &str) -> bool {
-    let mut rest = text;
-    while let Some(start) = rest.find("${") {
-        let after = &rest[start + 2..];
-        let name_end = after
-            .find(|character: char| character != '_' && !character.is_ascii_alphanumeric())
-            .unwrap_or(after.len());
-        let name = &after[..name_end];
-        let tail = &after[name_end..];
-        if crate::valid_env_key(name)
-            && (tail.starts_with('}') || tail.starts_with(":-") || tail.starts_with(":?"))
-        {
-            return true;
-        }
-        rest = after;
+    expression_names(text).next().is_some()
+}
+
+/// The variables a runtime configuration's `${NAME}` expressions read, as the
+/// loader would: the names in the decoded string values it substitutes. A
+/// name in a comment, in a key, or in a value the loader refuses to fill
+/// (a `*Ref` member, a `secretProviders` setting, the envelope) is not
+/// included. Text the shared reader refuses names nothing; the loader
+/// refuses it when the file is loaded.
+#[must_use]
+pub fn substituted_variable_names(text: &str) -> BTreeSet<String> {
+    let mut hook = NamedValues::default();
+    let scanned = Reader::new(AUTHORED_BUFFER_NAME)
+        .with_hook(&mut hook)
+        .scan(text.as_bytes());
+    if scanned.is_err() {
+        return BTreeSet::new();
     }
-    false
+    hook.names
+}
+
+/// Collects the variable names of the values [`Substitution`] would fill.
+#[derive(Default)]
+struct NamedValues {
+    names: BTreeSet<String>,
+}
+
+impl ScalarHook for NamedValues {
+    fn key(&mut self, _site: &ScalarSite<'_>) -> Result<(), Refusal> {
+        Ok(())
+    }
+
+    fn value(&mut self, site: &ScalarSite<'_>) -> Result<Option<String>, Refusal> {
+        if literal_at(site).is_none() {
+            self.names
+                .extend(expression_names(site.text).map(str::to_owned));
+        }
+        Ok(None)
+    }
+}
+
+fn expression_names(text: &str) -> impl Iterator<Item = &str> {
+    let mut rest = text;
+    std::iter::from_fn(move || {
+        while let Some(start) = rest.find("${") {
+            let after = &rest[start + 2..];
+            rest = after;
+            let name_end = after
+                .find(|character: char| character != '_' && !character.is_ascii_alphanumeric())
+                .unwrap_or(after.len());
+            let name = &after[..name_end];
+            let tail = &after[name_end..];
+            if crate::valid_env_key(name)
+                && (tail.starts_with('}') || tail.starts_with(":-") || tail.starts_with(":?"))
+            {
+                return Some(name);
+            }
+        }
+        None
+    })
 }
 
 /// Whether the text after a `${` makes it the start of an expression: a name

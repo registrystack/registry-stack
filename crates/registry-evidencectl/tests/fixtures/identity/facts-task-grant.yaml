@@ -1,0 +1,34 @@
+apiVersion: id.registrystack.org/formats/platform/identity-facts/v1
+kind: PlatformIdentityFacts
+product: evidence
+issuer: http://127.0.0.1:8082
+audience: urn:example:resource:standalone-evidence
+allowedClients: unrestricted
+claims:
+  evidence_audience: string
+  evidence_tags: string-array
+  registry_actor_kind: string
+accessProfiles:
+- id: age-checks
+  scopes:
+  - evidence:request
+  purposes:
+  - age-check
+  requesterClients:
+  - task-checker
+  exchange:
+    assertionIssuerId: casework-example-test
+    bootstrapAudience: urn:example:resource:casework
+    bootstrapScope: casework:grants:assert
+  selectedBy:
+    registry_actor_kind:
+    - agent
+  requiredClaims:
+  - evidence_audience
+  - evidence_tags
+  - registry_actor_kind
+assertionIssuers:
+- id: casework-example-test
+  issuer: https://casework.example.test
+  jwksUrl: https://casework.example.test/.well-known/jwks.json
+  mapping: institutional-grant

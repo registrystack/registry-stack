@@ -126,12 +126,14 @@ fn valid_endpoint(url: &Url) -> bool {
 fn valid_scope(scope: &str) -> bool {
     scope.len() <= MAXIMUM_SCOPE_BYTES
         && !scope.contains('*')
-        && registry_platform_httputil::valid_scope_token(scope)
+        && crate::validate::valid_scope_token(scope)
 }
 
 /// Read one task connection document through the shared reader, refusing
 /// every `${...}` expression (CFG-SEC-2), and check it. Resolves no secret.
 /// `file` is the name every diagnostic carries.
+// Only the session-gated grant file reads a connection through this entry point.
+#[cfg_attr(not(feature = "session"), allow(dead_code))]
 pub(crate) fn read(file: &str, bytes: &[u8]) -> Result<Decoded<TaskConnection>, Report> {
     let mut hook = registry_platform_config::AuthoredExpressions;
     let decoded = Reader::new(file)
@@ -192,7 +194,7 @@ pub(crate) fn check(document: &Document, connection: &TaskConnection) -> Vec<Dia
         ),
         ("/bootstrapResource", &connection.bootstrap_resource),
     ] {
-        if !registry_platform_httputil::valid_resource_uri(resource) {
+        if !crate::validate::valid_resource_uri(resource) {
             error(
                 pointer,
                 "platform.task-connection.invalid-resource",
@@ -241,7 +243,7 @@ pub(crate) fn check(document: &Document, connection: &TaskConnection) -> Vec<Dia
                 ));
             }
         }
-        if !registry_platform_httputil::valid_resource_uri(&client.resource) {
+        if !crate::validate::valid_resource_uri(&client.resource) {
             found.push(document.diagnostic_at_value(
                 Severity::Error,
                 "platform.task-connection.invalid-resource",

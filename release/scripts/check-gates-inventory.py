@@ -165,6 +165,18 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "YAML reader boundary tests",
         "run: python3 -m unittest products/platform/scripts/test_check_yaml_reader_boundary.py",
     ),
+    (
+        "rstack launcher built alone for the check corpus",
+        "run: cargo build --locked -p registry-rstack",
+    ),
+    (
+        "rstack dependency boundary",
+        "run: python3 products/platform/scripts/check-rstack-dependencies.py",
+    ),
+    (
+        "rstack dependency boundary tests",
+        "run: python3 -m unittest products/platform/scripts/test_check_rstack_dependencies.py",
+    ),
     ("Runtime configuration conformance job", "config-conformance:"),
     (
         "Runtime configuration conformance path filter",

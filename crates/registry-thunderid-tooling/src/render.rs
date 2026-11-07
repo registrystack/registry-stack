@@ -250,7 +250,10 @@ fn branding_metadata() -> Result<BrandingMetadata, ToolingError> {
     Ok(metadata)
 }
 
-fn render_branding(root: &Path) -> Result<BrandingMetadata, ToolingError> {
+fn render_branding(
+    outputs: &mut Vec<Output>,
+    assets: bool,
+) -> Result<BrandingMetadata, ToolingError> {
     let metadata = branding_metadata()?;
     let mut theme: Value =
         serde_json::from_str(BRANDING_THEME).map_err(|_| ToolingError::InvalidRender {
@@ -263,11 +266,11 @@ fn render_branding(root: &Path) -> Result<BrandingMetadata, ToolingError> {
     };
     theme_fields.insert("resource_type".into(), json!("theme"));
     theme_fields.insert("id".into(), json!(&metadata.theme_id));
-    write_owner_only(
-        &root
-            .join("themes")
-            .join(format!("{}.yaml", metadata.theme_id)),
-        yaml_document(&theme)?.as_bytes(),
+    emit(
+        outputs,
+        Area::Resources,
+        format!("themes/{}.yaml", metadata.theme_id),
+        &theme,
     )?;
 
     let layout = json!({
@@ -285,30 +288,138 @@ fn render_branding(root: &Path) -> Result<BrandingMetadata, ToolingError> {
             }
         },
     });
-    write_owner_only(
-        &root
-            .join("layouts")
-            .join(format!("{}.yaml", metadata.layout_id)),
-        yaml_document(&layout)?.as_bytes(),
+    emit(
+        outputs,
+        Area::Resources,
+        format!("layouts/{}.yaml", metadata.layout_id),
+        &layout,
     )?;
 
-    let assets = root
-        .parent()
-        .expect("resources is always below the state root")
-        .join(BRANDING_ASSETS_DIR);
-    write_owner_only(
-        &assets.join("registry-stack-wordmark.svg"),
-        BRANDING_WORDMARK,
-    )?;
-    write_owner_only(
-        &assets.join("fonts/public-sans-latin-wght-normal.woff2"),
-        BRANDING_FONT,
-    )?;
-    write_owner_only(
-        &assets.join("fonts/OFL-public-sans.txt"),
-        BRANDING_FONT_LICENSE,
-    )?;
+    if assets {
+        for (path, bytes) in [
+            ("registry-stack-wordmark.svg", BRANDING_WORDMARK),
+            ("fonts/public-sans-latin-wght-normal.woff2", BRANDING_FONT),
+            ("fonts/OFL-public-sans.txt", BRANDING_FONT_LICENSE),
+        ] {
+            outputs.push(Output {
+                area: Area::Assets,
+                path: path.into(),
+                bytes: bytes.to_vec(),
+            });
+        }
+    }
     Ok(metadata)
+}
+
+/// Where a rendered document lands, relative to the output's roots.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Area {
+    /// The serving-time documents (`resources/`).
+    Resources,
+    /// The bootstrap provisioning directory (`registry-schema/`).
+    Bootstrap,
+    /// Public branding files (`branding-assets/`).
+    Assets,
+}
+
+/// One rendered file: its area, its path inside the area, and its bytes.
+#[derive(Debug, Clone)]
+pub(crate) struct Output {
+    pub area: Area,
+    pub path: std::path::PathBuf,
+    pub bytes: Vec<u8>,
+}
+
+/// A user type beyond the generated `RegistryPerson`.
+#[derive(Debug, Clone)]
+pub(crate) struct ExtensionUserType {
+    pub id: String,
+    pub name: String,
+    /// Optional string attributes, beyond username, email and password.
+    pub attributes: Vec<String>,
+}
+
+/// What a hosted deployment states that the closed description does not
+/// carry: extension user types, which type each user and application uses,
+/// and each application's public logo.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct DeploymentExtras {
+    pub user_types: Vec<ExtensionUserType>,
+    /// User id to the name of its extension user type.
+    pub user_type_of: std::collections::BTreeMap<String, String>,
+    /// Application id to the extension user types it admits.
+    pub app_user_types: std::collections::BTreeMap<String, Vec<String>>,
+    /// Application id to its public logo URL.
+    pub app_logo_urls: std::collections::BTreeMap<String, String>,
+}
+
+/// How secrets reach the rendered documents.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Mode<'a> {
+    /// A development session: each secret is read from its owner-only file
+    /// under this root and written into the rendered document.
+    Development { root: &'a Path },
+    /// A hosted deployment: no secret is opened. Each secret renders as the
+    /// `{{.NAME}}` placeholder ThunderID substitutes from its environment,
+    /// where `NAME` is the final component of the secret's path.
+    Deployment { extras: &'a DeploymentExtras },
+}
+
+impl Mode<'_> {
+    fn extras(&self) -> Option<&DeploymentExtras> {
+        match self {
+            Self::Development { .. } => None,
+            Self::Deployment { extras } => Some(extras),
+        }
+    }
+
+    /// The text a document carries for the secret at `path`. In development
+    /// the file is read and `check` refuses an unusable value; in a
+    /// deployment `check` never runs because no value exists.
+    fn secret(
+        &self,
+        path: &Path,
+        unreadable: &'static str,
+        check: impl FnOnce(&str) -> Result<(), ToolingError>,
+    ) -> Result<String, ToolingError> {
+        match self {
+            Self::Development { root } => {
+                let raw = fs::read_to_string(root.join(path))
+                    .map_err(|_| ToolingError::Filesystem { reason: unreadable })?;
+                check(&raw)?;
+                Ok(raw.trim().to_owned())
+            }
+            Self::Deployment { .. } => {
+                let name = path.file_name().and_then(|name| name.to_str()).ok_or(
+                    ToolingError::InvalidRender {
+                        reason: "a secret placeholder has no name",
+                    },
+                )?;
+                Ok(format!("{{{{.{name}}}}}"))
+            }
+        }
+    }
+}
+
+/// Everything one render produces, before any file is written.
+#[derive(Debug)]
+pub(crate) struct Built {
+    pub outputs: Vec<Output>,
+    pub agent_type: String,
+}
+
+fn emit(
+    outputs: &mut Vec<Output>,
+    area: Area,
+    path: impl Into<std::path::PathBuf>,
+    document: &Value,
+) -> Result<(), ToolingError> {
+    outputs.push(Output {
+        area,
+        path: path.into(),
+        bytes: yaml_document(document)?.into_bytes(),
+    });
+    Ok(())
 }
 
 /// Render every native resource document for one validated description.
@@ -326,10 +437,44 @@ pub fn render(description: &IssuerDescription) -> Result<RenderedResources, Tool
     prepare_private_root(&description.state_root)?;
     let root = description.state_root.join(RESOURCES_DIR);
     let bootstrap_root = description.state_root.join(BOOTSTRAP_DIR);
+    let built = build(
+        description,
+        &Mode::Development {
+            root: &description.state_root,
+        },
+    )?;
+    for output in &built.outputs {
+        let base = match output.area {
+            Area::Resources => &root,
+            Area::Bootstrap => &bootstrap_root,
+            Area::Assets => &description.state_root.join(BRANDING_ASSETS_DIR),
+        };
+        write_owner_only(&base.join(&output.path), &output.bytes)?;
+    }
+    let digest = Sha256::digest(built.agent_type.as_bytes());
+    Ok(RenderedResources {
+        resources_dir: root,
+        bootstrap_dir: bootstrap_root,
+        agent_type_sha256: hex(&digest),
+        agent_type_document: built.agent_type,
+    })
+}
+
+/// Build every document for one validated description without writing any.
+pub(crate) fn build(
+    description: &IssuerDescription,
+    mode: &Mode<'_>,
+) -> Result<Built, ToolingError> {
+    let mut outputs = Vec::new();
+    let extras = mode.extras();
+    let ou_handle = &description.organization_unit.handle;
     let branding = if description.interactive_applications.is_empty() {
         None
     } else {
-        Some(render_branding(&root)?)
+        Some(render_branding(
+            &mut outputs,
+            matches!(mode, Mode::Development { .. }),
+        )?)
     };
 
     // The bootstrap bundle already created the default organization unit,
@@ -344,11 +489,14 @@ pub fn render(description: &IssuerDescription) -> Result<RenderedResources, Tool
             "name": description.organization_unit.name,
             "description": description.organization_unit.description,
         });
-        write_owner_only(
-            &root
-                .join("organization_units")
-                .join(format!("{}.yaml", description.organization_unit.handle)),
-            yaml_document(&organization)?.as_bytes(),
+        emit(
+            &mut outputs,
+            Area::Resources,
+            format!(
+                "organization_units/{}.yaml",
+                description.organization_unit.handle
+            ),
+            &organization,
         )?;
     }
 
@@ -384,15 +532,15 @@ pub fn render(description: &IssuerDescription) -> Result<RenderedResources, Tool
             "name": server.name,
             "description": server.description,
             "identifier": server.identifier,
-            "ouHandle": description.organization_unit.handle,
+            "ouHandle": ou_handle,
             "delimiter": ":",
             "resources": resources,
         });
-        write_owner_only(
-            &root
-                .join("resource_servers")
-                .join(format!("{}.yaml", server.id)),
-            yaml_document(&document)?.as_bytes(),
+        emit(
+            &mut outputs,
+            Area::Resources,
+            format!("resource_servers/{}.yaml", server.id),
+            &document,
         )?;
     }
 
@@ -424,13 +572,15 @@ pub fn render(description: &IssuerDescription) -> Result<RenderedResources, Tool
             "id": role.id,
             "name": role.name,
             "description": role.description,
-            "ouHandle": description.organization_unit.handle,
+            "ouHandle": ou_handle,
             "permissions": permissions,
             "assignments": assignments,
         });
-        write_owner_only(
-            &root.join("roles").join(format!("{}.yaml", role.id)),
-            yaml_document(&document)?.as_bytes(),
+        emit(
+            &mut outputs,
+            Area::Resources,
+            format!("roles/{}.yaml", role.id),
+            &document,
         )?;
     }
 
@@ -469,13 +619,20 @@ pub fn render(description: &IssuerDescription) -> Result<RenderedResources, Tool
                 }]
             }
         });
-        write_owner_only(
-            &root.join("connections").join(format!("{}.yaml", issuer.id)),
-            yaml_document(&document)?.as_bytes(),
+        emit(
+            &mut outputs,
+            Area::Resources,
+            format!("connections/{}.yaml", issuer.id),
+            &document,
         )?;
     }
 
-    if !description.interactive_applications.is_empty() {
+    let user_type_name = |user_id: &str| {
+        extras
+            .and_then(|extras| extras.user_type_of.get(user_id))
+            .map_or("RegistryPerson", String::as_str)
+    };
+    let user_schema = |attributes: &mut dyn Iterator<Item = &String>| {
         let mut schema = serde_json::Map::new();
         for name in ["username", "email", "password"] {
             schema.insert(
@@ -488,40 +645,76 @@ pub fn render(description: &IssuerDescription) -> Result<RenderedResources, Tool
                 }),
             );
         }
-        for name in description
-            .synthetic_users
-            .iter()
-            .flat_map(|user| user.attributes.keys())
-        {
+        for name in attributes {
             schema.entry(name.clone()).or_insert_with(|| {
                 json!({
                     "type": "string", "displayName": name,
                 })
             });
         }
+        schema
+    };
+    if !description.interactive_applications.is_empty() {
+        let schema = user_schema(
+            &mut description
+                .synthetic_users
+                .iter()
+                .filter(|user| user_type_name(&user.id) == "RegistryPerson")
+                .flat_map(|user| user.attributes.keys()),
+        );
         let user_type = json!({
             "resource_type": "user_type",
             "id": "0197aaaa-0000-7000-8000-000000000010",
-            "category": "user", "name": "RegistryPerson", "ouHandle": description.organization_unit.handle,
+            "category": "user", "name": "RegistryPerson", "ouHandle": ou_handle,
             "allowSelfRegistration": false,
             "systemAttributes": {"display": "username"},
             "schema": schema,
         });
-        write_owner_only(
-            &root.join("user_types/registry-person.yaml"),
-            yaml_document(&user_type)?.as_bytes(),
+        emit(
+            &mut outputs,
+            Area::Resources,
+            "user_types/registry-person.yaml",
+            &user_type,
+        )?;
+    }
+    for extension in extras.iter().flat_map(|extras| &extras.user_types) {
+        let schema = user_schema(
+            &mut extension.attributes.iter().chain(
+                description
+                    .synthetic_users
+                    .iter()
+                    .filter(|user| user_type_name(&user.id) == extension.name)
+                    .flat_map(|user| user.attributes.keys()),
+            ),
+        );
+        let user_type = json!({
+            "resource_type": "user_type",
+            "id": extension.id,
+            "category": "user", "name": extension.name, "ouHandle": ou_handle,
+            "allowSelfRegistration": false,
+            "systemAttributes": {"display": "username"},
+            "schema": schema,
+        });
+        emit(
+            &mut outputs,
+            Area::Resources,
+            format!("user_types/{}.yaml", extension.id),
+            &user_type,
         )?;
     }
     for user in &description.synthetic_users {
-        let password = fs::read_to_string(description.state_root.join(&user.password_file))
-            .map_err(|_| ToolingError::Filesystem {
-                reason: "a synthetic user password file could not be read",
-            })?;
-        if password.trim().len() < 12 || password.trim().len() > 256 {
-            return Err(ToolingError::InvalidDescription {
-                reason: "synthetic user passwords are 12..=256 bytes",
-            });
-        }
+        let password = mode.secret(
+            &user.password_file,
+            "a synthetic user password file could not be read",
+            |password| {
+                if password.trim().len() < 12 || password.trim().len() > 256 {
+                    return Err(ToolingError::InvalidDescription {
+                        reason: "synthetic user passwords are 12..=256 bytes",
+                    });
+                }
+                Ok(())
+            },
+        )?;
         let mut attributes = serde_json::Map::from_iter([
             ("username".into(), json!(user.username)),
             ("email".into(), json!(user.email)),
@@ -532,44 +725,58 @@ pub fn render(description: &IssuerDescription) -> Result<RenderedResources, Tool
                 .map(|(name, value)| (name.clone(), json!(value))),
         );
         let document = json!({
-            "resource_type": "user", "id": user.id, "type": "RegistryPerson",
-            "ouHandle": description.organization_unit.handle,
-            "attributes": attributes, "credentials": {"password": password.trim()},
+            "resource_type": "user", "id": user.id, "type": user_type_name(&user.id),
+            "ouHandle": ou_handle,
+            "attributes": attributes, "credentials": {"password": password},
         });
-        write_owner_only(
-            &root.join("users").join(format!("{}.yaml", user.id)),
-            yaml_document(&document)?.as_bytes(),
+        emit(
+            &mut outputs,
+            Area::Resources,
+            format!("users/{}.yaml", user.id),
+            &document,
         )?;
     }
     for app in &description.interactive_applications {
         let branding = branding
             .as_ref()
             .expect("interactive applications render branding");
-        let secret = fs::read_to_string(description.state_root.join(&app.client_secret_file))
-            .map_err(|_| ToolingError::Filesystem {
-                reason: "a browser application secret file could not be read",
-            })?;
-        if secret.trim().len() < 16 || secret.trim().len() > 256 {
-            return Err(ToolingError::InvalidDescription {
-                reason: "browser application secrets are 16..=256 bytes",
-            });
-        }
-        let document = json!({
+        let secret = mode.secret(
+            &app.client_secret_file,
+            "a browser application secret file could not be read",
+            |secret| {
+                if secret.trim().len() < 16 || secret.trim().len() > 256 {
+                    return Err(ToolingError::InvalidDescription {
+                        reason: "browser application secrets are 16..=256 bytes",
+                    });
+                }
+                Ok(())
+            },
+        )?;
+        let mut allowed_user_types = vec![json!("RegistryPerson")];
+        allowed_user_types.extend(
+            extras
+                .and_then(|extras| extras.app_user_types.get(&app.id))
+                .into_iter()
+                .flatten()
+                .map(|name| json!(name)),
+        );
+        let mut document = json!({
             "resource_type": "application", "id": app.id,
-            "name": app.client_id, "description": "Synthetic local browser application",
-            "type": "fullstack", "ouHandle": description.organization_unit.handle,
+            "name": app.client_id,
+            "description": if extras.is_some() {
+                "Browser application"
+            } else {
+                "Synthetic local browser application"
+            },
+            "type": "fullstack", "ouHandle": ou_handle,
             "url": app.origin,
             "authFlowId": "01900000-0000-7000-8000-000000000068",
             "themeId": branding.theme_id,
             "layoutId": branding.layout_id,
-            "logoUrl": format!(
-                "http://127.0.0.1:{}{}/registry-stack-wordmark.svg",
-                description.port, branding.asset_base_path
-            ),
             "isRegistrationFlowEnabled": false, "isRecoveryFlowEnabled": false,
-            "allowedUserTypes": ["RegistryPerson"],
+            "allowedUserTypes": allowed_user_types,
             "inboundAuthConfig": [{"type": "oauth2", "config": {
-                "clientId": app.client_id, "clientSecret": secret.trim(),
+                "clientId": app.client_id, "clientSecret": secret,
                 "redirectUris": app.redirect_uris,
                 "postLogoutRedirectUris": [app.origin],
                 "grantTypes": ["authorization_code"], "responseTypes": ["code"],
@@ -579,9 +786,21 @@ pub fn render(description: &IssuerDescription) -> Result<RenderedResources, Tool
                     "idToken": {"validityPeriod": 3600, "userAttributes": app.token_attributes}},
             }}],
         });
-        write_owner_only(
-            &root.join("applications").join(format!("{}.yaml", app.id)),
-            yaml_document(&document)?.as_bytes(),
+        let logo = match extras {
+            None => Some(format!(
+                "http://127.0.0.1:{}{}/registry-stack-wordmark.svg",
+                description.port, branding.asset_base_path
+            )),
+            Some(extras) => extras.app_logo_urls.get(&app.id).cloned(),
+        };
+        if let Some(logo) = logo {
+            document["logoUrl"] = json!(logo);
+        }
+        emit(
+            &mut outputs,
+            Area::Resources,
+            format!("applications/{}.yaml", app.id),
+            &document,
         )?;
     }
 
@@ -593,7 +812,7 @@ pub fn render(description: &IssuerDescription) -> Result<RenderedResources, Tool
             "resource_type": "agent",
             "id": client.agent_id,
             "type": crate::description::DEFAULT_AGENT_TYPE,
-            "ouHandle": description.organization_unit.handle,
+            "ouHandle": ou_handle,
             "name": client.name,
             "description": client.description,
             "attributes": client.attributes,
@@ -654,11 +873,11 @@ pub fn render(description: &IssuerDescription) -> Result<RenderedResources, Tool
                 "attributes": exchange_attributes,
             });
         }
-        write_owner_only(
-            &bootstrap_root
-                .join("agents")
-                .join(format!("{}.yaml", client.agent_id)),
-            yaml_document(&document)?.as_bytes(),
+        emit(
+            &mut outputs,
+            Area::Bootstrap,
+            format!("agents/{}.yaml", client.agent_id),
+            &document,
         )?;
     }
 
@@ -666,22 +885,23 @@ pub fn render(description: &IssuerDescription) -> Result<RenderedResources, Tool
         // The secret is read here, inside the private state directory, and
         // written straight into the owner-only agent document that carries
         // it. It never appears in a returned value, a log line, or an argv.
-        let secret =
-            fs::read_to_string(description.state_root.join(&client.secret_file)).map_err(|_| {
-                ToolingError::Filesystem {
-                    reason: "a compatibility client secret file could not be read",
+        let secret = mode.secret(
+            &client.secret_file,
+            "a compatibility client secret file could not be read",
+            |secret| {
+                if secret.trim().is_empty() || secret.len() > 256 {
+                    return Err(ToolingError::InvalidDescription {
+                        reason: "a compatibility client secret file is 1..=256 bytes",
+                    });
                 }
-            })?;
-        if secret.trim().is_empty() || secret.len() > 256 {
-            return Err(ToolingError::InvalidDescription {
-                reason: "a compatibility client secret file is 1..=256 bytes",
-            });
-        }
+                Ok(())
+            },
+        )?;
         let document = json!({
             "resource_type": "agent",
             "id": client.agent_id,
             "type": crate::description::DEFAULT_AGENT_TYPE,
-            "ouHandle": description.organization_unit.handle,
+            "ouHandle": ou_handle,
             "name": client.name,
             "description": client.description,
             "inboundAuthConfig": [
@@ -692,7 +912,7 @@ pub fn render(description: &IssuerDescription) -> Result<RenderedResources, Tool
                         "grantTypes": ["client_credentials"],
                         "tokenEndpointAuthMethod": client.method.as_str(),
                         "publicClient": false,
-                        "clientSecret": secret.trim(),
+                        "clientSecret": secret,
                         "token": {
                             "accessToken": {
                                 "clientConfig": {
@@ -704,26 +924,23 @@ pub fn render(description: &IssuerDescription) -> Result<RenderedResources, Tool
                 }
             ]
         });
-        write_owner_only(
-            &bootstrap_root
-                .join("agents")
-                .join(format!("{}.yaml", client.agent_id)),
-            yaml_document(&document)?.as_bytes(),
+        emit(
+            &mut outputs,
+            Area::Bootstrap,
+            format!("agents/{}.yaml", client.agent_id),
+            &document,
         )?;
     }
 
     let agent_type = agent_type_document(description)?;
-    write_owner_only(
-        &bootstrap_root.join("agent-type.yaml"),
-        agent_type.as_bytes(),
-    )?;
-    let digest = Sha256::digest(agent_type.as_bytes());
-
-    Ok(RenderedResources {
-        resources_dir: root,
-        bootstrap_dir: bootstrap_root,
-        agent_type_document: agent_type,
-        agent_type_sha256: hex(&digest),
+    outputs.push(Output {
+        area: Area::Bootstrap,
+        path: "agent-type.yaml".into(),
+        bytes: agent_type.clone().into_bytes(),
+    });
+    Ok(Built {
+        outputs,
+        agent_type,
     })
 }
 

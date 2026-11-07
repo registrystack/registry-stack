@@ -1,0 +1,48 @@
+apiVersion: id.registrystack.org/formats/platform/identity-facts/v1
+kind: PlatformIdentityFacts
+product: casework
+issuer: https://identity.example.test/realms/registry
+audience: urn:example:casework
+allowedClients:
+- casework-staff
+- task-agent
+- task-status
+claims:
+  registry_actor_kind: string
+accessProfiles:
+- id: administrator
+  scopes:
+  - casework:admin
+  actorKind: human
+- id: requester
+  scopes:
+  - casework:request
+- id: staff
+  scopes:
+  - casework:staff
+  actorKind: human
+- id: supervisor
+  scopes:
+  - casework:supervisor
+  actorKind: human
+- id: task-status
+  scopes:
+  - casework:grants:status
+  requesterClients:
+  - task-status
+  actorKind: service
+- id: task-assert
+  scopes:
+  - casework:grants:assert
+  requesterClients:
+  - task-agent
+  exchange:
+    assertionIssuerId: casework-example-test
+    bootstrapAudience: urn:example:casework
+    bootstrapScope: casework:grants:assert
+  actorKind: agent
+assertionIssuers:
+- id: casework-example-test
+  issuer: https://casework.example.test
+  jwksUrl: https://casework.example.test/.well-known/jwks.json
+  mapping: institutional-grant

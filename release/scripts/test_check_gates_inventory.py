@@ -1753,6 +1753,18 @@ class GateInventoryTest(unittest.TestCase):
                 "run: python3 -m unittest products/platform/scripts/test_check_yaml_reader_boundary.py",
                 "YAML reader boundary tests",
             ),
+            (
+                "run: cargo build --locked -p registry-rstack",
+                "rstack launcher built alone for the check corpus",
+            ),
+            (
+                "run: python3 products/platform/scripts/check-rstack-dependencies.py",
+                "rstack dependency boundary",
+            ),
+            (
+                "run: python3 -m unittest products/platform/scripts/test_check_rstack_dependencies.py",
+                "rstack dependency boundary tests",
+            ),
         ):
             with self.subTest(gate=gate):
                 text = self.workflow.replace(snippet, "run: true # YAML reader boundary disabled")

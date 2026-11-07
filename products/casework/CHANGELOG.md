@@ -23,6 +23,19 @@
   Prometheus exposition. The `/metrics` scrape keeps its series, values and
   `text/plain; version=0.0.4` content type, with no behavior change.
 
+- Add `caseworkctl generate identity-facts`, which writes a
+  `registry.identity-facts/v1` document from the project and runtime
+  configuration. `caseworkctl dev` derives its task authority registration and
+  admitted clients from the same facts. A profile Casework admits only for a
+  person (one that does not act as a requester, or one that initiates reviews)
+  requires a human in the facts, so the generator refuses to grant it to a
+  machine client. The command refuses an `authentication.oidc.humanIdentity`
+  other than the claim `registry_actor_kind` with the value `human`. A project
+  profile whose principal claim is not `sub` lists it under `requiredClaims`,
+  so the generator refuses a principal granted the profile without it. The
+  task status profile requires a service and the task assertion profile an
+  agent, the kinds those endpoints admit.
+
 ## 0.45.0 - 2026-11-03
 
 - Add default-off delegated staff-reader policies and dedicated assigned-task

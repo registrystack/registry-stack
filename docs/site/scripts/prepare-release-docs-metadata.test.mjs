@@ -112,6 +112,20 @@ test('prepares a future candidate from current product metadata and explicit ext
   assert.equal(docs[2].docset_overrides, undefined);
 });
 
+test('skips external image pins when preparing docset products', async (t) => {
+  const pin = {
+    kind: 'image-pin', repo: 'example/pinned', ref: 'b'.repeat(40), version: '1.0.1',
+    images: { pinned: `ghcr.io/example/pinned:1.0.1@sha256:${'c'.repeat(64)}` },
+  };
+  const { prepare, read } = await fixture(t, {
+    external: { crosswalk: { ref: 'a'.repeat(40) }, pinned: pin },
+  });
+  await prepare();
+  const candidate = YAML.parse(await read('docsets')).docsets.find((entry) => entry.id === 'v0.29.0');
+  assert.deepEqual(candidate.products.crosswalk, { version: 'a'.repeat(40), ref: 'a'.repeat(40) });
+  assert.equal(Object.hasOwn(candidate.products, 'pinned'), false);
+});
+
 test('labels a product the manifest does not ship as main source at the docset ref', async (t) => {
   const { prepare, read } = await fixture(t);
   await prepare();

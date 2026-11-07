@@ -3081,6 +3081,124 @@
               },
               {
                 "required": [
+                  "accessProfiles"
+                ]
+              },
+              {
+                "required": [
+                  "assertionIssuers"
+                ]
+              },
+              {
+                "required": [
+                  "claims"
+                ]
+              },
+              {
+                "required": [
+                  "output"
+                ]
+              },
+              {
+                "required": [
+                  "product"
+                ]
+              }
+            ]
+          },
+          "then": {
+            "required": [
+              "output",
+              "product",
+              "claims",
+              "accessProfiles",
+              "assertionIssuers"
+            ]
+          }
+        }
+      ],
+      "properties": {
+        "accessProfiles": {
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "apiVersion": {
+          "const": "id.registrystack.org/formats/casework/report/v1alpha2",
+          "type": "string"
+        },
+        "assertionIssuers": {
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "claims": {
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "command": {
+          "const": "generate-identity-facts",
+          "type": "string"
+        },
+        "diagnostics": {
+          "items": {
+            "$ref": "#/$defs/Diagnostic"
+          },
+          "type": "array"
+        },
+        "kind": {
+          "const": "CaseworkReport",
+          "type": "string"
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "output": {
+          "type": "string"
+        },
+        "product": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/ReportStatus"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "command",
+        "ok",
+        "status",
+        "apiVersion",
+        "kind",
+        "version",
+        "diagnostics"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "anyOf": [
+              {
+                "properties": {
+                  "ok": {
+                    "const": true
+                  }
+                },
+                "required": [
+                  "ok"
+                ]
+              },
+              {
+                "required": [
                   "actionId"
                 ]
               },

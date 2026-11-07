@@ -1,0 +1,67 @@
+apiVersion: id.registrystack.org/formats/platform/identity-deployment/v1
+kind: PlatformIdentityDeployment
+organizationUnit:
+  handle: registry
+  name: Registry
+  description: Registry Stack deployment
+clients:
+  - id: case-portal
+    publicJwksFile: keys/case-portal.jwks.json
+    grants:
+      - product: breg
+        accessProfiles: [case-read]
+    claims:
+      registry_actor_kind: service
+  - id: field-agent
+    publicJwksFile: keys/field-agent.jwks.json
+    grants:
+      - product: evidence
+        accessProfiles: [invoke]
+    claims:
+      registry_actor_kind: service
+      evidence_audience: https://relying.example
+      evidence_tags: [field]
+  - id: task-agent
+    publicJwksFile: keys/task-agent.jwks.json
+    grants:
+      - product: evidence
+        accessProfiles: [task-invoke]
+    claims:
+      registry_actor_kind: agent
+browserApps:
+  - id: staff-portal
+    clientSecretRef: secret:env/STAFF_PORTAL_CLIENT_SECRET
+    origin: https://staff.registry.example
+    redirectUris: [https://staff.registry.example/auth/callback]
+    product: breg
+    tokenAttributes: [registry_actor_kind, registry_role]
+    userTypes: [farmer]
+    grants:
+      - product: breg
+        accessProfiles: [case-read]
+users:
+  - id: officer-one
+    username: officer-one
+    email: officer.one@agency.example
+    passwordRef: secret:env/OFFICER_ONE_PASSWORD
+    claims:
+      registry_actor_kind: human
+      registry_role: officer
+    grants:
+      - product: breg
+        accessProfiles: [case-read, case-write]
+  - id: farmer-one
+    username: farmer-one
+    email: farmer.one@agency.example
+    passwordRef: secret:env/FARMER_ONE_PASSWORD
+    userType: farmer
+    claims:
+      registry_actor_kind: human
+      registry_role: farmer
+    grants:
+      - product: breg
+        accessProfiles: [case-read]
+userTypes:
+  - id: farmer
+    name: Farmer
+    attributes: [national_id]

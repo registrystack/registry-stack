@@ -3581,7 +3581,7 @@ formats:
       path: products/platform/schemas/task-connection.schema.json
       id: https://id.registrystack.org/schemas/platform/task-connection/task-connection.v1alpha1.schema.json
       origin: generated
-      generator: cargo run -p registry-thunderid-tooling --features schema --example task-connection-schema -- --output products/platform/schemas
+      generator: cargo run -p registry-thunderid-tooling --features schema --example tooling-schemas -- --output products/platform/schemas
       driftCheck: crates/registry-thunderid-tooling/src/schema.rs
       differentialTest: crates/registry-thunderid-tooling/src/schema.rs
     reader:
@@ -3593,6 +3593,110 @@ formats:
     example: products/platform/examples/task-connection.yaml
     conformance:
       requiredText: /bootstrapResource
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: platform/identity-facts
+    product: platform
+    title: Product identity facts for the identity generator
+    files: [identity-facts.yaml]
+    syntax: yaml
+    audience: generated
+    stability: unpromised
+    current:
+      apiVersion: id.registrystack.org/formats/platform/identity-facts/v1
+      kind: PlatformIdentityFacts
+      checkedBy:
+        file: crates/registry-thunderid-tooling/src/identity_facts.rs
+        symbol: API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/platform/identity-facts/v1
+      kind: PlatformIdentityFacts
+    schema:
+      path: products/platform/schemas/identity-facts.schema.json
+      id: https://id.registrystack.org/schemas/platform/identity-facts/identity-facts.v1.schema.json
+      origin: generated
+      generator: cargo run -p registry-thunderid-tooling --features schema --example tooling-schemas -- --output products/platform/schemas
+      driftCheck: crates/registry-thunderid-tooling/src/schema.rs
+      differentialTest: crates/registry-thunderid-tooling/src/schema.rs
+    reader:
+      crate: registry-thunderid-tooling
+      file: crates/registry-thunderid-tooling/src/identity_facts.rs
+      function: read
+      type: IdentityFacts
+    check: rstack identity check {file}
+    example: products/platform/examples/identity/identity-facts.yaml
+    conformance:
+      requiredText: /product
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: platform/identity-deployment
+    product: platform
+    title: Identity deployment file for the identity generator
+    files: [identity-deployment.yaml]
+    syntax: yaml
+    audience: operator
+    stability: unpromised
+    current:
+      apiVersion: id.registrystack.org/formats/platform/identity-deployment/v1
+      kind: PlatformIdentityDeployment
+      checkedBy:
+        file: crates/registry-thunderid-tooling/src/identity_deployment.rs
+        symbol: API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/platform/identity-deployment/v1
+      kind: PlatformIdentityDeployment
+    schema:
+      path: products/platform/schemas/identity-deployment.schema.json
+      id: https://id.registrystack.org/schemas/platform/identity-deployment/identity-deployment.v1.schema.json
+      origin: generated
+      generator: cargo run -p registry-thunderid-tooling --features schema --example tooling-schemas -- --output products/platform/schemas
+      driftCheck: crates/registry-thunderid-tooling/src/schema.rs
+      differentialTest: crates/registry-thunderid-tooling/src/schema.rs
+    reader:
+      crate: registry-thunderid-tooling
+      file: crates/registry-thunderid-tooling/src/identity_deployment.rs
+      function: read
+      type: IdentityDeployment
+    check: rstack identity check {file}
+    example: products/platform/examples/identity/identity-deployment.yaml
+    conformance:
+      requiredText: /organizationUnit/handle
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: platform/identity-receipt
+    product: platform
+    title: Identity generator receipt
+    files: [identity-receipt.json]
+    syntax: json
+    audience: generated
+    stability: unpromised
+    current:
+      apiVersion: id.registrystack.org/formats/platform/identity-receipt/v1
+      kind: PlatformIdentityReceipt
+      checkedBy:
+        file: crates/registry-thunderid-tooling/src/identity_generate.rs
+        symbol: RECEIPT_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/platform/identity-receipt/v1
+      kind: PlatformIdentityReceipt
+    schema: none
+    reader: none
+    emittedBy:
+      file: crates/registry-thunderid-tooling/src/identity_generate.rs
+      symbol: generate
+    check: none
+    example: crates/registry-thunderid-tooling/fixtures/identity/expected/identity-receipt.json
+    conformance:
+      requiredText: none
       optionalText: none
       integer: none
       boolean: none

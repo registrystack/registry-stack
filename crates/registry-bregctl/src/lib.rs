@@ -55,6 +55,7 @@ mod file_check;
 mod history_erasure_lifecycle;
 mod history_rebaseline_lifecycle;
 mod hook_lifecycle;
+mod identity_facts;
 mod import_authority_lifecycle;
 mod init_from_model;
 mod instance_claim_lifecycle;
@@ -621,9 +622,15 @@ struct GenerateArgs {
     #[arg(long)]
     production: bool,
 
-    /// New directory that will receive exactly the generated artifact inventory.
-    #[arg(long, value_name = "DIRECTORY")]
+    /// New directory that will receive exactly the generated artifact inventory;
+    /// for identity-facts, a new YAML file.
+    #[arg(long, value_name = "PATH")]
     output: PathBuf,
+
+    /// Runtime configuration file (identity-facts only): its authentication
+    /// block states the issuer, audience and admitted clients.
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
+    runtime_config: Option<PathBuf>,
 
     /// Access profile: required for evidence-source; optional exact selection for odrl.
     #[arg(long)]
@@ -1618,6 +1625,9 @@ enum ArtifactSelector {
     Sql,
     EvidenceSource,
     Sdk,
+    /// The issuer, audience, clients, claims and access profiles this registry
+    /// expects, for the hosted identity generator. Takes --runtime-config; --output is a new file.
+    IdentityFacts,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, ValueEnum)]
@@ -8423,6 +8433,21 @@ fn generate_requested(args: &GenerateArgs) -> Result<SuccessReport, FailureRepor
     if args.artifact == ArtifactSelector::Odrl {
         return generate_odrl(args);
     }
+    if args.artifact == ArtifactSelector::IdentityFacts {
+        return generate_identity_facts(args);
+    }
+    if args.runtime_config.is_some() {
+        return Err(source_failure(
+            "generate",
+            diagnostic(
+                "identity-facts.arguments",
+                "arguments",
+                "--runtime-config applies to generate identity-facts only",
+            ),
+            DiagnosticArtifact::CommandArguments,
+            SuggestedAction::CorrectCommandUsage,
+        ));
+    }
     let fail = |message: &str| {
         source_failure(
             "generate",
@@ -8501,6 +8526,110 @@ fn generate_requested(args: &GenerateArgs) -> Result<SuccessReport, FailureRepor
             json!({"sourceId":options.source_id,"connection":options.connection,"behaviorRevision":export.behavior_revision,"selectorProfiles":export.selector_profiles,"additionalIdentityFields":export.identity_fields}),
         ),
         next_steps: vec![],
+    })
+}
+
+/// Write the identity facts of the registry project and runtime configuration.
+/// The report names the output file and counts; it carries no value read from
+/// either input.
+fn generate_identity_facts(args: &GenerateArgs) -> Result<SuccessReport, FailureReport> {
+    let fail = |code: &str, message: &str, artifact, action| FailureReport {
+        ok: false,
+        command: "generate",
+        diagnostics: vec![tool_diagnostic(
+            diagnostic(code, "arguments", message),
+            artifact,
+            action,
+        )],
+    };
+    let Some(runtime_config) = &args.runtime_config else {
+        return Err(fail(
+            "identity-facts.arguments",
+            "generate identity-facts requires --runtime-config",
+            DiagnosticArtifact::CommandArguments,
+            SuggestedAction::CorrectCommandUsage,
+        ));
+    };
+    if args.access_profile.is_some()
+        || args.entity.is_some()
+        || !args.selectors.is_empty()
+        || !args.fields.is_empty()
+        || args.source_id.is_some()
+        || args.connection.is_some()
+        || args.authentication.is_some()
+    {
+        return Err(fail(
+            "identity-facts.arguments",
+            "generate identity-facts accepts --runtime-config and --output only",
+            DiagnosticArtifact::CommandArguments,
+            SuggestedAction::CorrectCommandUsage,
+        ));
+    }
+    if args.output.exists() {
+        return Err(fail(
+            "identity-facts.output-exists",
+            "the output file already exists; generate never overwrites",
+            DiagnosticArtifact::GeneratedArtifacts,
+            SuggestedAction::RetryArtifactGeneration,
+        ));
+    }
+    if !runtime_config.is_absolute() {
+        return Err(fail(
+            "identity-facts.arguments",
+            "the runtime configuration path must be absolute",
+            DiagnosticArtifact::CommandArguments,
+            SuggestedAction::CorrectCommandUsage,
+        ));
+    }
+    let config = registry_breg::runtime_config::load_runtime_config(runtime_config)
+        .map_err(|error| runtime_config_failure("generate", error))?;
+    let profile = profile(args.production);
+    let (compiled, source) = compile_with_source(&args.project, profile, "generate")?;
+    let stated = identity_facts::facts(&config, &compiled).map_err(|error| {
+        fail(
+            "identity-facts.unstatable",
+            &error.to_string(),
+            DiagnosticArtifact::RuntimeConfiguration,
+            SuggestedAction::CorrectRuntimeConfiguration,
+        )
+    })?;
+    let facts = stated.facts;
+    identity_facts::write(&facts, &args.output).map_err(|error| {
+        fail(
+            "identity-facts.output-failed",
+            &error.to_string(),
+            DiagnosticArtifact::GeneratedArtifacts,
+            SuggestedAction::RetryArtifactGeneration,
+        )
+    })?;
+    Ok(SuccessReport {
+        ok: true,
+        command: "generate",
+        profile,
+        revision: Some(compiled.revision().to_owned()),
+        registry_revision: None,
+        package_digest: None,
+        findings: positioned_compiler_findings(&compiled, &source),
+        artifacts: vec![artifact_report(
+            &args.output.display().to_string(),
+            "application/yaml",
+            facts.to_yaml().unwrap_or_default().as_bytes(),
+        )],
+        explanation: Some(json!({
+            "identityFacts": {
+                "accessProfiles": facts.access_profiles.len(),
+                "claims": facts.claims.len(),
+            }
+        })),
+        next_steps: stated
+            .omitted_agent_profiles
+            .iter()
+            .map(|id| {
+                format!(
+                    "The access profile `{id}` requires an agent and is left out of the identity facts: it is reached only by a delegated or task-grant token, which hosted generation does not issue, so a grant naming it is refused."
+                )
+            })
+            .collect(),
     })
 }
 
@@ -10184,7 +10313,9 @@ impl ArtifactSelector {
             ArtifactSelector::Manifest => path.starts_with("generated/manifest/"),
             ArtifactSelector::Metadata => path == "generated/metadata/registry.json",
             ArtifactSelector::Sql => path == "generated/postgres/schema.sql",
-            ArtifactSelector::EvidenceSource | ArtifactSelector::Odrl => false,
+            ArtifactSelector::EvidenceSource
+            | ArtifactSelector::Odrl
+            | ArtifactSelector::IdentityFacts => false,
             ArtifactSelector::Sdk => {
                 path.starts_with("generated/sdk/")
                     || path.starts_with("generated/review-context-schemas/")

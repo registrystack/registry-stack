@@ -379,6 +379,12 @@ jobs:
       - name: Enforce the YAML reader boundary
         run: products/platform/scripts/check-yaml-reader-boundary.sh
 
+      - name: Test the rstack dependency boundary check
+        run: python3 -m unittest products/platform/scripts/test_check_rstack_dependencies.py
+
+      - name: Keep rstack a plain bootstrap launcher
+        run: python3 products/platform/scripts/check-rstack-dependencies.py
+
   platform-fuzz:
     name: Platform fuzz smoke (${{ matrix.group }})
     needs:
@@ -1990,6 +1996,12 @@ jobs:
           -p registry-evidence -p registry-evidencectl -p registry-manifest-cli
           -p registry-breg-mcp -p registry-breg-review -p registry-evidence-oid4vci -p registry-mcp
           -p registry-evidence-oid4vp
+
+      # The launcher is built alone, as the release builds it, so feature
+      # unification with the product tools cannot hide a missing feature or
+      # turn on the session code.
+      - name: Build the launcher check command
+        run: cargo build --locked -p registry-rstack
 
       - name: Run configuration conformance corpus
         run: products/platform/scripts/run-config-conformance.sh --strict --bin-dir target/debug
