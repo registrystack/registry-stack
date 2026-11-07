@@ -474,14 +474,18 @@ and a coverage report. These operator-review artifacts include configuration
 details and do not establish caller authority or public publication safety.
 
 Domain-semantic entries in `manifestProjection` are optional overlays on the
-configured data model. One project declares one publisher authority, one public
-service, one catalogue, one or more datasets, one or more data services, and
-optional distributions. Every entity names exactly one `primaryDataset`, while
-each data service explicitly lists its nonempty `servesDatasets`. Project-level
-`accessProfile` and `classificationCeiling` values are defaults that a dataset
-may narrow or replace. The compiler resolves every membership and reference
-before generation, and refuses duplicates, missing memberships, and dangling
-dataset, service, or distribution references.
+configured data model. One project declares one catalogue with its publisher,
+one or more identified `authorities`, one public service, one or more datasets,
+one or more data services, and optional distributions. The public service names
+the authority legally competent for it with `competentAuthority`, an id from
+`authorities`; the generated Manifest carries the authorities in `authorities[]`
+and the reference in the service's `competent_authority`, which CPSV-AP renders
+as `hasCompetentAuthority`. Every entity names exactly one `primaryDataset`,
+while each data service explicitly lists its nonempty `servesDatasets`.
+Project-level `accessProfile` and `classificationCeiling` values are defaults
+that a dataset may narrow or replace. The compiler resolves every membership and
+reference before generation, and refuses duplicates, missing memberships, and
+dangling authority, dataset, service, or distribution references.
 
 Generated Manifest and DCAT bytes are one classified publication slice. A
 dataset appears only when its effective access profile matches the governed

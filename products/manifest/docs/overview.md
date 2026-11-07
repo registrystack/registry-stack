@@ -24,9 +24,11 @@ model, and the [Registry Manifest reference](./reference.md) documents every fie
 A registry publisher or integrator writes `metadata.yaml` by hand to publish catalogue metadata
 for a registry, whatever runs it. A Base Registry Engine (BReg) project does not write one by
 hand: `bregctl generate manifest` projects one from the project's `manifestProjection` through
-the Registry Manifest library, with a DCAT catalogue. The projection carries only the datasets
-within its access profile and classification ceiling, and keeps the labels and identifiers of
-every other dataset out of both the manifest and the catalogue, relationship edges included.
+the Registry Manifest library, with a DCAT catalogue. The projection's `authorities` become the
+manifest's `authorities[]`, and its `publicService.competentAuthority` becomes the public
+service's `competent_authority`. The projection carries only the datasets within its access
+profile and classification ceiling, and keeps the labels and identifiers of every other dataset
+out of both the manifest and the catalogue, relationship edges included.
 
 ## The `registry-manifest` commands
 
