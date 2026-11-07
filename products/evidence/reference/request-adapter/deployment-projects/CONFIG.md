@@ -279,9 +279,8 @@ configuration revisions do not change. A compiled authority may carry
 `publicCheck: {requirement: <Requirement URI>}`, which activates that
 requirement as a public check and is part of the authority revision and the
 effective grant digest. A compiled authority with an empty `accessProfiles` map
-and a `publicCheck` is an activated check-only authority; startup no longer
-reads an empty profile map as "no authority activated" when an activation is
-present.
+and a `publicCheck` is an activated check-only authority; startup reads an empty
+profile map as "no authority activated" only when no activation is present.
 
 Activation validates each complete grant against the package's authority kind,
 actor kind, value origin, audience, purpose, subject-role selector profiles,

@@ -364,8 +364,8 @@ a certificate can check it without registering as a relying service.
 `checkCode`, needs no credential, and answers the status, the printed fields and
 the evaluation time, unsigned. A wrong number and a wrong code get the same
 `404`. The route exists only when the package declares `publicCheck` and the
-target authority activates it, and it is exposed only through a path-restricted
-proxy. See [the example](examples/public-check/README.md), [section 15.11 of
+target authority activates it. Evidence does not enforce the path restriction:
+exposing the route only through a path-restricted proxy is the operator's duty. See [the example](examples/public-check/README.md), [section 15.11 of
 the concept](CONCEPT.md#1511-public-certificate-check) and
 [the operator contract](OPERATOR-CONTRACT.md#public-certificate-check).
 
