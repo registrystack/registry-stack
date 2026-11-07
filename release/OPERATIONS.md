@@ -972,7 +972,9 @@ each asset against it as `release/VERIFY.md` describes. Eligible legs write an
 Evidence audit stream or a Messaging package ledger with scheduled and cancelled
 messages using the old binaries, with a disposable loopback PostgreSQL container
 for Messaging. It then points the PR's binaries at
-that state and the same files, runs the upgrade an operator runs, and fails
+that state and the same files, re-authoring a Messaging package the new release
+no longer reads as the Messaging CHANGELOG documents, runs the upgrade an
+operator runs, and fails
 when any captured view is served differently or any retained table holds fewer
 rows. Require that run to succeed before merging the release PR. To rehearse
 without a release PR, dispatch it by hand:
