@@ -45,13 +45,16 @@ and Origin checks. Use the app-owned server credential for the selected Render d
 call `POST /v1/render/{type}`, and stream the PDF to the browser, or attach it
 to the owning Record and retain `pdfDigest` and `dataDigest` alongside it.
 
-Use the existing public GET/HEAD host-route option for an app-owned check page;
-its context intentionally excludes the authenticated session and host config.
-A signed POST receiver needs a separate authenticated server endpoint.
+The check page is not an app route: the static page and Evidence's public check
+route answer the scan. App Kit's public GET/HEAD host-route option remains for
+other public pages; its context intentionally excludes the authenticated
+session and host config. A signed POST receiver needs a separate authenticated
+server endpoint.
 
 ## Verify the complete journey
 
 Exercise a staff print from an authorized Record, read back the attachment and
-stored hashes, then scan the QR and verify the app's bounded Evidence-backed
-answer. Test an unauthorized print and a check token that is unknown or expired.
-The host-route seam alone does not prove this app-owned journey has run.
+stored hashes, then scan the QR and confirm the static page shows Evidence's
+answer with the printed fields. Confirm that a wrong number and a wrong check
+code give the same not-found message, and test an unauthorized print. The
+host-route seam alone does not prove this journey has run.

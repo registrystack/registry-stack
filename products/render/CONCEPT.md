@@ -29,10 +29,11 @@ Render is not: a document store (attachments live in the owning registry),
 a qualified e-signature or seal service (see Sealing below for the optional
 seal it does apply), a credentials-issuance system (no keys, chips, or
 MRZ), an HTML converter, an imposition engine, or offline-branch
-synchronization. Printed QR verification belongs to the app that owns the
-record through an app-owned public check route and an Evidence-backed relying
-service. The app owns the bounded answer and its disclosure policy; Render
-mints nothing and does nothing at scan time.
+synchronization. Printed QR verification is answered by Registry Evidence's
+public check route and a static page; the app or issuing workflow stores the
+check code at issuance and supplies the QR URL. Evidence's package owns the
+bounded answer and its disclosure; Render mints nothing and does nothing at
+scan time.
 
 Version 1 has no batch or multi-document request, TLS termination, per-tenant
 rate limiting, metrics route, or hot reload or runtime bundle editing, and no
