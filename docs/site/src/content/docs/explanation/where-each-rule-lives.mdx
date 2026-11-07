@@ -1,0 +1,119 @@
+---
+title: Where each rule lives
+description: Which Registry Stack product and mechanism holds each kind of rule or step in a registry service, the interface each declares, and where its machine-readable catalogue is.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: unreviewed
+doc_type: explanation
+locale: en
+standards_referenced: []
+---
+
+If you are building a registry service on Registry Stack and ask "this rule or step, where do I put
+it?", find its kind in the table, then follow the link to the product that holds it. Each kind of
+logic has one home, and each home declares its own interface.
+
+## Three things to know first
+
+- **There is no single cross-product operation grammar.** A field rule, an Action plan, a hook, a
+  workflow step, an Adapter route and a message template are each written in the notation of the
+  product that owns them. Rhai appears in several products, but each product gives it its own
+  inputs, helper functions and limits.
+- **Two products publish machine-readable operation catalogues.** The Registry Coordinator
+  operation catalogue lists every versioned operation a workflow can call, with schemas, effect
+  class, idempotency key, recovery and receipt mode. The Registry Adapter effective contract lists
+  the operations one loaded Adapter exposes to a gateway. Neither covers the other products' own
+  configuration, which each product's schemas and `explain` output describe.
+- **Logic implemented outside the stack follows one pattern.** Put it behind an Adapter facade
+  route and call it from a workflow through `external.command/v1` (a POST that changes
+  something) or `external.get/v1` (a read).
+
+{/* Evidence: products/coordinator/generated/operations/catalog.json;
+    products/coordinator/generated/operations/README.md;
+    products/adapter/EFFECTIVE-CONTRACT.md;
+    products/coordinator/PRODUCT-CONTRACT.md (Bounded external command). */}
+
+## Where each kind of logic goes
+
+Base Registry Engine (BReg) holds the rules that must hold whenever a record changes. The other
+products hold what happens around a record.
+
+| Kind of logic | Holder and mechanism | Interface it declares | Machine-readable catalogue |
+| --- | --- | --- | --- |
+| Field validation and patterns | BReg Record type fields: type, bounds, vocabulary, required, and a `pattern` in PostgreSQL's regular-expression syntax. An Action input can carry a `pattern` too. | The field declaration in `registry.yaml` | `registry-project.schema.json`; `bregctl explain`. A pattern is enforced by the database and is not published in the generated JSON Schema or OpenAPI. |
+| Preconditions on current data | BReg Action `requires` and `commitGuards`, checked inside the transaction | Guard entries on the Action | `bregctl explain actions` |
+| Derived values | BReg generated identifiers (`generate` on a string field) and live derived fields (reviewed SQL compiled to a read-only view) | The field declaration | `registry-project.schema.json` |
+| Calculation and branching in an Action | BReg Action `plan`: `fixed`, a Rhai Function, or a Wasm Function | Typed Action `inputs`, declared write slots and declared refusal codes; Function ABI `registry.action-plan/v1` | `bregctl generate actions` writes the `action-contracts/v1` document |
+| Record timers | BReg Record type `timers`, enabled by the root project's `timerGrants`; each timer invokes one non-public immediate Action | The timer declaration on the Record type | `registry-project.schema.json`; a timer-only Action has no portable Action contract |
+| Events and webhooks | BReg `hooks`: a `url`, `rhai` or `wasm` handler that runs after commit; local handlers use ABI `registry.hook-handler/v1` | `trigger`, `projection` and optional `when` on the hook | `bregctl explain events`; `generated/event-schemas/proposal-lifecycle.schema.json` |
+| Review, then apply | BReg Proposal Action (`execution.mode: proposal`); Casework supplies the review | The Action's `review` and `application` declarations | `bregctl generate actions` |
+| Multi-step or cross-product process | Registry Coordinator `workflow.yaml`: `call`, `choose`, `wait-until`, `wait-for` and `finish` steps, with pure Rhai Functions | Typed workflow input and named finishes | `generated/operations/catalog.json` and the generated project schema |
+| Calls to systems outside the stack | Adapter pack routes (reviewed, in Camel route YAML, with Rhai mapping scripts), bound to a profile by a project and served as a facade | The profile's operations | The Adapter effective contract |
+| Answering a question about a person or record for another service | Registry Evidence: an AssertionDefinition, a Source bound to an Adapter pack route, and a derivation Function | The public Requirement URI, purpose and subject selectors | `generated/evidence-definitions-v1.schema.json` and the generated OpenAPI |
+| Documents and certificates | Registry Render (Typst template bundle, byte-stable PDF) and the Registry Document Store (custody and release of a verified version) | Render: template bundle and record data. Document Store: document policy and grants | `render/schemas/bundle.schema.json`; the Document Store project schema and event schemas |
+| Case steps | Registry Casework `ReviewPolicy`: stages, queues, outcomes and routing rules | The policy in `casework.yaml` | `generated/project/project.schema.json`; `caseworkctl explain` |
+| Notifications | Registry Messaging: versioned templates with a JSON Schema each, providers and sender profiles | The template's input schema | `generated/authoring/template.schema.json`; `messagingctl generate templates` |
+| Appointments | Registry Scheduling policy: offerings, holds and bookings, with four observer triggers | The policy | `generated/project/project.schema.json`; `schedulingctl explain` |
+
+{/* Evidence: products/breg/native-patterns.md; products/breg/immediate-actions.md;
+    products/breg/generated-identifiers.md; products/breg/README.md (Live derived fields);
+    products/breg/record-timers.md; products/breg/EVENTS-AND-WEBHOOKS.md;
+    products/breg/wasm-action-handlers.md; products/breg/proposals.md;
+    products/breg/metadata.md; products/breg/generated/authoring/registry-project.schema.json;
+    products/breg/generated/event-schemas/proposal-lifecycle.schema.json;
+    products/coordinator/PRODUCT-CONTRACT.md; products/adapter/README.md;
+    products/evidence/README.md; products/render/README.md; products/documents/README.md;
+    products/casework/README.md; products/messaging/README.md; products/scheduling/README.md;
+    crates/registry-breg/src/contract.rs (ACTION_PLAN_ABI_V1). */}
+
+## Choosing a plan for an Action
+
+Start with a `fixed` plan, which writes declared values and needs no code. Move to a Rhai Function
+when a value must be calculated from the inputs or the Action must decline for a stated reason. A
+Wasm Function takes the same plan contract for logic written in another language, with narrower
+rules: it reads only the declared inputs, calls no Evidence resolver, and cannot serve a Proposal
+Action. All three produce effects only through write slots the compiler admitted, so a script
+cannot reach a target, field or operation the project did not declare.
+
+A plan runs only when its Action is invoked, and the Action context carries no trusted calendar
+date. If a rule must not be bypassed, withhold the ordinary create profile that could write the
+same state without the Action. The details are in
+[Actions and Proposals](../../configure/breg-actions/).
+
+{/* Evidence: products/breg/immediate-actions.md (Author one plan);
+    products/breg/wasm-action-handlers.md (What ships);
+    crates/registry-breg/src/immediate_actions.rs (breg.action.handler-abi-invalid). */}
+
+## Logic outside the stack
+
+When a rule lives in another system, such as a licensing authority's calculation service, do not
+add a second plugin mechanism to the stack. Write an Adapter pack route that calls the system, and
+serve it as a facade route. The Adapter keeps the source credentials, an audit journal and an
+idempotency store for writes. A workflow then calls the route through one of two operations:
+
+- `external.get/v1` reads. The connection lists exact paths and a required response schema.
+- `external.command/v1` sends one POST to the single relative path configured on the connection. The
+  workflow supplies only the JSON body, and the alias's `interpret` Function turns the reply into
+  `accepted`, `refused` or `uncertain`. Every attempt carries the same stored body and the same
+  `Idempotency-Key`, so the receiving route must deduplicate on that header.
+
+Coordinator does not verify the provider's effect, and neither operation takes an arbitrary method
+or a destination chosen at run time. The effective contract of the Adapter lists only operations it
+can serve as reads to a gateway; a write the facade serves appears there as unserved. The
+[Coordinator catalogue](https://github.com/registrystack/registry-stack/blob/main/products/coordinator/generated/operations/README.md)
+therefore remains the place to see what a workflow can call, and the
+[Adapter product page](https://github.com/registrystack/registry-stack/blob/main/products/adapter/README.md)
+describes packs, profiles and facade routes.
+
+{/* Evidence: products/coordinator/PRODUCT-CONTRACT.md (Bounded external command);
+    products/adapter/README.md; products/adapter/EFFECTIVE-CONTRACT.md;
+    crates/registry-coordinator/src/external_http.rs. */}
+
+## Next
+
+- [How a registry works](../configuration-defined-registry/)
+- [Actions and Proposals](../../configure/breg-actions/)
+- [How Registry Coordinator works](../how-coordinator-works/)
+- [How the products fit together](../../start/concepts/)
