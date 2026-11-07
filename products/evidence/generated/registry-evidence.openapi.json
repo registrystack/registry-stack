@@ -1840,6 +1840,62 @@
         ],
         "type": "object"
       },
+      "PublicCheckAnswer": {
+        "additionalProperties": false,
+        "description": "The 200 body of POST /v1/public-check when the presented document number and check code match exactly one record. It carries only the status and the printed fields the active authority activated for the check, never another output of the definition. It is not an Evidence response format and is never signed. The contract is experimental.",
+        "properties": {
+          "fields": {
+            "description": "The members of the activated printed-fields output, a reviewed structured value.",
+            "type": "object"
+          },
+          "observedAt": {
+            "description": "The time Evidence evaluated this check, in UTC truncated to the second.",
+            "format": "date-time",
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$",
+            "type": "string"
+          },
+          "schema": {
+            "enum": [
+              "registry.evidence.public-check/v1alpha1"
+            ],
+            "type": "string"
+          },
+          "status": {
+            "description": "The value of the activated status output.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema",
+          "status",
+          "fields",
+          "observedAt"
+        ],
+        "title": "Evidence public check answer Version 1 alpha 1",
+        "type": "object"
+      },
+      "PublicCheckRequest": {
+        "additionalProperties": false,
+        "description": "The body of POST /v1/public-check, sent as exactly application/json: one printed document number and the check code printed beside it. The contract is experimental. A body that fails this schema is refused before the Source is read and writes no audit record.",
+        "properties": {
+          "checkCode": {
+            "description": "The printed check code, 24 RFC 4648 base32 characters. ASCII letters are uppercased before comparison and nothing is stripped, so a value with spaces, hyphens, or padding is refused.",
+            "pattern": "^[A-Za-z2-7]{24}$",
+            "type": "string"
+          },
+          "documentNumber": {
+            "description": "The printed document number. The selector profile of the activated subject bounds it further; a value outside that profile is refused as an invalid selector before the Source is read.",
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "documentNumber",
+          "checkCode"
+        ],
+        "title": "Evidence public check request Version 1 alpha 1",
+        "type": "object"
+      },
       "PublicValue": {
         "anyOf": [
           {
@@ -4287,6 +4343,445 @@
           }
         ],
         "summary": "Produce ordered evidence outcomes for several subjects"
+      }
+    },
+    "/v1/public-check": {
+      "options": {
+        "description": "Served only with the activated route. Every OPTIONS request is answered without reading the body, the Source, or the audit.",
+        "operationId": "preflightDocumentCheck",
+        "responses": {
+          "200": {
+            "description": "A cross-origin POST with a JSON body is permitted, without credentials",
+            "headers": {
+              "Access-Control-Allow-Headers": {
+                "schema": {
+                  "enum": [
+                    "content-type"
+                  ],
+                  "type": "string"
+                }
+              },
+              "Access-Control-Allow-Methods": {
+                "schema": {
+                  "enum": [
+                    "POST"
+                  ],
+                  "type": "string"
+                }
+              },
+              "Access-Control-Allow-Origin": {
+                "description": "Any origin may read the response. Access-Control-Allow-Credentials is never sent.",
+                "schema": {
+                  "enum": [
+                    "*"
+                  ],
+                  "type": "string"
+                }
+              },
+              "Access-Control-Max-Age": {
+                "schema": {
+                  "enum": [
+                    "600"
+                  ],
+                  "type": "string"
+                }
+              },
+              "Cache-Control": {
+                "description": "Evidence responses are never cacheable.",
+                "schema": {
+                  "enum": [
+                    "no-store"
+                  ],
+                  "type": "string"
+                }
+              },
+              "traceparent": {
+                "description": "W3C trace context the service mints for this request. An inbound traceparent is never read, and tracestate is never reflected.",
+                "schema": {
+                  "pattern": "^00-(?!0{32}-)[0-9a-f]{32}-(?!0{16}-)[0-9a-f]{16}-[0-9a-f]{2}$",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "summary": "Answer the CORS preflight of the public check"
+      },
+      "post": {
+        "description": "Experimental, Version 1 alpha 1. This is the first unauthenticated route that reads registry data. It is served only when the active target authority activates a public check; otherwise every method on this path answers 404 exactly like an unknown route. The request carries one printed document number and one check code, and the service reads only the Content-Type header and the body. Evidence reads the record through the activated definition with its own Source credentials, compares the stored code in constant time, and answers with the activated status and printed fields only. Every miss, including an unknown number, an ambiguous or unresolved lookup, a missing fact, and a wrong code, answers one identical 404. The answer is not an Evidence response format and is never signed. The service applies no rate admission to this route; a deployment limits its rate at the proxy. Any origin may read every response, and the route never permits credentials.",
+        "operationId": "checkDocument",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublicCheckRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicCheckAnswer"
+                }
+              }
+            },
+            "description": "The presented document number and check code match exactly one record",
+            "headers": {
+              "Access-Control-Allow-Origin": {
+                "description": "Any origin may read the response. Access-Control-Allow-Credentials is never sent.",
+                "schema": {
+                  "enum": [
+                    "*"
+                  ],
+                  "type": "string"
+                }
+              },
+              "Cache-Control": {
+                "description": "Evidence responses are never cacheable.",
+                "schema": {
+                  "enum": [
+                    "no-store"
+                  ],
+                  "type": "string"
+                }
+              },
+              "traceparent": {
+                "description": "W3C trace context the service mints for this request. An inbound traceparent is never read, and tracestate is never reflected.",
+                "schema": {
+                  "pattern": "^00-(?!0{32}-)[0-9a-f]{32}-(?!0{16}-)[0-9a-f]{16}-[0-9a-f]{2}$",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "code": {
+                              "enum": [
+                                "evidence.invalid-request"
+                              ],
+                              "type": "string"
+                            },
+                            "detail": {
+                              "enum": [
+                                "the Evidence request is invalid"
+                              ],
+                              "type": "string"
+                            },
+                            "status": {
+                              "enum": [
+                                400
+                              ],
+                              "type": "integer"
+                            },
+                            "title": {
+                              "enum": [
+                                "Evidence request is invalid"
+                              ],
+                              "type": "string"
+                            },
+                            "type": {
+                              "enum": [
+                                "https://id.registrystack.org/problems/registry-evidence/evidence/invalid-request"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "code": {
+                              "enum": [
+                                "request.selector-invalid"
+                              ],
+                              "type": "string"
+                            },
+                            "detail": {
+                              "enum": [
+                                "selector does not match an available request profile"
+                              ],
+                              "type": "string"
+                            },
+                            "status": {
+                              "enum": [
+                                400
+                              ],
+                              "type": "integer"
+                            },
+                            "title": {
+                              "enum": [
+                                "Selector is invalid"
+                              ],
+                              "type": "string"
+                            },
+                            "type": {
+                              "enum": [
+                                "https://id.registrystack.org/problems/registry-evidence/request/selector-invalid"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "type": "object"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Wrong content type, malformed or oversized body, malformed check code, or a document number outside the activated selector profile",
+            "headers": {
+              "Access-Control-Allow-Origin": {
+                "description": "Any origin may read the response. Access-Control-Allow-Credentials is never sent.",
+                "schema": {
+                  "enum": [
+                    "*"
+                  ],
+                  "type": "string"
+                }
+              },
+              "Cache-Control": {
+                "description": "Evidence responses are never cacheable.",
+                "schema": {
+                  "enum": [
+                    "no-store"
+                  ],
+                  "type": "string"
+                }
+              },
+              "traceparent": {
+                "description": "W3C trace context the service mints for this request. An inbound traceparent is never read, and tracestate is never reflected.",
+                "schema": {
+                  "pattern": "^00-(?!0{32}-)[0-9a-f]{32}-(?!0{16}-)[0-9a-f]{16}-[0-9a-f]{2}$",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "resource.not-found"
+                          ],
+                          "type": "string"
+                        },
+                        "detail": {
+                          "enum": [
+                            "the requested resource was not found"
+                          ],
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": [
+                            404
+                          ],
+                          "type": "integer"
+                        },
+                        "title": {
+                          "enum": [
+                            "Requested resource was not found"
+                          ],
+                          "type": "string"
+                        },
+                        "type": {
+                          "enum": [
+                            "https://id.registrystack.org/problems/registry-evidence/resource/not-found"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "No record matches the presented pair. Every miss is one identical response. Without an activated public check the path is not served and answers as an unknown route instead.",
+            "headers": {
+              "Access-Control-Allow-Origin": {
+                "description": "Any origin may read the response. Access-Control-Allow-Credentials is never sent.",
+                "schema": {
+                  "enum": [
+                    "*"
+                  ],
+                  "type": "string"
+                }
+              },
+              "Cache-Control": {
+                "description": "Evidence responses are never cacheable.",
+                "schema": {
+                  "enum": [
+                    "no-store"
+                  ],
+                  "type": "string"
+                }
+              },
+              "traceparent": {
+                "description": "W3C trace context the service mints for this request. An inbound traceparent is never read, and tracestate is never reflected.",
+                "schema": {
+                  "pattern": "^00-(?!0{32}-)[0-9a-f]{32}-(?!0{16}-)[0-9a-f]{16}-[0-9a-f]{2}$",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "code": {
+                              "enum": [
+                                "source.unavailable"
+                              ],
+                              "type": "string"
+                            },
+                            "detail": {
+                              "enum": [
+                                "the authoritative source is unavailable"
+                              ],
+                              "type": "string"
+                            },
+                            "status": {
+                              "enum": [
+                                503
+                              ],
+                              "type": "integer"
+                            },
+                            "title": {
+                              "enum": [
+                                "Authoritative source is unavailable"
+                              ],
+                              "type": "string"
+                            },
+                            "type": {
+                              "enum": [
+                                "https://id.registrystack.org/problems/registry-evidence/source/unavailable"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "code": {
+                              "enum": [
+                                "service.unavailable"
+                              ],
+                              "type": "string"
+                            },
+                            "detail": {
+                              "enum": [
+                                "the request could not be served"
+                              ],
+                              "type": "string"
+                            },
+                            "status": {
+                              "enum": [
+                                503
+                              ],
+                              "type": "integer"
+                            },
+                            "title": {
+                              "enum": [
+                                "Service is unavailable"
+                              ],
+                              "type": "string"
+                            },
+                            "type": {
+                              "enum": [
+                                "https://id.registrystack.org/problems/registry-evidence/service/unavailable"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "type": "object"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Admission, Source, evaluation, serialization, or audit failure; nothing is released",
+            "headers": {
+              "Access-Control-Allow-Origin": {
+                "description": "Any origin may read the response. Access-Control-Allow-Credentials is never sent.",
+                "schema": {
+                  "enum": [
+                    "*"
+                  ],
+                  "type": "string"
+                }
+              },
+              "Cache-Control": {
+                "description": "Evidence responses are never cacheable.",
+                "schema": {
+                  "enum": [
+                    "no-store"
+                  ],
+                  "type": "string"
+                }
+              },
+              "traceparent": {
+                "description": "W3C trace context the service mints for this request. An inbound traceparent is never read, and tracestate is never reflected.",
+                "schema": {
+                  "pattern": "^00-(?!0{32}-)[0-9a-f]{32}-(?!0{16}-)[0-9a-f]{16}-[0-9a-f]{2}$",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "summary": "Check one printed document number and check code"
       }
     }
   }

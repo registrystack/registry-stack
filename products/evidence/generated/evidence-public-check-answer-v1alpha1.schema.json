@@ -1,0 +1,33 @@
+{
+  "$id": "https://registrystack.org/schemas/evidence/public-check-answer-v1alpha1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The 200 body of POST /v1/public-check when the presented document number and check code match exactly one record. It carries only the status and the printed fields the active authority activated for the check, never another output of the definition. It is not an Evidence response format and is never signed. The contract is experimental.",
+  "properties": {
+    "fields": {
+      "description": "The members of the activated printed-fields output, a reviewed structured value.",
+      "type": "object"
+    },
+    "observedAt": {
+      "description": "The time Evidence evaluated this check, in UTC truncated to the second.",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$",
+      "type": "string"
+    },
+    "schema": {
+      "const": "registry.evidence.public-check/v1alpha1"
+    },
+    "status": {
+      "description": "The value of the activated status output.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema",
+    "status",
+    "fields",
+    "observedAt"
+  ],
+  "title": "Evidence public check answer Version 1 alpha 1",
+  "type": "object"
+}
