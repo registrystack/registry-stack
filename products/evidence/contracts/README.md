@@ -54,6 +54,14 @@ The normative source set is:
   omits response protection, signing identity, and execution bounds. The
   request-batch shape groups bounded item indices by authority and pseudonymized
   subject set and records one ordered terminal outcome set;
+- `public-check-request.schema.yaml`, `public-check-answer.schema.yaml`, and
+  `public-check-audit-event.schema.yaml`: the experimental
+  `POST /v1/public-check` body, the unsigned answer
+  `registry.evidence.public-check/v1alpha1`, and the closed audit record of
+  that unauthenticated route, which `audit-event.schema.yaml` does not carry.
+  The generated JSON schemas `evidence-public-check-request-v1alpha1.schema.json`
+  and `evidence-public-check-answer-v1alpha1.schema.json` under `../generated/`
+  are produced from the first two;
 - `bundle.schema.yaml` and `runtime.schema.yaml`: the immutable governed bundle,
   its digest-pinned Adapter pack route bindings, reviewed non-secret connection
   policies, bundle-level and grant-level `responseFormats` permission, closed

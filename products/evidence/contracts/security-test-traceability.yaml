@@ -866,3 +866,26 @@ entries:
       - {file: crates/registry-evidence-oid4vp/tests/responses.rs, name: a_delivered_read_is_journalled_as_consumed}
       - {file: crates/registry-evidence-oid4vp/tests/endpoints.rs, name: readiness_fails_once_the_client_identifier_certificate_has_expired}
       - {file: crates/registry-evidence-oid4vp/tests/certificate_expiry_log.rs, name: certificate_expiry_logs_one_warning_without_certificate_content}
+  - id: sec-public-check-gated-and-headerless
+    tests:
+      - {file: crates/registry-evidence/src/public_check_tests.rs, name: an_unactivated_check_answers_exactly_as_an_unknown_route}
+      - {file: crates/registry-evidence/src/public_check_tests.rs, name: a_check_only_authority_serves_the_check}
+      - {file: crates/registry-evidence/src/public_check_tests.rs, name: the_check_reads_no_header_but_its_content_type}
+      - {file: crates/registry-evidence/src/public_check_tests.rs, name: a_refused_request_reaches_neither_the_source_nor_the_audit}
+      - {file: crates/registry-evidence/src/public_check_tests.rs, name: only_the_check_route_is_readable_cross_origin}
+      - {file: crates/registry-evidence/src/observability.rs, name: the_public_check_route_mints_its_trace_and_ignores_inbound_trace_context}
+  - id: sec-public-check-identical-miss-and-code-confinement
+    tests:
+      - {file: crates/registry-evidence/src/public_check_tests.rs, name: every_miss_is_one_identical_not_found}
+      - {file: crates/registry-evidence/src/public_check_tests.rs, name: a_wrong_code_is_a_miss_the_operator_sees_as_code_mismatch}
+      - {file: crates/registry-evidence/src/public_check_tests.rs, name: relying_path_on_the_checked_definition_signs_every_output_without_the_code}
+      - {file: crates/registry-evidence/src/public_check.rs, name: mismatch_absent_and_malformed_stored_codes_are_one_miss}
+      - {file: crates/registry-evidence/src/public_check.rs, name: debug_output_redacts_the_code_and_number}
+      - {file: crates/registry-evidence/src/kernel.rs, name: a_declared_check_code_is_withheld_from_every_requirement_on_its_source}
+  - id: sec-public-check-answer-ceiling
+    tests:
+      - {file: crates/registry-evidence/src/public_check_tests.rs, name: a_hit_answers_the_status_and_printed_fields_and_nothing_else}
+      - {file: crates/registry-evidence/src/public_check_tests.rs, name: a_hit_answers_each_status_unstored_to_any_origin}
+      - {file: crates/registry-evidence/src/public_check.rs, name: answer_carries_status_inner_fields_and_second_precision_time}
+      - {file: crates/registry-evidence/src/public_check.rs, name: answer_refuses_missing_or_mistyped_outputs}
+      - {file: crates/registry-evidence/src/contracts.rs, name: public_check_schemas_refuse_what_the_route_refuses}
