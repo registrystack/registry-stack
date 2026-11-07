@@ -688,7 +688,7 @@ fn projection_refuses_an_unknown_competent_authority() {
     );
     assert_eq!(
         diagnostic.message,
-        "publicService.competentAuthority must reference manifestProjection.authorities[]"
+        "publicService.competentAuthority names `missing-agency`, which is not in manifestProjection.authorities[]"
     );
 }
 
@@ -781,6 +781,77 @@ fn projection_refuses_malformed_authority_identity_and_name_at_parse() {
             failure.diagnostics()
         );
     }
+}
+
+#[test]
+fn projection_locates_authority_identity_refusals_at_the_source_position() {
+    for (member, written) in [("iri", "not an iri"), ("authorityType", "not a type")] {
+        let mut source = multi_dataset_value();
+        let authorities = source["manifestProjection"]["authorities"]
+            .as_array_mut()
+            .expect("authorities is an array");
+        authorities.reverse();
+        authorities[0][member] = json!(written);
+        let failure = compile_multi_dataset_value(&source)
+            .expect_err("a malformed authority IRI or type is refused");
+        let diagnostic = failure
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| {
+                diagnostic.code == "breg.manifest-projection.invalid"
+                    && diagnostic.path.starts_with("project.manifestProjection.authorities[")
+            })
+            .unwrap_or_else(|| panic!("{member} refusal is located: {failure:?}"));
+        assert!(
+            diagnostic.path.starts_with("project.manifestProjection.authorities[0]."),
+            "{member} refusal names the source index: {}",
+            diagnostic.path
+        );
+        assert!(!diagnostic.message.contains(written));
+    }
+}
+
+#[test]
+fn projection_names_the_unresolved_competent_authority_in_the_message() {
+    let mut value = multi_dataset_value();
+    value["manifestProjection"]["publicService"]["competentAuthority"] = json!("missing-agency");
+    let failure =
+        compile_multi_dataset_value(&value).expect_err("an unknown competent authority is refused");
+    let diagnostic = failure
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| {
+            diagnostic.code == "breg.manifest-projection.competent-authority-dangling"
+        })
+        .expect("dangling diagnostic expected");
+    assert!(
+        diagnostic.message.contains("missing-agency"),
+        "{}",
+        diagnostic.message
+    );
+}
+
+#[test]
+fn yaml_projection_refuses_a_repeated_authority_id_with_a_located_diagnostic() {
+    let mut value = multi_dataset_value();
+    let repeated = value["manifestProjection"]["authorities"][1].clone();
+    value["manifestProjection"]["authorities"]
+        .as_array_mut()
+        .expect("authorities is an array")
+        .push(repeated);
+    // JSON is a YAML subset, so the YAML entry point reads the serialized fixture.
+    let project = parse_project_yaml(&serde_json::to_vec(&value).expect("fixture serializes"))
+        .expect("duplicate ids are a compile finding");
+    let failure = compile_project(&project, &[], CompileProfile::Authoring)
+        .expect_err("a repeated authority id is refused");
+    assert!(
+        failure.diagnostics().iter().any(|diagnostic| {
+            diagnostic.code == "breg.manifest-projection.authority-duplicate"
+                && diagnostic.path == "project.manifestProjection.authorities[2].id"
+        }),
+        "{:?}",
+        failure.diagnostics()
+    );
 }
 
 fn cross_dataset_reference_project() -> Value {
