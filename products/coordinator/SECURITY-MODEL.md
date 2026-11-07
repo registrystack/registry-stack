@@ -406,8 +406,13 @@ attempt recomputes, and a changed engine could reinterpret a frozen definition.
   expression levels, 65,536 source bytes, 16,384-byte strings, 256 array items,
   256 map members, 131,072 JSON bytes and depth 32. The profile has no clock,
   sleep or I/O.
+- `curry` is disabled, because Rhai does not count data curried into a
+  function pointer against these limits and every copy of the pointer copies
+  that data. Check refuses a source that uses it and names `curry`
+  (`curry_is_refused_in_every_call_form`,
+  `a_function_that_curries_is_refused_at_check_with_a_way_forward`).
 - The interpreter identity in each frozen definition (`INTERPRETER_ABI` in
-  `src/functions.rs`) names Rhai 1.27.0 and ABI `v2`, because the callable set
+  `src/functions.rs`) names Rhai 1.27.0 and ABI `v3`, because the callable set
   is part of what a definition means. A definition frozen under another identity
   is refused with `definition.abi`, and a live run under it is held
   (COORDINATOR-INV-12); Coordinator never reinterprets an old snapshot under

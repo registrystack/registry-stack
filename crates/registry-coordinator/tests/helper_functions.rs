@@ -250,6 +250,7 @@ fn explain_functions_lists_the_helpers_of_the_profile() {
         "timestamp",
         "print",
         "eval",
+        "curry",
         "rand",
         "sin",
         "exp",
@@ -263,7 +264,7 @@ fn explain_functions_lists_the_helpers_of_the_profile() {
     sorted.sort_unstable();
     sorted.dedup();
     assert_eq!(helpers, sorted, "sorted and without repeats");
-    assert!(report["interpreterAbi"].as_str().unwrap().contains("/v2;"));
+    assert!(report["interpreterAbi"].as_str().unwrap().contains("/v3;"));
     assert_eq!(report["limits"]["stringBytes"], 16384);
 
     let human = cli(&["explain", "functions"]);
@@ -500,6 +501,52 @@ fn a_result_holding_nan_or_infinity_is_refused_not_turned_into_null() {
     );
 }
 
+#[test]
+fn a_function_that_curries_is_refused_at_check_with_a_way_forward() {
+    let root = tempfile::tempdir().unwrap();
+    write_project(
+        root.path(),
+        "fn add(a, b) { a + b }\nfn probe(inputs) { let f = Fn(\"add\").curry(1); f.call(2) }\n",
+    );
+    let Err(error) = Definition::load(root.path()) else {
+        panic!("a Function that curries was accepted");
+    };
+    assert_eq!(error.code, "coordinator.function.definition");
+    assert!(error.message.contains("curry"), "{}", error.message);
+    let hint = error.suggested_action.as_deref().unwrap_or_default();
+    assert!(hint.contains("curry"), "{hint}");
+}
+
+#[test]
+fn a_refusal_in_a_shared_source_is_reported_once() {
+    // Two Functions read one source; its syntax refusal is one finding.
+    let root = tempfile::tempdir().unwrap();
+    write_project(
+        root.path(),
+        "fn add(a, b) { a + b }\nfn probe(inputs) { Fn(\"add\").curry(1) }\nfn other(inputs) { 1 }\n",
+    );
+    let path = root.path().join("workflow.yaml");
+    let mut workflow: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    workflow["functions"]["other"] = workflow["functions"]["probe"].clone();
+    workflow["functions"]["other"]["entrypoint"] = json!("other");
+    fs::write(&path, workflow.to_string()).unwrap();
+    let output = cli(&[
+        "--format",
+        "json",
+        "check",
+        "--project",
+        root.path().to_str().unwrap(),
+    ]);
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let refusals = report["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|d| d["code"] == "coordinator.function.definition")
+        .count();
+    assert_eq!(refusals, 1, "{report}");
+}
+
 fn unknown_call_names(source: &str) -> Vec<String> {
     let root = tempfile::tempdir().unwrap();
     write_project(root.path(), source);
@@ -551,7 +598,7 @@ fn a_function_name_given_as_a_string_literal_is_checked() {
 fn probe(inputs) {
   let a = call(Fn("nope_a"));
   let b = Fn("nope_b").call();
-  let c = curry(Fn("nope_c"), 1);
+  let c = Fn("nope_c").call(1);
   let d = [1].map(Fn("nope_d"));
   let e = [1].map("nope_e");
   let f = is_def_fn("nope_f", 1);

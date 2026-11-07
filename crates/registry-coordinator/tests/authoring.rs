@@ -507,9 +507,22 @@ fn snapshot_restore_refuses_the_v1_interpreter_that_lacked_the_string_and_number
     assert!(value["interpreterAbi"]
         .as_str()
         .unwrap()
-        .starts_with("coordinator/pure-rhai-1.27.0/v2;"));
+        .starts_with("coordinator/pure-rhai-1.27.0/v3;"));
     value["interpreterAbi"] = json!(
         "coordinator/pure-rhai-1.27.0/v1;named-input-object;raw-arithmetic-logic-string-array-map-iterator-instant;ops=100000;calls=32;expr=64;string=16384;array=256;map=256;source=65536;json=131072;depth=32"
+    );
+    assert_eq!(
+        refused(Definition::from_snapshot(&value.to_string())).code,
+        "definition.abi"
+    );
+}
+
+#[test]
+fn snapshot_restore_refuses_the_v2_interpreter_that_allowed_curry() {
+    let snapshot = fixture().snapshot().unwrap();
+    let mut value: Value = serde_json::from_str(&snapshot).unwrap();
+    value["interpreterAbi"] = json!(
+        "coordinator/pure-rhai-1.27.0/v2;named-input-object;raw-arithmetic-logic-string-more-string-deterministic-math-array-map-iterator-instant;ops=100000;calls=32;expr=64;string=16384;array=256;map=256;source=65536;json=131072;depth=32"
     );
     assert_eq!(
         refused(Definition::from_snapshot(&value.to_string())).code,
