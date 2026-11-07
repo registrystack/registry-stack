@@ -9,7 +9,7 @@ async fn claim(
 ) -> Result<ReviewTask, ReviewRuntimeError> {
     service
         .claim_review_task(
-            &actor("a", CaseworkRole::Staff),
+            &actor("a", CaseworkActsAs::Staff),
             task,
             None,
             "human-source-token",

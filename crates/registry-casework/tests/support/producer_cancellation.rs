@@ -42,7 +42,7 @@ async fn producer_cancellation_settles_concealed_tasks_and_clocks_without_source
                     subject: "administrator".into(),
                 },
                 profile_id: "administrator".into(),
-                role: CaseworkRole::Administrator,
+                role: CaseworkActsAs::Administrator,
             },
             &HolidaySetDocument {
                 holiday_set: "office-holidays".into(),

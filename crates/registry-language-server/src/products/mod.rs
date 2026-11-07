@@ -943,7 +943,7 @@ mod tests {
             ("fixtures/review.yml", "kind: CaseworkFixture\n"),
             (
                 "holiday-sets/office.yaml",
-                "kind: CaseworkHolidaySet\nholidaySet: office\n",
+                "kind: CaseworkHolidaySet\nid: office\n",
             ),
             ("imports/retired.json", "{\"sourceId\":\"retired\"}"),
         ]);

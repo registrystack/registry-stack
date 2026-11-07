@@ -276,16 +276,18 @@ impl ProviderPacer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use registry_messaging_core::{AccessProfile, AccessRole};
+    use registry_messaging_core::{AccessProfile, ActsAs};
 
     fn profile(id: &str, requests_per_minute: u32, burst: u32) -> AccessProfile {
         AccessProfile {
             id: id.to_owned(),
+            label: None,
+            description: None,
             principal_claim: "sub".to_owned(),
             required_scopes: Vec::new(),
             requester_clients: vec![format!("{id}-client")],
             actor_kind: None,
-            role: AccessRole::Sender,
+            acts_as: ActsAs::Sender,
             sender_profiles: vec!["notices".to_owned()],
             templates: vec!["reminder".to_owned()],
             allow_direct_content: false,

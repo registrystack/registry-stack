@@ -59,7 +59,7 @@ offerings:
 holidaySets:
   - id: office-holidays
     revision: 1
-    because: Public holidays observed by the registry offices.
+    label: Public holidays observed by the registry offices.
 openings:
   - id: bangkok-counter-hours
     location: bangkok-counter

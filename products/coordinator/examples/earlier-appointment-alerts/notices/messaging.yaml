@@ -21,7 +21,7 @@ accessProfiles:
     requiredScopes: [messaging:send]
     requesterClients: [coordinator-alerts]
     actorKind: service
-    role: sender
+    actsAs: sender
     senderProfiles: [transactional]
     templates: [earlier-appointment]
     requestsPerMinute: 60

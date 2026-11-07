@@ -303,9 +303,9 @@ impl PostgresStore {
         supervisory: bool,
     ) -> Result<BTreeMap<Uuid, ReviewTask>, ReviewRuntimeError> {
         let membership = match actor.role {
-            CaseworkRole::Staff => "staff",
-            CaseworkRole::Supervisor => "supervisor",
-            CaseworkRole::Administrator | CaseworkRole::Requester => {
+            CaseworkActsAs::Staff => "staff",
+            CaseworkActsAs::Supervisor => "supervisor",
+            CaseworkActsAs::Administrator | CaseworkActsAs::Requester => {
                 return Err(ReviewRuntimeError::Forbidden);
             }
         };
@@ -346,7 +346,7 @@ impl PostgresStore {
             {
                 continue;
             }
-            let policy: ReviewPolicyClosure = serde_json::from_value(row.get(9))?;
+            let policy = crate::store::stored_policy(row.get(9))?;
             let stage_index =
                 u16::try_from(row.get::<_, i32>(2)).map_err(|_| ReviewRuntimeError::Corrupt)?;
             if !supervisory
@@ -399,9 +399,9 @@ impl PostgresStore {
         let subject_binding = query.subject().map_err(|_| ReviewRuntimeError::Invalid)?;
         let subject = subject_binding.as_ref();
         let membership = match actor.role {
-            CaseworkRole::Staff => "staff",
-            CaseworkRole::Supervisor => "supervisor",
-            CaseworkRole::Administrator | CaseworkRole::Requester => {
+            CaseworkActsAs::Staff => "staff",
+            CaseworkActsAs::Supervisor => "supervisor",
+            CaseworkActsAs::Administrator | CaseworkActsAs::Requester => {
                 return Err(ReviewRuntimeError::Forbidden);
             }
         };
@@ -476,7 +476,7 @@ impl PostgresStore {
         let mut items = rows
             .into_iter()
             .map(|row| {
-                let policy = serde_json::from_value::<ReviewPolicyClosure>(row.get(9))?;
+                let policy = crate::store::stored_policy(row.get(9))?;
                 reviewer_task_from_row(&row, &policy)
             })
             .collect::<Result<Vec<_>, _>>()?;

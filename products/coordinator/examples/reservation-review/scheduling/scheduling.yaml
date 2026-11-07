@@ -23,7 +23,7 @@ offerings:
       startIncrementMinutes: 60
       maximumRecipients: 1
 holidaySets:
-  - {id: institution-holidays, revision: 1, because: The operator reviews this calendar.}
+  - {id: institution-holidays, revision: 1, label: The operator reviews this calendar.}
 openings:
   - id: reservation-hours
     location: community-hall

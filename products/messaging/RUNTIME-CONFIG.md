@@ -333,13 +333,13 @@ local identifier and `project.version` a text label; together they are the
 identity a package built from the project carries.
 
 Each access profile is `{id, principalClaim, requiredScopes, requesterClients,
-actorKind, role, senderProfiles, templates, allowDirectContent,
+actorKind, actsAs, senderProfiles, templates, allowDirectContent,
 requestsPerMinute, burst, maximumMessagesPerDay}`. `id` is a local
 identifier: a lowercase letter, then at most 63 lowercase letters, digits,
 underscores, or hyphens. `requiredScopes` is required: a list of at least one
 scope a token must carry, or `unrestricted` to require none. `requesterClients`
 lists at least one client. `actorKind` is `human`, `agent`, or
-`service`, and omitted means any. `role` is `sender` or `operator`. A sender
+`service`, and omitted means any. `actsAs` is `sender` or `operator`. A sender
 lists at least one sender profile and one template; an operator lists none and
 may not allow direct content. A requester client belongs to exactly one
 profile. `requestsPerMinute` is 1 to 60000, `burst` 1 to 10000, and

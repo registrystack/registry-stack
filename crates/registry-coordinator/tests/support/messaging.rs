@@ -81,7 +81,7 @@ impl Messaging {
             "senderProfiles":[{"id":"transactional", "channel":"email", "provider":"mail-relay", "sender":"notices@example.invalid"}],
             "templates":[{"id":"application-follow-up", "version":"1"}],
             "accessProfiles":[{"id":"case-notices", "principalClaim":"sub", "requiredScopes":["messaging:send"],
-                "requesterClients":["case-system"], "actorKind":"service", "role":"sender", "senderProfiles":["transactional"],
+                "requesterClients":["case-system"], "actorKind":"service", "actsAs":"sender", "senderProfiles":["transactional"],
                 "templates":["application-follow-up"], "requestsPerMinute":600, "burst":100}]
         })).unwrap()).unwrap();
         std::fs::write(

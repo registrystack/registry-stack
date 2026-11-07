@@ -174,9 +174,9 @@ fn authored_project_converts_to_the_versioned_snapshot_abi() {
 fn project_check_keeps_a_positioned_duplicate_function_title_warning() {
     let root = tempfile::tempdir().unwrap();
     let mut authored = declare_test_functions(&project());
-    authored["functions"]["identity"]["title"] = json!("Identity function");
+    authored["functions"]["identity"]["label"] = json!("Identity function");
     let mut copy = authored["functions"]["identity"].clone();
-    copy["title"] = json!("identity function");
+    copy["label"] = json!("identity function");
     authored["functions"]["identity-copy"] = copy;
     let bytes = serde_json::to_vec(&authored).unwrap();
     fs::write(
@@ -191,10 +191,10 @@ fn project_check_keeps_a_positioned_duplicate_function_title_warning() {
     let finding = warnings
         .diagnostics()
         .iter()
-        .find(|diagnostic| diagnostic.code == "coordinator.project.duplicate-function-title")
+        .find(|diagnostic| diagnostic.code == "coordinator.project.duplicate-function-label")
         .expect("the duplicate title warning survives project compilation");
-    assert_eq!(finding.path, "/functions/identity-copy/title");
-    assert_eq!(finding.related[0].path, "/functions/identity/title");
+    assert_eq!(finding.path, "/functions/identity-copy/label");
+    assert_eq!(finding.related[0].path, "/functions/identity/label");
     assert!(finding.message.contains("`identity`"));
     assert!(finding.message.contains("`identity-copy`"));
     assert!(!finding.message.contains("Identity function"));
@@ -204,9 +204,9 @@ fn project_check_keeps_a_positioned_duplicate_function_title_warning() {
 fn project_check_keeps_duplicate_title_warnings_beside_compile_errors() {
     let root = tempfile::tempdir().unwrap();
     let mut authored = declare_test_functions(&project());
-    authored["functions"]["identity"]["title"] = json!("Identity function");
+    authored["functions"]["identity"]["label"] = json!("Identity function");
     let mut copy = authored["functions"]["identity"].clone();
-    copy["title"] = json!("identity function");
+    copy["label"] = json!("identity function");
     authored["functions"]["identity-copy"] = copy;
     authored["workflow"]["steps"]["done"] = json!({
         "type": "call",
@@ -220,7 +220,7 @@ fn project_check_keeps_duplicate_title_warnings_beside_compile_errors() {
     let error = authoring::parse_project(&path, fs::read(&path).unwrap())
         .expect_err("the missing operation refuses compilation");
     for code in [
-        "coordinator.project.duplicate-function-title",
+        "coordinator.project.duplicate-function-label",
         "coordinator.definition.operation",
     ] {
         assert!(

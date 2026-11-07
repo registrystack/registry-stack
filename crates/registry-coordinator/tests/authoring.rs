@@ -419,6 +419,35 @@ fn pure_profile_has_no_clock_sleep_or_io_and_limits_computation() {
     assert!(!error.to_string().contains(CANARY));
 }
 
+/// 0.45.0 wrote `title` on a project's presentation and on a function; the
+/// snapshot reader refuses both rather than reading them as a label.
+#[test]
+fn a_snapshot_sealed_with_a_title_is_refused_not_reinterpreted() {
+    let snapshot = fixture().snapshot().unwrap();
+    let original: Value = serde_json::from_str(&snapshot).unwrap();
+    let function = original["workflow"]["functions"]
+        .as_object()
+        .and_then(|functions| functions.keys().next().cloned())
+        .expect("the fixture declares a function");
+    for pointer in [
+        "/workflow/presentation/title".to_owned(),
+        format!("/workflow/functions/{function}/title"),
+    ] {
+        let mut value = original.clone();
+        let (parent, member) = pointer.rsplit_once('/').unwrap();
+        value
+            .pointer_mut(parent)
+            .and_then(Value::as_object_mut)
+            .unwrap_or_else(|| panic!("{parent} is an object in the snapshot"))
+            .insert(member.to_owned(), json!("Readable"));
+        assert_eq!(
+            refused(Definition::from_snapshot(&value.to_string())).code,
+            "definition.snapshot",
+            "{pointer}"
+        );
+    }
+}
+
 #[test]
 fn snapshots_refuse_unsupported_abi_duplicate_fields_and_mutation() {
     let mut definition = fixture();

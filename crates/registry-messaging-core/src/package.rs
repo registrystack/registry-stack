@@ -26,7 +26,7 @@ use registry_platform_yaml::{
 use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
 
-use crate::access::{AccessProfile, AccessProfileError, AccessProfiles, AccessRole};
+use crate::access::{AccessProfile, AccessProfileError, AccessProfiles, ActsAs};
 use crate::finding::{FindingReason, MessagingFinding};
 use crate::naming::{
     MESSAGING_PROJECT_API_VERSION, MESSAGING_PROJECT_KIND, RETIRED_MESSAGING_PROJECT_API_VERSION,
@@ -89,6 +89,10 @@ pub const MESSAGING_PROJECT_FORMAT: FormatSpec<'static> = FormatSpec {
         RemovedKey {
             pointer: "/providers/*/kind",
             replacement: "Write type.",
+        },
+        RemovedKey {
+            pointer: "/accessProfiles/*/role",
+            replacement: "Write actsAs.",
         },
         RemovedKey {
             pointer: "/accessProfiles/*/dailyLimit",
@@ -606,14 +610,15 @@ impl MessagingProject {
                     ));
                 }
             }
-            match profile.role {
-                AccessRole::Sender if profile.sends_nothing() => findings.push(
-                    MessagingFinding::new(FindingReason::SenderWithoutTargets, at("role")),
-                ),
-                AccessRole::Operator if profile.declares_sending_permissions() => {
+            match profile.acts_as {
+                ActsAs::Sender if profile.sends_nothing() => findings.push(MessagingFinding::new(
+                    FindingReason::SenderWithoutTargets,
+                    at("actsAs"),
+                )),
+                ActsAs::Operator if profile.declares_sending_permissions() => {
                     findings.push(MessagingFinding::new(
                         FindingReason::OperatorWithSendingPermissions,
-                        at("role"),
+                        at("actsAs"),
                     ))
                 }
                 _ => {}
@@ -843,7 +848,7 @@ pub(crate) mod tests {
                 "principalClaim": "sub",
                 "requiredScopes": ["messaging:send"],
                 "requesterClients": ["case-system"],
-                "role": "sender",
+                "actsAs": "sender",
                 "senderProfiles": ["transactional"],
                 "templates": ["appointment-reminder"],
                 "requestsPerMinute": 60,
@@ -1012,7 +1017,12 @@ pub(crate) mod tests {
         let mut value = valid();
         value["providers"][0] = json!({"id": "relay", "kind": "smtp"});
         value["accessProfiles"][0]["dailyLimit"] = json!(100);
+        value["accessProfiles"][0]["role"] = json!("sender");
         let reported = refused(&value);
+        assert!(reported.contains(&(
+            "config.removed-key".to_owned(),
+            "/accessProfiles/0/role".to_owned()
+        )));
         assert!(reported.contains(&(
             "config.removed-key".to_owned(),
             "/providers/0/kind".to_owned()

@@ -45,8 +45,8 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use registry_messaging_core::{
-    type_uri, AccessRole, Caller, ContentRefusal, MessageView, Package, ProblemCode,
-    TemplatePreview, TemplatePreviewRequest, HEALTH_PATH, IDEMPOTENCY_KEY_HEADER, MESSAGES_PATH,
+    type_uri, ActsAs, Caller, ContentRefusal, MessageView, Package, ProblemCode, TemplatePreview,
+    TemplatePreviewRequest, HEALTH_PATH, IDEMPOTENCY_KEY_HEADER, MESSAGES_PATH,
     MESSAGE_CANCEL_PATH, MESSAGE_PATH, MESSAGE_RECEIPT_PATH, METRICS_PATH, PROVIDER_CALLBACK_PATH,
     PROVIDER_CALLBACK_TOKEN_PATH, READY_PATH, TEMPLATE_PREVIEW_PATH,
 };
@@ -542,7 +542,7 @@ async fn admit_submission(
     caller: &Caller,
     headers: &HeaderMap,
 ) -> Result<String, SubmissionRefusal> {
-    if caller.role() != AccessRole::Sender {
+    if caller.role() != ActsAs::Sender {
         return Err(ProblemCode::OperationNotAuthorized.into());
     }
     check_caller_rate(state, caller).await?;

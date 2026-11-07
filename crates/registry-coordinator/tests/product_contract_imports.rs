@@ -457,6 +457,16 @@ fn explain_includes_authored_event_triggers_in_json_and_human_output() {
         text.contains("licence-created: licensing licence-created-v1"),
         "{text}"
     );
+    project["workflow"]["eventTriggers"]["licence-created"]["label"] = json!("A licence is issued");
+    fs::write(root.path().join("workflow.yaml"), project.to_string()).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_coordinatorctl"))
+        .args(["explain", "--project"])
+        .arg(root.path())
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(text.contains("  label: A licence is issued"), "{text}");
     project["workflow"]
         .as_object_mut()
         .unwrap()

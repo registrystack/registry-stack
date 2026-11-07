@@ -29,9 +29,9 @@ impl PostgresStore {
                     .access_profiles
                     .iter()
                     .filter(|profile| stage.deciding_profiles.contains(&profile.id))
-                    .filter_map(|profile| match profile.role {
-                        CaseworkRole::Staff => Some("staff"),
-                        CaseworkRole::Supervisor => Some("supervisor"),
+                    .filter_map(|profile| match profile.acts_as {
+                        CaseworkActsAs::Staff => Some("staff"),
+                        CaseworkActsAs::Supervisor => Some("supervisor"),
                         _ => None,
                     })
                     .collect::<Vec<_>>();
@@ -131,13 +131,13 @@ impl PostgresStore {
             DirectoryTargetPurpose::Assignment => {
                 let queue = queue.ok_or(StoreError::Invalid)?;
                 let authorized = match actor.role {
-                    CaseworkRole::Staff => {
+                    CaseworkActsAs::Staff => {
                         is_staff_for_queue(&transaction, &actor.principal, queue).await?
                     }
-                    CaseworkRole::Supervisor => {
+                    CaseworkActsAs::Supervisor => {
                         can_assign_queue(&transaction, actor, queue).await?
                     }
-                    CaseworkRole::Administrator | CaseworkRole::Requester => false,
+                    CaseworkActsAs::Administrator | CaseworkActsAs::Requester => false,
                 };
                 if !authorized {
                     return Err(StoreError::Forbidden);
@@ -150,7 +150,7 @@ impl PostgresStore {
                     .await?
             }
             DirectoryTargetPurpose::AbsencePerson => match actor.role {
-                CaseworkRole::Staff => {
+                CaseworkActsAs::Staff => {
                     transaction
                         .query(
                             "SELECT m.issuer,m.subject,min(m.display_name) FROM casework_memberships m WHERE m.issuer=$1 AND m.subject=$2 AND m.membership_kind='staff' AND (m.issuer,m.subject)>($3,$4) GROUP BY m.issuer,m.subject ORDER BY m.issuer,m.subject LIMIT $5",
@@ -158,7 +158,7 @@ impl PostgresStore {
                         )
                         .await?
                 }
-                CaseworkRole::Supervisor => {
+                CaseworkActsAs::Supervisor => {
                     transaction
                         .query(
                             "SELECT person.issuer,person.subject,min(person.display_name) FROM casework_memberships person JOIN casework_memberships lead ON lead.team_id=person.team_id WHERE person.membership_kind='staff' AND lead.issuer=$1 AND lead.subject=$2 AND lead.membership_kind='supervisor' AND (person.issuer,person.subject)>($3,$4) GROUP BY person.issuer,person.subject ORDER BY person.issuer,person.subject LIMIT $5",
@@ -166,7 +166,7 @@ impl PostgresStore {
                         )
                         .await?
                 }
-                CaseworkRole::Administrator => {
+                CaseworkActsAs::Administrator => {
                     transaction
                         .query(
                             "SELECT m.issuer,m.subject,min(m.display_name) FROM casework_memberships m WHERE m.membership_kind='staff' AND (m.issuer,m.subject)>($1,$2) GROUP BY m.issuer,m.subject ORDER BY m.issuer,m.subject LIMIT $3",
@@ -174,14 +174,14 @@ impl PostgresStore {
                         )
                         .await?
                 }
-                CaseworkRole::Requester => return Err(StoreError::Forbidden),
+                CaseworkActsAs::Requester => return Err(StoreError::Forbidden),
             },
             DirectoryTargetPurpose::AbsenceCover => {
                 let person = person.ok_or(StoreError::Invalid)?;
                 if !can_manage_person(&transaction, actor, person).await? {
                     return Err(StoreError::Forbidden);
                 }
-                if actor.role == CaseworkRole::Supervisor {
+                if actor.role == CaseworkActsAs::Supervisor {
                     // A supervisor covers only inside the teams they lead, so a
                     // second team the absent person belongs to stays unseen.
                     transaction
@@ -249,7 +249,7 @@ impl PostgresStore {
         request: &DirectoryTeamUpdateRequest,
         idempotency_key: &str,
     ) -> Result<i64, StoreError> {
-        if actor.role != CaseworkRole::Administrator {
+        if actor.role != CaseworkActsAs::Administrator {
             return Err(StoreError::Forbidden);
         }
         validate_reason(
@@ -378,7 +378,7 @@ impl PostgresStore {
     ) -> Result<AbsenceList, StoreError> {
         if !matches!(
             actor.role,
-            CaseworkRole::Staff | CaseworkRole::Supervisor | CaseworkRole::Administrator
+            CaseworkActsAs::Staff | CaseworkActsAs::Supervisor | CaseworkActsAs::Administrator
         ) {
             return Err(StoreError::Forbidden);
         }
@@ -768,7 +768,7 @@ impl CaseworkService {
         request: &BootstrapDirectoryRequest,
         idempotency_key: &str,
     ) -> Result<i64, ServiceError> {
-        if actor.role != CaseworkRole::Administrator {
+        if actor.role != CaseworkActsAs::Administrator {
             return Err(StoreError::Forbidden.into());
         }
         if expected_directory_revision < 0
@@ -797,7 +797,7 @@ impl CaseworkService {
         request: &DirectoryTeamUpdateRequest,
         idempotency_key: &str,
     ) -> Result<i64, ServiceError> {
-        if actor.role != CaseworkRole::Administrator {
+        if actor.role != CaseworkActsAs::Administrator {
             return Err(StoreError::Forbidden.into());
         }
         if expected_directory_revision < 0
@@ -939,12 +939,12 @@ fn absence_from_row(row: tokio_postgres::Row) -> Result<AbsenceRecord, StoreErro
     })
 }
 
-fn role_name(role: CaseworkRole) -> &'static str {
+fn role_name(role: CaseworkActsAs) -> &'static str {
     match role {
-        CaseworkRole::Staff => "staff",
-        CaseworkRole::Supervisor => "supervisor",
-        CaseworkRole::Administrator => "administrator",
-        CaseworkRole::Requester => "requester",
+        CaseworkActsAs::Staff => "staff",
+        CaseworkActsAs::Supervisor => "supervisor",
+        CaseworkActsAs::Administrator => "administrator",
+        CaseworkActsAs::Requester => "requester",
     }
 }
 
@@ -1012,10 +1012,10 @@ async fn can_manage_person(
     actor: &ActorContext,
     person: &IssuerPrincipal,
 ) -> Result<bool, StoreError> {
-    if actor.role == CaseworkRole::Administrator {
+    if actor.role == CaseworkActsAs::Administrator {
         return Ok(true);
     }
-    let owns = actor.role == CaseworkRole::Staff
+    let owns = actor.role == CaseworkActsAs::Staff
         && actor.principal == *person
         && tx.query_opt(
             "SELECT 1 FROM casework_memberships person WHERE person.issuer=$1 AND person.subject=$2 AND person.membership_kind='staff' FOR KEY SHARE OF person",
@@ -1023,7 +1023,7 @@ async fn can_manage_person(
         )
         .await?
         .is_some();
-    let supervises=actor.role==CaseworkRole::Supervisor&&tx.query_opt("SELECT 1 FROM casework_memberships person JOIN casework_memberships lead ON lead.team_id=person.team_id WHERE person.issuer=$1 AND person.subject=$2 AND person.membership_kind='staff' AND lead.issuer=$3 AND lead.subject=$4 AND lead.membership_kind='supervisor' FOR KEY SHARE OF person,lead",&[&person.issuer,&person.subject,&actor.principal.issuer,&actor.principal.subject]).await?.is_some();
+    let supervises=actor.role==CaseworkActsAs::Supervisor&&tx.query_opt("SELECT 1 FROM casework_memberships person JOIN casework_memberships lead ON lead.team_id=person.team_id WHERE person.issuer=$1 AND person.subject=$2 AND person.membership_kind='staff' AND lead.issuer=$3 AND lead.subject=$4 AND lead.membership_kind='supervisor' FOR KEY SHARE OF person,lead",&[&person.issuer,&person.subject,&actor.principal.issuer,&actor.principal.subject]).await?.is_some();
     Ok(owns || supervises)
 }
 
@@ -1033,7 +1033,7 @@ async fn valid_absence_cover(
     person: &IssuerPrincipal,
     cover: &IssuerPrincipal,
 ) -> Result<bool, StoreError> {
-    if actor.role == CaseworkRole::Supervisor {
+    if actor.role == CaseworkActsAs::Supervisor {
         return Ok(tx.query_opt("SELECT 1 FROM casework_memberships person JOIN casework_memberships cover ON cover.team_id=person.team_id JOIN casework_memberships lead ON lead.team_id=person.team_id WHERE person.issuer=$1 AND person.subject=$2 AND person.membership_kind='staff' AND cover.issuer=$3 AND cover.subject=$4 AND cover.membership_kind='staff' AND lead.issuer=$5 AND lead.subject=$6 AND lead.membership_kind='supervisor' FOR KEY SHARE OF person,cover,lead",&[&person.issuer,&person.subject,&cover.issuer,&cover.subject,&actor.principal.issuer,&actor.principal.subject]).await?.is_some());
     }
     Ok(tx.query_opt("SELECT 1 FROM casework_memberships person JOIN casework_memberships cover ON cover.team_id=person.team_id WHERE person.issuer=$1 AND person.subject=$2 AND person.membership_kind='staff' AND cover.issuer=$3 AND cover.subject=$4 AND cover.membership_kind='staff' FOR KEY SHARE OF person,cover",&[&person.issuer,&person.subject,&cover.issuer,&cover.subject]).await?.is_some())
@@ -1044,7 +1044,7 @@ async fn can_assign_queue(
     actor: &ActorContext,
     queue: &str,
 ) -> Result<bool, StoreError> {
-    Ok(actor.role==CaseworkRole::Supervisor&&tx.query_opt("SELECT 1 FROM casework_queue_service q JOIN casework_memberships m ON m.team_id=q.team_id WHERE q.queue_id=$1 AND m.issuer=$2 AND m.subject=$3 AND m.membership_kind='supervisor' FOR KEY SHARE OF q,m",&[&queue,&actor.principal.issuer,&actor.principal.subject]).await?.is_some())
+    Ok(actor.role==CaseworkActsAs::Supervisor&&tx.query_opt("SELECT 1 FROM casework_queue_service q JOIN casework_memberships m ON m.team_id=q.team_id WHERE q.queue_id=$1 AND m.issuer=$2 AND m.subject=$3 AND m.membership_kind='supervisor' FOR KEY SHARE OF q,m",&[&queue,&actor.principal.issuer,&actor.principal.subject]).await?.is_some())
 }
 
 async fn is_staff_for_queue(

@@ -52,6 +52,23 @@ bytes, through an enabled secret provider.
 The accepted Run pins the active reviewed Workflow snapshot. Event input never
 chooses a principal, connection or credential.
 
+An event trigger may carry an optional `label` and `description`. They name the
+start for readers and appear in `check --explain` under
+`presentation.eventTriggers`; editing them changes no `workflowRevision`.
+
+```yaml
+workflow:
+  eventTriggers:
+    licence-created:
+      label: A licence is issued
+      description: Starts the notice workflow when the registry saves a new licence.
+      source: licensing
+      eventType: licence-created-v1
+      dataSchema: urn:example:licence-created:v1
+      event: {type: object}
+      input: {type: input}
+```
+
 Intake accepts at most 1 MiB, the Version 1 signable bound, and the admitted
 event must fit the 128 KiB structured value profile, so use minimized producer
 projections. A signed event over that profile is refused with `event.too-large`

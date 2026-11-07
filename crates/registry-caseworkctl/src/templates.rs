@@ -26,10 +26,10 @@ pub(crate) fn approval_project(pattern: &str) -> Result<Value> {
         "kind": "CaseworkProject",
         "project": {"id": pattern, "version": "1"},
         "accessProfiles": {
-            "staff": {"principalClaim":"sub", "requiredScopes":["casework:staff"], "role":"staff"},
-            "supervisor": {"principalClaim":"sub", "requiredScopes":["casework:supervisor"], "role":"supervisor"},
-            "administrator": {"principalClaim":"sub", "requiredScopes":["casework:admin"], "role":"administrator"},
-            "requester": {"principalClaim":"sub", "requiredScopes":["casework:request"], "role":"requester"}
+            "staff": {"principalClaim":"sub", "requiredScopes":["casework:staff"], "actsAs":"staff"},
+            "supervisor": {"principalClaim":"sub", "requiredScopes":["casework:supervisor"], "actsAs":"supervisor"},
+            "administrator": {"principalClaim":"sub", "requiredScopes":["casework:admin"], "actsAs":"administrator"},
+            "requester": {"principalClaim":"sub", "requiredScopes":["casework:request"], "actsAs":"requester"}
         },
         "queues": {"reviews": {"label": "Reviews awaiting approval"}},
         "reviewPolicies": {},
@@ -57,7 +57,7 @@ pub(crate) fn approval_project(pattern: &str) -> Result<Value> {
             .remove("staff");
         for profile in ["technical-reviewer", "authorizer"] {
             project["accessProfiles"][profile] = json!({
-                "principalClaim":"sub", "requiredScopes":[format!("casework:{profile}")], "role":"staff"
+                "principalClaim":"sub", "requiredScopes":[format!("casework:{profile}")], "actsAs":"staff"
             });
         }
         project["queues"] = json!({
@@ -97,7 +97,7 @@ pub(crate) fn approval_dev_clients(pattern: &str) -> Result<Value> {
     let mut clients = Vec::new();
     for (id, profile) in project["accessProfiles"].as_object().unwrap() {
         let mut client = json!({"id":id, "accessProfile":id, "scopes":profile["requiredScopes"]});
-        if profile["role"] != "requester" {
+        if profile["actsAs"] != "requester" {
             client["claims"] = json!({"registry_actor_kind":"human"});
         }
         clients.push(client);

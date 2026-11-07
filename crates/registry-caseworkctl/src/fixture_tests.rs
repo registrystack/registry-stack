@@ -36,7 +36,7 @@ fn run_json_check(project: &std::path::Path) -> (std::process::ExitCode, Value) 
 
 fn holiday_set(body: &str) -> String {
     format!(
-        "apiVersion: id.registrystack.org/formats/casework/holiday-set/v1alpha1\nkind: CaseworkHolidaySet\nholidaySet: office-holidays\nrevision: 7\n{body}"
+        "apiVersion: id.registrystack.org/formats/casework/holiday-set/v1alpha1\nkind: CaseworkHolidaySet\nid: office-holidays\nrevision: 7\n{body}"
     )
 }
 
@@ -192,7 +192,7 @@ fn check_refuses_substitution_in_an_authored_holiday_set() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|diagnostic| diagnostic["path"] == "/holidaySet")
+        .find(|diagnostic| diagnostic["path"] == "/id")
         .unwrap_or_else(|| panic!("missing holiday-set substitution diagnostic: {report}"));
     assert_eq!(diagnostic["code"], "config.substitution-not-allowed");
     assert_eq!(diagnostic["source"]["file"], path.display().to_string());

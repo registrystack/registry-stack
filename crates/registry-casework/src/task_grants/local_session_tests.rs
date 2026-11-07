@@ -218,10 +218,10 @@ async fn submitted_review_dev_approves_exchanges_and_revokes_on_stock_issuer() {
         "apiVersion":"id.registrystack.org/formats/casework/project/v1alpha1",
         "kind":"CaseworkProject", "project":{"id":"local-review","version":"1"},
         "accessProfiles":{
-            "staff":{"principalClaim":"sub","requiredScopes":["casework:staff"],"role":"staff"},
-            "supervisor":{"principalClaim":"sub","requiredScopes":["casework:supervisor"],"role":"supervisor"},
-            "administrator":{"principalClaim":"sub","requiredScopes":["casework:admin"],"role":"administrator"},
-            "requester":{"principalClaim":"sub","requiredScopes":["casework:reviews:request"],"role":"requester"}
+            "staff":{"principalClaim":"sub","requiredScopes":["casework:staff"],"actsAs":"staff"},
+            "supervisor":{"principalClaim":"sub","requiredScopes":["casework:supervisor"],"actsAs":"supervisor"},
+            "administrator":{"principalClaim":"sub","requiredScopes":["casework:admin"],"actsAs":"administrator"},
+            "requester":{"principalClaim":"sub","requiredScopes":["casework:reviews:request"],"actsAs":"requester"}
         },
         "queues":{"review":{"label":"Review"}},
         "teams":{"team":{"label":"Review team","serves":["review"],"memberProfiles":["staff"],"supervisorProfiles":["supervisor"]}},

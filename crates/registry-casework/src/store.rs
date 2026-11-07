@@ -2,7 +2,7 @@ use crate::{describe_secret_failure, DatabaseConfig};
 use chrono::Utc;
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod, Runtime};
 use registry_casework_core::{
-    ActorContext, BootstrapDirectoryRequest, CaseworkRole, DirectoryMember, DirectoryResponse,
+    ActorContext, BootstrapDirectoryRequest, CaseworkActsAs, DirectoryMember, DirectoryResponse,
     IssuerPrincipal, TeamRecord,
 };
 use registry_platform_config::SecretResolver;
@@ -414,7 +414,7 @@ impl PostgresStore {
         request: &BootstrapDirectoryRequest,
         idempotency_key: &str,
     ) -> Result<i64, StoreError> {
-        if actor.role != CaseworkRole::Administrator {
+        if actor.role != CaseworkActsAs::Administrator {
             return Err(StoreError::Forbidden);
         }
         let request_hash = request_hash(request)?;
@@ -517,7 +517,7 @@ impl PostgresStore {
         &self,
         actor: &ActorContext,
     ) -> Result<(i64, Vec<TeamRecord>), StoreError> {
-        if actor.role != CaseworkRole::Administrator {
+        if actor.role != CaseworkActsAs::Administrator {
             return Err(StoreError::Forbidden);
         }
         let mut client = self.client().await?;
@@ -535,9 +535,9 @@ impl PostgresStore {
     }
     pub async fn served_queues(&self, actor: &ActorContext) -> Result<Vec<String>, StoreError> {
         let membership_kind = match actor.role {
-            CaseworkRole::Staff => "staff",
-            CaseworkRole::Supervisor => "supervisor",
-            CaseworkRole::Administrator | CaseworkRole::Requester => {
+            CaseworkActsAs::Staff => "staff",
+            CaseworkActsAs::Supervisor => "supervisor",
+            CaseworkActsAs::Administrator | CaseworkActsAs::Requester => {
                 return Err(StoreError::Forbidden);
             }
         };
@@ -791,18 +791,68 @@ pub enum StoreError {
     Postgres(#[from] tokio_postgres::Error),
     #[error("Casework serialization failed")]
     Json(#[from] serde_json::Error),
+    /// A retained review policy still holds a member this release removed.
+    /// Releases up to 0.45.0 stored it; this one reads no such state.
+    #[error(
+        "a review stored by an earlier release holds `{member}`, which this release does not read; reviews stored by 0.45.0 or earlier are not readable after the upgrade, so start Casework on a new database"
+    )]
+    StoredByEarlierRelease { member: &'static str },
+}
+
+/// Read a retained review policy snapshot, naming the removed member when an
+/// earlier release stored it. Other malformed snapshots stay serialization
+/// failures.
+pub(crate) fn stored_policy(
+    snapshot: Value,
+) -> Result<registry_casework_core::ReviewPolicyClosure, StoreError> {
+    let holds_removed_member = snapshot
+        .pointer("/dependencies/accessProfiles")
+        .and_then(Value::as_array)
+        .is_some_and(|profiles| profiles.iter().any(|profile| profile.get("role").is_some()));
+    match serde_json::from_value(snapshot) {
+        Ok(policy) => Ok(policy),
+        Err(_) if holds_removed_member => Err(StoreError::StoredByEarlierRelease {
+            member: "accessProfiles[*].role",
+        }),
+        Err(error) => Err(StoreError::Json(error)),
+    }
+}
+
+/// Refuse a database that still holds a review stored by 0.45.0 or earlier in
+/// any lifecycle: decided reviews inside their result window and history read
+/// the same snapshots, so the upgrade needs a new database, not a drain.
+async fn refuse_reviews_stored_by_an_earlier_release(
+    tx: &tokio_postgres::Transaction<'_>,
+) -> Result<(), StoreError> {
+    let held: bool = tx
+        .query_one(
+            "SELECT EXISTS (SELECT 1 FROM casework_review_requests r,
+                jsonb_array_elements(CASE WHEN jsonb_typeof(r.policy_snapshot #> '{dependencies,accessProfiles}') = 'array'
+                    THEN r.policy_snapshot #> '{dependencies,accessProfiles}' ELSE '[]'::jsonb END) p
+              WHERE p ? 'role')",
+            &[],
+        )
+        .await?
+        .get(0);
+    if held {
+        return Err(StoreError::StoredByEarlierRelease {
+            member: "accessProfiles[*].role",
+        });
+    }
+    Ok(())
 }
 
 pub(crate) async fn pinned_work_inventory_in(
     tx: &tokio_postgres::Transaction<'_>,
 ) -> Result<crate::pinned_work::PinnedWorkInventory, StoreError> {
+    refuse_reviews_stored_by_an_earlier_release(tx).await?;
     let rows=tx.query("SELECT policy_snapshot,producer_id,source_namespace,active_stage_index,count(*) FROM casework_review_requests WHERE lifecycle='reviewing' GROUP BY policy_snapshot,producer_id,source_namespace,active_stage_index",&[]).await?;
     Ok(crate::pinned_work::PinnedWorkInventory {
         reviews: rows
             .into_iter()
             .map(|row| {
                 Ok(crate::pinned_work::PinnedReviewGroup {
-                    policy: serde_json::from_value(row.get(0))?,
+                    policy: stored_policy(row.get(0))?,
                     producer_id: row.get(1),
                     source_namespace: row.get(2),
                     active_stage_index: usize::try_from(row.get::<_, i32>(3))

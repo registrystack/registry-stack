@@ -3,7 +3,7 @@ use crate::HolidaySetDocument;
 use chrono::{DateTime, NaiveDate, Utc};
 use registry_platform_yaml::{
     ApiVersion, BoundedU64, Decoded, EnvelopeRule, Expect, ForeignValue, FormatSpec, Invalid,
-    LocalId, Reader, Report, RetiredApiVersion, UniqueList,
+    LocalId, Reader, RemovedKey, Report, RetiredApiVersion, UniqueList,
 };
 use serde::{Deserialize, Deserializer};
 use std::fmt;
@@ -19,7 +19,10 @@ pub const CASEWORK_HOLIDAY_SET_FORMAT: FormatSpec<'static> = FormatSpec {
         api_versions: &[ApiVersion::current(CASEWORK_HOLIDAY_SET_API_VERSION)],
         retired_api_versions: &[],
     },
-    removed_keys: &[],
+    removed_keys: &[RemovedKey {
+        pointer: "/holidaySet",
+        replacement: "Write the set's identifier as id.",
+    }],
 };
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub struct Timestamp(DateTime<Utc>);
@@ -91,8 +94,18 @@ pub struct CaseworkHolidaySet {
     pub api_version: String,
     pub kind: String,
     /// The holiday set a calendar names in `holidaySet`.
-    pub holiday_set: LocalId,
+    pub id: LocalId,
     pub revision: BoundedU64<1, MAXIMUM_HOLIDAY_SET_REVISION>,
+    /// An optional human label for the set.
+    #[serde(
+        default,
+        deserialize_with = "registry_platform_yaml::optional_display_text"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::DisplayText>")
+    )]
+    pub label: Option<String>,
     /// The dates that are not working days, at most 3660.
     #[cfg_attr(feature = "schema", schemars(length(max = 3660)))]
     pub dates: UniqueList<CalendarDate>,
@@ -128,7 +141,7 @@ impl CaseworkHolidaySet {
     /// The revision as the runtime's holiday-set document.
     pub fn to_document(&self) -> HolidaySetDocument {
         HolidaySetDocument {
-            holiday_set: self.holiday_set.to_string(),
+            holiday_set: self.id.to_string(),
             revision: self.revision.get(),
             dates: self.dates.iter().map(ToString::to_string).collect(),
         }

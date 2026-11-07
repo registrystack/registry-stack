@@ -62,6 +62,10 @@ pub const SCHEDULING_PROJECT_FORMAT: FormatSpec<'static> = FormatSpec {
                           2026.1.",
         },
         RemovedKey {
+            pointer: "/holidaySets/*/because",
+            replacement: "Write label.",
+        },
+        RemovedKey {
             pointer: "/offerings/*/exactTime/maxRecipients",
             replacement: "Write maximumRecipients.",
         },
@@ -629,7 +633,7 @@ impl Identified for OpeningPatternPolicy {
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct HolidaySetPolicy {
+pub struct HolidaySet {
     #[serde(deserialize_with = "crate::typed::local_id")]
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
@@ -639,12 +643,17 @@ pub struct HolidaySetPolicy {
         schemars(with = "registry_platform_yaml::BoundedU64<1, MAXIMUM_REVISION>")
     )]
     pub revision: u64,
-    #[serde(deserialize_with = "registry_platform_yaml::display_text")]
+    /// An optional human label for the set; the id names it when absent.
+    #[serde(
+        default,
+        deserialize_with = "registry_platform_yaml::optional_display_text",
+        skip_serializing_if = "Option::is_none"
+    )]
     #[cfg_attr(
         feature = "schema",
-        schemars(with = "registry_platform_yaml::DisplayText")
+        schemars(with = "Option<registry_platform_yaml::DisplayText>")
     )]
-    pub because: String,
+    pub label: Option<String>,
     /// The dates the set closes. A set that closes no date omits the member.
     #[serde(
         default,
@@ -661,7 +670,7 @@ pub struct HolidaySetPolicy {
     pub dates: Vec<String>,
 }
 
-impl Identified for HolidaySetPolicy {
+impl Identified for HolidaySet {
     fn id(&self) -> &str {
         &self.id
     }
@@ -1117,11 +1126,11 @@ pub struct SchedulingPolicy {
     #[cfg_attr(
         feature = "schema",
         schemars(
-            with = "registry_platform_yaml::UniqueIdList<HolidaySetPolicy>",
+            with = "registry_platform_yaml::UniqueIdList<HolidaySet>",
             length(min = 1, max = 256)
         )
     )]
-    pub holiday_sets: Vec<HolidaySetPolicy>,
+    pub holiday_sets: Vec<HolidaySet>,
     #[serde(deserialize_with = "crate::typed::unique_id_list")]
     #[cfg_attr(
         feature = "schema",
@@ -1195,7 +1204,7 @@ impl SchedulingPolicy {
     }
 
     #[must_use]
-    pub fn holiday_set(&self, id: &str) -> Option<&HolidaySetPolicy> {
+    pub fn holiday_set(&self, id: &str) -> Option<&HolidaySet> {
         self.holiday_sets.iter().find(|set| set.id == id)
     }
 
@@ -1282,7 +1291,9 @@ impl SchedulingPolicy {
                     PolicyCheckReason::InvalidBound,
                 ));
             }
-            check_because(&set.because, &format!("{path}/because"), &mut findings);
+            if let Some(label) = &set.label {
+                check_because(label, &format!("{path}/label"), &mut findings);
+            }
             check_identifier(&set.id, &format!("{path}/id"), &mut findings);
             check_collection_bound(&set.dates, &format!("{path}/dates"), &mut findings);
             for (date_index, date) in set.dates.iter().enumerate() {
@@ -2387,7 +2398,7 @@ offerings:
 holidaySets:
   - id: office-holidays
     revision: 1
-    because: Public holidays observed by the registry office.
+    label: Public holidays observed by the registry office.
     dates: ["2026-12-25"]
 openings:
   - id: counter-hours
@@ -2572,7 +2583,7 @@ offerings:
 holidaySets:
   - id: office-holidays
     revision: 1
-    because: Public holidays observed by the registry office.
+    label: Public holidays observed by the registry office.
 openings:
   - id: hall-hours
     location: civic-hall
@@ -3270,6 +3281,32 @@ maximumRecipients: 1
     }
 
     #[test]
+    fn a_holiday_set_because_is_refused_and_names_label() {
+        let old = MINIMAL_EXACT_TIME_PROJECT.replacen(
+            "    label: Public holidays observed by the registry office.\n",
+            "    because: Public holidays observed by the registry office.\n",
+            1,
+        );
+        assert_ne!(old, MINIMAL_EXACT_TIME_PROJECT);
+        assert!(refusals(&old).contains(&"/holidaySets/0/because config.removed-key".to_owned()));
+    }
+
+    #[test]
+    fn a_holiday_set_may_omit_its_label() {
+        let unlabeled = MINIMAL_EXACT_TIME_PROJECT.replacen(
+            "    label: Public holidays observed by the registry office.\n",
+            "",
+            1,
+        );
+        assert_ne!(unlabeled, MINIMAL_EXACT_TIME_PROJECT);
+        assert!(
+            refusals(&unlabeled).is_empty(),
+            "{:?}",
+            refusals(&unlabeled)
+        );
+    }
+
+    #[test]
     fn duplicate_ids_across_one_collection_are_rejected() {
         let duplicated =
             |item: &str| MINIMAL_EXACT_TIME_PROJECT.replacen(item, &format!("{item}{item}"), 1);
@@ -3281,7 +3318,7 @@ maximumRecipients: 1
             ),
             (
                 "holidaySets",
-                "  - id: office-holidays\n    revision: 1\n    because: Public holidays observed by the registry office.\n    dates: [\"2026-12-25\"]\n",
+                "  - id: office-holidays\n    revision: 1\n    label: Public holidays observed by the registry office.\n    dates: [\"2026-12-25\"]\n",
                 "/holidaySets/1/id",
             ),
         ] {

@@ -777,7 +777,7 @@ fn authored_semantic_errors_and_warnings_share_one_file_budget() {
             steps.insert(
                 id,
                 json!({
-                    "type": "finish", "outcome": "no-current-permission", "title": "Review"
+                    "type": "finish", "outcome": "no-current-permission", "label": "Review"
                 }),
             );
         }

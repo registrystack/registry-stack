@@ -1711,7 +1711,7 @@ mod tests {
             kind: ActorKind::Service,
             client_id: "civil-registry-app".to_owned(),
             profile_id: LocalId::new("custodian-app").unwrap(),
-            role: registry_documents_core::AccessRole::Custodian,
+            role: registry_documents_core::ActsAs::Custodian,
             institution: None,
         }
     }

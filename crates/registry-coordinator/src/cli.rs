@@ -1447,6 +1447,12 @@ fn render_explain(value: &Value) -> String {
             text(&trigger["source"]),
             text(&trigger["eventType"])
         ));
+        let wording = &value["presentation"]["eventTriggers"][id];
+        for member in ["label", "description"] {
+            if let Some(line) = wording[member].as_str() {
+                out.push_str(&format!("  {member}: {line}\n"));
+            }
+        }
     }
     let limits = value["limits"]
         .as_object()

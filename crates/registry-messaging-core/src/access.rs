@@ -52,7 +52,7 @@ impl ActorKind {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
-pub enum AccessRole {
+pub enum ActsAs {
     Sender,
     Operator,
 }
@@ -65,6 +65,26 @@ pub struct AccessProfile {
     #[serde(deserialize_with = "crate::typed::local_id")]
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
+    /// A name for the profile, accepted for authoring and tooling; never matched against a caller.
+    #[serde(
+        default,
+        deserialize_with = "registry_platform_yaml::optional_display_text"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::DisplayText>")
+    )]
+    pub label: Option<String>,
+    /// What the profile is for, accepted for authoring and tooling; never matched against a caller.
+    #[serde(
+        default,
+        deserialize_with = "registry_platform_yaml::optional_display_text"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::DisplayText>")
+    )]
+    pub description: Option<String>,
     /// `sub`, or the name of another string claim identifying the principal.
     #[serde(deserialize_with = "crate::typed::external_id")]
     #[cfg_attr(
@@ -85,7 +105,7 @@ pub struct AccessProfile {
     /// The actor kind the token must claim. Absent means any kind.
     #[serde(default)]
     pub actor_kind: Option<ActorKind>,
-    pub role: AccessRole,
+    pub acts_as: ActsAs,
     /// The sender profiles a sender may select; an operator lists none.
     #[serde(default, deserialize_with = "crate::typed::local_ids")]
     #[cfg_attr(
@@ -460,11 +480,11 @@ fn check_profile(profile: &AccessProfile) -> Result<(), AccessProfileError> {
     if has_empty {
         return Err(AccessProfileError::EmptyEntry(id()));
     }
-    match profile.role {
-        AccessRole::Sender if profile.sends_nothing() => {
+    match profile.acts_as {
+        ActsAs::Sender if profile.sends_nothing() => {
             return Err(AccessProfileError::SenderWithoutTargets(id()));
         }
-        AccessRole::Operator if profile.declares_sending_permissions() => {
+        ActsAs::Operator if profile.declares_sending_permissions() => {
             return Err(AccessProfileError::OperatorWithSendingPermissions(id()));
         }
         _ => {}
@@ -509,8 +529,8 @@ pub struct Caller {
 
 impl Caller {
     #[must_use]
-    pub fn role(&self) -> AccessRole {
-        self.profile.role
+    pub fn role(&self) -> ActsAs {
+        self.profile.acts_as
     }
 }
 
@@ -576,7 +596,7 @@ pub fn authorize_submission(
     scope: &SubmissionScope<'_>,
 ) -> Result<(), SubmissionRefusal> {
     let profile = &caller.profile;
-    if profile.role != AccessRole::Sender {
+    if profile.acts_as != ActsAs::Sender {
         return Err(SubmissionRefusal::Role);
     }
     if !profile
@@ -602,7 +622,7 @@ pub fn authorize_submission(
 /// submit, and an operator, who submits nothing, previews nothing.
 pub fn authorize_preview(caller: &Caller, template: &str) -> Result<(), SubmissionRefusal> {
     let profile = &caller.profile;
-    if profile.role != AccessRole::Sender {
+    if profile.acts_as != ActsAs::Sender {
         return Err(SubmissionRefusal::Role);
     }
     if !profile.templates.iter().any(|allowed| allowed == template) {
@@ -621,11 +641,13 @@ mod tests {
     fn sender(id: &str, client: &str) -> AccessProfile {
         AccessProfile {
             id: id.to_owned(),
+            label: None,
+            description: None,
             principal_claim: "sub".to_owned(),
             required_scopes: vec!["messaging-send".to_owned()],
             requester_clients: vec![client.to_owned()],
             actor_kind: None,
-            role: AccessRole::Sender,
+            acts_as: ActsAs::Sender,
             sender_profiles: vec!["notices-sms".to_owned()],
             templates: vec!["appointment-reminder".to_owned()],
             allow_direct_content: false,
@@ -637,7 +659,7 @@ mod tests {
 
     fn operator(id: &str, client: &str) -> AccessProfile {
         AccessProfile {
-            role: AccessRole::Operator,
+            acts_as: ActsAs::Operator,
             sender_profiles: Vec::new(),
             templates: Vec::new(),
             required_scopes: vec!["messaging-operate".to_owned()],
@@ -692,7 +714,7 @@ mod tests {
             .resolve(&Token::standing("clinic-backend", &["messaging-send"]).facts())
             .expect("the listed client with the required scope resolves");
         assert_eq!(caller.profile.id, "clinic-reminders");
-        assert_eq!(caller.role(), AccessRole::Sender);
+        assert_eq!(caller.role(), ActsAs::Sender);
         assert_eq!(caller.identity.issuer, ISSUER);
         assert_eq!(caller.identity.subject, "principal-1");
         assert_eq!(caller.actor_kind, Some(ActorKind::Service));
@@ -949,7 +971,7 @@ mod tests {
             "principalClaim": "sub",
             "requiredScopes": ["messaging:send"],
             "requesterClients": ["c"],
-            "role": "sender",
+            "actsAs": "sender",
             "senderProfiles": ["transactional"],
             "templates": ["appointment-reminder"],
             "requestsPerMinute": 1,
@@ -966,6 +988,22 @@ mod tests {
     }
 
     #[test]
+    fn a_profile_document_reads_a_label_and_a_description() {
+        let parsed = read(document(json!({
+            "label": "Case notices",
+            "description": "Sends appointment reminders."
+        })))
+        .unwrap();
+        assert_eq!(parsed.label.as_deref(), Some("Case notices"));
+        assert_eq!(
+            parsed.description.as_deref(),
+            Some("Sends appointment reminders.")
+        );
+        let plain = read(document(json!({}))).unwrap();
+        assert_eq!((plain.label, plain.description), (None, None));
+    }
+
+    #[test]
     fn a_profile_document_refuses_unknown_keys() {
         assert_eq!(
             read(document(json!({"endpoint": "https://elsewhere.test"}))).unwrap_err(),
@@ -973,13 +1011,13 @@ mod tests {
         );
         let parsed = read(document(json!({
             "actorKind": "agent",
-            "role": "operator",
+            "actsAs": "operator",
             "senderProfiles": null,
             "templates": null
         })))
         .unwrap();
         assert_eq!(parsed.actor_kind, Some(ActorKind::Agent));
-        assert_eq!(parsed.role, AccessRole::Operator);
+        assert_eq!(parsed.acts_as, ActsAs::Operator);
     }
 
     /// An explicit `actorKind: null` is refused, not read as the omitted

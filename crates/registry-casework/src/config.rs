@@ -1466,7 +1466,7 @@ impl RuntimeConfig {
                 ));
                 continue;
             };
-            if profile.role != registry_casework_core::CaseworkRole::Staff {
+            if profile.acts_as != registry_casework_core::CaseworkActsAs::Staff {
                 let mut path = base.to_vec();
                 path.push("profile");
                 findings.push(delegated_staff_reader_finding(

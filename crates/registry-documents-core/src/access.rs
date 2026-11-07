@@ -19,7 +19,7 @@ use serde_json::{Map, Value};
 use crate::custody::DocumentStatus;
 use crate::problem::ProblemCode;
 use crate::project::{
-    AccessProfile, AccessRole, ActorKind, CustodianRule, DocumentPolicy, DocumentsProject,
+    AccessProfile, ActorKind, ActsAs, CustodianRule, DocumentPolicy, DocumentsProject,
     RepresentedPrincipalGrants,
 };
 
@@ -100,7 +100,7 @@ impl AccessProfiles {
             kind,
             client_id: client_id.to_owned(),
             profile_id: profile_id.clone(),
-            role: profile.role,
+            role: profile.acts_as,
             institution: profile.institution.clone(),
         })
     }
@@ -169,7 +169,7 @@ pub struct Caller {
     pub kind: ActorKind,
     pub client_id: String,
     pub profile_id: LocalId,
-    pub role: AccessRole,
+    pub role: ActsAs,
     /// The institution the caller's profile acts for, never a request value.
     pub institution: Option<ExternalId>,
 }
@@ -239,8 +239,7 @@ pub fn place_custody(
         }
     }
     let own = ask.subject == caller.subject;
-    let represented =
-        (caller.role == AccessRole::RepresentedPrincipal).then(|| caller.subject.clone());
+    let represented = (caller.role == ActsAs::RepresentedPrincipal).then(|| caller.subject.clone());
     match (caller.kind, own) {
         (ActorKind::Human, false) => Err(ProblemCode::CustodyNotPermitted),
         (_, true) => Ok(Custody {
@@ -506,7 +505,7 @@ mod tests {
     fn a_verified_token_resolves_to_its_client_profile_and_institution() {
         let resolved = app();
         assert_eq!(resolved.profile_id.as_str(), "custodian-app");
-        assert_eq!(resolved.role, AccessRole::Custodian);
+        assert_eq!(resolved.role, ActsAs::Custodian);
         assert_eq!(resolved.subject, "registry-app");
         assert_eq!(resolved.issuer, ISSUER);
         assert_eq!(

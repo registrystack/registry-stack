@@ -8,18 +8,97 @@ async fn assign(
 ) -> Result<ReviewTask, ReviewRuntimeError> {
     service
         .assign_review_task(
-            &actor("supervisor", CaseworkRole::Supervisor),
+            &actor("supervisor", CaseworkActsAs::Supervisor),
             task,
             None,
             "",
             1,
             AssignmentRequest {
-                assignee: actor(subject, CaseworkRole::Staff).principal,
+                assignee: actor(subject, CaseworkActsAs::Staff).principal,
                 reason: None,
             },
             key,
         )
         .await
+}
+
+/// Rewrite a stored review policy snapshot into the shape release 0.45.0
+/// stored: each access profile names `role` where it now names `actsAs`.
+async fn store_snapshot_as_earlier_release(f: &Fixture, request: Uuid) {
+    f.db.execute(
+        "UPDATE casework_review_requests SET policy_snapshot = jsonb_set(policy_snapshot,
+            '{dependencies,accessProfiles}',
+            (SELECT jsonb_agg((p - 'actsAs') || jsonb_build_object('role', p->'actsAs'))
+               FROM jsonb_array_elements(policy_snapshot->'dependencies'->'accessProfiles') p))
+          WHERE request_id=$1",
+        &[&request],
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn a_review_stored_by_an_earlier_release_is_refused_naming_the_removed_member() {
+    let f = Fixture::new(project_value(false, false)).await;
+    let accepted = f.create("stored-by-earlier-release").await;
+    let task = f.task(accepted.request_id).await;
+    store_snapshot_as_earlier_release(&f, accepted.request_id).await;
+
+    let project = decode(&project_value(false, false));
+    let candidate = ActivationCandidate {
+        database_id: "authority-closure-tests",
+        package_digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        project: &project,
+        providers: &[],
+    };
+    let refusal = f.store.plan_activation(&candidate).await.unwrap_err();
+    let text = refusal.to_string();
+    assert!(
+        text.contains("stored by an earlier release") && text.contains("accessProfiles[*].role"),
+        "{text}"
+    );
+
+    let read = f
+        .service
+        .review_task(&actor("a", CaseworkActsAs::Staff), task, None, "")
+        .await
+        .unwrap_err();
+    assert!(
+        read.to_string().contains("stored by an earlier release"),
+        "{read}"
+    );
+}
+
+#[tokio::test]
+async fn a_decided_review_stored_by_an_earlier_release_refuses_activation() {
+    let f = Fixture::new(project_value(false, false)).await;
+    let accepted = f.create("decided-by-earlier-release").await;
+    // No review stays open: the only stored snapshot belongs to a cancelled
+    // review still inside its result window.
+    f.db.execute(
+        "UPDATE casework_review_requests SET lifecycle='cancelled', active_stage_index=NULL,
+            terminal_at=now(), result_available_until=now()+interval '1 day',
+            accountability_retained_until=now()+interval '2 days'
+          WHERE request_id=$1",
+        &[&accepted.request_id],
+    )
+    .await
+    .unwrap();
+    store_snapshot_as_earlier_release(&f, accepted.request_id).await;
+
+    let project = decode(&project_value(false, false));
+    let candidate = ActivationCandidate {
+        database_id: "authority-closure-tests",
+        package_digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        project: &project,
+        providers: &[],
+    };
+    let refusal = f.store.plan_activation(&candidate).await.unwrap_err();
+    let text = refusal.to_string();
+    assert!(
+        text.contains("stored by an earlier release") && text.contains("accessProfiles[*].role"),
+        "{text}"
+    );
 }
 
 #[tokio::test]
@@ -37,7 +116,7 @@ async fn absence_reconciliation_requires_audit_and_recovers_without_phantom_chan
     assert!(matches!(
         f.service
             .create_review_request(
-                &actor("notice-service", CaseworkRole::Requester),
+                &actor("notice-service", CaseworkActsAs::Requester),
                 f.request("stop-probe"),
                 "stop-probe"
             )
@@ -188,9 +267,9 @@ async fn assignment_roles_stay_pinned_and_activation_refuses_changed_deciding_au
     let mut value = project_value(false, false);
     value["accessProfiles"].as_object_mut().unwrap().insert(
         "spare-staff".into(),
-        json!({"principalClaim":"sub","requiredScopes":["casework:spare-staff"],"role":"staff"}),
+        json!({"principalClaim":"sub","requiredScopes":["casework:spare-staff"],"actsAs":"staff"}),
     );
-    value["accessProfiles"]["staff"]["role"] = json!("supervisor");
+    value["accessProfiles"]["staff"]["actsAs"] = json!("supervisor");
     value["teams"]["review-team"]["memberProfiles"] = json!(["spare-staff"]);
     value["teams"]["review-team"]["supervisorProfiles"] = json!(["supervisor", "staff"]);
     let changed = decode(&value);

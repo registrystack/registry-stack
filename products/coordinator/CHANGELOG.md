@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- BREAKING: This release does not read workflow snapshots sealed by 0.45.0 or earlier: a snapshot whose project presentation, function or operation holds `title` is refused with `definition.snapshot`. A step `title` in the free-form `presentation.steps` map still restores and is shown as written. Finish open runs on the earlier release before upgrading.
+
+- BREAKING: The authored `title` of a project, function, operation and step is
+  renamed `label`, and `presentation.title` in `check --explain` is
+  `presentation.label`, so one word names a display label across the products.
+  The duplicate-title diagnostics are now
+  `coordinator.project.duplicate-function-label`,
+  `coordinator.project.duplicate-operation-label` and
+  `coordinator.project.duplicate-step-label`. Migration: write `label: TEXT`
+  where a file wrote `title: TEXT` at those four positions; the old key is
+  refused with `config.removed-key` naming `label`. A script that reads
+  `presentation.title` or matches a duplicate-title code reads the new name.
+- Add optional `label` and `description` to `workflow.eventTriggers.<id>`. They are
+  stored under `presentation.eventTriggers`, reported by `check --explain`, and
+  never change the `workflowRevision`.
 - Adopt the shared platform implementations for the access-token algorithm
   roster (still exactly RS256 and ES256), framework-rejection normalization
   (400, 413, 415 and 422 answer the same `request.*` problem codes), the stop

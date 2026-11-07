@@ -502,7 +502,7 @@ pub(crate) mod tests {
             "principalClaim": "sub",
             "requiredScopes": "unrestricted",
             "requesterClients": ["operator-console"],
-            "role": "operator",
+            "actsAs": "operator",
             "requestsPerMinute": 60,
             "burst": 10
         }));

@@ -57,7 +57,7 @@ impl ReviewTaskListView {
 #[serde(rename_all = "camelCase")]
 struct ReviewTaskScanContext<'a> {
     feed: &'static str,
-    role: CaseworkRole,
+    role: CaseworkActsAs,
     supervisory: bool,
     ownership: Option<ReviewTaskOwnership>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -337,8 +337,8 @@ impl CaseworkService {
         actor: &ActorContext,
     ) -> Result<Vec<ReviewPolicyClosure>, ReviewRuntimeError> {
         let allowed = match actor.role {
-            CaseworkRole::Requester => self.producer_for_actor(actor)?.producer.review_policies,
-            CaseworkRole::Staff | CaseworkRole::Supervisor => self
+            CaseworkActsAs::Requester => self.producer_for_actor(actor)?.producer.review_policies,
+            CaseworkActsAs::Staff | CaseworkActsAs::Supervisor => self
                 .project
                 .review_policies
                 .iter()
@@ -350,7 +350,7 @@ impl CaseworkService {
                 })
                 .map(|policy| policy.id.clone())
                 .collect(),
-            CaseworkRole::Administrator => self
+            CaseworkActsAs::Administrator => self
                 .project
                 .review_policies
                 .iter()
@@ -436,7 +436,7 @@ impl CaseworkService {
         limit: usize,
     ) -> Result<SupervisoryReviewTaskPage, ReviewRuntimeError> {
         require_human_reviewer(actor)?;
-        if actor.role != CaseworkRole::Supervisor {
+        if actor.role != CaseworkActsAs::Supervisor {
             return Err(ReviewRuntimeError::Forbidden);
         }
         let page = self
@@ -1246,7 +1246,7 @@ impl CaseworkService {
         cursor: Option<Uuid>,
         limit: usize,
     ) -> Result<ReviewHistoryPage, ReviewRuntimeError> {
-        let requester = if actor.role == CaseworkRole::Requester {
+        let requester = if actor.role == CaseworkActsAs::Requester {
             if source_profile_id.is_some() {
                 return Err(ReviewRuntimeError::SourceProfileNotApplicable);
             }
@@ -1277,7 +1277,7 @@ impl CaseworkService {
         source_profile_id: Option<&str>,
         token: &str,
     ) -> Result<Vec<ReviewClockOccurrence>, ReviewRuntimeError> {
-        let producer = if actor.role == CaseworkRole::Requester {
+        let producer = if actor.role == CaseworkActsAs::Requester {
             if source_profile_id.is_some() {
                 return Err(ReviewRuntimeError::SourceProfileNotApplicable);
             }
@@ -1303,7 +1303,7 @@ impl CaseworkService {
         actor: &ActorContext,
         event_id: Uuid,
     ) -> Result<ReviewAccountabilityRecord, ReviewRuntimeError> {
-        if actor.role != CaseworkRole::Supervisor {
+        if actor.role != CaseworkActsAs::Supervisor {
             return Err(ReviewRuntimeError::Forbidden);
         }
         self.store.review_accountability(actor, event_id).await
@@ -1318,7 +1318,7 @@ impl CaseworkService {
         request: ReviewNoteRequest,
         idempotency_key: &str,
     ) -> Result<ReviewHistoryEntry, ReviewRuntimeError> {
-        let producer = if actor.role == CaseworkRole::Requester {
+        let producer = if actor.role == CaseworkActsAs::Requester {
             if source_profile_id.is_some() {
                 return Err(ReviewRuntimeError::SourceProfileNotApplicable);
             }
@@ -1624,7 +1624,7 @@ impl CaseworkService {
         &self,
         actor: &ActorContext,
     ) -> Result<ProducerAdmission, ReviewRuntimeError> {
-        if actor.role != registry_casework_core::CaseworkRole::Requester {
+        if actor.role != registry_casework_core::CaseworkActsAs::Requester {
             return Err(ReviewRuntimeError::Forbidden);
         }
         self.project
@@ -1761,9 +1761,9 @@ impl PostgresStore {
             return Ok((row.decision_receipt.decided_at, task_id));
         }
         let membership = match actor.role {
-            CaseworkRole::Staff => "staff",
-            CaseworkRole::Supervisor => "supervisor",
-            CaseworkRole::Administrator | CaseworkRole::Requester => {
+            CaseworkActsAs::Staff => "staff",
+            CaseworkActsAs::Supervisor => "supervisor",
+            CaseworkActsAs::Administrator | CaseworkActsAs::Requester => {
                 return Err(ReviewRuntimeError::Forbidden);
             }
         };
@@ -1829,9 +1829,9 @@ impl PostgresStore {
             return self.own_review_tasks(actor, queue, cursor, limit).await;
         }
         let membership = match actor.role {
-            CaseworkRole::Staff => "staff",
-            CaseworkRole::Supervisor => "supervisor",
-            CaseworkRole::Administrator | CaseworkRole::Requester => {
+            CaseworkActsAs::Staff => "staff",
+            CaseworkActsAs::Supervisor => "supervisor",
+            CaseworkActsAs::Administrator | CaseworkActsAs::Requester => {
                 return Err(ReviewRuntimeError::Forbidden);
             }
         };
@@ -1899,7 +1899,7 @@ impl PostgresStore {
         let mut items = rows
             .into_iter()
             .map(|row| {
-                let policy = serde_json::from_value::<ReviewPolicyClosure>(row.get(9))?;
+                let policy = crate::store::stored_policy(row.get(9))?;
                 reviewer_task_from_row(&row, &policy)
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -1920,8 +1920,8 @@ impl PostgresStore {
         limit: usize,
     ) -> Result<ReviewTaskPage, ReviewRuntimeError> {
         let membership = match actor.role {
-            CaseworkRole::Staff => "staff",
-            CaseworkRole::Supervisor => "supervisor",
+            CaseworkActsAs::Staff => "staff",
+            CaseworkActsAs::Supervisor => "supervisor",
             _ => return Err(ReviewRuntimeError::Forbidden),
         };
         let position = match cursor {
@@ -1971,7 +1971,7 @@ impl PostgresStore {
         let mut items = rows
             .into_iter()
             .map(|row| {
-                let policy = serde_json::from_value::<ReviewPolicyClosure>(row.get(9))?;
+                let policy = crate::store::stored_policy(row.get(9))?;
                 reviewer_task_from_row(&row, &policy)
             })
             .collect::<Result<Vec<_>, ReviewRuntimeError>>()?;
@@ -1991,8 +1991,8 @@ impl PostgresStore {
         ids: &[Uuid],
     ) -> Result<Vec<OwnReviewDecision>, ReviewRuntimeError> {
         let membership = match actor.role {
-            CaseworkRole::Staff => "staff",
-            CaseworkRole::Supervisor => "supervisor",
+            CaseworkActsAs::Staff => "staff",
+            CaseworkActsAs::Supervisor => "supervisor",
             _ => return Err(ReviewRuntimeError::Forbidden),
         };
         let client = self.client().await?;
@@ -2025,7 +2025,7 @@ impl PostgresStore {
             .await?
             .into_iter()
             .map(|row| {
-                let policy: ReviewPolicyClosure = serde_json::from_value(row.get(7))?;
+                let policy = crate::store::stored_policy(row.get(7))?;
                 Ok(OwnReviewDecision {
                     task_id: row.get(0),
                     request_id: row.get(1),
@@ -2121,9 +2121,9 @@ impl PostgresStore {
         supervisory: bool,
     ) -> Result<ReviewTask, ReviewRuntimeError> {
         let membership = match actor.role {
-            CaseworkRole::Staff => "staff",
-            CaseworkRole::Supervisor => "supervisor",
-            CaseworkRole::Administrator | CaseworkRole::Requester => {
+            CaseworkActsAs::Staff => "staff",
+            CaseworkActsAs::Supervisor => "supervisor",
+            CaseworkActsAs::Administrator | CaseworkActsAs::Requester => {
                 return Err(ReviewRuntimeError::Forbidden);
             }
         };
@@ -2163,7 +2163,7 @@ impl PostgresStore {
         {
             return Err(ReviewRuntimeError::ResultExpired);
         }
-        let policy: ReviewPolicyClosure = serde_json::from_value(row.get(9))?;
+        let policy = crate::store::stored_policy(row.get(9))?;
         let stage_index =
             u16::try_from(row.get::<_, i32>(2)).map_err(|_| ReviewRuntimeError::Corrupt)?;
         if !supervisory
@@ -2412,7 +2412,7 @@ impl PostgresStore {
             .ok_or(ReviewRuntimeError::NotFound)?;
         let stage_index =
             usize::try_from(row.get::<_, i32>(0)).map_err(|_| ReviewRuntimeError::Corrupt)?;
-        let policy: ReviewPolicyClosure = serde_json::from_value(row.get(1))?;
+        let policy = crate::store::stored_policy(row.get(1))?;
         let stage = policy
             .stages
             .get(stage_index)
@@ -2422,10 +2422,10 @@ impl PostgresStore {
             .access_profiles
             .iter()
             .filter(|profile| stage.deciding_profiles.contains(&profile.id))
-            .filter_map(|profile| match profile.role {
-                CaseworkRole::Staff => Some("staff".to_owned()),
-                CaseworkRole::Supervisor => Some("supervisor".to_owned()),
-                CaseworkRole::Administrator | CaseworkRole::Requester => None,
+            .filter_map(|profile| match profile.acts_as {
+                CaseworkActsAs::Staff => Some("staff".to_owned()),
+                CaseworkActsAs::Supervisor => Some("supervisor".to_owned()),
+                CaseworkActsAs::Administrator | CaseworkActsAs::Requester => None,
             })
             .collect::<std::collections::BTreeSet<_>>()
             .into_iter()
@@ -3457,7 +3457,7 @@ impl PostgresStore {
         if delegate {
             ensure_review_mutation_actor_authorized(&transaction, &record, actor, task_id).await?;
         } else {
-            if actor.role != CaseworkRole::Supervisor {
+            if actor.role != CaseworkActsAs::Supervisor {
                 return Err(ReviewRuntimeError::Forbidden);
             }
             ensure_actor_serves_review_queue(&transaction, actor, &task_queue).await?;
@@ -3503,7 +3503,7 @@ impl PostgresStore {
         if delegate && !stage.deciding_profiles.contains(&actor.profile_id) {
             return Err(ReviewRuntimeError::Forbidden);
         }
-        if !delegate && actor.role != CaseworkRole::Supervisor {
+        if !delegate && actor.role != CaseworkActsAs::Supervisor {
             return Err(ReviewRuntimeError::Forbidden);
         }
         let holder = match (
@@ -4252,7 +4252,7 @@ impl PostgresStore {
             .ok_or(ReviewRuntimeError::NotFound)?;
         let decision: String = row.get(7);
         let outcome: Option<String> = row.get(12);
-        let policy: ReviewPolicyClosure = serde_json::from_value(row.get(13))?;
+        let policy = crate::store::stored_policy(row.get(13))?;
         let decision_receipt = if decision == "approve" || outcome.is_some() {
             Some(review_decision_receipt(
                 &policy,
@@ -4467,7 +4467,7 @@ impl PostgresStore {
         {
             return Err(ReviewRuntimeError::TaskNotHeld);
         }
-        let policy: ReviewPolicyClosure = serde_json::from_value(row.get(9))?;
+        let policy = crate::store::stored_policy(row.get(9))?;
         let stage_index =
             u16::try_from(row.get::<_, i32>(1)).map_err(|_| ReviewRuntimeError::Corrupt)?;
         let stage = policy
@@ -5520,7 +5520,7 @@ fn request_query(predicate: &str) -> String {
 
 fn request_from_row(row: &Row) -> Result<ReviewRequestRecord, ReviewRuntimeError> {
     let lifecycle = parse_lifecycle(&row.get::<_, String>(10))?;
-    let policy: ReviewPolicyClosure = serde_json::from_value(row.get(8))?;
+    let policy = crate::store::stored_policy(row.get(8))?;
     policy.verify().map_err(|_| ReviewRuntimeError::Corrupt)?;
     let result_available_until = row.get::<_, Option<DateTime<Utc>>>(14);
     let result_erased_at = row.get::<_, Option<DateTime<Utc>>>(20);
@@ -5881,9 +5881,9 @@ async fn ensure_actor_serves_review_queue(
     queue: &str,
 ) -> Result<(), ReviewRuntimeError> {
     let membership_kind = match actor.role {
-        CaseworkRole::Staff => "staff",
-        CaseworkRole::Supervisor => "supervisor",
-        CaseworkRole::Administrator | CaseworkRole::Requester => {
+        CaseworkActsAs::Staff => "staff",
+        CaseworkActsAs::Supervisor => "supervisor",
+        CaseworkActsAs::Administrator | CaseworkActsAs::Requester => {
             return Err(ReviewRuntimeError::Forbidden);
         }
     };
@@ -6251,8 +6251,8 @@ fn transition_kind(transition: &ReviewTransition) -> &'static str {
 fn require_human_reviewer(actor: &ActorContext) -> Result<(), ReviewRuntimeError> {
     matches!(
         actor.role,
-        registry_casework_core::CaseworkRole::Staff
-            | registry_casework_core::CaseworkRole::Supervisor
+        registry_casework_core::CaseworkActsAs::Staff
+            | registry_casework_core::CaseworkActsAs::Supervisor
     )
     .then_some(())
     .ok_or(ReviewRuntimeError::Forbidden)
@@ -6305,9 +6305,9 @@ async fn ensure_review_stage_queue_access(
     lock_membership: bool,
 ) -> Result<(), ReviewRuntimeError> {
     let membership = match actor.role {
-        CaseworkRole::Staff => "staff",
-        CaseworkRole::Supervisor => "supervisor",
-        CaseworkRole::Administrator | CaseworkRole::Requester => {
+        CaseworkActsAs::Staff => "staff",
+        CaseworkActsAs::Supervisor => "supervisor",
+        CaseworkActsAs::Administrator | CaseworkActsAs::Requester => {
             return Err(ReviewRuntimeError::Forbidden);
         }
     };
@@ -6680,7 +6680,7 @@ async fn review_task_staffing_shortfalls(
                 WHERE q.queue_id=t.queue_id
                   AND EXISTS(SELECT 1 FROM jsonb_array_elements(r.policy_snapshot->'dependencies'->'accessProfiles') p
                     WHERE (s.stage->'decidingProfiles') ? (p->>'id')
-                      AND p->>'role'=m.membership_kind)
+                      AND p->>'actsAs'=m.membership_kind)
                   AND (NOT COALESCE((s.stage->>'excludeInitiator')::boolean,false)
                     OR r.initiator_issuer IS NULL
                     OR (m.issuer,m.subject)<>(r.initiator_issuer,r.initiator_subject))

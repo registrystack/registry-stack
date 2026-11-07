@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use registry_casework_core::{
-    AccessProfile, ActorContext, CaseworkProject, CaseworkRole, IssuerPrincipal,
+    AccessProfile, ActorContext, CaseworkActsAs, CaseworkProject, IssuerPrincipal,
 };
 use registry_platform_authcommon::validate_compact_access_token;
 use registry_platform_oidc::{JwksFetcher, TokenVerifier, TokenVerifierConfig};
@@ -147,7 +147,7 @@ impl CaseworkAuthenticator {
             self.profile_diagnostic();
             AuthenticationError::Profile
         })?;
-        let requires_person = profile.role != CaseworkRole::Requester
+        let requires_person = profile.acts_as != CaseworkActsAs::Requester
             || self.initiator_profiles.contains(&profile.id);
         if requires_person
             && (verified.claims.extra.contains_key("act")
@@ -211,7 +211,7 @@ impl CaseworkAuthenticator {
                 subject: principal.to_owned(),
             },
             profile_id: profile.id.clone(),
-            role: profile.role,
+            role: profile.acts_as,
         })
     }
 
@@ -296,9 +296,11 @@ mod tests {
         let mut p = project();
         p.access_profiles.push(AccessProfile {
             id: "staff".into(),
+            label: None,
+            description: None,
             principal_claim: "sub".into(),
             required_scopes: vec!["canary-private-scope".into()],
-            role: CaseworkRole::Staff,
+            acts_as: CaseworkActsAs::Staff,
         });
         let verifier = TokenVerifierConfig::access_token_profile(
             ISSUER,
@@ -467,15 +469,19 @@ mod tests {
         let mut project = project();
         project.access_profiles.push(AccessProfile {
             id: "staff".into(),
+            label: None,
+            description: None,
             principal_claim: "sub".into(),
             required_scopes: vec!["casework:staff".into()],
-            role: CaseworkRole::Staff,
+            acts_as: CaseworkActsAs::Staff,
         });
         project.access_profiles.push(AccessProfile {
             id: "requester-overlap".into(),
+            label: None,
+            description: None,
             principal_claim: "sub".into(),
             required_scopes: vec!["casework:staff".into()],
-            role: CaseworkRole::Requester,
+            acts_as: CaseworkActsAs::Requester,
         });
         let verifier = TokenVerifierConfig::access_token_profile(
             ISSUER,
@@ -879,9 +885,11 @@ mod tests {
             let mut p = project();
             p.access_profiles.push(AccessProfile {
                 id: "staff".into(),
+                label: None,
+                description: None,
                 principal_claim: "sub".into(),
                 required_scopes: vec!["casework:staff".into()],
-                role: CaseworkRole::Staff,
+                acts_as: CaseworkActsAs::Staff,
             });
             let auth =
                 CaseworkAuthenticator::new(&p, verifier, source, HumanIdentityConfig::default());

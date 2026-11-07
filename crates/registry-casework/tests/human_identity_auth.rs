@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use registry_casework::{AuthenticationError, CaseworkAuthenticator, HumanIdentityConfig};
 use registry_casework_core::{
-    AccessProfile, CaseworkProject, CaseworkRole, InboxPolicy, ProjectIdentity, QueuePolicy,
+    AccessProfile, CaseworkActsAs, CaseworkProject, InboxPolicy, ProjectIdentity, QueuePolicy,
     CASEWORK_API_VERSION, CASEWORK_KIND,
 };
 use registry_platform_httputil::FetchUrlPolicy;
@@ -22,16 +22,16 @@ async fn trusted_human_assertion_gates_human_profiles_and_requester_accepts_serv
     let authenticator = authenticator(&idp);
 
     for (profile, scope, role) in [
-        ("staff", "casework:staff", CaseworkRole::Staff),
+        ("staff", "casework:staff", CaseworkActsAs::Staff),
         (
             "supervisor",
             "casework:supervisor",
-            CaseworkRole::Supervisor,
+            CaseworkActsAs::Supervisor,
         ),
         (
             "administrator",
             "casework:admin",
-            CaseworkRole::Administrator,
+            CaseworkActsAs::Administrator,
         ),
     ] {
         let actor = authenticator
@@ -66,7 +66,7 @@ async fn trusted_human_assertion_gates_human_profiles_and_requester_accepts_serv
         )
         .await
         .expect("the explicitly configured Requester profile accepts a service identity");
-    assert_eq!(requester.role, CaseworkRole::Requester);
+    assert_eq!(requester.role, CaseworkActsAs::Requester);
     assert_eq!(requester.principal.subject, QUEUE_MEMBER_PRINCIPAL);
 
     let requester_with_human_assertion = token(&idp, "casework:request", Some(json!("human")));
@@ -74,7 +74,7 @@ async fn trusted_human_assertion_gates_human_profiles_and_requester_accepts_serv
         .authenticate(&requester_with_human_assertion, "requester")
         .await
         .expect("a human assertion does not prevent selecting the Requester profile");
-    assert_eq!(requester.role, CaseworkRole::Requester);
+    assert_eq!(requester.role, CaseworkActsAs::Requester);
     for human_profile in ["staff", "supervisor", "administrator"] {
         assert_eq!(
             authenticator
@@ -226,7 +226,7 @@ async fn delegated_or_grant_bearing_tokens_are_refused_for_officer_profiles_only
             .authenticate(&idp.mint_token(requester_claims), "requester")
             .await
             .expect("the Requester profile may carry delegated request context");
-        assert_eq!(requester.role, CaseworkRole::Requester);
+        assert_eq!(requester.role, CaseworkActsAs::Requester);
     }
 
     idp.stop().await;
@@ -237,7 +237,7 @@ async fn same_role_profiles_with_distinct_principals_require_distinct_scopes() {
     let idp = MockIdp::start().await;
 
     let mut overlapping = project();
-    let mut alternate = profile("staff-by-employee", "casework:staff", CaseworkRole::Staff);
+    let mut alternate = profile("staff-by-employee", "casework:staff", CaseworkActsAs::Staff);
     alternate.principal_claim = "employee_id".to_owned();
     overlapping.access_profiles.push(alternate);
     let findings = overlapping
@@ -263,7 +263,7 @@ async fn same_role_profiles_with_distinct_principals_require_distinct_scopes() {
     let mut alternate = profile(
         "staff-by-employee",
         "casework:staff-by-employee",
-        CaseworkRole::Staff,
+        CaseworkActsAs::Staff,
     );
     alternate.principal_claim = "employee_id".to_owned();
     separated.access_profiles.push(alternate);
@@ -298,7 +298,7 @@ async fn same_role_profiles_with_distinct_principals_require_distinct_scopes() {
         .expect("the independently scoped alternate principal is accepted");
     assert_eq!(actor.principal.subject, "employee-123");
     assert_eq!(actor.profile_id, "staff-by-employee");
-    assert_eq!(actor.role, CaseworkRole::Staff);
+    assert_eq!(actor.role, CaseworkActsAs::Staff);
 
     idp.stop().await;
 }
@@ -362,22 +362,24 @@ fn project() -> CaseworkProject {
             version: "1".to_owned(),
         },
         access_profiles: vec![
-            profile("staff", "casework:staff", CaseworkRole::Staff),
+            profile("staff", "casework:staff", CaseworkActsAs::Staff),
             profile(
                 "supervisor",
                 "casework:supervisor",
-                CaseworkRole::Supervisor,
+                CaseworkActsAs::Supervisor,
             ),
             profile(
                 "administrator",
                 "casework:admin",
-                CaseworkRole::Administrator,
+                CaseworkActsAs::Administrator,
             ),
             AccessProfile {
                 id: "requester".to_owned(),
+                label: None,
+                description: None,
                 principal_claim: "registry_principal".to_owned(),
                 required_scopes: vec!["casework:request".to_owned()],
-                role: CaseworkRole::Requester,
+                acts_as: CaseworkActsAs::Requester,
             },
         ],
         queues: vec![QueuePolicy {
@@ -394,11 +396,13 @@ fn project() -> CaseworkProject {
     }
 }
 
-fn profile(id: &str, scope: &str, role: CaseworkRole) -> AccessProfile {
+fn profile(id: &str, scope: &str, role: CaseworkActsAs) -> AccessProfile {
     AccessProfile {
         id: id.to_owned(),
+        label: None,
+        description: None,
         principal_claim: "registry_principal".to_owned(),
         required_scopes: vec![scope.to_owned()],
-        role,
+        acts_as: role,
     }
 }

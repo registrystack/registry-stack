@@ -1296,7 +1296,7 @@ fn package_report(loaded: &LoadedPackage) -> Result<Value, Outcome> {
     let profiles: Vec<Value> = package
         .access_profiles()
         .iter()
-        .map(|profile| json!({"id": profile.id, "role": profile.role}))
+        .map(|profile| json!({"id": profile.id, "actsAs": profile.acts_as}))
         .collect();
     let mut templates = Vec::new();
     for template in package.templates() {
@@ -2225,7 +2225,7 @@ fn render_check(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
             stdout,
             "access profile: {} ({})",
             text(&profile["id"]),
-            text(&profile["role"])
+            text(&profile["actsAs"])
         )?;
     }
     if let Some(retention) = report.get("retention") {
@@ -2445,7 +2445,7 @@ accessProfiles:
     principalClaim: sub
     requiredScopes: [messaging:operate]
     requesterClients: [operations-console]
-    role: operator
+    actsAs: operator
     requestsPerMinute: 60
     burst: 10
 ";
@@ -2536,7 +2536,7 @@ audit:
         assert_eq!(report["ok"], true);
         assert_eq!(report["metricsListener"], "127.0.0.1:9107");
         assert_eq!(report["accessProfiles"][0]["id"], "operations");
-        assert_eq!(report["accessProfiles"][0]["role"], "operator");
+        assert_eq!(report["accessProfiles"][0]["actsAs"], "operator");
         assert_eq!(report["retention"]["payloadRetentionDays"], 7);
 
         let (exit, stdout, stderr) = run(&[

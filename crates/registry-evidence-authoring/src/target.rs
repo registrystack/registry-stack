@@ -84,6 +84,28 @@ pub struct EvidenceTargetAuthority {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccessProfile {
+    /// A name for the profile, accepted for authoring and tooling; never matched against a caller.
+    #[serde(
+        default,
+        deserialize_with = "registry_platform_yaml::optional_display_text",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::DisplayText>")
+    )]
+    pub label: Option<String>,
+    /// What the profile is for, accepted for authoring and tooling; never matched against a caller.
+    #[serde(
+        default,
+        deserialize_with = "registry_platform_yaml::optional_display_text",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::DisplayText>")
+    )]
+    pub description: Option<String>,
     pub authority: AuthorityKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actor_kind: Option<ActorKind>,

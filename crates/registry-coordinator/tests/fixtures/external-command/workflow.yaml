@@ -80,7 +80,7 @@ workflow:
   start: create
   steps:
     create:
-      title: Create the fee bill
+      label: Create the fee bill
       type: call
       operation: create-bill
       input:

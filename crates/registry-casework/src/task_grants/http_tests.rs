@@ -139,20 +139,20 @@ pub(super) struct Fixture {
     audit: crate::AuditCapture,
 }
 pub(super) async fn fixture(lifetime: u64) -> Fixture {
-    fixture_for_role(lifetime, CaseworkRole::Staff).await
+    fixture_for_role(lifetime, CaseworkActsAs::Staff).await
 }
-async fn fixture_for_role(lifetime: u64, role: CaseworkRole) -> Fixture {
+async fn fixture_for_role(lifetime: u64, role: CaseworkActsAs) -> Fixture {
     fixture_for_role_with_templates(lifetime, role, None).await
 }
 async fn fixture_for_role_with_templates(
     lifetime: u64,
-    role: CaseworkRole,
+    role: CaseworkActsAs,
     replacement: Option<TaskTemplate>,
 ) -> Fixture {
     let (profile_id, scope, membership_kind) = match role {
-        CaseworkRole::Staff => ("staff", "casework:staff", "staff"),
-        CaseworkRole::Supervisor => ("supervisor", "casework:supervisor", "supervisor"),
-        CaseworkRole::Administrator | CaseworkRole::Requester => {
+        CaseworkActsAs::Staff => ("staff", "casework:staff", "staff"),
+        CaseworkActsAs::Supervisor => ("supervisor", "casework:supervisor", "supervisor"),
+        CaseworkActsAs::Administrator | CaseworkActsAs::Requester => {
             panic!("task approval requires a staff or supervisor role")
         }
     };
@@ -188,7 +188,7 @@ async fn fixture_for_role_with_templates(
     let review_template:TaskTemplate=serde_json::from_value(json!({"id":"review-summary","version":"1","label":"Prepare review summary","eligibleTeams":["team"],"eligibleProfiles":[profile_id],"source":"source","reviewPolicies":["external-review"],"agent":{"issuer":ISSUER,"subject":"agent"},"client":"agent-client","resource":"urn:breg:test","purpose":"prepare-review-summary","scopes":["records:get"],"bounds":{"type":"breg","permissions":[{"collection":"people","operations":["get"]}]},"subjects":{"person_reference":"person-reference"},"lifetimeSeconds":lifetime})).unwrap();
     let mut project:CaseworkProject=serde_json::from_value(json!({
         "apiVersion":CASEWORK_API_VERSION,"kind":CASEWORK_KIND,"project":{"id":"tasks","version":"1"},
-        "accessProfiles":{profile_id:{"principalClaim":"sub","requiredScopes":[scope],"role":profile_id},(if role==CaseworkRole::Staff{"supervisor"}else{"staff"}):{"principalClaim":"sub","requiredScopes":[if role==CaseworkRole::Staff{"casework:supervisor"}else{"casework:staff"}],"role":if role==CaseworkRole::Staff{"supervisor"}else{"staff"}},"administrator":{"principalClaim":"sub","requiredScopes":["casework:admin"],"role":"administrator"},"producer":{"principalClaim":"sub","requiredScopes":["casework:producer"],"role":"requester"}},
+        "accessProfiles":{profile_id:{"principalClaim":"sub","requiredScopes":[scope],"actsAs":profile_id},(if role==CaseworkActsAs::Staff{"supervisor"}else{"staff"}):{"principalClaim":"sub","requiredScopes":[if role==CaseworkActsAs::Staff{"casework:supervisor"}else{"casework:staff"}],"actsAs":if role==CaseworkActsAs::Staff{"supervisor"}else{"staff"}},"administrator":{"principalClaim":"sub","requiredScopes":["casework:admin"],"actsAs":"administrator"},"producer":{"principalClaim":"sub","requiredScopes":["casework:producer"],"actsAs":"requester"}},
         "queues":{"review":{"label":"Review"}},
         "teams":{"team":{"label":"Review team","serves":["review"],"memberProfiles":["staff"],"supervisorProfiles":["supervisor"]}},
         "contextProviders":{"source":{"deploymentRef":"source","sourceNamespace":"source","capabilities":["human-display","service-status","task-grant-context"],"serviceProfiles":{"service-status":"status-reader","task-grant-context":"task-reader"}}},
@@ -842,10 +842,10 @@ async fn task_grants_do_not_survive_an_approver_profile_role_change() {
         .iter()
         .position(|profile| profile.id == "staff")
         .expect("the fixture declares the staff profile");
-    changed_project.access_profiles[staff].role = CaseworkRole::Supervisor;
+    changed_project.access_profiles[staff].acts_as = CaseworkActsAs::Supervisor;
     let mut replacement_staff = changed_project.access_profiles[staff].clone();
     replacement_staff.id = "replacement-staff".into();
-    replacement_staff.role = CaseworkRole::Staff;
+    replacement_staff.acts_as = CaseworkActsAs::Staff;
     replacement_staff.required_scopes = vec!["casework:replacement-staff".into()];
     changed_project.access_profiles.push(replacement_staff);
     changed_project.teams[0].member_profiles = vec!["replacement-staff".into()];
@@ -1748,7 +1748,7 @@ async fn review_task_grant_approval_recovers_a_lost_response_after_the_task_revi
             subject: "human".into(),
         },
         profile_id: "staff".into(),
-        role: CaseworkRole::Staff,
+        role: CaseworkActsAs::Staff,
     };
     let database = f.store.client().await.unwrap();
     let request_id: Uuid = database
@@ -1889,10 +1889,10 @@ async fn review_task_grants_do_not_survive_an_approver_profile_role_change() {
         .iter()
         .position(|profile| profile.id == "staff")
         .expect("the fixture declares the staff profile");
-    changed_project.access_profiles[staff].role = CaseworkRole::Supervisor;
+    changed_project.access_profiles[staff].acts_as = CaseworkActsAs::Supervisor;
     let mut replacement_staff = changed_project.access_profiles[staff].clone();
     replacement_staff.id = "replacement-staff".into();
-    replacement_staff.role = CaseworkRole::Staff;
+    replacement_staff.acts_as = CaseworkActsAs::Staff;
     replacement_staff.required_scopes = vec!["casework:replacement-staff".into()];
     changed_project.access_profiles.push(replacement_staff);
     changed_project.teams[0].member_profiles = vec!["replacement-staff".into()];
@@ -1963,7 +1963,7 @@ async fn review_task_grant_database_bound_allows_postgres_jsonb_rendering_overhe
             subject: "human".into(),
         },
         profile_id: "staff".into(),
-        role: CaseworkRole::Staff,
+        role: CaseworkActsAs::Staff,
     };
     let mut template = f.project.task_templates[1].clone();
     template.id = "review-jsonb-boundary".into();
@@ -2021,7 +2021,8 @@ async fn review_task_grant_database_bound_allows_postgres_jsonb_rendering_overhe
         .batch_execute(&format!("DROP SCHEMA {} CASCADE", f.schema))
         .await
         .unwrap();
-    let f = fixture_for_role_with_templates(900, CaseworkRole::Staff, Some(template.clone())).await;
+    let f =
+        fixture_for_role_with_templates(900, CaseworkActsAs::Staff, Some(template.clone())).await;
     let database = f.store.client().await.unwrap();
     f.store
         .activate_task_templates(&[template.clone()])
@@ -2105,7 +2106,7 @@ async fn review_task_grant_database_bound_allows_postgres_jsonb_rendering_overhe
 
 #[tokio::test]
 async fn supervisor_task_grant_requires_continued_supervisor_membership() {
-    let f = fixture_for_role(900, CaseworkRole::Supervisor).await;
+    let f = fixture_for_role(900, CaseworkActsAs::Supervisor).await;
     let supervisor = token("human", "human-client", "human", "casework:supervisor");
     let agent = token("agent", "agent-client", "agent", "casework:grants:assert");
     let resource = token(
@@ -2121,7 +2122,7 @@ async fn supervisor_task_grant_requires_continued_supervisor_membership() {
             subject: "human".into(),
         },
         profile_id: "supervisor".into(),
-        role: CaseworkRole::Supervisor,
+        role: CaseworkActsAs::Supervisor,
     };
     assert!(
         f.store

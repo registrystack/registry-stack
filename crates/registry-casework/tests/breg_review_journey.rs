@@ -157,10 +157,10 @@ fn project(root: &std::path::Path, idp: &MockIdp, context: &BregContextExport) -
         "apiVersion":"id.registrystack.org/formats/casework/project/v1alpha1","kind":"CaseworkProject",
         "project":{"id":"facility-review-journey","version":"1"},
         "accessProfiles":{
-            "staff":{"principalClaim":"sub","requiredScopes":["casework:staff"],"role":"staff"},
-            "supervisor":{"principalClaim":"sub","requiredScopes":["casework:supervisor"],"role":"supervisor"},
-            "administrator":{"principalClaim":"sub","requiredScopes":["casework:admin"],"role":"administrator"},
-            "requester":{"principalClaim":"sub","requiredScopes":["casework:reviews:request"],"role":"requester"}
+            "staff":{"principalClaim":"sub","requiredScopes":["casework:staff"],"actsAs":"staff"},
+            "supervisor":{"principalClaim":"sub","requiredScopes":["casework:supervisor"],"actsAs":"supervisor"},
+            "administrator":{"principalClaim":"sub","requiredScopes":["casework:admin"],"actsAs":"administrator"},
+            "requester":{"principalClaim":"sub","requiredScopes":["casework:reviews:request"],"actsAs":"requester"}
         },
         "queues":{"review":{"label":"Facility reviews"}},
         "teams":{"reviewers":{"label":"Reviewers","serves":["review"],"memberProfiles":["staff"],"supervisorProfiles":["supervisor"]}},
@@ -234,21 +234,21 @@ fn approval_pattern_project(
     .unwrap();
     let (profiles, queues, stages, team_profiles) = match pattern {
         ApprovalPattern::SingleReviewer => (
-            json!({"staff":{"principalClaim":"sub","requiredScopes":["casework:staff"],"role":"staff"}}),
+            json!({"staff":{"principalClaim":"sub","requiredScopes":["casework:staff"],"actsAs":"staff"}}),
             json!({"reviews":{"label":"Reviews awaiting approval"}}),
             json!([{"id":"review","queue":"reviews","decidingProfiles":["staff"],"requiredApprovals":1,"excludeInitiator":true}]),
             json!(["staff"]),
         ),
         ApprovalPattern::TwoPeer => (
-            json!({"staff":{"principalClaim":"sub","requiredScopes":["casework:staff"],"role":"staff"}}),
+            json!({"staff":{"principalClaim":"sub","requiredScopes":["casework:staff"],"actsAs":"staff"}}),
             json!({"reviews":{"label":"Reviews awaiting approval"}}),
             json!([{"id":"review","queue":"reviews","decidingProfiles":["staff"],"requiredApprovals":2,"excludeInitiator":true}]),
             json!(["staff"]),
         ),
         ApprovalPattern::TechnicalThenAuthorization => (
             json!({
-                "technical-reviewer":{"principalClaim":"sub","requiredScopes":["casework:technical-reviewer"],"role":"staff"},
-                "authorizer":{"principalClaim":"sub","requiredScopes":["casework:authorizer"],"role":"staff"}
+                "technical-reviewer":{"principalClaim":"sub","requiredScopes":["casework:technical-reviewer"],"actsAs":"staff"},
+                "authorizer":{"principalClaim":"sub","requiredScopes":["casework:authorizer"],"actsAs":"staff"}
             }),
             json!({
                 "technical-checks":{"label":"Technical checks"},
@@ -264,9 +264,9 @@ fn approval_pattern_project(
     let mut access_profiles = profiles.as_object().unwrap().clone();
     access_profiles.extend(
         json!({
-            "requester":{"principalClaim":"sub","requiredScopes":["casework:reviews:request"],"role":"requester"},
-            "supervisor":{"principalClaim":"sub","requiredScopes":["casework:supervisor"],"role":"supervisor"},
-            "administrator":{"principalClaim":"sub","requiredScopes":["casework:admin"],"role":"administrator"}
+            "requester":{"principalClaim":"sub","requiredScopes":["casework:reviews:request"],"actsAs":"requester"},
+            "supervisor":{"principalClaim":"sub","requiredScopes":["casework:supervisor"],"actsAs":"supervisor"},
+            "administrator":{"principalClaim":"sub","requiredScopes":["casework:admin"],"actsAs":"administrator"}
         })
         .as_object()
         .unwrap()

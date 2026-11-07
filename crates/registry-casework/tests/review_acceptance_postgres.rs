@@ -20,10 +20,10 @@ fn project_value(source: bool, routing: bool) -> Value {
     let mut value = json!({
      "apiVersion":CASEWORK_API_VERSION,"kind":CASEWORK_KIND,"project":{"id":"acceptance","version":"1"},
      "accessProfiles":{
-      "staff":{"role":"staff","principalClaim":"sub","requiredScopes":["casework:review"]},
-      "supervisor":{"role":"supervisor","principalClaim":"sub","requiredScopes":["casework:supervise"]},
-      "administrator":{"role":"administrator","principalClaim":"sub","requiredScopes":["casework:admin"]},
-      "producer":{"role":"requester","principalClaim":"sub","requiredScopes":["casework:request"]}},
+      "staff":{"actsAs":"staff","principalClaim":"sub","requiredScopes":["casework:review"]},
+      "supervisor":{"actsAs":"supervisor","principalClaim":"sub","requiredScopes":["casework:supervise"]},
+      "administrator":{"actsAs":"administrator","principalClaim":"sub","requiredScopes":["casework:admin"]},
+      "producer":{"actsAs":"requester","principalClaim":"sub","requiredScopes":["casework:request"]}},
      "queues":{"reviews":{"label":"Reviews"},"north":{"label":"North reviews"}},
      "teams":{"review-team":{"label":"Review team","serves":["reviews","north"],"memberProfiles":["staff"],"supervisorProfiles":["supervisor"]}},
      "clocks":{"deadline":{"type":"subject","anchor":{"type":"request-accepted"},"after":{"hours":48}}},
@@ -50,17 +50,17 @@ fn project_value(source: bool, routing: bool) -> Value {
 fn decode(value: &Value) -> CaseworkProject {
     CaseworkProject::from_slice(&serde_json::to_vec(value).unwrap()).unwrap()
 }
-fn actor(subject: &str, role: CaseworkRole) -> ActorContext {
+fn actor(subject: &str, role: CaseworkActsAs) -> ActorContext {
     ActorContext {
         principal: IssuerPrincipal {
             issuer: "https://issuer.test".into(),
             subject: subject.into(),
         },
         profile_id: match role {
-            CaseworkRole::Staff => "staff",
-            CaseworkRole::Supervisor => "supervisor",
-            CaseworkRole::Administrator => "administrator",
-            CaseworkRole::Requester => "producer",
+            CaseworkActsAs::Staff => "staff",
+            CaseworkActsAs::Supervisor => "supervisor",
+            CaseworkActsAs::Administrator => "administrator",
+            CaseworkActsAs::Requester => "producer",
         }
         .into(),
         role,
@@ -282,7 +282,7 @@ impl Fixture {
     async fn create(&self, id: &str) -> ReviewRequestAccepted {
         self.service
             .create_review_request(
-                &actor("notice-service", CaseworkRole::Requester),
+                &actor("notice-service", CaseworkActsAs::Requester),
                 self.request(id),
                 &format!("create-{id}"),
             )
@@ -303,7 +303,7 @@ impl Fixture {
     async fn claim(&self, task: Uuid, who: &str) -> ReviewTask {
         self.service
             .claim_review_task(
-                &actor(who, CaseworkRole::Staff),
+                &actor(who, CaseworkActsAs::Staff),
                 task,
                 self.profile(),
                 "human-source-token",
@@ -326,7 +326,7 @@ async fn exact_policy_admission_and_independent_producer_authority() {
     assert!(matches!(
         f.service
             .create_review_request(
-                &actor("notice-service", CaseworkRole::Requester),
+                &actor("notice-service", CaseworkActsAs::Requester),
                 request,
                 "mismatch"
             )
@@ -343,7 +343,7 @@ async fn exact_policy_admission_and_independent_producer_authority() {
     assert!(matches!(
         f.service
             .create_review_request(
-                &actor("a", CaseworkRole::Staff),
+                &actor("a", CaseworkActsAs::Staff),
                 f.request("notice"),
                 "reviewer-create"
             )
@@ -355,7 +355,7 @@ async fn exact_policy_admission_and_independent_producer_authority() {
     let recovered = f
         .service
         .create_review_request(
-            &actor("notice-service", CaseworkRole::Requester),
+            &actor("notice-service", CaseworkActsAs::Requester),
             f.request("notice"),
             "create-notice",
         )
@@ -366,7 +366,7 @@ async fn exact_policy_admission_and_independent_producer_authority() {
     assert!(matches!(
         f.service
             .review_result(
-                &actor("other-producer", CaseworkRole::Requester),
+                &actor("other-producer", CaseworkActsAs::Requester),
                 accepted.request_id
             )
             .await,
@@ -375,7 +375,7 @@ async fn exact_policy_admission_and_independent_producer_authority() {
     assert!(matches!(
         f.service
             .claim_review_task(
-                &actor("notice-service", CaseworkRole::Requester),
+                &actor("notice-service", CaseworkActsAs::Requester),
                 f.task(accepted.request_id).await,
                 None,
                 "",
@@ -389,7 +389,7 @@ async fn exact_policy_admission_and_independent_producer_authority() {
 #[tokio::test]
 async fn current_policy_selection_recovers_before_updates_and_requires_live_authority() {
     let f = Fixture::new(project_value(false, false)).await;
-    let producer = actor("notice-service", CaseworkRole::Requester);
+    let producer = actor("notice-service", CaseworkActsAs::Requester);
     let mut request = f.request("current-policy");
     request.policy = PolicySelection::current("notice-review");
     let digest = submission_digest("notice-service", "notice-source", &request).unwrap();
@@ -450,7 +450,7 @@ async fn current_policy_selection_recovers_before_updates_and_requires_live_auth
     let held = f.claim(task, "a").await;
     changed
         .decide_review_task(
-            &actor("a", CaseworkRole::Staff),
+            &actor("a", CaseworkActsAs::Staff),
             task,
             ReviewTaskDecisionRequest {
                 decision: DecisionKind::Approve {
@@ -543,7 +543,7 @@ async fn concurrent_current_policy_acceptance_freezes_one_binding_and_refuses_in
         Vec::<Arc<dyn ReviewContextProvider>>::new(),
     )
     .unwrap();
-    let producer = actor("notice-service", CaseworkRole::Requester);
+    let producer = actor("notice-service", CaseworkActsAs::Requester);
     let mut request = f.request("concurrent-current");
     request.policy = PolicySelection::current("notice-review");
     let (first, second) = tokio::join!(
@@ -609,7 +609,7 @@ async fn submitted_two_stage_review_pins_policy_receipts_and_terminal_feed() {
     let transition = f
         .service
         .decide_review_task(
-            &actor("a", CaseworkRole::Staff),
+            &actor("a", CaseworkActsAs::Staff),
             task,
             decision.clone(),
             None,
@@ -624,7 +624,7 @@ async fn submitted_two_stage_review_pins_policy_receipts_and_terminal_feed() {
     assert!(matches!(
         f.service
             .claim_review_task(
-                &actor("a", CaseworkRole::Staff),
+                &actor("a", CaseworkActsAs::Staff),
                 second,
                 None,
                 "",
@@ -637,7 +637,7 @@ async fn submitted_two_stage_review_pins_policy_receipts_and_terminal_feed() {
     let held = f.claim(second, "b").await;
     f.service
         .decide_review_task(
-            &actor("b", CaseworkRole::Staff),
+            &actor("b", CaseworkActsAs::Staff),
             second,
             decision,
             None,
@@ -649,7 +649,7 @@ async fn submitted_two_stage_review_pins_policy_receipts_and_terminal_feed() {
         .unwrap();
     let receipt = f
         .service
-        .review_task(&actor("a", CaseworkRole::Staff), task, None, "")
+        .review_task(&actor("a", CaseworkActsAs::Staff), task, None, "")
         .await
         .unwrap()
         .decision_receipt
@@ -669,7 +669,11 @@ async fn submitted_two_stage_review_pins_policy_receipts_and_terminal_feed() {
     }
     let feed = f
         .service
-        .review_result_feed(&actor("notice-service", CaseworkRole::Requester), None, 100)
+        .review_result_feed(
+            &actor("notice-service", CaseworkActsAs::Requester),
+            None,
+            100,
+        )
         .await
         .unwrap();
     assert_eq!(feed.items.len(), 1);
@@ -677,7 +681,7 @@ async fn submitted_two_stage_review_pins_policy_receipts_and_terminal_feed() {
     let ReviewResultRead::Available(result) = f
         .service
         .review_result(
-            &actor("notice-service", CaseworkRole::Requester),
+            &actor("notice-service", CaseworkActsAs::Requester),
             accepted.request_id,
         )
         .await
@@ -707,7 +711,7 @@ async fn approvals_in_one_stage_must_agree_on_the_outcome_they_release() {
     let held = f.claim(first, "a").await;
     f.service
         .decide_review_task(
-            &actor("a", CaseworkRole::Staff),
+            &actor("a", CaseworkActsAs::Staff),
             first,
             with_conditions.clone(),
             None,
@@ -723,7 +727,7 @@ async fn approvals_in_one_stage_must_agree_on_the_outcome_they_release() {
     let refused = f
         .service
         .decide_review_task(
-            &actor("b", CaseworkRole::Staff),
+            &actor("b", CaseworkActsAs::Staff),
             second,
             ReviewTaskDecisionRequest {
                 decision: DecisionKind::Approve {
@@ -756,7 +760,7 @@ async fn approvals_in_one_stage_must_agree_on_the_outcome_they_release() {
     let transition = f
         .service
         .decide_review_task(
-            &actor("b", CaseworkRole::Staff),
+            &actor("b", CaseworkActsAs::Staff),
             second,
             with_conditions,
             None,
@@ -797,7 +801,7 @@ async fn reference_selection_conceals_before_sort_and_rejects_stale_continuation
     let first = f
         .service
         .review_staffing_tasks(
-            &actor("a", CaseworkRole::Staff),
+            &actor("a", CaseworkActsAs::Staff),
             Some("source-staff"),
             "human-source-token",
             query.clone(),
@@ -810,7 +814,7 @@ async fn reference_selection_conceals_before_sort_and_rejects_stale_continuation
     let hidden = f
         .service
         .review_staffing_tasks(
-            &actor("a", CaseworkRole::Staff),
+            &actor("a", CaseworkActsAs::Staff),
             Some("source-staff"),
             "human-source-token",
             ReviewStaffingQuery {
@@ -829,7 +833,7 @@ async fn reference_selection_conceals_before_sort_and_rejects_stale_continuation
     assert!(matches!(
         f.service
             .review_staffing_tasks(
-                &actor("a", CaseworkRole::Staff),
+                &actor("a", CaseworkActsAs::Staff),
                 Some("source-staff"),
                 "human-source-token",
                 ReviewStaffingQuery {
@@ -843,7 +847,7 @@ async fn reference_selection_conceals_before_sort_and_rejects_stale_continuation
     let denied = f
         .service
         .review_staffing_tasks(
-            &actor("a", CaseworkRole::Staff),
+            &actor("a", CaseworkActsAs::Staff),
             Some("source-staff"),
             "service-token",
             Default::default(),
@@ -863,7 +867,7 @@ async fn reference_selection_conceals_before_sort_and_rejects_stale_continuation
     let exact = f
         .service
         .review_staffing_tasks(
-            &actor("a", CaseworkRole::Staff),
+            &actor("a", CaseworkActsAs::Staff),
             Some("source-staff"),
             "human-source-token",
             exact,
@@ -906,7 +910,7 @@ async fn current_source_routing_is_purpose_bound_once_and_never_persists_fields(
         .contains("Private notice"));
     f.service
         .review_staffing_tasks(
-            &actor("a", CaseworkRole::Staff),
+            &actor("a", CaseworkActsAs::Staff),
             Some("source-staff"),
             "human-source-token",
             Default::default(),
@@ -919,7 +923,7 @@ async fn current_source_routing_is_purpose_bound_once_and_never_persists_fields(
     assert!(matches!(
         f.service
             .create_review_request(
-                &actor("notice-service", CaseworkRole::Requester),
+                &actor("notice-service", CaseworkActsAs::Requester),
                 f.request("widened"),
                 "widened"
             )
@@ -941,10 +945,10 @@ async fn caseload_preview_apply_is_atomic_revision_fenced_and_recoverable() {
         let accepted = f.create(id).await;
         f.claim(f.task(accepted.request_id).await, "a").await;
     }
-    let supervisor = actor("supervisor", CaseworkRole::Supervisor);
+    let supervisor = actor("supervisor", CaseworkActsAs::Supervisor);
     let movement = ReviewCaseloadMoveRequest {
-        from: actor("a", CaseworkRole::Staff).principal,
-        to: actor("b", CaseworkRole::Staff).principal,
+        from: actor("a", CaseworkActsAs::Staff).principal,
+        to: actor("b", CaseworkActsAs::Staff).principal,
         queue: None,
         reason: "Balance today's caseload".into(),
     };
@@ -1028,7 +1032,7 @@ async fn applied_caseload_preview_replays_for_a_day_across_directory_changes() {
         let accepted = f.create(id).await;
         f.claim(f.task(accepted.request_id).await, "a").await;
     }
-    let supervisor = actor("supervisor", CaseworkRole::Supervisor);
+    let supervisor = actor("supervisor", CaseworkActsAs::Supervisor);
     let preview = f
         .service
         .preview_review_caseload(
@@ -1036,8 +1040,8 @@ async fn applied_caseload_preview_replays_for_a_day_across_directory_changes() {
             None,
             "",
             ReviewCaseloadMoveRequest {
-                from: actor("a", CaseworkRole::Staff).principal,
-                to: actor("b", CaseworkRole::Staff).principal,
+                from: actor("a", CaseworkActsAs::Staff).principal,
+                to: actor("b", CaseworkActsAs::Staff).principal,
                 queue: None,
                 reason: "Cover absence".into(),
             },
@@ -1094,7 +1098,7 @@ async fn unapplied_caseload_preview_expires_after_fifteen_minutes() {
     let f = Fixture::new(project_value(false, false)).await;
     let accepted = f.create("one").await;
     f.claim(f.task(accepted.request_id).await, "a").await;
-    let supervisor = actor("supervisor", CaseworkRole::Supervisor);
+    let supervisor = actor("supervisor", CaseworkActsAs::Supervisor);
     let preview = f
         .service
         .preview_review_caseload(
@@ -1102,8 +1106,8 @@ async fn unapplied_caseload_preview_expires_after_fifteen_minutes() {
             None,
             "",
             ReviewCaseloadMoveRequest {
-                from: actor("a", CaseworkRole::Staff).principal,
-                to: actor("b", CaseworkRole::Staff).principal,
+                from: actor("a", CaseworkActsAs::Staff).principal,
+                to: actor("b", CaseworkActsAs::Staff).principal,
                 queue: None,
                 reason: "Cover absence".into(),
             },
@@ -1149,10 +1153,10 @@ async fn source_visibility_and_directory_authority_are_both_live_at_caseload_app
     let f = Fixture::new(project_value(true, false)).await;
     let accepted = f.create("live").await;
     f.claim(f.task(accepted.request_id).await, "a").await;
-    let supervisor = actor("supervisor", CaseworkRole::Supervisor);
+    let supervisor = actor("supervisor", CaseworkActsAs::Supervisor);
     let movement = ReviewCaseloadMoveRequest {
-        from: actor("a", CaseworkRole::Staff).principal,
-        to: actor("b", CaseworkRole::Staff).principal,
+        from: actor("a", CaseworkActsAs::Staff).principal,
+        to: actor("b", CaseworkActsAs::Staff).principal,
         queue: None,
         reason: "Cover absence".into(),
     };
@@ -1213,7 +1217,7 @@ async fn provider_failure_refuses_affected_work_while_submitted_review_remains_u
     assert!(matches!(
         f.service
             .claim_review_task(
-                &actor("a", CaseworkRole::Staff),
+                &actor("a", CaseworkActsAs::Staff),
                 task,
                 Some("source-staff"),
                 "human-source-token",
@@ -1241,7 +1245,7 @@ async fn provider_failure_refuses_affected_work_while_submitted_review_remains_u
     };
     let accepted = service
         .create_review_request(
-            &actor("notice-service", CaseworkRole::Requester),
+            &actor("notice-service", CaseworkActsAs::Requester),
             request,
             "standalone",
         )
@@ -1250,7 +1254,7 @@ async fn provider_failure_refuses_affected_work_while_submitted_review_remains_u
         .accepted;
     service
         .claim_review_task(
-            &actor("a", CaseworkRole::Staff),
+            &actor("a", CaseworkActsAs::Staff),
             f.task(accepted.request_id).await,
             None,
             "",
@@ -1277,7 +1281,7 @@ async fn due_order_holdings_and_pinned_subject_clock_recompute() {
     let tasks = f
         .service
         .review_staffing_tasks(
-            &actor("a", CaseworkRole::Staff),
+            &actor("a", CaseworkActsAs::Staff),
             None,
             "",
             Default::default(),
@@ -1289,7 +1293,7 @@ async fn due_order_holdings_and_pinned_subject_clock_recompute() {
     let holdings = f
         .service
         .review_staffing_tasks(
-            &actor("a", CaseworkRole::Staff),
+            &actor("a", CaseworkActsAs::Staff),
             None,
             "",
             ReviewStaffingQuery {
@@ -1312,7 +1316,7 @@ async fn due_order_holdings_and_pinned_subject_clock_recompute() {
         Vec::<Arc<dyn ReviewContextProvider>>::new(),
     )
     .unwrap();
-    let admin = actor("admin", CaseworkRole::Administrator);
+    let admin = actor("admin", CaseworkActsAs::Administrator);
     let preview = changed
         .preview_review_clock_recompute(
             &admin,
@@ -1345,7 +1349,7 @@ async fn applied_clock_recompute_replays_for_a_day_across_directory_changes() {
     let f = Fixture::new(project_value(false, false)).await;
     let accepted = f.create("clock").await;
     let task = f.task(accepted.request_id).await;
-    let admin = actor("admin", CaseworkRole::Administrator);
+    let admin = actor("admin", CaseworkActsAs::Administrator);
     let preview = f
         .service
         .preview_review_clock_recompute(
@@ -1418,7 +1422,7 @@ async fn live_read_budget_requires_narrowing_and_exact_subject_narrows_before_sc
     assert!(matches!(
         f.service
             .review_staffing_tasks(
-                &actor("a", CaseworkRole::Staff),
+                &actor("a", CaseworkActsAs::Staff),
                 Some("source-staff"),
                 "human-source-token",
                 ReviewStaffingQuery {
@@ -1441,7 +1445,7 @@ async fn live_read_budget_requires_narrowing_and_exact_subject_narrows_before_sc
     let page = f
         .service
         .review_staffing_tasks(
-            &actor("a", CaseworkRole::Staff),
+            &actor("a", CaseworkActsAs::Staff),
             Some("source-staff"),
             "human-source-token",
             query,
@@ -1462,7 +1466,7 @@ async fn admission_namespace_cannot_substitute_the_pinned_provider_namespace() {
     assert!(matches!(
         f.service
             .create_review_request(
-                &actor("notice-service", CaseworkRole::Requester),
+                &actor("notice-service", CaseworkActsAs::Requester),
                 request,
                 "wrong-namespace"
             )
@@ -1496,7 +1500,7 @@ async fn submitted_routing_needs_no_provider_and_request_clocks_do_not_share_rou
     let held = f.claim(task, "a").await;
     f.service
         .decide_review_task(
-            &actor("a", CaseworkRole::Staff),
+            &actor("a", CaseworkActsAs::Staff),
             task,
             ReviewTaskDecisionRequest {
                 decision: DecisionKind::Reject {
@@ -1519,7 +1523,7 @@ async fn submitted_routing_needs_no_provider_and_request_clocks_do_not_share_rou
     let second = f
         .service
         .create_review_request(
-            &actor("notice-service", CaseworkRole::Requester),
+            &actor("notice-service", CaseworkActsAs::Requester),
             request,
             "round-two",
         )
@@ -1540,7 +1544,7 @@ async fn clock_recompute_uses_pinned_calendar_and_fences_changed_holiday_inputs(
     value["calendars"] = json!({"office":{"timezone":"UTC","workingWeekdays":["monday","tuesday","wednesday","thursday","friday","saturday","sunday"],"holidaySet":"office-holidays"}});
     value["clocks"] = json!({"deadline":{"type":"stage","anchor":{"type":"stage-entered"},"calendar":"office","after":{"workingDays":1},"dueTime":"17:00","reminders":{},"steps":[]}});
     let f = Fixture::new(value).await;
-    let admin = actor("admin", CaseworkRole::Administrator);
+    let admin = actor("admin", CaseworkActsAs::Administrator);
     let holiday = HolidaySetDocument {
         holiday_set: "office-holidays".into(),
         revision: 1,
@@ -1643,7 +1647,7 @@ async fn clock_recompute_uses_pinned_calendar_and_fences_changed_holiday_inputs(
     assert!(matches!(
         service
             .preview_review_clock_recompute(
-                &actor("a", CaseworkRole::Staff),
+                &actor("a", CaseworkActsAs::Staff),
                 None,
                 "",
                 ReviewClockRecomputeRequest {

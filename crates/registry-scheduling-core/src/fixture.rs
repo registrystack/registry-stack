@@ -1098,7 +1098,7 @@ offerings:
 holidaySets:
   - id: office-holidays
     revision: 1
-    because: Public holidays observed by the registry office.
+    label: Public holidays observed by the registry office.
 openings:
   - id: counter-hours
     location: north-counter
@@ -1722,7 +1722,7 @@ offerings:
 holidaySets:
   - id: office-holidays
     revision: 1
-    because: Public holidays observed by the registry office.
+    label: Public holidays observed by the registry office.
 openings:
   - id: hall-hours
     location: civic-hall
@@ -1840,7 +1840,7 @@ offerings:
 holidaySets:
   - id: office-holidays
     revision: 1
-    because: Public holidays observed by the registry office.
+    label: Public holidays observed by the registry office.
 openings:
   - id: hall-hours
     location: civic-hall

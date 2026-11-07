@@ -22,7 +22,7 @@ test('Document Store reference carries the keys the operate page names', async (
   const paths = (id) => new Set(document.contracts.find((contract) => contract.id === id)
     .fields.map((field) => field.key_path));
   const expected = {
-    project: ['accessProfiles.*.role', 'documentPolicies.*.custodian',
+    project: ['accessProfiles.*.actsAs', 'documentPolicies.*.custodian',
       'documentPolicies.*.recipientProfiles',
       'documentPolicies.*.mandatoryRestrictions.cleanupGraceHours',
       'documentPolicies.*.mandatoryRestrictions.maximumGrantExpiryHours'],

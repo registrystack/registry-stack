@@ -12,7 +12,7 @@ impl PostgresStore {
         document: &HolidaySetDocument,
         idempotency_key: &str,
     ) -> Result<(), StoreError> {
-        if actor.role != CaseworkRole::Administrator {
+        if actor.role != CaseworkActsAs::Administrator {
             return Err(StoreError::Forbidden);
         }
         if document.holiday_set.is_empty()
@@ -145,7 +145,7 @@ impl CaseworkService {
         holiday_set: &str,
         revision: u64,
     ) -> Result<HolidaySetDocument, ServiceError> {
-        if actor.role != CaseworkRole::Administrator {
+        if actor.role != CaseworkActsAs::Administrator {
             return Err(StoreError::Forbidden.into());
         }
         self.store

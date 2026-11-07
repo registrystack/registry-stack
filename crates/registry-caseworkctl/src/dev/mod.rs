@@ -15,7 +15,7 @@ mod tests;
 use anyhow::{bail, Context, Result};
 use clap::{Args, Subcommand};
 use config::Clients;
-use registry_casework_core::{findings_report, CaseworkRole};
+use registry_casework_core::{findings_report, CaseworkActsAs};
 use registry_platform_yaml::{
     ApiVersion, Document, EnvelopeRule, Expect, FormatSpec, Reader, RemovedKey, Report, Severity,
 };
@@ -334,7 +334,7 @@ struct State {
 struct ReportedClient {
     id: String,
     profile: String,
-    role: CaseworkRole,
+    role: CaseworkActsAs,
     /// The subject the runtime sees for this client, resolved from its access
     /// profile's `principalClaim`. It is a local teaching identity, never a
     /// deployment identity, and it is what the seeded directory records.
@@ -395,7 +395,7 @@ impl State {
     fn administrator(&self) -> Result<&ReportedClient> {
         self.clients
             .iter()
-            .find(|client| client.role == CaseworkRole::Administrator)
+            .find(|client| client.role == CaseworkActsAs::Administrator)
             .context("retained local clients bind no Administrator profile")
     }
     fn save(&self) -> Result<()> {
@@ -412,7 +412,7 @@ impl State {
             "issuer":self.issuer_origin(),"clientAssertionAudience":self.issuer_origin(),"resource":self.audience(),
             "audience":self.audience(),"journal":root.join("logs/casework.log"),
             "contextProviders":self.context_providers,
-            "clients":self.clients.iter().map(|client|json!({"id":client.id,"profile":client.profile,"role":client.role,"subject":client.principal,
+            "clients":self.clients.iter().map(|client|json!({"id":client.id,"profile":client.profile,"actsAs":client.role,"subject":client.principal,
                 "clientIdFile":root.join("credentials").join(&client.id).join("client-id"),
                 "assertionKeyFile":root.join("credentials").join(&client.id).join("assertion-key.jwk")})).collect::<Vec<_>>(),
             "directory":{"revision":self.directory_revision,"teams":self.directory_teams}})

@@ -112,7 +112,7 @@ A `choose` step can name its everyday case with optional `expected` metadata:
 
 ```yaml
 check-revocation:
-  title: Has the licence been revoked?
+  label: Has the licence been revoked?
   type: choose
   expected: unmatched
   choose:

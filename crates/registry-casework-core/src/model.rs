@@ -73,7 +73,7 @@ mod directory_member_tests {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
-pub enum CaseworkRole {
+pub enum CaseworkActsAs {
     Staff,
     Supervisor,
     Administrator,
@@ -86,7 +86,7 @@ pub enum CaseworkRole {
 pub struct ActorContext {
     pub principal: IssuerPrincipal,
     pub profile_id: String,
-    pub role: CaseworkRole,
+    pub role: CaseworkActsAs,
 }
 
 /// A bearer credential may exist only for the duration of one request.

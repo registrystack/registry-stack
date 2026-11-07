@@ -83,12 +83,12 @@ fn project_check_reports_duplicate_display_text_and_deny_warnings_refuses_it() {
         .unwrap()
         .replacen(
             "    due:\n      type:",
-            "    due:\n      title: Review request\n      type:",
+            "    due:\n      label: Review request\n      type:",
             1,
         )
         .replacen(
             "    read-application:\n      type:",
-            "    read-application:\n      title: review request\n      type:",
+            "    read-application:\n      label: review request\n      type:",
             1,
         );
     fs::write(&path, authored).unwrap();
@@ -99,15 +99,15 @@ fn project_check_reports_duplicate_display_text_and_deny_warnings_refuses_it() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|item| item["code"] == "coordinator.project.duplicate-step-title")
+        .find(|item| item["code"] == "coordinator.project.duplicate-step-label")
         .expect("the product check reports the duplicate title");
-    assert_eq!(warning["path"], "/workflow/steps/read-application/title");
+    assert_eq!(warning["path"], "/workflow/steps/read-application/label");
 
     let (exit, denied) = check(&root, &["--deny-warnings"]);
     assert_eq!(exit, 1, "{denied}");
     assert_eq!(
         denied["diagnostics"][0]["code"],
-        "coordinator.project.duplicate-step-title"
+        "coordinator.project.duplicate-step-label"
     );
 
     let scope = warning["scope"]
@@ -116,7 +116,7 @@ fn project_check_reports_duplicate_display_text_and_deny_warnings_refuses_it() {
     fs::write(
         root.join("check-acceptances.yaml"),
         format!(
-            "apiVersion: id.registrystack.org/formats/platform/check-acceptances/v1alpha1\nkind: PlatformCheckAcceptances\nacceptances:\n  - code: coordinator.project.duplicate-step-title\n    scope:\n      file: {}\n      path: {}\n    reason: Operators distinguish these pilot steps by their surrounding stage.\n",
+            "apiVersion: id.registrystack.org/formats/platform/check-acceptances/v1alpha1\nkind: PlatformCheckAcceptances\nacceptances:\n  - code: coordinator.project.duplicate-step-label\n    scope:\n      file: {}\n      path: {}\n    reason: Operators distinguish these pilot steps by their surrounding stage.\n",
             scope["file"].as_str().unwrap(),
             scope["path"].as_str().unwrap(),
         ),
@@ -128,7 +128,7 @@ fn project_check_reports_duplicate_display_text_and_deny_warnings_refuses_it() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|item| item["code"] == "coordinator.project.duplicate-step-title")
+        .find(|item| item["code"] == "coordinator.project.duplicate-step-label")
         .unwrap();
     assert_eq!(
         warning["acceptedReason"],

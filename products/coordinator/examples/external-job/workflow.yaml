@@ -84,7 +84,7 @@ workflow:
   start: read
   steps:
     read:
-      title: Read this job's status
+      label: Read this job's status
       type: call
       operation: read-job
       input:

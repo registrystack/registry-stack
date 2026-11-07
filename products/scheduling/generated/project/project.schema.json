@@ -190,13 +190,10 @@
       ],
       "type": "object"
     },
-    "HolidaySetPolicy": {
+    "HolidaySet": {
       "additionalProperties": false,
       "description": "A named, revisioned set of holiday dates.",
       "properties": {
-        "because": {
-          "$ref": "#/$defs/DisplayText"
-        },
         "dates": {
           "description": "The dates the set closes. A set that closes no date omits the member.",
           "items": {
@@ -210,6 +207,10 @@
         "id": {
           "$ref": "#/$defs/LocalId"
         },
+        "label": {
+          "$ref": "#/$defs/DisplayText",
+          "description": "An optional human label for the set; the id names it when absent."
+        },
         "revision": {
           "format": "uint64",
           "maximum": 9223372036854775807,
@@ -219,8 +220,7 @@
       },
       "required": [
         "id",
-        "revision",
-        "because"
+        "revision"
       ],
       "type": "object"
     },
@@ -555,7 +555,7 @@
     },
     "holidaySets": {
       "items": {
-        "$ref": "#/$defs/HolidaySetPolicy"
+        "$ref": "#/$defs/HolidaySet"
       },
       "maxItems": 256,
       "minItems": 1,

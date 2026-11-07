@@ -185,6 +185,9 @@ pub enum StoreError {
     SecretConfiguration(String),
     #[error("the Scheduling database is not in the state this runtime expects")]
     Corrupt,
+    /// A retained policy still holds a member this release removed.
+    #[error("a policy stored by an earlier release holds `{member}`, which this release does not read; Scheduling state stored by 0.45.0 or earlier is not readable after the upgrade, so start from a new database")]
+    StoredByEarlierRelease { member: &'static str },
     #[error("the bounded Scheduling capacity snapshot is too large to evaluate")]
     CapacitySnapshotTooLarge,
     #[error(
@@ -346,6 +349,7 @@ impl StoreError {
                 | Self::RuntimeGrantsMissing(_)
                 | Self::LedgerUnreadable { .. }
                 | Self::RetainedHookBindings
+                | Self::StoredByEarlierRelease { .. }
                 | Self::DeploymentIdentity
                 | Self::PolicyInUse(_)
                 | Self::CombinedInvariant(_)
@@ -4044,8 +4048,21 @@ async fn publish_policy(
 }
 
 /// Read a retained policy document without reinterpreting its stored members.
+///
+/// A document that holds a member this release removed is reported as stored
+/// by an earlier release, not as corrupt, and stays refused.
 fn retained_policy(document: Value) -> Result<SchedulingPolicy, StoreError> {
-    serde_json::from_value(document).map_err(|_| StoreError::Corrupt)
+    let holds_removed_member = document
+        .get("holidaySets")
+        .and_then(Value::as_array)
+        .is_some_and(|sets| sets.iter().any(|set| set.get("because").is_some()));
+    match serde_json::from_value(document) {
+        Ok(policy) => Ok(policy),
+        Err(_) if holds_removed_member => Err(StoreError::StoredByEarlierRelease {
+            member: "holidaySets[*].because",
+        }),
+        Err(_) => Err(StoreError::Corrupt),
+    }
 }
 
 /// The combined policy-by-records contradictions a database write refuses.

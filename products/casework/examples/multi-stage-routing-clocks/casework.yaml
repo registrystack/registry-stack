@@ -2,10 +2,10 @@ apiVersion: id.registrystack.org/formats/casework/project/v1alpha1
 kind: CaseworkProject
 project: {id: regional-review, version: "1"}
 accessProfiles:
-  staff: {principalClaim: sub, requiredScopes: [casework:staff], role: staff}
-  supervisor: {principalClaim: sub, requiredScopes: [casework:supervisor], role: supervisor}
-  administrator: {principalClaim: sub, requiredScopes: [casework:admin], role: administrator}
-  requester: {principalClaim: sub, requiredScopes: [casework:request], role: requester}
+  staff: {principalClaim: sub, requiredScopes: [casework:staff], actsAs: staff}
+  supervisor: {principalClaim: sub, requiredScopes: [casework:supervisor], actsAs: supervisor}
+  administrator: {principalClaim: sub, requiredScopes: [casework:admin], actsAs: administrator}
+  requester: {principalClaim: sub, requiredScopes: [casework:request], actsAs: requester}
 queues:
   triage: {label: Regional triage}
   northern-review: {label: Northern reviews}

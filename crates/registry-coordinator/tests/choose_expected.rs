@@ -116,7 +116,7 @@ fn explained_step<'a>(explain: &'a Value, id: &str) -> &'a Value {
 fn expected_is_snapshot_presentation_without_execution_or_revision_meaning() {
     let legacy = load(&compare_project(None)).unwrap();
     let mut annotated = compare_project(Some(json!("unmatched")));
-    annotated["workflow"]["steps"]["route"]["title"] = json!("Classify score");
+    annotated["workflow"]["steps"]["route"]["label"] = json!("Classify score");
     annotated["workflow"]["steps"]["route"]["description"] =
         json!("Routes scores above five to high.");
     let expected = load(&annotated).unwrap();
@@ -135,7 +135,7 @@ fn expected_is_snapshot_presentation_without_execution_or_revision_meaning() {
     assert_eq!(removed.digest, legacy.digest);
     for definition in [&expected, &changed, &removed] {
         let metadata = &definition.workflow.presentation.steps["route"];
-        assert_eq!(metadata["title"], "Classify score");
+        assert_eq!(metadata["label"], "Classify score");
         assert_eq!(metadata["description"], "Routes scores above five to high.");
     }
     assert_eq!(

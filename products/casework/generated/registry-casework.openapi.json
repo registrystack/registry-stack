@@ -121,8 +121,33 @@
       "AccessProfile": {
         "additionalProperties": false,
         "properties": {
+          "actsAs": {
+            "$ref": "#/components/schemas/CaseworkActsAs"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DisplayText"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the profile is for, accepted for authoring and tooling; never matched against a caller. Part of the review policy description, which any caller who may read that description can see."
+          },
           "id": {
             "$ref": "#/components/schemas/LocalId"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DisplayText"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A name for the profile, accepted for authoring and tooling; never matched against a caller. Part of the review policy description, which any caller who may read that description can see."
           },
           "principalClaim": {
             "type": "string"
@@ -134,16 +159,13 @@
             "minItems": 1,
             "type": "array",
             "uniqueItems": true
-          },
-          "role": {
-            "$ref": "#/components/schemas/CaseworkRole"
           }
         },
         "required": [
           "id",
           "principalClaim",
           "requiredScopes",
-          "role"
+          "actsAs"
         ],
         "type": "object"
       },
@@ -223,7 +245,7 @@
         ],
         "type": "object"
       },
-      "CaseworkRole": {
+      "CaseworkActsAs": {
         "enum": [
           "staff",
           "supervisor",

@@ -191,7 +191,7 @@ pub(crate) mod tests {
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
     use chrono::Utc;
     use jsonwebtoken::{Algorithm, EncodingKey, Header};
-    use registry_messaging_core::{AccessProfile, AccessRole};
+    use registry_messaging_core::{AccessProfile, ActsAs};
     use registry_platform_httputil::FetchUrlPolicy;
     use registry_platform_oidc::{AccessTokenAlgorithm, JwksFetcherConfig};
     use serde_json::json;
@@ -212,11 +212,13 @@ pub(crate) mod tests {
         AccessProfiles::new(vec![
             AccessProfile {
                 id: "case-notices".to_owned(),
+                label: None,
+                description: None,
                 principal_claim: "sub".to_owned(),
                 required_scopes: vec!["messaging:send".to_owned()],
                 requester_clients: vec![SENDER_CLIENT.to_owned()],
                 actor_kind: Some(ActorKind::Service),
-                role: AccessRole::Sender,
+                acts_as: ActsAs::Sender,
                 sender_profiles: vec!["transactional".to_owned()],
                 templates: vec!["appointment-reminder".to_owned()],
                 allow_direct_content: false,
@@ -226,11 +228,13 @@ pub(crate) mod tests {
             },
             AccessProfile {
                 id: "operations".to_owned(),
+                label: None,
+                description: None,
                 principal_claim: "sub".to_owned(),
                 required_scopes: vec!["messaging:operate".to_owned()],
                 requester_clients: vec![OPERATOR_CLIENT.to_owned()],
                 actor_kind: None,
-                role: AccessRole::Operator,
+                acts_as: ActsAs::Operator,
                 sender_profiles: Vec::new(),
                 templates: Vec::new(),
                 allow_direct_content: false,
@@ -347,7 +351,7 @@ pub(crate) mod tests {
             .await
             .expect("a sender holding its profile's scope authenticates");
         assert_eq!(caller.profile.id, "case-notices");
-        assert_eq!(caller.role(), AccessRole::Sender);
+        assert_eq!(caller.role(), ActsAs::Sender);
         assert_eq!(caller.identity.issuer, ISSUER);
         assert_eq!(caller.identity.subject, "case-system-principal");
         assert_eq!(caller.actor_kind, Some(ActorKind::Service));
@@ -356,7 +360,7 @@ pub(crate) mod tests {
             .authenticate(&token(operator_claims()))
             .await
             .expect("an operator authenticates");
-        assert_eq!(operator.role(), AccessRole::Operator);
+        assert_eq!(operator.role(), ActsAs::Operator);
     }
 
     #[tokio::test]

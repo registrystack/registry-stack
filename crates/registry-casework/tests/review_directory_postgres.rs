@@ -39,7 +39,7 @@ fn named_member(principal: &IssuerPrincipal, display_name: &str) -> DirectoryMem
     }
 }
 
-fn actor(subject: &str, role: CaseworkRole, profile_id: &str) -> ActorContext {
+fn actor(subject: &str, role: CaseworkActsAs, profile_id: &str) -> ActorContext {
     ActorContext {
         principal: principal(subject),
         profile_id: profile_id.to_owned(),
@@ -47,12 +47,14 @@ fn actor(subject: &str, role: CaseworkRole, profile_id: &str) -> ActorContext {
     }
 }
 
-fn profile(id: &str, role: CaseworkRole) -> AccessProfile {
+fn profile(id: &str, role: CaseworkActsAs) -> AccessProfile {
     AccessProfile {
         id: id.to_owned(),
+        label: None,
+        description: None,
         principal_claim: "sub".to_owned(),
         required_scopes: vec![format!("casework:{id}")],
-        role,
+        acts_as: role,
     }
 }
 
@@ -66,10 +68,10 @@ fn project() -> CaseworkProject {
             version: "1".to_owned(),
         },
         access_profiles: vec![
-            profile("staff", CaseworkRole::Staff),
-            profile("supervisor", CaseworkRole::Supervisor),
-            profile("administrator", CaseworkRole::Administrator),
-            profile("requester", CaseworkRole::Requester),
+            profile("staff", CaseworkActsAs::Staff),
+            profile("supervisor", CaseworkActsAs::Supervisor),
+            profile("administrator", CaseworkActsAs::Administrator),
+            profile("requester", CaseworkActsAs::Requester),
         ],
         queues: vec![QueuePolicy {
             id: QUEUE.to_owned(),
@@ -117,13 +119,13 @@ async fn fixture() -> Fixture {
         .with_audit(registry_casework::CaseworkAudit::capture().0);
     let administrator = actor(
         "administrator",
-        CaseworkRole::Administrator,
+        CaseworkActsAs::Administrator,
         "administrator",
     );
-    let staff_a = actor("staff-a", CaseworkRole::Staff, "staff");
-    let staff_b = actor("staff-b", CaseworkRole::Staff, "staff");
-    let staff_c = actor("staff-c", CaseworkRole::Staff, "staff");
-    let supervisor = actor("supervisor", CaseworkRole::Supervisor, "supervisor");
+    let staff_a = actor("staff-a", CaseworkActsAs::Staff, "staff");
+    let staff_b = actor("staff-b", CaseworkActsAs::Staff, "staff");
+    let staff_c = actor("staff-c", CaseworkActsAs::Staff, "staff");
+    let supervisor = actor("supervisor", CaseworkActsAs::Supervisor, "supervisor");
     let service =
         CaseworkService::new(store.clone(), project(), Vec::new()).expect("directory service");
     service
@@ -149,7 +151,7 @@ async fn fixture() -> Fixture {
         store,
         database: connect_scoped(&scoped_url).await,
         scoped_url,
-        requester: actor("requester", CaseworkRole::Requester, "requester"),
+        requester: actor("requester", CaseworkActsAs::Requester, "requester"),
         staff_a,
         staff_b,
         staff_c,
@@ -162,7 +164,7 @@ async fn directory_bootstrap_rejects_unconfigured_and_unbounded_memberships_befo
     let fixture = fixture().await;
     let administrator = actor(
         "administrator",
-        CaseworkRole::Administrator,
+        CaseworkActsAs::Administrator,
         "administrator",
     );
     assert_eq!(
@@ -246,7 +248,7 @@ async fn directory_read_holds_one_revision_snapshot_through_all_content_reads() 
     let fixture = fixture().await;
     let administrator = actor(
         "administrator",
-        CaseworkRole::Administrator,
+        CaseworkActsAs::Administrator,
         "administrator",
     );
     let mut blocker = connect_scoped(&fixture.scoped_url).await;
@@ -315,7 +317,7 @@ async fn oversized_directory_update_rolls_back_every_effect() {
     let fixture = fixture().await;
     let administrator = actor(
         "administrator",
-        CaseworkRole::Administrator,
+        CaseworkActsAs::Administrator,
         "administrator",
     );
     let people = large_directory_members(90);
@@ -539,7 +541,7 @@ async fn directory_targets_are_paged_query_bound_and_recheck_current_authority()
         .collect::<Vec<_>>();
     let administrator = actor(
         "administrator",
-        CaseworkRole::Administrator,
+        CaseworkActsAs::Administrator,
         "administrator",
     );
     assert!(matches!(
@@ -746,7 +748,7 @@ async fn directory_targets_are_paged_query_bound_and_recheck_current_authority()
             .await,
         Err(ServiceError::Store(StoreError::Forbidden))
     ));
-    let unrelated_supervisor = actor("unrelated", CaseworkRole::Supervisor, "supervisor");
+    let unrelated_supervisor = actor("unrelated", CaseworkActsAs::Supervisor, "supervisor");
     let empty = fixture
         .service
         .directory_targets(
@@ -767,7 +769,7 @@ async fn absence_cover_targets_stay_inside_the_teams_the_actor_supervises() {
     let fixture = fixture().await;
     let administrator = actor(
         "administrator",
-        CaseworkRole::Administrator,
+        CaseworkActsAs::Administrator,
         "administrator",
     );
     let unsupervised_staff = principal("unsupervised-staff");
@@ -838,7 +840,7 @@ async fn directory_names_follow_authorized_memberships_without_duplicate_targets
     let fixture = fixture().await;
     let administrator = actor(
         "administrator",
-        CaseworkRole::Administrator,
+        CaseworkActsAs::Administrator,
         "administrator",
     );
     assert!(matches!(
@@ -969,7 +971,7 @@ async fn supervisor_cannot_record_cover_from_an_unsupervised_shared_team() {
     let fixture = fixture().await;
     let administrator = actor(
         "administrator",
-        CaseworkRole::Administrator,
+        CaseworkActsAs::Administrator,
         "administrator",
     );
     let unsupervised_cover = principal("unsupervised-cover");
@@ -1065,7 +1067,7 @@ async fn absence_update_preserves_owner_and_delete_replay_rechecks_current_autho
 
     let administrator = actor(
         "administrator",
-        CaseworkRole::Administrator,
+        CaseworkActsAs::Administrator,
         "administrator",
     );
     let directory_revision = fixture
@@ -1331,7 +1333,7 @@ async fn absence_pages_stop_at_the_serialized_response_budget_and_resume() {
         .expect("insert large absence records");
     let administrator = actor(
         "administrator",
-        CaseworkRole::Administrator,
+        CaseworkActsAs::Administrator,
         "administrator",
     );
     let mut cursor = None;
@@ -1395,7 +1397,7 @@ async fn absence_cursors_refuse_changed_or_expired_context() {
         Err(ServiceError::Store(StoreError::CursorInvalid))
     ));
     let mut other_role = fixture.staff_a.clone();
-    other_role.role = CaseworkRole::Supervisor;
+    other_role.role = CaseworkActsAs::Supervisor;
     assert!(matches!(
         fixture
             .service
@@ -1494,7 +1496,7 @@ async fn absence_pages_reapply_staff_and_supervisor_visibility() {
 
     let administrator = actor(
         "administrator",
-        CaseworkRole::Administrator,
+        CaseworkActsAs::Administrator,
         "administrator",
     );
     fixture

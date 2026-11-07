@@ -15,7 +15,7 @@ kind: SchedulingProject
 project: {id: busy-records-test, version: "1"}
 services: [{id: registry-update, label: Registry update}]
 channels: [public]
-holidaySets: [{id: none, revision: 1, because: test}]
+holidaySets: [{id: none, revision: 1, label: test}]
 openings:
   - id: all-day
     location: north-counter

@@ -352,7 +352,7 @@ pub fn access_project() -> String {
     let project = STARTER_PROJECT
         .replacen(
             "\ndocumentPolicies:\n",
-            "  partner-service:\n    principalClaim: sub\n    requiredScopes: [documents:read]\n    requesterClients: [partner-service]\n    actorKind: service\n    role: recipient\n\ndocumentPolicies:\n",
+            "  partner-service:\n    principalClaim: sub\n    requiredScopes: [documents:read]\n    requesterClients: [partner-service]\n    actorKind: service\n    actsAs: recipient\n\ndocumentPolicies:\n",
             1,
         )
         .replacen(

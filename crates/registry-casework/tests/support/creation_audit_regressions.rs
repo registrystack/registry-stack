@@ -7,7 +7,7 @@ async fn creation_requires_audit_admission_before_any_durable_change() {
     let outcome = f
         .service
         .create_review_request(
-            &actor("notice-service", CaseworkRole::Requester),
+            &actor("notice-service", CaseworkActsAs::Requester),
             f.request("new"),
             "new",
         )
@@ -36,7 +36,7 @@ async fn producer_supersession_cannot_bypass_an_unavailable_audit_writer() {
     let outcome = f
         .service
         .create_review_request(
-            &actor("notice-service", CaseworkRole::Requester),
+            &actor("notice-service", CaseworkActsAs::Requester),
             request,
             "successor",
         )
@@ -80,7 +80,7 @@ async fn creation_response_is_withheld_until_audit_and_exact_recovery_releases_i
     request.policy = PolicySelection::current("notice-review");
     let expected_policy = f.project.compile_policy("notice-review").unwrap().binding();
     let expected_digest = submission_digest("notice-service", "notice-source", &request).unwrap();
-    let producer = actor("notice-service", CaseworkRole::Requester);
+    let producer = actor("notice-service", CaseworkActsAs::Requester);
     f.audit.refuse_after(1);
     assert!(matches!(
         f.service
@@ -171,7 +171,7 @@ async fn current_source_task_context_obeys_its_pinned_deadline() {
     let outcome = tokio::time::timeout(
         std::time::Duration::from_millis(500),
         service.review_task_context(
-            &actor("a", CaseworkRole::Staff),
+            &actor("a", CaseworkActsAs::Staff),
             task,
             Some("source-staff"),
             "human-source-token",
@@ -186,7 +186,7 @@ async fn current_source_task_context_obeys_its_pinned_deadline() {
     let accepted = f.create("standalone").await;
     f.service
         .review_task_context(
-            &actor("a", CaseworkRole::Staff),
+            &actor("a", CaseworkActsAs::Staff),
             f.task(accepted.request_id).await,
             None,
             "",

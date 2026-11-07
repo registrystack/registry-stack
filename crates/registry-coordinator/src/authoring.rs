@@ -42,6 +42,10 @@ const FORMAT: FormatSpec<'static> = FormatSpec {
     },
     removed_keys: &[
         RemovedKey { pointer: "/input", replacement: "Move input to workflow.input." },
+        RemovedKey { pointer: "/title", replacement: "Write label." },
+        RemovedKey { pointer: "/functions/*/title", replacement: "Write label." },
+        RemovedKey { pointer: "/operations/*/title", replacement: "Write label." },
+        RemovedKey { pointer: "/workflow/steps/*/title", replacement: "Write label." },
         RemovedKey { pointer: "/connections", replacement: "Declare logical connections on Operation aliases under operations, then bind them in runtime.yaml." },
         RemovedKey { pointer: "/functionsFile", replacement: "Declare named typed Functions under functions, each with its source asset." },
         RemovedKey { pointer: "/deadlineSeconds", replacement: "Move deadlineSeconds to workflow.deadlineSeconds." },
@@ -59,10 +63,10 @@ const FORMAT: FormatSpec<'static> = FormatSpec {
 pub struct CoordinatorProject {
     /// The shared identity: project.id identifies this Workflow and project.version is a human release label.
     pub project: ProjectIdentity,
-    /// An optional human title; it changes neither stable identity nor behavior revision.
+    /// An optional human label; it changes neither stable identity nor behavior revision.
     #[serde(default, deserialize_with = "optional_display_text")]
     #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
-    title: Option<String>,
+    label: Option<String>,
     /// An optional explanation for readers; it has no execution or authorization effect.
     #[serde(default, deserialize_with = "optional_display_text")]
     #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
@@ -173,10 +177,10 @@ struct AuthoredOperation {
     /// Named bounded completion contracts; the host enforces their observation semantics.
     #[serde(default)]
     completions: BTreeMap<LocalId, AuthoredCompletion>,
-    /// An optional human title; it changes neither stable identity nor behavior revision.
+    /// An optional human label; it changes neither stable identity nor behavior revision.
     #[serde(default, deserialize_with = "optional_display_text")]
     #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
-    title: Option<String>,
+    label: Option<String>,
     /// An optional explanation for readers; it has no execution or authorization effect.
     #[serde(default, deserialize_with = "optional_display_text")]
     #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
@@ -220,10 +224,10 @@ struct AuthoredFunction {
     /// Optional narrowing of the bounded pure profile; omitted limits retain the default ceiling.
     #[serde(default)]
     limits: NarrowedLimits,
-    /// An optional human title; it changes neither stable identity nor behavior revision.
+    /// An optional human label; it changes neither stable identity nor behavior revision.
     #[serde(default, deserialize_with = "optional_display_text")]
     #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
-    title: Option<String>,
+    label: Option<String>,
     /// An optional explanation for readers; it has no execution or authorization effect.
     #[serde(default, deserialize_with = "optional_display_text")]
     #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
@@ -326,6 +330,14 @@ struct AuthoredEventTrigger {
     event: Schema,
     /// Ordinary typed Mapping from the event envelope to Workflow start input.
     input: AuthoredMapping,
+    /// An optional human label for this start; it changes neither stable identity nor behavior revision.
+    #[serde(default, deserialize_with = "optional_display_text")]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
+    label: Option<String>,
+    /// An optional explanation of when this start fires; it has no execution or authorization effect.
+    #[serde(default, deserialize_with = "optional_display_text")]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
+    description: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -503,10 +515,10 @@ enum AuthoredStep {
         wait_until: AuthoredMapping,
         /// The next Step on the successful completion route.
         next: LocalId,
-        /// An optional human title; it changes neither stable identity nor behavior revision.
+        /// An optional human label; it changes neither stable identity nor behavior revision.
         #[serde(default, deserialize_with = "optional_display_text")]
         #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
-        title: Option<String>,
+        label: Option<String>,
         /// An optional explanation for readers; it has no execution or authorization effect.
         #[serde(default, deserialize_with = "optional_display_text")]
         #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
@@ -526,10 +538,10 @@ enum AuthoredStep {
         /// An optional Step taken after authorized cancellation while waiting; no completion value is available there.
         #[serde(default)]
         on_cancel: Option<LocalId>,
-        /// An optional human title; it changes neither stable identity nor behavior revision.
+        /// An optional human label; it changes neither stable identity nor behavior revision.
         #[serde(default, deserialize_with = "optional_display_text")]
         #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
-        title: Option<String>,
+        label: Option<String>,
         /// An optional explanation for readers; it has no execution or authorization effect.
         #[serde(default, deserialize_with = "optional_display_text")]
         #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
@@ -547,10 +559,10 @@ enum AuthoredStep {
         /// Omit it to fail the run with `product-refused` on a declared refusal too.
         #[serde(default)]
         on_declared_refusal: Option<LocalId>,
-        /// An optional human title; it changes neither stable identity nor behavior revision.
+        /// An optional human label; it changes neither stable identity nor behavior revision.
         #[serde(default, deserialize_with = "optional_display_text")]
         #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
-        title: Option<String>,
+        label: Option<String>,
         /// An optional explanation for readers; it has no execution or authorization effect.
         #[serde(default, deserialize_with = "optional_display_text")]
         #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
@@ -565,10 +577,10 @@ enum AuthoredStep {
         /// The everyday case for readers and diagram tools; it has no execution or revision effect.
         #[serde(default)]
         expected: Option<LocalId>,
-        /// An optional human title; it changes neither stable identity nor behavior revision.
+        /// An optional human label; it changes neither stable identity nor behavior revision.
         #[serde(default, deserialize_with = "optional_display_text")]
         #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
-        title: Option<String>,
+        label: Option<String>,
         /// An optional explanation for readers; it has no execution or authorization effect.
         #[serde(default, deserialize_with = "optional_display_text")]
         #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
@@ -581,10 +593,10 @@ enum AuthoredStep {
         /// The declared result schema or mapping; Functions and the host enforce it.
         #[serde(default)]
         output: Option<AuthoredMapping>,
-        /// An optional human title; it changes neither stable identity nor behavior revision.
+        /// An optional human label; it changes neither stable identity nor behavior revision.
         #[serde(default, deserialize_with = "optional_display_text")]
         #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
-        title: Option<String>,
+        label: Option<String>,
         /// An optional explanation for readers; it has no execution or authorization effect.
         #[serde(default, deserialize_with = "optional_display_text")]
         #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
@@ -594,13 +606,13 @@ enum AuthoredStep {
 registry_platform_yaml::tagged_union!(AuthoredStep);
 
 impl AuthoredStep {
-    fn title(&self) -> Option<&str> {
+    fn label(&self) -> Option<&str> {
         match self {
-            Self::WaitUntil { title, .. }
-            | Self::WaitFor { title, .. }
-            | Self::Call { title, .. }
-            | Self::Choose { title, .. }
-            | Self::Finish { title, .. } => title.as_deref(),
+            Self::WaitUntil { label, .. }
+            | Self::WaitFor { label, .. }
+            | Self::Call { label, .. }
+            | Self::Choose { label, .. }
+            | Self::Finish { label, .. } => label.as_deref(),
         }
     }
 }
@@ -1008,53 +1020,53 @@ fn project_integrity_diagnostics(
 
     let groups = [
         (
-            "coordinator.project.duplicate-function-title",
+            "coordinator.project.duplicate-function-label",
             "functions",
             project
                 .functions
                 .iter()
                 .filter_map(|(id, item)| {
-                    item.title.as_ref().map(|title| {
+                    item.label.as_ref().map(|label| {
                         let pointer = format!(
-                            "/functions/{}/title",
+                            "/functions/{}/label",
                             registry_platform_yaml::escape_pointer_segment(id.as_str())
                         );
-                        (id.as_str().to_owned(), title.clone(), pointer)
+                        (id.as_str().to_owned(), label.clone(), pointer)
                     })
                 })
                 .collect::<Vec<_>>(),
         ),
         (
-            "coordinator.project.duplicate-operation-title",
+            "coordinator.project.duplicate-operation-label",
             "operations",
             project
                 .operations
                 .iter()
                 .filter_map(|(id, item)| {
-                    item.title.as_ref().map(|title| {
+                    item.label.as_ref().map(|label| {
                         let pointer = format!(
-                            "/operations/{}/title",
+                            "/operations/{}/label",
                             registry_platform_yaml::escape_pointer_segment(id.as_str())
                         );
-                        (id.as_str().to_owned(), title.clone(), pointer)
+                        (id.as_str().to_owned(), label.clone(), pointer)
                     })
                 })
                 .collect(),
         ),
         (
-            "coordinator.project.duplicate-step-title",
+            "coordinator.project.duplicate-step-label",
             "workflow steps",
             project
                 .workflow
                 .steps
                 .iter()
                 .filter_map(|(id, item)| {
-                    item.title().map(|title| {
+                    item.label().map(|label| {
                         let pointer = format!(
-                            "/workflow/steps/{}/title",
+                            "/workflow/steps/{}/label",
                             registry_platform_yaml::escape_pointer_segment(id.as_str())
                         );
-                        (id.as_str().to_owned(), title.to_owned(), pointer)
+                        (id.as_str().to_owned(), label.to_owned(), pointer)
                     })
                 })
                 .collect(),
@@ -1295,7 +1307,7 @@ fn compile(project: CoordinatorProject, path: &Path) -> Result<Workflow> {
                 interpret: None,
                 response: None,
                 action: contract.action,
-                title: operation.title,
+                label: operation.label,
                 description: operation.description,
             },
         );
@@ -1434,12 +1446,22 @@ fn compile(project: CoordinatorProject, path: &Path) -> Result<Workflow> {
         );
     }
     let input = resolver.resolve(&project.workflow.input.0.into_value(), "/workflow/input")?;
+    let mut trigger_presentation = BTreeMap::new();
     let event_triggers = project
         .workflow
         .event_triggers
         .into_iter()
         .map(|(id, trigger)| {
             let id = id.into_string();
+            if trigger.label.is_some() || trigger.description.is_some() {
+                trigger_presentation.insert(
+                    id.clone(),
+                    crate::definition::TriggerPresentation {
+                        label: trigger.label,
+                        description: trigger.description,
+                    },
+                );
+            }
             let event = resolver.resolve(
                 &trigger.event.0.into_value(),
                 &format!("/workflow/eventTriggers/{id}/event"),
@@ -1477,9 +1499,10 @@ fn compile(project: CoordinatorProject, path: &Path) -> Result<Workflow> {
         .collect::<Result<_>>()?;
     let mut steps = BTreeMap::new();
     let mut presentation = Presentation {
-        title: project.title,
+        label: project.label,
         description: project.description,
         steps: BTreeMap::new(),
+        event_triggers: trigger_presentation,
     };
     for (id, step) in project.workflow.steps {
         let id = id.into_string();
@@ -1489,18 +1512,18 @@ fn compile(project: CoordinatorProject, path: &Path) -> Result<Workflow> {
             }
             _ => None,
         };
-        let (step, title, description) = match step {
+        let (step, label, description) = match step {
             AuthoredStep::WaitUntil {
                 wait_until,
                 next,
-                title,
+                label,
                 description,
             } => (
                 Step::WaitUntil {
                     wait_until: wait_until.into(),
                     next: next.into_string(),
                 },
-                title,
+                label,
                 description,
             ),
             AuthoredStep::WaitFor {
@@ -1509,7 +1532,7 @@ fn compile(project: CoordinatorProject, path: &Path) -> Result<Workflow> {
                 next,
                 on_timeout,
                 on_cancel,
-                title,
+                label,
                 description,
             } => (
                 Step::WaitFor {
@@ -1522,7 +1545,7 @@ fn compile(project: CoordinatorProject, path: &Path) -> Result<Workflow> {
                     on_timeout: on_timeout.map(LocalId::into_string),
                     on_cancel: on_cancel.map(LocalId::into_string),
                 },
-                title,
+                label,
                 description,
             ),
             AuthoredStep::Call {
@@ -1530,7 +1553,7 @@ fn compile(project: CoordinatorProject, path: &Path) -> Result<Workflow> {
                 input,
                 next,
                 on_declared_refusal,
-                title,
+                label,
                 description,
             } => {
                 let resolved = operations.get(operation.as_str()).ok_or_else(|| {
@@ -1549,14 +1572,14 @@ fn compile(project: CoordinatorProject, path: &Path) -> Result<Workflow> {
                         next: next.into_string(),
                         on_declared_refusal: on_declared_refusal.map(LocalId::into_string),
                     },
-                    title,
+                    label,
                     description,
                 )
             }
             AuthoredStep::Choose {
                 choose,
                 cases,
-                title,
+                label,
                 description,
                 ..
             } => (
@@ -1567,25 +1590,25 @@ fn compile(project: CoordinatorProject, path: &Path) -> Result<Workflow> {
                         .map(|(name, target)| (name.into_string(), target.into_string()))
                         .collect(),
                 },
-                title,
+                label,
                 description,
             ),
             AuthoredStep::Finish {
                 outcome,
                 output,
-                title,
+                label,
                 description,
             } => (
                 Step::Finish {
                     finish: outcome.into_string(),
                     output: output.map(Into::into),
                 },
-                title,
+                label,
                 description,
             ),
         };
-        if title.is_some() || description.is_some() || expected.is_some() {
-            let mut metadata = json!({"title":title,"description":description});
+        if label.is_some() || description.is_some() || expected.is_some() {
+            let mut metadata = json!({"label":label,"description":description});
             if let Some(expected) = expected {
                 metadata["expected"] = json!(expected);
             }
@@ -1657,7 +1680,7 @@ fn resolve_function(
         output,
         limits: function.limits.effective(),
         revision: String::new(),
-        title: function.title,
+        label: function.label,
         description: function.description,
     })
 }

@@ -114,6 +114,10 @@
           "$ref": "#/$defs/ExternalId",
           "description": "Exact producer data-schema identifier accepted by this trigger."
         },
+        "description": {
+          "$ref": "#/$defs/DisplayText",
+          "description": "An optional explanation of when this start fires; it has no execution or authorization effect."
+        },
         "event": {
           "$ref": "#/$defs/Schema",
           "description": "Schema for the complete authenticated event envelope before input mapping."
@@ -125,6 +129,10 @@
         "input": {
           "$ref": "#/$defs/AuthoredMapping",
           "description": "Ordinary typed Mapping from the event envelope to Workflow start input."
+        },
+        "label": {
+          "$ref": "#/$defs/DisplayText",
+          "description": "An optional human label for this start; it changes neither stable identity nor behavior revision."
         },
         "source": {
           "$ref": "#/$defs/LocalId",
@@ -162,6 +170,10 @@
           },
           "type": "object"
         },
+        "label": {
+          "$ref": "#/$defs/DisplayText",
+          "description": "An optional human label; it changes neither stable identity nor behavior revision."
+        },
         "limits": {
           "$ref": "#/$defs/NarrowedLimits",
           "description": "Optional narrowing of the bounded pure profile; omitted limits retain the default ceiling."
@@ -177,10 +189,6 @@
         "source": {
           "description": "A local reviewed source asset inside the project directory.",
           "type": "string"
-        },
-        "title": {
-          "$ref": "#/$defs/DisplayText",
-          "description": "An optional human title; it changes neither stable identity nor behavior revision."
         }
       },
       "required": [
@@ -367,6 +375,10 @@
           "$ref": "#/$defs/LocalId",
           "description": "The typed pure Function that interprets an external command's provider\nresponse into an accepted result, a declared refusal or an uncertain\noutcome. Required on, and accepted only on, `external.command/v1`."
         },
+        "label": {
+          "$ref": "#/$defs/DisplayText",
+          "description": "An optional human label; it changes neither stable identity nor behavior revision."
+        },
         "record": {
           "$ref": "#/$defs/RecordReference",
           "description": "Limit BReg read replies to the imported record schema's API field names.\nFields may be hidden by access policy, and their value types remain open."
@@ -378,10 +390,6 @@
         "template": {
           "$ref": "#/$defs/TemplateReference",
           "description": "Fix a Messaging template version, its locales and its data schema."
-        },
-        "title": {
-          "$ref": "#/$defs/DisplayText",
-          "description": "An optional human title; it changes neither stable identity nor behavior revision."
         },
         "uses": {
           "$ref": "#/$defs/Operation",
@@ -404,13 +412,13 @@
               "$ref": "#/$defs/DisplayText",
               "description": "An optional explanation for readers; it has no execution or authorization effect."
             },
+            "label": {
+              "$ref": "#/$defs/DisplayText",
+              "description": "An optional human label; it changes neither stable identity nor behavior revision."
+            },
             "next": {
               "$ref": "#/$defs/LocalId",
               "description": "The next Step on the successful completion route."
-            },
-            "title": {
-              "$ref": "#/$defs/DisplayText",
-              "description": "An optional human title; it changes neither stable identity nor behavior revision."
             },
             "type": {
               "const": "wait-until",
@@ -440,6 +448,10 @@
               "$ref": "#/$defs/DisplayText",
               "description": "An optional explanation for readers; it has no execution or authorization effect."
             },
+            "label": {
+              "$ref": "#/$defs/DisplayText",
+              "description": "An optional human label; it changes neither stable identity nor behavior revision."
+            },
             "next": {
               "$ref": "#/$defs/LocalId",
               "description": "The next Step on the successful completion route."
@@ -458,10 +470,6 @@
               "maximum": 31536000,
               "minimum": 1,
               "type": "integer"
-            },
-            "title": {
-              "$ref": "#/$defs/DisplayText",
-              "description": "An optional human title; it changes neither stable identity nor behavior revision."
             },
             "type": {
               "const": "wait-for",
@@ -488,6 +496,10 @@
               "$ref": "#/$defs/AuthoredMapping",
               "description": "The typed Workflow start input, or a mapping supplying the called Operation input."
             },
+            "label": {
+              "$ref": "#/$defs/DisplayText",
+              "description": "An optional human label; it changes neither stable identity nor behavior revision."
+            },
             "next": {
               "$ref": "#/$defs/LocalId",
               "description": "The next Step on the successful completion route."
@@ -499,10 +511,6 @@
             "operation": {
               "$ref": "#/$defs/LocalId",
               "description": "One local Operation alias declared under operations."
-            },
-            "title": {
-              "$ref": "#/$defs/DisplayText",
-              "description": "An optional human title; it changes neither stable identity nor behavior revision."
             },
             "type": {
               "const": "call",
@@ -543,9 +551,9 @@
               "$ref": "#/$defs/LocalId",
               "description": "The everyday case for readers and diagram tools; it has no execution or revision effect."
             },
-            "title": {
+            "label": {
               "$ref": "#/$defs/DisplayText",
-              "description": "An optional human title; it changes neither stable identity nor behavior revision."
+              "description": "An optional human label; it changes neither stable identity nor behavior revision."
             },
             "type": {
               "const": "choose",
@@ -567,6 +575,10 @@
               "$ref": "#/$defs/DisplayText",
               "description": "An optional explanation for readers; it has no execution or authorization effect."
             },
+            "label": {
+              "$ref": "#/$defs/DisplayText",
+              "description": "An optional human label; it changes neither stable identity nor behavior revision."
+            },
             "outcome": {
               "$ref": "#/$defs/LocalId",
               "description": "One declared terminal outcome name."
@@ -574,10 +586,6 @@
             "output": {
               "$ref": "#/$defs/AuthoredMapping",
               "description": "The declared result schema or mapping; Functions and the host enforce it."
-            },
-            "title": {
-              "$ref": "#/$defs/DisplayText",
-              "description": "An optional human title; it changes neither stable identity nor behavior revision."
             },
             "type": {
               "const": "finish",
@@ -1069,6 +1077,10 @@
       "description": "The kind of document this is.",
       "type": "string"
     },
+    "label": {
+      "$ref": "#/$defs/DisplayText",
+      "description": "An optional human label; it changes neither stable identity nor behavior revision."
+    },
     "operations": {
       "additionalProperties": {
         "$ref": "#/$defs/AuthoredOperation"
@@ -1101,10 +1113,6 @@
       ],
       "description": "The shared Project identity; its version is a human release label, not the computed Workflow revision.",
       "unevaluatedProperties": false
-    },
-    "title": {
-      "$ref": "#/$defs/DisplayText",
-      "description": "An optional human title; it changes neither stable identity nor behavior revision."
     },
     "types": {
       "additionalProperties": {

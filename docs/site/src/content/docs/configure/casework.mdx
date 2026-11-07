@@ -58,7 +58,7 @@ the next step to take.
 ## Name the queue for its reviewers
 
 Each [access profile](../../reference/glossary/#access-profile) admits a token that carries its `requiredScopes`, takes the caller's identity
-from `principalClaim`, and gives the caller one role: `staff`, `supervisor`, `administrator`, or
+from `principalClaim`, and gives the caller one `actsAs` value: `staff`, `supervisor`, `administrator`, or
 `requester`. The project declares one of each:
 
 ```yaml title="casework.yaml" test-excerpt="casework.yaml"
@@ -66,7 +66,7 @@ accessProfiles:
   staff:
     principalClaim: sub
     requiredScopes: [casework:staff]
-    role: staff
+    actsAs: staff
 ```
 
 A [queue](../../reference/glossary/#queue) is where a stage's ReviewTasks wait. Its label is what
@@ -181,7 +181,7 @@ mkdir -p holiday-sets
 ```yaml title="holiday-sets/office-holidays-7.yaml" test-file
 apiVersion: id.registrystack.org/formats/casework/holiday-set/v1alpha1
 kind: CaseworkHolidaySet
-holidaySet: office-holidays
+id: office-holidays
 revision: 7
 dates: [2026-09-07]
 ```

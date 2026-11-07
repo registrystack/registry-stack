@@ -137,18 +137,18 @@ fn init_clients_bind_the_standalone_template() {
     let clients = accepted(STANDALONE_DEV_CLIENTS.as_bytes());
     let bound = config::bind(&clients, &policy).unwrap();
 
-    let roles: BTreeMap<&str, CaseworkRole> = bound
+    let roles: BTreeMap<&str, CaseworkActsAs> = bound
         .iter()
         .map(|entry| (entry.client.id.as_str(), entry.role))
         .collect();
-    assert_eq!(roles["administrator"], CaseworkRole::Administrator);
-    assert_eq!(roles["supervisor"], CaseworkRole::Supervisor);
-    assert_eq!(roles["staff"], CaseworkRole::Staff);
-    assert_eq!(roles["requester"], CaseworkRole::Requester);
+    assert_eq!(roles["administrator"], CaseworkActsAs::Administrator);
+    assert_eq!(roles["supervisor"], CaseworkActsAs::Supervisor);
+    assert_eq!(roles["staff"], CaseworkActsAs::Staff);
+    assert_eq!(roles["requester"], CaseworkActsAs::Requester);
     // Only a person carries the human identity claim.
     for entry in &bound {
         let human = entry.client.claims.contains_key(config::HUMAN_CLAIM);
-        assert_eq!(human, entry.role != CaseworkRole::Requester);
+        assert_eq!(human, entry.role != CaseworkActsAs::Requester);
     }
     assert_eq!(clients.directory.len(), 1);
     assert_eq!(clients.directory[0].queue, "decisions");
@@ -163,13 +163,13 @@ fn api_client_selects_the_exact_retained_profile_and_refuses_unknown_clients() {
         ReportedClient {
             id: "staff".to_owned(),
             profile: "staff-reviewers".to_owned(),
-            role: CaseworkRole::Staff,
+            role: CaseworkActsAs::Staff,
             principal: "dev-staff".to_owned(),
         },
         ReportedClient {
             id: "requester".to_owned(),
             profile: "trusted-requester".to_owned(),
-            role: CaseworkRole::Requester,
+            role: CaseworkActsAs::Requester,
             principal: "dev-requester".to_owned(),
         },
     ];
@@ -875,17 +875,17 @@ fn binding_accepts_directory_members_with_matching_roles() {
     let clients = accepted(STANDALONE_DEV_CLIENTS.as_bytes());
 
     let bound = config::bind(&clients, &policy).unwrap();
-    let roles: BTreeMap<&str, CaseworkRole> = bound
+    let roles: BTreeMap<&str, CaseworkActsAs> = bound
         .iter()
         .map(|entry| (entry.client.id.as_str(), entry.role))
         .collect();
     assert_eq!(
         roles[clients.directory[0].staff[0].as_str()],
-        CaseworkRole::Staff
+        CaseworkActsAs::Staff
     );
     assert_eq!(
         roles[clients.directory[0].supervisors[0].as_str()],
-        CaseworkRole::Supervisor
+        CaseworkActsAs::Supervisor
     );
 }
 
@@ -896,13 +896,13 @@ fn binding_refuses_repeated_resolved_principals_within_each_membership_kind() {
 
     for (role, existing_id, second_id, pointer) in [
         (
-            CaseworkRole::Staff,
+            CaseworkActsAs::Staff,
             "staff",
             "second-staff",
             "/directory/0/staff/1",
         ),
         (
-            CaseworkRole::Supervisor,
+            CaseworkActsAs::Supervisor,
             "supervisor",
             "second-supervisor",
             "/directory/0/supervisors/1",
@@ -912,7 +912,7 @@ fn binding_refuses_repeated_resolved_principals_within_each_membership_kind() {
         let profile = policy
             .access_profiles
             .iter_mut()
-            .find(|profile| profile.role == role)
+            .find(|profile| profile.acts_as == role)
             .unwrap();
         profile.principal_claim = "registry_principal".to_owned();
 
@@ -929,8 +929,10 @@ fn binding_refuses_repeated_resolved_principals_within_each_membership_kind() {
         second_client.id = second_id.to_owned();
         clients.clients.push(second_client);
         match role {
-            CaseworkRole::Staff => clients.directory[0].staff.push(second_id.to_owned()),
-            CaseworkRole::Supervisor => clients.directory[0].supervisors.push(second_id.to_owned()),
+            CaseworkActsAs::Staff => clients.directory[0].staff.push(second_id.to_owned()),
+            CaseworkActsAs::Supervisor => {
+                clients.directory[0].supervisors.push(second_id.to_owned())
+            }
             _ => unreachable!(),
         }
 
@@ -947,7 +949,10 @@ fn binding_accepts_one_resolved_principal_in_each_membership_kind() {
     let project = standalone(root.path());
     let mut policy = crate::project::load_and_check_policy(&project).unwrap();
     for profile in &mut policy.access_profiles {
-        if matches!(profile.role, CaseworkRole::Staff | CaseworkRole::Supervisor) {
+        if matches!(
+            profile.acts_as,
+            CaseworkActsAs::Staff | CaseworkActsAs::Supervisor
+        ) {
             profile.principal_claim = "registry_principal".to_owned();
         }
     }
@@ -1660,7 +1665,7 @@ fn the_report_names_every_local_credential_without_a_secret() {
     state.clients = vec![ReportedClient {
         id: "requester".to_owned(),
         profile: "requester".to_owned(),
-        role: CaseworkRole::Requester,
+        role: CaseworkActsAs::Requester,
         principal: config::principal("requester"),
     }];
     state.directory_revision = 1;
@@ -1675,7 +1680,7 @@ fn the_report_names_every_local_credential_without_a_secret() {
     assert_eq!(report["directory"]["teams"], 1);
     assert_eq!(report["directory"]["revision"], 1);
     assert_eq!(report["clients"][0]["id"], "requester");
-    assert_eq!(report["clients"][0]["role"], "requester");
+    assert_eq!(report["clients"][0]["actsAs"], "requester");
     assert_eq!(
         report["clients"][0]["subject"],
         config::principal("requester")
@@ -3270,9 +3275,9 @@ fn seeding_administrator_token_is_issued_after_every_other_client() {
             id: client.id.clone(),
             profile: client.access_profile.clone(),
             role: if index == 0 {
-                CaseworkRole::Administrator
+                CaseworkActsAs::Administrator
             } else {
-                CaseworkRole::Requester
+                CaseworkActsAs::Requester
             },
             principal: config::principal(&client.id),
         })
@@ -3327,13 +3332,13 @@ fn token_issuance_stops_between_clients_when_interrupted() {
         ReportedClient {
             id: "administrator".to_owned(),
             profile: "administrator".to_owned(),
-            role: CaseworkRole::Administrator,
+            role: CaseworkActsAs::Administrator,
             principal: config::principal("administrator"),
         },
         ReportedClient {
             id: "requester".to_owned(),
             profile: "requester".to_owned(),
-            role: CaseworkRole::Requester,
+            role: CaseworkActsAs::Requester,
             principal: config::principal("requester"),
         },
     ];
@@ -3512,7 +3517,7 @@ fn local_api_refuses_an_integration_client_bound_to_another_resource() {
     state.clients = vec![ReportedClient {
         id: "staff".to_owned(),
         profile: "staff".to_owned(),
-        role: CaseworkRole::Staff,
+        role: CaseworkActsAs::Staff,
         principal: config::principal("staff"),
     }];
     let root = state.root();
@@ -3604,7 +3609,7 @@ fn dev_token_writes_a_profile_line_only_for_a_client_bound_to_an_access_profile(
     state.clients = vec![ReportedClient {
         id: "staff".to_owned(),
         profile: "staff".to_owned(),
-        role: CaseworkRole::Staff,
+        role: CaseworkActsAs::Staff,
         principal: config::principal("staff"),
     }];
     let root = state.root();
@@ -3963,13 +3968,13 @@ fn a_current_bregctl_dev_state_names_the_borrowed_issuer_owner() {
         ReportedClient {
             id: "staff".to_owned(),
             profile: "staff".to_owned(),
-            role: CaseworkRole::Staff,
+            role: CaseworkActsAs::Staff,
             principal: config::principal("staff"),
         },
         ReportedClient {
             id: "administrator".to_owned(),
             profile: "administrator".to_owned(),
-            role: CaseworkRole::Administrator,
+            role: CaseworkActsAs::Administrator,
             principal: "custom-administrator".to_owned(),
         },
     ];

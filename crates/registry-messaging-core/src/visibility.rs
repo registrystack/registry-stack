@@ -9,7 +9,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::access::{AccessRole, Caller};
+use crate::access::{ActsAs, Caller};
 use crate::problem::ProblemCode;
 
 /// A principal as the token issuer names it. A subject is only unique within
@@ -28,9 +28,9 @@ pub fn check_message_visibility(
 ) -> Result<(), ProblemCode> {
     match (caller.role(), submitter) {
         (_, None) => Err(ProblemCode::MessageNotVisible),
-        (AccessRole::Operator, Some(_)) => Ok(()),
-        (AccessRole::Sender, Some(submitter)) if *submitter == caller.identity => Ok(()),
-        (AccessRole::Sender, Some(_)) => Err(ProblemCode::MessageNotVisible),
+        (ActsAs::Operator, Some(_)) => Ok(()),
+        (ActsAs::Sender, Some(submitter)) if *submitter == caller.identity => Ok(()),
+        (ActsAs::Sender, Some(_)) => Err(ProblemCode::MessageNotVisible),
     }
 }
 
@@ -46,17 +46,19 @@ mod tests {
         }
     }
 
-    fn caller(role: AccessRole, issuer: &str, subject: &str) -> Caller {
+    fn caller(role: ActsAs, issuer: &str, subject: &str) -> Caller {
         Caller {
             identity: identity(issuer, subject),
             actor_kind: Some(ActorKind::Service),
             profile: AccessProfile {
                 id: "profile".to_owned(),
+                label: None,
+                description: None,
                 principal_claim: "sub".to_owned(),
                 required_scopes: Vec::new(),
                 requester_clients: vec!["client".to_owned()],
                 actor_kind: None,
-                role,
+                acts_as: role,
                 sender_profiles: Vec::new(),
                 templates: Vec::new(),
                 allow_direct_content: false,
@@ -73,21 +75,21 @@ mod tests {
     #[test]
     fn another_caller_is_told_the_message_is_not_visible() {
         let submitter = identity("https://issuer-a.test", "principal-1");
-        let own = caller(AccessRole::Sender, "https://issuer-a.test", "principal-1");
+        let own = caller(ActsAs::Sender, "https://issuer-a.test", "principal-1");
         assert_eq!(check_message_visibility(&own, Some(&submitter)), Ok(()));
 
-        let other_subject = caller(AccessRole::Sender, "https://issuer-a.test", "principal-2");
+        let other_subject = caller(ActsAs::Sender, "https://issuer-a.test", "principal-2");
         assert_eq!(
             check_message_visibility(&other_subject, Some(&submitter)),
             Err(ProblemCode::MessageNotVisible)
         );
         // The same subject from another issuer is another principal.
-        let other_issuer = caller(AccessRole::Sender, "https://issuer-b.test", "principal-1");
+        let other_issuer = caller(ActsAs::Sender, "https://issuer-b.test", "principal-1");
         assert_eq!(
             check_message_visibility(&other_issuer, Some(&submitter)),
             Err(ProblemCode::MessageNotVisible)
         );
-        let operator = caller(AccessRole::Operator, "https://ops.test", "operator-1");
+        let operator = caller(ActsAs::Operator, "https://ops.test", "operator-1");
         assert_eq!(
             check_message_visibility(&operator, Some(&submitter)),
             Ok(())
@@ -96,9 +98,9 @@ mod tests {
 
     #[test]
     fn a_missing_message_answers_exactly_like_an_invisible_one() {
-        let own = caller(AccessRole::Sender, "https://issuer-a.test", "principal-1");
-        let operator = caller(AccessRole::Operator, "https://ops.test", "operator-1");
-        let other = caller(AccessRole::Sender, "https://issuer-a.test", "principal-2");
+        let own = caller(ActsAs::Sender, "https://issuer-a.test", "principal-1");
+        let operator = caller(ActsAs::Operator, "https://ops.test", "operator-1");
+        let other = caller(ActsAs::Sender, "https://issuer-a.test", "principal-2");
         let submitter = identity("https://issuer-a.test", "principal-1");
         assert_eq!(
             check_message_visibility(&own, None),

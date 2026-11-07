@@ -112,6 +112,30 @@ entry in a fragment. Each states its migration step.
    earlier registry refuses to resume; import the data again under a fresh
    checkpoint path.
 
+### Coordinator
+
+1. **`title` is renamed `label`.** The authored `title` of a project, function,
+   operation and step is `label`, and the explain member `presentation.title`
+   is `presentation.label`. The duplicate-title diagnostics become
+   `coordinator.project.duplicate-function-label`, `...duplicate-operation-label`
+   and `...duplicate-step-label`. Migration: write `label: TEXT` where a file
+   wrote `title: TEXT` at those four positions; the old key is refused with
+   `config.removed-key` naming `label`.
+2. **Snapshots sealed by 0.45.0 or earlier are not read.** A snapshot whose
+   project presentation, function or operation holds `title` is refused with
+   `definition.snapshot`; a step `title` in the free-form `presentation.steps`
+   map still restores and is shown as written. Migration: finish open runs on
+   the earlier release before upgrading.
+
+### Documents and Messaging
+
+1. **Access profiles rename `role` to `actsAs`.** The values are unchanged
+   (`custodian`, `represented-principal`, `recipient`; `sender`, `operator`),
+   and the schema definition `AccessRole` is now `ActsAs`. Migration: write
+   `actsAs: VALUE` where a profile wrote `role: VALUE`; the old key is refused
+   with `config.removed-key`. The same change applies to Casework, in its
+   fragment.
+
 ### Messaging
 
 1. **A spent idempotency key is scoped to the caller's issuer and subject.**

@@ -1,9 +1,9 @@
 //! Focused regressions for retained activation dependencies and exact staffing targets.
 use super::*;
 
-fn movement(target: &str, role: CaseworkRole) -> ReviewCaseloadMoveRequest {
+fn movement(target: &str, role: CaseworkActsAs) -> ReviewCaseloadMoveRequest {
     ReviewCaseloadMoveRequest {
-        from: actor("a", CaseworkRole::Staff).principal,
+        from: actor("a", CaseworkActsAs::Staff).principal,
         to: actor(target, role).principal,
         queue: None,
         reason: "Balance the review queue".into(),
@@ -19,10 +19,10 @@ async fn caseload_target_membership_must_match_the_pinned_deciding_profiles() {
     assert!(matches!(
         f.service
             .preview_review_caseload(
-                &actor("supervisor", CaseworkRole::Supervisor),
+                &actor("supervisor", CaseworkActsAs::Supervisor),
                 None,
                 "",
-                movement("supervisor", CaseworkRole::Supervisor),
+                movement("supervisor", CaseworkActsAs::Supervisor),
             )
             .await,
         Err(ReviewRuntimeError::Forbidden)
@@ -37,10 +37,10 @@ async fn caseload_target_membership_must_match_the_pinned_deciding_profiles() {
     assert!(matches!(
         service
             .preview_review_caseload(
-                &actor("supervisor", CaseworkRole::Supervisor),
+                &actor("supervisor", CaseworkActsAs::Supervisor),
                 None,
                 "",
-                movement("supervisor", CaseworkRole::Supervisor),
+                movement("supervisor", CaseworkActsAs::Supervisor),
             )
             .await,
         Err(ReviewRuntimeError::Forbidden)
@@ -55,17 +55,17 @@ async fn caseload_target_membership_must_match_the_pinned_deciding_profiles() {
     let preview = allowed
         .service
         .preview_review_caseload(
-            &actor("supervisor", CaseworkRole::Supervisor),
+            &actor("supervisor", CaseworkActsAs::Supervisor),
             None,
             "",
-            movement("supervisor", CaseworkRole::Supervisor),
+            movement("supervisor", CaseworkActsAs::Supervisor),
         )
         .await
         .unwrap();
     allowed
         .service
         .apply_review_caseload(
-            &actor("supervisor", CaseworkRole::Supervisor),
+            &actor("supervisor", CaseworkActsAs::Supervisor),
             None,
             "",
             ReviewCaseloadApplyRequest {
@@ -84,13 +84,13 @@ async fn caseload_refuses_active_absence_and_rechecks_scheduled_absence_at_apply
         let request = f.create(id).await;
         f.claim(f.task(request.request_id).await, "a").await;
     }
-    let supervisor = actor("supervisor", CaseworkRole::Supervisor);
+    let supervisor = actor("supervisor", CaseworkActsAs::Supervisor);
     let before = f.holders().await;
     let id = Uuid::new_v4();
     f.db.execute("INSERT INTO casework_absences(absence_id,person_issuer,person_subject,starts_at,ends_at,cover_issuer,cover_subject,revision) VALUES($1,'https://issuer.test','b',now()-interval '1 hour',now()+interval '1 hour','https://issuer.test','a',1)", &[&id]).await.unwrap();
     assert!(matches!(
         f.service
-            .preview_review_caseload(&supervisor, None, "", movement("b", CaseworkRole::Staff))
+            .preview_review_caseload(&supervisor, None, "", movement("b", CaseworkActsAs::Staff))
             .await,
         Err(ReviewRuntimeError::Forbidden)
     ));
@@ -107,7 +107,7 @@ async fn caseload_refuses_active_absence_and_rechecks_scheduled_absence_at_apply
     .unwrap();
     let preview = f
         .service
-        .preview_review_caseload(&supervisor, None, "", movement("b", CaseworkRole::Staff))
+        .preview_review_caseload(&supervisor, None, "", movement("b", CaseworkActsAs::Staff))
         .await
         .unwrap();
     let delay = (starts - Utc::now()).to_std().unwrap_or_default();

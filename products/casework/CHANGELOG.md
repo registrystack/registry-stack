@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Each access profile may carry an optional `label` and `description`. Neither is matched against a caller, a profile that writes neither reads as before, and rewording them leaves a policy's behavioral binding unchanged. Casework keeps both in the review policy description, which any caller who may read that description, requesters included, can see.
+
+- BREAKING: This release does not read review state stored by 0.45.0 or earlier. A stored review policy that still names `role` on an access profile is refused with a message that says it was stored by an earlier release and names the member, and Casework history stored before the upgrade is not readable after it, and decided reviews still in their result window are not either. Start Casework on a new database when upgrading from 0.45.0 or earlier: activation refuses while any stored review, in any lifecycle, holds the earlier shape.
+
+- BREAKING: The `caseworkctl dev` report names a client's `actsAs` where it named `role`: read `clients[].actsAs`. Values are unchanged.
+
+- BREAKING: A holiday-set file names itself with `id` where it wrote `holidaySet`,
+  and may carry an optional `label`, so the file has the shape Scheduling's
+  `holidaySets` entries have. A calendar still names its set in
+  `calendars.<id>.holidaySet`. Migration: write `id: SET_ID` where the file wrote
+  `holidaySet: SET_ID`; the old key is refused with `config.removed-key` naming `id`.
+
+- BREAKING: Casework access profiles rename `role` to `actsAs`; the values are unchanged, and the `AccessProfile` schema in the OpenAPI document and the CLI report schema, and the definition `CaseworkRole`, are now `CaseworkActsAs`. Migration: in each `accessProfiles` entry, write `actsAs: VALUE` where the file wrote `role: VALUE`. A file that still writes `role` is refused with `config.removed-key` naming `actsAs`.
+- BREAKING: The diagnostic `casework.access-profile.missing-role` is now `casework.access-profile.missing-acts-as`.
+
 - Adopt the shared platform implementations for the access-token algorithm
   roster (still exactly RS256 and ES256), framework-rejection normalization
   (400, 413, 415 and 422 answer the same `request.*` problem codes) and the
