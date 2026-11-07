@@ -799,11 +799,15 @@ fn projection_locates_authority_identity_refusals_at_the_source_position() {
             .iter()
             .find(|diagnostic| {
                 diagnostic.code == "breg.manifest-projection.invalid"
-                    && diagnostic.path.starts_with("project.manifestProjection.authorities[")
+                    && diagnostic
+                        .path
+                        .starts_with("project.manifestProjection.authorities[")
             })
             .unwrap_or_else(|| panic!("{member} refusal is located: {failure:?}"));
         assert!(
-            diagnostic.path.starts_with("project.manifestProjection.authorities[0]."),
+            diagnostic
+                .path
+                .starts_with("project.manifestProjection.authorities[0]."),
             "{member} refusal names the source index: {}",
             diagnostic.path
         );
