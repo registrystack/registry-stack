@@ -29,6 +29,22 @@ relevant product pages on this site rather than duplicating release notes.
     current_pack_metrics_preserve_closed_http_status_outcomes_without_sensitive_labels and
     current_pack_metrics_count_a_source_400_or_415_as_shape_drift. */}
 
+- BREAKING (Rust client): Coordinator's `RunListQuery` is `#[non_exhaustive]`, so a struct
+  literal no longer compiles. Build it with `RunListQuery::new(limit)` and chain `with_cursor`,
+  `with_state`, `with_attention`, `with_proposal`, `with_turn` and `with_outcome`.
+- A Coordinator Proposal wait whose read shows Base Registry Engine (BReg) applying the Proposal
+  automatically (`submitted`, `turn: nobody`) reads again at the read floor (default 30 seconds)
+  instead of after `resultCheckSeconds` (default 900). The read floor and observation budget still
+  apply.
+- The KoboToolbox Adapter pack says its API token carries the account's API rights, so bind the
+  token of an account restricted to the form. The pack digest changes: repin a job that pins it.
+
+{/* Evidence: products/coordinator/CHANGELOG.md, Unreleased, `#[non_exhaustive]` and
+    `turn: nobody`; crates/registry-coordinator-client/src/model.rs, with_cursor;
+    crates/registry-coordinator/tests/breg_proposal_wait_postgres.rs,
+    any_read_of_an_automatic_application_reads_again_at_the_read_floor;
+    products/adapter/packs/kobotoolbox/pack.yaml; products/adapter/examples/kobotoolbox-job/job.yaml. */}
+
 ## v0.45.0 beta-57
 
 - BREAKING: Evidence sources move into reviewed Adapter packs. A source declares `pack`,
