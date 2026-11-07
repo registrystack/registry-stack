@@ -206,7 +206,10 @@ phase is `request` for the access attempt and `response` for every other phase, 
 
 All five miss decisions are answered to the caller with one identical `404 resource.not-found`
 problem. The log is where you tell them apart: `code-mismatch` also covers a stored check code that
-is absent or malformed, and it is visible to you only.
+is absent or malformed, and it is visible to you only. A document number that passes the selector
+profile but that the Source path cannot carry is admitted, so it leaves an `access-attempt` record
+and a `transient-failure` record with `dependency-failure`, and the caller gets
+`503 source.unavailable`; the Source is never contacted.
 
 Every record carries `assuranceProfile`, `eventId`, `occurredAt`, `operation`, `phase`,
 `requirement`, `bundleRevision`, `authorityRevision`, `effectiveGrantDigest`, `purpose`,
