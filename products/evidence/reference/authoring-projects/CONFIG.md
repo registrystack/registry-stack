@@ -108,28 +108,6 @@ The route's declared input and output schemas supply the checked lookup and
 private fact contract. Caller input cannot choose a pack, route, endpoint,
 credential or broader selector set.
 
-Every file a pack uses is pinned in `pack.yaml` by its path and `sha256:` digest,
-and `check` and `package` refuse a file whose bytes no longer match. After you
-review a change to a pinned script, query or schema, run `evidencectl pack lock
-adapter-packs/<pack-id>` to recompute the pins instead of copying digests by
-hand:
-
-```text
-$ evidencectl pack lock adapter-packs/starter-source
-Locked adapter-packs/starter-source/pack.yaml
-  scripts/extract.rhai: sha256:0b99f8765f05 -> sha256:79e004ea1d19
-1 pin updated
-```
-
-The command rewrites only the digest of each stale pin, in place, so the diff
-shows nothing else. It says `nothing changed` when every pin already matches. It
-never adds or removes a pin: declare a new file in `pack.yaml` first, with any
-well-formed placeholder digest, then lock. It refuses, and writes nothing, when
-a pinned file is missing, is a symbolic link or sits behind one, or has a path
-that is absolute or contains `..`, and it lists every such file at once. It
-edits a `pack.yaml` written as JSON, the form `evidencectl` writes; for a pack
-you wrote in another YAML form it refuses and leaves the pins to you.
-
 A route whose input schema has a root `oneOf` offers alternative lookup keys,
 for example a person identifier or a household identifier with a region. The
 Source `inputs` must map every input of at least one alternative; `evidencectl
