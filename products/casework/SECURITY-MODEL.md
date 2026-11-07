@@ -36,6 +36,17 @@ Deployment behavior is in the [README](README.md),
 - **Supervisory reads.** Supervisory discovery omits holder identities and due
   dates and grants no reviewer content access. The audited accountability read
   is released only after its audit entry is accepted (CASEWORK-SEC-21).
+- **Policy inspection.** Any caller allowed to read a review policy, including
+  the trusted producers that submit to it, receives its full closure from
+  `GET /v1/review-policies`: every access profile in the project (id, label,
+  description, principal claim name, required scopes and role) together with
+  the queues, teams, inbox, and the policy's clocks, calendars, context
+  provider, task templates and trusted producers. This is intended: the policy
+  digest a producer pins covers that whole closure, and the producer must be
+  able to recompute it. The closure holds no secrets, credentials or people and
+  no service address other than the token issuer's URL, and it does not say
+  which client holds which scope. Keep anything confidential out of a
+  profile's `label` and `description`.
 - **Task grants.** A grant is bounded: 900 seconds for an immediate grant, at
   most 604800 seconds (seven days) for a `deferred` one. Responsibility
   changes, release, a changed subject, template deactivation and revocation
