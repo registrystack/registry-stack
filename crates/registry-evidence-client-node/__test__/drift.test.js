@@ -215,6 +215,8 @@ test('the handwritten request-batch input types preserve the common and item fie
     'expectedOutputs',
     'maximumAssertionLifetimeSeconds',
     'clockSkewSeconds',
+    'acceptedChannels',
+    'maximumCredentialAgeSeconds',
     'items',
   ]);
 });

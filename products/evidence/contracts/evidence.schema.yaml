@@ -7,6 +7,7 @@ required:
   - schema
   - assuranceProfile
   - subjectBinding
+  - channel
   - id
   - type
   - supportsRequirement
@@ -26,10 +27,29 @@ required:
 dependentRequired:
   audience: [requestNonce]
   requestNonce: [audience]
+# A holder-presented assertion carries the presented credential and a source
+# assertion carries none.
+if:
+  properties:
+    channel: {const: holder-presented}
+  required: [channel]
+then:
+  required: [presentedCredential]
+else:
+  not:
+    required: [presentedCredential]
 properties:
   schema: {const: registry.assertion-evidence/v1}
   assuranceProfile: {enum: [local, production, evidence-grade]}
   subjectBinding: {enum: [audience-scoped, holder-bound]}
+  channel:
+    enum: [source, holder-presented]
+    description: >-
+      How the facts were obtained. A source assertion was acquired by Evidence
+      from an authoritative source; a holder-presented assertion was derived
+      from a credential that a holder presented and Evidence verified. The
+      vocabulary is closed and signed with every other member.
+  presentedCredential: {$ref: '#/$defs/presented-credential'}
   requestNonce: {type: string, pattern: '^[A-Za-z0-9_-]{43}$'}
   id: {type: string, format: uri, maxLength: 512}
   type: {const: Evidence}
@@ -66,6 +86,24 @@ properties:
     maxItems: 16
     items: {$ref: '#/$defs/supported-value'}
 $defs:
+  presented-credential:
+    type: object
+    additionalProperties: false
+    required: [trustEntry, issuer, type, issuedAt, subjectLink]
+    properties:
+      trustEntry:
+        type: string
+        pattern: '^[a-z][a-z0-9_-]{0,63}$'
+        description: The identifier of the issuer allow-list entry that matched.
+      issuer: {type: string, format: uri, maxLength: 512, description: "The credential's iss."}
+      type: {type: string, minLength: 1, maxLength: 512, description: "The credential's vct."}
+      issuedAt:
+        type: string
+        format: date-time
+        description: >-
+          The credential's own issue time. It is never the verification or
+          evaluation instant, and it is not later than observedAt.
+      subjectLink: {enum: [possession, attribute-match]}
   subject-binding:
     type: object
     additionalProperties: false

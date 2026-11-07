@@ -24,44 +24,53 @@ forbidden_packages=(
   tracing
 )
 
-dependency_tree=$(
-  cargo tree \
-    --locked \
-    --manifest-path "$repository_root/Cargo.toml" \
-    --package registry-evidence-verifier \
-    --edges normal \
-    --target all
+# The pure presentation crate is linked by Evidence behind a feature but has the
+# same no-I/O promise, so its normal dependency tree gets the same check.
+portable_packages=(
+  registry-evidence-verifier
+  registry-evidence-presentation
 )
 
 found_forbidden=0
-for package in "${forbidden_packages[@]}"; do
-  # A search that neither matches nor reports "no match" is a broken check, not
-  # a clean tree, so separate the two outcomes from every other status.
-  search_status=0
-  # `grep -E` rather than ripgrep: the hosted runner that gates this has no
-  # ripgrep, and a search command that is absent exits 127, which reads as a
-  # clean tree in any construct that only distinguishes match from no match.
-  matches=$(
-    printf '%s\n' "$dependency_tree" |
-      grep -E "(^|[^0-9A-Za-z_-])${package}([-_][0-9A-Za-z_-]+)* v[0-9]"
-  ) || search_status=$?
-  case "$search_status" in
-  0)
-    printf 'registry-evidence-verifier reaches %s through its normal dependencies:\n%s\n' \
-      "$package" "$matches" >&2
-    found_forbidden=1
-    ;;
-  1) ;;
-  *)
-    printf 'The dependency search for %s failed with status %s.\n' \
-      "$package" "$search_status" >&2
-    exit 1
-    ;;
-  esac
+for portable_package in "${portable_packages[@]}"; do
+  dependency_tree=$(
+    cargo tree \
+      --locked \
+      --manifest-path "$repository_root/Cargo.toml" \
+      --package "$portable_package" \
+      --edges normal \
+      --target all
+  )
+
+  for package in "${forbidden_packages[@]}"; do
+    # A search that neither matches nor reports "no match" is a broken check, not
+    # a clean tree, so separate the two outcomes from every other status.
+    search_status=0
+    # `grep -E` rather than ripgrep: the hosted runner that gates this has no
+    # ripgrep, and a search command that is absent exits 127, which reads as a
+    # clean tree in any construct that only distinguishes match from no match.
+    matches=$(
+      printf '%s\n' "$dependency_tree" |
+        grep -E "(^|[^0-9A-Za-z_-])${package}([-_][0-9A-Za-z_-]+)* v[0-9]"
+    ) || search_status=$?
+    case "$search_status" in
+    0)
+      printf '%s reaches %s through its normal dependencies:\n%s\n' \
+        "$portable_package" "$package" "$matches" >&2
+      found_forbidden=1
+      ;;
+    1) ;;
+    *)
+      printf 'The dependency search for %s in %s failed with status %s.\n' \
+        "$package" "$portable_package" "$search_status" >&2
+      exit 1
+      ;;
+    esac
+  done
 done
 
 if [[ "$found_forbidden" -ne 0 ]]; then
-  printf 'The portable Evidence verifier must stay free of runtime-only dependencies.\n' >&2
+  printf 'The portable Evidence crates must stay free of runtime-only dependencies.\n' >&2
   exit 1
 fi
 
@@ -95,4 +104,4 @@ case "$feature_tree" in
   ;;
 esac
 
-printf 'Evidence verifier dependencies stay portable and no workspace package enables its fixtures.\n'
+printf 'Evidence verifier and presentation dependencies stay portable and no workspace package enables the verifier fixtures.\n'

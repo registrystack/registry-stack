@@ -58,6 +58,26 @@ fn unknown_protocol_and_incomplete_signed_contract_fail_before_live_binding() {
     assert!(!checked_protocol("signed-evidence-v1", b"{}"));
 }
 
+#[test]
+fn the_wallet_presentation_protocol_is_registered_only_with_its_feature() {
+    let registered = format!(
+        "{:?}",
+        registry_evidence::host_protocol::registry().unwrap()
+    );
+    assert_eq!(
+        registered.contains("wallet-presentation-v1"),
+        cfg!(feature = "wallet-presentation")
+    );
+}
+
+#[test]
+fn the_wallet_presentation_protocol_needs_a_complete_authenticated_contract() {
+    // The fixture endpoint has no authentication and the configuration is
+    // empty: the protocol refuses either way, and without its feature the
+    // identifier is unknown, so a pack that names it never compiles.
+    assert!(!checked_protocol("wallet-presentation-v1", b"{}"));
+}
+
 struct Intent;
 impl registry_adapter_engine::evidence::EvidenceHostHooks for Intent {
     fn before_acquisition<'a>(

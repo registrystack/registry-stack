@@ -161,6 +161,7 @@ mod tests {
                 .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
                 .collect(),
             Zeroizing::new(body.as_ref().to_vec()),
+            chrono::DateTime::UNIX_EPOCH,
         )
     }
 

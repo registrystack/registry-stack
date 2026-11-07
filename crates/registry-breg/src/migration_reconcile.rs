@@ -208,9 +208,8 @@ impl From<PostgresKernelError> for ReconcileError {
             | PostgresKernelError::FieldPatternSyntax { .. }
             | PostgresKernelError::FieldPatternExistingRows { .. }
             | PostgresKernelError::FieldEncryptionBlindCollision { .. }
-            | PostgresKernelError::FieldEncryptionRetainedProposalSnapshots { .. } => {
-                Self::InvalidInput
-            }
+            | PostgresKernelError::FieldEncryptionRetainedProposalSnapshots { .. }
+            | PostgresKernelError::BlindIndexReindexRowLimit { .. } => Self::InvalidInput,
             PostgresKernelError::Connection
             | PostgresKernelError::Statement(_)
             | PostgresKernelError::Pool
@@ -248,6 +247,7 @@ impl From<MigrationError> for ReconcileError {
             | MigrationError::FieldPatternExistingRows { .. }
             | MigrationError::FieldEncryptionLookupCollision { .. }
             | MigrationError::FieldEncryptionRetainedProposalSnapshots { .. }
+            | MigrationError::BlindIndexReindexRowLimit { .. }
             | MigrationError::ActiveProposalRecoveryUnavailable
             | MigrationError::BackupEvidence
             | MigrationError::BackupBindingDocument(_)

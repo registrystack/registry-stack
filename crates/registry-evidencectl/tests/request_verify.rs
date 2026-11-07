@@ -1058,6 +1058,7 @@ impl Fixture {
             "schema": "registry.assertion-evidence/v1",
             "assuranceProfile": "local",
             "subjectBinding": "audience-scoped",
+            "channel": "source",
             "requestNonce": request["requestNonce"],
             "id": "urn:registrystack:evidence:local:assertion:00000000-0000-4000-8000-000000000001",
             "type": "Evidence",

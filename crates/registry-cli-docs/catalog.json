@@ -15157,6 +15157,159 @@
       ]
     },
     {
+      "name": "evidence-oid4vp",
+      "invocation": "evidence-oid4vp",
+      "about": "Registry Stack OpenID4VP verifier front end for Evidence",
+      "long_about": null,
+      "usage": "evidence-oid4vp <COMMAND>",
+      "arguments": [],
+      "options": [
+        {
+          "display": "-h, --help",
+          "description": "Print help",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        },
+        {
+          "display": "-V, --version",
+          "description": "Print version",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        }
+      ],
+      "constraints": [],
+      "subcommands": [
+        {
+          "name": "check",
+          "invocation": "evidence-oid4vp check",
+          "about": "Check the runtime file offline, as `serve` reads it, then exit",
+          "long_about": "Check the runtime file offline, as `serve` reads it, then exit. Reads the one file and nothing else: no network, no socket, and no secret material. It does not prove that the certificate chain and signing key resolve, match, or are unexpired: `serve` proves all three when it starts. Exits 0 when nothing is refused, 1 when something is refused or, under --deny-warnings, a warning is reported, 2 when the command line is invalid, and 3 when the file cannot be read.",
+          "usage": "evidence-oid4vp check [OPTIONS] --runtime-config <FILE>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--runtime-config <FILE>",
+              "description": "Runtime configuration file",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": "EVIDENCE_OID4VP_RUNTIME_CONFIG"
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "--deny-warnings",
+              "description": "Exit 1 when a warning is reported",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--environment",
+              "description": "Fill `${NAME}` expressions in the runtime file from the process environment and check the values they produce. Without it, each expression is checked by syntax and position only",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help (see a summary with '-h')",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "openapi",
+          "invocation": "evidence-oid4vp openapi",
+          "about": "Render the deterministic OpenAPI 3.1 contract, then exit",
+          "long_about": null,
+          "usage": "evidence-oid4vp openapi [OPTIONS]",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--output <OUTPUT>",
+              "description": "Write to a file instead of stdout",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "serve",
+          "invocation": "evidence-oid4vp serve",
+          "about": "Serve the portal and wallet endpoints until terminated",
+          "long_about": null,
+          "usage": "evidence-oid4vp serve --runtime-config <FILE>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--runtime-config <FILE>",
+              "description": "Runtime configuration file",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": "EVIDENCE_OID4VP_RUNTIME_CONFIG"
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        }
+      ]
+    },
+    {
       "name": "evidencectl",
       "invocation": "evidencectl",
       "about": "Evidence adopter tooling: keys, source authoring, fixture runs",

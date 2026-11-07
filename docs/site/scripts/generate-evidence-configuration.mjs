@@ -44,6 +44,7 @@ const DEPLOYMENT_REFERENCE =
   'products/evidence/reference/request-adapter/deployment-projects/CONFIG.md';
 const AUTHORING_REFERENCE = 'products/evidence/reference/authoring-projects/CONFIG.md';
 const OID4VCI_REFERENCE = 'docs/site/src/content/docs/configure/evidence-oid4vci.mdx';
+const OID4VP_REFERENCE = 'docs/site/src/content/docs/configure/evidence-oid4vp.mdx';
 
 export const CONTRACTS = [
   {
@@ -116,6 +117,13 @@ export const CONTRACTS = [
     title: 'evidence-oid4vci runtime configuration',
     status: 'beta',
     reference: OID4VCI_REFERENCE,
+  },
+  {
+    id: 'oid4vp-runtime',
+    file: 'products/evidence/generated/oid4vp-runtime/oid4vp-runtime.schema.json',
+    title: 'evidence-oid4vp runtime configuration',
+    status: 'beta',
+    reference: OID4VP_REFERENCE,
   },
 ];
 

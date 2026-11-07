@@ -6,6 +6,7 @@
 
 use std::collections::BTreeMap;
 use std::future::Future;
+use std::io;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -608,6 +609,132 @@ pub async fn body_limit_problem_response(_request: Request<Body>) -> Response<Bo
     .into_response()
 }
 
+/// The class of an axum framework rejection a service re-answers in its own
+/// problem vocabulary.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FrameworkRejection {
+    /// 400 Bad Request.
+    Invalid,
+    /// 413 Payload Too Large.
+    BodyTooLarge,
+    /// 415 Unsupported Media Type.
+    UnsupportedMediaType,
+    /// 422 Unprocessable Entity.
+    Unprocessable,
+}
+
+/// Replace an axum framework rejection body with the service's own problem.
+///
+/// Extractors and layers answer 400, 413, 415 and 422 with bodies no caller
+/// was promised. A response with those statuses that is not already
+/// `application/problem+json` (compared exactly, ignoring only a parameter
+/// after `;`) is replaced by `problem(kind)`, so every answer reads as the
+/// service's one problem shape. Every other response, including a problem
+/// response with one of those statuses, is returned unchanged.
+pub fn normalize_framework_rejection<B>(
+    response: Response<B>,
+    problem: impl FnOnce(FrameworkRejection) -> Response<B>,
+) -> Response<B> {
+    let is_problem = response
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        == Some("application/problem+json");
+    if is_problem {
+        return response;
+    }
+    let kind = match response.status() {
+        StatusCode::BAD_REQUEST => FrameworkRejection::Invalid,
+        StatusCode::PAYLOAD_TOO_LARGE => FrameworkRejection::BodyTooLarge,
+        StatusCode::UNSUPPORTED_MEDIA_TYPE => FrameworkRejection::UnsupportedMediaType,
+        StatusCode::UNPROCESSABLE_ENTITY => FrameworkRejection::Unprocessable,
+        _ => return response,
+    };
+    problem(kind)
+}
+
+/// An operator stop signal a service drains on.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StopSignal {
+    /// SIGTERM, which a service manager and a container runtime send.
+    #[cfg(unix)]
+    Terminate,
+    /// SIGINT on Unix, Ctrl-C on Windows; an interactive operator's stop.
+    Interrupt,
+}
+
+impl StopSignal {
+    /// The signals the platform delivers, in installation order.
+    #[cfg(unix)]
+    const PLATFORM: [Self; 2] = [Self::Terminate, Self::Interrupt];
+    #[cfg(not(unix))]
+    const PLATFORM: [Self; 1] = [Self::Interrupt];
+}
+
+/// A future that resolves when one installed signal arrives.
+pub type StopWatch = Pin<Box<dyn Future<Output = ()> + Send>>;
+
+/// Resolve on the first SIGTERM (Unix) or Ctrl-C.
+///
+/// Every handler is installed before this returns, so a service that cannot
+/// observe a stop request refuses to start instead of running with a signal
+/// that would terminate it abruptly or never stop it. A handler that cannot be
+/// installed is an error naming the operating system cause; it is never a wait
+/// that no signal can end. Call it before binding a listener.
+///
+/// If a handler's signal stream later ends because the runtime's signal
+/// driver is gone, the returned future resolves, so the service stops rather
+/// than running with no way to be stopped.
+pub fn shutdown_signal() -> io::Result<impl Future<Output = ()> + Send + 'static> {
+    shutdown_signal_with(install_operating_system_signal)
+}
+
+/// [`shutdown_signal`] with the installer supplied, so a test can prove that
+/// an install failure is returned and that either signal resolves the future.
+/// `install` is called once for each signal in [`StopSignal::PLATFORM`] order,
+/// and the first error is returned without installing the rest.
+fn shutdown_signal_with<I>(mut install: I) -> io::Result<impl Future<Output = ()> + Send + 'static>
+where
+    I: FnMut(StopSignal) -> io::Result<StopWatch>,
+{
+    let mut watches = Vec::with_capacity(StopSignal::PLATFORM.len());
+    for signal in StopSignal::PLATFORM {
+        watches.push(install(signal)?);
+    }
+    Ok(std::future::poll_fn(move |context| {
+        for watch in &mut watches {
+            if watch.as_mut().poll(context).is_ready() {
+                return Poll::Ready(());
+            }
+        }
+        Poll::Pending
+    }))
+}
+
+#[cfg(unix)]
+fn install_operating_system_signal(signal: StopSignal) -> io::Result<StopWatch> {
+    use tokio::signal::unix::{signal as install, SignalKind};
+
+    let kind = match signal {
+        StopSignal::Terminate => SignalKind::terminate(),
+        StopSignal::Interrupt => SignalKind::interrupt(),
+    };
+    let mut stream = install(kind)?;
+    Ok(Box::pin(async move {
+        stream.recv().await;
+    }))
+}
+
+#[cfg(windows)]
+fn install_operating_system_signal(signal: StopSignal) -> io::Result<StopWatch> {
+    let StopSignal::Interrupt = signal;
+    let mut stream = tokio::signal::windows::ctrl_c()?;
+    Ok(Box::pin(async move {
+        stream.recv().await;
+    }))
+}
+
 fn is_loopback_origin(url: &url::Url) -> bool {
     let Some(host) = url.host() else {
         return false;
@@ -1001,5 +1128,180 @@ mod tests {
                 .unwrap(),
             "cross-origin"
         );
+    }
+
+    // ----- shutdown_signal -----
+
+    use std::io;
+
+    fn pending_watch() -> StopWatch {
+        Box::pin(std::future::pending())
+    }
+
+    #[test]
+    fn a_signal_that_cannot_be_installed_is_an_error_not_a_silent_wait() {
+        for failing in StopSignal::PLATFORM {
+            let mut attempted = Vec::new();
+            let result = shutdown_signal_with(|signal| {
+                attempted.push(signal);
+                if signal == failing {
+                    Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "install refused",
+                    ))
+                } else {
+                    Ok(pending_watch())
+                }
+            });
+            let error = result
+                .err()
+                .unwrap_or_else(|| panic!("an install failure of {failing:?} must refuse startup"));
+            assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+            assert!(attempted.contains(&failing));
+        }
+    }
+
+    #[test]
+    fn every_platform_signal_is_installed_before_the_future_is_returned() {
+        let mut installed = Vec::new();
+        let _future = shutdown_signal_with(|signal| {
+            installed.push(signal);
+            Ok(pending_watch())
+        })
+        .expect("installs succeed");
+        assert_eq!(installed, StopSignal::PLATFORM);
+    }
+
+    #[tokio::test]
+    async fn the_future_resolves_when_either_installed_signal_fires() {
+        for firing in StopSignal::PLATFORM {
+            let future = shutdown_signal_with(|signal| {
+                if signal == firing {
+                    Ok(Box::pin(std::future::ready(())) as StopWatch)
+                } else {
+                    Ok(pending_watch())
+                }
+            })
+            .expect("installs succeed");
+            tokio::time::timeout(std::time::Duration::from_secs(5), future)
+                .await
+                .unwrap_or_else(|_| panic!("{firing:?} must resolve the future"));
+        }
+    }
+
+    #[test]
+    fn the_future_stays_pending_until_a_signal_arrives() {
+        let future = shutdown_signal_with(|_| Ok(pending_watch())).expect("installs succeed");
+        let mut future = Box::pin(future);
+        let waker = std::task::Waker::noop();
+        let mut context = Context::from_waker(waker);
+        assert!(future.as_mut().poll(&mut context).is_pending());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_operating_system_installer_resolves_on_sigterm() {
+        let future = shutdown_signal().expect("handlers install");
+        let status = std::process::Command::new("kill")
+            .args(["-TERM", &std::process::id().to_string()])
+            .status()
+            .expect("kill runs");
+        assert!(status.success());
+        tokio::time::timeout(std::time::Duration::from_secs(5), future)
+            .await
+            .expect("SIGTERM resolves the shutdown future");
+    }
+
+    // ----- normalize_framework_rejection -----
+
+    fn plain(status: StatusCode, content_type: Option<&str>) -> Response<Body> {
+        let mut builder = Response::builder().status(status);
+        if let Some(content_type) = content_type {
+            builder = builder.header(CONTENT_TYPE, content_type);
+        }
+        builder.body(Body::from("framework body")).unwrap()
+    }
+
+    fn replacement(rejection: FrameworkRejection) -> Response<Body> {
+        Response::builder()
+            .status(StatusCode::IM_A_TEAPOT)
+            .header("x-rejection", format!("{rejection:?}"))
+            .body(Body::empty())
+            .unwrap()
+    }
+
+    #[test]
+    fn each_framework_rejection_status_is_replaced_by_its_kind() {
+        for (status, kind) in [
+            (StatusCode::BAD_REQUEST, FrameworkRejection::Invalid),
+            (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                FrameworkRejection::BodyTooLarge,
+            ),
+            (
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                FrameworkRejection::UnsupportedMediaType,
+            ),
+            (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                FrameworkRejection::Unprocessable,
+            ),
+        ] {
+            for content_type in [
+                None,
+                Some("text/plain; charset=utf-8"),
+                Some("application/json"),
+            ] {
+                let out = normalize_framework_rejection(plain(status, content_type), replacement);
+                assert_eq!(out.status(), StatusCode::IM_A_TEAPOT, "{status}");
+                assert_eq!(out.headers()["x-rejection"], format!("{kind:?}"));
+            }
+        }
+    }
+
+    #[test]
+    fn a_problem_response_is_kept_with_or_without_parameters() {
+        for content_type in [
+            "application/problem+json",
+            "application/problem+json; charset=utf-8",
+        ] {
+            let out = normalize_framework_rejection(
+                plain(StatusCode::BAD_REQUEST, Some(content_type)),
+                |_| panic!("a problem response is not replaced"),
+            );
+            assert_eq!(out.status(), StatusCode::BAD_REQUEST);
+            assert_eq!(out.headers()[CONTENT_TYPE], content_type);
+        }
+    }
+
+    #[test]
+    fn the_problem_media_type_match_is_exact_as_every_product_copy_had_it() {
+        for content_type in ["Application/Problem+Json", " application/problem+json"] {
+            let out = normalize_framework_rejection(
+                plain(StatusCode::BAD_REQUEST, Some(content_type)),
+                replacement,
+            );
+            assert_eq!(out.status(), StatusCode::IM_A_TEAPOT, "{content_type:?}");
+        }
+    }
+
+    #[test]
+    fn every_other_status_passes_through_untouched() {
+        for status in [
+            StatusCode::OK,
+            StatusCode::UNAUTHORIZED,
+            StatusCode::FORBIDDEN,
+            StatusCode::NOT_FOUND,
+            StatusCode::METHOD_NOT_ALLOWED,
+            StatusCode::REQUEST_TIMEOUT,
+            StatusCode::TOO_MANY_REQUESTS,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            StatusCode::SERVICE_UNAVAILABLE,
+        ] {
+            let out = normalize_framework_rejection(plain(status, None), |_| {
+                panic!("{status} is not a framework rejection")
+            });
+            assert_eq!(out.status(), status);
+        }
     }
 }

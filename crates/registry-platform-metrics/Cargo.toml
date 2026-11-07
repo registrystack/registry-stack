@@ -1,0 +1,15 @@
+[package]
+name = "registry-platform-metrics"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Prometheus text exposition primitives with bounded label cardinality for Registry Stack runtimes."
+repository.workspace = true
+readme = "README.md"
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]

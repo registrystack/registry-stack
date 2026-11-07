@@ -83,11 +83,11 @@ pub async fn set_force_row_security_for_test(
 pub(crate) use interlock::{
     covered_field_encryption_fields, field_plaintext_string, lock_wait_ended,
     prepare_unique_blind_index_preflight, prior_plaintext_projection, read_activation_status,
-    record_unique_blind_index_page, recursive_member_path, set_force_row_security,
-    ActivationStatusRead, DedicatedApplyConnection as VerifiedPackageApplyConnection,
-    FieldEncryptionCoveredField, MaintenanceSnapshot, MaintenanceTransition, PackageDdlStatement,
-    ReviewedExecutionOutcome, ReviewedFieldEncryptionContext, ReviewedMigrationProgress,
-    ReviewedPackageExecutionRequest,
+    record_unique_blind_index_page, recursive_member_path, reindexed_blind_index_fields,
+    scan_blind_index_reindex, set_force_row_security, ActivationStatusRead,
+    DedicatedApplyConnection as VerifiedPackageApplyConnection, FieldEncryptionCoveredField,
+    MaintenanceSnapshot, MaintenanceTransition, PackageDdlStatement, ReviewedExecutionOutcome,
+    ReviewedFieldEncryptionContext, ReviewedMigrationProgress, ReviewedPackageExecutionRequest,
 };
 pub use interlock::{RegistryLockKey, RetainedLocalHookDeliveries};
 pub(crate) use migration_ledger::{
@@ -406,6 +406,14 @@ pub enum PostgresKernelError {
         "retain-plaintext-history requires clearing retained Proposal snapshots before encrypting the field"
     )]
     FieldEncryptionRetainedProposalSnapshots { entity_id: String, field_id: String },
+    /// Authored identifiers and row counts only.
+    #[error("blind-index re-index would walk more rows than its reviewed maximum")]
+    BlindIndexReindexRowLimit {
+        entity_id: String,
+        step_id: String,
+        row_count: u64,
+        maximum_total_rows: u64,
+    },
     #[error("PostgreSQL connection failed")]
     Connection,
     #[error("PostgreSQL pool operation failed")]

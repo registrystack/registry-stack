@@ -111,6 +111,7 @@ impl ProjectFamily {
         Self::Product(crate::products::ProductKind::Manifest),
         Self::Product(crate::products::ProductKind::Render),
         Self::Product(crate::products::ProductKind::EvidenceOid4vci),
+        Self::Product(crate::products::ProductKind::EvidenceOid4vp),
     ];
 
     /// Whether this family claims a directory as one of its roots.

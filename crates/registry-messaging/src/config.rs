@@ -7,7 +7,6 @@ use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use jsonwebtoken::Algorithm;
 use registry_messaging_core::{
     typed, ProviderKind, MESSAGING_RUNTIME_API_VERSION, MESSAGING_RUNTIME_KIND, PACKAGE_FILE,
     RETIRED_MESSAGING_RUNTIME_API_VERSION,
@@ -33,8 +32,8 @@ pub use registry_platform_config::{
     UNAVAILABLE_CODE as RUNTIME_CONFIG_UNAVAILABLE_CODE,
 };
 use registry_platform_oidc::{
-    access_token_typ_set, fetch_discovery_for_issuer, parse_static_jwks, IssuerNetworkPolicy,
-    JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, TokenVerifierConfig,
+    access_token_typ_set, fetch_discovery_for_issuer, parse_static_jwks, AccessTokenAlgorithm,
+    IssuerNetworkPolicy, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, TokenVerifierConfig,
 };
 use registry_platform_yaml::{escape_pointer_segment, Diagnostic, Report, RetiredApiVersion};
 use serde::{Deserialize, Deserializer};
@@ -910,7 +909,10 @@ impl RuntimeConfig {
         TokenVerifierConfig::access_token_profile(
             self.authentication.oidc.provider.issuer.to_string(),
             vec![self.authentication.oidc.provider.audience.clone()],
-            vec![Algorithm::RS256, Algorithm::ES256],
+            vec![
+                AccessTokenAlgorithm::RS256.to_jsonwebtoken(),
+                AccessTokenAlgorithm::ES256.to_jsonwebtoken(),
+            ],
             access_token_typ_set(MESSAGING_ACCESS_TOKEN_TYPE),
         )
         .with_scope_claim(self.authentication.oidc.scope_claim.clone())

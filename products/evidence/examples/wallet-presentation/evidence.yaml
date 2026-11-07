@@ -1,0 +1,151 @@
+apiVersion: id.registrystack.org/formats/evidence/project/v1alpha1
+kind: EvidenceProject
+id: wallet-presentation-evidence
+selectorProfiles:
+  wallet-session:
+    maximumAggregateBytes: 1152
+    fields:
+      session-reference:
+        type: string
+        minimumBytes: 1
+        maximumBytes: 128
+      principal-issuer:
+        type: string
+        minimumBytes: 1
+        maximumBytes: 512
+      principal-subject:
+        type: string
+        minimumBytes: 1
+        maximumBytes: 512
+  wallet-session-with-name:
+    maximumAggregateBytes: 1408
+    fields:
+      session-reference:
+        type: string
+        minimumBytes: 1
+        maximumBytes: 128
+      principal-issuer:
+        type: string
+        minimumBytes: 1
+        maximumBytes: 512
+      principal-subject:
+        type: string
+        minimumBytes: 1
+        maximumBytes: 512
+      expected-name:
+        type: string
+        minimumBytes: 1
+        maximumBytes: 256
+functions:
+- id: derive-credential-possession
+  interface: assertion-derive/v1
+  source: functions/derive-credential-possession.rhai
+- id: derive-name-match
+  interface: assertion-derive/v1
+  source: functions/derive-name-match.rhai
+sources:
+  presented-possession:
+    pack: {id: wallet-session, version: '1'}
+    route: possession
+    connection: wallet-verifier
+    acquisitionPosture: field-projected
+    inputs:
+      reference:
+        selector: {role: subject, profile: wallet-session, field: session-reference}
+      principalIssuer:
+        selector: {role: subject, profile: wallet-session, field: principal-issuer}
+      principalSubject:
+        selector: {role: subject, profile: wallet-session, field: principal-subject}
+  presented-identity:
+    pack: {id: wallet-session, version: '1'}
+    route: identity
+    connection: wallet-verifier
+    acquisitionPosture: field-projected
+    inputs:
+      reference:
+        selector: {role: subject, profile: wallet-session-with-name, field: session-reference}
+      principalIssuer:
+        selector: {role: subject, profile: wallet-session-with-name, field: principal-issuer}
+      principalSubject:
+        selector: {role: subject, profile: wallet-session-with-name, field: principal-subject}
+assertionDefinitions:
+  credential-possession:
+    question: Did the holder present a credential of the configured type from a trusted issuer?
+    semantics:
+      requirement: urn:example:requirement:credential-possession:v1
+      kind: criterion
+      evidenceType: urn:example:evidence-type:credential-possession:v1
+      referenceFrameworks:
+      - urn:example:framework:wallet-presentation:v1
+    purpose: credential-check
+    grantCeiling:
+      authorities:
+      - organizational
+      actorKinds:
+      - service
+      valueOrigins:
+      - request
+      audiences:
+      - urn:example:audience:wallet-app
+    subjects:
+    - role: subject
+      selectors:
+      - wallet-session
+    acquisition:
+      holderPresented:
+        source: presented-possession
+        selectorProfiles:
+        - wallet-session
+    derive:
+      function: derive-credential-possession
+    outputs:
+      credential-presented:
+        concept: urn:example:concept:credential-presented:v1
+        type: boolean
+    validitySeconds: 300
+    subjectBinding: audience-scoped
+    representations:
+    - signed-jws
+  identity-match:
+    question: Does the name on the presented credential match the expected name?
+    semantics:
+      requirement: urn:example:requirement:identity-match:v1
+      kind: criterion
+      evidenceType: urn:example:evidence-type:identity-match:v1
+      referenceFrameworks:
+      - urn:example:framework:wallet-presentation:v1
+    purpose: identity-check
+    grantCeiling:
+      authorities:
+      - organizational
+      actorKinds:
+      - service
+      valueOrigins:
+      - request
+      audiences:
+      - urn:example:audience:wallet-app
+    subjects:
+    - role: subject
+      selectors:
+      - wallet-session-with-name
+    acquisition:
+      holderPresented:
+        source: presented-identity
+        selectorProfiles:
+        - wallet-session-with-name
+    derive:
+      function: derive-name-match
+      selectorInputs:
+      - role: subject
+        alternatives:
+        - profile: wallet-session-with-name
+          fields:
+          - expected-name
+    outputs:
+      name-matches:
+        concept: urn:example:concept:name-matches:v1
+        type: boolean
+    validitySeconds: 300
+    subjectBinding: audience-scoped
+    representations:
+    - signed-jws

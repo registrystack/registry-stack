@@ -32,7 +32,7 @@ use crate::{config::DeliveryConfig, CREDENTIAL_FORMAT};
 
 /// The proof signing algorithm a wallet must use, and the algorithm Evidence
 /// signs a holder-bound credential with. Both are fixed by the frozen profile.
-const ES256: &str = "ES256";
+pub(crate) const ES256: &str = "ES256";
 
 /// The two binding methods a holder may present. Both are self-contained in
 /// the proof header; the `did:jwk` form is decoded locally and never resolved
@@ -114,6 +114,11 @@ impl CredentialCatalog {
     #[must_use]
     pub fn get(&self, id: &str) -> Option<&CredentialConfiguration> {
         self.entries.get(id)
+    }
+
+    /// Every published configuration, in identifier order.
+    pub fn configurations(&self) -> impl Iterator<Item = &CredentialConfiguration> {
+        self.entries.values()
     }
 
     #[must_use]

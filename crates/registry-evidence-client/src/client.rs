@@ -11,7 +11,7 @@ use std::{
 
 use chrono::{DateTime, Utc};
 use registry_evidence_verifier::{
-    model::{Evidence, JwksDocument},
+    model::{ChannelKind, Evidence, JwksDocument, PresentedCredential},
     verifier::ExpectedSubjectDocument,
     EVIDENCE_REQUEST_BATCH_MEDIA_TYPE, EVIDENCE_REQUEST_BATCH_SCHEMA_V1,
 };
@@ -284,6 +284,20 @@ impl VerifiedEvidence {
         &self.evidence
     }
 
+    /// How the verified facts were obtained. Only a channel the request's
+    /// policy accepted can appear here; the default accepts `source` only.
+    #[must_use]
+    pub fn channel(&self) -> ChannelKind {
+        self.evidence.channel
+    }
+
+    /// The credential a holder presented, present if and only if
+    /// [`Self::channel`] is `holder-presented`.
+    #[must_use]
+    pub fn presented_credential(&self) -> Option<&PresentedCredential> {
+        self.evidence.presented_credential.as_ref()
+    }
+
     /// The validated W3C trace identifier for the exchange that produced this
     /// payload. It is support correlation only, not an Evidence audit operation
     /// identity.
@@ -479,7 +493,9 @@ impl EvidenceClient {
             snapshot.jwks.clone(),
             Vec::new(),
         ))?;
-        let prepared = client.prepare(spec)?;
+        let prepared = client
+            .prepare(spec)?
+            .with_channel_policy(request.channel_policy.clone())?;
         let retained = client.retain_verification(&prepared);
         let raw = client.send(&prepared).await?;
         let verified = client.verify(&prepared, &raw)?;
@@ -537,7 +553,9 @@ impl EvidenceClient {
             snapshot.jwks.clone(),
             Vec::new(),
         ))?;
-        let prepared = client.prepare(spec)?;
+        let prepared = client
+            .prepare(spec)?
+            .with_channel_policy(request.channel_policy.clone())?;
         let token = snapshot.token_provider.bearer_token().await?;
         let authorization = token
             .authorization_header_value()
@@ -1788,15 +1806,16 @@ mod tests {
             PROVIDED_BY, PURPOSE, REQUIREMENT,
         },
         outbound::read_failure_kind,
-        prepare::{EvidenceRequestSpec, SubjectExpectations, SubjectRequest},
+        prepare::{ChannelPolicy, EvidenceRequestSpec, SubjectExpectations, SubjectRequest},
         request::SelectorValue,
         response_format::EvidenceResponseFormat,
         token::StaticToken,
     };
     use registry_evidence_verifier::{
+        model::{ChannelKind, SubjectLinkMode},
         verifier::{
             ExpectedFormDocument, ExpectedOutputDocument, ExpectedScalarFormDocument,
-            VerificationError,
+            VerificationError, MAXIMUM_CREDENTIAL_AGE_SECONDS,
         },
         AssuranceProfile, EVIDENCE_JWS_MEDIA_TYPE, EVIDENCE_SD_JWT_VC_MEDIA_TYPE,
     };
@@ -2000,6 +2019,192 @@ mod tests {
                 .expect("the expectations serialize"),
             serde_json::json!([{"role": "subject", "binding": fixture.subject_binding}])
         );
+    }
+
+    const PRESENTED_CREDENTIAL_ISSUED_AT: &str = "2026-08-01T00:00:00Z";
+
+    #[test]
+    fn a_source_assertion_exposes_its_channel_and_no_presented_credential() {
+        let fixture = signed_evidence();
+        let client = client(&fixture);
+        let prepared = client
+            .prepare(spec(SubjectExpectations::AcceptFirstUse))
+            .expect("the specification is accepted");
+        let response = raw(fixture.sign(prepared.request_nonce()));
+
+        let verified = client
+            .verify_as_of(&prepared, &response, fixture.now)
+            .expect("the response verifies");
+        assert_eq!(verified.channel(), ChannelKind::Source);
+        assert!(verified.presented_credential().is_none());
+    }
+
+    #[test]
+    fn the_default_policy_refuses_a_holder_presented_assertion() {
+        let fixture = signed_evidence();
+        let client = client(&fixture);
+        let prepared = client
+            .prepare(spec(SubjectExpectations::AcceptFirstUse))
+            .expect("the specification is accepted");
+        let response =
+            raw(fixture
+                .sign_holder_presented(prepared.request_nonce(), PRESENTED_CREDENTIAL_ISSUED_AT));
+
+        let failure = client
+            .verify_as_of(&prepared, &response, fixture.now)
+            .expect_err("source is the only channel accepted by default");
+        assert!(
+            matches!(
+                failure,
+                EvidenceClientError::Verification(VerificationError::Policy)
+            ),
+            "{failure:?}"
+        );
+    }
+
+    #[test]
+    fn a_policy_accepting_holder_presented_exposes_the_presented_credential() {
+        let fixture = signed_evidence();
+        let client = client(&fixture);
+        let prepared = client
+            .prepare(spec(SubjectExpectations::AcceptFirstUse))
+            .expect("the specification is accepted")
+            .with_channel_policy(ChannelPolicy {
+                accepted_channels: vec![ChannelKind::Source, ChannelKind::HolderPresented],
+                maximum_credential_age_seconds: None,
+            })
+            .expect("the channel policy is in bounds");
+        let response =
+            raw(fixture
+                .sign_holder_presented(prepared.request_nonce(), PRESENTED_CREDENTIAL_ISSUED_AT));
+
+        let verified = client
+            .verify_as_of(&prepared, &response, fixture.now)
+            .expect("the accepted channel verifies");
+        assert_eq!(verified.channel(), ChannelKind::HolderPresented);
+        let credential = verified
+            .presented_credential()
+            .expect("a holder-presented assertion carries its credential");
+        assert_eq!(credential.trust_entry, "national-id");
+        assert_eq!(credential.issuer, "https://issuer.example");
+        assert_eq!(
+            credential.credential_type,
+            "https://credentials.example/identity"
+        );
+        assert_eq!(credential.issued_at, PRESENTED_CREDENTIAL_ISSUED_AT);
+        assert_eq!(credential.subject_link, SubjectLinkMode::AttributeMatch);
+    }
+
+    #[test]
+    fn the_accepted_channels_survive_a_retained_context() {
+        let fixture = signed_evidence();
+        let client = client(&fixture);
+        let prepared = client
+            .prepare(spec(SubjectExpectations::AcceptFirstUse))
+            .expect("the specification is accepted")
+            .with_channel_policy(ChannelPolicy {
+                accepted_channels: vec![ChannelKind::HolderPresented],
+                maximum_credential_age_seconds: Some(30 * 24 * 60 * 60),
+            })
+            .expect("the channel policy is in bounds");
+        let retained = RetainedEvidenceVerification::from_slice(
+            &serde_json::to_vec(&client.retain_verification(&prepared))
+                .expect("the context serializes"),
+        )
+        .expect("the retained context parses");
+        let response =
+            fixture.sign_holder_presented(prepared.request_nonce(), PRESENTED_CREDENTIAL_ISSUED_AT);
+
+        let verified = retained
+            .verify_as_of(&response, fixture.now)
+            .expect("the retained policy accepts the channel");
+        assert_eq!(verified.channel(), ChannelKind::HolderPresented);
+    }
+
+    #[test]
+    fn the_maximum_credential_age_refuses_an_older_presented_credential() {
+        const DAY: u64 = 24 * 60 * 60;
+        let fixture = signed_evidence();
+        let client = client(&fixture);
+        // The observation is at 2026-08-05T11:59:00Z, 4 days 11:59 after issue.
+        let prepare = |age: u64| {
+            client
+                .prepare(spec(SubjectExpectations::AcceptFirstUse))
+                .expect("the specification is accepted")
+                .with_channel_policy(ChannelPolicy {
+                    accepted_channels: vec![ChannelKind::HolderPresented],
+                    maximum_credential_age_seconds: Some(age),
+                })
+                .expect("the channel policy is in bounds")
+        };
+        let too_tight = prepare(4 * DAY);
+        let response = raw(fixture
+            .sign_holder_presented(too_tight.request_nonce(), PRESENTED_CREDENTIAL_ISSUED_AT));
+        let failure = client
+            .verify_as_of(&too_tight, &response, fixture.now)
+            .expect_err("the credential is older than the policy allows");
+        assert!(
+            matches!(
+                failure,
+                EvidenceClientError::Verification(VerificationError::Policy)
+            ),
+            "{failure:?}"
+        );
+
+        let roomy = prepare(5 * DAY);
+        let response =
+            raw(fixture
+                .sign_holder_presented(roomy.request_nonce(), PRESENTED_CREDENTIAL_ISSUED_AT));
+        client
+            .verify_as_of(&roomy, &response, fixture.now)
+            .expect("the credential is within the allowed age");
+    }
+
+    #[test]
+    fn a_channel_policy_the_verifier_would_refuse_is_refused_at_preparation() {
+        let fixture = signed_evidence();
+        let client = client(&fixture);
+        for (accepted_channels, maximum_credential_age_seconds) in [
+            (Vec::new(), None),
+            (vec![ChannelKind::Source, ChannelKind::Source], None),
+            (vec![ChannelKind::Source], Some(0)),
+            (
+                vec![ChannelKind::Source],
+                Some(MAXIMUM_CREDENTIAL_AGE_SECONDS + 1),
+            ),
+        ] {
+            let prepared = client
+                .prepare(spec(SubjectExpectations::AcceptFirstUse))
+                .expect("the specification is accepted");
+            let failure = prepared
+                .with_channel_policy(ChannelPolicy {
+                    accepted_channels,
+                    maximum_credential_age_seconds,
+                })
+                .expect_err("an out-of-bounds channel policy is refused");
+            assert!(
+                matches!(failure, EvidenceClientError::Configuration { .. }),
+                "{failure:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_batch_channel_policy_applies_to_every_item() {
+        let fixture = signed_evidence();
+        let client = client(&fixture);
+        let batch = client
+            .prepare_batch(request_batch_spec(2))
+            .expect("the batch is accepted")
+            .with_channel_policy(ChannelPolicy {
+                accepted_channels: vec![ChannelKind::HolderPresented],
+                maximum_credential_age_seconds: None,
+            })
+            .expect("the channel policy is in bounds");
+        for index in 0..batch.count() {
+            let policy = batch.policy_document(index).expect("the item exists");
+            assert_eq!(policy.accepted_channels, vec![ChannelKind::HolderPresented]);
+        }
     }
 
     /// The whole point of pinning: once the relying party holds the binding, a

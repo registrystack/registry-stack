@@ -55,9 +55,9 @@ use crate::migration_plan::{
 };
 use crate::model::CompiledStatisticalDataset;
 use crate::model::{
-    CompiledAccessInventory, CompiledActionInventory, CompiledEntity, CompiledQueryInventory,
-    CompiledQueryOperation, CompiledQueryTemporalValueKind, CompiledRecipients,
-    CompiledRouteInventory, REFERENCE_INDEX_PREFIX,
+    CompiledAccessInventory, CompiledActionInventory, CompiledEntity, CompiledFieldEncryption,
+    CompiledQueryInventory, CompiledQueryOperation, CompiledQueryTemporalValueKind,
+    CompiledRecipients, CompiledRouteInventory, REFERENCE_INDEX_PREFIX,
 };
 use crate::physical_names::PhysicalNameInventory;
 use crate::CompiledRegistry;
@@ -1201,7 +1201,7 @@ impl CompiledRegistryChangeCode {
                 "turning field encryption on rekeys storage behind a reviewed backfill before the plaintext column retires; Phase 1 does not support turning encryption off",
             ),
             Self::FieldLookupChanged => Some(
-                "Phase 1 does not support changing the blind-index lookup of an already-encrypted field; keep its lookup unchanged",
+                "changing only the normalization list of an already-encrypted field's blind-index lookup re-derives every stored digest from its envelope behind a reviewed field-encryption backfill; adding, removing, or changing the uniqueness of the lookup is unsupported",
             ),
             Self::FieldAddedRequired => Some(
                 "a required field on an existing entity needs a reviewed backfill; when the field is encrypted, add it as optional, populate it through authorized Registry writes, then make it required in a later package",
@@ -1562,6 +1562,25 @@ fn compare_derived_relations(
     }
 }
 
+/// Whether two encryption shapes differ only in the blind index's
+/// normalization list: both declare a lookup in the same column with the same
+/// uniqueness, so re-deriving the digests from the envelopes is the whole
+/// change.
+fn blind_index_needs_reindex_only(
+    previous: Option<&CompiledFieldEncryption>,
+    candidate: Option<&CompiledFieldEncryption>,
+) -> bool {
+    let (Some(previous), Some(candidate)) = (
+        previous.and_then(|encryption| encryption.blind_index.as_ref()),
+        candidate.and_then(|encryption| encryption.blind_index.as_ref()),
+    ) else {
+        return false;
+    };
+    previous.physical_name == candidate.physical_name
+        && previous.unique == candidate.unique
+        && previous.normalization != candidate.normalization
+}
+
 fn compare_fields(
     entity_id: &str,
     previous: &CompiledEntity,
@@ -1630,10 +1649,19 @@ fn compare_fields(
         {
             push_change(
                 changes,
-                // Existing envelopes are the only source value. Authored SQL
-                // cannot open them to derive a changed keyed blind index, and
-                // the Phase 1 engine backfill only seals predecessor plaintext.
-                CompiledRegistryChangeClass::Unsupported,
+                // Existing envelopes are the only source value, and authored
+                // SQL cannot open them to derive a changed keyed blind index.
+                // The engine re-index opens them, but only for a changed
+                // normalization list over an unchanged column and uniqueness;
+                // any other lookup change has no keyed conversion.
+                if blind_index_needs_reindex_only(
+                    previous_field.encryption.as_ref(),
+                    candidate_field.encryption.as_ref(),
+                ) {
+                    CompiledRegistryChangeClass::DataBackfillRequired
+                } else {
+                    CompiledRegistryChangeClass::Unsupported
+                },
                 CompiledRegistryChangeCode::FieldLookupChanged,
                 target(
                     CompiledRegistryChangeTargetKind::Field,

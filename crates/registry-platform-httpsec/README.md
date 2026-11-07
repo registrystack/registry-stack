@@ -14,6 +14,13 @@ Client-safe HTTP validation plus Axum and Tower helpers for HTTP security.
 - Request body limit layer construction.
 - RFC 9457 Problem Details responses with `application/problem+json`.
 - A standard body-limit problem response.
+- `shutdown_signal`, which installs SIGTERM (Unix) and Ctrl-C handlers before
+  it returns and fails with the operating system error when one cannot be
+  installed, so a service refuses startup instead of waiting on a signal it
+  cannot observe.
+- `normalize_framework_rejection`, which re-answers axum's 400, 413, 415 and
+  422 framework bodies in the service's own problem vocabulary through a
+  caller-supplied mapping from `FrameworkRejection`.
 - `TraceId` and `TraceContext`, the shared strict W3C `traceparent` transport
   primitives for Registry service responses.
 - `ProblemBody`, the fixed value-free Registry Stack problem envelope with

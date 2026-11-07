@@ -236,31 +236,13 @@ async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
     // The stop signal is observed once and broadcast, so the drain and the
     // hard bound below race the same event.
     let (stop_tx, stop_rx) = tokio::sync::watch::channel(());
-    // The handler is installed here, not inside the task: a failure must
-    // refuse startup. Installing it in the task could only panic there,
-    // which ends the task alone and would leave a server that treats
-    // SIGTERM as an immediate exit with renders in flight.
-    #[cfg(unix)]
-    let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-        .map_err(|err| {
-            RenderProblem::new(
-                ProblemKind::Internal,
-                format!("cannot install the SIGTERM handler: {err}"),
-            )
-        })?;
+    // The handlers are installed here, not inside the task: a failure must
+    // refuse startup. Installing them in the task could only fail there,
+    // which would leave a server that treats SIGTERM as an immediate exit
+    // with renders in flight.
+    let stop_signal = stop_signal_after(registry_platform_httpsec::shutdown_signal)?;
     tokio::spawn(async move {
-        let ctrl_c = tokio::signal::ctrl_c();
-        #[cfg(unix)]
-        {
-            tokio::select! {
-                _ = ctrl_c => {},
-                _ = term.recv() => {},
-            }
-        }
-        #[cfg(not(unix))]
-        {
-            let _ = ctrl_c.await;
-        }
+        stop_signal.await;
         let _ = stop_tx.send(());
     });
     // Phase 1 — drain: the graceful-shutdown future holds the server open
@@ -315,6 +297,21 @@ async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
     }
     tracing::info!("registry-render serve stopped");
     Ok(0)
+}
+
+/// Install the stop-signal handlers (SIGTERM and Ctrl-C) with `install`. A
+/// failure refuses startup, so the server is never left with no way to drain
+/// on a stop request.
+fn stop_signal_after<I, S>(install: I) -> Result<S, RenderProblem>
+where
+    I: FnOnce() -> std::io::Result<S>,
+{
+    install().map_err(|err| {
+        RenderProblem::new(
+            ProblemKind::Internal,
+            format!("cannot install the stop signal handlers: {err}"),
+        )
+    })
 }
 
 fn init_tracing() {
@@ -1625,6 +1622,31 @@ mod tests {
             rustix::process::dumpable_behavior().expect("prctl reads"),
             rustix::process::DumpableBehavior::NotDumpable
         );
+    }
+
+    #[test]
+    fn a_stop_signal_install_failure_refuses_startup() {
+        let problem = stop_signal_after(|| -> std::io::Result<std::future::Pending<()>> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "install refused",
+            ))
+        })
+        .expect_err("an install failure is an error, never a silent wait");
+        assert_eq!(problem.kind, ProblemKind::Internal);
+        assert!(
+            problem.detail.contains("install refused"),
+            "{}",
+            problem.detail
+        );
+    }
+
+    #[tokio::test]
+    async fn an_installed_stop_signal_resolves_when_it_fires() {
+        let signal = stop_signal_after(|| Ok(std::future::ready(()))).expect("installs");
+        tokio::time::timeout(std::time::Duration::from_secs(5), signal)
+            .await
+            .expect("a fired signal resolves");
     }
 
     #[test]

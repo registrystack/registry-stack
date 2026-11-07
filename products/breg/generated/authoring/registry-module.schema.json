@@ -3092,6 +3092,16 @@
           "const": "remove-separators",
           "description": "Strips spaces, hyphens, slashes, and dots from the canonical form.",
           "type": "string"
+        },
+        {
+          "const": "nfc",
+          "description": "Canonical composition (Unicode NFC), so a precomposed letter and its\nbase letter plus combining mark give the same value. Compatibility\nforms such as ligatures are not mapped.",
+          "type": "string"
+        },
+        {
+          "const": "case-fold",
+          "description": "NFC, then full Unicode case folding with no locale tailoring, then NFC\nagain: `ß` and `ẞ` fold to `ss`, `ς` folds to `σ`, canonically\nequivalent spellings fold alike whatever the order of their combining\nmarks, and a capital that folds to a decomposed sequence is composed\nagain. Unlike `lowercase` it is meant for matching, so it is the case\nstep to pair with `nfc`.",
+          "type": "string"
         }
       ]
     },

@@ -26,6 +26,7 @@ holding several products can be read without guessing which tool is talking.
 | Manifest | `metadata.yaml` with `schema_version: registry-manifest/v1`, or an explicit project marker | `manifest` |
 | Render | `manifest.yaml`: `RenderBundle` or Render `apiVersion` | `render` |
 | Evidence OID4VCI | an explicit project marker | `evidence-oid4vci` |
+| Evidence OID4VP | an explicit project marker | `evidence-oid4vp` |
 
 ### Evidence
 
@@ -77,10 +78,11 @@ symbols, completion, and hover for their modeled local authoring edges.
 | Manifest | Catalog, dataset, service, distribution, codelist, entity and field names; dataset/service/distribution relationships, entity-scoped identifiers, requirements and evidence lists, and Registry Evidence evaluation profiles. |
 | Render | Document identifiers, governed entry/schema files, and locale label files. |
 | Evidence OID4VCI | Native configuration section symbols. `tokenClient.privateKeyRef` is a secret reference, not a file path, so it offers no navigation; key contents are never read or indexed. |
+| Evidence OID4VP | Native configuration section symbols, client identifier and policy declarations, and the policy `clientIdentifier` reference to a declared client identifier. `signingKeyRef` and `certificateChainRef` are secret references, not file paths, so they offer no navigation; key and certificate contents are never read or indexed. |
 
-For arbitrary Manifest and OID4VCI configuration filenames, create
+For arbitrary Manifest, OID4VCI, and OID4VP configuration filenames, create
 `.registry-stack-editor/project.json` containing `{"product":"manifest","document":"config/metadata.yaml"}`
-or the product `evidence-oid4vci`. The document must be an existing regular `.yaml` or `.yml` file
+or the products `evidence-oid4vci` or `evidence-oid4vp`. The document must be an existing regular `.yaml` or `.yml` file
 inside the project, using a relative path without traversal or symbolic links. The shared
 `python3 editors/configure.py` command writes this marker and configures both editors.
 

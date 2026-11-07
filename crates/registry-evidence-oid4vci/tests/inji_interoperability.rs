@@ -50,7 +50,7 @@ use registry_evidence_oid4vci::{
 };
 use registry_evidence_verifier::{
     model::{
-        Evidence, EvidenceObjectType, JwksDocument, PublicValue, SubjectBinding,
+        ChannelKind, Evidence, EvidenceObjectType, JwksDocument, PublicValue, SubjectBinding,
         SubjectBindingMode, SupportedValue,
     },
     sdjwt_vc::{holder_thumbprint, issuance_input},
@@ -279,6 +279,8 @@ fn holder_bound_evidence(index: usize, holder_key: &HolderPublicKey) -> Evidence
         schema: EVIDENCE_SCHEMA_V1.to_owned(),
         assurance_profile: AssuranceProfile::Local,
         subject_binding: SubjectBindingMode::HolderBound,
+        channel: ChannelKind::Source,
+        presented_credential: None,
         request_nonce: None,
         id: format!("urn:ulid:01J0000000000000000000000{suffix}"),
         evidence_type_name: EvidenceObjectType::Evidence,
@@ -547,6 +549,8 @@ fn relying_policy(holder: &FixtureKey) -> HolderBoundPresentationPolicy {
             form: ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::Boolean),
         }],
         revoked_key_ids: Vec::new(),
+        accepted_channels: vec![ChannelKind::Source],
+        maximum_credential_age_seconds: None,
         maximum_assertion_lifetime_seconds: 3_600,
         key_binding_audience: PRESENTATION_AUDIENCE.to_owned(),
         key_binding_nonce: PRESENTATION_NONCE.to_owned(),

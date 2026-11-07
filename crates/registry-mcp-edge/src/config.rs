@@ -79,7 +79,13 @@ pub struct ResourceServerConfig {
     pub allow_insecure_http: bool,
     /// The asymmetric signature algorithms an accepted token may use.
     #[serde(deserialize_with = "bounded_restricting_list")]
-    #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 128)))]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "UniqueList<schema_impls::AccessTokenAlgorithmSchema>",
+            length(min = 1, max = 128)
+        )
+    )]
     pub algorithms: UniqueList<AccessTokenAlgorithm>,
     /// The chat-host clients whose tokens the gateway accepts.
     #[serde(deserialize_with = "bounded_restricting_list")]
@@ -423,7 +429,32 @@ mod schema_impls {
 
     use schemars::{json_schema, JsonSchema, Schema, SchemaGenerator};
 
-    use super::{ResourceUri, ScopeToken};
+    use super::{AccessTokenAlgorithm, ResourceUri, ScopeToken};
+
+    /// The published schema of an accepted-token algorithm. The generated
+    /// schema keeps its established member order and description.
+    pub(super) struct AccessTokenAlgorithmSchema;
+
+    impl JsonSchema for AccessTokenAlgorithmSchema {
+        fn schema_name() -> Cow<'static, str> {
+            Cow::Borrowed("AccessTokenAlgorithm")
+        }
+
+        fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
+            let mut schema = AccessTokenAlgorithm::subset_schema(&[
+                AccessTokenAlgorithm::RS256,
+                AccessTokenAlgorithm::RS384,
+                AccessTokenAlgorithm::ES256,
+                AccessTokenAlgorithm::ES384,
+                AccessTokenAlgorithm::EdDSA,
+            ]);
+            schema.insert(
+                "description".to_owned(),
+                "An asymmetric access-token signature algorithm.".into(),
+            );
+            schema
+        }
+    }
 
     impl JsonSchema for ScopeToken {
         fn schema_name() -> Cow<'static, str> {

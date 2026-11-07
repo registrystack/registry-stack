@@ -18,10 +18,10 @@ job-postgres = ["dep:pg_query"]
 job-sftp = ["job-file"]
 job-rabbitmq = []
 rabbitmq-test-plaintext = []
-sqlite-extract = ["dep:registry-platform-sqlite", "dep:chrono"]
+sqlite-extract = ["dep:registry-platform-sqlite"]
 
 [dependencies]
-chrono = { workspace = true, optional = true }
+chrono.workspace = true
 registry-platform-sqlite = { workspace = true, optional = true }
 base64.workspace = true
 chacha20poly1305 = { workspace = true, features = ["zeroize"] }
@@ -50,7 +50,7 @@ registry-adapter-core.workspace = true
 registry-platform-authcommon.workspace = true
 registry-platform-canonical-json.workspace = true
 registry-platform-config.workspace = true
-registry-platform-crypto.workspace = true
+registry-platform-crypto = { workspace = true, features = ["xchacha-seal"] }
 registry-platform-httputil.workspace = true
 registry-platform-ratelimit.workspace = true
 registry-platform-resilience.workspace = true

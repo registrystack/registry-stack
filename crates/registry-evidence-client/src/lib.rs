@@ -195,15 +195,15 @@ pub use config::{
     DEFAULT_MAXIMUM_RESPONSE_BYTES,
 };
 pub use definitions::{
-    ConceptForm, DefinitionCardinality, DefinitionConcept, DefinitionKind,
-    DefinitionResponseFormat, DefinitionSelector, DefinitionSubject, EvidenceDefinition,
-    EvidenceDefinitionsDocument, SelectorField, SelectorValueOrigin,
+    ConceptForm, DefinitionAlternative, DefinitionCardinality, DefinitionConcept, DefinitionKind,
+    DefinitionRequestShape, DefinitionResponseFormat, DefinitionSelector, DefinitionSubject,
+    EvidenceDefinition, EvidenceDefinitionsDocument, SelectorField, SelectorValueOrigin,
     EVIDENCE_DEFINITIONS_SCHEMA_V1,
 };
 pub use error::{EvidenceClientError, TransportKind};
 pub use nonce::{presentation_nonce, NonceError, RequestNonce};
 pub use prepare::{
-    EvidenceRequestSpec, HolderBoundRequestSpec, PreparedEvidenceRequest,
+    ChannelPolicy, EvidenceRequestSpec, HolderBoundRequestSpec, PreparedEvidenceRequest,
     PreparedHolderBoundRequest, SubjectExpectations, SubjectRequest, MAXIMUM_EXPECTED_OUTPUTS,
     MAXIMUM_HOLDER_KEYS, MAXIMUM_IDENTIFIER_BYTES, MAXIMUM_SELECTOR_INTEGER,
     MAXIMUM_SELECTOR_STRING_BYTES, MAXIMUM_SELECTOR_VALUES, MAXIMUM_SUBJECTS,
@@ -247,9 +247,10 @@ pub use token::{BearerToken, OAuthErrorCode, StaticToken, TokenError, TokenProvi
 // on the verifier crate directly to name the types this API returns and accepts.
 pub use registry_evidence_verifier::{
     model::{
-        BucketForm, BucketValue, EntityReferenceForm, EntityReferenceValue, Evidence,
-        EvidenceObjectType, HolderPublicKey, JwksDocument, PublicValue, ScalarOrEntityReference,
-        StructuredValue, StructuredValueForm, SubjectBinding, SubjectBindingMode, SupportedValue,
+        AssertionChannel, BucketForm, BucketValue, ChannelKind, EntityReferenceForm,
+        EntityReferenceValue, Evidence, EvidenceObjectType, HolderPublicKey, JwksDocument,
+        PresentedCredential, PublicValue, ScalarOrEntityReference, StructuredValue,
+        StructuredValueForm, SubjectBinding, SubjectBindingMode, SubjectLinkMode, SupportedValue,
     },
     verifier::{
         EvidenceVerificationPolicyDocument, ExpectedFormDocument, ExpectedListDocument,

@@ -23,6 +23,11 @@ Portable verification core for signed Evidence Version 1 responses.
 - `contracts::evidence_schema` and `contracts::evidence_contract_accepts`: the
   single source of the published Evidence payload schema and of the payload
   validation every verification performs.
+- `holder_proof::validate_holder_proof` and
+  `holder_proof::validate_holder_proof_for_confirmation`: the proof of
+  possession check of the holder-bound SD-JWT VC profile (EdDSA, `kb+jwt`,
+  bound to the subject, evaluation, credential profile, disclosure hash and
+  claim set), checked against the holder key the credential confirms.
 - `sdjwt_vc` mapping between an Evidence payload and its SD-JWT VC issuance
   input and disclosed claim set.
 

@@ -325,8 +325,12 @@ fn property_groups(value: &Value) -> Vec<Vec<String>> {
                 if let Some(properties) = object.get("properties").and_then(Value::as_object) {
                     groups.push(properties.keys().cloned().collect());
                 }
-                for value in object.values() {
-                    visit(value, groups);
+                // An `if` subschema tests a member's value; it declares no
+                // member, so it is not a property group of the wire type.
+                for (keyword, value) in object {
+                    if keyword != "if" {
+                        visit(value, groups);
+                    }
                 }
             }
             _ => {}
@@ -586,6 +590,30 @@ fn definitions_schema() -> Value {
                     "concepts": {
                         "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true,
                         "items": {"$ref": "#/$defs/concept"}
+                    },
+                    "channel": {
+                        "description": "The acquisition channel of this entry's own subjects. Present only when the caller is entitled to a holder-presented channel of the definition, as the entry's own channel or as an alternative; absence means the source channel. A caller entitled to the source channel alone receives the entry a source-only definition produces, so the member never reveals that a holder-presented channel exists.",
+                        "enum": ["source", "holder-presented"]
+                    },
+                    "alternatives": {
+                        "description": "The request shapes of the other channels of this definition that the caller is entitled to. Absent when there are none. A channel the caller is not entitled to is never listed.",
+                        "type": "array", "minItems": 1, "maxItems": 1, "uniqueItems": true,
+                        "items": {"$ref": "#/$defs/alternative"}
+                    }
+                }
+            },
+            "alternative": {
+                "type": "object", "additionalProperties": false,
+                "required": ["channel", "responseFormats", "subjects"],
+                "properties": {
+                    "channel": {"enum": ["source", "holder-presented"]},
+                    "responseFormats": {
+                        "type": "array", "minItems": 1, "maxItems": 4, "uniqueItems": true,
+                        "items": {"enum": ["signed-jws", "unsigned-json", "sd-jwt-vc", "sd-jwt-vc-batch"]}
+                    },
+                    "subjects": {
+                        "type": "array", "minItems": 1, "maxItems": 8, "uniqueItems": true,
+                        "items": {"$ref": "#/$defs/subject"}
                     }
                 }
             },
@@ -851,11 +879,15 @@ fn jwks_schema() -> Value {
                     "alg": {"const": "ES256"},
                     "crv": {"const": "P-256"},
                     "x": {"type": "string", "pattern": "^[A-Za-z0-9_-]{43}$"},
-                    "y": {"type": "string", "pattern": "^[A-Za-z0-9_-]{43}$"}
+                    "y": {"type": "string", "pattern": "^[A-Za-z0-9_-]{43}$"},
+                    "x5c": {
+                        "type": "array", "minItems": 1, "maxItems": 3,
+                        "items": {"type": "string", "contentEncoding": "base64", "minLength": 1, "maxLength": 21848}
+                    }
                 }
             }
         },
-        "$comment": "Only the governed active and published non-revoked P-256 keys are returned. Each kid is the key's RFC 7638 SHA-256 thumbprint. Discovery is not a trust anchor; verifiers pin the governed provider and JWKS location."
+        "$comment": "Only the governed active and published non-revoked P-256 keys are returned. Each kid is the key's RFC 7638 SHA-256 thumbprint. Discovery is not a trust anchor; verifiers pin the governed provider and JWKS location. Only the active key carries the optional x5c member, when the deployment configures a certificate chain; the chain does not change what a verifier pins."
     })
 }
 
@@ -1118,6 +1150,7 @@ fn openapi_document(
         "Evidence",
         evidence,
         &[
+            ("presented-credential", "PresentedCredential"),
             ("subject-binding", "SubjectBinding"),
             ("supported-value", "SupportedValue"),
             ("value", "PublicValue"),
@@ -1132,6 +1165,7 @@ fn openapi_document(
         definitions,
         &[
             ("definition", "EvidenceDefinition"),
+            ("alternative", "EvidenceDefinitionAlternative"),
             ("subject", "EvidenceDefinitionSubject"),
             ("selector", "EvidenceDefinitionSelector"),
             ("selector-field", "EvidenceSelectorField"),
@@ -2049,6 +2083,7 @@ mod tests {
                     "schema": "registry.assertion-evidence/v1",
                     "assuranceProfile": "evidence-grade",
                     "subjectBinding": "audience-scoped",
+                    "channel": "source",
                     "requestNonce": "r1N1mq48U3PpZ5keuZEgmA5KMC2KDrF1hT6640koy6I",
                     "id": "urn:ulid:01K1EXAMPLE0000000000000000",
                     "type": "Evidence",

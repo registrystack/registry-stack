@@ -12,11 +12,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use base64::Engine as _;
 use registry_breg_client::{BRegPreparedProposal, BaseRegistryClient};
 use sha2::{Digest, Sha256};
-use subtle::ConstantTimeEq;
 use zeroize::Zeroizing;
 
 use crate::registry::RecordRevision;
@@ -35,10 +32,8 @@ const MAXIMUM_VIEWS: usize = 16;
 pub(crate) const MAXIMUM_SESSIONS_PER_CITIZEN: usize = 3;
 
 /// A fresh base64url encoding of 32 bytes from the operating system.
-pub(crate) fn random_token() -> Result<String, getrandom::Error> {
-    let mut bytes = Zeroizing::new([0_u8; 32]);
-    getrandom::fill(bytes.as_mut())?;
-    Ok(URL_SAFE_NO_PAD.encode(bytes.as_ref()))
+pub(crate) fn random_token() -> Result<String, registry_platform_crypto::RandomTokenError> {
+    registry_platform_crypto::random_base64url(32)
 }
 
 /// Whether `value` has the shape of a token this page issues.
@@ -51,7 +46,7 @@ pub(crate) fn well_formed_token(value: &str) -> bool {
 
 /// Compare two tokens without an early exit on the first differing byte.
 pub(crate) fn tokens_match(presented: &str, expected: &str) -> bool {
-    presented.len() == expected.len() && bool::from(presented.as_bytes().ct_eq(expected.as_bytes()))
+    registry_platform_crypto::constant_time_eq(presented.as_bytes(), expected.as_bytes())
 }
 
 fn digest(cookie: &str) -> [u8; 32] {
@@ -291,6 +286,19 @@ mod tests {
         assert_ne!(token, random_token().expect("random"));
         assert!(!well_formed_token(&format!("{}=", &token[..42])));
         assert!(!well_formed_token(&token[..42]));
+    }
+
+    #[test]
+    fn tokens_match_only_when_every_byte_agrees() {
+        let token = random_token().expect("random");
+        assert!(tokens_match(&token, &token.clone()));
+        let mut other = token.clone().into_bytes();
+        other[42] = if other[42] == b'A' { b'B' } else { b'A' };
+        let other = String::from_utf8(other).expect("ascii");
+        assert!(!tokens_match(&token, &other));
+        assert!(!tokens_match(&token, &token[..42]));
+        assert!(!tokens_match(&token[..42], &token));
+        assert!(!tokens_match("", &token));
     }
 
     #[test]

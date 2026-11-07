@@ -31,3 +31,7 @@ offers:
   requiredScopes: [oid4vci:offer]
 store:
   maximumOffers: 4096
+# Uncomment to also serve the OpenID4VCI Draft 13 compatibility profile at
+# <credentialIssuer>/protocol/oid4vci/draft-13, beside the 1.0 Final profile.
+# It is off when this member is absent. Written as an empty mapping.
+# draft13Profile: {}

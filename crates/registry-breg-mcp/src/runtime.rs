@@ -10,9 +10,9 @@ use std::{future::Future, sync::Arc, time::Duration};
 
 use axum::Router;
 use registry_mcp_edge::{
-    router, token_verifier, AccessTokenAlgorithm as EdgeAlgorithm, AuditOptions, GatewayCore,
-    GatewayInfo, ProviderBinding, RateLimitOptions, ResourceServer, ResourceServerError,
-    ResourceServerOptions, ServerOptions, TokenBucketOptions, ToolAuditLog,
+    router, token_verifier, AuditOptions, GatewayCore, GatewayInfo, ProviderBinding,
+    RateLimitOptions, ResourceServer, ResourceServerError, ResourceServerOptions, ServerOptions,
+    TokenBucketOptions, ToolAuditLog,
 };
 use registry_platform_audit::{AuditError, AuditProfile, AuditWriter};
 use registry_platform_config::{JwksSource, ProtectedSecret, SecretResolver};
@@ -25,7 +25,7 @@ use zeroize::Zeroizing;
 
 use crate::{
     breg_binding,
-    config::{describe_secret_failure, AccessTokenAlgorithm, RuntimeConfig},
+    config::{describe_secret_failure, RuntimeConfig},
     BRegBindingError, BREG_TOOL_NAMES,
 };
 
@@ -158,12 +158,7 @@ async fn assemble(config: &RuntimeConfig) -> Result<Parts, StartupError> {
     let resource_options = ResourceServerOptions {
         resource: server.resource.as_str().to_owned(),
         issuer: server.issuer.as_str().to_owned(),
-        algorithms: server
-            .algorithms
-            .iter()
-            .copied()
-            .map(edge_algorithm)
-            .collect(),
+        algorithms: server.algorithms.iter().copied().collect(),
         allowed_clients: server
             .allowed_clients
             .iter()
@@ -221,16 +216,6 @@ async fn assemble(config: &RuntimeConfig) -> Result<Parts, StartupError> {
         resource_server,
         binding,
     })
-}
-
-const fn edge_algorithm(algorithm: AccessTokenAlgorithm) -> EdgeAlgorithm {
-    match algorithm {
-        AccessTokenAlgorithm::RS256 => EdgeAlgorithm::RS256,
-        AccessTokenAlgorithm::RS384 => EdgeAlgorithm::RS384,
-        AccessTokenAlgorithm::ES256 => EdgeAlgorithm::ES256,
-        AccessTokenAlgorithm::ES384 => EdgeAlgorithm::ES384,
-        AccessTokenAlgorithm::EdDSA => EdgeAlgorithm::EdDSA,
-    }
 }
 
 /// Build the gateway's HTTP application.

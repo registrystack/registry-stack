@@ -173,7 +173,7 @@ function writeExplicitMarker(directory: string, product: string, document: strin
   fs.writeFileSync(path.join(directory, '.registry-stack-editor/project.json'), JSON.stringify({ product, document }));
 }
 
-for (const product of ['manifest', 'evidence-oid4vci']) {
+for (const product of ['manifest', 'evidence-oid4vci', 'evidence-oid4vp']) {
   test(`an explicit ${product} marker anchors an adopter-named document`, () => {
     const directory = tempDirectory();
     fs.mkdirSync(path.join(directory, 'authored'));

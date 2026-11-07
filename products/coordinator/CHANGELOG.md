@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Adopt the shared platform implementations for the access-token algorithm
+  roster (still exactly RS256 and ES256), framework-rejection normalization
+  (400, 413, 415 and 422 answer the same `request.*` problem codes), the stop
+  signal and the Prometheus exposition. Startup still refuses with
+  `signal-unavailable` when a stop-signal handler cannot be installed, and now
+  installs the SIGINT handler at startup alongside SIGTERM. The `/metrics`
+  scrape keeps its series, values and content type.
 - BREAKING: `coordinatorctl check` refuses a
   `casework.cancel-review-request/v1` step unless its `request` maps the whole
   output, with no path, of a `casework.submit-review-request/v1` step in the

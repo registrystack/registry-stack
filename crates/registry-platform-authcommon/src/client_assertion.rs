@@ -17,9 +17,10 @@
 //! indicator, or claims of its own needs those from the caller that builds its
 //! token request; they are not part of the assertion signed here.
 
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use registry_platform_crypto::{PrivateJwk, SigningAlgorithm};
-use serde_json::{json, Value};
+use futures::executor::block_on;
+use registry_platform_crypto::jws::sign_compact_jws;
+use registry_platform_crypto::{LocalJwkSigner, PrivateJwk};
+use serde_json::{json, Map, Value};
 use thiserror::Error;
 use ulid::Ulid;
 use zeroize::Zeroizing;
@@ -112,24 +113,19 @@ pub fn sign_client_assertion(
     if !(1..=MAXIMUM_ASSERTION_LIFETIME_SECONDS).contains(&request.lifetime_seconds) {
         return Err(ClientAssertionError::LifetimeOutOfRange);
     }
-    let key_id = key
-        .kid
-        .as_deref()
-        .filter(|kid| !kid.trim().is_empty())
-        .ok_or(ClientAssertionError::MissingKeyId)?;
+    // The server selects the registered public key by this identifier, which
+    // the signer publishes in the header.
+    if key.kid.as_deref().is_none_or(|kid| kid.trim().is_empty()) {
+        return Err(ClientAssertionError::MissingKeyId);
+    }
     // The header names the algorithm so the server can verify without guessing,
     // which means it must state what this key actually signs with rather than
     // one fixed name.
-    let algorithm = key
-        .algorithm()
+    key.algorithm()
         .map_err(|_| ClientAssertionError::UnsupportedAlgorithm)?;
 
-    let header = json!({
-        "alg": header_algorithm(algorithm),
-        "typ": "JWT",
-        // The server selects the registered public key by this identifier.
-        "kid": key_id,
-    });
+    let mut header = Map::new();
+    header.insert("typ".to_owned(), Value::String("JWT".to_owned()));
     let claims = json!({
         "iss": request.client_id,
         "sub": request.client_id,
@@ -141,47 +137,23 @@ pub fn sign_client_assertion(
         // generated per assertion and never reused.
         "jti": Ulid::generate().to_string(),
     });
+    let payload = serde_json::to_vec(&claims).map_err(|_| ClientAssertionError::NotSerializable)?;
 
-    let signing_input = format!("{}.{}", encode(&header)?, encode(&claims)?);
     // Stating an algorithm is not the same as being able to sign with it: a
     // P-256 scalar of zero and an RSA key whose components disagree both parse.
     // Those are refused only where the key is imported, which is here.
-    let signature = registry_platform_crypto::sign(signing_input.as_bytes(), key)
+    let signer = LocalJwkSigner::new(key.clone()).map_err(|_| ClientAssertionError::CannotSign)?;
+    // The signer is local, so its future completes without waiting on anything.
+    let assertion = block_on(sign_compact_jws(header, &payload, &signer))
         .map_err(|_| ClientAssertionError::CannotSign)?;
-    Ok(Zeroizing::new(format!(
-        "{signing_input}.{}",
-        URL_SAFE_NO_PAD.encode(signature)
-    )))
-}
-
-/// The JOSE `alg` header value naming `algorithm`.
-///
-/// The name itself comes from the crypto crate, so there is one spelling of it
-/// in the workspace. The match exists to enumerate the variants with no
-/// wildcard arm: a signing algorithm added there has to be considered here,
-/// as a compile error rather than as an assertion no server can verify.
-const fn header_algorithm(algorithm: SigningAlgorithm) -> &'static str {
-    match algorithm {
-        SigningAlgorithm::EdDsa
-        | SigningAlgorithm::Es256
-        | SigningAlgorithm::Rs256
-        | SigningAlgorithm::Es384
-        | SigningAlgorithm::Rs384 => algorithm.jwa_name(),
-    }
-}
-
-/// One JWS segment: the compact JSON of `value`, base64url encoded without
-/// padding.
-fn encode(value: &Value) -> Result<String, ClientAssertionError> {
-    serde_json::to_vec(value)
-        .map(|bytes| URL_SAFE_NO_PAD.encode(bytes))
-        .map_err(|_| ClientAssertionError::NotSerializable)
+    Ok(Zeroizing::new(assertion))
 }
 
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
 
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
     use registry_platform_crypto::verify;
     use serde_json::json;
 
@@ -356,6 +328,25 @@ mod tests {
                 panic!("the {expected_alg} assertion verifies under the signing key: {error}")
             });
         }
+    }
+
+    /// The assertion parses and verifies through the shared compact JWS
+    /// reader, which is what a server built on the same crate does.
+    #[test]
+    fn an_assertion_verifies_through_the_shared_jws_verifier() {
+        use registry_platform_crypto::jws::{parse_compact_jws, JwsLimits};
+        use registry_platform_crypto::SigningAlgorithm;
+
+        let key = signing_key(P256_JWK);
+        let assertion = sign_client_assertion(&key, &request(DEFAULT_ASSERTION_LIFETIME_SECONDS))
+            .expect("the assertion is signed");
+
+        let parsed = parse_compact_jws(&assertion, &JwsLimits::default()).expect("parses");
+        let payload = parsed
+            .verify(&key.public(), &[SigningAlgorithm::Es256])
+            .expect("verifies under the signing key");
+        let claims: Value = serde_json::from_slice(payload).expect("claims are JSON");
+        assert_eq!(claims["iss"], json!(CLIENT_ID));
     }
 
     /// A replay-checking token endpoint refuses a repeated `jti`, so a fresh one

@@ -13,12 +13,14 @@ use std::{
 };
 
 use registry_evidence_verifier::{
-    model::HolderPublicKey,
+    model::{ChannelKind, HolderPublicKey},
     sdjwt_vc::holder_thumbprint,
     verifier::{
-        revoked_key_ids_are_usable, EvidenceVerificationPolicyDocument, ExpectedFormDocument,
-        ExpectedOutputDocument, ExpectedSubjectDocument, MAXIMUM_ASSERTION_LIFETIME_SECONDS,
-        MAXIMUM_CLOCK_SKEW_SECONDS, MINIMUM_ASSERTION_LIFETIME_SECONDS,
+        default_accepted_channels, revoked_key_ids_are_usable, EvidenceVerificationPolicyDocument,
+        ExpectedFormDocument, ExpectedOutputDocument, ExpectedSubjectDocument,
+        MAXIMUM_ASSERTION_LIFETIME_SECONDS, MAXIMUM_CLOCK_SKEW_SECONDS,
+        MAXIMUM_CREDENTIAL_AGE_SECONDS, MINIMUM_ASSERTION_LIFETIME_SECONDS,
+        MINIMUM_CREDENTIAL_AGE_SECONDS,
     },
     AssuranceProfile,
 };
@@ -76,6 +78,53 @@ const HOLDER_BOUND_RESPONSE_FORMATS: [EvidenceResponseFormat; 2] = [
     EvidenceResponseFormat::SdJwtVc,
     EvidenceResponseFormat::SdJwtVcBatch,
 ];
+
+/// Which channels a relying party accepts, and how old a presented credential
+/// may be.
+///
+/// The default accepts `source` only, so a relying party that never names a
+/// channel refuses an assertion that a holder presented. Apply a policy with
+/// [`PreparedEvidenceRequest::with_channel_policy`]; the bounds are the
+/// verification policy contract's, and a policy outside them is refused there.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChannelPolicy {
+    /// The channels this procedure accepts: at least one, each once.
+    pub accepted_channels: Vec<ChannelKind>,
+    /// Longest acceptable age of a presented credential at the assertion's
+    /// observation time. It bounds `holder-presented` assertions only.
+    pub maximum_credential_age_seconds: Option<u64>,
+}
+
+impl Default for ChannelPolicy {
+    fn default() -> Self {
+        Self {
+            accepted_channels: default_accepted_channels(),
+            maximum_credential_age_seconds: None,
+        }
+    }
+}
+
+impl ChannelPolicy {
+    /// Refuse a policy the verification policy contract forbids, so the caller
+    /// learns before a request is sent rather than when its answer arrives.
+    pub(crate) fn validate(&self) -> Result<(), EvidenceClientError> {
+        let distinct = self.accepted_channels.iter().collect::<BTreeSet<_>>();
+        if self.accepted_channels.is_empty() || distinct.len() != self.accepted_channels.len() {
+            return Err(EvidenceClientError::configuration(
+                "the accepted channels must name at least one channel, each once",
+            ));
+        }
+        if let Some(seconds) = self.maximum_credential_age_seconds {
+            if !(MINIMUM_CREDENTIAL_AGE_SECONDS..=MAXIMUM_CREDENTIAL_AGE_SECONDS).contains(&seconds)
+            {
+                return Err(EvidenceClientError::configuration(
+                    "the maximum credential age is outside the verification policy contract",
+                ));
+            }
+        }
+        Ok(())
+    }
+}
 
 /// One requested subject, before the request body exists.
 #[derive(Debug, Clone)]
@@ -317,6 +366,8 @@ impl PreparedEvidenceRequest {
             expected_subjects,
             expected_outputs: spec.expected_outputs,
             revoked_key_ids,
+            accepted_channels: default_accepted_channels(),
+            maximum_credential_age_seconds: None,
             maximum_assertion_lifetime_seconds: spec.maximum_assertion_lifetime_seconds,
             clock_skew_seconds: spec.clock_skew_seconds,
         };
@@ -332,6 +383,23 @@ impl PreparedEvidenceRequest {
     #[cfg(test)]
     fn new(spec: EvidenceRequestSpec) -> Result<Self, EvidenceClientError> {
         Self::new_with_revoked_key_ids(spec, Vec::new())
+    }
+
+    /// Replace the default channel policy (`source` only, no credential age
+    /// bound) before the request is sent.
+    ///
+    /// The policy joins the closed verification policy, so it is retained
+    /// with the request and judged offline exactly like every other
+    /// expectation. A policy outside the verification policy contract is
+    /// refused here.
+    pub fn with_channel_policy(
+        mut self,
+        channel_policy: ChannelPolicy,
+    ) -> Result<Self, EvidenceClientError> {
+        channel_policy.validate()?;
+        self.policy.accepted_channels = channel_policy.accepted_channels;
+        self.policy.maximum_credential_age_seconds = channel_policy.maximum_credential_age_seconds;
+        Ok(self)
     }
 
     /// The nonce this request carries. Retain it with the transaction record:

@@ -1,0 +1,100 @@
+# HELP breg_http_requests_total Requests served by the Registry boundary.
+# TYPE breg_http_requests_total counter
+breg_http_requests_total{route="/v1/records",method="POST",status="server-error"} 1
+breg_http_requests_total{route="/v1/records",method="POST",status="success"} 1
+breg_http_requests_total{route="/v1/records/{record_id}",method="GET",status="client-error"} 1
+breg_http_requests_total{route="/v1/records/{record_id}",method="GET",status="success"} 2
+breg_http_requests_total{route="unmatched",method="OTHER",status="client-error"} 1
+# HELP breg_http_request_duration_seconds Request duration at the Registry boundary.
+# TYPE breg_http_request_duration_seconds histogram
+breg_http_request_duration_seconds_bucket{route="/v1/records",method="POST",status="server-error",le="0.005"} 0
+breg_http_request_duration_seconds_bucket{route="/v1/records",method="POST",status="server-error",le="0.01"} 0
+breg_http_request_duration_seconds_bucket{route="/v1/records",method="POST",status="server-error",le="0.025"} 0
+breg_http_request_duration_seconds_bucket{route="/v1/records",method="POST",status="server-error",le="0.05"} 0
+breg_http_request_duration_seconds_bucket{route="/v1/records",method="POST",status="server-error",le="0.1"} 0
+breg_http_request_duration_seconds_bucket{route="/v1/records",method="POST",status="server-error",le="0.25"} 1
+breg_http_request_duration_seconds_bucket{route="/v1/records",method="POST",status="server-error",le="0.5"} 1
+breg_http_request_duration_seconds_bucket{route="/v1/records",method="POST",status="server-error",le="1"} 1
+breg_http_request_duration_seconds_bucket{route="/v1/records",method="POST",status="server-error",le="5"} 1
+breg_http_request_duration_seconds_bucket{route="/v1/records",method="POST",status="server-error",le="+Inf"} 1
+breg_http_request_duration_seconds_sum{route="/v1/records",method="POST",status="server-error"} 0.25
+breg_http_request_duration_seconds_count{route="/v1/records",method="POST",status="server-error"} 1
+breg_http_request_duration_seconds_bucket{route="/v1/records",method="POST",status="success",le="0.005"} 0
+breg_http_request_duration_seconds_bucket{route="/v1/records",method="POST",status="success",le="0.01"} 0
+breg_http_request_duration_seconds_bucket{route="/v1/records",method="POST",status="success",le="0.025"} 0
+breg_http_request_duration_seconds_bucket{route="/v1/records",method="POST",status="success",le="0.05"} 0
+breg_http_request_duration_seconds_bucket{route="/v1/records",method="POST",status="success",le="0.1"} 0
+breg_http_request_duration_seconds_bucket{route="/v1/records",method="POST",status="success",le="0.25"} 0
+breg_http_request_duration_seconds_bucket{route="/v1/records",method="POST",status="success",le="0.5"} 0
+breg_http_request_duration_seconds_bucket{route="/v1/records",method="POST",status="success",le="1"} 0
+breg_http_request_duration_seconds_bucket{route="/v1/records",method="POST",status="success",le="5"} 0
+breg_http_request_duration_seconds_bucket{route="/v1/records",method="POST",status="success",le="+Inf"} 1
+breg_http_request_duration_seconds_sum{route="/v1/records",method="POST",status="success"} 7.3
+breg_http_request_duration_seconds_count{route="/v1/records",method="POST",status="success"} 1
+breg_http_request_duration_seconds_bucket{route="/v1/records/{record_id}",method="GET",status="client-error",le="0.005"} 0
+breg_http_request_duration_seconds_bucket{route="/v1/records/{record_id}",method="GET",status="client-error",le="0.01"} 0
+breg_http_request_duration_seconds_bucket{route="/v1/records/{record_id}",method="GET",status="client-error",le="0.025"} 0
+breg_http_request_duration_seconds_bucket{route="/v1/records/{record_id}",method="GET",status="client-error",le="0.05"} 0
+breg_http_request_duration_seconds_bucket{route="/v1/records/{record_id}",method="GET",status="client-error",le="0.1"} 0
+breg_http_request_duration_seconds_bucket{route="/v1/records/{record_id}",method="GET",status="client-error",le="0.25"} 0
+breg_http_request_duration_seconds_bucket{route="/v1/records/{record_id}",method="GET",status="client-error",le="0.5"} 0
+breg_http_request_duration_seconds_bucket{route="/v1/records/{record_id}",method="GET",status="client-error",le="1"} 1
+breg_http_request_duration_seconds_bucket{route="/v1/records/{record_id}",method="GET",status="client-error",le="5"} 1
+breg_http_request_duration_seconds_bucket{route="/v1/records/{record_id}",method="GET",status="client-error",le="+Inf"} 1
+breg_http_request_duration_seconds_sum{route="/v1/records/{record_id}",method="GET",status="client-error"} 1
+breg_http_request_duration_seconds_count{route="/v1/records/{record_id}",method="GET",status="client-error"} 1
+breg_http_request_duration_seconds_bucket{route="/v1/records/{record_id}",method="GET",status="success",le="0.005"} 1
+breg_http_request_duration_seconds_bucket{route="/v1/records/{record_id}",method="GET",status="success",le="0.01"} 1
+breg_http_request_duration_seconds_bucket{route="/v1/records/{record_id}",method="GET",status="success",le="0.025"} 1
+breg_http_request_duration_seconds_bucket{route="/v1/records/{record_id}",method="GET",status="success",le="0.05"} 2
+breg_http_request_duration_seconds_bucket{route="/v1/records/{record_id}",method="GET",status="success",le="0.1"} 2
+breg_http_request_duration_seconds_bucket{route="/v1/records/{record_id}",method="GET",status="success",le="0.25"} 2
+breg_http_request_duration_seconds_bucket{route="/v1/records/{record_id}",method="GET",status="success",le="0.5"} 2
+breg_http_request_duration_seconds_bucket{route="/v1/records/{record_id}",method="GET",status="success",le="1"} 2
+breg_http_request_duration_seconds_bucket{route="/v1/records/{record_id}",method="GET",status="success",le="5"} 2
+breg_http_request_duration_seconds_bucket{route="/v1/records/{record_id}",method="GET",status="success",le="+Inf"} 2
+breg_http_request_duration_seconds_sum{route="/v1/records/{record_id}",method="GET",status="success"} 0.034
+breg_http_request_duration_seconds_count{route="/v1/records/{record_id}",method="GET",status="success"} 2
+breg_http_request_duration_seconds_bucket{route="unmatched",method="OTHER",status="client-error",le="0.005"} 1
+breg_http_request_duration_seconds_bucket{route="unmatched",method="OTHER",status="client-error",le="0.01"} 1
+breg_http_request_duration_seconds_bucket{route="unmatched",method="OTHER",status="client-error",le="0.025"} 1
+breg_http_request_duration_seconds_bucket{route="unmatched",method="OTHER",status="client-error",le="0.05"} 1
+breg_http_request_duration_seconds_bucket{route="unmatched",method="OTHER",status="client-error",le="0.1"} 1
+breg_http_request_duration_seconds_bucket{route="unmatched",method="OTHER",status="client-error",le="0.25"} 1
+breg_http_request_duration_seconds_bucket{route="unmatched",method="OTHER",status="client-error",le="0.5"} 1
+breg_http_request_duration_seconds_bucket{route="unmatched",method="OTHER",status="client-error",le="1"} 1
+breg_http_request_duration_seconds_bucket{route="unmatched",method="OTHER",status="client-error",le="5"} 1
+breg_http_request_duration_seconds_bucket{route="unmatched",method="OTHER",status="client-error",le="+Inf"} 1
+breg_http_request_duration_seconds_sum{route="unmatched",method="OTHER",status="client-error"} 0.001
+breg_http_request_duration_seconds_count{route="unmatched",method="OTHER",status="client-error"} 1
+# HELP breg_pool_connections Runtime pool connections by state.
+# TYPE breg_pool_connections gauge
+breg_pool_connections{state="maximum-size"} 0
+breg_pool_connections{state="size"} 0
+breg_pool_connections{state="available"} 0
+breg_pool_connections{state="waiting"} 0
+# HELP breg_worker_last_success_age_seconds Seconds since each background worker last completed an iteration without failure; absent until the first.
+# TYPE breg_worker_last_success_age_seconds gauge
+# HELP breg_queue_oldest_pending_age_seconds Seconds the oldest due item in each queue has waited to be claimed, sampled at scrape; zero when none is due.
+# TYPE breg_queue_oldest_pending_age_seconds gauge
+# HELP breg_proposal_application_blocked_jobs Application jobs closed or held by a package change on the current submitted proposal, sampled at scrape.
+# TYPE breg_proposal_application_blocked_jobs gauge
+# HELP breg_record_timer_observed_live_lease_owners Distinct observed current live lease owners, not a census of running replicas.
+# TYPE breg_record_timer_observed_live_lease_owners gauge
+# HELP breg_record_timer_oldest_due_lag_seconds Seconds since the oldest sampled current due timer became due according to PostgreSQL; absent when none is due.
+# TYPE breg_record_timer_oldest_due_lag_seconds gauge
+# HELP breg_record_timer_current_occurrences Current timer occurrences in the bounded sample by closed state and block kind.
+# TYPE breg_record_timer_current_occurrences gauge
+# HELP breg_record_timer_current_executed_attempts Cumulative executed attempts recorded on the bounded current-occurrence sample; a gauge, not a monotonic retry counter.
+# TYPE breg_record_timer_current_executed_attempts gauge
+# HELP breg_record_timer_retained_attempts Retained value-free attempt details for the bounded current-occurrence sample.
+# TYPE breg_record_timer_retained_attempts gauge
+# HELP breg_record_timer_stale_current_occurrences Current unfinished occurrences whose cached policy revision differs from the open binding.
+# TYPE breg_record_timer_stale_current_occurrences gauge
+# HELP breg_record_timer_control_compatible Whether the durable timer protocol, bound instance epoch, and active package match this process.
+# TYPE breg_record_timer_control_compatible gauge
+# HELP breg_record_timer_counts_truncated Whether current occurrence, attempt, or lease-owner counts reached the bounded sample ceiling.
+# TYPE breg_record_timer_counts_truncated gauge
+# HELP breg_active_package_info The package this process verified at startup, by digest.
+# TYPE breg_active_package_info gauge
+breg_active_package_info{package_digest="sha256:abababababababababababababababababababababababababababababababab"} 1

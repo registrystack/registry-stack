@@ -34,7 +34,8 @@ use axum::{Json, Router};
 use chrono::{DateTime, Utc};
 use registry_platform_authcommon::parse_bearer_token;
 use registry_platform_httpsec::{
-    request_body_limit_default, security_headers, CspBuilder, ProblemBody, TraceContext,
+    normalize_framework_rejection, request_body_limit_default, security_headers, CspBuilder,
+    FrameworkRejection, ProblemBody, TraceContext,
 };
 use registry_scheduling_core::{
     type_uri, valid_identifier, valid_reference, AdmissionRequest, AvailabilityPreviewRequest,
@@ -205,7 +206,7 @@ async fn http_boundary(request: axum::http::Request<axum::body::Body>, next: Nex
     let trace = TraceContext::from_headers(request.headers());
     let mut response = REQUEST_TRACE
         .scope(trace.clone(), async move {
-            normalize_framework_rejection(next.run(request).await)
+            normalize_framework_rejection(next.run(request).await, request_problem)
         })
         .await;
     trace.apply(response.headers_mut());
@@ -222,24 +223,13 @@ async fn http_boundary(request: axum::http::Request<axum::body::Body>, next: Nex
 /// was promised. The statuses are kept; the body becomes the vocabulary's
 /// `request.*` problem for that status, so every answer still reads as one
 /// problem shape.
-fn normalize_framework_rejection(response: Response) -> Response {
-    let is_problem = response
-        .headers()
-        .get(CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.split(';').next())
-        == Some("application/problem+json");
-    if is_problem {
-        return response;
-    }
-    let problem = match response.status() {
-        StatusCode::BAD_REQUEST => Some(ProblemCode::RequestInvalid),
-        StatusCode::PAYLOAD_TOO_LARGE => Some(ProblemCode::RequestBodyTooLarge),
-        StatusCode::UNSUPPORTED_MEDIA_TYPE => Some(ProblemCode::RequestUnsupportedMediaType),
-        StatusCode::UNPROCESSABLE_ENTITY => Some(ProblemCode::RequestUnprocessable),
-        _ => None,
-    };
-    problem.map_or(response, problem_response)
+fn request_problem(rejection: FrameworkRejection) -> Response {
+    problem_response(match rejection {
+        FrameworkRejection::Invalid => ProblemCode::RequestInvalid,
+        FrameworkRejection::BodyTooLarge => ProblemCode::RequestBodyTooLarge,
+        FrameworkRejection::UnsupportedMediaType => ProblemCode::RequestUnsupportedMediaType,
+        FrameworkRejection::Unprocessable => ProblemCode::RequestUnprocessable,
+    })
 }
 
 async fn route_not_found() -> Response {
@@ -1271,6 +1261,26 @@ mod tests {
         assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
         let body = body_json(response).await;
         assert_eq!(body["code"], "request.unsupported-media-type");
+    }
+
+    #[tokio::test]
+    async fn an_oversized_body_normalizes_to_the_body_too_large_problem() {
+        let oversized = Request::builder()
+            .method("POST")
+            .uri("/v1/echo")
+            .header("content-type", "application/json")
+            .body(Body::from(vec![b' '; 1024 * 1024 + 1]))
+            .unwrap();
+        let response = send(edge_router(), oversized).await;
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(
+            response.headers().get(CONTENT_TYPE).unwrap(),
+            "application/problem+json"
+        );
+        let body = body_json(response).await;
+        assert_eq!(body["code"], "request.body-too-large");
+        assert_eq!(body["status"], 413);
+        assert_eq!(body["traceId"].as_str().map(str::len), Some(32));
     }
 
     #[tokio::test]

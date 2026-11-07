@@ -1,0 +1,10 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["reference", "principalIssuer", "principalSubject"],
+  "properties": {
+    "reference": {"type": "string", "minLength": 1, "maxLength": 128},
+    "principalIssuer": {"type": "string", "minLength": 1, "maxLength": 512},
+    "principalSubject": {"type": "string", "minLength": 1, "maxLength": 512}
+  }
+}

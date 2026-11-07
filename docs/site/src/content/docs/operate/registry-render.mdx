@@ -127,6 +127,9 @@ These rules are not in the tables:
 - `shutdownGraceMilliseconds` is how long in-flight renders and seals get to finish on SIGTERM;
   open connections then get the same again. Align it with your supervisor's stop timeout, and
   with a seal's `attemptTimeoutMilliseconds`, which a seal waiting on its authority may need.
+- The server installs its `SIGTERM` and `Ctrl-C` handlers before it accepts requests. If either
+  cannot be installed, startup fails with "cannot install the stop signal handlers" instead of
+  serving with no way to stop cleanly.
 
 {/* Evidence: crates/registry-render/src/runtime.rs, LimitsRuntime, AuditRuntime, validate_bind and
     default_shutdown_grace;

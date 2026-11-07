@@ -39,10 +39,10 @@ use p256::{ecdsa::SigningKey, elliptic_curve::Generate as _};
 // crate's `Cargo.toml`), so every reference below is unambiguous by
 // construction.
 use evidence_client_sdk::{
-    AssuranceProfile, Evidence, EvidenceObjectType, EvidenceVerificationPolicyDocument,
-    ExpectedFormDocument, ExpectedOutputDocument, ExpectedScalarFormDocument,
-    ExpectedSubjectDocument, JwksDocument, PublicValue, SubjectBinding, SubjectBindingMode,
-    SupportedValue,
+    AssertionChannel, AssuranceProfile, ChannelKind, Evidence, EvidenceObjectType,
+    EvidenceVerificationPolicyDocument, ExpectedFormDocument, ExpectedOutputDocument,
+    ExpectedScalarFormDocument, ExpectedSubjectDocument, JwksDocument, PresentedCredential,
+    PublicValue, SubjectBinding, SubjectBindingMode, SubjectLinkMode, SupportedValue,
 };
 use registry_evidence_verifier::{
     model::FlattenedJws, verifier::verify_flattened_jws, EVIDENCE_JWS_CTY, EVIDENCE_JWS_TYP,
@@ -128,6 +128,8 @@ fn fixture_evidence(issued_at: DateTime<Utc>, valid_until: DateTime<Utc>) -> Evi
         schema: EVIDENCE_SCHEMA_V1.to_owned(),
         assurance_profile: AssuranceProfile::Local,
         subject_binding: SubjectBindingMode::AudienceScoped,
+        channel: ChannelKind::Source,
+        presented_credential: None,
         request_nonce: Some(FIXTURE_NONCE.to_owned()),
         id: "urn:example:evidence:python-fixture".to_owned(),
         evidence_type_name: EvidenceObjectType::Evidence,
@@ -149,6 +151,30 @@ fn fixture_evidence(issued_at: DateTime<Utc>, valid_until: DateTime<Utc>) -> Evi
             provides_value_for: "urn:example:concept:status-holds".to_owned(),
             value: PublicValue::Boolean(true),
         }],
+    }
+}
+
+/// The same assertion, stated as obtained from a credential a holder
+/// presented: issued one day before the observation.
+fn holder_presented_fixture_evidence(
+    issued_at: DateTime<Utc>,
+    valid_until: DateTime<Utc>,
+) -> Evidence {
+    let (channel, presented_credential) = AssertionChannel::HolderPresented(
+        PresentedCredential::new(
+            "national-id",
+            "https://issuer.example",
+            "https://credentials.example/identity",
+            issued_at - ChronoDuration::days(1),
+            SubjectLinkMode::AttributeMatch,
+        )
+        .expect("the credential members are in contract"),
+    )
+    .into_members();
+    Evidence {
+        channel,
+        presented_credential,
+        ..fixture_evidence(issued_at, valid_until)
     }
 }
 
@@ -190,6 +216,8 @@ fn fixture_policy_document(evidence: &Evidence) -> EvidenceVerificationPolicyDoc
             })
             .collect(),
         revoked_key_ids: Vec::new(),
+        accepted_channels: vec![ChannelKind::Source],
+        maximum_credential_age_seconds: None,
         maximum_assertion_lifetime_seconds: (FIXTURE_LIFETIME_DAYS * 24 * 60 * 60) as u64,
         clock_skew_seconds: 30,
     }
@@ -252,6 +280,14 @@ async fn regenerate_golden_fixture() {
     let dir = fixtures_dir();
     fs::create_dir_all(dir).expect("the fixtures directory can be created");
     write_pretty(&dir.join("response.jws.json"), &jws);
+    write_pretty(
+        &dir.join("response.holder-presented.jws.json"),
+        &sign(
+            &holder_presented_fixture_evidence(issued_at, valid_until),
+            &signer,
+        )
+        .await,
+    );
     write_pretty(&dir.join("jwks.json"), &jwks);
     write_pretty(&dir.join("policy.json"), &policy_document);
 }
@@ -315,6 +351,47 @@ fn the_committed_fixture_verifies_at_its_pinned_instant() {
     let evidence = verify_flattened_jws(&jws_bytes, &jwks, &policy).expect("the fixture verifies");
 
     assert_fixture_shape(&evidence);
+}
+
+/// The committed holder-presented response is refused under the committed
+/// policy, which accepts `source` only, and verifies, exposing its presented
+/// credential, once the policy names the channel.
+#[test]
+fn the_committed_holder_presented_fixture_verifies_only_where_the_channel_is_accepted() {
+    let dir = fixtures_dir();
+    let jws_bytes = fs::read(dir.join("response.holder-presented.jws.json"))
+        .expect("the holder-presented response fixture exists");
+    let jwks: JwksDocument =
+        serde_json::from_slice(&fs::read(dir.join("jwks.json")).expect("the JWKS fixture exists"))
+            .expect("the JWKS fixture parses");
+    let policy_document: EvidenceVerificationPolicyDocument = serde_json::from_slice(
+        &fs::read(dir.join("policy.json")).expect("the policy fixture exists"),
+    )
+    .expect("the policy fixture parses");
+    let now = fixture_issued_at() + ChronoDuration::days(1);
+
+    let default_policy = policy_document
+        .clone()
+        .try_into_policy(now)
+        .expect("the committed policy states bounds its contract allows");
+    assert!(verify_flattened_jws(&jws_bytes, &jwks, &default_policy).is_err());
+
+    let accepting = EvidenceVerificationPolicyDocument {
+        accepted_channels: vec![ChannelKind::Source, ChannelKind::HolderPresented],
+        ..policy_document
+    }
+    .try_into_policy(now)
+    .expect("the policy states bounds its contract allows");
+    let evidence =
+        verify_flattened_jws(&jws_bytes, &jwks, &accepting).expect("the accepted channel verifies");
+    assert_eq!(evidence.channel, ChannelKind::HolderPresented);
+    assert_eq!(
+        evidence
+            .presented_credential
+            .expect("a holder-presented assertion carries its credential")
+            .trust_entry,
+        "national-id"
+    );
 }
 
 /// The real-clock half of the same coverage. A response signed now and verified

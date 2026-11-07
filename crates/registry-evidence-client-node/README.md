@@ -117,6 +117,18 @@ Any malformed envelope or invalid available member refuses the whole batch,
 never a partial result. The exported `EvidenceRequestBatchSpec` and
 `EvidenceRequestBatchItemSpec` TypeScript types describe the input.
 
+Every assertion states a signed `channel`: `source` when Evidence acquired
+the facts itself, `holder-presented` when a holder presented another issuer's
+credential, in which case `evidence.presentedCredential` (`trustEntry`,
+`issuer`, `type`, `issuedAt`, `subjectLink`) states what was presented. A
+request accepts `source` only by default, so a `holder-presented` assertion
+fails verification with `kind: "verification"`. Name more channels with
+`acceptedChannels` (for example `['source', 'holder-presented']`) on a request
+specification, a batch specification, or a progressive `request()`, and bound
+a presented credential's age at the assertion's observation time with
+`maximumCredentialAgeSeconds`. The bound applies to `holder-presented`
+assertions only; a credential issued after the observation is always refused.
+
 A serialized verification policy is a complete document with `apiVersion`
 and `kind` first. Prepared requests, prepared batch policies, and retained
 verification contexts carry this same shape. Write a retained context's

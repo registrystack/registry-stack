@@ -1,13 +1,24 @@
 //! Bearer verification belongs only to the HTTP adapter.
 use crate::problem::{ProblemKind, RenderProblem};
 use crate::runtime::RenderRuntime;
-use jsonwebtoken::Algorithm;
 use registry_platform_oidc::{
-    access_token_typ_set, fetch_discovery_for_issuer, IssuerNetworkPolicy, JwksFetcher,
-    JwksFetcherConfig, OidcDiscoveryConfig, OidcError, TokenVerifier, TokenVerifierConfig,
+    access_token_typ_set, fetch_discovery_for_issuer, AccessTokenAlgorithm, IssuerNetworkPolicy,
+    JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, OidcError, TokenVerifier,
+    TokenVerifierConfig,
 };
 use std::sync::Arc;
 use std::time::Duration;
+
+/// The access-token signature algorithms the service accepts.
+const ACCEPTED_ALGORITHMS: [AccessTokenAlgorithm; 2] =
+    [AccessTokenAlgorithm::RS256, AccessTokenAlgorithm::ES256];
+
+fn accepted_algorithms() -> Vec<jsonwebtoken::Algorithm> {
+    ACCEPTED_ALGORITHMS
+        .into_iter()
+        .map(AccessTokenAlgorithm::to_jsonwebtoken)
+        .collect()
+}
 
 pub(crate) async fn verifier(
     runtime: &RenderRuntime,
@@ -56,7 +67,7 @@ pub(crate) async fn verifier(
     let profile = TokenVerifierConfig::access_token_profile(
         provider.issuer.to_string(),
         vec![provider.audience.clone()],
-        vec![Algorithm::RS256, Algorithm::ES256],
+        accepted_algorithms(),
         access_token_typ_set("at+jwt"),
     )
     .with_allowed_clients(oidc.clients.allowed_clients.clone())
@@ -146,9 +157,16 @@ pub(crate) async fn authenticate(
 pub(crate) mod tests {
     use super::*;
     use base64::Engine as _;
-    use jsonwebtoken::{EncodingKey, Header};
+    use jsonwebtoken::{Algorithm, EncodingKey, Header};
     use serde_json::{json, Value};
     const CANARY_KEY: &[u8] = b"canary-render-signing-key-01234567890123456789";
+    #[test]
+    fn the_service_accepts_exactly_rs256_and_es256_access_tokens() {
+        assert_eq!(
+            accepted_algorithms(),
+            vec![Algorithm::RS256, Algorithm::ES256]
+        );
+    }
     pub(crate) fn test_jwks() -> Value {
         json!({"keys":[{"kty":"oct","kid":"canary","alg":"HS256","use":"sig","k":base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(CANARY_KEY)}]})
     }

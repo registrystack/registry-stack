@@ -23,12 +23,20 @@ use axum::{
     Router,
 };
 
+use registry_platform_metrics::{
+    Exposition, HistogramSnapshot, MetricKind, SumCountOrder, CONTENT_TYPE as METRICS_MEDIA_TYPE,
+};
+
 use crate::service::{
     AUTHORIZATION_SERVER_METADATA_PATH, CREDENTIAL_PATH, HEALTH_PATH, ISSUER_METADATA_PATH,
     NONCE_PATH, OFFERS_PATH, READY_PATH, TOKEN_PATH,
 };
 
-const METRICS_MEDIA_TYPE: &str = "text/plain; version=0.0.4";
+const REQUESTS_FAMILY: &str = "evidence_oid4vci_http_requests_total";
+const DURATION_FAMILY: &str = "evidence_oid4vci_http_request_duration_seconds";
+/// The metric names and label names in this module are fixed here, so a
+/// refusal by the writer is a programming error, not a runtime condition.
+const DECLARATION: &str = "the metric declarations are valid";
 const DURATION_BUCKETS: [f64; 8] = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 1.0, 5.0];
 const NO_ERROR: &str = "none";
 
@@ -209,79 +217,95 @@ impl Metrics {
             .outcomes
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let mut body = String::new();
-        body.push_str("# HELP evidence_oid4vci_http_requests_total Delivery requests by closed outcome class.\n");
-        body.push_str("# TYPE evidence_oid4vci_http_requests_total counter\n");
+        let mut out = Exposition::new();
+        out.header(
+            REQUESTS_FAMILY,
+            Some("Delivery requests by closed outcome class."),
+            MetricKind::Counter,
+        )
+        .expect(DECLARATION);
         for (key, series) in requests.iter() {
-            body.push_str(&format!(
-                "evidence_oid4vci_http_requests_total{{{}}} {}\n",
-                request_labels(key),
-                series.requests
-            ));
+            out.sample(REQUESTS_FAMILY, &request_labels(key), series.requests)
+                .expect(DECLARATION);
         }
-        body.push_str(
-            "# HELP evidence_oid4vci_http_request_duration_seconds Delivery request latency.\n",
-        );
-        body.push_str("# TYPE evidence_oid4vci_http_request_duration_seconds histogram\n");
+        out.header(
+            DURATION_FAMILY,
+            Some("Delivery request latency."),
+            MetricKind::Histogram,
+        )
+        .expect(DECLARATION);
         for (key, series) in requests.iter() {
-            for (count, bound) in series.buckets.iter().zip(DURATION_BUCKETS) {
-                body.push_str(&format!(
-                    "evidence_oid4vci_http_request_duration_seconds_bucket{{{},le=\"{bound}\"}} {count}\n",
-                    request_labels(key)
-                ));
-            }
-            body.push_str(&format!(
-                "evidence_oid4vci_http_request_duration_seconds_bucket{{{},le=\"+Inf\"}} {}\n",
-                request_labels(key),
-                series.requests
-            ));
-            body.push_str(&format!(
-                "evidence_oid4vci_http_request_duration_seconds_sum{{{}}} {}\n",
-                request_labels(key),
-                series.duration_sum
-            ));
-            body.push_str(&format!(
-                "evidence_oid4vci_http_request_duration_seconds_count{{{}}} {}\n",
-                request_labels(key),
-                series.requests
-            ));
+            let snapshot = HistogramSnapshot {
+                cumulative: series.buckets.to_vec(),
+                count: series.requests,
+                sum: series.duration_sum,
+            };
+            out.histogram(
+                DURATION_FAMILY,
+                &request_labels(key),
+                &DURATION_BUCKETS,
+                &snapshot,
+                SumCountOrder::SumThenCount,
+            )
+            .expect(DECLARATION);
         }
-        body.push_str("# HELP evidence_oid4vci_outcomes_total Closed protocol and upstream outcome classes.\n");
-        body.push_str("# TYPE evidence_oid4vci_outcomes_total counter\n");
+        out.header(
+            "evidence_oid4vci_outcomes_total",
+            Some("Closed protocol and upstream outcome classes."),
+            MetricKind::Counter,
+        )
+        .expect(DECLARATION);
         for outcome in Outcome::ALL {
-            body.push_str(&format!(
-                "evidence_oid4vci_outcomes_total{{outcome=\"{}\"}} {}\n",
-                outcome.label(),
-                outcomes.get(&outcome).copied().unwrap_or(0)
-            ));
+            out.sample(
+                "evidence_oid4vci_outcomes_total",
+                &[("outcome", outcome.label())],
+                outcomes.get(&outcome).copied().unwrap_or(0),
+            )
+            .expect(DECLARATION);
         }
-        body.push_str("# HELP evidence_oid4vci_store_entries Entries in the fullest independently bounded offer, ledger, or token keyspace.\n");
-        body.push_str("# TYPE evidence_oid4vci_store_entries gauge\n");
-        body.push_str(&format!(
-            "evidence_oid4vci_store_entries {}\n",
-            self.store_entries.load(Ordering::Relaxed)
-        ));
-        body.push_str("# HELP evidence_oid4vci_store_capacity Refusal threshold for each independently bounded offer, ledger, or token keyspace.\n");
-        body.push_str("# TYPE evidence_oid4vci_store_capacity gauge\n");
-        body.push_str(&format!(
-            "evidence_oid4vci_store_capacity {}\n",
-            self.store_capacity
-        ));
-        body.push_str("# HELP evidence_oid4vci_cleanup_expired_total Expired in-memory entries released by cleanup.\n");
-        body.push_str("# TYPE evidence_oid4vci_cleanup_expired_total counter\n");
-        body.push_str(&format!(
-            "evidence_oid4vci_cleanup_expired_total {}\n",
-            self.cleanup_expired.load(Ordering::Relaxed)
-        ));
-        body
+        out.header(
+            "evidence_oid4vci_store_entries",
+            Some("Entries in the fullest independently bounded offer, ledger, or token keyspace."),
+            MetricKind::Gauge,
+        )
+        .expect(DECLARATION);
+        out.sample(
+            "evidence_oid4vci_store_entries",
+            &[],
+            self.store_entries.load(Ordering::Relaxed),
+        )
+        .expect(DECLARATION);
+        out.header(
+            "evidence_oid4vci_store_capacity",
+            Some("Refusal threshold for each independently bounded offer, ledger, or token keyspace."),
+            MetricKind::Gauge,
+        )
+        .expect(DECLARATION);
+        out.sample("evidence_oid4vci_store_capacity", &[], self.store_capacity)
+            .expect(DECLARATION);
+        out.header(
+            "evidence_oid4vci_cleanup_expired_total",
+            Some("Expired in-memory entries released by cleanup."),
+            MetricKind::Counter,
+        )
+        .expect(DECLARATION);
+        out.sample(
+            "evidence_oid4vci_cleanup_expired_total",
+            &[],
+            self.cleanup_expired.load(Ordering::Relaxed),
+        )
+        .expect(DECLARATION);
+        out.finish()
     }
 }
 
-fn request_labels(key: &RequestSeriesKey) -> String {
-    format!(
-        "route=\"{}\",method=\"{}\",status=\"{}\",error=\"{}\"",
-        key.route, key.method, key.status, key.error
-    )
+fn request_labels(key: &RequestSeriesKey) -> [(&'static str, &'static str); 4] {
+    [
+        ("route", key.route),
+        ("method", key.method),
+        ("status", key.status),
+        ("error", key.error),
+    ]
 }
 
 pub(crate) async fn observe(
@@ -344,6 +368,10 @@ fn normalized_route(request: &Request<Body>) -> &'static str {
         Some(TOKEN_PATH) => TOKEN_PATH,
         Some(NONCE_PATH) => NONCE_PATH,
         Some(CREDENTIAL_PATH) => CREDENTIAL_PATH,
+        Some(crate::draft13::ISSUER_METADATA_PATH) => crate::draft13::ISSUER_METADATA_PATH,
+        Some(crate::draft13::OFFERS_PATH) => crate::draft13::OFFERS_PATH,
+        Some(crate::draft13::TOKEN_PATH) => crate::draft13::TOKEN_PATH,
+        Some(crate::draft13::CREDENTIAL_PATH) => crate::draft13::CREDENTIAL_PATH,
         _ => "unmatched",
     }
 }
@@ -376,6 +404,8 @@ fn normalized_problem(problem: &str) -> &'static str {
         "invalid_grant" => "invalid_grant",
         "invalid_credential_request" => "invalid_credential_request",
         "credential_request_denied" => "credential_request_denied",
+        "unsupported_credential_format" => "unsupported_credential_format",
+        "unsupported_credential_type" => "unsupported_credential_type",
         "invalid_proof" => "invalid_proof",
         "invalid_nonce" => "invalid_nonce",
         "temporarily_unavailable" => "temporarily_unavailable",
@@ -492,6 +522,51 @@ mod tests {
         assert!(rendered.contains("outcome=\"store-fault\"} 0"));
         assert!(rendered.contains("evidence_oid4vci_store_entries 7"));
         assert!(rendered.contains("evidence_oid4vci_store_capacity 256"));
+    }
+
+    /// A registry that has seen every kind of series the scrape can carry,
+    /// recorded with fixed durations so its text is reproducible.
+    fn populated_registry() -> Metrics {
+        let metrics = Metrics::new(256);
+        for (route, method, status, error, millis) in [
+            (HEALTH_PATH, "GET", "success", NO_ERROR, 3),
+            (HEALTH_PATH, "GET", "success", NO_ERROR, 30),
+            (TOKEN_PATH, "POST", "success", NO_ERROR, 120),
+            (TOKEN_PATH, "POST", "client-error", "invalid_grant", 1),
+            (CREDENTIAL_PATH, "POST", "client-error", "invalid_nonce", 9),
+            (
+                CREDENTIAL_PATH,
+                "POST",
+                "server-error",
+                "server_error",
+                6_000,
+            ),
+            ("unmatched", "other", "client-error", NO_ERROR, 7),
+        ] {
+            metrics.record_request(route, method, status, error, Duration::from_millis(millis));
+        }
+        for outcome in [
+            Outcome::OfferCreated,
+            Outcome::OfferCreated,
+            Outcome::NonceTampered,
+            Outcome::CredentialIssued,
+        ] {
+            metrics.record_outcome(outcome);
+        }
+        metrics.record_store_entries(Some(7));
+        metrics.record_cleanup(3);
+        metrics
+    }
+
+    /// The text a scrape of [`populated_registry`] returned before the
+    /// exposition was written by the shared metrics primitive. Dashboards and
+    /// alerts read these bytes, so they must not move.
+    #[test]
+    fn a_populated_scrape_is_byte_identical_to_the_recorded_one() {
+        assert_eq!(
+            populated_registry().render(),
+            include_str!("observability/golden-scrape.txt")
+        );
     }
 
     #[test]

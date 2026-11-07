@@ -45,6 +45,9 @@ use axum::{
     Router,
 };
 use registry_platform_httpsec::{TraceContext, TraceId};
+use registry_platform_metrics::{
+    Exposition, HistogramSnapshot, MetricKind, SumCountOrder, CONTENT_TYPE as METRICS_CONTENT_TYPE,
+};
 use ulid::Ulid;
 
 use crate::{problem::ProblemCode, rate_limit::EvidenceRateLimiter};
@@ -82,7 +85,10 @@ const NO_ERROR: &str = "none";
 /// Category label used when a response carries no runtime failure.
 const NO_CATEGORY: &str = "none";
 
-const METRICS_MEDIA_TYPE: &str = "text/plain; version=0.0.4";
+/// The metric names and label names in this module are fixed here or drawn
+/// from closed vocabularies, so a refusal by the writer is a programming
+/// error, not a runtime condition.
+const DECLARATION: &str = "the metric declarations are valid";
 
 /// Upper bounds, in seconds, of the request duration histogram.
 const DURATION_BUCKETS: [f64; 9] = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 5.0];
@@ -293,6 +299,16 @@ struct Series {
     bucket_counts: [u64; DURATION_BUCKETS.len()],
 }
 
+impl Series {
+    fn snapshot(&self) -> HistogramSnapshot {
+        HistogramSnapshot {
+            cumulative: self.bucket_counts.to_vec(),
+            count: self.requests,
+            sum: self.duration_sum,
+        }
+    }
+}
+
 impl Metrics {
     /// A registry that serves the metrics listener: it samples `rate_limiter`
     /// on every scrape to publish the `evidence_rate_limiter_tracked_keys`
@@ -356,57 +372,49 @@ impl Metrics {
             .series
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let mut body = String::new();
-        body.push_str(
-            "# HELP evidence_http_requests_total Requests served by the Evidence boundary.\n",
-        );
-        body.push_str("# TYPE evidence_http_requests_total counter\n");
+        let mut out = Exposition::new();
+        out.header(
+            "evidence_http_requests_total",
+            Some("Requests served by the Evidence boundary."),
+            MetricKind::Counter,
+        )
+        .expect(DECLARATION);
         for (key, value) in series.iter() {
-            body.push_str(&format!(
-                "evidence_http_requests_total{{{}}} {}\n",
-                labels(key),
-                value.requests
-            ));
+            out.sample("evidence_http_requests_total", &labels(key), value.requests)
+                .expect(DECLARATION);
         }
-        body.push_str(
-            "# HELP evidence_http_request_duration_seconds Request duration at the Evidence boundary.\n",
-        );
-        body.push_str("# TYPE evidence_http_request_duration_seconds histogram\n");
+        out.header(
+            "evidence_http_request_duration_seconds",
+            Some("Request duration at the Evidence boundary."),
+            MetricKind::Histogram,
+        )
+        .expect(DECLARATION);
         for (key, value) in series.iter() {
-            for (count, bound) in value.bucket_counts.iter().zip(DURATION_BUCKETS) {
-                body.push_str(&format!(
-                    "evidence_http_request_duration_seconds_bucket{{{},le=\"{bound}\"}} {count}\n",
-                    labels(key)
-                ));
-            }
-            body.push_str(&format!(
-                "evidence_http_request_duration_seconds_bucket{{{},le=\"+Inf\"}} {}\n",
-                labels(key),
-                value.requests
-            ));
-            body.push_str(&format!(
-                "evidence_http_request_duration_seconds_sum{{{}}} {}\n",
-                labels(key),
-                value.duration_sum
-            ));
-            body.push_str(&format!(
-                "evidence_http_request_duration_seconds_count{{{}}} {}\n",
-                labels(key),
-                value.requests
-            ));
+            out.histogram(
+                "evidence_http_request_duration_seconds",
+                &labels(key),
+                &DURATION_BUCKETS,
+                &value.snapshot(),
+                SumCountOrder::SumThenCount,
+            )
+            .expect(DECLARATION);
         }
-        body.push_str(
-            "# HELP evidence_rate_limiter_tracked_keys Pseudonym keys currently tracked by the rate limiter.\n",
-        );
-        body.push_str("# TYPE evidence_rate_limiter_tracked_keys gauge\n");
-        body.push_str(&format!(
-            "evidence_rate_limiter_tracked_keys {}\n",
-            self.rate_limiter_tracked_keys.load(Ordering::Relaxed)
-        ));
+        out.header(
+            "evidence_rate_limiter_tracked_keys",
+            Some("Pseudonym keys currently tracked by the rate limiter."),
+            MetricKind::Gauge,
+        )
+        .expect(DECLARATION);
+        out.sample(
+            "evidence_rate_limiter_tracked_keys",
+            &[],
+            self.rate_limiter_tracked_keys.load(Ordering::Relaxed),
+        )
+        .expect(DECLARATION);
         if let Some(source_diagnostics) = &self.source_diagnostics {
-            source_diagnostics.render(&mut body);
+            source_diagnostics.render(&mut out);
         }
-        body
+        out.finish()
     }
 }
 
@@ -494,22 +502,25 @@ impl DependencyMetrics {
             }
         }
     }
-    fn render(&self, body: &mut String, dependency: &str, identity: &str) {
+    fn render(&self, out: &mut Exposition, dependency: &str, identity: (&str, &str)) {
         let series = self
             .0
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let counter = format!("evidence_{dependency}_requests_total");
+        let duration = format!("evidence_{dependency}_request_duration_seconds");
         for (outcome, entry) in series.iter() {
-            let labels = format!("{identity},outcome=\"{}\"", outcome.label());
-            let counter = format!("evidence_{dependency}_requests_total");
-            let duration = format!("evidence_{dependency}_request_duration_seconds");
-            body.push_str(&format!("{counter}{{{labels}}} {}\n", entry.requests));
-            for (count, bound) in entry.bucket_counts.iter().zip(DURATION_BUCKETS) {
-                body.push_str(&format!(
-                    "{duration}_bucket{{{labels},le=\"{bound}\"}} {count}\n"
-                ));
-            }
-            body.push_str(&format!("{duration}_bucket{{{labels},le=\"+Inf\"}} {}\n{duration}_count{{{labels}}} {}\n{duration}_sum{{{labels}}} {}\n", entry.requests, entry.requests, entry.duration_sum));
+            let labels = [identity, ("outcome", outcome.label())];
+            out.sample(&counter, &labels, entry.requests)
+                .expect(DECLARATION);
+            out.histogram(
+                &duration,
+                &labels,
+                &DURATION_BUCKETS,
+                &entry.snapshot(),
+                SumCountOrder::CountThenSum,
+            )
+            .expect(DECLARATION);
         }
     }
 }
@@ -675,71 +686,78 @@ impl SourceDiagnostics {
         );
     }
 
-    fn render(&self, body: &mut String) {
+    fn render(&self, out: &mut Exposition) {
         if let Some((bundle, authority)) = &self.build {
-            body.push_str("# HELP evidence_build_info Running version and captured governed identities.\n# TYPE evidence_build_info gauge\n");
-            body.push_str(&format!(
-                "evidence_build_info{{version=\"{}\",bundle=\"{}\",authority=\"{}\"}} 1\n",
-                env!("CARGO_PKG_VERSION"),
-                escape_label_value(bundle),
-                escape_label_value(authority)
-            ));
+            out.header(
+                "evidence_build_info",
+                Some("Running version and captured governed identities."),
+                MetricKind::Gauge,
+            )
+            .expect(DECLARATION);
+            out.sample(
+                "evidence_build_info",
+                &[
+                    ("version", env!("CARGO_PKG_VERSION")),
+                    ("bundle", bundle),
+                    ("authority", authority),
+                ],
+                1_u64,
+            )
+            .expect(DECLARATION);
         }
         for dependency in ["source", "signer"] {
-            body.push_str(&format!("# HELP evidence_{dependency}_requests_total Completed dependency attempts by closed outcome.\n# TYPE evidence_{dependency}_requests_total counter\n# HELP evidence_{dependency}_request_duration_seconds Dependency attempt latency including cancellation.\n# TYPE evidence_{dependency}_request_duration_seconds histogram\n"));
+            out.header(
+                &format!("evidence_{dependency}_requests_total"),
+                Some("Completed dependency attempts by closed outcome."),
+                MetricKind::Counter,
+            )
+            .expect(DECLARATION);
+            out.header(
+                &format!("evidence_{dependency}_request_duration_seconds"),
+                Some("Dependency attempt latency including cancellation."),
+                MetricKind::Histogram,
+            )
+            .expect(DECLARATION);
         }
         for (source, signals) in &self.sources {
-            signals.requests.render(
-                body,
-                "source",
-                &format!("source=\"{}\"", escape_label_value(source)),
-            );
+            signals.requests.render(out, "source", ("source", source));
         }
-        self.signer.render(body, "signer", "signer=\"active\"");
-        body.push_str("# HELP evidence_source_lookups_total Completed pack lookups by closed outcome.\n# TYPE evidence_source_lookups_total counter\n");
+        self.signer.render(out, "signer", ("signer", "active"));
+        out.header(
+            "evidence_source_lookups_total",
+            Some("Completed pack lookups by closed outcome."),
+            MetricKind::Counter,
+        )
+        .expect(DECLARATION);
         for (source, signals) in &self.sources {
             let counts = signals
                 .lookups
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             for (outcome, count) in counts.iter() {
-                body.push_str(&format!(
-                    "evidence_source_lookups_total{{source=\"{}\",outcome=\"{}\"}} {}\n",
-                    escape_label_value(source),
-                    outcome.label(),
-                    count
-                ));
+                out.sample(
+                    "evidence_source_lookups_total",
+                    &[("source", source), ("outcome", outcome.label())],
+                    *count,
+                )
+                .expect(DECLARATION);
             }
         }
-
-        body.push_str(
-            "# HELP evidence_source_shape_drift_total Source responses whose shape departed from the declared projection.\n",
-        );
-        body.push_str("# TYPE evidence_source_shape_drift_total counter\n");
+        out.header(
+            "evidence_source_shape_drift_total",
+            Some("Source responses whose shape departed from the declared projection."),
+            MetricKind::Counter,
+        )
+        .expect(DECLARATION);
         for (source_id, signals) in &self.sources {
-            body.push_str(&format!(
-                "evidence_source_shape_drift_total{{source=\"{}\"}} {}\n",
-                escape_label_value(source_id),
-                signals.shape_drift_total.load(Ordering::Relaxed)
-            ));
+            out.sample(
+                "evidence_source_shape_drift_total",
+                &[("source", source_id)],
+                signals.shape_drift_total.load(Ordering::Relaxed),
+            )
+            .expect(DECLARATION);
         }
     }
-}
-
-/// Escape a label value under the Prometheus text exposition rules. Source
-/// identifiers are governed bundle text, but the exposition must stay
-/// well-formed whatever that text holds.
-fn escape_label_value(value: &str) -> String {
-    let mut escaped = String::with_capacity(value.len());
-    for character in value.chars() {
-        match character {
-            '\\' => escaped.push_str("\\\\"),
-            '"' => escaped.push_str("\\\""),
-            '\n' => escaped.push_str("\\n"),
-            other => escaped.push(other),
-        }
-    }
-    escaped
 }
 
 /// The handle one source executor reports its diagnostics through.
@@ -778,11 +796,13 @@ impl SourceObserver {
     }
 }
 
-fn labels(key: &SeriesKey) -> String {
-    format!(
-        "route=\"{}\",method=\"{}\",status=\"{}\",error=\"{}\"",
-        key.route, key.method, key.status, key.error
-    )
+fn labels(key: &SeriesKey) -> [(&'static str, &'static str); 4] {
+    [
+        ("route", key.route),
+        ("method", key.method),
+        ("status", key.status),
+        ("error", key.error),
+    ]
 }
 
 /// Build the metrics application.
@@ -809,7 +829,7 @@ async fn render_metrics(State(metrics): State<Arc<Metrics>>) -> Response {
     let mut response = (StatusCode::OK, metrics.render()).into_response();
     response
         .headers_mut()
-        .insert(CONTENT_TYPE, HeaderValue::from_static(METRICS_MEDIA_TYPE));
+        .insert(CONTENT_TYPE, HeaderValue::from_static(METRICS_CONTENT_TYPE));
     response
 }
 
@@ -1047,8 +1067,9 @@ mod tests {
             observer.lookup(outcome);
         }
         assert!(diagnostics.observer("request-controlled-canary").is_none());
-        let mut rendered = String::new();
-        diagnostics.render(&mut rendered);
+        let mut out = Exposition::new();
+        diagnostics.render(&mut out);
+        let rendered = out.finish();
         for outcome in ["match", "no-match", "ambiguous", "unresolved"] {
             assert!(rendered.contains(&format!(
                 "evidence_source_lookups_total{{source=\"people\",outcome=\"{outcome}\"}} 1"
@@ -1071,8 +1092,9 @@ mod tests {
         diagnostics.shape_drift("not-governed", &findings, now);
         diagnostics.undeclared_not_found("source-b", UndeclaredNotFound::NotDeclared, now);
 
-        let mut body = String::new();
-        diagnostics.render(&mut body);
+        let mut out = Exposition::new();
+        diagnostics.render(&mut out);
+        let body = out.finish();
         assert_eq!(
             body.lines()
                 .filter(|line| line.contains("evidence_source_shape_drift_total"))
@@ -1084,12 +1106,6 @@ mod tests {
              evidence_source_shape_drift_total{source=\"source-a\"} 2\n\
              evidence_source_shape_drift_total{source=\"source-b\"} 0\n"
         );
-    }
-
-    #[test]
-    fn source_label_values_are_escaped_for_the_text_exposition() {
-        assert_eq!(escape_label_value("plain-id"), "plain-id");
-        assert_eq!(escape_label_value("a\"b\\c\nd"), "a\\\"b\\\\c\\nd");
     }
 
     #[test]
@@ -1111,6 +1127,88 @@ mod tests {
                 .contains("evidence_source_shape_drift_total"),
             "a registry without a runtime publishes no source series"
         );
+    }
+
+    /// A registry that has seen every kind of series the scrape can carry,
+    /// recorded with fixed durations so its text is reproducible.
+    fn populated_registry() -> Metrics {
+        let limiter = Arc::new(
+            EvidenceRateLimiter::new(crate::rate_limit::RateLimitConfig {
+                requests_per_principal_per_minute: 60,
+                burst_per_principal: 2,
+                failed_selector_attempts_per_principal_authority_per_minute: 2,
+            })
+            .expect("limiter builds"),
+        );
+        let diagnostics = Arc::new(
+            SourceDiagnostics::new(["people", "a\"b\\c\nd"])
+                .with_build("bundle\"x\\y\nz", Some("package")),
+        );
+        let metrics = Metrics::new(limiter, Arc::clone(&diagnostics));
+        for (route, method, status, error, millis) in [
+            ("/health", "GET", StatusCategory::Success, NO_ERROR, 3),
+            ("/health", "GET", StatusCategory::Success, NO_ERROR, 30),
+            (
+                "/v1/evidence",
+                "POST",
+                StatusCategory::Success,
+                NO_ERROR,
+                120,
+            ),
+            (
+                "/v1/evidence",
+                "POST",
+                StatusCategory::ClientError,
+                "evidence.invalid-request",
+                1,
+            ),
+            (
+                "/v1/evidence",
+                "POST",
+                StatusCategory::ServerError,
+                "evidence.unavailable",
+                6_000,
+            ),
+            (
+                UNMATCHED_ROUTE,
+                "other",
+                StatusCategory::ClientError,
+                NO_ERROR,
+                7,
+            ),
+        ] {
+            metrics.record(route, method, status, error, Duration::from_millis(millis));
+        }
+        metrics.record_rate_limiter_tracked_keys(5);
+        for (source, outcome, millis) in [
+            ("people", DependencyOutcome::Success, 12),
+            ("people", DependencyOutcome::Success, 700),
+            ("people", DependencyOutcome::Timeout, 5_100),
+            ("a\"b\\c\nd", DependencyOutcome::Cancelled, 1),
+        ] {
+            diagnostics.sources[source]
+                .requests
+                .record(outcome, Duration::from_millis(millis));
+        }
+        diagnostics
+            .signer()
+            .record(DependencyOutcome::Signing, Duration::from_millis(40));
+        let observer = diagnostics.observer("people").expect("a governed source");
+        observer.lookup(SourceLookupOutcome::Match);
+        observer.lookup(SourceLookupOutcome::Match);
+        observer.lookup(SourceLookupOutcome::Unresolved);
+        observer.shape_drift(&["/total is absent".to_owned()]);
+        metrics
+    }
+
+    /// The text a scrape of [`populated_registry`] returned before the
+    /// exposition was written by the shared metrics primitive. Dashboards and
+    /// alerts read these bytes, so they must not move.
+    #[test]
+    fn a_populated_scrape_is_byte_identical_to_the_recorded_one() {
+        let golden = include_str!("observability/golden-scrape.txt")
+            .replace("{VERSION}", env!("CARGO_PKG_VERSION"));
+        assert_eq!(populated_registry().render(), golden);
     }
 
     #[test]

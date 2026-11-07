@@ -13,6 +13,7 @@
 //! library through `jsonwebtoken`.
 
 pub mod contracts;
+pub mod holder_proof;
 pub mod model;
 pub mod sdjwt_vc;
 pub mod status_list;

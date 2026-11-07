@@ -6,10 +6,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
-use chacha20poly1305::aead::{Aead, Payload};
-use chacha20poly1305::{KeyInit, XChaCha20Poly1305, XNonce};
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use registry_platform_canonical_json::canonicalize_json;
+use registry_platform_crypto::xchacha_seal;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::Sha256;
@@ -21,8 +20,8 @@ use crate::model::{CompiledQueryKind, CompiledQuerySortDirection};
 const WIRE_VERSION: u8 = 3;
 const ROOT_SECRET_MIN_BYTES: usize = 32;
 const KEY_BYTES: usize = 32;
-const NONCE_BYTES: usize = 24;
-const TAG_BYTES: usize = 16;
+const NONCE_BYTES: usize = xchacha_seal::NONCE_BYTES;
+const TAG_BYTES: usize = xchacha_seal::TAG_BYTES;
 const MAX_PAYLOAD_BYTES: usize = 8 * 1024;
 const MAX_TOKEN_BYTES: usize = ((1 + NONCE_BYTES + MAX_PAYLOAD_BYTES + TAG_BYTES) * 4).div_ceil(3);
 const MAX_AGE_SECONDS: u64 = 86_400;
@@ -63,24 +62,11 @@ impl CursorCodec {
         if plaintext.is_empty() || plaintext.len() > MAX_PAYLOAD_BYTES {
             return Err(CursorError::Malformed);
         }
-        let cipher = XChaCha20Poly1305::new_from_slice(self.aead_key.as_slice())
+        let sealed = xchacha_seal::seal(&self.aead_key, CURSOR_AAD, &plaintext)
             .map_err(|_| CursorError::Configuration)?;
-        let mut nonce = [0_u8; NONCE_BYTES];
-        getrandom::fill(&mut nonce).map_err(|_| CursorError::Configuration)?;
-        let nonce = XNonce::from(nonce);
-        let ciphertext = cipher
-            .encrypt(
-                &nonce,
-                Payload {
-                    msg: plaintext.as_slice(),
-                    aad: CURSOR_AAD,
-                },
-            )
-            .map_err(|_| CursorError::Configuration)?;
-        let mut envelope = Vec::with_capacity(1 + NONCE_BYTES + ciphertext.len());
+        let mut envelope = Vec::with_capacity(1 + sealed.len());
         envelope.push(WIRE_VERSION);
-        envelope.extend_from_slice(&nonce);
-        envelope.extend_from_slice(&ciphertext);
+        envelope.extend_from_slice(&sealed);
         Ok(URL_SAFE_NO_PAD.encode(envelope))
     }
 
@@ -110,18 +96,7 @@ impl CursorCodec {
         {
             return Err(CursorError::Invalid);
         }
-        let (nonce, ciphertext) = envelope[1..].split_at(NONCE_BYTES);
-        let nonce: [u8; NONCE_BYTES] = nonce.try_into().map_err(|_| CursorError::Invalid)?;
-        let cipher = XChaCha20Poly1305::new_from_slice(self.aead_key.as_slice())
-            .map_err(|_| CursorError::Configuration)?;
-        let plaintext = cipher
-            .decrypt(
-                &XNonce::from(nonce),
-                Payload {
-                    msg: ciphertext,
-                    aad: CURSOR_AAD,
-                },
-            )
+        let plaintext = xchacha_seal::open(&self.aead_key, CURSOR_AAD, &envelope[1..])
             .map_err(|_| CursorError::Invalid)?;
         if plaintext.is_empty() || plaintext.len() > MAX_PAYLOAD_BYTES {
             return Err(CursorError::Invalid);
@@ -560,6 +535,8 @@ fn derive_key(secret: &[u8], label: &[u8]) -> Result<Zeroizing<[u8; KEY_BYTES]>,
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chacha20poly1305::aead::{Aead, Payload};
+    use chacha20poly1305::{KeyInit, XChaCha20Poly1305, XNonce};
 
     fn codec() -> CursorCodec {
         CursorCodec::new(Zeroizing::new(vec![0x51; 32]), Duration::from_secs(60))
@@ -834,5 +811,136 @@ mod tests {
             .open_after_authorization(&token, 1_001, |_| Ok(expected))
             .expect("matching authorized binding opens cursor");
         assert_eq!(opened.continuation.sort_value.as_deref(), Some("alpha"));
+    }
+
+    // Cursors sealed by the codec at wire version 3 with the fixed nonces
+    // below, under root secret `[0x51; 32]`, for `payload()`. They pin the
+    // wire format: `version || nonce || ciphertext || tag`, associated data
+    // `breg-cursor-v3`, key derived from the root secret.
+    const GOLDEN_NONCE_11: &str = include_str!("../tests/golden/cursor-nonce-11.txt");
+    const GOLDEN_NONCE_A5: &str = include_str!("../tests/golden/cursor-nonce-a5.txt");
+
+    /// The wire format sealed with a chosen nonce, written against the AEAD
+    /// crate directly so it does not depend on the codec's own sealing.
+    fn seal_independently(codec: &CursorCodec, payload: &CursorPayload, nonce: u8) -> String {
+        let cipher = XChaCha20Poly1305::new_from_slice(codec.aead_key.as_slice())
+            .expect("the derived key has the cipher's length");
+        let nonce = [nonce; NONCE_BYTES];
+        let ciphertext = cipher
+            .encrypt(
+                &XNonce::from(nonce),
+                Payload {
+                    msg: serde_json::to_vec(payload)
+                        .expect("payload serializes")
+                        .as_slice(),
+                    aad: CURSOR_AAD,
+                },
+            )
+            .expect("the payload seals");
+        let mut envelope = vec![WIRE_VERSION];
+        envelope.extend_from_slice(&nonce);
+        envelope.extend_from_slice(&ciphertext);
+        URL_SAFE_NO_PAD.encode(envelope)
+    }
+
+    fn reencode(wire: &[u8]) -> String {
+        URL_SAFE_NO_PAD.encode(wire)
+    }
+
+    const GOLDENS: [(&str, u8); 2] = [(GOLDEN_NONCE_11, 0x11), (GOLDEN_NONCE_A5, 0xA5)];
+
+    #[test]
+    fn golden_cursors_open_to_their_payload() {
+        let codec = codec();
+        for (token, nonce) in GOLDENS {
+            let wire = URL_SAFE_NO_PAD.decode(token).expect("golden is base64url");
+            assert_eq!(wire[0], WIRE_VERSION);
+            assert_eq!(wire[1..=NONCE_BYTES], [nonce; NONCE_BYTES]);
+            assert_eq!(codec.decode(token, 1_001).expect("golden opens"), payload());
+        }
+    }
+
+    #[test]
+    fn golden_cursors_are_what_an_independent_sealer_produces() {
+        let codec = codec();
+        for (token, nonce) in GOLDENS {
+            assert_eq!(seal_independently(&codec, &payload(), nonce), token);
+        }
+    }
+
+    #[test]
+    fn golden_cursors_refuse_another_root_secret() {
+        // The cursor key is derived from one root secret and the codec holds
+        // no previous key, so a rotated secret orphans issued cursors.
+        let rotated = CursorCodec::new(Zeroizing::new(vec![0x52; 32]), Duration::from_secs(60))
+            .expect("a strong secret");
+        for (token, _) in GOLDENS {
+            assert!(matches!(
+                rotated.decode(token, 1_001),
+                Err(CursorError::Invalid)
+            ));
+        }
+    }
+
+    #[test]
+    fn golden_cursors_refuse_expiry_binding_and_every_malformation() {
+        let codec = codec();
+        let (token, _) = GOLDENS[0];
+        assert!(codec.decode(token, 1_059).is_ok());
+        assert!(matches!(
+            codec.decode(token, 1_060),
+            Err(CursorError::Expired)
+        ));
+        let mut other = binding();
+        other.package_revision = "package-b".to_owned();
+        assert!(matches!(
+            codec.open_after_authorization(token, 1_001, |_| Ok(other)),
+            Err(CursorError::Mismatch)
+        ));
+
+        let wire = URL_SAFE_NO_PAD.decode(token).expect("golden is base64url");
+        let flipped = |index: usize| {
+            let mut altered = wire.clone();
+            altered[index] ^= 1;
+            reencode(&altered)
+        };
+        for (what, altered) in [
+            ("version byte", flipped(0)),
+            ("first nonce byte", flipped(1)),
+            ("last nonce byte", flipped(NONCE_BYTES)),
+            ("first ciphertext byte", flipped(1 + NONCE_BYTES)),
+            ("last tag byte", flipped(wire.len() - 1)),
+            ("truncated", reencode(&wire[..wire.len() - 1])),
+            ("extended", reencode(&[wire.as_slice(), &[0]].concat())),
+            ("header only", reencode(&wire[..1 + NONCE_BYTES])),
+            (
+                "header and tag only",
+                reencode(&wire[..1 + NONCE_BYTES + TAG_BYTES]),
+            ),
+            ("empty", String::new()),
+            ("not base64url", format!("{token}!")),
+            ("padded", format!("{token}=")),
+            ("over the token bound", "A".repeat(MAX_TOKEN_BYTES + 1)),
+        ] {
+            assert!(
+                matches!(codec.decode(&altered, 1_001), Err(CursorError::Invalid)),
+                "{what}"
+            );
+        }
+    }
+
+    #[test]
+    fn encoded_cursors_use_the_documented_layout_and_a_fresh_nonce_each() {
+        let codec = codec();
+        let first = codec.encode(&payload()).expect("encodes");
+        let second = codec.encode(&payload()).expect("encodes");
+        let plaintext_bytes = serde_json::to_vec(&payload()).expect("serializes").len();
+        let wires = [&first, &second].map(|token| {
+            let wire = URL_SAFE_NO_PAD.decode(token).expect("base64url");
+            assert_eq!(wire[0], WIRE_VERSION);
+            assert_eq!(wire.len(), 1 + NONCE_BYTES + plaintext_bytes + TAG_BYTES);
+            wire
+        });
+        assert_ne!(wires[0][1..=NONCE_BYTES], wires[1][1..=NONCE_BYTES]);
     }
 }

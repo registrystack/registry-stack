@@ -3,14 +3,29 @@
     "Acquisition": {
       "additionalProperties": false,
       "properties": {
+        "holderPresented": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HolderPresented"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A wallet presentation Source for the selector profiles it lists. A\nrequest on one of those profiles acquires only through this Source."
+        },
         "source": {
-          "$ref": "#/$defs/LocalId",
-          "description": "One reviewed route owns the complete bounded provider interaction."
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LocalId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "One reviewed route owns the complete bounded provider interaction for\nthe selector profiles that `holderPresented` does not claim. Optional\nonly when `holderPresented` lists every profile the subject roles allow."
         }
       },
-      "required": [
-        "source"
-      ],
       "type": "object"
     },
     "AcquisitionPosture": {
@@ -546,6 +561,28 @@
         "actorKinds",
         "valueOrigins",
         "audiences"
+      ],
+      "type": "object"
+    },
+    "HolderPresented": {
+      "additionalProperties": false,
+      "properties": {
+        "selectorProfiles": {
+          "items": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "source": {
+          "$ref": "#/$defs/LocalId"
+        }
+      },
+      "required": [
+        "source",
+        "selectorProfiles"
       ],
       "type": "object"
     },

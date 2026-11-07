@@ -16,6 +16,7 @@ schema = [
     "dep:schemars",
     "registry-platform-audit/schema",
     "registry-platform-config/schema",
+    "registry-platform-oidc/schema",
     "registry-platform-yaml/schema",
 ]
 test-support = []
@@ -24,7 +25,6 @@ test-support = []
 async-trait.workspace = true
 axum.workspace = true
 http.workspace = true
-jsonwebtoken.workspace = true
 registry-platform-audit.workspace = true
 registry-platform-authcommon.workspace = true
 registry-platform-buildinfo.workspace = true

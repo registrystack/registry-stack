@@ -1,0 +1,78 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/evidence/oid4vp-runtime/oid4vp-runtime.v1alpha1.schema.json
+# A minimal Evidence OpenID4VP verifier runtime configuration: the file
+# `evidence-oid4vp serve --runtime-config` reads and `evidence-oid4vp check
+# --runtime-config` checks offline. Replace every origin with this deployment's
+# own.
+#
+# Two client identifiers are declared, and each policy names the one it uses.
+# The x509-san-dns identifier is for HAIP wallets: place the PEM certificate
+# chain (leaf first) and the private JWK of the leaf key under
+# secretProviders.file.root, named as the identifier names them; the leaf
+# certificate must name the host of publicBaseUrl as a DNS subject alternative
+# name. The decentralized-identifier identifier is for MOSIP Inji: place a
+# private Ed25519 JWK there, and the service publishes its public key in the
+# DID document at /.well-known/did.json. Its did is did:web: and the host of
+# publicBaseUrl, with no port and no path.
+apiVersion: id.registrystack.org/formats/evidence/oid4vp-runtime/v1alpha1
+kind: EvidenceOid4vpRuntimeConfig
+publicBaseUrl: https://verifier.example.org
+listener:
+  bind: 127.0.0.1:8095
+secretProviders:
+  file:
+    root: /run/secrets/evidence-oid4vp
+audit:
+  destination: file
+  path: /var/lib/registry-evidence-oid4vp/audit.jsonl
+  hashKeyRef: secret:file/audit-hash-key
+applicantTokens:
+  issuer: https://mint.example.org
+  audience: https://verifier.example.org
+  requiredScope: oid4vp:session
+evidenceCredentials:
+  issuer: https://mint.example.org
+  audience: https://verifier.example.org
+  allowedClient: evidence
+  requiredScope: oid4vp:read-result
+clientIdentifiers:
+  - id: haip
+    type: x509-san-dns
+    certificateChainRef: secret:file/verifier-chain.pem
+    signingKeyRef: secret:file/verifier-signing.jwk.json
+  - id: inji
+    type: decentralized-identifier
+    did: did:web:verifier.example.org
+    signingKeyRef: secret:file/verifier-did-signing.jwk.json
+policies:
+  # A HAIP wallet: A128GCM and A256GCM responses, and an authority hint.
+  - id: national-id
+    clientIdentifier: haip
+    credentials:
+      - id: national_id
+        format: dc+sd-jwt
+        vctValues: [https://credentials.example.org/national-id]
+        claims:
+          - path: [given_name]
+          - path: [family_name]
+          - path: [birthdate]
+    trustedAuthorities:
+      - type: aki
+        values: [c2lnbmluZy1rZXktaWRlbnRpZmllcg]
+  # MOSIP Inji: no trustedAuthorities (the wallet does not read them) and
+  # A256GCM only, the one response encryption Inji supports.
+  - id: national-id-inji
+    clientIdentifier: inji
+    credentials:
+      - id: national_id
+        format: dc+sd-jwt
+        vctValues: [https://credentials.example.org/national-id]
+        claims:
+          - path: [given_name]
+          - path: [family_name]
+          - path: [birthdate]
+    acceptedResponseEncryption: [A256GCM]
+sessions:
+  sessionTtlSeconds: 300
+  resultTtlSeconds: 1800
+  maximumLiveSessions: 4096
+  maximumHeldPresentationBytes: 268435456

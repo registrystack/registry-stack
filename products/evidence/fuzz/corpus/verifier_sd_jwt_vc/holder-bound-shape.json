@@ -2,6 +2,7 @@
   "schema": "registry.assertion-evidence/v1",
   "assuranceProfile": "evidence-grade",
   "subjectBinding": "holder-bound",
+  "channel": "source",
   "id": "urn:ulid:01K1EXAMPLE0000000000000000",
   "type": "Evidence",
   "supportsRequirement": "urn:example:requirement:v1",

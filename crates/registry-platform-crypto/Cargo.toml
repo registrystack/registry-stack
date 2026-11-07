@@ -19,11 +19,18 @@ cms-signing = ["dep:cms", "dep:der", "dep:x509-cert"]
 # The `document_signature::test_support` PKI and timestamp responder, for
 # consumers' tests only; never enable it in a production build.
 test-support = ["cms-signing", "dep:rcgen"]
+# Compact JWE (ECDH-ES, P-256, AES-GCM) decryption.
+jwe = []
+# Test-only compact JWE encryption, so a service can simulate a wallet in its tests.
+jwe-test-support = ["jwe"]
+# XChaCha20-Poly1305 sealing with random 192-bit nonces.
+xchacha-seal = ["dep:chacha20poly1305"]
 
 [dependencies]
 async-trait.workspace = true
 aws-lc-rs.workspace = true
 base64.workspace = true
+chacha20poly1305 = { workspace = true, optional = true }
 cms = { workspace = true, optional = true }
 der = { workspace = true, optional = true }
 ed25519-dalek.workspace = true
@@ -47,4 +54,4 @@ zeroize.workspace = true
 rcgen.workspace = true
 proptest.workspace = true
 tempfile.workspace = true
-tokio = { workspace = true, features = ["io-util"] }
+tokio = { workspace = true, features = ["io-util", "macros", "rt"] }

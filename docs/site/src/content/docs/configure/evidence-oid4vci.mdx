@@ -194,6 +194,39 @@ gateway, then start `evidence-oid4vci` again so its first catalog comes from the
     TcpListener, restartInvalidatesOutstandingExchanges;
     products/evidence/contracts/oid4vci-profile.yaml, honest_limits. */}
 
+## Limits and refusals
+
+The service bounds what a caller can make it do. Every response carries the shared security
+headers, and a request body over `listener.maximumRequestBytes` (16384 bytes by default, 1024 to
+1048576) is refused before it is parsed. A request the web framework refuses, for a malformed body,
+an oversize body, or an unsupported content type, is answered in the service's
+`{"error", "error_description"}` JSON shape and not in plain text.
+
+The optional `rateLimits` block sets request budgets as token buckets. A runtime file without it is
+valid and takes the defaults below. A request over its budget is answered `429` with a `Retry-After`
+header and `{"error": "temporarily_unavailable"}`.
+
+| Key | Default | What it budgets |
+| --- | --- | --- |
+| `offersPerPrincipalPerMinute` | 600 | Offers one authorized principal (the token's client, else its subject) may create per minute |
+| `offerBurst` | 60 | The most offers one principal may create in a burst |
+| `walletRequestsPerMinute` | 3000 | Requests per minute each of the token, nonce, and credential endpoints takes from all wallets together |
+| `walletRequestBurst` | 300 | The most requests each of those endpoints admits in a burst |
+
+The token, nonce, and credential endpoints each have one budget shared by every wallet, so a busy
+deployment spends it quickly. These budgets use one key for all wallets, so they bound the service as
+a whole and cannot tell one client from another: a single source can spend a shared budget and lock
+every wallet out of that endpoint until it refills. Rate limit per source address at your ingress in
+front of those three paths as well. Check that the defaults suit your wallet traffic before you
+upgrade a busy deployment, and raise them in `rateLimits` rather than behind the proxy alone.
+
+{/* Evidence: crates/registry-evidence-oid4vci/src/service.rs, Limits, admit, limiter_refusal, offer_limiter_key, wallet_endpoint,
+    build_app, normalize_rejections, security_headers;
+    crates/registry-evidence-oid4vci/src/config.rs, RateLimitsConfig, maximum_request_bytes;
+    products/evidence/generated/oid4vci-runtime/oid4vci-runtime.schema.json, rateLimits,
+    offersPerPrincipalPerMinute, walletRequestsPerMinute;
+    products/evidence/CHANGELOG.md, Unreleased. */}
+
 ## Metrics
 
 Set `metricsListener.bind` to serve Prometheus text at `/metrics` on a private address:

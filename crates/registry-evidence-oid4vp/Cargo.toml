@@ -1,0 +1,66 @@
+[package]
+name = "registry-evidence-oid4vp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Wallet-facing OpenID4VP verifier front end for Registry Evidence."
+repository.workspace = true
+readme = "README.md"
+publish = false
+
+[[bin]]
+name = "evidence-oid4vp"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[features]
+schema = [
+  "dep:schemars",
+  "registry-platform-audit/schema",
+  "registry-platform-config/schema",
+  "registry-platform-oidc/schema",
+  "registry-platform-yaml/schema",
+]
+
+[dependencies]
+axum.workspace = true
+base64.workspace = true
+chrono.workspace = true
+clap.workspace = true
+der.workspace = true
+registry-platform-audit.workspace = true
+registry-platform-authcommon.workspace = true
+registry-platform-buildinfo.workspace = true
+registry-platform-canonical-json.workspace = true
+registry-platform-config.workspace = true
+registry-platform-crypto = { workspace = true, features = ["jwe"] }
+registry-platform-httpsec = { workspace = true, features = ["server"] }
+registry-platform-metrics.workspace = true
+registry-platform-oidc.workspace = true
+registry-platform-ratelimit.workspace = true
+registry-platform-x509.workspace = true
+registry-platform-yaml.workspace = true
+schemars = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+url.workspace = true
+x509-cert.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+axum-test.workspace = true
+jsonschema.workspace = true
+rcgen.workspace = true
+registry-evidence-authoring.workspace = true
+registry-evidence-client.workspace = true
+registry-platform-crypto = { workspace = true, features = ["jwe", "jwe-test-support"] }
+registry-platform-testing = { workspace = true, features = ["test-authorization-server"] }
+reqwest.workspace = true
+tempfile.workspace = true

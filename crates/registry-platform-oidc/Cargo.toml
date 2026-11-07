@@ -10,6 +10,10 @@ publish = false
 [lints]
 workspace = true
 
+[features]
+# Derives the generated configuration schema for the roster.
+schema = ["dep:schemars"]
+
 [dependencies]
 base64.workspace = true
 jsonwebtoken.workspace = true
@@ -20,6 +24,7 @@ registry-platform-yaml.workspace = true
 uuid = { workspace = true, features = ["serde"] }
 chrono.workspace = true
 reqwest.workspace = true
+schemars = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

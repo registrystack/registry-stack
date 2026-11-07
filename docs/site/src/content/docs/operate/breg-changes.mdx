@@ -507,7 +507,9 @@ It changes nothing and reports no values. It binds the same predecessor the appl
 reports per covered field the rows still holding plaintext and the retained revisions, Proposal
 snapshots, idempotency responses, and outbox payloads that mention it. When the field has a unique
 lookup, it names up to 64 Records whose values would collide; correct one of each pair first, since
-the apply refuses the same collision before it seals anything.
+the apply refuses the same collision before it seals anything. It runs in one transaction on the
+serving registry and holds an `ACCESS EXCLUSIVE` lock on each scanned Record type's table until it
+ends, so that Record type's reads and writes wait for the whole scan; run it in a quiet window.
 
 When the history choice is `retain-plaintext-history`, the apply also refuses while a retained
 Proposal snapshot still holds the field's plaintext, with

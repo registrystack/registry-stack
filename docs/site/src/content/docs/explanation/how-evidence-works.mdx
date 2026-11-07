@@ -76,12 +76,42 @@ relying parties asking about the same person cannot join their answers.
 Minimization is modelled, not automatic: two definitions each defensible alone can reconstruct
 a protected value between them, so the operator reviews the enabled definitions together.
 
+Every assertion also states how its facts were obtained, in a signed `channel` member. `source`
+means Evidence read an authoritative source. [`holder-presented`](../../reference/glossary/#holder-presented) means the holder presented a
+credential from a wallet and Evidence verified it; that assertion also carries a
+`presentedCredential` member naming the trusted-issuer entry that matched, the credential's issuer
+and type, its own issue time, and how the subject was linked, and no claim value. A definition
+chooses its channel in `acquisition`: the `source` block reads a source, and an optional
+`holderPresented` block reads a wallet presentation, with the request's selector profile choosing
+exactly one and no fallback between them. A relying party's verification policy decides which
+channels it accepts. The default accepts `source` only, so a holder-presented assertion is refused
+unless the relying party opts in with `acceptedChannels`, and `maximumCredentialAgeSeconds` can
+bound how old the presented credential may be. The wallet side is
+[Verify a wallet presentation](../../configure/evidence-oid4vp/).
+
 {/* Evidence: crates/registry-evidence-authoring/src/project.rs, output type enum;
     crates/registry-evidence-authoring/src/output.rs, TYPES;
     products/evidence/contracts/request.schema.yaml; products/evidence/contracts/evidence.schema.yaml;
     products/evidence/contracts/problem-contract.yaml; products/evidence/contracts/bundle.schema.yaml,
     existenceDisclosure; products/evidence/contracts/security-invariant-matrix.yaml, V1-I03, V1-I16, V1-I17;
     products/evidence/fixtures/acceptance/. */}
+{/* Evidence: products/evidence/contracts/cccev-field-mapping.yaml, Evidence.presentedCredential;
+    products/evidence/contracts/verification-policy.schema.yaml, acceptedChannels;
+    products/evidence/contracts/bundle.schema.yaml, holderPresented;
+    crates/registry-evidence-client/src/prepare.rs, default_accepted_channels, accepted_channels;
+    crates/registry-evidence/src/kernel.rs, AssertionChannel, ChannelKind. */}
+
+Definition discovery lists one entry per definition handle. When a caller is entitled to both
+channels of one definition, the entry keeps the source channel's request shape and carries the
+holder-presented shape under `alternatives`, so a client that ignores the member requests as it
+always did. A channel the caller is not entitled to is never listed, and a caller entitled to the
+source channel alone receives the same entry, without a `channel` member, that a source-only
+definition produces.
+
+{/* Evidence: products/evidence/contracts/definitions.schema.yaml, alternatives;
+    crates/registry-evidence/src/runtime.rs, merge_channel_alternatives, unalternated_source;
+    crates/registry-evidence/src/discovery_channel_tests.rs;
+    crates/registry-evidence-client/src/definitions.rs, request_shape. */}
 
 ## What exists at runtime?
 

@@ -12,10 +12,11 @@ pub enum ProductKind {
     Manifest,
     Render,
     EvidenceOid4vci,
+    EvidenceOid4vp,
 }
 
 impl ProductKind {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::Breg,
         Self::Casework,
         Self::Coordinator,
@@ -25,6 +26,7 @@ impl ProductKind {
         Self::Manifest,
         Self::Render,
         Self::EvidenceOid4vci,
+        Self::EvidenceOid4vp,
     ];
 
     pub const fn name(self) -> &'static str {
@@ -38,6 +40,7 @@ impl ProductKind {
             Self::Manifest => "manifest",
             Self::Render => "render",
             Self::EvidenceOid4vci => "evidence-oid4vci",
+            Self::EvidenceOid4vp => "evidence-oid4vp",
         }
     }
 }

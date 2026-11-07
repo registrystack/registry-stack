@@ -62,6 +62,7 @@ python3 editors/configure.py scheduling /path/to/scheduling-project
 python3 editors/configure.py coordinator /path/to/workflow-project
 python3 editors/configure.py manifest /path/to/metadata-project --document publication.yaml
 python3 editors/configure.py evidence-oid4vci /path/to/issuer --document config/wallet.yaml
+python3 editors/configure.py evidence-oid4vp /path/to/verifier --document config/verifier.yaml
 ```
 
 The product argument also accepts `casework`, `messaging`, `documents`, `discovery`,
@@ -69,7 +70,7 @@ The product argument also accepts `casework`, `messaging`, `documents`, `discove
 directory holding `runtime.yaml`), `platform` (a directory holding a task
 connection file, `task-connection.yaml`), and `breg-mcp` and `breg-review` (a
 directory holding the citizen MCP gateway's or review page's `runtime.yaml`).
-Manifest and wallet-delivery setup records the selected document in
+Manifest, wallet-delivery, and wallet-verifier setup records the selected document in
 `.registry-stack-editor/project.json`, so an arbitrary configuration filename
 can be recognized without claiming unrelated YAML.
 

@@ -41,6 +41,7 @@ registry-platform-config.workspace = true
 registry-cli-api.workspace = true
 registry-cli-reference.workspace = true
 registry-platform-crypto.workspace = true
+registry-platform-httpsec = { workspace = true, features = ["server"] }
 registry-platform-yaml.workspace = true
 registry-thunderid-tooling.workspace = true
 p256.workspace = true

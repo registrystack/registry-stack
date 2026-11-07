@@ -9,7 +9,7 @@ fi
 seen=' '
 for target in "$@"; do
   case "$target" in
-    authoring_openapi | authoring_project | verifier_flattened_jws | verifier_sd_jwt_vc) ;;
+    authoring_openapi | authoring_project | verifier_flattened_jws | verifier_holder_proof | verifier_sd_jwt_vc) ;;
     *)
       printf 'unknown evidence fuzz target: %s\n' "$target" >&2
       exit 2

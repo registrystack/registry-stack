@@ -58,6 +58,26 @@
             "audience"
           ]
         },
+        "else": {
+          "not": {
+            "required": [
+              "presentedCredential"
+            ]
+          }
+        },
+        "if": {
+          "properties": {
+            "channel": {
+              "enum": [
+                "holder-presented"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "channel"
+          ]
+        },
         "properties": {
           "assuranceProfile": {
             "enum": [
@@ -70,6 +90,13 @@
           "audience": {
             "format": "uri",
             "maxLength": 512,
+            "type": "string"
+          },
+          "channel": {
+            "enum": [
+              "source",
+              "holder-presented"
+            ],
             "type": "string"
           },
           "configurationRevision": {
@@ -98,6 +125,9 @@
           "observedAt": {
             "format": "date-time",
             "type": "string"
+          },
+          "presentedCredential": {
+            "$ref": "#/components/schemas/PresentedCredential"
           },
           "providedBy": {
             "format": "uri",
@@ -161,6 +191,7 @@
           "schema",
           "assuranceProfile",
           "subjectBinding",
+          "channel",
           "id",
           "type",
           "supportsRequirement",
@@ -175,12 +206,35 @@
           "subjects",
           "supportedValues"
         ],
+        "then": {
+          "required": [
+            "presentedCredential"
+          ]
+        },
         "title": "Evidence assertion payload Version 1",
         "type": "object"
       },
       "EvidenceDefinition": {
         "additionalProperties": false,
         "properties": {
+          "alternatives": {
+            "description": "The request shapes of the other channels of this definition that the caller is entitled to. Absent when there are none. A channel the caller is not entitled to is never listed.",
+            "items": {
+              "$ref": "#/components/schemas/EvidenceDefinitionAlternative"
+            },
+            "maxItems": 1,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "channel": {
+            "description": "The acquisition channel of this entry's own subjects. Present only when the caller is entitled to a holder-presented channel of the definition, as the entry's own channel or as an alternative; absence means the source channel. A caller entitled to the source channel alone receives the entry a source-only definition produces, so the member never reveals that a holder-presented channel exists.",
+            "enum": [
+              "source",
+              "holder-presented"
+            ],
+            "type": "string"
+          },
           "concepts": {
             "items": {
               "$ref": "#/components/schemas/EvidenceDefinitionConcept"
@@ -275,6 +329,48 @@
           "referenceFrameworks",
           "subjects",
           "concepts"
+        ],
+        "type": "object"
+      },
+      "EvidenceDefinitionAlternative": {
+        "additionalProperties": false,
+        "properties": {
+          "channel": {
+            "enum": [
+              "source",
+              "holder-presented"
+            ],
+            "type": "string"
+          },
+          "responseFormats": {
+            "items": {
+              "enum": [
+                "signed-jws",
+                "unsigned-json",
+                "sd-jwt-vc",
+                "sd-jwt-vc-batch"
+              ],
+              "type": "string"
+            },
+            "maxItems": 4,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "subjects": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceDefinitionSubject"
+            },
+            "maxItems": 8,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "channel",
+          "responseFormats",
+          "subjects"
         ],
         "type": "object"
       },
@@ -1204,6 +1300,17 @@
             "pattern": "^[A-Za-z0-9_-]{43}$",
             "type": "string"
           },
+          "x5c": {
+            "items": {
+              "contentEncoding": "base64",
+              "maxLength": 21848,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 3,
+            "minItems": 1,
+            "type": "array"
+          },
           "y": {
             "pattern": "^[A-Za-z0-9_-]{43}$",
             "type": "string"
@@ -1216,6 +1323,44 @@
           "crv",
           "x",
           "y"
+        ],
+        "type": "object"
+      },
+      "PresentedCredential": {
+        "additionalProperties": false,
+        "properties": {
+          "issuedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "issuer": {
+            "format": "uri",
+            "maxLength": 512,
+            "type": "string"
+          },
+          "subjectLink": {
+            "enum": [
+              "possession",
+              "attribute-match"
+            ],
+            "type": "string"
+          },
+          "trustEntry": {
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "type": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "trustEntry",
+          "issuer",
+          "type",
+          "issuedAt",
+          "subjectLink"
         ],
         "type": "object"
       },

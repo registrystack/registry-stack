@@ -506,7 +506,7 @@ mod tests {
                 let cap = capability();
                 let mut payload = serde_json::json!({
                     "schema":registry_evidence_verifier::EVIDENCE_SCHEMA_V1,
-                    "assuranceProfile":"local", "subjectBinding":"audience-scoped", "requestNonce":request["requestNonce"],
+                    "assuranceProfile":"local", "channel":"source", "subjectBinding":"audience-scoped", "requestNonce":request["requestNonce"],
                     "id":"urn:example:evidence:00000000-0000-4000-8000-000000000001", "type":"Evidence",
                     "supportsRequirement":cap.definition.requirement, "isConformantTo":cap.definition.evidence_type,
                     "issuedBy":cap.issued_by, "providedBy":cap.provided_by, "purpose":cap.definition.purpose, "audience":cap.audience,
@@ -526,6 +526,15 @@ mod tests {
                     "output" => payload["supportedValues"][0]["value"] = serde_json::json!("true"),
                     "missing-output" => payload["supportedValues"] = serde_json::json!([]),
                     "expired" => payload["validUntil"] = serde_json::json!((now - chrono::Duration::seconds(1)).to_rfc3339()),
+                    "holder-presented" => {
+                        payload["channel"] = serde_json::json!("holder-presented");
+                        payload["presentedCredential"] = serde_json::json!({
+                            "trustEntry":"national-id", "issuer":"https://issuer.example",
+                            "type":"https://credentials.example/identity",
+                            "issuedAt":(now - chrono::Duration::seconds(30)).to_rfc3339(),
+                            "subjectLink":"attribute-match"
+                        });
+                    }
                     "stale" => payload["observedAt"] = serde_json::json!((now - chrono::Duration::seconds(61)).to_rfc3339()),
                     _ => {}
                 }
@@ -627,6 +636,7 @@ mod tests {
             "stale",
             "key",
             "revoked",
+            "holder-presented",
         ] {
             let (client, requests, server) = test_provider(tamper).await;
             let result = client

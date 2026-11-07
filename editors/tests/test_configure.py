@@ -285,6 +285,23 @@ class ConfigureTests(unittest.TestCase):
         marker = json.loads((project / ".registry-stack-editor/project.json").read_text())
         self.assertEqual(marker, {"product": "evidence-oid4vci", "document": "wallet.yaml"})
 
+    def test_verifier_setup_maps_the_runtime_schema_to_the_named_document(self):
+        project = self.project(
+            "verifier", "verifier.yaml", "products/evidence/examples/oid4vp-runtime/runtime.yaml"
+        )
+        with self.assertRaisesRegex(configure.SetupError, "requires --document"):
+            configure.configure("evidence-oid4vp", project, self.workspace, None)
+        configure.configure("evidence-oid4vp", project, self.workspace, "verifier.yaml")
+        schema = project / ".registry-stack-editor/schemas/oid4vp-runtime.schema.json"
+        self.assertEqual(
+            schema.read_bytes(),
+            (ROOT / "products/evidence/generated/oid4vp-runtime/oid4vp-runtime.schema.json").read_bytes(),
+        )
+        settings = json.loads((self.workspace / ".vscode/settings.json").read_text())
+        self.assertEqual(settings["yaml.schemas"], {schema.as_uri(): [str(project / "verifier.yaml")]})
+        marker = json.loads((project / ".registry-stack-editor/project.json").read_text())
+        self.assertEqual(marker, {"product": "evidence-oid4vp", "document": "verifier.yaml"})
+
     def test_task_only_setup_preserves_unrelated_settings_jsonc(self):
         project = self.project("manifest", "metadata.yaml")
         settings = self.workspace / ".vscode/settings.json"
@@ -492,6 +509,7 @@ class ConfigureTests(unittest.TestCase):
             "evidence": ["check", str(project)],
             "platform": ["dev", "check", "task-connection.yaml"],
             "evidence-oid4vci": ["check", "--runtime-config", str(document)],
+            "evidence-oid4vp": ["check", "--runtime-config", str(document)],
             "evidence-deployment": ["check", "--runtime-config", "runtime.yaml"],
         }
         for product, args in expected.items():

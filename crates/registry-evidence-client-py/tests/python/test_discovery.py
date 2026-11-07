@@ -10,6 +10,7 @@ camelCase shape survives untouched.
 
 from __future__ import annotations
 
+import copy
 import json
 import pathlib
 import sys
@@ -80,6 +81,39 @@ DEFINITIONS_DOCUMENT = {
 }
 
 
+def _two_channel_document() -> dict:
+    """A definition granted on both channels: one entry, the source channel's
+    shape as its own, the holder-presented shape as its alternative."""
+    document = copy.deepcopy(DEFINITIONS_DOCUMENT)
+    definition = document["definitions"][0]
+    definition["channel"] = "source"
+    definition["alternatives"] = [
+        {
+            "channel": "holder-presented",
+            "responseFormats": ["signed-jws"],
+            "subjects": [
+                {
+                    "role": "subject",
+                    "cardinality": "one",
+                    "selector": {
+                        "profile": "session-reference-v1",
+                        "valueOrigin": "request",
+                        "fields": [
+                            {
+                                "type": "string",
+                                "name": "session_reference",
+                                "minimumBytes": 1,
+                                "maximumBytes": 128,
+                            }
+                        ],
+                    },
+                }
+            ],
+        }
+    ]
+    return document
+
+
 class DiscoveryTest(unittest.TestCase):
     def setUp(self) -> None:
         self.server = StubServer({})
@@ -90,8 +124,8 @@ class DiscoveryTest(unittest.TestCase):
             self.server.base_url, fixtures.VALID_JWKS, [], "test-token", **bounds
         )
 
-    def _serve_definitions(self) -> bytes:
-        body = json.dumps(DEFINITIONS_DOCUMENT).encode("utf-8")
+    def _serve_definitions(self, document: dict = DEFINITIONS_DOCUMENT) -> bytes:
+        body = json.dumps(document).encode("utf-8")
         self.server.routes["GET /v1/evidence-definitions"] = StubRoute(
             status=200,
             headers={"Content-Type": JSON_MEDIA_TYPE},
@@ -109,6 +143,31 @@ class DiscoveryTest(unittest.TestCase):
         self.assertEqual(
             document["definitions"][0]["configurationRevision"], "test-revision-1"
         )
+
+    def test_discover_carries_the_channel_and_the_alternatives_of_a_two_channel_definition(
+        self,
+    ):
+        self._serve_definitions(_two_channel_document())
+        document = self._client().discover()
+        self.assertEqual(len(document["definitions"]), 1)
+        definition = document["definitions"][0]
+        self.assertEqual(definition["channel"], "source")
+        self.assertEqual(
+            definition["subjects"][0]["selector"]["profile"], "record-lookup-v1"
+        )
+        self.assertEqual(len(definition["alternatives"]), 1)
+        alternative = definition["alternatives"][0]
+        self.assertEqual(alternative["channel"], "holder-presented")
+        self.assertEqual(alternative["responseFormats"], ["signed-jws"])
+        self.assertEqual(
+            alternative["subjects"][0]["selector"]["profile"], "session-reference-v1"
+        )
+
+    def test_discover_omits_the_channel_members_of_a_source_only_definition(self):
+        self._serve_definitions()
+        definition = self._client().discover()["definitions"][0]
+        self.assertNotIn("channel", definition)
+        self.assertNotIn("alternatives", definition)
 
     def test_the_metadata_bound_governs_discovery_and_the_response_bound_does_not(self):
         """The two bounds answer different questions.

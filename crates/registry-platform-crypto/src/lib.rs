@@ -5,12 +5,18 @@ pub mod delivery_signature;
 #[cfg(feature = "cms-signing")]
 pub mod document_signature;
 pub mod field_encryption;
+#[cfg(feature = "jwe")]
+pub mod jwe;
+pub mod jws;
 pub mod mac;
+pub mod random;
 pub mod sealed_value;
 #[cfg(feature = "transit")]
 pub mod transit_datakey;
 #[cfg(all(test, unix, feature = "transit"))]
 mod transit_mock;
+#[cfg(feature = "xchacha-seal")]
+pub mod xchacha_seal;
 
 use async_trait::async_trait;
 use aws_lc_rs::encoding::{
@@ -45,6 +51,7 @@ use ed25519_dalek::{
     VerifyingKey as Ed25519VerifyingKey,
 };
 use hmac::{Hmac, KeyInit, Mac};
+pub use mac::constant_time_eq;
 use p256::ecdsa::{
     signature::Verifier as _, Signature as P256Signature, VerifyingKey as P256VerifyingKey,
 };
@@ -58,6 +65,7 @@ use pkcs1::{
     der::asn1::UintRef, der::Decode as _, der::SecretDocument, RsaPrivateKey as Pkcs1RsaPrivateKey,
 };
 use pkcs8::PrivateKeyInfo as Pkcs8PrivateKeyInfo;
+pub use random::{random_base64url, RandomTokenError};
 pub use registry_platform_canonical_json::{
     canonicalize_json, parse_json_strict, JcsError, StrictJsonError,
 };

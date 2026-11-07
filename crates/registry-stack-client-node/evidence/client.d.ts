@@ -30,6 +30,39 @@ import {
 /** The signed response encoding closed before one request is sent. */
 export type EvidenceResponseFormat = 'signed-jws' | 'sd-jwt-vc'
 
+/**
+ * How an assertion's facts were obtained. `source` means Evidence acquired
+ * them itself from an authoritative source; `holder-presented` means a holder
+ * presented another issuer's credential and Evidence verified it. A request
+ * accepts `source` only unless it names more in `acceptedChannels`.
+ */
+export type EvidenceChannel = 'source' | 'holder-presented'
+
+/**
+ * The channel policy a request or request batch may state. Both members are
+ * optional: absent `acceptedChannels` means `['source']` only, so a request
+ * that never names a channel refuses an assertion a holder presented, and
+ * absent `maximumCredentialAgeSeconds` means no credential age bound, which
+ * applies to `holder-presented` assertions only.
+ */
+export interface EvidenceChannelPolicy {
+  acceptedChannels?: ReadonlyArray<EvidenceChannel>
+  maximumCredentialAgeSeconds?: number
+}
+
+/**
+ * What a `holder-presented` assertion states about the credential the holder
+ * presented: the `presentedCredential` member of a verified `evidence`, present
+ * if and only if its `channel` is `holder-presented`.
+ */
+export interface PresentedCredential {
+  readonly trustEntry: string
+  readonly issuer: string
+  readonly type: string
+  readonly issuedAt: string
+  readonly subjectLink: 'possession' | 'attribute-match'
+}
+
 /** An opaque, versioned subject-continuity receipt owned by the application. */
 export interface SubjectBindingReceipt {
   readonly schema: 'registry.evidence-subject-binding-receipt/v1'
@@ -81,6 +114,10 @@ export type AudienceScopedRequest = {
   subjects?: Readonly<Record<string, Readonly<Record<string, string | number | boolean>>>>
   /** A prior receipt the application chose to retain. Nothing is persisted by this package. */
   bindingReceipt?: SubjectBindingReceipt
+  /** See `EvidenceChannelPolicy`. Absent means `source` only. */
+  acceptedChannels?: ReadonlyArray<EvidenceChannel>
+  /** See `EvidenceChannelPolicy`. Absent means no credential age bound. */
+  maximumCredentialAgeSeconds?: number
 }
 
 /**
@@ -296,6 +333,10 @@ export interface EvidenceRequestSpec {
   expectedOutputs: ReadonlyArray<Readonly<Record<string, unknown>>>
   maximumAssertionLifetimeSeconds: number
   clockSkewSeconds: number
+  /** See `EvidenceChannelPolicy`. Absent means `source` only. */
+  acceptedChannels?: ReadonlyArray<EvidenceChannel>
+  /** See `EvidenceChannelPolicy`. Absent means no credential age bound. */
+  maximumCredentialAgeSeconds?: number
   subjectExpectations:
     | 'acceptFirstUse'
     | { pinned: ReadonlyArray<{ role: string; binding: string }> }
@@ -329,6 +370,10 @@ export interface EvidenceRequestBatchSpec {
   expectedOutputs: ReadonlyArray<Readonly<Record<string, unknown>>>
   maximumAssertionLifetimeSeconds: number
   clockSkewSeconds: number
+  /** See `EvidenceChannelPolicy`. Absent means `source` only. */
+  acceptedChannels?: ReadonlyArray<EvidenceChannel>
+  /** See `EvidenceChannelPolicy`. Absent means no credential age bound. */
+  maximumCredentialAgeSeconds?: number
   items: ReadonlyArray<EvidenceRequestBatchItemSpec>
 }
 

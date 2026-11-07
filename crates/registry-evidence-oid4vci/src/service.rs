@@ -40,7 +40,9 @@ use axum::{
     body::{Body, Bytes},
     extract::{DefaultBodyLimit, Extension, Form, State},
     http::{
-        header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, PRAGMA, WWW_AUTHENTICATE},
+        header::{
+            AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, PRAGMA, RETRY_AFTER, WWW_AUTHENTICATE,
+        },
         HeaderMap, HeaderValue, Request, StatusCode,
     },
     middleware::{from_fn, from_fn_with_state, Next},
@@ -54,6 +56,13 @@ use registry_evidence_client::{HolderPublicKey, MAXIMUM_HOLDER_KEYS};
 use registry_evidence_verifier::sdjwt_vc::holder_thumbprint;
 use registry_platform_config::describe_secret_failure;
 use registry_platform_crypto::PublicJwk;
+use registry_platform_httpsec::{
+    normalize_framework_rejection, request_body_limit, security_headers, CspBuilder,
+    FrameworkRejection,
+};
+use registry_platform_ratelimit::token_bucket::{
+    TokenBucketConfig, TokenBucketError, TokenBucketLimiter,
+};
 use registry_platform_sdjwt::{validate_oid4vci_proof_jwt, Oid4vciProofPolicy, SdJwtError};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -66,8 +75,9 @@ use crate::{
     audit::{
         CredentialDeliveryAudit, CredentialDeliveryOutcome, DeliveryAudit, DeliveryAuditError,
     },
-    authorizer::{AuthorizationError, MintResourceServer, OfferAuthorizer},
-    config::DeliveryConfig,
+    authorizer::{AuthorizationError, AuthorizedOffer, MintResourceServer, OfferAuthorizer},
+    config::{DeliveryConfig, RateLimitsConfig},
+    draft13::{CREDENTIAL_PATH as DRAFT13_CREDENTIAL_PATH, TOKEN_PATH as DRAFT13_TOKEN_PATH},
     issuer::{CredentialIssuer, EvidenceIssuer, IssuanceError},
     metadata::authorization_server_metadata,
     observability::{self, Metrics, Outcome, ProblemCode},
@@ -78,6 +88,8 @@ use crate::{
     storage::{CatalogGeneration, KeyRing, Store},
     store::{NonceError, NonceMinter, OfferStore, PreparedRequest, StoreError},
 };
+
+mod draft13;
 
 pub const HEALTH_PATH: &str = "/health";
 pub const READY_PATH: &str = "/ready";
@@ -171,13 +183,170 @@ pub struct DeliveryService {
     store: Arc<dyn Store>,
     /// The catalog generation every offer and token here is bound to.
     generation: CatalogGeneration,
+    /// The generation the Draft 13 compatibility profile's offers and tokens
+    /// are bound to. It differs from `generation`, so a code or token of one
+    /// profile is unknown to the other.
+    draft13_generation: CatalogGeneration,
     nonces: NonceMinter,
     authorizer: Arc<dyn OfferAuthorizer>,
     issuer: Arc<dyn CredentialIssuer>,
     audit: Arc<DeliveryAudit>,
     metrics: Arc<Metrics>,
+    limits: Limits,
     /// Where every deadline in this process is read against.
     clock: Clock,
+}
+
+/// The request budgets of one process.
+///
+/// Every key a limiter sees is either a fixed endpoint label or a principal an
+/// offer token's verified claims named, so no caller can grow a limiter's
+/// bounded key table by choosing what it sends.
+struct Limits {
+    offers: TokenBucketLimiter,
+    wallet: TokenBucketLimiter,
+}
+
+impl Limits {
+    fn new(config: &RateLimitsConfig) -> Self {
+        let limiter = |requests_per_minute, burst| {
+            TokenBucketLimiter::new(TokenBucketConfig {
+                requests_per_minute,
+                burst,
+            })
+            .expect("the configured limits are validated to be positive")
+        };
+        Self {
+            offers: limiter(config.offers_per_principal_per_minute, config.offer_burst),
+            wallet: limiter(
+                config.wallet_requests_per_minute,
+                config.wallet_request_burst,
+            ),
+        }
+    }
+}
+
+/// Admit one request against `limiter`, or the answer that refuses it.
+async fn admit(limiter: &TokenBucketLimiter, key: &str) -> Result<(), Response> {
+    match limiter.check(key, 1).await {
+        Ok(()) => Ok(()),
+        Err(error) => Err(limiter_refusal(&error)),
+    }
+}
+
+/// The answer for a limiter that refused. A spent budget and a limiter out of
+/// capacity for new keys are the caller's to retry. A limiter that rejects its
+/// own key or cost is a fault of this service, so it is logged without the key
+/// and answered as a server error that carries no Retry-After.
+fn limiter_refusal(error: &TokenBucketError) -> Response {
+    let wait = match error {
+        TokenBucketError::Exceeded { retry_after } => retry_after.as_secs() + 1,
+        TokenBucketError::Capacity => CAPACITY_RETRY_SECONDS,
+        TokenBucketError::Configuration | TokenBucketError::CostExceedsBurst => {
+            tracing::error!(
+                fault = %error,
+                "the rate limiter rejected a request it should always accept"
+            );
+            return problem(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                "the request could not be admitted",
+            );
+        }
+    };
+    let mut response = problem(
+        StatusCode::TOO_MANY_REQUESTS,
+        "temporarily_unavailable",
+        "too many requests; retry after the interval in Retry-After",
+    );
+    response
+        .headers_mut()
+        .insert(RETRY_AFTER, HeaderValue::from(wait));
+    response
+}
+
+/// The limiter key of an authorized offer principal: a digest, so a client id
+/// or subject of any length or spelling is a valid key. The kind tag keeps a
+/// client id and a subject with the same text in separate buckets. The
+/// authorized client, else the subject, else nobody in particular.
+fn offer_limiter_key(authorized: &AuthorizedOffer) -> String {
+    let (kind, value) = match (&authorized.client, &authorized.subject) {
+        (Some(client), _) => ("client", client.as_str()),
+        (None, Some(subject)) => ("subject", subject.as_str()),
+        (None, None) => ("unattributed", ""),
+    };
+    let mut payload = Vec::new();
+    for part in [kind, value] {
+        // Length-prefixed so adjacent parts cannot run together.
+        payload.extend_from_slice(&(part.len() as u64).to_be_bytes());
+        payload.extend_from_slice(part.as_bytes());
+    }
+    let digest =
+        registry_platform_crypto::domain_separated_sha256(OFFER_LIMITER_KEY_DOMAIN, &payload);
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// The domain a principal digest is taken under.
+const OFFER_LIMITER_KEY_DOMAIN: &[u8] = b"registry-evidence-oid4vci/offer-limiter-key/v1\0";
+
+/// What a caller is told to wait when the limiter itself is out of capacity.
+const CAPACITY_RETRY_SECONDS: u64 = 5;
+
+/// The budget a wallet request spends, by the endpoint it asks. Only the
+/// token, nonce and credential endpoints of either profile are budgeted here;
+/// offers are budgeted per principal once authorized, and the probes and
+/// metadata documents are not budgeted.
+fn wallet_endpoint(path: &str) -> Option<&'static str> {
+    match path {
+        TOKEN_PATH | DRAFT13_TOKEN_PATH => Some("token"),
+        NONCE_PATH => Some("nonce"),
+        CREDENTIAL_PATH | DRAFT13_CREDENTIAL_PATH => Some("credential"),
+        _ => None,
+    }
+}
+
+async fn limit_wallet_requests(
+    State(service): State<Arc<DeliveryService>>,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    if let Some(endpoint) = wallet_endpoint(request.uri().path()) {
+        if let Err(refusal) = admit(&service.limits.wallet, endpoint).await {
+            return refusal;
+        }
+    }
+    next.run(request).await
+}
+
+/// Re-answer an axum framework rejection in the OAuth error shape. The
+/// service's own JSON answers pass through untouched.
+async fn normalize_rejections(request: Request<Body>, next: Next) -> Response {
+    let response = next.run(request).await;
+    let own_json = response
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.starts_with(JSON_MEDIA_TYPE));
+    if own_json {
+        return response;
+    }
+    normalize_framework_rejection(response, |kind| match kind {
+        FrameworkRejection::Invalid | FrameworkRejection::Unprocessable => problem(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "the request is malformed",
+        ),
+        FrameworkRejection::BodyTooLarge => problem(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "invalid_request",
+            "the request body exceeds the limit",
+        ),
+        FrameworkRejection::UnsupportedMediaType => problem(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "invalid_request",
+            "the request content type is not supported",
+        ),
+    })
 }
 
 /// How a handler reads the current second.
@@ -224,15 +393,20 @@ impl DeliveryService {
         let store = Arc::new(OfferStore::new(&config.store));
         let nonces = NonceMinter::new(config.store.nonce_lifetime_seconds);
         let metrics = Arc::new(Metrics::new(config.store.maximum_offers));
+        let limits = Limits::new(&config.rate_limits);
         Self {
             config,
             store,
             generation: CatalogGeneration::default(),
+            draft13_generation: CatalogGeneration::default()
+                .for_profile(crate::draft13::GENERATION_LABEL)
+                .expect("the default catalog generation has room for the profile label"),
             nonces,
             authorizer,
             issuer,
             audit,
             metrics,
+            limits,
             clock: Arc::new(now),
         }
     }
@@ -259,10 +433,19 @@ impl DeliveryService {
     /// as unknown. No configuration key reaches this yet: until the reviewed
     /// `oid4vci-profile/v2` selects a backend, [`Self::load`] keeps the
     /// in-memory store of [`Self::with_halves`] and the default generation.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `generation` leaves no room for the label that separates the
+    /// Draft 13 compatibility profile's state from the 1.0 profile's, which
+    /// only a generation within a few characters of the maximum length does.
     #[doc(hidden)]
     #[must_use]
     pub fn with_store(mut self, store: Arc<dyn Store>, generation: CatalogGeneration) -> Self {
         self.store = store;
+        self.draft13_generation = generation
+            .for_profile(crate::draft13::GENERATION_LABEL)
+            .expect("the catalog generation has room for the profile label");
         self.generation = generation;
         self
     }
@@ -316,7 +499,7 @@ async fn inspect_with(
     issuer: &dyn CredentialIssuer,
 ) -> Result<Value, IssuanceError> {
     let catalog = issuer.catalog().await?;
-    Ok(json!({
+    let mut inspected = json!({
         "profile": "registry.evidence.oid4vci-profile/v1",
         "credentialIssuerMetadata": catalog.issuer_metadata(config),
         "authorizationServerMetadata": authorization_server_metadata(config),
@@ -325,7 +508,12 @@ async fn inspect_with(
             "restartInvalidatesOutstandingExchanges": true,
             "metricsEnabled": config.metrics_listener.is_some(),
         }
-    }))
+    });
+    if config.draft13_profile {
+        inspected["draft13CredentialIssuerMetadata"] =
+            crate::draft13::issuer_metadata(&catalog, config);
+    }
+    Ok(inspected)
 }
 
 fn evidence_issuer(config: &DeliveryConfig) -> Result<EvidenceIssuer, ServiceError> {
@@ -401,14 +589,26 @@ pub fn build_app(service: Arc<DeliveryService>) -> Router {
             PublicRoute::Credential => router.route(route.path(), post(credential)),
         })
         .fallback(unknown_route)
-        .method_not_allowed_fallback(unknown_route)
-        .with_state(service);
+        .method_not_allowed_fallback(unknown_route);
+    let routes = if service.config.draft13_profile {
+        draft13::routes(routes)
+    } else {
+        routes
+    }
+    .with_state(Arc::clone(&service));
     routes
         .layer(DefaultBodyLimit::max(body_limit))
+        .layer(request_body_limit(body_limit))
+        .layer(from_fn_with_state(
+            Arc::clone(&service),
+            limit_wallet_requests,
+        ))
         .layer(from_fn_with_state(
             request_timeout,
             refuse_a_stalled_request,
         ))
+        .layer(from_fn(normalize_rejections))
+        .layer(security_headers(CspBuilder::deny_by_default()))
         .layer(from_fn_with_state(metrics, observability::observe))
         .layer(from_fn(add_no_store))
 }
@@ -609,12 +809,44 @@ struct OfferRequest {
     transaction_code: bool,
 }
 
-/// Create one offer, against a request the adopter is authorized to make.
+/// The protocol profile an exchange runs under. The profiles share the offer
+/// store, the offer authorization, and the Evidence client, and they share no
+/// redeemable state: each has its own catalog generation, so a code or token
+/// minted for one is unknown to the other.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Profile {
+    /// OpenID4VCI 1.0 Final.
+    Final,
+    /// The OpenID4VCI Draft 13 compatibility profile.
+    Draft13,
+}
+
+impl Profile {
+    fn generation(self, service: &DeliveryService) -> &CatalogGeneration {
+        match self {
+            Self::Final => &service.generation,
+            Self::Draft13 => &service.draft13_generation,
+        }
+    }
+}
+
+/// Create one 1.0 Final offer.
+async fn create_offer(
+    State(service): State<Arc<DeliveryService>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    create_offer_for(Profile::Final, service, headers, body).await
+}
+
+/// Create one offer for `profile`, against a request the adopter is authorized
+/// to make.
 ///
 /// This is the authorization boundary of the service. Everything after it is
 /// reached with the secrets created here and with nothing else.
-async fn create_offer(
-    State(service): State<Arc<DeliveryService>>,
+async fn create_offer_for(
+    profile: Profile,
+    service: Arc<DeliveryService>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
@@ -627,6 +859,9 @@ async fn create_offer(
             return response;
         }
     };
+    if let Err(refusal) = admit(&service.limits.offers, &offer_limiter_key(&authorized)).await {
+        return refusal;
+    }
 
     let Ok(body) = std::str::from_utf8(&body) else {
         return problem(
@@ -711,7 +946,7 @@ async fn create_offer(
         .remember_offer(
             &code,
             transaction_code.as_ref().map(|code| code.as_str()),
-            &service.generation,
+            profile.generation(&service),
             prepared,
             service.now(),
         )
@@ -733,12 +968,20 @@ async fn create_offer(
         "offer created"
     );
 
-    let offer = credential_offer(
-        &service.config.credential_issuer,
-        &request.credential_configuration_id,
-        &code,
-        transaction_code.is_some(),
-    );
+    let offer = match profile {
+        Profile::Final => credential_offer(
+            &service.config.credential_issuer,
+            &request.credential_configuration_id,
+            &code,
+            transaction_code.is_some(),
+        ),
+        Profile::Draft13 => crate::draft13::credential_offer(
+            &crate::draft13::credential_issuer(&service.config),
+            &request.credential_configuration_id,
+            &code,
+            transaction_code.is_some(),
+        ),
+    };
     let mut answer = json!({
         "credentialOffer": offer,
         "credentialOfferUri": credential_offer_uri(&offer),
@@ -774,12 +1017,34 @@ async fn token(
     Extension(stage): Extension<RequestStage>,
     Form(request): Form<TokenRequest>,
 ) -> Response {
+    let access_token = match redeem_code(Profile::Final, &service, &stage, request).await {
+        Ok(access_token) => access_token,
+        Err(response) => return response,
+    };
+    value_response(
+        StatusCode::OK,
+        &json!({
+            "access_token": access_token.as_str(),
+            "token_type": "Bearer",
+            "expires_in": service.config.store.access_token_lifetime_seconds,
+        }),
+    )
+}
+
+/// Redeem a pre-authorized code under `profile`, handing back the access token
+/// it was exchanged for, or the refusal to answer with.
+async fn redeem_code(
+    profile: Profile,
+    service: &Arc<DeliveryService>,
+    stage: &RequestStage,
+    request: TokenRequest,
+) -> Result<Zeroizing<String>, Response> {
     if request.grant_type != crate::PRE_AUTHORIZED_CODE_GRANT_TYPE {
-        return problem(
+        return Err(problem(
             StatusCode::BAD_REQUEST,
             "unsupported_grant_type",
             "this service supports the pre-authorized code grant only",
-        );
+        ));
     }
     let code = Zeroizing::new(request.pre_authorized_code);
     let transaction_code = request.tx_code.map(Zeroizing::new);
@@ -793,25 +1058,18 @@ async fn token(
             &code,
             transaction_code.as_ref().map(|code| code.as_str()),
             &access_token,
-            &service.generation,
+            profile.generation(service),
             service.now(),
         )
         .await
     {
-        return store_response(&service, &error, Outcome::CodeClaimRefused);
+        return Err(store_response(service, &error, Outcome::CodeClaimRefused));
     }
     service.metrics.record_outcome(Outcome::CodeRedeemed);
     // The code is spent and the token bound, so nothing may stand between
     // them and the wallet, the bookkeeping least of all.
-    refresh_store_entries_in_background(&service);
-    value_response(
-        StatusCode::OK,
-        &json!({
-            "access_token": access_token.as_str(),
-            "token_type": "Bearer",
-            "expires_in": service.config.store.access_token_lifetime_seconds,
-        }),
-    )
+    refresh_store_entries_in_background(service);
+    Ok(access_token)
 }
 
 /// Mint a nonce for the credential request that follows.
@@ -1151,6 +1409,20 @@ fn holder_key_from_proof(
     service: &DeliveryService,
     proof: &str,
 ) -> Result<HolderPublicKey, ProofRefusal> {
+    holder_key_from_proof_with(service, proof, &service.config.credential_issuer, |nonce| {
+        service.nonces.verify(nonce, service.now())
+    })
+}
+
+/// [`holder_key_from_proof`] for a profile that names its own audience and
+/// decides for itself whether a nonce is one it issued. Every other rule is
+/// shared.
+fn holder_key_from_proof_with(
+    service: &DeliveryService,
+    proof: &str,
+    audience: &str,
+    verify_nonce: impl FnOnce(&str) -> Result<(), NonceError>,
+) -> Result<HolderPublicKey, ProofRefusal> {
     if proof.len() > MAXIMUM_PROOF_BYTES {
         return Err(ProofRefusal::new(
             "invalid_proof",
@@ -1163,7 +1435,7 @@ fn holder_key_from_proof(
             "the proof was not accepted: the payload does not carry a readable `nonce` claim",
         ));
     };
-    match service.nonces.verify(&nonce, service.now()) {
+    match verify_nonce(&nonce) {
         Ok(()) => {}
         Err(NonceError::Expired) => {
             return Err(ProofRefusal::nonce(
@@ -1185,7 +1457,7 @@ fn holder_key_from_proof(
         }
     }
     let policy = Oid4vciProofPolicy {
-        audience: service.config.credential_issuer.clone(),
+        audience: audience.to_owned(),
         nonce,
         max_age: PROOF_MAX_AGE,
         max_future_skew: PROOF_MAX_FUTURE_SKEW,
@@ -2277,6 +2549,342 @@ mod tests {
                 Some(&b"no-store"[..]),
                 "path {path}"
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn every_answer_carries_the_shared_security_headers() {
+        let directory = canonical_tempdir();
+        let (service, _) = wired_service(directory.path());
+        let server = TestServer::new(build_app(service));
+
+        for (label, response) in [
+            ("health", server.get(HEALTH_PATH).await),
+            ("unknown route", server.get("/nowhere").await),
+            ("nonce", server.post(NONCE_PATH).await),
+        ] {
+            let headers = response.headers();
+            assert_eq!(
+                headers
+                    .get("x-content-type-options")
+                    .map(|value| value.as_bytes()),
+                Some(&b"nosniff"[..]),
+                "{label}"
+            );
+            assert!(headers.contains_key("content-security-policy"), "{label}");
+            assert!(headers.contains_key("strict-transport-security"), "{label}");
+            assert_eq!(
+                headers.get("cache-control").map(|value| value.as_bytes()),
+                Some(&b"no-store"[..]),
+                "{label}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn an_oversized_body_is_refused_in_the_service_error_shape() {
+        let directory = canonical_tempdir();
+        let (service, issuer) = wired_service(directory.path());
+        let limit = service.config.listener.maximum_request_bytes as usize;
+        let server = TestServer::new(build_app(service));
+
+        let response = server
+            .post(OFFERS_PATH)
+            .add_header("authorization", format!("Bearer {OFFER_TOKEN}"))
+            .content_type("application/json")
+            .bytes(vec![b' '; limit + 1].into())
+            .await;
+        assert_eq!(response.status_code(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(response.json::<Value>()["error"], json!("invalid_request"));
+        assert!(issuer.requests().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_framework_rejection_is_answered_in_the_service_error_shape() {
+        let directory = canonical_tempdir();
+        let (service, _) = wired_service(directory.path());
+        let server = TestServer::new(build_app(service));
+
+        // A token request that is not a form is rejected by the extractor.
+        let response = server
+            .post(TOKEN_PATH)
+            .content_type("application/json")
+            .bytes("{}".into())
+            .await;
+        assert_eq!(response.status_code(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        assert_eq!(response.json::<Value>()["error"], json!("invalid_request"));
+    }
+
+    #[tokio::test]
+    async fn a_token_form_that_cannot_be_decoded_is_an_oauth_invalid_request() {
+        let directory = canonical_tempdir();
+        let (service, _) = wired_service(directory.path());
+        let server = TestServer::new(build_app(service));
+
+        // A form without `grant_type` fails the extractor, which would answer
+        // 422; OAuth 2.0 token errors are 400 with `invalid_request`.
+        let response = server
+            .post(TOKEN_PATH)
+            .form(&[("pre-authorized_code", "a-code")])
+            .await;
+        assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
+        assert_eq!(response.json::<Value>()["error"], json!("invalid_request"));
+    }
+
+    fn service_with_rate_limits(
+        directory: &Path,
+        limits: crate::config::RateLimitsConfig,
+    ) -> TestServer {
+        let mut config = load_deployment(directory);
+        config.rate_limits = limits;
+        let (service, _) = wired_service_over(config);
+        TestServer::new(build_app(service))
+    }
+
+    fn tight_limits() -> crate::config::RateLimitsConfig {
+        crate::config::RateLimitsConfig {
+            offers_per_principal_per_minute: 1,
+            offer_burst: 1,
+            wallet_requests_per_minute: 1,
+            wallet_request_burst: 1,
+        }
+    }
+
+    fn assert_rate_limited(response: &axum_test::TestResponse, label: &str) {
+        assert_eq!(
+            response.status_code(),
+            StatusCode::TOO_MANY_REQUESTS,
+            "{label}"
+        );
+        let wait: u64 = response
+            .headers()
+            .get("retry-after")
+            .unwrap_or_else(|| panic!("{label} carries Retry-After"))
+            .to_str()
+            .expect("Retry-After is text")
+            .parse()
+            .expect("Retry-After is whole seconds");
+        assert!(wait >= 1, "{label}");
+        assert_eq!(
+            response.json::<Value>()["error"],
+            json!("temporarily_unavailable"),
+            "{label}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_burst_past_the_wallet_limit_is_refused_with_retry_after() {
+        let directory = canonical_tempdir();
+        let server = service_with_rate_limits(directory.path(), tight_limits());
+
+        assert_eq!(server.post(NONCE_PATH).await.status_code(), StatusCode::OK);
+        assert_rate_limited(&server.post(NONCE_PATH).await, "second nonce");
+        // Each wallet endpoint has its own budget, so a flood of nonce
+        // requests does not starve the token or credential endpoints.
+        assert_ne!(
+            server
+                .post(TOKEN_PATH)
+                .form(&token_form("x", None))
+                .await
+                .status_code(),
+            StatusCode::TOO_MANY_REQUESTS
+        );
+        assert_rate_limited(
+            &server.post(TOKEN_PATH).form(&token_form("x", None)).await,
+            "second token",
+        );
+        assert_ne!(
+            server
+                .post(CREDENTIAL_PATH)
+                .json(&json!({}))
+                .await
+                .status_code(),
+            StatusCode::TOO_MANY_REQUESTS
+        );
+        assert_rate_limited(
+            &server.post(CREDENTIAL_PATH).json(&json!({})).await,
+            "second credential",
+        );
+    }
+
+    #[tokio::test]
+    async fn a_burst_of_offers_from_one_principal_is_refused_with_retry_after() {
+        let directory = canonical_tempdir();
+        let server = service_with_rate_limits(directory.path(), tight_limits());
+        let offer = || {
+            server
+                .post(OFFERS_PATH)
+                .add_header("authorization", format!("Bearer {OFFER_TOKEN}"))
+                .json(&offer_body(false))
+        };
+
+        assert_ne!(offer().await.status_code(), StatusCode::TOO_MANY_REQUESTS);
+        assert_rate_limited(&offer().await, "second offer");
+        // A caller that is not authorized is refused as before and never
+        // spends the principal's budget or learns it.
+        let unauthorized = server.post(OFFERS_PATH).json(&offer_body(false)).await;
+        assert_eq!(unauthorized.status_code(), StatusCode::UNAUTHORIZED);
+    }
+
+    /// Authorizes a token named for a principal shape, so a test can offer as
+    /// a client, as a subject alone, or as neither.
+    struct PrincipalAuthorizer {
+        client: Option<String>,
+        subject: Option<String>,
+        token: &'static str,
+    }
+
+    #[async_trait]
+    impl OfferAuthorizer for PrincipalAuthorizer {
+        async fn authorize(&self, credential: &str) -> Result<AuthorizedOffer, AuthorizationError> {
+            if credential != self.token {
+                return Err(AuthorizationError::Refused);
+            }
+            Ok(AuthorizedOffer {
+                client: self.client.clone(),
+                subject: self.subject.clone(),
+            })
+        }
+    }
+
+    /// A server over `principals`, tried in order by token, with the tight
+    /// offer budget of one request per principal.
+    fn server_for_principals(
+        directory: &Path,
+        principals: Vec<PrincipalAuthorizer>,
+    ) -> (TestServer, Arc<RecordingIssuer>) {
+        struct Roster(Vec<PrincipalAuthorizer>);
+
+        #[async_trait]
+        impl OfferAuthorizer for Roster {
+            async fn authorize(
+                &self,
+                credential: &str,
+            ) -> Result<AuthorizedOffer, AuthorizationError> {
+                for member in &self.0 {
+                    if let Ok(authorized) = member.authorize(credential).await {
+                        return Ok(authorized);
+                    }
+                }
+                Err(AuthorizationError::Refused)
+            }
+        }
+
+        let mut config = load_deployment(directory);
+        config.rate_limits = tight_limits();
+        let issuer = Arc::new(RecordingIssuer::new());
+        let service = Arc::new(DeliveryService::with_halves(
+            config,
+            Arc::new(Roster(principals)),
+            Arc::clone(&issuer) as Arc<dyn CredentialIssuer>,
+            test_audit(),
+        ));
+        (TestServer::new(build_app(service)), issuer)
+    }
+
+    async fn offer_as(server: &TestServer, token: &str) -> axum_test::TestResponse {
+        server
+            .post(OFFERS_PATH)
+            .add_header("authorization", format!("Bearer {token}"))
+            .json(&offer_body(false))
+            .await
+    }
+
+    #[tokio::test]
+    async fn an_offer_from_a_client_id_with_a_space_is_admitted_then_limited() {
+        let directory = canonical_tempdir();
+        let (server, _) = server_for_principals(
+            directory.path(),
+            vec![PrincipalAuthorizer {
+                client: Some("Adopter Portal".to_owned()),
+                subject: None,
+                token: "portal-token",
+            }],
+        );
+
+        let first = offer_as(&server, "portal-token").await;
+        assert_ne!(first.status_code(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(first.status_code().is_success(), "{first:?}");
+        assert_rate_limited(&offer_as(&server, "portal-token").await, "second offer");
+    }
+
+    #[tokio::test]
+    async fn an_offer_from_a_subject_over_256_bytes_is_admitted() {
+        let directory = canonical_tempdir();
+        let (server, _) = server_for_principals(
+            directory.path(),
+            vec![PrincipalAuthorizer {
+                client: None,
+                subject: Some("s".repeat(257)),
+                token: "long-token",
+            }],
+        );
+
+        let response = offer_as(&server, "long-token").await;
+        assert!(response.status_code().is_success(), "{response:?}");
+    }
+
+    #[tokio::test]
+    async fn a_client_id_and_a_subject_with_the_same_text_have_separate_budgets() {
+        let directory = canonical_tempdir();
+        let (server, _) = server_for_principals(
+            directory.path(),
+            vec![
+                PrincipalAuthorizer {
+                    client: Some("same-text".to_owned()),
+                    subject: None,
+                    token: "client-token",
+                },
+                PrincipalAuthorizer {
+                    client: None,
+                    subject: Some("same-text".to_owned()),
+                    token: "subject-token",
+                },
+            ],
+        );
+
+        assert!(offer_as(&server, "client-token")
+            .await
+            .status_code()
+            .is_success());
+        assert!(offer_as(&server, "subject-token")
+            .await
+            .status_code()
+            .is_success());
+        assert_rate_limited(&offer_as(&server, "client-token").await, "second client");
+        assert_rate_limited(&offer_as(&server, "subject-token").await, "second subject");
+    }
+
+    #[test]
+    fn a_limiter_configuration_fault_is_a_server_error_without_retry_after() {
+        let response = limiter_refusal(&TokenBucketError::Configuration);
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(response.headers().get(RETRY_AFTER).is_none());
+    }
+
+    #[test]
+    fn a_limiter_out_of_capacity_keeps_the_retry_answer() {
+        let response = limiter_refusal(&TokenBucketError::Capacity);
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            response.headers().get(RETRY_AFTER),
+            Some(&HeaderValue::from(CAPACITY_RETRY_SECONDS))
+        );
+    }
+
+    #[tokio::test]
+    async fn the_probes_and_metadata_are_not_rate_limited() {
+        let directory = canonical_tempdir();
+        let server = service_with_rate_limits(directory.path(), tight_limits());
+
+        for _ in 0..5 {
+            for path in [HEALTH_PATH, READY_PATH, ISSUER_METADATA_PATH] {
+                assert_ne!(
+                    server.get(path).await.status_code(),
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "{path}"
+                );
+            }
         }
     }
 

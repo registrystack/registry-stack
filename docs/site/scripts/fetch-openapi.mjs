@@ -53,6 +53,8 @@ const SPEC_SOURCES = {
   // The wallet-facing OID4VCI supporting service beside Evidence publishes its
   // own document, sourced from the same repository entry as Evidence.
   'registry-evidence-oid4vci': 'products/evidence/generated/registry-evidence-oid4vci.openapi.json',
+  // The OpenID4VP verifier front end beside Evidence, sourced the same way.
+  'registry-evidence-oid4vp': 'products/evidence/generated/registry-evidence-oid4vp.openapi.json',
   // A registry's OpenAPI document is compiled from its project, so the site
   // renders the facility template's compiled document as an example of what a
   // registry serves.
@@ -75,6 +77,9 @@ function bregRepo(docset) {
 const bregOpenApiFloor = [0, 42, 0];
 // The OID4VCI supporting service first shipped its document in v0.20.0.
 const evidenceOid4vciOpenApiFloor = [0, 20, 0];
+// The OpenID4VP verifier is in no release yet; v0.45.0 predates it, so the
+// floor is the next release line.
+const evidenceOid4vpOpenApiFloor = [0, 46, 0];
 
 /**
  * The current docset publishes every document; a release docset publishes a
@@ -111,6 +116,14 @@ export function docsetPublishesBregOpenApi(docset, currentId) {
  */
 export function docsetPublishesEvidenceOid4vciOpenApi(docset, currentId) {
   return docsetPublishesFrom('registry-evidence-oid4vci', evidenceOid4vciOpenApiFloor, docset, currentId);
+}
+
+/**
+ * @param {{ id: string }} docset
+ * @param {string} currentId
+ */
+export function docsetPublishesEvidenceOid4vpOpenApi(docset, currentId) {
+  return docsetPublishesFrom('registry-evidence-oid4vp', evidenceOid4vpOpenApiFloor, docset, currentId);
 }
 
 function fail(message) {
@@ -206,9 +219,15 @@ async function main() {
       console.log(`Skipped ${repoId} OpenAPI spec absent from docset ${docset.id}.`);
       continue;
     }
-    // The OID4VCI document lives beside the Evidence document, so it follows
+    if (repoId === 'registry-evidence-oid4vp' && !docsetPublishesEvidenceOid4vpOpenApi(docset, docsets.current)) {
+      console.log(`Skipped ${repoId} OpenAPI spec absent from docset ${docset.id}.`);
+      continue;
+    }
+    // The OID4VCI and OID4VP documents live beside the Evidence document, so they follow
     // the registry-evidence entry's ref and source, never its `openapi` path.
-    const sourceRepoId = repoId === 'registry-evidence-oid4vci' ? 'registry-evidence' : repoId;
+    const sourceRepoId = repoId === 'registry-evidence-oid4vci' || repoId === 'registry-evidence-oid4vp'
+      ? 'registry-evidence'
+      : repoId;
     const repo = manifest.repos[sourceRepoId] ?? (repoId === 'registry-breg' ? bregRepo(docset) : undefined);
     if (!repo) {
       fail(`${repoId}: no entry in repo-docs.yaml to source the OpenAPI spec ref from`);

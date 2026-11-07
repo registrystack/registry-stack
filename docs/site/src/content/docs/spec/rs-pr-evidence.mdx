@@ -145,7 +145,13 @@ REQ-PR-EVIDENCE-002: Definition discovery MUST be authenticated, rate limited, a
 The response MUST contain only complete request shapes that match exactly one configured authority
 path, and MUST omit unentitled and ambiguous shapes, so an unentitled caller receives an empty list
 (`products/evidence/contracts/definitions.schema.yaml`, invariant `V1-I26` in
-`products/evidence/contracts/security-invariant-matrix.yaml`).
+`products/evidence/contracts/security-invariant-matrix.yaml`). The response MUST carry at most one
+entry per definition handle: a caller entitled to both acquisition channels of one definition
+receives the source channel's shape as the entry and the holder-presented shape in its
+`alternatives`, and any other two shapes under one handle MUST refuse the complete document rather
+than publish an arbitrary winner (`products/evidence/OPERATOR-CONTRACT.md`). An entry MUST state a
+`channel` only for a caller entitled to a holder-presented channel of that definition; a caller
+entitled to the source channel alone MUST receive the entry a source-only definition produces.
 
 REQ-PR-EVIDENCE-003: Discovery MUST NOT create authority and MUST NOT expose deployment internals.
 Requester-scoped definition discovery MUST NOT reveal source plans, scripts, credentials, requester

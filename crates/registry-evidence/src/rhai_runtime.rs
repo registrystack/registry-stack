@@ -15,6 +15,7 @@ use rhai::{
 use serde_json::Value;
 use thiserror::Error;
 
+use crate::name_normalisation::{self, NameNormalisationError};
 use crate::values::{Decimal, EntityReferenceSeed};
 
 pub const MAXIMUM_OPERATIONS: u64 = 100_000;
@@ -482,7 +483,26 @@ fn register_evidence_primitives(engine: &mut Engine) {
         .register_fn("set_contains", set_contains)
         .register_fn("required", required)
         .register_fn("is_missing", is_missing)
-        .register_fn("get_path", get_path);
+        .register_fn("get_path", get_path)
+        .register_fn("normalise_name", normalise_name);
+}
+
+/// Normalises one name under a named, versioned profile Evidence owns, for a
+/// single exact comparison against one expected value normalised the same way.
+/// The primitive returns the normalised text only: it never searches candidates,
+/// ranks, or scores. An unknown profile or an input beyond the profile bounds is
+/// a fault in the script, so it fails the invocation rather than answering with
+/// an unnormalised or empty value. The error code names the bound, never the value.
+fn normalise_name(profile: &str, value: &str) -> Result<ImmutableString, Box<EvalAltResult>> {
+    name_normalisation::normalise_name(profile, value)
+        .map(ImmutableString::from)
+        .map_err(|error| {
+            primitive_error(match error {
+                NameNormalisationError::UnknownProfile => "unknown_name_profile",
+                NameNormalisationError::InputTooLarge => "name_input_out_of_bounds",
+                NameNormalisationError::OutputTooLarge => "name_output_out_of_bounds",
+            })
+        })
 }
 
 /// Resolves one RFC 6901 JSON Pointer against a decoded value, the same pointer
@@ -2561,6 +2581,90 @@ mod tests {
                 matches!(&values[0].value, DerivedValue::Json(value) if value == &json!(true)),
                 "{pointer}"
             );
+        }
+    }
+
+    fn name_derivation(body: &str) -> Result<Value, RhaiRuntimeError> {
+        let runtime = runtime();
+        let script = runtime
+            .compile_derivation(&format!(
+                "fn derive(facts, selectors, evaluation_context) {{
+                    [#{{ concept_id: \"value\", value: {body} }}]
+                }}"
+            ))
+            .expect("compiles");
+        runtime
+            .derive(
+                &script,
+                &BTreeMap::from([
+                    (
+                        "presented".to_owned(),
+                        json!("Nguye\u{302}\u{303}n  Thi\u{323} O\u{2019}Brien"),
+                    ),
+                    (
+                        "expected".to_owned(),
+                        json!("NGUY\u{1ec5}N TH\u{1ecb} O'BRIEN"),
+                    ),
+                    ("other".to_owned(), json!("Nguyen Thi Obrian")),
+                    ("long".to_owned(), json!("a".repeat(1025))),
+                    ("expanding".to_owned(), json!("\u{fdfa}".repeat(341))),
+                ]),
+                &json!({}),
+                context(json!({}), BTreeMap::new()),
+            )
+            .map(|values| match &values[0].value {
+                DerivedValue::Json(value) => value.clone(),
+                other => panic!("expected JSON, got {other:?}"),
+            })
+    }
+
+    #[test]
+    fn normalise_name_lets_a_derivation_compare_two_names_for_exact_equality() {
+        assert_eq!(
+            name_derivation(
+                r#"normalise_name("name-match-v1", facts.presented)
+                    == normalise_name("name-match-v1", facts.expected)"#
+            )
+            .expect("derives"),
+            json!(true)
+        );
+        assert_eq!(
+            name_derivation(
+                r#"normalise_name("name-match-v1", facts.presented)
+                    == normalise_name("name-match-v1", facts.other)"#
+            )
+            .expect("derives"),
+            json!(false)
+        );
+        assert_eq!(
+            name_derivation(r#"normalise_name("name-match-v1", facts.expected)"#).expect("derives"),
+            json!("nguyenthiobrien")
+        );
+    }
+
+    #[test]
+    fn normalise_name_refuses_unknown_profiles_and_unbounded_values_as_script_faults() {
+        for body in [
+            r#"normalise_name("name-match-v0", facts.presented)"#,
+            r#"normalise_name("", facts.presented)"#,
+            r#"normalise_name("name-match-v1", facts.long)"#,
+            r#"normalise_name("name-match-v1", facts.expanding)"#,
+        ] {
+            assert!(
+                matches!(name_derivation(body), Err(RhaiRuntimeError::Invocation)),
+                "{body}"
+            );
+        }
+    }
+
+    #[test]
+    fn normalise_name_has_no_implicit_coercion_of_its_arguments() {
+        for body in [
+            r#"normalise_name("name-match-v1", 7)"#,
+            r#"normalise_name("name-match-v1")"#,
+            r#"normalise_name(facts.presented)"#,
+        ] {
+            assert!(name_derivation(body).is_err(), "{body}");
         }
     }
 

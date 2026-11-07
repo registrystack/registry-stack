@@ -77,6 +77,19 @@ impl CatalogGeneration {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// The generation a protocol profile other than the primary one runs
+    /// under: this generation followed by `+` and the profile's label.
+    ///
+    /// A redemption or claim under a different generation is refused as
+    /// unknown without spending anything, so two profiles sharing one store
+    /// cannot redeem each other's offers or tokens. The result is refused when
+    /// it would exceed [`Self::MAXIMUM_LENGTH`] rather than truncated into a
+    /// collision. Replicas sharing a store must not name a generation of
+    /// another replica's profile-derived form.
+    pub fn for_profile(&self, label: &str) -> Result<Self, InvalidCatalogGeneration> {
+        Self::new(&format!("{}+{label}", self.0))
+    }
 }
 
 impl Default for CatalogGeneration {
@@ -177,6 +190,16 @@ mod tests {
         }
         assert_eq!(
             CatalogGeneration::new(&"a".repeat(CatalogGeneration::MAXIMUM_LENGTH + 1)),
+            Err(InvalidCatalogGeneration)
+        );
+        let base = CatalogGeneration::new("catalog-1").expect("a generation");
+        let derived = base.for_profile("draft-13").expect("a derived generation");
+        assert_eq!(derived.as_str(), "catalog-1+draft-13");
+        assert_ne!(derived, base);
+        let too_long = CatalogGeneration::new(&"a".repeat(CatalogGeneration::MAXIMUM_LENGTH))
+            .expect("a maximum length generation");
+        assert_eq!(
+            too_long.for_profile("draft-13"),
             Err(InvalidCatalogGeneration)
         );
         let accepted = CatalogGeneration::new("2026-10-27.catalog/3").expect("a generation");

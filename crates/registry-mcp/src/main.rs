@@ -77,7 +77,14 @@ async fn main() -> ExitCode {
             "resourceServer.allowInsecureHttp permits plain HTTP to the configured issuer and to a JWKS URI declared in configuration"
         );
     }
-    match runtime::serve(&config, shutdown_signal()).await {
+    let shutdown = match shutdown_after(registry_platform_httpsec::shutdown_signal) {
+        Ok(shutdown) => shutdown,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    match runtime::serve(&config, shutdown).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("{error}");
@@ -86,29 +93,22 @@ async fn main() -> ExitCode {
     }
 }
 
-async fn shutdown_signal() {
-    let interrupt = async {
-        if let Err(error) = tokio::signal::ctrl_c().await {
-            tracing::error!(%error, "the interrupt signal cannot be observed");
-            std::future::pending::<()>().await;
-        }
-    };
-    let terminate = async {
-        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
-            Ok(mut terminate) => {
-                terminate.recv().await;
-            }
-            Err(error) => {
-                tracing::error!(%error, "the terminate signal cannot be observed");
-                std::future::pending::<()>().await;
-            }
-        }
-    };
-    tokio::select! {
-        () = interrupt => {}
-        () = terminate => {}
-    }
-    tracing::info!("shutting down");
+/// Installs the stop-signal handlers before the gateway starts serving. An
+/// install failure refuses startup, so the process is never left with no way
+/// to be stopped by a signal.
+fn shutdown_after<I, S>(
+    install: I,
+) -> Result<impl std::future::Future<Output = ()> + Send + 'static, String>
+where
+    I: FnOnce() -> std::io::Result<S>,
+    S: std::future::Future<Output = ()> + Send + 'static,
+{
+    let signal =
+        install().map_err(|error| format!("the stop signals cannot be observed: {error}"))?;
+    Ok(async move {
+        signal.await;
+        tracing::info!("shutting down");
+    })
 }
 
 #[cfg(test)]
@@ -116,6 +116,28 @@ mod tests {
     use super::*;
     use registry_platform_httputil::FetchUrlPolicy;
     use registry_platform_oidc::IssuerNetworkPolicy;
+
+    #[test]
+    fn a_stop_signal_install_failure_refuses_startup() {
+        let error = shutdown_after(|| -> std::io::Result<std::future::Pending<()>> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "install refused",
+            ))
+        })
+        .err()
+        .expect("an install failure is an error, never a silent wait");
+        assert!(error.contains("stop signals cannot be observed"), "{error}");
+        assert!(error.contains("install refused"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn the_shutdown_future_resolves_when_the_signal_fires() {
+        let shutdown = shutdown_after(|| Ok(std::future::ready(()))).expect("installs");
+        tokio::time::timeout(std::time::Duration::from_secs(5), shutdown)
+            .await
+            .expect("a fired signal resolves the shutdown future");
+    }
 
     #[test]
     fn operational_logs_include_the_runtime_edge_and_breg_provider_only() {

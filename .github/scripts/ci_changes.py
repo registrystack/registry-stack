@@ -36,6 +36,7 @@ SHARDS = {
         "registry-platform-hooks",
         "registry-platform-httpsec",
         "registry-platform-httputil",
+        "registry-platform-metrics",
         "registry-platform-objectstore",
         "registry-platform-oidc",
         "registry-platform-ratelimit",
@@ -44,6 +45,8 @@ SHARDS = {
         "registry-platform-sdjwt",
         "registry-platform-sqlite",
         "registry-platform-testing",
+        "registry-platform-text",
+        "registry-platform-x509",
         "registry-platform-yaml",
     ),
     "mcp": (
@@ -113,6 +116,8 @@ SHARDS = {
         "registry-evidence-client-node",
         "registry-evidence-client-py",
         "registry-evidence-oid4vci",
+        "registry-evidence-oid4vp",
+        "registry-evidence-presentation",
         "registry-evidence-verifier",
         "registry-evidencectl",
     ),
@@ -185,6 +190,7 @@ CONFIG_CHECK_PACKAGES = frozenset(
         "registry-documentsctl",
         "registry-evidence",
         "registry-evidence-oid4vci",
+        "registry-evidence-oid4vp",
         "registry-evidencectl",
         "registry-manifest-cli",
         "registry-mcp",
@@ -302,8 +308,10 @@ EVIDENCE_TUTORIAL_INPUTS = (
     "docs/site/src/content/docs/tutorials/verify-an-assertion-as-a-consumer.mdx",
     "products/evidence/examples/fhir/**",
     "products/evidence/examples/standalone/**",
+    "products/evidence/examples/wallet-presentation/**",
     "products/evidence/fixtures/interoperability/inji-oid4vci/profile.json",
     "products/evidence/fixtures/interoperability/inji-oid4vci/receipt.json",
+    "products/evidence/fixtures/interoperability/oid4vp-device-run/**",
     "products/evidence/scripts/compat/inji-oid4vci-upstream.sh",
     "products/evidence/scripts/compat/inji-oid4vci.sh",
     # The application tutorial imports the maintained client package, and
@@ -1361,6 +1369,10 @@ def classify(
             # The same generator publishes the evidence-oid4vci runtime grammar
             # for the supporting service's configure page.
             "products/evidence/generated/oid4vci-runtime/*",
+            # The wallet presentation API reference and the evidence-oid4vp
+            # runtime grammar follow the same rule as the delivery service's.
+            "products/evidence/generated/registry-evidence-oid4vp.openapi.json",
+            "products/evidence/generated/oid4vp-runtime/*",
             "products/breg/generated/authoring/*",
             "products/breg/generated/runtime/*",
             # The Scheduling configuration reference page is generated from

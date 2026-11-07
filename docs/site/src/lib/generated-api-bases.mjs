@@ -17,6 +17,7 @@
 export const GENERATED_API_BASES = [
   'reference/apis/evidence',
   'reference/apis/evidence-oid4vci',
+  'reference/apis/evidence-oid4vp',
   'reference/apis/casework',
   'reference/apis/scheduling',
   'reference/apis/messaging',

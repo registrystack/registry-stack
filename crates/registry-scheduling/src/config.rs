@@ -8,7 +8,6 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use jsonwebtoken::Algorithm;
 use registry_platform_audit::{
     AuditDestination, AuditDestinationError, AuditDestinationKind, MAX_AUDIT_RETAIN_DAYS,
     MIN_AUDIT_ROTATE_BYTES,
@@ -30,8 +29,8 @@ pub use registry_platform_config::{
 use registry_platform_httputil::destination::validate_fixed_destination_path;
 use registry_platform_oidc::task_grant::{TaskGrantStatusEndpoint, TaskGrantStatusRegistry};
 use registry_platform_oidc::{
-    access_token_typ_set, fetch_discovery_for_issuer, parse_static_jwks, IssuerNetworkPolicy,
-    JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, TokenVerifierConfig,
+    access_token_typ_set, fetch_discovery_for_issuer, parse_static_jwks, AccessTokenAlgorithm,
+    IssuerNetworkPolicy, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, TokenVerifierConfig,
 };
 use registry_platform_yaml::{
     escape_pointer_segment, Diagnostic, Invalid, LocalId, Report, RetiredApiVersion,
@@ -438,6 +437,9 @@ fn local_id_map_schema<V: schemars::JsonSchema>(
 /// spellings it admits is derived, never authored, so no deployment can widen
 /// it to an ordinary JWT.
 const SCHEDULING_ACCESS_TOKEN_TYPE: &str = "at+jwt";
+/// The access-token signature algorithms the service accepts.
+const ACCESS_TOKEN_ALGORITHMS: [AccessTokenAlgorithm; 2] =
+    [AccessTokenAlgorithm::RS256, AccessTokenAlgorithm::ES256];
 
 fn default_scope_claim() -> String {
     "scope".to_owned()
@@ -1180,7 +1182,10 @@ impl RuntimeConfig {
         TokenVerifierConfig::access_token_profile(
             self.authentication.oidc.provider.issuer.to_string(),
             vec![self.authentication.oidc.provider.audience.clone()],
-            vec![Algorithm::RS256, Algorithm::ES256],
+            ACCESS_TOKEN_ALGORITHMS
+                .into_iter()
+                .map(AccessTokenAlgorithm::to_jsonwebtoken)
+                .collect(),
             access_token_typ_set(SCHEDULING_ACCESS_TOKEN_TYPE),
         )
         .with_scope_claim(self.authentication.oidc.scope_claim.clone())
@@ -4132,6 +4137,21 @@ holdPolicy:
             let error = parse_runtime(&document).expect_err("an explicit null is refused");
             assert_eq!(error.pointer(), pointer, "{error}");
         }
+    }
+
+    #[test]
+    fn the_access_token_profile_accepts_exactly_rs256_and_es256() {
+        let root = canonical_tempdir();
+        let (_, document) = development(root.path());
+        let config = RuntimeConfig::load(write_operator(root.path(), document))
+            .expect("configuration is accepted");
+        assert_eq!(
+            config.verifier_profile().allowed_algorithms,
+            vec![
+                jsonwebtoken::Algorithm::RS256,
+                jsonwebtoken::Algorithm::ES256
+            ]
+        );
     }
 
     #[test]

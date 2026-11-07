@@ -25,7 +25,9 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use registry_platform_httpsec::{ProblemBody, TraceContext};
+use registry_platform_httpsec::{
+    normalize_framework_rejection, FrameworkRejection, ProblemBody, TraceContext,
+};
 use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::{json, Value};
 use std::{future::Future, sync::Arc, time::Duration};
@@ -159,7 +161,7 @@ async fn http_boundary(request: axum::http::Request<axum::body::Body>, next: Nex
     let trace = TraceContext::from_headers(request.headers());
     let mut response = REQUEST_TRACE
         .scope(trace.clone(), async move {
-            normalize_framework_rejection(next.run(request).await)
+            normalize_framework_rejection(next.run(request).await, framework_rejection_problem)
         })
         .await;
     trace.apply(response.headers_mut());
@@ -171,24 +173,13 @@ async fn http_boundary(request: axum::http::Request<axum::body::Body>, next: Nex
 /// Framework rejections carry axum's own bodies, which no Coordinator caller
 /// was promised. The statuses are kept; the body becomes the vocabulary's
 /// `request.*` problem for that status.
-fn normalize_framework_rejection(response: Response) -> Response {
-    let is_problem = response
-        .headers()
-        .get(CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.split(';').next())
-        == Some("application/problem+json");
-    if is_problem {
-        return response;
-    }
-    let problem = match response.status() {
-        StatusCode::BAD_REQUEST => Some(ProblemCode::RequestInvalid),
-        StatusCode::PAYLOAD_TOO_LARGE => Some(ProblemCode::RequestBodyTooLarge),
-        StatusCode::UNSUPPORTED_MEDIA_TYPE => Some(ProblemCode::RequestUnsupportedMediaType),
-        StatusCode::UNPROCESSABLE_ENTITY => Some(ProblemCode::RequestUnprocessable),
-        _ => None,
-    };
-    problem.map_or(response, problem_response)
+fn framework_rejection_problem(kind: FrameworkRejection) -> Response {
+    problem_response(match kind {
+        FrameworkRejection::Invalid => ProblemCode::RequestInvalid,
+        FrameworkRejection::BodyTooLarge => ProblemCode::RequestBodyTooLarge,
+        FrameworkRejection::UnsupportedMediaType => ProblemCode::RequestUnsupportedMediaType,
+        FrameworkRejection::Unprocessable => ProblemCode::RequestUnprocessable,
+    })
 }
 async fn route_not_found() -> Response {
     problem_response(ProblemCode::RequestNotFound)
@@ -605,6 +596,41 @@ mod problem_tests {
         let response = problem(CoordinatorError::new(unmapped, "canary"));
         assert_problem(&response, StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(document(response).await["code"], "runtime.failure");
+    }
+
+    #[tokio::test]
+    async fn each_framework_rejection_class_answers_its_request_problem() {
+        for (status, code) in [
+            (StatusCode::BAD_REQUEST, "request.invalid"),
+            (StatusCode::PAYLOAD_TOO_LARGE, "request.body-too-large"),
+            (
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "request.unsupported-media-type",
+            ),
+            (StatusCode::UNPROCESSABLE_ENTITY, "request.unprocessable"),
+        ] {
+            let rejected = (status, "axum's own text").into_response();
+            let normalized = normalize_framework_rejection(rejected, framework_rejection_problem);
+            assert_eq!(normalized.status(), status);
+            assert_eq!(
+                normalized.headers()[axum::http::header::CONTENT_TYPE],
+                "application/problem+json"
+            );
+            let bytes = axum::body::to_bytes(normalized.into_body(), 65_536)
+                .await
+                .unwrap();
+            let document: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(document["code"], code);
+        }
+        let kept = normalize_framework_rejection(
+            (StatusCode::NOT_FOUND, "kept").into_response(),
+            framework_rejection_problem,
+        );
+        assert_eq!(kept.status(), StatusCode::NOT_FOUND);
+        assert_ne!(
+            kept.headers()[axum::http::header::CONTENT_TYPE],
+            "application/problem+json"
+        );
     }
 
     #[tokio::test]

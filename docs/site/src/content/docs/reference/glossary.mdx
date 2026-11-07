@@ -128,8 +128,14 @@ Product names are always in English, including on future translated pages.
   <dt id="offering">offering</dt>
   <dd>One bookable Registry Scheduling service at one location, in exact-time or arrival-window mode, drawing on a <a href="#resource-pool">resource pool</a> or on published windows.</dd>
 
+  <dt id="holder-presented">holder-presented</dt>
+  <dd>The value of an assertion's signed `channel` member for facts Registry Evidence obtained from a credential a holder presented from a wallet and verified itself, as opposed to `source`, a read of an authoritative source. A relying party's channel policy decides whether to accept it, and BReg accepts only `source` for a governed action.</dd>
+
   <dt id="oid4vci">OID4VCI</dt>
   <dd>OpenID for Verifiable Credential Issuance. The `registry-evidence-oid4vci` supporting service implements a frozen OID4VCI 1.0 Final profile to deliver holder-bound `dc+sd-jwt` credentials to a wallet; Registry Evidence signs them.</dd>
+
+  <dt id="oid4vp">OID4VP</dt>
+  <dd>OpenID for Verifiable Presentations. The `registry-evidence-oid4vp` supporting service speaks OpenID4VP 1.0 to a holder wallet, requests a `dc+sd-jwt` credential through DCQL, and hands the encrypted response to Registry Evidence, which verifies it. It is built from source and is in no release yet. See <a href="../../configure/evidence-oid4vp/">Verify a wallet presentation</a>.</dd>
 
   <dt id="opening">opening</dt>
   <dd>The weekly hours on which an exact-time <a href="#offering">offering</a> publishes start times, minus its <a href="#holiday-set">holiday sets</a>.</dd>

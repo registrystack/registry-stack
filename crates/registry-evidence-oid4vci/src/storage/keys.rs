@@ -89,6 +89,11 @@ impl VersionedKey {
     pub(crate) fn bytes(&self) -> &[u8] {
         self.bytes.as_slice()
     }
+
+    /// The key in the wiped container the shared sealing primitive takes.
+    pub(crate) fn secret(&self) -> &Zeroizing<[u8; KEY_LENGTH]> {
+        &self.bytes
+    }
 }
 
 /// The current key and, during a rotation, the previous one.

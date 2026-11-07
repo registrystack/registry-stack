@@ -1,0 +1,105 @@
+# HELP evidence_oid4vci_http_requests_total Delivery requests by closed outcome class.
+# TYPE evidence_oid4vci_http_requests_total counter
+evidence_oid4vci_http_requests_total{route="/credential",method="POST",status="client-error",error="invalid_nonce"} 1
+evidence_oid4vci_http_requests_total{route="/credential",method="POST",status="server-error",error="server_error"} 1
+evidence_oid4vci_http_requests_total{route="/health",method="GET",status="success",error="none"} 2
+evidence_oid4vci_http_requests_total{route="/token",method="POST",status="client-error",error="invalid_grant"} 1
+evidence_oid4vci_http_requests_total{route="/token",method="POST",status="success",error="none"} 1
+evidence_oid4vci_http_requests_total{route="unmatched",method="other",status="client-error",error="none"} 1
+# HELP evidence_oid4vci_http_request_duration_seconds Delivery request latency.
+# TYPE evidence_oid4vci_http_request_duration_seconds histogram
+evidence_oid4vci_http_request_duration_seconds_bucket{route="/credential",method="POST",status="client-error",error="invalid_nonce",le="0.005"} 0
+evidence_oid4vci_http_request_duration_seconds_bucket{route="/credential",method="POST",status="client-error",error="invalid_nonce",le="0.01"} 1
+evidence_oid4vci_http_request_duration_seconds_bucket{route="/credential",method="POST",status="client-error",error="invalid_nonce",le="0.025"} 1
+evidence_oid4vci_http_request_duration_seconds_bucket{route="/credential",method="POST",status="client-error",error="invalid_nonce",le="0.05"} 1
+evidence_oid4vci_http_request_duration_seconds_bucket{route="/credential",method="POST",status="client-error",error="invalid_nonce",le="0.1"} 1
+evidence_oid4vci_http_request_duration_seconds_bucket{route="/credential",method="POST",status="client-error",error="invalid_nonce",le="0.25"} 1
+evidence_oid4vci_http_request_duration_seconds_bucket{route="/credential",method="POST",status="client-error",error="invalid_nonce",le="1"} 1
+evidence_oid4vci_http_request_duration_seconds_bucket{route="/credential",method="POST",status="client-error",error="invalid_nonce",le="5"} 1
+evidence_oid4vci_http_request_duration_seconds_bucket{route="/credential",method="POST",status="client-error",error="invalid_nonce",le="+Inf"} 1
+evidence_oid4vci_http_request_duration_seconds_sum{route="/credential",method="POST",status="client-error",error="invalid_nonce"} 0.009
+evidence_oid4vci_http_request_duration_seconds_count{route="/credential",method="POST",status="client-error",error="invalid_nonce"} 1
+evidence_oid4vci_http_request_duration_seconds_bucket{route="/credential",method="POST",status="server-error",error="server_error",le="0.005"} 0
+evidence_oid4vci_http_request_duration_seconds_bucket{route="/credential",method="POST",status="server-error",error="server_error",le="0.01"} 0
+evidence_oid4vci_http_request_duration_seconds_bucket{route="/credential",method="POST",status="server-error",error="server_error",le="0.025"} 0
+evidence_oid4vci_http_request_duration_seconds_bucket{route="/credential",method="POST",status="server-error",error="server_error",le="0.05"} 0
+evidence_oid4vci_http_request_duration_seconds_bucket{route="/credential",method="POST",status="server-error",error="server_error",le="0.1"} 0
+evidence_oid4vci_http_request_duration_seconds_bucket{route="/credential",method="POST",status="server-error",error="server_error",le="0.25"} 0
+evidence_oid4vci_http_request_duration_seconds_bucket{route="/credential",method="POST",status="server-error",error="server_error",le="1"} 0
+evidence_oid4vci_http_request_duration_seconds_bucket{route="/credential",method="POST",status="server-error",error="server_error",le="5"} 0
+evidence_oid4vci_http_request_duration_seconds_bucket{route="/credential",method="POST",status="server-error",error="server_error",le="+Inf"} 1
+evidence_oid4vci_http_request_duration_seconds_sum{route="/credential",method="POST",status="server-error",error="server_error"} 6
+evidence_oid4vci_http_request_duration_seconds_count{route="/credential",method="POST",status="server-error",error="server_error"} 1
+evidence_oid4vci_http_request_duration_seconds_bucket{route="/health",method="GET",status="success",error="none",le="0.005"} 1
+evidence_oid4vci_http_request_duration_seconds_bucket{route="/health",method="GET",status="success",error="none",le="0.01"} 1
+evidence_oid4vci_http_request_duration_seconds_bucket{route="/health",method="GET",status="success",error="none",le="0.025"} 1
+evidence_oid4vci_http_request_duration_seconds_bucket{route="/health",method="GET",status="success",error="none",le="0.05"} 2
+evidence_oid4vci_http_request_duration_seconds_bucket{route="/health",method="GET",status="success",error="none",le="0.1"} 2
+evidence_oid4vci_http_request_duration_seconds_bucket{route="/health",method="GET",status="success",error="none",le="0.25"} 2
+evidence_oid4vci_http_request_duration_seconds_bucket{route="/health",method="GET",status="success",error="none",le="1"} 2
+evidence_oid4vci_http_request_duration_seconds_bucket{route="/health",method="GET",status="success",error="none",le="5"} 2
+evidence_oid4vci_http_request_duration_seconds_bucket{route="/health",method="GET",status="success",error="none",le="+Inf"} 2
+evidence_oid4vci_http_request_duration_seconds_sum{route="/health",method="GET",status="success",error="none"} 0.033
+evidence_oid4vci_http_request_duration_seconds_count{route="/health",method="GET",status="success",error="none"} 2
+evidence_oid4vci_http_request_duration_seconds_bucket{route="/token",method="POST",status="client-error",error="invalid_grant",le="0.005"} 1
+evidence_oid4vci_http_request_duration_seconds_bucket{route="/token",method="POST",status="client-error",error="invalid_grant",le="0.01"} 1
+evidence_oid4vci_http_request_duration_seconds_bucket{route="/token",method="POST",status="client-error",error="invalid_grant",le="0.025"} 1
+evidence_oid4vci_http_request_duration_seconds_bucket{route="/token",method="POST",status="client-error",error="invalid_grant",le="0.05"} 1
+evidence_oid4vci_http_request_duration_seconds_bucket{route="/token",method="POST",status="client-error",error="invalid_grant",le="0.1"} 1
+evidence_oid4vci_http_request_duration_seconds_bucket{route="/token",method="POST",status="client-error",error="invalid_grant",le="0.25"} 1
+evidence_oid4vci_http_request_duration_seconds_bucket{route="/token",method="POST",status="client-error",error="invalid_grant",le="1"} 1
+evidence_oid4vci_http_request_duration_seconds_bucket{route="/token",method="POST",status="client-error",error="invalid_grant",le="5"} 1
+evidence_oid4vci_http_request_duration_seconds_bucket{route="/token",method="POST",status="client-error",error="invalid_grant",le="+Inf"} 1
+evidence_oid4vci_http_request_duration_seconds_sum{route="/token",method="POST",status="client-error",error="invalid_grant"} 0.001
+evidence_oid4vci_http_request_duration_seconds_count{route="/token",method="POST",status="client-error",error="invalid_grant"} 1
+evidence_oid4vci_http_request_duration_seconds_bucket{route="/token",method="POST",status="success",error="none",le="0.005"} 0
+evidence_oid4vci_http_request_duration_seconds_bucket{route="/token",method="POST",status="success",error="none",le="0.01"} 0
+evidence_oid4vci_http_request_duration_seconds_bucket{route="/token",method="POST",status="success",error="none",le="0.025"} 0
+evidence_oid4vci_http_request_duration_seconds_bucket{route="/token",method="POST",status="success",error="none",le="0.05"} 0
+evidence_oid4vci_http_request_duration_seconds_bucket{route="/token",method="POST",status="success",error="none",le="0.1"} 0
+evidence_oid4vci_http_request_duration_seconds_bucket{route="/token",method="POST",status="success",error="none",le="0.25"} 1
+evidence_oid4vci_http_request_duration_seconds_bucket{route="/token",method="POST",status="success",error="none",le="1"} 1
+evidence_oid4vci_http_request_duration_seconds_bucket{route="/token",method="POST",status="success",error="none",le="5"} 1
+evidence_oid4vci_http_request_duration_seconds_bucket{route="/token",method="POST",status="success",error="none",le="+Inf"} 1
+evidence_oid4vci_http_request_duration_seconds_sum{route="/token",method="POST",status="success",error="none"} 0.12
+evidence_oid4vci_http_request_duration_seconds_count{route="/token",method="POST",status="success",error="none"} 1
+evidence_oid4vci_http_request_duration_seconds_bucket{route="unmatched",method="other",status="client-error",error="none",le="0.005"} 0
+evidence_oid4vci_http_request_duration_seconds_bucket{route="unmatched",method="other",status="client-error",error="none",le="0.01"} 1
+evidence_oid4vci_http_request_duration_seconds_bucket{route="unmatched",method="other",status="client-error",error="none",le="0.025"} 1
+evidence_oid4vci_http_request_duration_seconds_bucket{route="unmatched",method="other",status="client-error",error="none",le="0.05"} 1
+evidence_oid4vci_http_request_duration_seconds_bucket{route="unmatched",method="other",status="client-error",error="none",le="0.1"} 1
+evidence_oid4vci_http_request_duration_seconds_bucket{route="unmatched",method="other",status="client-error",error="none",le="0.25"} 1
+evidence_oid4vci_http_request_duration_seconds_bucket{route="unmatched",method="other",status="client-error",error="none",le="1"} 1
+evidence_oid4vci_http_request_duration_seconds_bucket{route="unmatched",method="other",status="client-error",error="none",le="5"} 1
+evidence_oid4vci_http_request_duration_seconds_bucket{route="unmatched",method="other",status="client-error",error="none",le="+Inf"} 1
+evidence_oid4vci_http_request_duration_seconds_sum{route="unmatched",method="other",status="client-error",error="none"} 0.007
+evidence_oid4vci_http_request_duration_seconds_count{route="unmatched",method="other",status="client-error",error="none"} 1
+# HELP evidence_oid4vci_outcomes_total Closed protocol and upstream outcome classes.
+# TYPE evidence_oid4vci_outcomes_total counter
+evidence_oid4vci_outcomes_total{outcome="offer-created"} 2
+evidence_oid4vci_outcomes_total{outcome="offer-authorization-refused"} 0
+evidence_oid4vci_outcomes_total{outcome="store-saturated"} 0
+evidence_oid4vci_outcomes_total{outcome="store-fault"} 0
+evidence_oid4vci_outcomes_total{outcome="code-redeemed"} 0
+evidence_oid4vci_outcomes_total{outcome="code-claim-refused"} 0
+evidence_oid4vci_outcomes_total{outcome="token-claimed"} 0
+evidence_oid4vci_outcomes_total{outcome="token-claim-refused"} 0
+evidence_oid4vci_outcomes_total{outcome="nonce-minted"} 0
+evidence_oid4vci_outcomes_total{outcome="nonce-invalid"} 0
+evidence_oid4vci_outcomes_total{outcome="nonce-tampered"} 1
+evidence_oid4vci_outcomes_total{outcome="nonce-expired"} 0
+evidence_oid4vci_outcomes_total{outcome="proof-refused"} 0
+evidence_oid4vci_outcomes_total{outcome="credential-issued"} 1
+evidence_oid4vci_outcomes_total{outcome="evidence-refused"} 0
+evidence_oid4vci_outcomes_total{outcome="evidence-not-available"} 0
+evidence_oid4vci_outcomes_total{outcome="evidence-unavailable"} 0
+evidence_oid4vci_outcomes_total{outcome="cleanup-expired"} 3
+# HELP evidence_oid4vci_store_entries Entries in the fullest independently bounded offer, ledger, or token keyspace.
+# TYPE evidence_oid4vci_store_entries gauge
+evidence_oid4vci_store_entries 7
+# HELP evidence_oid4vci_store_capacity Refusal threshold for each independently bounded offer, ledger, or token keyspace.
+# TYPE evidence_oid4vci_store_capacity gauge
+evidence_oid4vci_store_capacity 256
+# HELP evidence_oid4vci_cleanup_expired_total Expired in-memory entries released by cleanup.
+# TYPE evidence_oid4vci_cleanup_expired_total counter
+evidence_oid4vci_cleanup_expired_total 3

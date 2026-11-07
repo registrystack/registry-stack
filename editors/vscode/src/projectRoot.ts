@@ -75,7 +75,9 @@ function declaresExplicitProduct(directory: string): boolean {
     const marker = JSON.parse(text);
     if (
       marker === null ||
-      (marker.product !== 'manifest' && marker.product !== 'evidence-oid4vci') ||
+      (marker.product !== 'manifest' &&
+        marker.product !== 'evidence-oid4vci' &&
+        marker.product !== 'evidence-oid4vp') ||
       typeof marker.document !== 'string' ||
       marker.document.includes('\\') ||
       path.isAbsolute(marker.document) ||

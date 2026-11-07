@@ -2,6 +2,87 @@
 
 ## Unreleased
 
+- Fix blind-index lookups that missed Unicode-equivalent spellings. The
+  composed and decomposed forms of one name hashed to different digests, so a
+  lookup missed the record and a `unique` index accepted both as two records.
+  `lookup.normalization` gains `nfc` (Unicode normalization form C) and
+  `case-fold` (NFC, then the full Unicode case fold, then NFC again, so `ß`,
+  `ẞ`, and `ss` are one value, a folded capital such as `Ϊ́` still matches
+  `ΐ`, and canonically equivalent spellings match whatever the order of their
+  combining marks).
+  List `nfc` first for name-like fields. Existing steps keep their exact
+  output, so unchanged lookups keep their digests.
+- Changing only the `normalization` list of an already encrypted lookup,
+  previously refused as `FieldLookupChanged`, is now a `DataBackfillRequired`
+  change covered by a reviewed `field-encryption-backfill` step that names
+  only the field's `<field>#lookup` column and carries no `history` choice. The
+  step re-derives each digest from the stored envelope and writes only that
+  column, in resumable chunks. Before the apply commits anything, it refuses
+  the package when two records would collide on a unique lookup, so `bregctl
+  migration reconcile` reports the refused target `revertible`. A new digest
+  equal to the old digest a later record still holds is a valid end state:
+  each chunk clears that stale digest before it writes, so the re-index
+  completes in any record order. The registry stays in maintenance and serves
+  no Record reads or writes for the whole re-index. Once the first chunk
+  commits, the target cannot be reverted: `bregctl migration reconcile`
+  reports it `unresolvable` (steps only the same target can finish), and
+  retrying the same `apply` resumes it. Adding or removing a
+  lookup, or changing `unique`, stays refused. A package that changes a list
+  without the step is refused. `bregctl field-encryption preflight` scans
+  re-index steps with the configured field-encryption key, reporting each
+  step's row count beside its `maxTotalRows` and the records that would
+  collide. It runs every step in one transaction on the serving registry, and
+  the scan's `ALTER TABLE`, which lifts `FORCE ROW LEVEL SECURITY`, holds an
+  `ACCESS EXCLUSIVE` lock on the Record type's table until the preflight ends,
+  so that Record type's reads and writes wait for the whole scan: run it in a
+  quiet window.
+- A reviewed plan whose authored SQL writes a blind-index column
+  (`<field>#lookup`), in a transactional step or a chunked backfill, beside
+  a re-index or an encryption flip, is refused with `BlindIndexWrite`
+  (`migration.review.blind-index-write-refused`), naming the Record type and
+  field only. Only the engine derives digests, from the envelopes authored
+  SQL cannot open. A plan that authors such a write in place of the engine
+  re-index stays a coverage refusal, which names the missing step.
+- A blind-index re-index step whose table holds more rows than its
+  `maxTotalRows` is refused before any write with `BlindIndexReindexRowLimit`
+  (`field-encryption.reindex.row-limit`), naming the step and both counts,
+  instead of stopping partway with old and new digests mixed.
+  `bregctl field-encryption preflight` fails on the same condition.
+- A reviewed `field-encryption-backfill` step whose object names another
+  Record type or table than the step's `entityId` is refused as an invalid
+  descriptor. The engine walks the step's own table, so such a plan could
+  satisfy coverage while leaving the other Record type unprocessed.
+- Fix a refused field-encryption flip that reconcile could not revert. The
+  normalized-duplicate and retained-proposal checks ran after the apply had
+  committed compiler DDL, and dropped the read views when views changed.
+  Every field-encryption check now runs before the apply commits anything, so
+  the refused target is `revertible`.
+- Share the access-token algorithm roster, the stop-signal handler, the
+  Prometheus exposition, and cursor sealing with the platform crates. The
+  accepted algorithms, the cursor wire format, and the metrics scrape bytes
+  of finite values are unchanged. A stop-signal handler that cannot be
+  installed now refuses startup instead of running without one. When the
+  stop-signal stream ends, BReg now shuts down and returns `Ok` instead of
+  `StartupError::Shutdown`. An infinite metric value now renders `+Inf` or
+  `-Inf`, as the Prometheus text format requires, instead of `inf` or `-inf`.
+- Governed-action Evidence acceptance requires an assertion with
+  `channel: source`. A correctly signed `holder-presented` assertion is
+  refused through the existing `action.evidence_failed` refusal; there is no
+  configuration key to accept other channels. The assertion's channel
+  stays inside the retained signed response, and the retained verification
+  context records the accepted-channel policy; BReg adds no separate channel
+  field.
+- `breg-mcp` installs its stop-signal handlers before it starts serving. A
+  handler that cannot be installed used to be logged while the process kept
+  running with that signal unobserved; startup now fails with "the stop signals
+  cannot be observed" and the operating-system cause. SIGINT is installed at
+  startup alongside SIGTERM. The accepted `resourceServer.algorithms` values
+  (`RS256`, `RS384`, `ES256`, `ES384`, `EdDSA`) and the configuration schema are
+  unchanged; the roster is now the shared `registry-platform-oidc` one.
+- `breg-review` draws its session and sign-in tokens with the shared
+  `random_base64url` and compares them with the shared `constant_time_eq`. The
+  token shape (32 random bytes, unpadded base64url) and the comparison result are
+  unchanged.
 - Flag a task-grant profile that binds no rows. For a non-public record type,
   `breg.access-profile.task-grant-rows-unbound` is a finding (not an error)
   when a profile with a `taskGrant`, or an Action or Proposal permission of

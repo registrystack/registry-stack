@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Verified access-token ownership and exact deployment policy matching.
 use crate::{store::Actor, CoordinatorError, Result};
-use jsonwebtoken::Algorithm;
 use registry_platform_config::{
     JwksSource, OidcClientsConfig, OidcIssuerConfig, SecretProvidersConfig,
 };
 use registry_platform_oidc::{
-    access_token_typ_set, fetch_discovery_for_issuer, parse_static_jwks, IssuerNetworkPolicy,
-    JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, TokenVerifier, TokenVerifierConfig,
-    ASSERTION_ISSUER_CLAIM,
+    access_token_typ_set, fetch_discovery_for_issuer, parse_static_jwks, AccessTokenAlgorithm,
+    IssuerNetworkPolicy, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, TokenVerifier,
+    TokenVerifierConfig, ASSERTION_ISSUER_CLAIM,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use std::{
@@ -361,7 +360,10 @@ impl AccessConfig {
         let profile = TokenVerifierConfig::access_token_profile(
             self.issuer.issuer.clone(),
             vec![self.issuer.audience.clone()],
-            vec![Algorithm::RS256, Algorithm::ES256],
+            vec![
+                AccessTokenAlgorithm::RS256.to_jsonwebtoken(),
+                AccessTokenAlgorithm::ES256.to_jsonwebtoken(),
+            ],
             access_token_typ_set("at+jwt"),
         )
         .with_scope_claim(&self.scope_claim)

@@ -33,15 +33,29 @@ Proposal's review context.
 
 To find a record by an encrypted value, add a `lookup` block to the field. BReg stores a blind
 index beside the ciphertext: an HMAC-SHA-256 of the value after the `normalization` steps you list
-(`trim`, `collapse-whitespace`, `remove-separators`, `uppercase`, `lowercase`, in your order, at
-most eight). Set `unique: true` to make the index unique; a second record with the same normalized
-value is refused as a conflict. Expose the lookup through a selector profile and the access
-profile's `lookups` grant. A `structured` field cannot declare a lookup.
+(`nfc`, `case-fold`, `trim`, `collapse-whitespace`, `remove-separators`, `uppercase`, `lowercase`,
+in your order, at most eight). Set `unique: true` to make the index unique; a second record with the
+same normalized value is refused as a conflict. Expose the lookup through a selector profile and the
+access profile's `lookups` grant. A `structured` field cannot declare a lookup.
 
 The index answers equality and nothing else, and it shows a database reader which rows hold a
 value and which rows share one, without the value itself. Keep the normalization narrow: for an
-identifier, `trim` and `remove-separators` usually say what "the same value" means;
-`uppercase` and `lowercase` follow Unicode case rules that can make unexpected values collide.
+identifier, `trim` and `remove-separators` usually say what "the same value" means.
+
+For a name or any other text a person types, list `nfc` first. Without it, the composed and the
+decomposed spelling of the same name (`é` as one character or as `e` plus a combining accent)
+are different bytes, so they get different indexes: a lookup misses the record, and a `unique`
+index accepts both spellings as two records. `nfc` rewrites the value to Unicode normalization
+form C before the next step. `case-fold` applies NFC first, because the fold turns some combining
+marks into letters (the Greek iota subscript folds to `ι`): two spellings that order their marks
+differently would otherwise fold to different values. It then applies the full Unicode case fold,
+so `ß`, `ẞ`, and `ss` are one value, which neither `lowercase` nor `uppercase` achieves. It ends
+with NFC again, because folding some capitals leaves a decomposed sequence: `Ϊ́` (capital iota with
+dialytika, then an acute accent) folds to `ι` plus two combining marks, and without the closing
+NFC it would not match `ΐ`. A typical name lookup is
+`normalization: [nfc, case-fold, trim, collapse-whitespace]`. Adding either step to the list of a
+lookup that already holds data changes every stored digest; the section on changing the
+normalization of an existing lookup below explains the reviewed migration that requires.
 
 The [BReg configuration reference](../../reference/breg-configuration/) lists every member and
 bound.
@@ -63,6 +77,9 @@ bound.
     crates/registry-breg/tests/field_encryption_contract.rs,
     native_proposal_context_refuses_encrypted_record_fields();
     crates/registry-platform-crypto/src/field_encryption.rs, blind_index_hmac();
+    crates/registry-breg/src/field_encryption.rs, FieldEncryptionService::normalize(),
+    case_fold_closes_with_nfc_so_folded_spellings_match(), and
+    unicode_steps_give_equivalent_spellings_one_blind_index();
     crates/registry-breg/src/postgres/read.rs, lookup_sql();
     crates/registry-breg/tests/postgres_field_encryption.rs,
     blind_index_lookup_resolves_normalized_equality() and
@@ -152,19 +169,93 @@ Backups taken before the migration still hold plaintext until you retire or re-e
 
 `bregctl field-encryption preflight` reports, without values, how many rows, revisions, and
 retained copies each covered field affects, and which records would collide on a unique lookup.
+It runs every step in one transaction on the serving registry, and lifts `FORCE ROW LEVEL
+SECURITY` on each scanned Record type's table with an `ALTER TABLE`, which holds an
+`ACCESS EXCLUSIVE` lock on that table until the preflight ends: that Record type's reads and
+writes wait for the whole scan, so run it in a quiet window.
 [Change an active registry](../../operate/breg-changes/) walks through preflight, apply, and
 `erase-history`.
 
-Three package changes are refused: removing encryption, changing the `lookup` of an encrypted
-field, and adding a required encrypted field to an existing Record type. For the last, add the
-field as optional, fill it through authorized writes, then make it required in a later package.
+Two package changes are refused: removing encryption and adding a required encrypted field to an
+existing Record type. For the second, add the field as optional, fill it through authorized writes,
+then make it required in a later package.
+
+### Change the normalization of an existing lookup
+
+Editing the `normalization` list of an already encrypted field changes the digest of every stored
+value, so the old digests would stop matching new queries and a `unique` index would not protect
+the new spelling rules. BReg classifies that edit as a reviewed backfill, never as an automatic
+change, and refuses a package that changes the list without one. The descriptor covers the field's
+`FieldLookupChanged` change and declares one step with `type: field-encryption-backfill` whose
+only object is the field's blind-index column (the member `<field>#lookup`). It carries no
+`history` choice, because it rewrites no record, envelope, or revision. Only the engine derives
+digests: a reviewed plan whose authored SQL writes a blind-index column, beside a re-index or an
+encryption flip, is refused with `migration.review.blind-index-write-refused`.
+
+At apply, the step opens each envelope under the active key, derives the digest under the new list,
+and writes only the blind-index column, chunk by chunk, with the same resumable cursor as the
+encryption backfill. Before the apply commits anything, ahead of the compiler DDL and of every
+step in the plan, it checks every re-index and every encryption flip. It refuses the whole
+package, naming up to 64 record ids and no values, when two records would share a digest under the
+new list on a `unique` lookup, which is the case when two spellings of one name already coexist;
+correct one of each pair first.
+
+A record's new digest may equal the old digest a record later in the walk still holds, because
+the two lists map different values onto one digest. That end state is valid, so the re-index does
+not refuse it: on a `unique` lookup each chunk first clears any such stale digest on the rows it
+has not reached, then writes the new digests. A cleared row gets its own new digest when the walk
+reaches it. If the apply stops partway, a cleared record is not found by lookup until the resumed
+step reaches it.
+
+The registry stays in maintenance for the whole re-index and serves no Record reads or writes
+until the step completes, including while an interrupted step waits to resume. Once the first
+chunk commits, the target can no longer be reverted: `bregctl migration reconcile` reports it
+`unresolvable`, because the reviewed migration committed steps that only the same target can
+finish. Fix the cause and retry the same `apply`, which resumes the step after its last committed
+chunk.
+
+The same check counts the rows each re-index step walks, valued or null, and refuses a step whose
+table holds more rows than its `maxTotalRows`, naming the step and both counts, because the step
+would otherwise stop partway with old and new digests mixed. Raise `maxTotalRows` in a reviewed
+package rehearsed against that count.
+
+A refused apply leaves the active registry as it was: `bregctl migration reconcile` reports the
+target `revertible`, reverting it returns the registry to `ready`, and it serves reads again.
+
+Changing only the list is supported. Adding or removing the `lookup`, or changing its `unique`
+flag, stays refused. `bregctl field-encryption preflight` scans a re-index step too: it opens the
+envelopes with the configured field-encryption key, reports how many rows the step walks beside
+its `maxTotalRows`, and names the records that would collide, so you can correct them before the
+apply. Its re-index scan holds the same `ACCESS EXCLUSIVE` lock on the Record type's table until
+the preflight ends, so run it in a quiet window.
 
 {/* Evidence: crates/registry-breg/src/migration_plan.rs,
     ReviewedMigrationStepDescriptor::FieldEncryptionBackfill, ReviewedFieldEncryptionHistory,
     validate_descriptor_shape() (breg.migration.history),
     descriptor_covers_field_encryption_flip(), and validate_field_encryption_step_grouping();
     crates/registry-breg/src/package.rs, CompiledRegistryChangeCode::explanation() for
-    FieldEncryptionChanged, FieldLookupChanged, and FieldAddedRequired;
+    FieldEncryptionChanged, FieldLookupChanged, and FieldAddedRequired,
+    blind_index_needs_reindex_only(); crates/registry-breg/src/migration_plan.rs,
+    ReviewedMigrationStepDescriptor::is_blind_index_reindex(),
+    validate_blind_index_reindex_coverage(), and refuse_blind_index_writes();
+    crates/registry-breg/tests/migration_plan.rs,
+    reviewed_blind_index_reindex_refuses_an_authored_lookup_write_after_the_engine_step() and
+    reviewed_encryption_flip_refuses_a_chunked_lookup_write();
+    crates/registry-breg/src/postgres/interlock.rs,
+    field_encryption_preflight(), scan_blind_index_reindex(),
+    execute_blind_index_reindex_chunk(), clear_stale_unique_digests(), and
+    set_force_row_security(); crates/registry-breg/src/field_encryption_backfill.rs,
+    preflight_field_encryption_backfill(); crates/registry-breg/src/migration_reconcile.rs,
+    classify() and UNRESOLVABLE_STEPS_COMMITTED;
+    crates/registry-breg/tests/postgres_migration.rs,
+    real_postgres_blind_index_reindex_resumes_and_makes_the_unique_index_unicode_aware(),
+    real_postgres_blind_index_reindex_refuses_unicode_equivalent_duplicates_value_free(),
+    real_postgres_refused_blind_index_reindex_stays_revertible_and_readable(),
+    real_postgres_blind_index_reindex_checks_every_step_before_any_commits(),
+    real_postgres_operator_preflight_scans_blind_index_reindex_steps(),
+    real_postgres_blind_index_reindex_refuses_more_rows_than_its_ceiling(), and
+    real_postgres_blind_index_reindex_completes_when_a_later_record_holds_a_new_digest();
+    crates/registry-breg/src/field_encryption.rs, FieldEncryptionService::normalize();
     crates/registry-breg/src/field_encryption_backfill.rs,
     FieldEncryptionBackfillPreflightReport, MAX_NAMED_DUPLICATE_RECORDS, and
     erase_field_encryption_history(); crates/registry-breg/src/postgres/interlock.rs,

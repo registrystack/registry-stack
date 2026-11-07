@@ -332,6 +332,11 @@ pub struct Bundle {
     pub fixtures: BTreeMap<String, JsonValue>,
     pub active_public_jwk: PublicJwk,
     pub published_public_jwks: BTreeMap<String, PublicJwk>,
+    /// The parsed certificate chain certifying the active key, when the
+    /// bundle names one. Startup binds it to the signer and checks it is
+    /// valid; the bundle only guarantees it parses, is within the chain
+    /// policy's length, and belongs to the active key's file name.
+    pub certificate_chain: Option<registry_platform_x509::X5cChain>,
 }
 
 /// One source's parsed, digest-checked Adapter pack and its exact captured
@@ -693,6 +698,7 @@ impl Bundle {
         validate_codelist_references(&config, &codelists)?;
         let fixtures = load_fixtures(root, &config, &files)?;
         let (active_public_jwk, published_public_jwks) = load_public_jwks(&config, &files)?;
+        let certificate_chain = load_certificate_chain(&config, &files, &active_public_jwk)?;
         let requirement_revisions = compute_requirement_revisions(&config, &source_packs, &files)?;
 
         Ok(Self {
@@ -711,6 +717,7 @@ impl Bundle {
             fixtures,
             active_public_jwk,
             published_public_jwks,
+            certificate_chain,
         })
     }
 
@@ -1137,6 +1144,8 @@ fn file_size_cap(path: &str) -> u64 {
     {
         MAX_SCRIPT_BYTES
     } else if path.starts_with("public-keys/") {
+        // A certificate chain is at most eight certificates of 16 KiB each,
+        // PEM encoded; it fits well inside the public-key allowance.
         MAX_PUBLIC_JWK_BYTES
     } else {
         MAX_ARTIFACT_BYTES
@@ -1388,6 +1397,9 @@ fn validate_file_closure(
         }
     }
     expected.insert(config.signing.active_public_jwk_file.as_str().to_owned());
+    if let Some(chain) = &config.signing.certificate_chain_file {
+        expected.insert(chain.as_str().to_owned());
+    }
     for path in &config.signing.published_public_jwk_files {
         expected.insert(path.as_str().to_owned());
     }
@@ -3079,6 +3091,43 @@ fn load_public_jwks(
         }
     }
     Ok((active, keys))
+}
+
+/// Parse the certificate chain the signing block names. The file belongs to
+/// the active key (`public-keys/<kid>.chain.pem`), so rotating the key makes a
+/// predecessor's chain a refused input rather than a silently reused one.
+fn load_certificate_chain(
+    config: &EvidenceConfig,
+    files: &BTreeMap<String, Vec<u8>>,
+    active: &PublicJwk,
+) -> Result<Option<registry_platform_x509::X5cChain>, BundleError> {
+    let Some(path) = &config.signing.certificate_chain_file else {
+        return Ok(None);
+    };
+    let path = path.as_str();
+    let load = || -> Result<registry_platform_x509::X5cChain, BundleError> {
+        let active_kid = active
+            .kid
+            .as_deref()
+            .ok_or(invalid_artifact("active public JWK kid is missing"))?;
+        if path != format!("public-keys/{active_kid}.chain.pem") {
+            return Err(invalid_artifact(
+                "certificate chain filename does not match the active key's RFC 7638 thumbprint",
+            ));
+        }
+        let bytes = files
+            .get(path)
+            .ok_or(invalid_artifact("certificate chain file is missing"))?;
+        let chain = registry_platform_x509::X5cChain::from_pem(bytes)
+            .map_err(|_| invalid_artifact("certificate chain is not a PEM certificate chain"))?;
+        if chain.len() > crate::signing::maximum_certificate_chain_length() {
+            return Err(invalid_artifact(
+                "certificate chain is longer than the chain policy allows",
+            ));
+        }
+        Ok(chain)
+    };
+    load().map(Some).map_err(|error| error.in_artifact(path))
 }
 
 fn validate_public_jwk_path(path: &str, kid: &str) -> Result<(), BundleError> {
@@ -5029,6 +5078,119 @@ mod tests {
             4,
             "the package digest still records every rotation step"
         );
+    }
+
+    const ACTIVE_KEY_ID: &str = "_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo";
+    const ACTIVE_PRIVATE_JWK: &str = r#"{"kty":"EC","crv":"P-256","d":"MInq88dvxx-e1-MEfmdes4I6Gt2QbsKoEmYyk2j0Oj4","x":"3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4","y":"GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU","alg":"ES256","kid":"_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo"}"#;
+
+    /// Load the acceptance bundle after naming `chain_file` in its signing
+    /// block and writing `chain_pem` there (nothing is written when `None`).
+    #[cfg(unix)]
+    fn load_with_certificate_chain(
+        chain_file: &str,
+        chain_pem: Option<&str>,
+    ) -> Result<Bundle, BundleError> {
+        let directory = tempfile::tempdir().expect("temporary bundle");
+        copy_acceptance_bundle("adult-status", directory.path());
+        let config = directory.path().join(CONFIG_FILE);
+        let text = fs::read_to_string(&config).expect("the configuration reads");
+        let anchor = format!("  activePublicJwkFile: public-keys/{ACTIVE_KEY_ID}.jwk.json\n");
+        assert_eq!(text.matches(&anchor).count(), 1);
+        fs::write(
+            &config,
+            text.replace(
+                &anchor,
+                &format!("{anchor}  certificateChainFile: {chain_file}\n"),
+            ),
+        )
+        .expect("the configuration writes");
+        if let Some(pem) = chain_pem {
+            fs::write(directory.path().join(chain_file), pem).expect("the chain writes");
+        }
+        refresh_package_envelope(directory.path());
+        set_tree_mode(directory.path(), 0o555, 0o444);
+        let loaded = Bundle::load(directory.path());
+        set_tree_mode(directory.path(), 0o755, 0o644);
+        loaded
+    }
+
+    fn test_chain_pem(certificates: usize) -> String {
+        use crate::certificate_test_support::{chain_for, pem, pki};
+        let now = 1_785_672_000;
+        let private = registry_platform_crypto::PrivateJwk::parse(ACTIVE_PRIVATE_JWK)
+            .expect("the test key parses");
+        let pki = pki(now);
+        let mut x5c = chain_for(
+            &pki,
+            &private,
+            &["https://evidence.example"],
+            now - 60,
+            now + 60,
+        );
+        x5c.push(base64::engine::general_purpose::STANDARD.encode(pki.root.der()));
+        x5c.truncate(certificates);
+        pem(&x5c)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_certificate_chain_for_the_active_key_loads_with_the_bundle() {
+        let file = format!("public-keys/{ACTIVE_KEY_ID}.chain.pem");
+        let bundle =
+            load_with_certificate_chain(&file, Some(&test_chain_pem(2))).expect("the chain loads");
+        assert_eq!(bundle.certificate_chain.expect("chain is kept").len(), 2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_bundle_without_a_certificate_chain_keeps_none() {
+        let directory = tempfile::tempdir().expect("temporary bundle");
+        copy_acceptance_bundle("adult-status", directory.path());
+        set_tree_mode(directory.path(), 0o555, 0o444);
+        let bundle = Bundle::load(directory.path()).expect("the bundle loads");
+        assert!(bundle.certificate_chain.is_none());
+        set_tree_mode(directory.path(), 0o755, 0o644);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn certificate_chain_startup_refusals_name_the_artifact_and_the_cause() {
+        let own = format!("public-keys/{ACTIVE_KEY_ID}.chain.pem");
+        let rotated = "public-keys/-RNgdUjduVCNV-y15KSAVZnF2gNjGb_02KQ2-MoMu4U.chain.pem";
+        let cases: [(&str, &str, Option<String>, &str); 4] = [
+            (
+                "unparseable",
+                own.as_str(),
+                Some("not a certificate\n".to_owned()),
+                "certificate chain is not a PEM certificate chain",
+            ),
+            (
+                "another key's file name",
+                rotated,
+                Some(test_chain_pem(2)),
+                "certificate chain filename does not match the active key's RFC 7638 thumbprint",
+            ),
+            (
+                "absent file",
+                own.as_str(),
+                None,
+                "the configuration references an artifact the bundle does not contain",
+            ),
+            (
+                "too many certificates",
+                own.as_str(),
+                Some(format!("{}{}", test_chain_pem(3), test_chain_pem(2))),
+                "certificate chain is longer than the chain policy allows",
+            ),
+        ];
+        for (name, file, pem, cause) in cases {
+            let error = load_with_certificate_chain(file, pem.as_deref()).expect_err(name);
+            assert!(error.to_string().contains(cause), "{name}: {error}");
+            if pem.is_some() {
+                let fault = error.artifact_fault().expect("the artifact is named");
+                assert_eq!(fault.artifact(), file, "{name}");
+            }
+        }
     }
 
     /// An emergency revocation denies a key through the JWKS and the denylist a

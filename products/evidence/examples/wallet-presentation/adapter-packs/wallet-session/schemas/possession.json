@@ -1,0 +1,8 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["presented"],
+  "properties": {
+    "presented": {"type": "boolean"}
+  }
+}

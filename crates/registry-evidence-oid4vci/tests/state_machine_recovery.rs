@@ -839,14 +839,16 @@ async fn raw_body_extraction_keeps_the_framework_payload_limit() {
             StatusCode::PAYLOAD_TOO_LARGE,
             "{path}"
         );
+        // The framework's refusal is re-answered in the service's own error
+        // shape; it is still the body limit that refuses, before any handler.
         assert_eq!(
             response.header("content-type").to_str().expect("ASCII"),
-            "text/plain; charset=utf-8",
+            "application/json",
             "{path}"
         );
         assert_eq!(
-            response.text(),
-            "Failed to buffer the request body: length limit exceeded",
+            response.json::<serde_json::Value>()["error"],
+            "invalid_request",
             "{path}"
         );
     }

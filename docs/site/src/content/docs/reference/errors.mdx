@@ -24,7 +24,18 @@ OpenAPI artifacts under CI.
 
 The OID4VCI delivery service has its own protocol error vocabulary in the
 [committed OpenAPI artifact](https://github.com/registrystack/registry-stack/blob/main/products/evidence/generated/registry-evidence-oid4vci.openapi.json).
-Framework-level refusals that never enter the protocol handler can intentionally use `text/plain`.
+A request the web framework refuses before the protocol handler runs, for a malformed body, an
+oversize body, or an unsupported content type, is answered in the same JSON error shape as the
+service's own refusals. A request over its rate budget is answered `429` with `Retry-After`.
+
+## Evidence OID4VP supporting service
+
+The OpenID4VP verifier answers wallets with the OAuth error shape and no description, and answers
+callers with problem responses defined in its
+[committed OpenAPI artifact](https://github.com/registrystack/registry-stack/blob/main/products/evidence/generated/registry-evidence-oid4vp.openapi.json).
+A session that failed because the wallet reported an error carries one `failureCategory` from a
+closed set; a refusal for a spent budget or a full presentation store is `503` or `429` with
+`Retry-After`.
 
 ## Retired Relay codes
 

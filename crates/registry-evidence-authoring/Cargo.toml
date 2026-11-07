@@ -44,3 +44,8 @@ serde_json.workspace = true
 serde_norway.workspace = true
 sha2.workspace = true
 url.workspace = true
+
+[dev-dependencies]
+# Test-only: pins the target binding's algorithm enum to the shared roster,
+# which this library may not link because its crate performs input and output.
+registry-platform-oidc.workspace = true

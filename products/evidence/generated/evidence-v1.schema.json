@@ -44,6 +44,43 @@
       ],
       "type": "object"
     },
+    "presented-credential": {
+      "additionalProperties": false,
+      "properties": {
+        "issuedAt": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "issuer": {
+          "format": "uri",
+          "maxLength": 512,
+          "type": "string"
+        },
+        "subjectLink": {
+          "enum": [
+            "possession",
+            "attribute-match"
+          ]
+        },
+        "trustEntry": {
+          "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+          "type": "string"
+        },
+        "type": {
+          "maxLength": 512,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "trustEntry",
+        "issuer",
+        "type",
+        "issuedAt",
+        "subjectLink"
+      ],
+      "type": "object"
+    },
     "structured": {
       "additionalProperties": false,
       "properties": {
@@ -159,6 +196,23 @@
       "audience"
     ]
   },
+  "else": {
+    "not": {
+      "required": [
+        "presentedCredential"
+      ]
+    }
+  },
+  "if": {
+    "properties": {
+      "channel": {
+        "const": "holder-presented"
+      }
+    },
+    "required": [
+      "channel"
+    ]
+  },
   "properties": {
     "assuranceProfile": {
       "enum": [
@@ -171,6 +225,12 @@
       "format": "uri",
       "maxLength": 512,
       "type": "string"
+    },
+    "channel": {
+      "enum": [
+        "source",
+        "holder-presented"
+      ]
     },
     "configurationRevision": {
       "pattern": "^sha256:[a-f0-9]{64}$",
@@ -198,6 +258,9 @@
     "observedAt": {
       "format": "date-time",
       "type": "string"
+    },
+    "presentedCredential": {
+      "$ref": "#/$defs/presented-credential"
     },
     "providedBy": {
       "format": "uri",
@@ -254,6 +317,7 @@
     "schema",
     "assuranceProfile",
     "subjectBinding",
+    "channel",
     "id",
     "type",
     "supportsRequirement",
@@ -268,6 +332,11 @@
     "subjects",
     "supportedValues"
   ],
+  "then": {
+    "required": [
+      "presentedCredential"
+    ]
+  },
   "title": "Evidence assertion payload Version 1",
   "type": "object"
 }

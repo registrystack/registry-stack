@@ -84,11 +84,16 @@ fn safe_relative(value: &str) -> Option<PathBuf> {
     Some(path.to_path_buf())
 }
 
-pub(crate) fn entry_path(root: &Path, product: ProductKind) -> Option<PathBuf> {
-    if matches!(
+/// Whether the product's document may carry any filename, named by the explicit editor marker.
+fn explicit_marker_only(product: ProductKind) -> bool {
+    matches!(
         product,
-        ProductKind::Manifest | ProductKind::EvidenceOid4vci
-    ) {
+        ProductKind::Manifest | ProductKind::EvidenceOid4vci | ProductKind::EvidenceOid4vp
+    )
+}
+
+pub(crate) fn entry_path(root: &Path, product: ProductKind) -> Option<PathBuf> {
+    if explicit_marker_only(product) {
         if let Some(source) = read_text(root, &root.join(EXPLICIT_MARKER)) {
             let marker: serde_json::Value = serde_json::from_str(&source).ok()?;
             if marker.get("product")?.as_str()? == product.name() {
@@ -103,7 +108,7 @@ pub(crate) fn entry_path(root: &Path, product: ProductKind) -> Option<PathBuf> {
                 return is_safe_authored_file(root, &path).then_some(path);
             }
         }
-        if product == ProductKind::EvidenceOid4vci {
+        if product != ProductKind::Manifest {
             return None;
         }
     }
@@ -117,22 +122,16 @@ pub(crate) fn declares_root(root: &Path, product: ProductKind) -> bool {
     let Some(source) = read_text(root, &path) else {
         return false;
     };
-    if matches!(
-        product,
-        ProductKind::Manifest | ProductKind::EvidenceOid4vci
-    ) && path != root.join(spec(product).marker)
-    {
+    if explicit_marker_only(product) && path != root.join(spec(product).marker) {
         return true;
     }
     // An explicit marker also declares a default-named entry while it is being edited.
-    if matches!(
-        product,
-        ProductKind::Manifest | ProductKind::EvidenceOid4vci
-    ) && read_text(root, &root.join(EXPLICIT_MARKER))
-        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-        .is_some_and(|marker| {
-            marker.get("product").and_then(serde_json::Value::as_str) == Some(product.name())
-        })
+    if explicit_marker_only(product)
+        && read_text(root, &root.join(EXPLICIT_MARKER))
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+            .is_some_and(|marker| {
+                marker.get("product").and_then(serde_json::Value::as_str) == Some(product.name())
+            })
     {
         return true;
     }

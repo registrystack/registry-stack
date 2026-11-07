@@ -3085,6 +3085,50 @@ formats:
       - pointer: /audit/hashKeyRef
         whenOmitted: refused
     restrictingMembers: [/offers/allowedClients, /offers/requiredScopes]
+  - id: evidence/oid4vp-runtime
+    product: evidence
+    title: OpenID4VP verifier runtime configuration
+    files: [runtime.yaml]
+    syntax: yaml
+    audience: operator
+    stability: experimental
+    current:
+      apiVersion: id.registrystack.org/formats/evidence/oid4vp-runtime/v1alpha1
+      kind: EvidenceOid4vpRuntimeConfig
+      checkedBy:
+        file: crates/registry-evidence-oid4vp/src/config.rs
+        symbol: OID4VP_RUNTIME_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/evidence/oid4vp-runtime/v1alpha1
+      kind: EvidenceOid4vpRuntimeConfig
+    schema:
+      path: products/evidence/generated/oid4vp-runtime/oid4vp-runtime.schema.json
+      id: https://id.registrystack.org/schemas/evidence/oid4vp-runtime/oid4vp-runtime.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-evidence-oid4vp --features schema --example runtime-schema -- --output products/evidence/generated/oid4vp-runtime
+      driftCheck: crates/registry-evidence-oid4vp/src/schema.rs
+    reader:
+      crate: registry-evidence-oid4vp
+      file: crates/registry-evidence-oid4vp/src/config.rs
+      function: load
+      type: VerifierDocument
+    check: evidence-oid4vp check --runtime-config {file}
+    example: products/evidence/examples/oid4vp-runtime/runtime.yaml
+    conformance:
+      requiredText: /applicantTokens/requiredScope
+      optionalText: /audit/path
+      integer: /sessions/maximumLiveSessions
+      boolean: none
+    securityMembers:
+      - pointer: /listener/bind
+        whenOmitted: refused
+      - pointer: /metricsListener/bind
+        whenOmitted: closed
+      - pointer: /applicantTokens/allowInsecureHttp
+        whenOmitted: closed
+      - pointer: /evidenceCredentials/allowInsecureHttp
+        whenOmitted: closed
+    restrictingMembers: []
   - id: evidence/client-profile
     product: evidence
     title: Evidence relying-party client profile

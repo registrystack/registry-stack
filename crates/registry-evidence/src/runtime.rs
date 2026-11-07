@@ -33,24 +33,25 @@ use crate::{
     auth::{AuthenticatedContext, AuthenticationError, Authenticator},
     bundle::{Bundle, DeploymentInputs, RuntimeDocument},
     config::{
-        subject_binding_permits_response_format, AssuranceProfile, AuthorityKind, ConceptForm,
-        RequirementKind, ResponseFormat, RuntimeConfig, RuntimeSignerConfig, SelectorField,
-        SelectorInput, SubjectBindingMode, SubjectCardinality, ValueOrigin,
-        MAXIMUM_HOLDER_BOUND_BATCH_SIZE,
+        subject_binding_permits_response_format, AcquisitionConfig, AssuranceProfile,
+        AuthorityKind, ConceptForm, RequirementKind, ResponseFormat, RuntimeConfig,
+        RuntimeSignerConfig, SelectorField, SelectorInput, SubjectBindingMode, SubjectCardinality,
+        ValueOrigin, MAXIMUM_HOLDER_BOUND_BATCH_SIZE,
     },
     contracts::definitions_contract_accepts,
     kernel::{EvidenceConstruction, EvidenceScope, KernelError, OfflineKernel, ValueProjection},
     model::{
-        request_nonce_is_canonical, EvidenceDefinition, EvidenceDefinitionConcept,
-        EvidenceDefinitionForm, EvidenceDefinitionListItemForm, EvidenceDefinitionSelector,
-        EvidenceDefinitionSubject, EvidenceDefinitions, EvidenceRequest, EvidenceRequestBatch,
-        EvidenceSelectorField, FlattenedJws, JwksDocument, LookupResult, RequestedSelector,
-        RequestedSubject, SdJwtVcBatchEnvelope, SdJwtVcBatchEnvelopeType, SubjectBinding,
-        UnsignedEnvelopeType, UnsignedEnvelopeWarning, UnsignedEvidenceEnvelope,
-        UnsignedIntegrityProtection, EVIDENCE_REQUEST_BATCH_MAX_ITEMS,
+        request_nonce_is_canonical, ChannelKind, EvidenceDefinition, EvidenceDefinitionAlternative,
+        EvidenceDefinitionConcept, EvidenceDefinitionForm, EvidenceDefinitionListItemForm,
+        EvidenceDefinitionSelector, EvidenceDefinitionSubject, EvidenceDefinitions,
+        EvidenceRequest, EvidenceRequestBatch, EvidenceSelectorField, FlattenedJws, JwksDocument,
+        LookupResult, RequestedSelector, RequestedSubject, SdJwtVcBatchEnvelope,
+        SdJwtVcBatchEnvelopeType, SubjectBinding, UnsignedEnvelopeType, UnsignedEnvelopeWarning,
+        UnsignedEvidenceEnvelope, UnsignedIntegrityProtection, EVIDENCE_REQUEST_BATCH_MAX_ITEMS,
     },
     observability::SourceDiagnostics,
     pack_source::{PackSourceError, PackSourceExecutor, PackSourceFailure},
+    presented::{construction_channel, PresentedFacts},
     problem::ProblemCode,
     rate_limit::{EvidenceRateLimiter, RateLimitConfig, RateLimitError},
     sdjwt_vc,
@@ -87,6 +88,14 @@ pub enum RuntimeInitializationError {
     Signing(SigningInitializationFault),
     #[error("an Evidence source plan could not initialize")]
     Source,
+    /// A Source is on the wrong acquisition channel. The pointer names the
+    /// definition member to repair and the cause is a closed text; neither
+    /// carries a configured value.
+    #[error("an Evidence source is on the wrong acquisition channel at {pointer}: {cause}")]
+    ChannelSource {
+        pointer: String,
+        cause: &'static str,
+    },
     #[error("the Evidence rate limiter could not initialize")]
     RateLimit,
     #[error("the Evidence access-token issuer TLS trust profile could not initialize")]
@@ -170,6 +179,14 @@ pub enum SigningInitializationFault {
     SelfTest,
     /// The published key set could not be assembled from the bundle's keys.
     KeySet,
+    /// The signing certificate chain could not be bound to the signer.
+    CertificateChain,
+    /// The leaf of the signing certificate chain certifies a different key.
+    CertificateKey,
+    /// A certificate in the signing chain is expired or not yet valid.
+    CertificateNotValid,
+    /// The signing certificate chain is longer than the chain policy allows.
+    CertificateChainTooLong,
 }
 
 impl SigningInitializationFault {
@@ -218,6 +235,16 @@ impl SigningInitializationFault {
             Self::KeySet => {
                 "the published signing key set could not be assembled from the bundle's keys"
             }
+            Self::CertificateChain => "the signing certificate chain could not be parsed",
+            Self::CertificateKey => {
+                "the signing certificate leaf does not certify the active signing key"
+            }
+            Self::CertificateNotValid => {
+                "a certificate in the signing certificate chain is not valid at startup"
+            }
+            Self::CertificateChainTooLong => {
+                "the signing certificate chain is longer than the chain policy allows"
+            }
         }
     }
 }
@@ -232,6 +259,10 @@ impl From<&EvidenceSigningError> for SigningInitializationFault {
     fn from(error: &EvidenceSigningError) -> Self {
         match error {
             EvidenceSigningError::Provider(_) | EvidenceSigningError::SelfTest => Self::SelfTest,
+            EvidenceSigningError::CertificateChain => Self::CertificateChain,
+            EvidenceSigningError::CertificateKey => Self::CertificateKey,
+            EvidenceSigningError::CertificateNotValid => Self::CertificateNotValid,
+            EvidenceSigningError::CertificateChainTooLong => Self::CertificateChainTooLong,
             _ => Self::GovernedKey,
         }
     }
@@ -347,8 +378,17 @@ pub async fn validate_verification_material(
     let signer = EvidenceSigner::initialize_governed(provider, &bundle.active_public_jwk)
         .await
         .map_err(|error| RuntimeInitializationError::Signing((&error).into()))?;
-    let jwks = crate::signing::jwks_document_with_revocations(
+    // The certificate identity belongs to the active key the bundle governs.
+    // Its chain is bound only after the signer proved it holds that key.
+    let signer = match &bundle.certificate_chain {
+        Some(chain) => signer
+            .with_certificate_chain(chain.clone(), Utc::now().timestamp())
+            .map_err(|error| RuntimeInitializationError::Signing((&error).into()))?,
+        None => signer,
+    };
+    let jwks = crate::signing::jwks_document_with_certificate_chain(
         signer.public_jwk(),
+        signer.certificate_chain(),
         bundle.published_public_jwks.values().cloned(),
         bundle.config.signing.revoked_key_ids.clone(),
     )
@@ -502,6 +542,23 @@ impl std::fmt::Debug for EvidenceRuntime {
     }
 }
 
+/// Refuse a Source on the wrong acquisition channel, naming the definition
+/// member to repair.
+pub(crate) fn refuse_misassigned_channel_sources(
+    bundle: &Bundle,
+) -> Result<(), RuntimeInitializationError> {
+    match crate::pack_source::channel_source_refusals(bundle)
+        .into_iter()
+        .next()
+    {
+        Some(refusal) => Err(RuntimeInitializationError::ChannelSource {
+            pointer: refusal.pointer,
+            cause: refusal.cause,
+        }),
+        None => Ok(()),
+    }
+}
+
 /// Compile every governed source against the runtime document that binds it.
 fn build_sources(
     bundle: &Bundle,
@@ -509,6 +566,7 @@ fn build_sources(
     secrets: &Arc<SecretResolver>,
     diagnostics: &Arc<SourceDiagnostics>,
 ) -> Result<BTreeMap<String, PackSourceExecutor>, RuntimeInitializationError> {
+    refuse_misassigned_channel_sources(bundle)?;
     let mut sources = crate::pack_source::build_sources(bundle, runtime_document, secrets)
         .map_err(|_| RuntimeInitializationError::Source)?;
     for (id, source) in &mut sources {
@@ -935,23 +993,19 @@ impl EvidenceRuntime {
             if validate_entitlement_context(self.bundle(), &context, &matched).is_err() {
                 continue;
             }
-            definitions.push(self.discovery_definition(&request, &matched)?);
+            let acquisition = &self
+                .kernel
+                .requirement(&request.requirement)
+                .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "discovery-requirement"))?
+                .acquisition;
+            // A grant whose subjects select no single channel is one the
+            // runtime would deny, so it is not published.
+            let Some(channel) = matched_channel(acquisition, &matched) else {
+                continue;
+            };
+            definitions.push(self.discovery_definition(&request, &matched, channel)?);
         }
-        let mut published_handles = BTreeSet::new();
-        if definitions
-            .iter()
-            .any(|definition| !published_handles.insert(definition.handle.as_str()))
-        {
-            // A handle selects a complete definition, not merely a requirement
-            // URI. Different grants may legitimately expose different shapes
-            // to different requesters, but one authenticated document must
-            // never make the public handle ambiguous. Refuse the complete
-            // document instead of publishing an arbitrary winner.
-            return Err(failure(
-                ProblemCode::ServiceUnavailable,
-                "discovery-ambiguous-handle",
-            ));
-        }
+        let definitions = merge_channel_alternatives(definitions)?;
         let response = EvidenceDefinitions {
             schema: EVIDENCE_DEFINITIONS_SCHEMA_V1.to_owned(),
             assurance_profile: self.bundle().config.assurance_profile,
@@ -978,6 +1032,7 @@ impl EvidenceRuntime {
         &self,
         request: &EvidenceRequest,
         matched: &MatchedEntitlement,
+        channel: ChannelKind,
     ) -> Result<EvidenceDefinition, RuntimeFailure> {
         let requirement = self
             .kernel
@@ -1061,6 +1116,13 @@ impl EvidenceRuntime {
             reference_frameworks: requirement.reference_frameworks.clone().into_vec(),
             subjects,
             concepts,
+            // The channel is stated only where a second one is declared.
+            channel: requirement
+                .acquisition
+                .holder_presented
+                .as_ref()
+                .map(|_| channel),
+            alternatives: Vec::new(),
         })
     }
 
@@ -1997,6 +2059,8 @@ impl EvidenceRuntime {
             stage.valid_until,
             stage.acquisition_deadline,
         );
+        let (channel, valid_until_cap) =
+            construction_channel(stage.presented.as_deref(), source_valid_until);
         let facts = match stage.lookup {
             LookupResult::Match(facts) => facts,
             LookupResult::NoMatch | LookupResult::Ambiguous | LookupResult::Unresolved => {
@@ -2103,7 +2167,8 @@ impl EvidenceRuntime {
                     scope: evidence_scope(member_scope, &request.request_nonce),
                     issued_at,
                     observed_at,
-                    source_valid_until,
+                    source_valid_until: valid_until_cap,
+                    channel: channel.clone(),
                     subjects,
                 },
             ) {
@@ -2555,6 +2620,8 @@ impl EvidenceRuntime {
         };
         let subjects = self.subject_bindings(&item.resolved, &item.resolved.subject_scope)?;
         let evidence_id = format!("urn:ulid:{}", ulid::Ulid::generate());
+        let (channel, valid_until_cap) =
+            construction_channel(facts.presented.as_deref(), facts.valid_until);
         let evidence = self
             .kernel
             .construct_evidence(
@@ -2569,7 +2636,8 @@ impl EvidenceRuntime {
                     ),
                     issued_at,
                     observed_at,
-                    source_valid_until: facts.valid_until,
+                    source_valid_until: valid_until_cap,
+                    channel,
                     subjects,
                 },
             )
@@ -2607,12 +2675,13 @@ impl EvidenceRuntime {
             .kernel
             .requirement(&resolved.requirement)
             .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "requirement"))?;
+        let source_id = acquisition_source(&requirement.acquisition, resolved)?;
         let stage = self
             .execute_request_batch_source_stage(
                 audit_material,
                 item_index,
                 operation,
-                &requirement.acquisition.source,
+                source_id,
                 resolved,
                 requester,
                 started,
@@ -2624,6 +2693,7 @@ impl EvidenceRuntime {
                 Some(AcquiredFacts {
                     values,
                     valid_until: stage.valid_until,
+                    presented: stage.presented,
                 }),
                 stage.acquisition_deadline,
             )),
@@ -2677,6 +2747,7 @@ impl EvidenceRuntime {
             source_id,
             adapter_id,
             valid_until: lookup.valid_until,
+            presented: lookup.presented,
             acquisition_deadline: lookup.acquisition_deadline,
         })
     }
@@ -2715,7 +2786,7 @@ impl EvidenceRuntime {
             .kernel
             .requirement(&resolved.requirement)
             .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "requirement"))?;
-        let source_id = &requirement.acquisition.source;
+        let source_id = acquisition_source(&requirement.acquisition, resolved)?;
         let (source_id, adapter_id) = self.source_identity(source_id)?;
         let executor = self
             .sources
@@ -2765,6 +2836,7 @@ impl EvidenceRuntime {
             source_id,
             adapter_id,
             valid_until: lookup.valid_until,
+            presented: lookup.presented,
             acquisition_deadline: lookup.acquisition_deadline,
         })
     }
@@ -3160,6 +3232,116 @@ impl registry_adapter_engine::evidence::EvidenceHostHooks for SourceAccessIntent
     }
 }
 
+/// The one channel the subjects of a matched grant select, or `None` when the
+/// profiles select none or different ones (the runtime denies such a request).
+fn matched_channel(
+    acquisition: &AcquisitionConfig,
+    matched: &MatchedEntitlement,
+) -> Option<ChannelKind> {
+    let mut selected = None;
+    for subject in matched.subjects() {
+        let channel = acquisition.channel_for_profile(&subject.selector_profile)?;
+        if selected.is_some_and(|previous| previous != channel) {
+            return None;
+        }
+        selected = Some(channel);
+    }
+    selected
+}
+
+/// Fold the entries that share a handle into one. The only collision that
+/// folds is one definition granted on both of its channels for one purpose:
+/// the source channel's entry stays the entry and the holder-presented
+/// channel's shape becomes its alternative. Any other collision (two shapes on
+/// one channel, different purposes under one handle) refuses the complete
+/// document instead of publishing an arbitrary winner: a handle selects a
+/// complete definition, not merely a requirement URI, and one authenticated
+/// document must never make the public handle ambiguous. A channel is never
+/// added beyond the entries the caller's own grants produced.
+pub(crate) fn merge_channel_alternatives(
+    entries: Vec<EvidenceDefinition>,
+) -> Result<Vec<EvidenceDefinition>, RuntimeFailure> {
+    let mut order = Vec::with_capacity(entries.len());
+    let mut groups: BTreeMap<String, Vec<EvidenceDefinition>> = BTreeMap::new();
+    for entry in entries {
+        let group = groups.entry(entry.handle.clone()).or_default();
+        if group.is_empty() {
+            order.push(entry.handle.clone());
+        }
+        group.push(entry);
+    }
+    order
+        .into_iter()
+        .map(|handle| merge_handle_group(groups.remove(&handle).unwrap_or_default()))
+        .collect()
+}
+
+fn merge_handle_group(
+    mut group: Vec<EvidenceDefinition>,
+) -> Result<EvidenceDefinition, RuntimeFailure> {
+    let ambiguous = || {
+        failure(
+            ProblemCode::ServiceUnavailable,
+            "discovery-ambiguous-handle",
+        )
+    };
+    let Some(last) = group.pop() else {
+        return Err(ambiguous());
+    };
+    let Some(other) = group.pop() else {
+        // A source entry with no alternative states no channel, so a caller
+        // holding only the source grant of a two-channel definition receives
+        // exactly what a source-only definition produces.
+        return Ok(unalternated_source(last));
+    };
+    if !group.is_empty() || other.requirement != last.requirement || other.purpose != last.purpose {
+        return Err(ambiguous());
+    }
+    // The source channel's shape is the entry's own, so a client that ignores
+    // `alternatives` requests exactly as it always did.
+    let (mut source, presented) = match (other.channel, last.channel) {
+        (Some(ChannelKind::Source), Some(ChannelKind::HolderPresented)) => (other, last),
+        (Some(ChannelKind::HolderPresented), Some(ChannelKind::Source)) => (last, other),
+        _ => return Err(ambiguous()),
+    };
+    source.alternatives.push(EvidenceDefinitionAlternative {
+        channel: ChannelKind::HolderPresented,
+        response_formats: presented.response_formats,
+        subjects: presented.subjects,
+    });
+    Ok(source)
+}
+
+fn unalternated_source(mut entry: EvidenceDefinition) -> EvidenceDefinition {
+    if entry.channel == Some(ChannelKind::Source) {
+        entry.channel = None;
+    }
+    entry
+}
+
+/// The one Source a request may acquire through. Each subject's selector
+/// profile selects a channel, and the request's profiles must all select the
+/// same one: a request on a source profile never reaches the holder-presented
+/// Source, and a request on a holder-presented profile never reaches the
+/// source channel's. A profile that selects no channel, or subjects that
+/// select different channels, are refused before any source effect.
+pub(crate) fn acquisition_source<'a>(
+    acquisition: &'a AcquisitionConfig,
+    resolved: &ResolvedAuthorization,
+) -> Result<&'a str, RuntimeFailure> {
+    let mut selected = None;
+    for subject in &resolved.subjects {
+        let source = acquisition
+            .source_for_profile(&subject.selector_profile)
+            .ok_or_else(|| failure(ProblemCode::NotAuthorized, "acquisition-channel"))?;
+        if selected.is_some_and(|previous| previous != source) {
+            return Err(failure(ProblemCode::NotAuthorized, "acquisition-channel"));
+        }
+        selected = Some(source);
+    }
+    selected.ok_or_else(|| failure(ProblemCode::NotAuthorized, "acquisition-channel"))
+}
+
 /// The shared value-free source failure classification used by serving and offline tooling.
 pub fn pack_source_failure(error: PackSourceError) -> RuntimeFailure {
     let (problem, category) = match error {
@@ -3228,12 +3410,14 @@ struct SourceStageOutcome {
     source_id: String,
     adapter_id: String,
     valid_until: Option<chrono::DateTime<Utc>>,
+    presented: Option<Arc<PresentedFacts>>,
     acquisition_deadline: tokio::time::Instant,
 }
 
 struct AcquiredFacts {
     values: BTreeMap<String, Value>,
     valid_until: Option<chrono::DateTime<Utc>>,
+    presented: Option<Arc<PresentedFacts>>,
 }
 
 struct AuditCaller {

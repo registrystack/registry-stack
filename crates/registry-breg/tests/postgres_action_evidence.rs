@@ -623,10 +623,13 @@ async fn signed_evidence_actions_release_postgres_and_commit_atomic_transcripts(
         "inactive status skips optional category"
     );
     assert_eq!(counts(&database, &registry).await, committed);
-    for mode in ["nonce", "expired"] {
+    for mode in ["nonce", "expired", "holder-presented"] {
         provider.mode(mode);
         let failed = send(app.clone(), ACTION, mode, input(mode, true), true).await;
         assert!(!failed.0.is_success(), "{}", failed.1);
+        if mode == "holder-presented" {
+            assert_eq!(failed.1["code"], "action.evidence_failed");
+        }
         assert_eq!(counts(&database, &registry).await, committed);
     }
     provider.mode("");

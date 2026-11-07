@@ -49,7 +49,7 @@ impl EvidenceProvider {
                 let category = requirement.ends_with("category-v1");
                 let mut payload = json!({
                     "schema":registry_evidence_verifier::EVIDENCE_SCHEMA_V1,
-                    "assuranceProfile":"local", "subjectBinding":"audience-scoped", "requestNonce":request["requestNonce"],
+                    "assuranceProfile":"local", "channel":"source", "subjectBinding":"audience-scoped", "requestNonce":request["requestNonce"],
                     "id":format!("urn:example:evidence:{}", uuid::Uuid::new_v4()), "type":"Evidence",
                     "supportsRequirement":requirement, "isConformantTo":if category {"urn:example:farmer:category-evidence"} else {"urn:example:farmer:status-evidence"},
                     "issuedBy":"urn:example:farmer-authority", "providedBy":"urn:example:farmer-registry", "purpose":"land-registration", "audience":"urn:example:landholding",
@@ -59,6 +59,15 @@ impl EvidenceProvider {
                     "supportedValues":[{"providesValueFor":if category {"urn:example:farmer:category"} else {"urn:example:farmer:active"}, "value":if category {json!("smallholder")} else {json!(mode != "inactive")}}]
                 });
                 if mode == "nonce" { payload["requestNonce"] = json!("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"); }
+                if mode == "holder-presented" {
+                    payload["channel"] = json!("holder-presented");
+                    payload["presentedCredential"] = json!({
+                        "trustEntry":"national-id", "issuer":"https://issuer.example",
+                        "type":"https://credentials.example/identity",
+                        "issuedAt":(now - chrono::Duration::seconds(30)).to_rfc3339(),
+                        "subjectLink":"attribute-match"
+                    });
+                }
                 if mode == "expired" { payload["validUntil"] = json!((now - chrono::Duration::seconds(1)).to_rfc3339()); }
                 let protected = URL_SAFE_NO_PAD.encode(json!({"alg":"ES256","kid":key.kid,"typ":registry_evidence_verifier::EVIDENCE_JWS_TYP,"cty":registry_evidence_verifier::EVIDENCE_JWS_CTY}).to_string());
                 let payload = URL_SAFE_NO_PAD.encode(payload.to_string());

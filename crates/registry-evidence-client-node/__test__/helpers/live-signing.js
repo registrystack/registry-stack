@@ -105,6 +105,7 @@ function evidenceFor(spec, nonce) {
     schema: EVIDENCE_SCHEMA_V1,
     assuranceProfile: spec.expectedAssuranceProfile,
     subjectBinding: 'audience-scoped',
+    channel: 'source',
     requestNonce: nonce,
     id: 'urn:example:node-test:evidence:1',
     type: 'Evidence',
@@ -123,11 +124,35 @@ function evidenceFor(spec, nonce) {
   };
 }
 
+/**
+ * The same assertion, stated as obtained from a credential a holder presented.
+ * `credentialAgeMillis` is how long before the observation the credential was
+ * issued.
+ */
+function holderPresentedEvidenceFor(spec, nonce, credentialAgeMillis) {
+  const evidence = evidenceFor(spec, nonce);
+  const issuedAt = new Date(Date.parse(evidence.observedAt) - credentialAgeMillis)
+    .toISOString()
+    .replace(/\.\d+Z$/, 'Z');
+  return {
+    ...evidence,
+    channel: 'holder-presented',
+    presentedCredential: {
+      trustEntry: 'national-id',
+      issuer: 'https://issuer.example',
+      type: 'https://credentials.example/identity',
+      issuedAt,
+      subjectLink: 'attribute-match',
+    },
+  };
+}
+
 module.exports = {
   generateSigningKey,
   signEvidence,
   requestSpec,
   evidenceFor,
+  holderPresentedEvidenceFor,
   SUBJECT_BINDING,
   EVIDENCE_JWS_MEDIA_TYPE,
 };

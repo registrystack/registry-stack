@@ -116,6 +116,46 @@ fn encrypted_field_shape_round_trips_and_defaults_stay_absent() {
 }
 
 #[test]
+fn unicode_normalization_steps_are_authored_by_name_and_compile() {
+    let source: FieldSource = serde_json::from_value(json!({
+        "id":"secret","type":"string","maximumLength":256,"classification":"restricted",
+        "encrypted":true,"lookup":{"normalization":["trim","nfc","case-fold"],"unique":true}
+    }))
+    .unwrap();
+    let lookup = source.lookup.as_ref().unwrap();
+    assert_eq!(
+        lookup.normalization,
+        [
+            NormalizationStep::Trim,
+            NormalizationStep::Nfc,
+            NormalizationStep::CaseFold
+        ]
+    );
+    assert_eq!(
+        serde_json::to_value(&source).unwrap()["lookup"]["normalization"],
+        json!(["trim", "nfc", "case-fold"])
+    );
+
+    let mut project = encrypted_project();
+    project["recordTypes"][0]["fields"][1]["lookup"] =
+        json!({"normalization":["trim","nfc","case-fold"],"unique":true});
+    let registry = compile_value(&project).expect("the Unicode steps compile");
+    let blind = encrypted_field(&registry)
+        .encryption
+        .as_ref()
+        .and_then(|encryption| encryption.blind_index.as_ref())
+        .expect("the lookup compiles to a blind index");
+    assert_eq!(
+        blind.normalization,
+        [
+            NormalizationStep::Trim,
+            NormalizationStep::Nfc,
+            NormalizationStep::CaseFold
+        ]
+    );
+}
+
+#[test]
 fn encrypted_field_shape_refuses_unsupported_declarations() {
     for (field, because) in [
         (
@@ -792,9 +832,9 @@ fn encryption_flip_change_sets_classify_without_a_physical_rename() {
         .all(|change| change.code != Code::FieldPhysicalNameChanged));
     assert!(change_set_to_applicable_migration_plan(&flip_off).is_err());
 
-    // Existing envelopes are the only source values, so every lookup change on
-    // an already-encrypted field stays unsupported until a dedicated keyed
-    // blind-index backfill exists.
+    // Existing envelopes are the only source values. Only a normalization-list
+    // change on a field whose blind index keeps its column and uniqueness has
+    // an engine re-index; every other lookup change stays unsupported.
     let lookup_on = compiled_registry_change_set(&encrypted_plain_lookup, &encrypted_unique, prior);
     assert!(lookup_on.changes.iter().any(
         |change| change.code == Code::FieldLookupChanged && change.class == Class::Unsupported
@@ -806,9 +846,29 @@ fn encryption_flip_change_sets_classify_without_a_physical_rename() {
     ));
     let rekeyed = compile(Some(json!({"normalization":["lowercase"],"unique":true})));
     let lookup_rekeyed = compiled_registry_change_set(&encrypted_unique, &rekeyed, prior);
-    assert!(lookup_rekeyed.changes.iter().any(
-        |change| change.code == Code::FieldLookupChanged && change.class == Class::Unsupported
+    assert!(lookup_rekeyed
+        .changes
+        .iter()
+        .any(|change| change.code == Code::FieldLookupChanged
+            && change.class == Class::DataBackfillRequired));
+    assert!(
+        change_set_to_applicable_migration_plan(&lookup_rekeyed).is_err(),
+        "a re-index is a reviewed backfill, never a compiler-applicable plan"
+    );
+    let unicode = compile(Some(
+        json!({"normalization":["nfc","case-fold"],"unique":true}),
     ));
+    let lookup_unicode = compiled_registry_change_set(&encrypted_unique, &unicode, prior);
+    assert!(lookup_unicode
+        .changes
+        .iter()
+        .any(|change| change.code == Code::FieldLookupChanged
+            && change.class == Class::DataBackfillRequired));
+    let unchanged = compiled_registry_change_set(&encrypted_unique, &encrypted_unique, prior);
+    assert!(unchanged
+        .changes
+        .iter()
+        .all(|change| change.code != Code::FieldLookupChanged));
     let lookup_lost =
         compiled_registry_change_set(&encrypted_plain_lookup, &encrypted_no_lookup, prior);
     assert!(lookup_lost.changes.iter().any(

@@ -25,7 +25,7 @@ use registry_evidence::config::SelectorInput;
 use registry_evidence::kernel::{
     EvidenceConstruction, EvidenceScope, OfflineKernel, ValueProjection,
 };
-use registry_evidence::model::{LookupResult, PublicValue, SubjectBinding};
+use registry_evidence::model::{AssertionChannel, LookupResult, PublicValue, SubjectBinding};
 use registry_evidence::pack_source::build_sources;
 use registry_evidence::secrets::{SecretProvider, SecretResolver};
 use registry_evidence::selector::{resolve_offline_fixture_authorization, ResolvedAuthorization};
@@ -503,6 +503,7 @@ async fn a_protected_registry_read_backs_a_full_signed_minimum_disclosure_assert
                 issued_at: observed_at,
                 observed_at,
                 source_valid_until: None,
+                channel: AssertionChannel::Source,
                 subjects,
             },
         )

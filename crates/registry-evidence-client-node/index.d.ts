@@ -64,7 +64,7 @@ export declare class EvidenceClient {
    * a multi-subject request batch. No I/O happens here, and the returned
    * opaque batch is good for exactly one exchange.
    */
-  prepareBatch(spec: { requirement: string; purpose: string; audience: string; evidenceType: string; issuedBy: string; providedBy: string; configurationRevision: string; expectedAssuranceProfile: any; expectedOutputs: ReadonlyArray<Readonly<Record<string, any>>>; maximumAssertionLifetimeSeconds: number; clockSkewSeconds: number; items: ReadonlyArray<{ subjects: ReadonlyArray<{ role: string; selectorProfile: string; selectorValues?: Readonly<Record<string, string | number | boolean>> | null }>; subjectExpectations: 'acceptFirstUse' | { pinned: ReadonlyArray<{ role: string; binding: string }> } }> }): PreparedEvidenceRequestBatch
+  prepareBatch(spec: { requirement: string; purpose: string; audience: string; evidenceType: string; issuedBy: string; providedBy: string; configurationRevision: string; expectedAssuranceProfile: any; expectedOutputs: ReadonlyArray<Readonly<Record<string, any>>>; maximumAssertionLifetimeSeconds: number; clockSkewSeconds: number; acceptedChannels?: ReadonlyArray<'source' | 'holder-presented'>; maximumCredentialAgeSeconds?: number; items: ReadonlyArray<{ subjects: ReadonlyArray<{ role: string; selectorProfile: string; selectorValues?: Readonly<Record<string, string | number | boolean>> | null }>; subjectExpectations: 'acceptFirstUse' | { pinned: ReadonlyArray<{ role: string; binding: string }> } }> }): PreparedEvidenceRequestBatch
   /**
    * Read the request shapes this requester is entitled to send. Discovery
    * is authoring input, not a trust anchor: it never supplies verification
@@ -283,7 +283,11 @@ export type SubjectContinuity =
  * opaque.
  */
 export interface VerifiedEvidence {
-  /** The verified payload, serialized field for field with no hand mapping. */
+  /**
+   * The verified payload, serialized field for field with no hand mapping.
+   * Its `channel` is `source` or `holder-presented`, and a
+   * `holder-presented` payload also carries `presentedCredential`.
+   */
   evidence: any
   /**
    * The validated W3C trace identifier for the exchange that produced this

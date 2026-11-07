@@ -26,6 +26,7 @@ schema = [
   "dep:schemars",
   "registry-platform-audit/schema",
   "registry-platform-config/schema",
+  "registry-platform-oidc/schema",
   "registry-platform-yaml/schema",
 ]
 # Enables the PostgreSQL half of the storage contract. It requires
@@ -36,7 +37,9 @@ postgres-test = []
 async-trait.workspace = true
 axum.workspace = true
 base64.workspace = true
-# zeroize wipes the cipher's own copy of the sealing key when it drops.
+# The zeroize feature wipes the cipher's own copy of the sealing key when it
+# drops, including the cipher inside `xchacha_seal`, which this crate shares it
+# with. The tests build the cipher directly to pin the stored record form.
 chacha20poly1305 = { workspace = true, features = ["zeroize"] }
 chrono.workspace = true
 clap.workspace = true
@@ -48,8 +51,11 @@ registry-evidence-verifier.workspace = true
 registry-platform-audit.workspace = true
 registry-platform-buildinfo.workspace = true
 registry-platform-config.workspace = true
-registry-platform-crypto.workspace = true
+registry-platform-crypto = { workspace = true, features = ["xchacha-seal"] }
+registry-platform-httpsec = { workspace = true, features = ["server"] }
+registry-platform-ratelimit.workspace = true
 registry-platform-httputil.workspace = true
+registry-platform-metrics.workspace = true
 registry-platform-oidc.workspace = true
 registry-platform-sdjwt.workspace = true
 registry-platform-yaml.workspace = true

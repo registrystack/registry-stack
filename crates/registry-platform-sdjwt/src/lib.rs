@@ -1,23 +1,34 @@
 // SPDX-License-Identifier: Apache-2.0
 //! SD-JWT VC issuance and holder-proof validation helpers.
 
+use async_trait::async_trait;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
-use registry_platform_crypto::{
-    parse_json_strict, verify, JwkError, LocalJwkSigner, PrivateJwk, PublicJwk, SigningAlgorithm,
-    SigningError, SigningProvider,
+use registry_platform_crypto::jws::{
+    parse_compact_jws, sign_compact_jws, CompactJws, JwsError, JwsLimits,
 };
+use registry_platform_crypto::mac::constant_time_eq;
+use registry_platform_crypto::{
+    parse_json_strict, verify, JwkError, KeyReadiness, LocalJwkSigner, PrivateJwk, PublicJwk,
+    SigningAlgorithm, SigningError, SigningProvider,
+};
+use registry_platform_x509::CertifiedSigner;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
-use subtle::ConstantTimeEq;
 use thiserror::Error;
 use ulid::Ulid;
 
-const HOLDER_PROOF_ALLOWED_ALGORITHM: SigningAlgorithm = SigningAlgorithm::EdDsa;
+pub mod presentation;
+
+pub use presentation::{
+    parse_presentation, resolve_disclosures, sd_hash, ParsedPresentation, PresentationError,
+    SdJwtLimits,
+};
+
 const KEY_BINDING_ALLOWED_ALGORITHM: SigningAlgorithm = SigningAlgorithm::Es256;
 const OID4VCI_PROOF_ALLOWED_ALGORITHM: SigningAlgorithm = SigningAlgorithm::Es256;
 
@@ -63,6 +74,8 @@ const MAXIMUM_OID4VCI_DID_JWK_BYTES: usize = 2_048;
 #[derive(Clone)]
 pub struct SdJwtIssuer {
     signer: Arc<dyn SigningProvider>,
+    /// Certificate chain for the `x5c` header of issued credentials, leaf first.
+    x5c: Option<Vec<String>>,
 }
 
 impl fmt::Debug for SdJwtIssuer {
@@ -70,6 +83,7 @@ impl fmt::Debug for SdJwtIssuer {
         f.debug_struct("SdJwtIssuer")
             .field("alg", &self.signer.algorithm())
             .field("kid", &self.signer.key_id())
+            .field("x5c", &self.x5c.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -82,7 +96,18 @@ impl SdJwtIssuer {
 
     #[must_use]
     pub fn from_signing_provider(signer: Arc<dyn SigningProvider>) -> Self {
-        Self { signer }
+        Self { signer, x5c: None }
+    }
+
+    /// An issuer whose credentials carry the signer's certificate chain in the
+    /// `x5c` header. The chain is not validated here; relying parties validate
+    /// it against their own trust anchors.
+    #[must_use]
+    pub fn from_certified_signer(certified: CertifiedSigner) -> Self {
+        Self {
+            signer: Arc::clone(certified.signer()),
+            x5c: Some(certified.x5c()),
+        }
     }
 
     pub async fn issue(&self, input: SdJwtIssuanceInput) -> Result<SignedSdJwt, SdJwtError> {
@@ -150,12 +175,12 @@ impl SdJwtIssuer {
             );
         }
 
-        let header = json!({
-            "alg": self.signer.algorithm().jwa_name(),
-            "typ": "dc+sd-jwt",
-            "kid": self.signer.key_id(),
-        });
-        let jwt = sign_jwt(header, Value::Object(payload), self.signer.as_ref()).await?;
+        let mut header = Map::new();
+        header.insert("typ".to_string(), json!("dc+sd-jwt"));
+        if let Some(x5c) = &self.x5c {
+            header.insert("x5c".to_string(), json!(x5c));
+        }
+        let jwt = sign_jwt(header, &Value::Object(payload), self.signer.as_ref()).await?;
         Ok(SignedSdJwt {
             credential_id: credential_id.clone(),
             jti: credential_id,
@@ -167,12 +192,9 @@ impl SdJwtIssuer {
         if typ.trim().is_empty() || self.signer.key_id().trim().is_empty() {
             return Err(SdJwtError::Signing(SigningError::MissingKeyId));
         }
-        let header = json!({
-            "alg": self.signer.algorithm().jwa_name(),
-            "typ": typ,
-            "kid": self.signer.key_id(),
-        });
-        sign_jwt(header, payload, self.signer.as_ref()).await
+        let mut header = Map::new();
+        header.insert("typ".to_string(), json!(typ));
+        sign_jwt(header, &payload, self.signer.as_ref()).await
     }
 }
 
@@ -307,119 +329,6 @@ pub fn sort_sd_digests(digests: &mut Vec<String>) {
     digests.sort_unstable();
 }
 
-#[derive(Clone, Debug)]
-pub struct HolderProofPolicy {
-    pub audience: String,
-    pub max_lifetime: Duration,
-}
-
-#[derive(Clone, Debug)]
-pub struct HolderProofBindings<'a> {
-    pub expected_sub: &'a str,
-    pub evaluation_id: &'a str,
-    pub credential_profile: &'a str,
-    pub disclosure_hash: &'a [u8],
-    pub claim_set: &'a [String],
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct HolderProofClaims {
-    pub sub: String,
-    pub aud: String,
-    pub iat: i64,
-    pub exp: i64,
-    pub jti: String,
-    pub raw: Value,
-}
-
-pub fn validate_holder_proof(
-    proof_jwt: &str,
-    holder_jwk: &PublicJwk,
-    bindings: &HolderProofBindings<'_>,
-    policy: &HolderProofPolicy,
-    now: i64,
-) -> Result<HolderProofClaims, SdJwtError> {
-    let (header_b64, payload_b64, signature_b64) = split_compact_jwt(proof_jwt)?;
-    let header = decode_json(header_b64)?;
-    require_holder_proof_algorithm(&header, holder_jwk, HOLDER_PROOF_ALLOWED_ALGORITHM)?;
-    if header.get("typ").and_then(Value::as_str) != Some("kb+jwt") {
-        return Err(SdJwtError::HolderProofInvalid);
-    }
-    for forbidden in ["crit", "jku", "jwk", "x5u", "x5c"] {
-        if header.get(forbidden).is_some() {
-            return Err(SdJwtError::HolderProofInvalid);
-        }
-    }
-    let signature = URL_SAFE_NO_PAD
-        .decode(signature_b64)
-        .map_err(|_| SdJwtError::HolderProofInvalid)?;
-    let signing_input = format!("{header_b64}.{payload_b64}");
-    verify(signing_input.as_bytes(), &signature, holder_jwk)
-        .map_err(|_| SdJwtError::HolderProofInvalid)?;
-
-    let raw = decode_json(payload_b64)?;
-    let sub = required_string(&raw, "sub")?;
-    let aud = required_audience(&raw, &policy.audience)?;
-    let iat = required_i64(&raw, "iat")?;
-    let exp = required_i64(&raw, "exp")?;
-    let jti = required_string(&raw, "jti")?;
-    if jti.is_empty() || jti.starts_with("urn:ulid:") {
-        return Err(SdJwtError::HolderProofInvalid);
-    }
-    if sub != bindings.expected_sub {
-        return Err(SdJwtError::HolderProofInvalid);
-    }
-    if raw.get("evaluation_id").and_then(Value::as_str) != Some(bindings.evaluation_id) {
-        return Err(SdJwtError::HolderProofInvalid);
-    }
-    if raw.get("credential_profile").and_then(Value::as_str) != Some(bindings.credential_profile) {
-        return Err(SdJwtError::HolderProofInvalid);
-    }
-    let expected_disclosure = URL_SAFE_NO_PAD.encode(bindings.disclosure_hash);
-    if raw.get("disclosure").and_then(Value::as_str) != Some(expected_disclosure.as_str()) {
-        return Err(SdJwtError::HolderProofInvalid);
-    }
-    if raw.get("claims") != Some(&json!(bindings.claim_set)) {
-        return Err(SdJwtError::HolderProofInvalid);
-    }
-    let max_lifetime = i64::try_from(policy.max_lifetime.as_secs()).unwrap_or(i64::MAX);
-    if iat < now - 120 || iat > now + 30 || exp <= iat || exp > iat + max_lifetime || exp <= now {
-        return Err(SdJwtError::HolderProofInvalid);
-    }
-
-    Ok(HolderProofClaims {
-        sub: sub.to_string(),
-        aud,
-        iat,
-        exp,
-        jti: jti.to_string(),
-        raw,
-    })
-}
-
-/// Validate a holder proof against the holder confirmation embedded in the
-/// issuer-signed credential.
-///
-/// This is the preferred verifier entry point for SD-JWT VC presentations. It
-/// prevents callers from accidentally trusting a holder key that did not come
-/// from the credential's `cnf.jwk`, and when `cnf.kid` is present it requires
-/// the holder proof header to carry that exact `kid`.
-pub fn validate_holder_proof_for_confirmation(
-    proof_jwt: &str,
-    confirmation: &HolderConfirmation,
-    bindings: &HolderProofBindings<'_>,
-    policy: &HolderProofPolicy,
-    now: i64,
-) -> Result<HolderProofClaims, SdJwtError> {
-    if let Some(expected_kid) = confirmation.kid.as_deref() {
-        let actual_kid = holder_proof_header_kid(proof_jwt)?;
-        if actual_kid.as_deref() != Some(expected_kid) {
-            return Err(SdJwtError::HolderProofInvalid);
-        }
-    }
-    validate_holder_proof(proof_jwt, &confirmation.jwk, bindings, policy, now)
-}
-
 /// Compute the platform-owned disclosure binding hash for a presentation.
 #[must_use]
 pub fn presentation_disclosure_hash(presentation: &str) -> [u8; 32] {
@@ -450,6 +359,48 @@ impl fmt::Debug for KeyBindingPolicy {
             .field("max_age", &self.max_age)
             .field("max_future_skew", &self.max_future_skew)
             .finish_non_exhaustive()
+    }
+}
+
+/// How claims beyond the four RFC 9901 section 4.3 names are treated.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum KeyBindingExtraClaims {
+    /// The payload carries exactly the four claims; anything more is refused.
+    #[default]
+    Strict,
+    /// Unknown claims are ignored, as RFC 9901 section 4.3 permits. The four
+    /// named claims are still required.
+    IgnoreUnknown,
+}
+
+/// Algorithm and payload choices for a key-binding JWT, beside the
+/// [`KeyBindingPolicy`] challenge. The default is the profile
+/// [`validate_key_binding_jwt`] enforces: ES256 only, no extra claims.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyBindingOptions {
+    /// Algorithms the JWT header may name. The holder key must use the same one.
+    pub allowed_algorithms: Vec<SigningAlgorithm>,
+    pub extra_claims: KeyBindingExtraClaims,
+}
+
+impl Default for KeyBindingOptions {
+    fn default() -> Self {
+        Self {
+            allowed_algorithms: vec![KEY_BINDING_ALLOWED_ALGORITHM],
+            extra_claims: KeyBindingExtraClaims::Strict,
+        }
+    }
+}
+
+impl KeyBindingOptions {
+    /// The options for a holder wallet this verifier does not control: ES256
+    /// and EdDSA, and unknown claims ignored.
+    #[must_use]
+    pub fn third_party() -> Self {
+        Self {
+            allowed_algorithms: vec![SigningAlgorithm::Es256, SigningAlgorithm::EdDsa],
+            extra_claims: KeyBindingExtraClaims::IgnoreUnknown,
+        }
     }
 }
 
@@ -624,21 +575,73 @@ pub fn validate_key_binding_jwt(
     policy: &KeyBindingPolicy,
     now: i64,
 ) -> Result<KeyBindingClaims, SdJwtError> {
-    let (header_b64, payload_b64, signature_b64) =
-        split_compact_jwt(kb_jwt).map_err(|_| SdJwtError::KeyBindingInvalid)?;
-    let header = decode_strict_json(header_b64).map_err(|_| SdJwtError::KeyBindingInvalid)?;
-    require_key_binding_header(&header, confirmation)?;
+    validate_key_binding(
+        kb_jwt,
+        &confirmation.jwk,
+        confirmation.kid.as_deref(),
+        sd_hash_input,
+        policy,
+        &KeyBindingOptions::default(),
+        now,
+    )
+}
 
-    let signature = URL_SAFE_NO_PAD
-        .decode(signature_b64)
-        .map_err(|_| SdJwtError::KeyBindingInvalid)?;
-    let signing_input = format!("{header_b64}.{payload_b64}");
-    verify(signing_input.as_bytes(), &signature, &confirmation.jwk)
+/// Validate a key-binding JWT against a holder key the caller already resolved
+/// (for example from the credential's `cnf`), under the stated `options`.
+///
+/// The checks and their order are those of [`validate_key_binding_jwt`], with
+/// two policy choices handed to the caller: the algorithms the JWT may use, and
+/// whether claims beyond the four RFC 9901 section 4.3 names are refused or
+/// ignored. `typ` must be `kb+jwt`, `aud` must equal `policy.audience` exactly
+/// (callers pass the complete, prefixed OpenID4VP `client_id`), `nonce` is
+/// compared in constant time, `iat` must lie in the policy window, and
+/// `sd_hash` must match `sd_hash_input`. The header allowlist stays closed under
+/// both policies.
+///
+/// `PublicJwk::kid` is not compared with the header `kid`; a caller that holds
+/// an issuer-stated `cnf.kid` uses [`validate_key_binding_jwt`] instead.
+pub fn validate_key_binding_jwt_with_options(
+    kb_jwt: &str,
+    holder_jwk: &PublicJwk,
+    sd_hash_input: &str,
+    policy: &KeyBindingPolicy,
+    options: &KeyBindingOptions,
+    now: i64,
+) -> Result<KeyBindingClaims, SdJwtError> {
+    validate_key_binding(
+        kb_jwt,
+        holder_jwk,
+        None,
+        sd_hash_input,
+        policy,
+        options,
+        now,
+    )
+}
+
+fn validate_key_binding(
+    kb_jwt: &str,
+    holder_jwk: &PublicJwk,
+    expected_kid: Option<&str>,
+    sd_hash_input: &str,
+    policy: &KeyBindingPolicy,
+    options: &KeyBindingOptions,
+    now: i64,
+) -> Result<KeyBindingClaims, SdJwtError> {
+    let jws = parse_jws(kb_jwt).map_err(|_| SdJwtError::KeyBindingInvalid)?;
+    require_key_binding_header(
+        &header_value(&jws),
+        holder_jwk,
+        expected_kid,
+        &options.allowed_algorithms,
+    )?;
+    let payload = jws
+        .verify(holder_jwk, &options.allowed_algorithms)
         .map_err(|_| SdJwtError::KeyBindingInvalid)?;
 
-    let payload = decode_strict_json(payload_b64).map_err(|_| SdJwtError::KeyBindingInvalid)?;
-    let members = closed_payload(&payload, &KEY_BINDING_PAYLOAD_CLAIMS)
-        .ok_or(SdJwtError::KeyBindingInvalid)?;
+    let payload = parse_json_strict(payload).map_err(|_| SdJwtError::KeyBindingInvalid)?;
+    let members =
+        key_binding_payload(&payload, options.extra_claims).ok_or(SdJwtError::KeyBindingInvalid)?;
 
     let nonce = required_member_str(members, "nonce").ok_or(SdJwtError::KeyBindingInvalid)?;
     if !constant_time_eq(nonce.as_bytes(), policy.nonce.as_bytes()) {
@@ -697,19 +700,21 @@ pub fn validate_oid4vci_proof_jwt(
     now: i64,
 ) -> Result<Oid4vciProofClaims, SdJwtError> {
     let format = || SdJwtError::Oid4vciProofInvalid(Oid4vciProofCheck::Format);
-    let (header_b64, payload_b64, signature_b64) =
-        split_compact_jwt(proof_jwt).map_err(|_| format())?;
-    let header = decode_strict_json(header_b64).map_err(|_| format())?;
-    let holder_jwk = require_oid4vci_proof_header(&header)?;
+    // A `crit` or `b64` header is refused while parsing; it is reported as the
+    // header-parameter failure it is, like any other unreviewed parameter.
+    let jws = parse_jws(proof_jwt).map_err(|err| match err {
+        JwsError::UnsupportedHeader => {
+            SdJwtError::Oid4vciProofInvalid(Oid4vciProofCheck::HeaderParameters)
+        }
+        _ => format(),
+    })?;
+    let holder_jwk = require_oid4vci_proof_header(&header_value(&jws))?;
 
-    let signature = URL_SAFE_NO_PAD
-        .decode(signature_b64)
-        .map_err(|_| SdJwtError::Oid4vciProofInvalid(Oid4vciProofCheck::Signature))?;
-    let signing_input = format!("{header_b64}.{payload_b64}");
-    verify(signing_input.as_bytes(), &signature, &holder_jwk)
+    let payload = jws
+        .verify(&holder_jwk, &[OID4VCI_PROOF_ALLOWED_ALGORITHM])
         .map_err(|_| SdJwtError::Oid4vciProofInvalid(Oid4vciProofCheck::Signature))?;
 
-    let payload = decode_strict_json(payload_b64).map_err(|_| format())?;
+    let payload = parse_json_strict(payload).map_err(|_| format())?;
     let members = payload.as_object().ok_or_else(format)?;
     // OpenID4VCI 1.0 sends `iss` only from a wallet that authenticated as an
     // OAuth client. A pre-authorized code flow has no such client, so `iss`
@@ -790,6 +795,8 @@ pub enum SdJwtError {
     Oid4vciProofKeyReferenceUnsupported,
     #[error("OpenID4VCI proof JWT carries `iss` but no authenticated client identity backs it")]
     Oid4vciProofIssuerPresent,
+    #[error("invalid SD-JWT presentation: {0}")]
+    Presentation(#[from] PresentationError),
 }
 
 fn map_signing_error(err: SigningError) -> SdJwtError {
@@ -805,12 +812,12 @@ fn map_signing_error(err: SigningError) -> SdJwtError {
 // This parser recognizes EdDSA, ES256, and RS256, a narrower set than
 // `SdJwtIssuer::issue` can emit through `self.signer.algorithm().jwa_name()`,
 // which also covers ES384 and RS384. The gap is unreachable: this parser's only
-// caller is `require_holder_proof_algorithm`, which is pinned to
-// `HOLDER_PROOF_ALLOWED_ALGORITHM = SigningAlgorithm::EdDsa`, so a header naming
-// an algorithm this function does not recognize is rejected here, and a header
-// naming any algorithm other than EdDSA is rejected by the pin regardless of
-// whether this function would have parsed it. Widening the holder-proof pin to
-// accept another algorithm must add the matching arm here first.
+// caller is `require_holder_proof_algorithm`, whose callers pass allow-lists
+// drawn from ES256 and EdDSA, so a header naming an algorithm this function
+// does not recognize is rejected here, and a header naming any algorithm
+// outside the allow-list is rejected by the allow-list regardless of whether
+// this function would have parsed it. Widening an allow-list to accept another
+// algorithm must add the matching arm here first.
 fn signing_algorithm_from_jwa(alg: &str) -> Option<SigningAlgorithm> {
     match alg {
         "EdDSA" => Some(SigningAlgorithm::EdDsa),
@@ -823,7 +830,7 @@ fn signing_algorithm_from_jwa(alg: &str) -> Option<SigningAlgorithm> {
 fn require_holder_proof_algorithm(
     header: &Value,
     holder_jwk: &PublicJwk,
-    allowed_algorithm: SigningAlgorithm,
+    allowed_algorithms: &[SigningAlgorithm],
 ) -> Result<(), SdJwtError> {
     let header_algorithm = header
         .get("alg")
@@ -834,7 +841,7 @@ fn require_holder_proof_algorithm(
         .algorithm()
         .map_err(|_| SdJwtError::HolderProofInvalid)?;
 
-    if header_algorithm != allowed_algorithm || jwk_algorithm != header_algorithm {
+    if !allowed_algorithms.contains(&header_algorithm) || jwk_algorithm != header_algorithm {
         return Err(SdJwtError::HolderProofInvalid);
     }
     Ok(())
@@ -844,19 +851,21 @@ fn require_holder_proof_algorithm(
 /// closed allowlist, then the issuer-stated `kid`.
 fn require_key_binding_header(
     header: &Value,
-    confirmation: &HolderConfirmation,
+    holder_jwk: &PublicJwk,
+    expected_kid: Option<&str>,
+    allowed_algorithms: &[SigningAlgorithm],
 ) -> Result<(), SdJwtError> {
     if header.get("typ").and_then(Value::as_str) != Some(KEY_BINDING_TYP) {
         return Err(SdJwtError::KeyBindingInvalid);
     }
-    require_holder_proof_algorithm(header, &confirmation.jwk, KEY_BINDING_ALLOWED_ALGORITHM)
+    require_holder_proof_algorithm(header, holder_jwk, allowed_algorithms)
         .map_err(|_| SdJwtError::KeyBindingInvalid)?;
     if !header_parameters_are_reviewed(header, &KEY_BINDING_HEADER_PARAMETERS, &[]) {
         return Err(SdJwtError::KeyBindingInvalid);
     }
     // When the issuer named a `cnf.kid`, the presenter has to repeat it, so a
     // holder with several confirmed keys cannot silently swap between them.
-    if let Some(expected_kid) = confirmation.kid.as_deref() {
+    if let Some(expected_kid) = expected_kid {
         if header.get("kid").and_then(Value::as_str) != Some(expected_kid) {
             return Err(SdJwtError::KeyBindingInvalid);
         }
@@ -875,7 +884,7 @@ fn require_oid4vci_proof_header(header: &Value) -> Result<PublicJwk, SdJwtError>
         ));
     }
     let holder_jwk = oid4vci_proof_key(header)?;
-    require_holder_proof_algorithm(header, &holder_jwk, OID4VCI_PROOF_ALLOWED_ALGORITHM)
+    require_holder_proof_algorithm(header, &holder_jwk, &[OID4VCI_PROOF_ALLOWED_ALGORITHM])
         .map_err(|_| SdJwtError::Oid4vciProofInvalid(Oid4vciProofCheck::HeaderAlgorithm))?;
     if !header_parameters_are_reviewed(header, &OID4VCI_PROOF_HEADER_PARAMETERS, &["jwk"]) {
         return Err(SdJwtError::Oid4vciProofInvalid(
@@ -1009,8 +1018,8 @@ fn parse_oid4vci_proof_jwk(jwk: &Value) -> Result<PublicJwk, SdJwtError> {
 /// Enforce a closed header allowlist.
 ///
 /// Rejecting everything the validator has not reviewed already subsumes the
-/// `crit`, `jku`, `jwk`, `x5u`, and `x5c` denylist that `validate_holder_proof`
-/// applies. Those five are still named, so widening an allowlist to include one
+/// `crit`, `jku`, `jwk`, `x5u`, and `x5c` denylist a header validator could
+/// otherwise apply by name. Those five are still named, so widening an allowlist to include one
 /// of them has to be a deliberate entry in `honoured_self_nominating` and can
 /// never be an oversight.
 fn header_parameters_are_reviewed(
@@ -1030,6 +1039,24 @@ fn header_parameters_are_reviewed(
         }
         allowed.contains(&name)
     })
+}
+
+/// The key-binding payload members, or `None` when a required claim is missing
+/// or, under [`KeyBindingExtraClaims::Strict`], when any other claim is present.
+fn key_binding_payload(
+    payload: &Value,
+    extra_claims: KeyBindingExtraClaims,
+) -> Option<&Map<String, Value>> {
+    match extra_claims {
+        KeyBindingExtraClaims::Strict => closed_payload(payload, &KEY_BINDING_PAYLOAD_CLAIMS),
+        KeyBindingExtraClaims::IgnoreUnknown => {
+            let members = payload.as_object()?;
+            KEY_BINDING_PAYLOAD_CLAIMS
+                .iter()
+                .all(|claim| members.contains_key(*claim))
+                .then_some(members)
+        }
+    }
 }
 
 /// Require a payload that carries exactly `claims` and nothing else.
@@ -1053,13 +1080,6 @@ fn single_valued_audience(members: &Map<String, Value>, expected: &str) -> Optio
         Some(Value::String(aud)) if aud == expected => Some(aud.clone()),
         _ => None,
     }
-}
-
-/// Compare a challenge without leaking how far a candidate matched, so a caller
-/// cannot be walked toward the expected value one byte at a time. Length is
-/// compared first and is not treated as secret.
-fn constant_time_eq(actual: &[u8], expected: &[u8]) -> bool {
-    actual.len() == expected.len() && bool::from(actual.ct_eq(expected))
 }
 
 /// Bound `iat` to the policy window with checked arithmetic, so neither a
@@ -1097,98 +1117,95 @@ fn issue_disclosure(name: &str, value: Value) -> Result<IssuedDisclosure, SdJwtE
     Ok(IssuedDisclosure { encoded, digest })
 }
 
-/// Internal JWS serialiser. Local Ed25519 sign cost is inherited from
+/// Parse a compact JWS under the default bounds.
+fn parse_jws(token: &str) -> Result<CompactJws<'_>, JwsError> {
+    parse_compact_jws(token, &JwsLimits::default())
+}
+
+fn header_value(jws: &CompactJws<'_>) -> Value {
+    Value::Object(jws.header().clone())
+}
+
+/// Wraps a provider so a signing failure keeps its own [`SigningError`] when
+/// `sign_compact_jws` reports only a closed category, and so the signature is
+/// verified against the provider's public key before it is released.
+struct CheckedSigner<'a> {
+    inner: &'a dyn SigningProvider,
+    public_jwk: PublicJwk,
+    failure: Mutex<Option<SigningError>>,
+}
+
+impl CheckedSigner<'_> {
+    /// Keep the real failure and hand the JWS helper a placeholder; the helper
+    /// reports only its own category.
+    fn record(&self, err: SigningError) -> SigningError {
+        *self.failure.lock().unwrap_or_else(PoisonError::into_inner) = Some(err);
+        SigningError::external("signing failed")
+    }
+
+    fn take_failure(&self) -> Option<SigningError> {
+        self.failure
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+    }
+}
+
+#[async_trait]
+impl SigningProvider for CheckedSigner<'_> {
+    fn algorithm(&self) -> SigningAlgorithm {
+        self.inner.algorithm()
+    }
+
+    fn key_id(&self) -> &str {
+        self.inner.key_id()
+    }
+
+    fn public_jwk(&self) -> PublicJwk {
+        self.public_jwk.clone()
+    }
+
+    fn readiness(&self) -> KeyReadiness {
+        self.inner.readiness()
+    }
+
+    async fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, SigningError> {
+        let signature = self
+            .inner
+            .sign(payload)
+            .await
+            .map_err(|err| self.record(err))?;
+        verify(payload, &signature, &self.public_jwk)
+            .map_err(|err| self.record(SigningError::Crypto(err)))?;
+        Ok(signature)
+    }
+}
+
+/// Sign `payload` as a compact JWS with `extra_header` plus the signer's `alg`
+/// and `kid`. Local Ed25519 sign cost is inherited from
 /// `registry_platform_crypto::sign` (~15 µs/op on Apple M5 Max; see its doc
 /// comment for details), while external providers may add network latency.
 async fn sign_jwt(
-    header: Value,
-    payload: Value,
+    extra_header: Map<String, Value>,
+    payload: &Value,
     signer: &dyn SigningProvider,
 ) -> Result<String, SdJwtError> {
-    let header_b64 = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&header)?);
-    let payload_b64 = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload)?);
-    let signing_input = format!("{header_b64}.{payload_b64}");
+    let payload = serde_json::to_vec(payload)?;
     let public_jwk = signer.public_jwk();
     if public_jwk.kid.as_deref() != Some(signer.key_id()) {
         return Err(SdJwtError::Signing(SigningError::KeyIdMismatch));
     }
-    let signature = signer.sign(signing_input.as_bytes()).await?;
-    verify(signing_input.as_bytes(), &signature, &public_jwk)
-        .map_err(|err| SdJwtError::Signing(SigningError::Crypto(err)))?;
-    Ok(format!(
-        "{}.{}",
-        signing_input,
-        URL_SAFE_NO_PAD.encode(signature)
-    ))
-}
-
-fn split_compact_jwt(jwt: &str) -> Result<(&str, &str, &str), SdJwtError> {
-    let mut parts = jwt.split('.');
-    let header = parts.next().ok_or(SdJwtError::HolderProofInvalid)?;
-    let payload = parts.next().ok_or(SdJwtError::HolderProofInvalid)?;
-    let signature = parts.next().ok_or(SdJwtError::HolderProofInvalid)?;
-    if parts.next().is_some() || header.is_empty() || payload.is_empty() || signature.is_empty() {
-        return Err(SdJwtError::HolderProofInvalid);
-    }
-    Ok((header, payload, signature))
-}
-
-fn decode_json(segment: &str) -> Result<Value, SdJwtError> {
-    let bytes = URL_SAFE_NO_PAD
-        .decode(segment)
-        .map_err(|_| SdJwtError::HolderProofInvalid)?;
-    serde_json::from_slice(&bytes).map_err(|_| SdJwtError::HolderProofInvalid)
-}
-
-/// Decode a base64url segment into JSON that rejects duplicate members.
-///
-/// `serde_json` keeps the last of two members sharing a name. A validator that
-/// reads such a member once would then check one value while another reader of
-/// the same bytes sees the other, so every closed header and payload in this
-/// module is decoded here. Callers map the failure onto their own error, which
-/// is why this returns the neutral `InvalidInput`.
-fn decode_strict_json(segment: &str) -> Result<Value, SdJwtError> {
-    let bytes = URL_SAFE_NO_PAD
-        .decode(segment)
-        .map_err(|_| SdJwtError::InvalidInput)?;
-    parse_json_strict(&bytes).map_err(|_| SdJwtError::InvalidInput)
-}
-
-fn holder_proof_header_kid(proof_jwt: &str) -> Result<Option<String>, SdJwtError> {
-    let (header_b64, _, _) = split_compact_jwt(proof_jwt)?;
-    let header = decode_json(header_b64)?;
-    Ok(header
-        .get("kid")
-        .and_then(Value::as_str)
-        .map(str::to_string))
-}
-
-fn required_string<'a>(value: &'a Value, field: &str) -> Result<&'a str, SdJwtError> {
-    value
-        .get(field)
-        .and_then(Value::as_str)
-        .ok_or(SdJwtError::HolderProofInvalid)
-}
-
-fn required_i64(value: &Value, field: &str) -> Result<i64, SdJwtError> {
-    value
-        .get(field)
-        .and_then(Value::as_i64)
-        .ok_or(SdJwtError::HolderProofInvalid)
-}
-
-fn required_audience(value: &Value, expected: &str) -> Result<String, SdJwtError> {
-    match value.get("aud") {
-        Some(Value::String(aud)) if aud == expected => Ok(aud.clone()),
-        Some(Value::Array(values)) => {
-            let matched = values
-                .iter()
-                .filter_map(Value::as_str)
-                .find(|aud| *aud == expected)
-                .ok_or(SdJwtError::HolderProofInvalid)?;
-            Ok(matched.to_string())
-        }
-        _ => Err(SdJwtError::HolderProofInvalid),
+    let checked = CheckedSigner {
+        inner: signer,
+        public_jwk,
+        failure: Mutex::new(None),
+    };
+    match sign_compact_jws(extra_header, &payload, &checked).await {
+        Ok(jwt) => Ok(jwt),
+        Err(JwsError::SigningFailed) => Err(checked
+            .take_failure()
+            .map_or(SdJwtError::InvalidInput, SdJwtError::Signing)),
+        Err(_) => Err(SdJwtError::InvalidInput),
     }
 }
 
@@ -1657,225 +1674,12 @@ mod tests {
     }
 
     #[test]
-    fn holder_proof_returns_jti_for_caller_replay_detection() {
-        let holder = PrivateJwk::parse(HOLDER_JWK).expect("holder");
-        let now = 1_700_000_000;
-        let proof = sign_holder_proof(&holder, proof_payload(now, "proof-jti-1"));
-
-        let claim_set = claim_set();
-        let bindings = bindings(&claim_set);
-        let claims = validate_holder_proof(&proof, &holder.public(), &bindings, &policy(), now)
-            .expect("proof validates");
-
-        assert_eq!(claims.jti, "proof-jti-1");
-    }
-
-    #[test]
-    fn holder_proof_rejects_when_credential_id_substituted_for_proof_jti() {
-        let holder = PrivateJwk::parse(HOLDER_JWK).expect("holder");
-        let now = 1_700_000_000;
-        let proof = sign_holder_proof(
-            &holder,
-            proof_payload(now, "urn:ulid:01HX0000000000000000000000"),
-        );
-
-        let claim_set = claim_set();
-        let bindings = bindings(&claim_set);
-        validate_holder_proof(&proof, &holder.public(), &bindings, &policy(), now)
-            .expect_err("credential id must not be accepted as holder-proof jti");
-    }
-
-    #[test]
-    fn holder_proof_enforces_audience_lifetime_and_bindings() {
-        let holder = PrivateJwk::parse(HOLDER_JWK).expect("holder");
-        let now = 1_700_000_000;
-
-        let claim_set = claim_set();
-        let bindings = bindings(&claim_set);
-        validate_holder_proof(
-            &sign_holder_proof(&holder, proof_payload(now, "proof-jti-1")),
-            &holder.public(),
-            &bindings,
-            &policy(),
-            now,
-        )
-        .expect("baseline proof validates");
-
-        let mut wrong_aud_payload = proof_payload(now, "proof-jti-2");
-        wrong_aud_payload["aud"] = json!("wrong");
-        let wrong_aud = sign_holder_proof(&holder, wrong_aud_payload);
-        validate_holder_proof(&wrong_aud, &holder.public(), &bindings, &policy(), now)
-            .expect_err("audience mismatch rejects");
-
-        let mut exp_equal_iat_payload = proof_payload(now, "proof-jti-3");
-        exp_equal_iat_payload["exp"] = json!(now);
-        let exp_equal_iat = sign_holder_proof(&holder, exp_equal_iat_payload);
-        validate_holder_proof(&exp_equal_iat, &holder.public(), &bindings, &policy(), now)
-            .expect_err("exp == iat rejects");
-
-        let mut over_ceiling_payload = proof_payload(now, "proof-jti-4");
-        over_ceiling_payload["exp"] = json!(now + 301);
-        let over_ceiling = sign_holder_proof(&holder, over_ceiling_payload);
-        validate_holder_proof(&over_ceiling, &holder.public(), &bindings, &policy(), now)
-            .expect_err("over max lifetime rejects");
-
-        let mut wrong_bindings = proof_bindings(&claim_set);
-        wrong_bindings.credential_profile = "profile-b";
-        validate_holder_proof(
-            &sign_holder_proof(&holder, proof_payload(now, "proof-jti-5")),
-            &holder.public(),
-            &wrong_bindings,
-            &policy(),
-            now,
-        )
-        .expect_err("binding mismatch rejects");
-    }
-
-    #[test]
-    fn holder_proof_for_confirmation_enforces_cnf_jwk_and_kid() {
-        let holder = PrivateJwk::parse(HOLDER_JWK).expect("holder");
-        let other_holder = PrivateJwk::parse(
-            r#"{"crv":"Ed25519","d":"f4QIxnAyRWzhuBOmNRgvBTE56mWePdsPL0mvCtl8Gys","x":"pv4e_hXHBLN27rcs6VDFV1ED0TiU8M3xy9vsuWFEsec","kty":"OKP","alg":"EdDSA","kid":"did:jwk:other#key-1"}"#,
-        )
-        .expect("other holder");
-        let now = 1_700_000_000;
-        let claim_set = claim_set();
-        let bindings = bindings(&claim_set);
-        let proof = sign_holder_proof(&holder, proof_payload(now, "proof-jti-confirmed"));
-        let confirmation = HolderConfirmation {
-            jwk: holder.public(),
-            kid: Some("did:jwk:holder#key-1".to_string()),
-        };
-
-        validate_holder_proof_for_confirmation(&proof, &confirmation, &bindings, &policy(), now)
-            .expect("cnf-bound proof validates");
-
-        let wrong_confirmation = HolderConfirmation {
-            jwk: other_holder.public(),
-            kid: Some("did:jwk:holder#key-1".to_string()),
-        };
-        validate_holder_proof_for_confirmation(
-            &proof,
-            &wrong_confirmation,
-            &bindings,
-            &policy(),
-            now,
-        )
-        .expect_err("wrong cnf.jwk rejects");
-
-        let wrong_kid_confirmation = HolderConfirmation {
-            jwk: holder.public(),
-            kid: Some("did:jwk:holder#other".to_string()),
-        };
-        validate_holder_proof_for_confirmation(
-            &proof,
-            &wrong_kid_confirmation,
-            &bindings,
-            &policy(),
-            now,
-        )
-        .expect_err("wrong cnf.kid rejects");
-    }
-
-    #[test]
-    fn holder_proof_rejects_header_alg_that_does_not_match_resolved_key() {
-        let holder = PrivateJwk::parse(P256_JWK).expect("p256 holder");
-        let now = 1_700_000_000;
-        let claim_set = claim_set();
-        let bindings = bindings(&claim_set);
-        let proof = sign_jwt_with_private(
-            json!({"alg": "EdDSA", "typ": "kb+jwt", "kid": "did:jwk:holder#p256-key-1"}),
-            proof_payload(now, "proof-jti-alg-confusion"),
-            &holder,
-        )
-        .expect("proof signs with resolved ES256 key");
-        let confirmation = HolderConfirmation {
-            jwk: holder.public(),
-            kid: Some("did:jwk:holder#p256-key-1".to_string()),
-        };
-
-        validate_holder_proof_for_confirmation(&proof, &confirmation, &bindings, &policy(), now)
-            .expect_err("EdDSA header must not verify with an ES256 cnf key");
-        validate_holder_proof(&proof, &holder.public(), &bindings, &policy(), now)
-            .expect_err("EdDSA header must not verify with an ES256 resolved key");
-    }
-
-    #[test]
-    fn holder_proof_rejects_correctly_signed_non_eddsa_proof_because_the_holder_proof_pin_is_eddsa_only(
-    ) {
-        let holder = PrivateJwk::parse(P256_JWK).expect("p256 holder");
-        let now = 1_700_000_000;
-        let claim_set = claim_set();
-        let bindings = bindings(&claim_set);
-        let proof = sign_jwt_with_private(
-            json!({"alg": "ES256", "typ": "kb+jwt", "kid": "did:web:issuer.test#p256-key-1"}),
-            proof_payload(now, "proof-jti-es256"),
-            &holder,
-        )
-        .expect("proof signs with its own ES256 key");
-
-        validate_holder_proof(&proof, &holder.public(), &bindings, &policy(), now).expect_err(
-            "HOLDER_PROOF_ALLOWED_ALGORITHM pins holder proofs to EdDSA even for a \
-             correctly self-signed ES256 proof",
-        );
-    }
-
-    #[test]
     fn presentation_disclosure_hash_is_platform_computed() {
         let hash = presentation_disclosure_hash("issuer.jwt~disclosure~holder.jwt");
         let manual = Sha256::digest(b"issuer.jwt~disclosure~holder.jwt");
 
         assert_eq!(hash.as_slice(), manual.as_slice());
         assert_ne!(hash, [0u8; 32]);
-    }
-
-    #[test]
-    fn validate_holder_proof_rejects_structurally_malformed_compact_jwt() {
-        let holder = PrivateJwk::parse(HOLDER_JWK).expect("holder");
-        let claim_set = claim_set();
-        let bindings = bindings(&claim_set);
-        let now = 1_700_000_000;
-
-        for malformed in ["notajwt", "a.b", "a.b.c.d", "!!.!!.!!"] {
-            assert!(
-                matches!(
-                    validate_holder_proof(malformed, &holder.public(), &bindings, &policy(), now),
-                    Err(SdJwtError::HolderProofInvalid)
-                ),
-                "input {:?} must return HolderProofInvalid",
-                malformed
-            );
-        }
-    }
-
-    #[test]
-    fn holder_proof_rejects_wrong_type_and_dangerous_headers() {
-        let holder = PrivateJwk::parse(HOLDER_JWK).expect("holder");
-        let now = 1_700_000_000;
-        let claim_set = claim_set();
-        let bindings = bindings(&claim_set);
-
-        let wrong_typ = sign_jwt_with_private(
-            json!({"alg": "EdDSA", "typ": "JWT", "kid": "did:jwk:holder#key-1"}),
-            proof_payload(now, "proof-jti-6"),
-            &holder,
-        )
-        .expect("proof signs");
-        validate_holder_proof(&wrong_typ, &holder.public(), &bindings, &policy(), now)
-            .expect_err("holder proof typ must be kb+jwt");
-
-        for forbidden in ["crit", "jku", "jwk", "x5u", "x5c"] {
-            let mut header = json!({
-                "alg": "EdDSA",
-                "typ": "kb+jwt",
-                "kid": "did:jwk:holder#key-1"
-            });
-            header[forbidden] = json!("forbidden");
-            let proof = sign_jwt_with_private(header, proof_payload(now, "proof-jti-7"), &holder)
-                .expect("proof signs");
-            validate_holder_proof(&proof, &holder.public(), &bindings, &policy(), now)
-                .expect_err("dangerous holder-proof header is rejected");
-        }
     }
 
     #[test]
@@ -3078,54 +2882,6 @@ mod tests {
                 .sign(payload)
                 .await
         }
-    }
-
-    fn claim_set() -> Vec<String> {
-        vec!["claim-a".to_string()]
-    }
-
-    fn bindings<'a>(claim_set: &'a [String]) -> HolderProofBindings<'a> {
-        proof_bindings(claim_set)
-    }
-
-    fn proof_bindings<'a>(claim_set: &'a [String]) -> HolderProofBindings<'a> {
-        HolderProofBindings {
-            expected_sub: "did:jwk:holder",
-            evaluation_id: "eval-1",
-            credential_profile: "profile-a",
-            disclosure_hash: b"redacted-disclosure-hash",
-            claim_set,
-        }
-    }
-
-    fn policy() -> HolderProofPolicy {
-        HolderProofPolicy {
-            audience: "registry-notary".to_string(),
-            max_lifetime: Duration::from_secs(300),
-        }
-    }
-
-    fn proof_payload(now: i64, jti: &str) -> Value {
-        json!({
-            "sub": "did:jwk:holder",
-            "aud": "registry-notary",
-            "iat": now,
-            "exp": now + 60,
-            "jti": jti,
-            "evaluation_id": "eval-1",
-            "credential_profile": "profile-a",
-            "disclosure": URL_SAFE_NO_PAD.encode(b"redacted-disclosure-hash"),
-            "claims": ["claim-a"],
-        })
-    }
-
-    fn sign_holder_proof(holder: &PrivateJwk, payload: Value) -> String {
-        sign_jwt_with_private(
-            json!({"alg": "EdDSA", "typ": "kb+jwt", "kid": "did:jwk:holder#key-1"}),
-            payload,
-            holder,
-        )
-        .expect("proof signs")
     }
 
     fn sign_jwt_with_private(

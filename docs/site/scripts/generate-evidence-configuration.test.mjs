@@ -661,6 +661,7 @@ test('every published schema declares whether it is frozen or adopter tooling', 
   assert.equal(byId.get('authoring-target').status, 'tooling');
   assert.equal(byId.get('authoring-target-authority').status, 'tooling');
   assert.equal(byId.get('oid4vci-runtime').status, 'beta');
+  assert.equal(byId.get('oid4vp-runtime').status, 'beta');
 });
 
 test('the OID4VCI runtime schema is published from the generated product schema', async () => {
@@ -673,6 +674,17 @@ test('the OID4VCI runtime schema is published from the generated product schema'
   assert.equal(contract.reference, 'docs/site/src/content/docs/configure/evidence-oid4vci.mdx');
   const paths = pathsOf(contract.fields);
   for (const top of ['credentialIssuer', 'evidence', 'listener', 'offers', 'store', 'tokenClient']) {
+    assert.ok(paths.some((path) => path === top || path.startsWith(`${top}.`)), `${top} is missing`);
+  }
+});
+
+test('the OID4VP runtime schema is published from the generated product schema', async () => {
+  const document = await buildEvidenceConfiguration(repoRoot);
+  const contract = document.contracts.find((entry) => entry.id === 'oid4vp-runtime');
+  assert.equal(contract.marker, undefined);
+  assert.equal(contract.reference, 'docs/site/src/content/docs/configure/evidence-oid4vp.mdx');
+  const paths = pathsOf(contract.fields);
+  for (const top of ['applicantTokens', 'clientIdentifiers', 'evidenceCredentials', 'policies', 'publicBaseUrl', 'sessions']) {
     assert.ok(paths.some((path) => path === top || path.startsWith(`${top}.`)), `${top} is missing`);
   }
 });

@@ -8,6 +8,7 @@ use registry_platform_crypto::{
     SigningProvider,
 };
 use registry_platform_sdjwt::{SdJwtError, SdJwtIssuanceInput, SdJwtIssuer};
+use registry_platform_x509::{CertifiedSigner, ChainPolicy, X509Error, X5cChain};
 use serde::Serialize;
 use thiserror::Error;
 use tokio::sync::Mutex;
@@ -43,6 +44,20 @@ pub enum EvidenceSigningError {
     KeySerialization(#[source] serde_json::Error),
     #[error("the SD-JWT VC serialization could not be produced")]
     SdJwtVc(#[source] SdJwtError),
+    #[error("the signing certificate chain could not be parsed")]
+    CertificateChain,
+    #[error("the signing certificate leaf does not certify the active signing key")]
+    CertificateKey,
+    #[error("a certificate in the signing certificate chain is not valid at startup")]
+    CertificateNotValid,
+    #[error("the signing certificate chain is longer than the chain policy allows")]
+    CertificateChainTooLong,
+}
+
+/// Most certificates a signing chain may carry: the leaf, the intermediates
+/// the platform chain policy allows, and one shipped trust anchor.
+pub fn maximum_certificate_chain_length() -> usize {
+    usize::from(ChainPolicy::default().max_path_length) + 2
 }
 
 #[derive(Debug, Serialize)]
@@ -56,6 +71,9 @@ struct ProtectedHeader<'a> {
 /// Evidence's single active ES256/P-256 signer.
 pub struct EvidenceSigner {
     provider: Arc<dyn SigningProvider>,
+    /// The certificate chain certifying the active key, when the deployment
+    /// configures one.
+    certified: Option<CertifiedSigner>,
     recovery_probe: Mutex<()>,
     metrics: Option<Arc<crate::observability::DependencyMetrics>>,
 }
@@ -87,9 +105,48 @@ impl EvidenceSigner {
 
         Ok(Self {
             provider,
+            certified: None,
             recovery_probe: Mutex::new(()),
             metrics: None,
         })
+    }
+
+    /// Bind the certificate chain (leaf first) that certifies the active key.
+    ///
+    /// Refused: a chain longer than the platform chain policy allows, a leaf
+    /// whose public key is not the signing key, and any certificate that is
+    /// not valid at `now` (Unix seconds). The chain is not validated to a
+    /// trust anchor here; relying parties do that against their own anchors.
+    pub fn with_certificate_chain(
+        mut self,
+        chain: X5cChain,
+        now: i64,
+    ) -> Result<Self, EvidenceSigningError> {
+        if chain.len() > maximum_certificate_chain_length() {
+            return Err(EvidenceSigningError::CertificateChainTooLong);
+        }
+        for encoded in chain.to_x5c() {
+            let der = base64::engine::general_purpose::STANDARD
+                .decode(encoded)
+                .map_err(|_| EvidenceSigningError::CertificateChain)?;
+            if !certificate_is_valid_at(&der, now)? {
+                return Err(EvidenceSigningError::CertificateNotValid);
+            }
+        }
+        let certified = CertifiedSigner::new(Arc::clone(&self.provider), chain).map_err(
+            |error| match error {
+                X509Error::SignerKeyMismatch => EvidenceSigningError::CertificateKey,
+                _ => EvidenceSigningError::CertificateChain,
+            },
+        )?;
+        self.certified = Some(certified);
+        Ok(self)
+    }
+
+    /// The `x5c` value (standard base64 DER, leaf first) for the active key,
+    /// when a certificate chain is configured.
+    pub fn certificate_chain(&self) -> Option<Vec<String>> {
+        self.certified.as_ref().map(CertifiedSigner::x5c)
     }
 
     /// Initialize against the governed active public JWK. Runtime callers use
@@ -210,7 +267,11 @@ impl EvidenceSigner {
     ) -> Result<String, EvidenceSigningError> {
         let observation = self.metrics.as_ref().map(|metrics| metrics.start());
         let result = async {
-            SdJwtIssuer::from_signing_provider(Arc::clone(&self.provider))
+            let issuer = match &self.certified {
+                Some(certified) => SdJwtIssuer::from_certified_signer(certified.clone()),
+                None => SdJwtIssuer::from_signing_provider(Arc::clone(&self.provider)),
+            };
+            issuer
                 .issue(input)
                 .await
                 .map(|signed| signed.jwt)
@@ -244,9 +305,21 @@ pub fn jwks_document_with_revocations(
     published: impl IntoIterator<Item = PublicJwk>,
     revoked: impl IntoIterator<Item = String>,
 ) -> Result<JwksDocument, EvidenceSigningError> {
+    jwks_document_with_certificate_chain(active, None, published, revoked)
+}
+
+/// The served key set. The active key's entry carries `x5c` (RFC 7517 section
+/// 4.7) when `active_x5c` is given; retired and revoked keys never do.
+pub fn jwks_document_with_certificate_chain(
+    active: PublicJwk,
+    active_x5c: Option<Vec<String>>,
+    published: impl IntoIterator<Item = PublicJwk>,
+    revoked: impl IntoIterator<Item = String>,
+) -> Result<JwksDocument, EvidenceSigningError> {
     let revoked = revoked.into_iter().collect::<BTreeSet<_>>();
     let mut seen = BTreeSet::new();
     let mut keys = Vec::new();
+    let mut active_x5c = active_x5c;
     for key in std::iter::once(active).chain(published) {
         if keys.len() == MAX_PUBLISHED_KEYS {
             return Err(EvidenceSigningError::PublishedKey);
@@ -265,9 +338,27 @@ pub fn jwks_document_with_revocations(
         {
             return Err(EvidenceSigningError::PublishedKey);
         }
-        keys.push(serde_json::to_value(key).map_err(EvidenceSigningError::KeySerialization)?);
+        let mut entry =
+            serde_json::to_value(key).map_err(EvidenceSigningError::KeySerialization)?;
+        if let (Some(x5c), Some(members)) = (active_x5c.take(), entry.as_object_mut()) {
+            members.insert("x5c".to_owned(), serde_json::json!(x5c));
+        }
+        keys.push(entry);
     }
     Ok(JwksDocument { keys })
+}
+
+fn certificate_is_valid_at(der: &[u8], now: i64) -> Result<bool, EvidenceSigningError> {
+    use x509_cert::{der::Decode as _, Certificate};
+
+    let certificate =
+        Certificate::from_der(der).map_err(|_| EvidenceSigningError::CertificateChain)?;
+    let validity = &certificate.tbs_certificate.validity;
+    let seconds = |time: &x509_cert::time::Time| {
+        i64::try_from(time.to_unix_duration().as_secs())
+            .map_err(|_| EvidenceSigningError::CertificateChain)
+    };
+    Ok(seconds(&validity.not_before)? <= now && now <= seconds(&validity.not_after)?)
 }
 
 fn validate_provider(
@@ -669,6 +760,287 @@ mod tests {
                 .expect("signature decodes");
             verify(signing_input.as_bytes(), &signature, &signer.public_jwk())
                 .expect("fixture signature verifies");
+        }
+    }
+
+    /// The certificate-backed signing identity: `x5c` in the credential
+    /// header and the served key set, checked against the third-party
+    /// verifier and Evidence's own pinned verifier.
+    mod certificate_identity {
+        use super::*;
+        use crate::certificate_test_support::{chain_for, pem, pki, TestPki};
+        use crate::verifier::{
+            trusted_keys_are_usable, verify_sd_jwt_vc, EvidenceVerificationPolicy,
+            VerificationError,
+        };
+        use registry_evidence_presentation::{
+            ChannelPolicy, IssuerTrust, KeySource, SessionContext, TrustEntry,
+        };
+        use registry_platform_x509::TrustAnchors;
+
+        const DAY: i64 = 86_400;
+        const ISSUER: &str = "https://evidence.example";
+        const NOW: &str = "2026-08-02T12:00:00Z";
+
+        fn now() -> i64 {
+            NOW.parse::<chrono::DateTime<chrono::Utc>>()
+                .expect("time parses")
+                .timestamp()
+        }
+
+        fn golden_evidence() -> crate::model::Evidence {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../products/evidence/fixtures/conformance/golden/adult-evidence.json");
+            let mut evidence: crate::model::Evidence =
+                serde_json::from_slice(&std::fs::read(path).expect("golden payload reads"))
+                    .expect("golden payload is an Evidence document");
+            ISSUER.clone_into(&mut evidence.provided_by);
+            evidence
+        }
+
+        fn input() -> SdJwtIssuanceInput {
+            crate::sdjwt_vc::issuance_input(&golden_evidence(), None, &BTreeMap::new())
+                .expect("golden payload maps")
+        }
+
+        fn private() -> PrivateJwk {
+            PrivateJwk::parse(PRIVATE_JWK).expect("test key parses")
+        }
+
+        fn chain_certifying_the_signer(pki: &TestPki, uri: &str) -> Vec<String> {
+            chain_for(pki, &private(), &[uri], now() - DAY, now() + DAY)
+        }
+
+        fn parsed(x5c: &[String]) -> X5cChain {
+            X5cChain::from_pem(pem(x5c).as_bytes()).expect("chain parses")
+        }
+
+        fn header_of(serialized: &str) -> serde_json::Value {
+            let encoded = serialized.split('.').next().expect("header segment");
+            serde_json::from_slice(&URL_SAFE_NO_PAD.decode(encoded).expect("header decodes"))
+                .expect("header parses")
+        }
+
+        fn pinned(signer: &EvidenceSigner, x5c: Option<Vec<String>>) -> crate::model::JwksDocument {
+            jwks_document_with_certificate_chain(
+                signer.public_jwk(),
+                x5c,
+                [],
+                std::iter::empty::<String>(),
+            )
+            .expect("JWKS builds")
+        }
+
+        fn own_policy() -> EvidenceVerificationPolicy {
+            EvidenceVerificationPolicy::from_accepted_transaction(
+                &golden_evidence(),
+                golden_evidence().request_nonce.as_deref().expect("nonce"),
+                48 * 60 * 60,
+                NOW.parse().expect("time parses"),
+                30,
+            )
+            .expect("policy is within the contract")
+        }
+
+        fn third_party_verdict(
+            serialized: &str,
+            pki: &TestPki,
+        ) -> Result<registry_evidence_presentation::VerifiedCredential, ()> {
+            let vct = input().vct;
+            let trust = IssuerTrust::new(vec![TrustEntry {
+                id: "evidence".to_owned(),
+                issuer: ISSUER.to_owned(),
+                vct: vec![vct.clone()],
+                key_source: KeySource::X5c {
+                    anchors: TrustAnchors::from_der_certificates(&[pki.root.der().to_vec()])
+                        .expect("anchors"),
+                    policy: registry_platform_x509::ChainPolicy::default(),
+                },
+            }])
+            .expect("trust");
+            registry_evidence_presentation::verify_sd_jwt_vc(
+                serialized,
+                &SessionContext {
+                    nonce: "unused".to_owned(),
+                    client_id: "x509_san_dns:verifier.example".to_owned(),
+                    received_at: now(),
+                },
+                &trust,
+                &ChannelPolicy::new(vec![vct], false),
+                now(),
+            )
+            .map_err(|_| ())
+        }
+
+        #[tokio::test]
+        async fn credentials_carry_x5c_and_a_third_party_verifies_them_to_the_test_root() {
+            let pki = pki(now());
+            let x5c = chain_certifying_the_signer(&pki, ISSUER);
+            let signer = signer()
+                .await
+                .with_certificate_chain(parsed(&x5c), now())
+                .expect("a matching chain binds");
+
+            let serialized = signer.sign_sd_jwt_vc(input()).await.expect("signs");
+
+            assert_eq!(
+                header_of(&serialized),
+                serde_json::json!({"alg": "ES256", "kid": KEY_ID, "typ": "dc+sd-jwt", "x5c": x5c})
+            );
+            let verified = third_party_verdict(&serialized, &pki)
+                .expect("the root, the chain, and the issuer binding hold");
+            assert_eq!(verified.issuer, ISSUER);
+        }
+
+        #[tokio::test]
+        async fn a_third_party_refuses_an_issuer_the_leaf_does_not_bind() {
+            let pki = pki(now());
+            let x5c = chain_certifying_the_signer(&pki, "https://other.example");
+            let signer = signer()
+                .await
+                .with_certificate_chain(parsed(&x5c), now())
+                .expect("binds");
+            let serialized = signer.sign_sd_jwt_vc(input()).await.expect("signs");
+            assert!(third_party_verdict(&serialized, &pki).is_err());
+        }
+
+        #[tokio::test]
+        async fn evidences_own_verifier_accepts_x5c_only_against_the_pinned_leaf() {
+            let pki = pki(now());
+            let x5c = chain_certifying_the_signer(&pki, ISSUER);
+            let signer = signer()
+                .await
+                .with_certificate_chain(parsed(&x5c), now())
+                .expect("binds");
+            let serialized = signer.sign_sd_jwt_vc(input()).await.expect("signs");
+
+            let matching = pinned(&signer, signer.certificate_chain());
+            assert_eq!(matching.keys[0]["x5c"], serde_json::json!(x5c));
+            assert!(trusted_keys_are_usable(&matching).is_ok());
+            assert_eq!(
+                verify_sd_jwt_vc(serialized.as_bytes(), &matching, &own_policy())
+                    .expect("the pinned key carries the header's leaf"),
+                golden_evidence()
+            );
+
+            let without_chain = pinned(&signer, None);
+            assert_eq!(
+                verify_sd_jwt_vc(serialized.as_bytes(), &without_chain, &own_policy()),
+                Err(VerificationError::ProtectedHeader)
+            );
+
+            let other_leaf = chain_certifying_the_signer(&pki, "https://other.example");
+            let differing = pinned(&signer, Some(other_leaf));
+            assert_eq!(
+                verify_sd_jwt_vc(serialized.as_bytes(), &differing, &own_policy()),
+                Err(VerificationError::ProtectedHeader)
+            );
+        }
+
+        #[tokio::test]
+        async fn without_an_identity_credentials_and_the_key_set_carry_no_x5c() {
+            let signer = signer().await;
+            assert_eq!(signer.certificate_chain(), None);
+
+            let serialized = signer.sign_sd_jwt_vc(input()).await.expect("signs");
+
+            assert_eq!(
+                URL_SAFE_NO_PAD
+                    .decode(serialized.split('.').next().expect("header segment"))
+                    .expect("header decodes"),
+                br#"{"alg":"ES256","kid":"_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo","typ":"dc+sd-jwt"}"#
+            );
+            let plain = jwks_document(signer.public_jwk(), []).expect("JWKS builds");
+            let unconfigured = pinned(&signer, signer.certificate_chain());
+            assert_eq!(plain, unconfigured);
+            assert!(plain.keys[0].get("x5c").is_none());
+        }
+
+        #[tokio::test]
+        async fn only_the_active_key_publishes_a_chain() {
+            let pki = pki(now());
+            let x5c = chain_certifying_the_signer(&pki, ISSUER);
+            let signer = signer()
+                .await
+                .with_certificate_chain(parsed(&x5c), now())
+                .expect("binds");
+            let retired = PrivateJwk::parse(SAME_KID_DIFFERENT_PRIVATE_JWK)
+                .expect("key parses")
+                .public();
+            let mut retired = retired;
+            retired.kid = Some(retired.jkt().expect("thumbprint"));
+
+            let document = jwks_document_with_certificate_chain(
+                signer.public_jwk(),
+                signer.certificate_chain(),
+                [retired],
+                std::iter::empty::<String>(),
+            )
+            .expect("JWKS builds");
+
+            assert_eq!(document.keys.len(), 2);
+            assert_eq!(document.keys[0]["x5c"], serde_json::json!(x5c));
+            assert!(document.keys[1].get("x5c").is_none());
+        }
+
+        #[tokio::test]
+        async fn startup_refuses_a_leaf_that_does_not_certify_the_signing_key() {
+            let pki = pki(now());
+            let other = PrivateJwk::parse(SAME_KID_DIFFERENT_PRIVATE_JWK).expect("key parses");
+            let x5c = chain_for(&pki, &other, &[ISSUER], now() - DAY, now() + DAY);
+            let error = signer()
+                .await
+                .with_certificate_chain(parsed(&x5c), now())
+                .expect_err("a leaf for a different key is refused");
+            assert!(matches!(error, EvidenceSigningError::CertificateKey));
+            assert_eq!(
+                error.to_string(),
+                "the signing certificate leaf does not certify the active signing key"
+            );
+        }
+
+        #[tokio::test]
+        async fn startup_refuses_a_leaf_that_is_not_valid_now() {
+            let pki = pki(now());
+            let expired = chain_for(&pki, &private(), &[ISSUER], now() - 3 * DAY, now() - DAY);
+            let not_yet = chain_for(&pki, &private(), &[ISSUER], now() + DAY, now() + 3 * DAY);
+            for x5c in [expired, not_yet] {
+                let error = signer()
+                    .await
+                    .with_certificate_chain(parsed(&x5c), now())
+                    .expect_err("a leaf outside its validity is refused");
+                assert!(matches!(error, EvidenceSigningError::CertificateNotValid));
+                assert_eq!(
+                    error.to_string(),
+                    "a certificate in the signing certificate chain is not valid at startup"
+                );
+            }
+        }
+
+        #[tokio::test]
+        async fn startup_refuses_a_chain_longer_than_the_chain_policy_allows() {
+            let pki = pki(now());
+            let mut x5c = chain_certifying_the_signer(&pki, ISSUER);
+            x5c.push(base64::engine::general_purpose::STANDARD.encode(pki.root.der()));
+            assert_eq!(x5c.len(), maximum_certificate_chain_length());
+            assert!(signer()
+                .await
+                .with_certificate_chain(parsed(&x5c), now())
+                .is_ok());
+
+            x5c.push(x5c[1].clone());
+            let error = signer()
+                .await
+                .with_certificate_chain(parsed(&x5c), now())
+                .expect_err("an over-long chain is refused");
+            assert!(matches!(
+                error,
+                EvidenceSigningError::CertificateChainTooLong
+            ));
+            assert_eq!(
+                error.to_string(),
+                "the signing certificate chain is longer than the chain policy allows"
+            );
         }
     }
 }

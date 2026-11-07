@@ -22,7 +22,38 @@ Crypto primitives shared by registry services.
 - HMAC-SHA256 tags and legacy-interoperability HMAC-SHA1 verification in
   `mac`, with constant-time verification that refuses a tag of the wrong
   length, and a constant-time byte comparison for shared secrets such as URL
-  tokens.
+  tokens. `constant_time_eq` is also exported at the crate root and is the
+  shared compare for secrets.
+- `random_base64url(bytes)` (also `random::random_base64url`): an unpadded
+  base64url token of 16 to 64 operating-system random bytes, for nonces,
+  `state` values, and session references; other sizes are refused.
+- `xchacha_seal` (feature `xchacha-seal`): XChaCha20-Poly1305 `seal` and
+  `open` with a fresh random 192-bit nonce, at the `nonce || ciphertext ||
+  tag` level; callers keep version bytes, key derivation, and associated
+  data.
+
+`jws` (always compiled) parses, verifies, and signs compact JWS. Parsing
+bounds each segment before decoding, reads the header with the strict JSON
+parser, and refuses `crit` and `b64`. `CompactJws::verify` requires the header
+`alg` to equal the key's algorithm and to be in the caller's allow-list, and
+returns the payload only after the signature verifies. `sign_compact_jws` takes
+`alg` and `kid` from the `SigningProvider` and refuses them in the caller's
+extra header members. Errors never carry the token or key material.
+
+The `jwe` feature adds `jwe`: compact `ECDH-ES` decryption over P-256 with
+A128GCM or A256GCM (RFC 7516, RFC 7518 section 4.6), on aws-lc-rs. The
+recipient key is an `EcdhEsP256Key` (redacted `Debug`, public JWK export with
+`use` `enc` and `alg` `ECDH-ES`). `decrypt_compact_ecdh_es` accepts only an
+empty encrypted-key segment, `alg` exactly `ECDH-ES`, an `enc` from the
+caller's allow-list, an on-curve P-256 `epk`, and a `kid` equal to the key's
+when present; it refuses `zip` and `crit`, feeds `apu` and `apv` into the KDF,
+and uses the transmitted header segment as AAD. Every failure is one opaque
+`JweError`; the closed reason is readable only under test. The
+`jwe-test-support` feature adds `encrypt_compact_ecdh_es_for_tests` and
+`EcdhEsP256Key::to_pkcs8_der_for_tests` so a service can simulate a wallet; it
+is not a production surface. `tests/fixtures/gen_jwe_vectors.py` regenerates
+the independent jwcrypto vectors in `tests/fixtures/jwe-vectors.json` (see the
+script header for the command).
 
 `sealed_value` protects bounded product-owned durable values with AES-256-GCM,
 HKDF-SHA256 domain separation, caller-supplied context and key versions. It

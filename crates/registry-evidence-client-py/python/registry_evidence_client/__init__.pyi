@@ -18,10 +18,24 @@ releasing the GIL for the duration so other Python threads keep running.
 None of this crosses into `asyncio`; there is no `async def` anywhere here.
 """
 
-from typing import Any, Literal, Mapping, Optional, Sequence, TypedDict, Union
+from typing import (
+    Any,
+    Literal,
+    Mapping,
+    NotRequired,
+    Optional,
+    Sequence,
+    TypedDict,
+    Union,
+)
 
 EvidenceResponseFormat = Literal["signed-jws", "sd-jwt-vc"]
 
+EvidenceChannel = Literal["source", "holder-presented"]
+
+# Absent `acceptedChannels` means `["source"]` only, so a policy that never
+# names a channel refuses an assertion a holder presented.
+# `maximumCredentialAgeSeconds` bounds a `holder-presented` assertion only.
 EvidenceVerificationPolicyDocument = TypedDict(
     "EvidenceVerificationPolicyDocument",
     {
@@ -39,8 +53,24 @@ EvidenceVerificationPolicyDocument = TypedDict(
         "expectedSubjects": Sequence[Mapping[str, Any]],
         "expectedOutputs": Sequence[Mapping[str, Any]],
         "revokedKeyIds": Sequence[str],
+        "acceptedChannels": NotRequired[Sequence[EvidenceChannel]],
+        "maximumCredentialAgeSeconds": NotRequired[int],
         "maximumAssertionLifetimeSeconds": int,
         "clockSkewSeconds": int,
+    },
+)
+
+# What a `holder-presented` assertion states about the credential the holder
+# presented. It is the `presentedCredential` member of `VerifiedEvidence.evidence`
+# and is present if and only if `evidence["channel"]` is `"holder-presented"`.
+PresentedCredential = TypedDict(
+    "PresentedCredential",
+    {
+        "trustEntry": str,
+        "issuer": str,
+        "type": str,
+        "issuedAt": str,
+        "subjectLink": Literal["possession", "attribute-match"],
     },
 )
 
@@ -123,6 +153,8 @@ EvidenceRequestSpec = TypedDict(
         "expected_outputs": Sequence[Mapping[str, Any]],
         "maximum_assertion_lifetime_seconds": int,
         "clock_skew_seconds": int,
+        "accepted_channels": NotRequired[Sequence[EvidenceChannel]],
+        "maximum_credential_age_seconds": NotRequired[int],
         "subject_expectations": Union[
             Literal["accept_first_use"], Sequence[ExpectedSubject]
         ],
@@ -151,6 +183,8 @@ EvidenceRequestSpecWithHolderKeys = TypedDict(
         "expected_outputs": Sequence[Mapping[str, Any]],
         "maximum_assertion_lifetime_seconds": int,
         "clock_skew_seconds": int,
+        "accepted_channels": NotRequired[Sequence[EvidenceChannel]],
+        "maximum_credential_age_seconds": NotRequired[int],
         "subject_expectations": Union[
             Literal["accept_first_use"], Sequence[ExpectedSubject]
         ],
@@ -180,6 +214,8 @@ EvidenceRequestBatchSpec = TypedDict(
         "expected_outputs": Sequence[Mapping[str, Any]],
         "maximum_assertion_lifetime_seconds": int,
         "clock_skew_seconds": int,
+        "accepted_channels": NotRequired[Sequence[EvidenceChannel]],
+        "maximum_credential_age_seconds": NotRequired[int],
         "items": Sequence[EvidenceRequestBatchItem],
     },
 )
@@ -324,7 +360,13 @@ class SdJwtVcBatchResponse:
     def credential_for_holder_key(self, index: int) -> Optional[str]: ...
 
 class VerifiedEvidence:
-    """A response that satisfied every expectation."""
+    """A response that satisfied every expectation.
+
+    `evidence["channel"]` is `"source"` or `"holder-presented"`, and only a
+    channel the request's policy accepted can appear; the default accepts
+    `"source"` only. `evidence["presentedCredential"]` (a `PresentedCredential`)
+    is present if and only if the channel is `"holder-presented"`.
+    """
 
     evidence: Any
     trace_id: Optional[str]
@@ -431,6 +473,8 @@ class EvidenceClient:
         response_format: EvidenceResponseFormat = ...,
         binding_receipt: Optional[SubjectBindingReceipt] = ...,
         subjects: Optional[Mapping[str, Mapping[str, Union[str, int, bool]]]] = ...,
+        accepted_channels: Optional[Sequence[EvidenceChannel]] = ...,
+        maximum_credential_age_seconds: Optional[int] = ...,
         **selectors: Union[str, int, bool],
     ) -> Union[VerifiedAssertion, VerifiedAudienceScopedCredential]: ...
     def prepare(

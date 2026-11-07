@@ -2,6 +2,216 @@
 
 ## Unreleased
 
+- A definition with `holderPresented` acquisition now answers only as a signed
+  JWS assertion. Startup already refused an SD-JWT VC representation there; it
+  now refuses unsigned JSON too, and `evidencectl` refuses both before
+  deployment, with one message naming `signed-jws`. Wallet facts never travel
+  unsigned.
+- The holder-presented channel accepts `maximumCredentialAgeSeconds` up to
+  315,360,000 (ten years, the verifier's cap) instead of one year. The age is
+  measured from the credential's `iat`, so a one-year cap refused long-lived
+  identity credentials. Choose a smaller value when you want freshness.
+- `name-match-v1` keeps the marks that are part of a spelling. It used to drop
+  every nonspacing mark, so Devanagari names differing only by a virama, nukta
+  or anusvara compared equal, a false subject match. It now strips nonspacing
+  marks only in the generic combining blocks (U+0300 to U+036F, U+1AB0 to
+  U+1AFF, U+1DC0 to U+1DFF, U+20D0 to U+20FF, U+FE20 to U+FE2F), the Arabic
+  vowel signs (U+064B to U+065F, U+0670) and the Hebrew points and cantillation
+  (U+0591 to U+05C7). Latin, Greek and Cyrillic accents still fold; Arabic and
+  Hebrew spellings with and without vowel marks still match; Brahmic and Thai
+  marks are kept. The profile is unreleased, so the name stays and its pinned
+  fingerprint changed.
+- Shared-code cleanup in the Evidence runtime, `evidence-oid4vci` and
+  `evidencectl`. The access-token algorithm roster comes from
+  `registry-platform-oidc` (accepted values unchanged: `EdDSA`, `ES256`,
+  `RS256`, and the same `config.unknown-variant` refusal and schema). A stop
+  signal handler that cannot be installed now refuses startup with a value-free
+  error in `registry-evidence`, `evidence-oid4vci` and the `evidencectl` source
+  mock, instead of serving with no way to shut down cleanly. `evidence-oid4vci`
+  seals prepared requests through the shared XChaCha20-Poly1305 primitive (stored
+  form unchanged; records sealed by earlier releases open, including after key
+  rotation), and both services write their Prometheus scrape through the shared
+  exposition writer (byte-identical output).
+  Security note: `evidence-oid4vci` now sends the shared security headers on every
+  response, bounds request bodies, and rate limits requests with token buckets.
+  An exceeded budget is answered `429` with `Retry-After` and
+  `{"error": "temporarily_unavailable"}`. The new optional `rateLimits` block
+  sets the budgets (`offersPerPrincipalPerMinute` 600, `offerBurst` 60,
+  `walletRequestsPerMinute` 3000, `walletRequestBurst` 300 by default); a
+  runtime file without it stays valid. Offers are budgeted per authorized
+  principal (token client, else subject); the token, nonce and credential
+  endpoints each have one budget shared by all wallets. The offer budget is
+  keyed on a digest of the principal, so a client id with a space or a subject
+  over 256 bytes is limited like any other and not refused; a limiter fault is
+  logged and answered `500 server_error` without `Retry-After`. Behaviour change: a
+  framework rejection is now answered in the service's
+  `{"error", "error_description"}` JSON shape instead of the framework's plain
+  text. `400`, `413` and `415` keep their statuses; a token form that cannot be
+  decoded, which was `422`, is now `400` with `invalid_request`, as OAuth 2.0
+  token errors require. Check that the default
+  budgets suit your wallet traffic before upgrading a busy deployment.
+- `wallet-presentation-v1` is a new built-in host protocol, a sibling of
+  `signed-evidence-v1`, that reads a holder's presentation from the wallet
+  protocol service (`POST /v1/presentations/read`, a closed request of session
+  reference and presenting principal), verifies it in Evidence with the pure
+  `registry-evidence-presentation` crate, and hands the route only the declared
+  claims plus a closed verification object. Trusted `PresentedFacts` carry the
+  credential members and an expiry of the earlier of `exp` and the maximum
+  credential age. Its pinned configuration states the channel policy and client
+  identifiers, the DCQL query id, the issuer allow-list, an explicit deny-list,
+  the channel policy, the disclosed claims, `status` (`required` is refused until
+  status checking is available; `not-checked` must be stated), the maximum
+  credential age and the subject-link mode. Holder binding is always required.
+  The protocol sits behind the default `wallet-presentation` feature; without it
+  a pack that names the protocol fails to compile. The presentation crate gains
+  an issuer and certificate-fingerprint deny-list checked before the allow-list.
+  An ignored device-run harness (`tests/device_run.rs`) and a value-free receipt
+  format record a real-wallet run; no wallet is claimed until a reviewed receipt exists.
+- `registry-evidence-verifier` reads the SD-JWT VC issuer JWS and the Status
+  List Token through the shared compact JWS parser, and resolves SD-JWT VC
+  disclosures through the shared RFC 9901 resolver with the Evidence issuance
+  profile kept on top. The verifier accepts and refuses the same credentials
+  and tokens, with these reclassifications of already-refused input: a segment
+  that cannot be decoded or exceeds its size bound draws `MalformedJws` (SD-JWT
+  VC) or `MalformedToken` / `TokenTooLarge` (Status List Token) instead of the
+  class of the later check that would have read it; a Status List Token header
+  carrying `b64` is refused with `UnsupportedCriticalHeader` instead of being
+  ignored; a disclosure whose name is `_sd`, `...` or `_sd_alg`, or whose value
+  carries a `_sd` or `...` member, is refused as `Disclosure`.
+- `registry_evidence_verifier::holder_proof` is the home of the holder-bound
+  profile's proof of possession check (`validate_holder_proof`,
+  `validate_holder_proof_for_confirmation`), moved from
+  `registry-platform-sdjwt` with unchanged rules. Its failure type is
+  `HolderProofError`. Its fuzz target is `verifier_holder_proof` in
+  `products/evidence/fuzz`, moved from the platform fuzz crate as
+  `sdjwt_holder_proof`.
+- `acquisition` accepts an optional `holderPresented: {source, selectorProfiles}`
+  block beside `source`. A request's selector profile selects exactly one
+  acquisition channel with no fallback; `source` is optional only when the block
+  lists every selector profile the subject roles allow. Startup refuses a
+  holder-presented Source that does not use `wallet-presentation-v1`, a
+  source-channel Source that does, an empty, repeated, unknown or both-channel
+  profile list, an SD-JWT VC representation on a holder-presented definition,
+  and a `channels` member on a grant. A holder-presented channel without
+  verified presented facts is a dependency failure; a source channel that
+  receives them is a protocol refusal. Definitions without the block keep their
+  configuration and revision. Authoring accepts and checks the same block,
+  including that a Source reads only selector profiles of its own channel
+  (`acquisition-channel-profile`).
+  Discovery stays one entry per handle for a definition granted on both
+  channels: the entry states its `channel`, the source channel's shape is its
+  own `subjects`, and an additive `alternatives` member carries the
+  holder-presented shape (`channel`, `subjects`, `responseFormats`) only when
+  the caller is entitled to it. Source-only entries are unchanged. The Rust
+  client parses and validates both members and selects a shape with
+  `EvidenceDefinition::request_shape`; the Node and Python `discover` results
+  carry them.
+  A caller entitled to the source channel alone receives the entry without a
+  `channel` member, exactly as for a source-only definition. A
+  `wallet-presentation-v1` read whose `receivedAt` is later than the read plus
+  the policy clock skew, or earlier than the read less 3600 seconds and the
+  skew, is a dependency failure, and startup refuses `subjectLink:
+  attribute-match` with an empty `disclosedClaims`.
+- `normalise_name(profile, value)` is a new Rhai primitive and the one stated exception
+  to exact string comparison in derivation scripts. The only profile is
+  `name-match-v1` (NFKC, full case fold, mark removal, a declared
+  transliteration table, and removal of invisible shaping characters, hyphens,
+  apostrophes and spaces). It returns the normalised text for one exact
+  comparison with one expected value; it performs no search, ranking or
+  scoring. An unknown profile, input over 1,024 bytes, or growth past 8,192
+  bytes in any step fails the invocation. The profile fingerprint (steps, table
+  digest, Unicode data version) is pinned by a test, so an ICU upgrade is a
+  reviewed change. The global primitive rule that strings are compared as exact
+  UTF-8 names this exception.
+- Assertion construction takes the `channel` and `presentedCredential` members
+  from trusted facts a host protocol attaches to its verified response
+  (`registry_evidence::presented::PresentedFacts`), and from the source path
+  (`channel: source`, no credential) otherwise. Nothing a source script emits
+  can set them. With presented facts the assertion's `validUntil` is capped by
+  the credential's `exp` as well as the source deadline. Host protocol
+  verifiers receive the acquisition's evaluation instant; `signed-evidence-v1`
+  still judges the upstream assertion at the wall clock when its response is
+  verified, because that assertion is issued after the request was sent.
+- `signing.certificateChainFile` is a new optional member of the bundle's
+  signing block. It names `public-keys/<kid>.chain.pem`, a PEM certificate
+  chain (leaf first, at most three certificates) for the active signing key,
+  so wallets and verifiers that resolve issuer keys through `x5c` (HAIP 1.0
+  mandates it) can verify the SD-JWT VC credentials Evidence issues. With the
+  member, SD-JWT VC credentials carry the chain as `x5c` in the issuer JWT
+  header and the served JWKS entry for the active key carries the same chain
+  as its `x5c` member; the signing key, algorithm, `kid`, and the flattened JWS
+  format do not change. Without it, issued headers and the key set are
+  byte-identical to before. Startup refuses a chain that does not parse, is
+  longer than the platform chain policy allows, has a leaf for a different key,
+  or has a certificate that is not valid at startup; the file name must carry
+  the active key's thumbprint, so a rotated key's chain is never reused. The
+  chain is not validated to a trust anchor by Evidence; relying parties do
+  that. Evidence's own verifier now accepts an `x5c` header on an SD-JWT VC
+  only when the pinned key selected by `kid` carries an `x5c` member whose first
+  certificate equals the header's, and still verifies with the pinned key. A
+  pinned key set whose entries carry an `x5c` member is now a usable key set;
+  an `x5c` header against a key with none is refused as before, and the
+  flattened JWS profile still refuses `x5c`.
+- BREAKING: `registry.assertion-evidence/v1` gains a required, signed member
+  `channel` (`source` or `holder-presented`). A holder-presented assertion
+  also carries `presentedCredential` (`trustEntry`, `issuer`, `type`,
+  `issuedAt`, `subjectLink`); a source assertion must not. Every assertion the
+  runtime constructs today is `source`, and a verified SD-JWT VC maps to
+  `source`; the runtime refuses to serialize a holder-presented assertion as an
+  SD-JWT VC. Payloads signed before this change lack `channel` and are refused
+  as malformed payloads; reissue them. Verification policies and
+  holder-bound verification policies gain optional `acceptedChannels`
+  (default `[source]`) and `maximumCredentialAgeSeconds` (holder-presented
+  only, measured from `presentedCredential.issuedAt` to `observedAt`). A
+  credential issued after `observedAt` is always refused.
+- The relying-party Rust client and the Node and Python bindings expose the
+  verified assertion's `channel` and `presentedCredential`, and accept
+  `acceptedChannels` and `maximumCredentialAgeSeconds` on a request. The
+  default policy accepts `source` only, so a holder-presented assertion is
+  refused unless the caller opts in. Rebuild bindings and regenerate golden
+  fixtures that carried assertions without a `channel`.
+- `evidence-oid4vci` gains an optional OpenID4VCI Draft 13 compatibility
+  profile for wallets that accept third-party issuance only over Draft 13
+  (the France Identité Partenaires test wallet). It is off unless the runtime
+  file carries `draft13Profile: {}`, and then it is served beside the 1.0 Final
+  profile at its own issuer identifier, the `credentialIssuer` followed by
+  `/protocol/oid4vci/draft-13`: plain JSON issuer metadata, offer creation, a
+  form-encoded token endpoint returning lowercase `bearer` with `c_nonce` and
+  `c_nonce_expires_in`, and a credential endpoint taking `format`, `vct` and a
+  singular `proof` and returning one `credential`. Every configuration there
+  advertises `cose_key` as its binding method for the Android 1.3.5078 build;
+  the credential still binds the holder key in `cnf.jwk`. The 1.0 routes,
+  metadata and wire behaviour are unchanged with the profile on or off, an
+  offer, access token or nonce of one profile is unusable in the other, and the
+  service still signs nothing. The service OpenAPI document gains the profile's
+  four paths and the runtime schema gains `draft13Profile`. See
+  `contracts/oid4vci-profile.yaml`.
+- Add the `registry-evidence-oid4vp` OpenID4VP verifier front end. It lists
+  `clientIdentifiers` of four types (`x509-san-dns`, `x509-hash`,
+  `decentralized-identifier` for `did:web`, and `pre-registered`); every policy
+  names one with `clientIdentifier`. The did:web and pre-registered types sign
+  request objects with EdDSA for Inji, and the service then serves
+  `GET /.well-known/did.json` and `GET /v1/jwks`. `sessions.maximumHeldPresentationBytes`
+  (default 268435456) bounds held presentations; a response past it is refused
+  with 503. `GET /v1/sessions/{reference}` adds `failureCategory` when the wallet
+  reported an error. Every response carries one canonical W3C `traceparent` (a valid
+  inbound one keeps its trace id) and never a `tracestate`. Repeated object members in wallet responses and caller
+  bodies are refused. The HTTP contract is
+  `generated/registry-evidence-oid4vp.openapi.json` and the profile is
+  `contracts/oid4vp-profile.yaml`; it implements OpenID4VP 1.0 and the HAIP 1.0
+  verifier flow profile and is not certified. A presentation is consumed by
+  its first successful read (a later read is a 404), `/ready` reports not ready
+  once a client identifier certificate has expired, and a deployment must rate
+  limit the wallet-facing paths per source at its ingress.
+  The example `examples/wallet-presentation` and the composed gate
+  `tests/evidence_journey.rs` run the service and Evidence together over loopback,
+  from a simulated wallet to a verified `holder-presented` assertion. A policy's
+  credential query may omit `claims` to request no claim (an empty list is
+  refused), and a `wallet-presentation-v1` configuration may list no
+  `disclosedClaims`, so a possession-only check discloses nothing.
+- The language server now supports `evidence-oid4vp` runtime files: a project marker
+  product, section symbols, client identifier and policy declarations, and the policy
+  `clientIdentifier` reference check. Secret references are not navigable.
 - BREAKING: Source pack scripts run on the Adapter's deterministic engine, so
   the acquisition deadline holds for every call a script can make. A pack
   script that calls `timestamp`, `elapsed`, `sleep`, `exit`, `take`, `tag`,

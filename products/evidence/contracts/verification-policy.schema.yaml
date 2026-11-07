@@ -67,12 +67,31 @@ properties:
     uniqueItems: true
     items: {type: string, pattern: '^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$'}
     description: Emergency denylist of Evidence service-key RFC 7638 thumbprints, checked before a pinned JWKS key is selected. An empty list is explicit.
+  acceptedChannels:
+    type: array
+    minItems: 1
+    maxItems: 2
+    uniqueItems: true
+    items: {enum: [source, holder-presented]}
+    description: >-
+      The channels this procedure accepts, from the closed channel vocabulary.
+      Omitting it means source only, so a procedure written before the channel
+      member existed refuses an assertion that a holder presented. An empty
+      list is refused; an open choice is every channel listed.
+  maximumCredentialAgeSeconds:
+    type: integer
+    minimum: 1
+    maximum: 315360000
+    description: >-
+      Longest acceptable observedAt minus presentedCredential.issuedAt, applied
+      to holder-presented assertions only. Omitting it means no bound on the
+      credential's age.
   clockSkewSeconds:
     type: integer
     minimum: 0
     maximum: 300
     default: 0
-    description: The only optional field. Omitting it means zero tolerance.
+    description: Optional. Omitting it means zero tolerance.
 $defs:
   expected-subject:
     type: object
@@ -170,7 +189,7 @@ $comment: >-
   such as the independently retained original request and an accepted original
   transaction. Copying values out of the JWS under verification proves nothing,
   and a policy that omitted an expectation would silently skip a comparison, so
-  the document is closed and every field except clockSkewSeconds is required. A
+  the document is closed and every field except clockSkewSeconds, acceptedChannels, and maximumCredentialAgeSeconds is required. A
   failed comparison, including the expected nonce, the expected role-bound
   subject set, and the expected output contract, reports the one generic policy
   class, so re-verification is never an oracle for which hidden comparison

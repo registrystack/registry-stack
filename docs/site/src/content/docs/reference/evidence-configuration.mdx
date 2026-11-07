@@ -57,10 +57,13 @@ with `none` must also match the loopback pattern listed there.
     crates/registry-evidencectl/schemas/authoring/*.schema.json.
     Run npm run generate from docs/site. */}
 
-{/* The evidence-oid4vci runtime grammar is generated into the same data and
-    belongs to the supporting service's own page, configure/evidence-oid4vci. */}
+{/* The evidence-oid4vci and evidence-oid4vp runtime grammars are generated into the same data
+    and belong to the supporting services' own pages, configure/evidence-oid4vci and
+    configure/evidence-oid4vp. */}
 <ConfigurationReference
-  contracts={reference.contracts.filter((contract) => contract.id !== 'oid4vci-runtime')}
+  contracts={reference.contracts.filter(
+    (contract) => contract.id !== 'oid4vci-runtime' && contract.id !== 'oid4vp-runtime',
+  )}
   prefix="evidence"
 />
 

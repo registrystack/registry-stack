@@ -12,7 +12,7 @@ use chrono::{DateTime, Utc};
 use registry_evidence_verifier::{
     fixtures::{jwks_document, EvidenceSigner},
     model::{
-        Evidence, EvidenceObjectType, JwksDocument, PublicValue, SubjectBinding,
+        ChannelKind, Evidence, EvidenceObjectType, JwksDocument, PublicValue, SubjectBinding,
         SubjectBindingMode, SupportedValue,
     },
     verifier::{verify_flattened_jws, EvidenceVerificationPolicy},
@@ -86,6 +86,8 @@ pub fn canonical_evidence() -> Evidence {
         schema: EVIDENCE_SCHEMA_V1.to_owned(),
         assurance_profile: AssuranceProfile::EvidenceGrade,
         subject_binding: SubjectBindingMode::AudienceScoped,
+        channel: ChannelKind::Source,
+        presented_credential: None,
         request_nonce: Some(CANONICAL_NONCE.to_owned()),
         id: "urn:ulid:01K1EXAMPLE0000000000000000".to_owned(),
         evidence_type_name: EvidenceObjectType::Evidence,

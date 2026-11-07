@@ -16,6 +16,11 @@ path = "src/main.rs"
 workspace = true
 
 [features]
+default = ["wallet-presentation"]
+# Registers the `wallet-presentation-v1` host protocol, which verifies a
+# credential a holder presented from a wallet. Without it the protocol is
+# unknown and a pack that names it fails to compile.
+wallet-presentation = ["dep:registry-evidence-presentation"]
 # Enables the status ledger PostgreSQL suites. They require
 # `EVIDENCE_STATUS_TEST_DATABASE_URL` and fail when it is absent.
 postgres-test = []
@@ -39,6 +44,7 @@ jsonschema.workspace = true
 jsonwebtoken.workspace = true
 registry-adapter-core.workspace = true
 registry-adapter-engine = { workspace = true, features = ["sqlite-extract"] }
+registry-evidence-presentation = { workspace = true, optional = true }
 registry-evidence-verifier.workspace = true
 registry-evidence-client.workspace = true
 registry-discovery-profile.workspace = true
@@ -49,11 +55,14 @@ registry-platform-buildinfo.workspace = true
 registry-platform-crypto = { workspace = true, features = ["transit"] }
 registry-platform-config.workspace = true
 registry-platform-httpsec = { workspace = true, features = ["server"] }
+registry-platform-metrics.workspace = true
 registry-platform-httputil.workspace = true
 registry-platform-oidc.workspace = true
 registry-platform-ratelimit.workspace = true
 registry-platform-sdjwt.workspace = true
+registry-platform-x509.workspace = true
 registry-platform-sqlite = { workspace = true, features = ["fixture"] }
+registry-platform-text.workspace = true
 registry-platform-yaml.workspace = true
 reqwest.workspace = true
 rand_core.workspace = true
@@ -78,6 +87,7 @@ ulid.workspace = true
 url.workspace = true
 utoipa.workspace = true
 uuid.workspace = true
+x509-cert.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
@@ -87,6 +97,7 @@ criterion.workspace = true
 proptest.workspace = true
 rcgen.workspace = true
 registry-evidence-authoring.workspace = true
+registry-evidence-presentation.workspace = true
 registry-platform-crypto = { workspace = true, features = ["test-support", "transit"] }
 serde_norway.workspace = true
 tokio-rustls.workspace = true

@@ -227,9 +227,10 @@ impl EvidenceSourceConfig {
         &self,
         verification: &RetainedEvidenceVerification,
         response: &[u8],
+        now: DateTime<Utc>,
     ) -> Result<(Value, DateTime<Utc>), SignedSourceError> {
         let verified = verification
-            .verify(response)
+            .verify_as_of(response, now)
             .map_err(|_| SignedSourceError::Verification)?;
         let valid_until = DateTime::parse_from_rfc3339(&verified.evidence().valid_until)
             .map_err(|_| SignedSourceError::Verification)?

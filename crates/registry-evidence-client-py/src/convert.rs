@@ -19,10 +19,10 @@ use std::{collections::BTreeMap, fmt, sync::Arc, time::Duration};
 
 use chrono::{DateTime, Utc};
 use evidence_client_sdk::{
-    AssuranceProfile, Evidence, EvidenceClientConfig, EvidenceClientError,
-    EvidenceRequestBatchItemSpec, EvidenceRequestBatchSpec, EvidenceRequestSpec,
-    EvidenceResponseFormat, ExpectedOutputDocument, ExpectedSubjectDocument, HolderPublicKey,
-    JwksDocument, PrivateKeyJwt, PrivateKeyJwtConfig, SelectorValue, StaticToken,
+    AssuranceProfile, ChannelKind, ChannelPolicy, Evidence, EvidenceClientConfig,
+    EvidenceClientError, EvidenceRequestBatchItemSpec, EvidenceRequestBatchSpec,
+    EvidenceRequestSpec, EvidenceResponseFormat, ExpectedOutputDocument, ExpectedSubjectDocument,
+    HolderPublicKey, JwksDocument, PrivateKeyJwt, PrivateKeyJwtConfig, SelectorValue, StaticToken,
     SubjectExpectations, SubjectRequest, TokenError, TokenProvider,
 };
 use pyo3::{
@@ -571,6 +571,48 @@ fn holder_keys_from_json(
     }
 }
 
+/// The channel policy of a request or request-batch specification, or of the
+/// progressive request keywords: `accepted_channels` (a non-empty sequence of
+/// `"source"` and `"holder-presented"`) and `maximum_credential_age_seconds`,
+/// both optional. Absent or `None` members leave the client's default: `source`
+/// only, with no credential age bound. The Rust client owns the bounds; only
+/// the shape is checked here.
+pub fn channel_policy_from_json(
+    object: &Map<String, Value>,
+) -> Result<ChannelPolicy, ConversionError> {
+    let mut policy = ChannelPolicy::default();
+    match object.get("accepted_channels") {
+        None | Some(Value::Null) => {}
+        Some(Value::Array(channels)) => {
+            policy.accepted_channels = channels
+                .iter()
+                .map(|channel| match channel.as_str() {
+                    Some("source") => Ok(ChannelKind::Source),
+                    Some("holder-presented") => Ok(ChannelKind::HolderPresented),
+                    _ => Err(ConversionError::new(
+                        "`accepted_channels` entries must be \"source\" or \"holder-presented\"",
+                    )),
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+        }
+        Some(_) => {
+            return Err(ConversionError::new(
+                "`accepted_channels` must be a sequence of channel names",
+            ))
+        }
+    }
+    policy.maximum_credential_age_seconds = match object.get("maximum_credential_age_seconds") {
+        None | Some(Value::Null) => None,
+        Some(_) => Some(required_u64(object, "maximum_credential_age_seconds")?),
+    };
+    Ok(policy)
+}
+
+/// [`channel_policy_from_json`] over a whole specification value.
+pub fn spec_channel_policy_from_json(value: &Value) -> Result<ChannelPolicy, ConversionError> {
+    channel_policy_from_json(as_object(value, "a request specification")?)
+}
+
 /// Build the specification [`evidence_client_sdk::EvidenceClient::prepare`]
 /// validates. Only shape is checked here: an empty identifier, an
 /// out-of-range count, or any other business rule is the real client's own
@@ -648,6 +690,8 @@ pub fn batch_spec_from_json(value: &Value) -> Result<EvidenceRequestBatchSpec, C
             "expected_outputs",
             "maximum_assertion_lifetime_seconds",
             "clock_skew_seconds",
+            "accepted_channels",
+            "maximum_credential_age_seconds",
             "items",
         ],
         "a request batch specification must contain only the documented fields",
@@ -2387,6 +2431,8 @@ mod tests {
             schema: registry_evidence_verifier::EVIDENCE_SCHEMA_V1.to_owned(),
             assurance_profile: AssuranceProfile::Local,
             subject_binding: SubjectBindingMode::AudienceScoped,
+            channel: ChannelKind::Source,
+            presented_credential: None,
             request_nonce: Some("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned()),
             id: "urn:example:evidence:convert-test".to_owned(),
             evidence_type_name: EvidenceObjectType::Evidence,
@@ -2409,6 +2455,84 @@ mod tests {
                 value: PublicValue::Boolean(true),
             }],
         }
+    }
+
+    #[test]
+    fn the_channel_policy_defaults_to_source_only_and_reads_the_named_members() {
+        let absent = spec_channel_policy_from_json(&valid_spec_json()).expect("absence is allowed");
+        assert_eq!(absent, ChannelPolicy::default());
+        assert_eq!(absent.accepted_channels, vec![ChannelKind::Source]);
+        assert_eq!(absent.maximum_credential_age_seconds, None);
+
+        let mut spec = valid_spec_json();
+        spec["accepted_channels"] = serde_json::json!(["source", "holder-presented"]);
+        spec["maximum_credential_age_seconds"] = serde_json::json!(86_400);
+        let policy = spec_channel_policy_from_json(&spec).expect("the members are in shape");
+        assert_eq!(
+            policy.accepted_channels,
+            vec![ChannelKind::Source, ChannelKind::HolderPresented]
+        );
+        assert_eq!(policy.maximum_credential_age_seconds, Some(86_400));
+    }
+
+    #[test]
+    fn a_channel_policy_in_the_wrong_shape_is_refused() {
+        for (field, value) in [
+            ("accepted_channels", serde_json::json!("source")),
+            ("accepted_channels", serde_json::json!(["wallet"])),
+            ("accepted_channels", serde_json::json!([1])),
+            ("maximum_credential_age_seconds", serde_json::json!(-1)),
+            ("maximum_credential_age_seconds", serde_json::json!("86400")),
+        ] {
+            let mut spec = valid_spec_json();
+            spec[field] = value.clone();
+            assert!(
+                spec_channel_policy_from_json(&spec).is_err(),
+                "{field}: {value}"
+            );
+        }
+    }
+
+    /// A holder-presented payload converts with its channel and every
+    /// presented-credential member under the contract's spelling.
+    #[test]
+    fn a_holder_presented_payload_converts_with_its_presented_credential() {
+        use evidence_client_sdk::{AssertionChannel, PresentedCredential, SubjectLinkMode};
+
+        let (channel, presented_credential) = AssertionChannel::HolderPresented(
+            PresentedCredential::new(
+                "national-id",
+                "https://issuer.example",
+                "https://credentials.example/identity",
+                "2026-07-01T00:00:00Z".parse().expect("time parses"),
+                SubjectLinkMode::Possession,
+            )
+            .expect("members are in contract"),
+        )
+        .into_members();
+        let evidence = evidence_client_sdk::Evidence {
+            channel,
+            presented_credential,
+            ..audience_scoped_evidence()
+        };
+        let value = evidence_to_json(&evidence).expect("evidence serializes");
+        assert_eq!(value["channel"], "holder-presented");
+        assert_eq!(
+            value["presentedCredential"],
+            serde_json::json!({
+                "trustEntry": "national-id",
+                "issuer": "https://issuer.example",
+                "type": "https://credentials.example/identity",
+                "issuedAt": "2026-07-01T00:00:00Z",
+                "subjectLink": "possession",
+            })
+        );
+        let source = evidence_to_json(&audience_scoped_evidence()).expect("evidence serializes");
+        assert_eq!(source["channel"], "source");
+        assert!(!source
+            .as_object()
+            .expect("an object")
+            .contains_key("presentedCredential"));
     }
 
     #[test]

@@ -647,7 +647,9 @@ pub enum ReviewedMigrationStepDescriptor {
     /// by chunk, with the journal and cursor effects each chunk commits. It
     /// carries no authored SQL; its bound statement content is the canonical
     /// JSON of this descriptor step, so the ledger checksum pins it without a
-    /// SQL artifact.
+    /// SQL artifact. A step whose objects name only blind-index columns is
+    /// instead the re-index of a changed normalization list: it re-derives
+    /// each digest from the stored envelope and touches nothing else.
     FieldEncryptionBackfill {
         #[serde(deserialize_with = "members::local_id")]
         #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
@@ -725,6 +727,9 @@ impl registry_platform_yaml::Identified for ReviewedMigrationStepDescriptor {
     }
 }
 
+/// The suffix of the inventory member naming a field's blind-index column.
+const BLIND_INDEX_MEMBER_SUFFIX: &str = "#lookup";
+
 impl ReviewedMigrationStepDescriptor {
     #[cfg(feature = "tooling")]
     fn id(&self) -> &str {
@@ -741,7 +746,26 @@ impl ReviewedMigrationStepDescriptor {
         }
     }
 
-    fn objects(&self) -> &[ReviewedMigrationObject] {
+    /// Whether this is the engine step that re-derives blind-index digests
+    /// from existing envelopes after a normalization change: it names only
+    /// blind-index columns, where a flip into encryption also names the
+    /// envelope column it seals.
+    pub fn is_blind_index_reindex(&self) -> bool {
+        match self {
+            Self::FieldEncryptionBackfill { objects, .. } => {
+                !objects.is_empty()
+                    && objects.iter().all(|object| {
+                        object
+                            .member_id
+                            .as_deref()
+                            .is_some_and(|member| member.ends_with(BLIND_INDEX_MEMBER_SUFFIX))
+                    })
+            }
+            Self::TransactionalSql { .. } | Self::ChunkedBackfill { .. } => false,
+        }
+    }
+
+    pub(crate) fn objects(&self) -> &[ReviewedMigrationObject] {
         match self {
             Self::TransactionalSql { objects, .. }
             | Self::ChunkedBackfill { objects, .. }
@@ -1050,6 +1074,10 @@ pub enum ReviewedMigrationError {
         "the reviewed migration cannot rewrite timer control or predicate field `{field_id}` on Record type `{entity_id}`"
     )]
     TimerFieldUpdate { entity_id: String, field_id: String },
+    #[error(
+        "the reviewed migration cannot write the blind-index column of field `{field_id}` on Record type `{entity_id}`; only the engine derives its digests"
+    )]
+    BlindIndexWrite { entity_id: String, field_id: String },
 }
 
 #[cfg(feature = "tooling")]
@@ -1186,13 +1214,15 @@ pub(crate) fn validate_reviewed_migration_plan(
 
         let mut steps = Vec::with_capacity(descriptor.steps.len());
         let mut object_covers = BTreeSet::new();
+        let mut blind_index_writes = Vec::new();
         for step in &descriptor.steps {
             match step.sql_path() {
                 Some(path) => {
                     referenced_paths.insert(path.to_owned());
                     let sql = read_sql(files, path)?;
-                    let reference_validation_tables =
+                    let validated =
                         validate_step_sql(step, sql, &descriptor, bindings, &declared_tables)?;
+                    blind_index_writes.extend(validated.blind_index_writes);
                     for object in step.objects() {
                         object_covers.insert(object_cover(object, &descriptor.covers)?);
                     }
@@ -1200,7 +1230,7 @@ pub(crate) fn validate_reviewed_migration_plan(
                         descriptor: step.clone(),
                         sql: sql.to_owned(),
                         sha256: digest(sql.as_bytes()),
-                        reference_validation_tables,
+                        reference_validation_tables: validated.reference_validation_tables,
                     });
                 }
                 None => {
@@ -1208,7 +1238,9 @@ pub(crate) fn validate_reviewed_migration_plan(
                     // ledger checksum covers the canonical JSON of the step
                     // descriptor itself, so any field of the step is pinned
                     // exactly the way authored SQL would be.
-                    validate_step_sql(step, "", &descriptor, bindings, &declared_tables)?;
+                    let validated =
+                        validate_step_sql(step, "", &descriptor, bindings, &declared_tables)?;
+                    blind_index_writes.extend(validated.blind_index_writes);
                     for object in step.objects() {
                         object_covers.insert(object_cover(object, &descriptor.covers)?);
                     }
@@ -1229,6 +1261,7 @@ pub(crate) fn validate_reviewed_migration_plan(
             }
         }
         validate_field_encryption_drop_order(&descriptor, &steps)?;
+        validate_blind_index_reindex_coverage(&descriptor)?;
         let descriptor_covers = descriptor.covers.iter().cloned().collect::<BTreeSet<_>>();
         if descriptor.steps.is_empty() && covers_are_metadata_only(&descriptor.covers) {
             object_covers = descriptor_covers.clone();
@@ -1236,6 +1269,9 @@ pub(crate) fn validate_reviewed_migration_plan(
         if object_covers != descriptor_covers {
             return Err(ReviewedMigrationError::Coverage);
         }
+        // After coverage, so a plan that authors the re-index in place of the
+        // engine step is refused for the missing step, the fix to name.
+        refuse_blind_index_writes(&blind_index_writes)?;
         let pre_assertions = validate_assertions(
             &descriptor.pre_assertions,
             files,
@@ -1334,6 +1370,9 @@ fn validate_field_encryption_step_grouping(
             else {
                 continue;
             };
+            if step.descriptor.is_blind_index_reindex() {
+                continue;
+            }
             let fields = objects
                 .iter()
                 .filter_map(|object| {
@@ -1354,6 +1393,55 @@ fn validate_field_encryption_step_grouping(
         if entity_steps.len() != 1 || entity_steps[0] != fields {
             return Err(ReviewedMigrationError::Coverage);
         }
+    }
+    Ok(())
+}
+
+/// Every changed blind-index lookup is re-derived by exactly one engine
+/// re-index step in the descriptor that covers it, and every re-index step
+/// re-derives only fields that descriptor covers. Authored SQL cannot open the
+/// envelopes, so a lookup change with no re-index step would leave the stored
+/// digests of the old normalization behind the new package.
+#[cfg(feature = "tooling")]
+fn validate_blind_index_reindex_coverage(
+    descriptor: &ReviewedMigrationDescriptor,
+) -> Result<(), ReviewedMigrationError> {
+    let covered = descriptor
+        .covers
+        .iter()
+        .filter(|cover| cover.code == CompiledRegistryChangeCode::FieldLookupChanged)
+        .map(|cover| {
+            Some((
+                cover.target.record_type_id.clone()?,
+                cover.target.member_id.clone()?,
+            ))
+        })
+        .collect::<Option<BTreeSet<_>>>()
+        .ok_or(ReviewedMigrationError::Coverage)?;
+    let mut reindexed = BTreeSet::new();
+    for step in &descriptor.steps {
+        let ReviewedMigrationStepDescriptor::FieldEncryptionBackfill {
+            entity_id, objects, ..
+        } = step
+        else {
+            continue;
+        };
+        if !step.is_blind_index_reindex() {
+            continue;
+        }
+        for object in objects {
+            let field = object
+                .member_id
+                .as_deref()
+                .and_then(|member| member.strip_suffix(BLIND_INDEX_MEMBER_SUFFIX))
+                .ok_or(ReviewedMigrationError::Descriptor)?;
+            if !reindexed.insert((entity_id.clone(), field.to_owned())) {
+                return Err(ReviewedMigrationError::Coverage);
+            }
+        }
+    }
+    if covered != reindexed {
+        return Err(ReviewedMigrationError::Coverage);
     }
     Ok(())
 }
@@ -1916,6 +2004,17 @@ fn descriptor_problems(
     problems
 }
 
+/// What one validated step yields to its descriptor: the reference tables
+/// the apply validates, and the blind-index columns the step's SQL writes
+/// values to, which the descriptor refuses once its coverage holds.
+#[cfg(feature = "tooling")]
+#[derive(Default)]
+#[must_use = "a step's blind-index writes must reach refuse_blind_index_writes"]
+struct ValidatedStepSql {
+    reference_validation_tables: Vec<String>,
+    blind_index_writes: Vec<ReviewedMigrationObject>,
+}
+
 #[cfg(feature = "tooling")]
 fn validate_step_sql(
     step: &ReviewedMigrationStepDescriptor,
@@ -1923,10 +2022,10 @@ fn validate_step_sql(
     descriptor: &ReviewedMigrationDescriptor,
     bindings: &ReviewedPlanBindings<'_>,
     declared_tables: &BTreeSet<&str>,
-) -> Result<Vec<String>, ReviewedMigrationError> {
+) -> Result<ValidatedStepSql, ReviewedMigrationError> {
     if let ReviewedMigrationStepDescriptor::FieldEncryptionBackfill { .. } = step {
         validate_field_encryption_backfill_step(step, descriptor, bindings)?;
-        return Ok(Vec::new());
+        return Ok(ValidatedStepSql::default());
     }
     let parsed = parse_one(sql)?;
     validate_ast_objects(&parsed, declared_tables, false)?;
@@ -1999,11 +2098,40 @@ fn validate_step_sql(
         return Err(ReviewedMigrationError::Sql);
     }
     validate_timer_field_updates(&value_rewritten_objects, bindings)?;
-    Ok(reference_validation_tables(
-        &parsed,
-        step.objects(),
-        bindings,
-    ))
+    Ok(ValidatedStepSql {
+        reference_validation_tables: reference_validation_tables(&parsed, step.objects(), bindings),
+        blind_index_writes: value_rewritten_objects
+            .into_iter()
+            .filter(|object| {
+                object.kind == ReviewedMigrationObjectKind::Field
+                    && object
+                        .member_id
+                        .as_deref()
+                        .is_some_and(|member| member.ends_with(BLIND_INDEX_MEMBER_SUFFIX))
+            })
+            .collect(),
+    })
+}
+
+/// Refuse authored SQL that writes a blind-index column's values. Authored
+/// SQL cannot open the envelopes, so only the engine derives digests; a value
+/// written there would leave a digest no lookup of the stored value matches.
+#[cfg(feature = "tooling")]
+fn refuse_blind_index_writes(
+    writes: &[ReviewedMigrationObject],
+) -> Result<(), ReviewedMigrationError> {
+    let Some(object) = writes.first() else {
+        return Ok(());
+    };
+    let field_id = object
+        .member_id
+        .as_deref()
+        .and_then(|member| member.strip_suffix(BLIND_INDEX_MEMBER_SUFFIX))
+        .ok_or(ReviewedMigrationError::Descriptor)?;
+    Err(ReviewedMigrationError::BlindIndexWrite {
+        entity_id: object.entity_id.clone(),
+        field_id: field_id.to_owned(),
+    })
 }
 
 #[cfg(feature = "tooling")]
@@ -2086,7 +2214,8 @@ fn reference_validation_tables(
 /// name the envelope column of a covered field the candidate compiles as
 /// encrypted, plus that field's blind-index sibling under the implicit
 /// `#lookup` member, and its cursor protocol must be the record-id keyset the
-/// engine walks.
+/// engine walks. A re-index step names only blind-index columns, each of a
+/// lookup both packages declare and the descriptor covers as changed.
 #[cfg(feature = "tooling")]
 fn validate_field_encryption_backfill_step(
     step: &ReviewedMigrationStepDescriptor,
@@ -2105,8 +2234,14 @@ fn validate_field_encryption_backfill_step(
     if descriptor.change_class != CompiledRegistryChangeClass::DataBackfillRequired {
         return Err(ReviewedMigrationError::Descriptor);
     }
+    let reindex = step.is_blind_index_reindex();
+    let cover_code = if reindex {
+        CompiledRegistryChangeCode::FieldLookupChanged
+    } else {
+        CompiledRegistryChangeCode::FieldEncryptionChanged
+    };
     if !descriptor.covers.iter().any(|cover| {
-        cover.code == CompiledRegistryChangeCode::FieldEncryptionChanged
+        cover.code == cover_code
             && cover.target.record_type_id.as_deref() == Some(entity_id.as_str())
     }) {
         return Err(ReviewedMigrationError::Coverage);
@@ -2117,6 +2252,43 @@ fn validate_field_encryption_backfill_step(
         .ok_or(ReviewedMigrationError::Descriptor)?;
     if *cursor != ChunkCursorProtocol::RecordIdUuidArray {
         return Err(ReviewedMigrationError::Descriptor);
+    }
+    // The engine walks the step's entity table, so every object must name
+    // that entity and table; coverage then reads the same entity the
+    // runtime re-derives or seals.
+    if objects
+        .iter()
+        .any(|object| object.entity_id != *entity_id || object.table != entity.physical_table)
+    {
+        return Err(ReviewedMigrationError::Descriptor);
+    }
+    if reindex {
+        // A re-index re-derives digests of a lookup both packages declare, so
+        // the predecessor must already hold the blind-index column.
+        let prior = bindings
+            .prior_entities
+            .get(entity_id)
+            .ok_or(ReviewedMigrationError::Descriptor)?;
+        for object in objects {
+            let field_id = object
+                .member_id
+                .as_deref()
+                .and_then(|member| member.strip_suffix(BLIND_INDEX_MEMBER_SUFFIX))
+                .ok_or(ReviewedMigrationError::Descriptor)?;
+            let covered = descriptor.covers.iter().any(|cover| {
+                cover.code == CompiledRegistryChangeCode::FieldLookupChanged
+                    && cover.target.record_type_id.as_deref() == Some(entity_id.as_str())
+                    && cover.target.member_id.as_deref() == Some(field_id)
+            });
+            let prior_blind = prior
+                .fields
+                .get(field_id)
+                .and_then(|field| field.encryption.as_ref())
+                .and_then(|encryption| encryption.blind_index.as_ref());
+            if !covered || prior_blind.is_none() {
+                return Err(ReviewedMigrationError::Coverage);
+            }
+        }
     }
     for object in objects {
         let Some(member_id) = object.member_id.as_deref() else {
@@ -2159,7 +2331,7 @@ fn descriptor_covers_field_encryption_flip(descriptor: &ReviewedMigrationDescrip
             matches!(
                 step,
                 ReviewedMigrationStepDescriptor::FieldEncryptionBackfill { .. }
-            )
+            ) && !step.is_blind_index_reindex()
         })
 }
 

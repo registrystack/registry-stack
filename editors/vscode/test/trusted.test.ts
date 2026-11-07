@@ -79,6 +79,29 @@ suite('Registry Stack extension', () => {
       '  maximumOffers: 4096',
       '',
     ].join('\n');
+    // A complete verifier runtime document, the form the current reader accepts.
+    const oid4vpRuntime = [
+      'apiVersion: id.registrystack.org/formats/evidence/oid4vp-runtime/v1alpha1',
+      'kind: EvidenceOid4vpRuntimeConfig',
+      'publicBaseUrl: https://verifier.example.org',
+      'listener:',
+      '  bind: 127.0.0.1:8095',
+      'secretProviders:',
+      '  file:',
+      '    root: /run/secrets/evidence-oid4vp',
+      'audit:',
+      '  destination: stdout',
+      '  hashKeyRef: secret:file/audit-hash-key',
+      'clientIdentifiers:',
+      '  - id: haip',
+      '    type: x509-san-dns',
+      '    certificateChainRef: secret:file/verifier-chain.pem',
+      '    signingKeyRef: secret:file/verifier-signing.jwk.json',
+      'policies:',
+      '  - id: national-id',
+      '    clientIdentifier: haip',
+      '',
+    ].join('\n');
     const productFixtures = [
       ['breg', 'registry.yaml', 'kind: BRegProject\nrecordTypes:\n  - id: host-person\n', 'host-person'],
       ['coordinator', 'workflow.yaml', 'kind: CoordinatorProject\noperations:\n  host-operation: {uses: breg.read-record/v1, connection: external-registry}\n', 'host-operation'],
@@ -89,6 +112,7 @@ suite('Registry Stack extension', () => {
       ['render', 'manifest.yaml', 'kind: RenderBundle\ndocuments:\n  - id: host-document\n', 'host-document'],
       ['manifest', 'custom.yaml', 'schema_version: registry-manifest/v1\ncatalog:\n  id: host-catalog\n', 'host-catalog'],
       ['evidence-oid4vci', 'wallet-config.yml', oid4vciRuntime, 'credentialIssuer'],
+      ['evidence-oid4vp', 'verifier-config.yml', oid4vpRuntime, 'clientIdentifiers'],
     ];
     const initialFolder = vscode.workspace.workspaceFolders?.[0];
     assert.ok(initialFolder);
@@ -97,7 +121,7 @@ suite('Registry Stack extension', () => {
       fs.mkdirSync(directory);
       const documentPath = path.join(directory, filename);
       fs.writeFileSync(documentPath, content);
-      if (product === 'manifest' || product === 'evidence-oid4vci') {
+      if (product === 'manifest' || product === 'evidence-oid4vci' || product === 'evidence-oid4vp') {
         fs.mkdirSync(path.join(directory, '.registry-stack-editor'));
         fs.writeFileSync(
           path.join(directory, '.registry-stack-editor/project.json'),

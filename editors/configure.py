@@ -33,7 +33,8 @@ PRODUCT_FILES = {
     "platform": "task-connection.yaml",
     "evidence-deployment": "runtime.yaml",
 }
-PRODUCTS = (*PRODUCT_FILES, "evidence-oid4vci")
+AUTHORED_DOCUMENT_PRODUCTS = ("evidence-oid4vci", "evidence-oid4vp")
+PRODUCTS = (*PRODUCT_FILES, *AUTHORED_DOCUMENT_PRODUCTS)
 # A pattern ending in `.json` names a JSON format, mapped through the JSON
 # language server; every other pattern is YAML.
 SCHEMAS = {
@@ -117,6 +118,9 @@ SCHEMAS = {
     ),
     "evidence-oid4vci": (
         ("products/evidence/generated/oid4vci-runtime/oid4vci-runtime.schema.json", "{document}"),
+    ),
+    "evidence-oid4vp": (
+        ("products/evidence/generated/oid4vp-runtime/oid4vp-runtime.schema.json", "{document}"),
     ),
     "discovery": (
         ("products/platform/schemas/check-acceptances.schema.json", "check-acceptances.yaml"),
@@ -236,6 +240,7 @@ CHECKS = {
     "evidence": ("evidencectl", "check", "{project}"),
     "platform": ("evidencectl", "dev", "check", "task-connection.yaml"),
     "evidence-oid4vci": ("evidence-oid4vci", "check", "--runtime-config", "{document}"),
+    "evidence-oid4vp": ("evidence-oid4vp", "check", "--runtime-config", "{document}"),
     "evidence-deployment": ("evidence", "check", "--runtime-config", "runtime.yaml"),
 }
 
@@ -307,11 +312,11 @@ def workspace_version() -> str:
 def check_project(product: str, project: Path, document_arg: str | None) -> tuple[str | None, Path | None]:
     if not project.is_dir() or project.is_symlink():
         raise SetupError(f"project must be a real directory: {project}")
-    if document_arg is not None and product not in ("manifest", "evidence-oid4vci"):
-        raise SetupError("--document applies only to manifest and evidence-oid4vci")
-    if product == "evidence-oid4vci" and document_arg is None:
-        raise SetupError("evidence-oid4vci requires --document for its authored YAML file")
-    if product == "manifest" or product == "evidence-oid4vci":
+    if document_arg is not None and product not in ("manifest", *AUTHORED_DOCUMENT_PRODUCTS):
+        raise SetupError("--document applies only to manifest, evidence-oid4vci, and evidence-oid4vp")
+    if product in AUTHORED_DOCUMENT_PRODUCTS and document_arg is None:
+        raise SetupError(f"{product} requires --document for its authored YAML file")
+    if product == "manifest" or product in AUTHORED_DOCUMENT_PRODUCTS:
         return safe_document(project, document_arg or PRODUCT_FILES["manifest"])
     marker = PRODUCT_FILES[product]
     if not (project / marker).is_file() or (project / marker).is_symlink():
@@ -549,7 +554,7 @@ def configure(product: str, project: Path, workspace: Path, document_arg: str | 
                 workspace,
             )
 
-    if product in ("manifest", "evidence-oid4vci"):
+    if product in ("manifest", *AUTHORED_DOCUMENT_PRODUCTS):
         marker_path = project / MANAGED / "project.json"
         marker = {"product": product, "document": document_name}
         current_marker = read_json(marker_path, None, project)

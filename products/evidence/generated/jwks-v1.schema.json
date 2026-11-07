@@ -1,5 +1,5 @@
 {
-  "$comment": "Only the governed active and published non-revoked P-256 keys are returned. Each kid is the key's RFC 7638 SHA-256 thumbprint. Discovery is not a trust anchor; verifiers pin the governed provider and JWKS location.",
+  "$comment": "Only the governed active and published non-revoked P-256 keys are returned. Each kid is the key's RFC 7638 SHA-256 thumbprint. Discovery is not a trust anchor; verifiers pin the governed provider and JWKS location. Only the active key carries the optional x5c member, when the deployment configures a certificate chain; the chain does not change what a verifier pins.",
   "$defs": {
     "p256-public-jwk": {
       "additionalProperties": false,
@@ -20,6 +20,17 @@
         "x": {
           "pattern": "^[A-Za-z0-9_-]{43}$",
           "type": "string"
+        },
+        "x5c": {
+          "items": {
+            "contentEncoding": "base64",
+            "maxLength": 21848,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 3,
+          "minItems": 1,
+          "type": "array"
         },
         "y": {
           "pattern": "^[A-Za-z0-9_-]{43}$",

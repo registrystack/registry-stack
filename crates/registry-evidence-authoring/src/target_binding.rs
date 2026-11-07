@@ -1007,4 +1007,66 @@ mod tests {
         assert!(runtime.get("algorithm").is_none());
         assert!(runtime.get("publicJwkFile").is_none());
     }
+
+    fn oidc_with_algorithm(algorithm: &str) -> Result<TargetOidcAuthentication, serde_json::Error> {
+        serde_json::from_value(serde_json::json!({
+            "issuer": "https://identity.invalid",
+            "audience": "evidence-fixture",
+            "jwksSource": {"type": "uri", "uri": "https://identity.invalid/jwks.json"},
+            "tokenTypes": ["at+jwt"],
+            "algorithms": [algorithm],
+            "principalClaim": "sub",
+            "requesterTagsClaim": "evidence_tags",
+            "evidenceAudienceClaim": "evidence_audience",
+            "maximumTokenLifetimeSeconds": 900,
+            "requiredScopes": "unrestricted"
+        }))
+    }
+
+    #[test]
+    fn access_token_algorithms_accept_exactly_eddsa_es256_and_rs256() {
+        for accepted in ["EdDSA", "ES256", "RS256"] {
+            let oidc = oidc_with_algorithm(accepted)
+                .unwrap_or_else(|error| panic!("{accepted} is accepted: {error}"));
+            assert_eq!(
+                serde_json::to_value(&oidc.algorithms).expect("algorithms serialize"),
+                serde_json::json!([accepted])
+            );
+        }
+        for rejected in ["ES384", "RS384", "HS256", "PS256", "none", "es256", "EDDSA"] {
+            let error = oidc_with_algorithm(rejected).expect_err("the algorithm is refused");
+            assert!(
+                error.to_string().contains("unknown variant"),
+                "{rejected}: {error}"
+            );
+        }
+    }
+
+    // The authoring form keeps its own enum because the shared roster lives in
+    // a crate that may perform input or output, which this library may not
+    // link. The shared roster is a test-only dependency here, so a member
+    // added, renamed or dropped on either side fails a test instead of
+    // drifting.
+    #[test]
+    fn every_access_token_algorithm_names_a_member_of_the_shared_roster() {
+        use registry_platform_oidc::AccessTokenAlgorithm as Shared;
+        fn shared(algorithm: TargetAccessTokenAlgorithm) -> Shared {
+            match algorithm {
+                TargetAccessTokenAlgorithm::EdDSA => Shared::EdDSA,
+                TargetAccessTokenAlgorithm::ES256 => Shared::ES256,
+                TargetAccessTokenAlgorithm::RS256 => Shared::RS256,
+            }
+        }
+        for algorithm in [
+            TargetAccessTokenAlgorithm::EdDSA,
+            TargetAccessTokenAlgorithm::ES256,
+            TargetAccessTokenAlgorithm::RS256,
+        ] {
+            let authored = serde_json::to_value(algorithm).expect("the algorithm serializes");
+            assert_eq!(authored, serde_json::json!(shared(algorithm).jwa_name()));
+            let read: Shared = serde_json::from_value(authored.clone())
+                .unwrap_or_else(|error| panic!("{authored} is a shared member: {error}"));
+            assert_eq!(read, shared(algorithm));
+        }
+    }
 }

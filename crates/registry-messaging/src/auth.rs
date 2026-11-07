@@ -193,7 +193,7 @@ pub(crate) mod tests {
     use jsonwebtoken::{Algorithm, EncodingKey, Header};
     use registry_messaging_core::{AccessProfile, AccessRole};
     use registry_platform_httputil::FetchUrlPolicy;
-    use registry_platform_oidc::JwksFetcherConfig;
+    use registry_platform_oidc::{AccessTokenAlgorithm, JwksFetcherConfig};
     use serde_json::json;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -607,7 +607,9 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn separate_resource_rs256_and_es256_profiles_refuse_cross_resource_reuse() {
-        for algorithm in [Algorithm::RS256, Algorithm::ES256] {
+        for algorithm in [AccessTokenAlgorithm::RS256, AccessTokenAlgorithm::ES256]
+            .map(AccessTokenAlgorithm::to_jsonwebtoken)
+        {
             let key = registry_platform_testing::access_token_test_key(algorithm);
             let jwks = serde_json::from_value(json!({"keys":[key.public()]})).unwrap();
             let source = Arc::new(JwksFetcher::new_static(jwks, JwksFetcherConfig::defaults()));

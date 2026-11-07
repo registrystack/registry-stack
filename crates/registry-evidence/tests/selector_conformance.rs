@@ -28,8 +28,8 @@ use registry_evidence::kernel::{
     EvidenceConstruction, EvidenceScope, OfflineKernel, ValueProjection,
 };
 use registry_evidence::model::{
-    Evidence, EvidenceRequest, FlattenedJws, LookupResult, RequestedSelector, RequestedSubject,
-    SelectorValue, SubjectBinding,
+    AssertionChannel, Evidence, EvidenceRequest, FlattenedJws, LookupResult, RequestedSelector,
+    RequestedSubject, SelectorValue, SubjectBinding,
 };
 use registry_evidence::pack_source::{build_sources, PackSourceExecutor};
 use registry_evidence::secrets::{SecretProvider, SecretResolver};
@@ -221,6 +221,7 @@ impl PreparedService {
                     issued_at,
                     observed_at,
                     source_valid_until: None,
+                    channel: AssertionChannel::Source,
                     subjects,
                 },
             )

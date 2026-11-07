@@ -5,9 +5,11 @@
 //! and one single-use response verifier for every physical HTTP attempt. Raw
 //! response bytes never enter an Exchange or a script.
 
+use std::any::Any;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use chrono::{DateTime, Utc};
 use http::{HeaderName, HeaderValue};
 use registry_adapter_core::{Endpoint, HostProtocol};
 use registry_platform_yaml::LocalId;
@@ -336,6 +338,7 @@ pub struct HostProtocolWireResponse {
     status: u16,
     headers: Vec<(String, String)>,
     body: Zeroizing<Vec<u8>>,
+    evaluation_instant: DateTime<Utc>,
 }
 
 impl HostProtocolWireResponse {
@@ -343,12 +346,24 @@ impl HostProtocolWireResponse {
         status: u16,
         headers: Vec<(String, String)>,
         body: Zeroizing<Vec<u8>>,
+        evaluation_instant: DateTime<Utc>,
     ) -> Self {
         Self {
             status,
             headers,
             body,
+            evaluation_instant,
         }
+    }
+
+    /// The instant the host fixed for this acquisition. A host protocol
+    /// verifier judges freshness and expiry against it. The signed-source
+    /// verifier in `registry-evidence` is the exception: it judges an upstream
+    /// assertion at the wall clock when the response is verified, because this
+    /// instant precedes the assertion's own issue time.
+    #[must_use]
+    pub const fn evaluation_instant(&self) -> DateTime<Utc> {
+        self.evaluation_instant
     }
 
     #[must_use]
@@ -376,12 +391,27 @@ impl HostProtocolWireResponse {
     }
 }
 
+/// Product-typed value a verifier hands to its embedding host. The engine
+/// carries it by reference and never inspects, clones the contents of, or
+/// serializes it; the host downcasts it to the type it expects.
+pub type HostProtocolAttachment = Arc<dyn Any + Send + Sync>;
+
 /// Verified script-visible JSON plus optional trusted protocol validity
-/// metadata. The validity string stays outside the Exchange.
+/// metadata and an optional opaque host attachment. The validity string and
+/// the attachment stay outside the Exchange.
 pub struct VerifiedHostProtocolResponse {
     body: Value,
     valid_until: Option<String>,
     keep_response_headers: bool,
+    attachment: Option<HostProtocolAttachment>,
+}
+
+/// The parts of a verified response the route consumes.
+pub(crate) struct VerifiedHostProtocolParts {
+    pub(crate) body: Value,
+    pub(crate) valid_until: Option<String>,
+    pub(crate) keep_response_headers: bool,
+    pub(crate) attachment: Option<HostProtocolAttachment>,
 }
 
 impl VerifiedHostProtocolResponse {
@@ -391,6 +421,7 @@ impl VerifiedHostProtocolResponse {
             body,
             valid_until,
             keep_response_headers: true,
+            attachment: None,
         }
     }
 
@@ -402,8 +433,21 @@ impl VerifiedHostProtocolResponse {
         self
     }
 
-    pub(crate) fn into_parts(self) -> (Value, Option<String>, bool) {
-        (self.body, self.valid_until, self.keep_response_headers)
+    /// Attach a trusted, product-typed value for the embedding host. It is
+    /// never placed in an Exchange or exposed to a script.
+    #[must_use]
+    pub fn with_attachment(mut self, attachment: HostProtocolAttachment) -> Self {
+        self.attachment = Some(attachment);
+        self
+    }
+
+    pub(crate) fn into_parts(self) -> VerifiedHostProtocolParts {
+        VerifiedHostProtocolParts {
+            body: self.body,
+            valid_until: self.valid_until,
+            keep_response_headers: self.keep_response_headers,
+            attachment: self.attachment,
+        }
     }
 }
 
@@ -456,13 +500,41 @@ mod tests {
 
     #[test]
     fn verified_response_keeps_headers_by_default_and_can_suppress_them() {
-        let (_, _, keep_headers) =
-            VerifiedHostProtocolResponse::new(Value::Null, None).into_parts();
-        assert!(keep_headers);
+        let parts = VerifiedHostProtocolResponse::new(Value::Null, None).into_parts();
+        assert!(parts.keep_response_headers);
+        assert!(parts.attachment.is_none());
 
-        let (_, _, keep_headers) = VerifiedHostProtocolResponse::new(Value::Null, None)
+        let parts = VerifiedHostProtocolResponse::new(Value::Null, None)
             .without_response_headers()
             .into_parts();
-        assert!(!keep_headers);
+        assert!(!parts.keep_response_headers);
+    }
+
+    #[test]
+    fn attachment_round_trips_untouched_and_keeps_the_other_parts() {
+        let attachment: HostProtocolAttachment = Arc::new(String::from("opaque"));
+        let parts = VerifiedHostProtocolResponse::new(Value::Bool(true), Some("v".to_owned()))
+            .without_response_headers()
+            .with_attachment(Arc::clone(&attachment))
+            .into_parts();
+        assert_eq!(parts.body, Value::Bool(true));
+        assert_eq!(parts.valid_until.as_deref(), Some("v"));
+        assert!(!parts.keep_response_headers);
+        let carried = parts.attachment.expect("attachment carried");
+        assert!(Arc::ptr_eq(&carried, &attachment));
+        assert_eq!(
+            carried.downcast_ref::<String>().map(String::as_str),
+            Some("opaque")
+        );
+    }
+
+    #[test]
+    fn wire_response_exposes_the_injected_evaluation_instant() {
+        let instant = DateTime::parse_from_rfc3339("2026-11-06T10:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let response =
+            HostProtocolWireResponse::new(200, Vec::new(), Zeroizing::new(Vec::new()), instant);
+        assert_eq!(response.evaluation_instant(), instant);
     }
 }

@@ -291,11 +291,108 @@ fn wallet_delivery_key_reference_is_not_navigable_and_key_bytes_are_not_indexed(
         .is_empty());
 }
 
+const VERIFIER: &str = r#"apiVersion: id.registrystack.org/formats/evidence/oid4vp-runtime/v1alpha1
+kind: EvidenceOid4vpRuntimeConfig
+publicBaseUrl: https://verifier.example.test
+listener: {bind: 127.0.0.1:8095}
+secretProviders: {file: {root: /run/secrets/verifier}}
+audit: {destination: stdout, hashKeyRef: secret:file/audit-hash-key}
+clientIdentifiers:
+  - id: <|identifier|>haip
+    type: x509-san-dns
+    certificateChainRef: secret:file/<|chain|>verifier-chain.pem
+    signingKeyRef: secret:file/<|key|>verifier-signing.jwk.json
+policies:
+  - id: national-id
+    clientIdentifier: <|identifier-use|>haip
+"#;
+fn verifier_project() -> Project {
+    Project::new(&[
+        file(
+            ".registry-stack-editor/project.json",
+            r#"{"product":"evidence-oid4vp","document":"config/verifier.yaml"}"#,
+        ),
+        file("config/verifier.yaml", VERIFIER),
+        // Invalid contents expose accidental parsing. Key and certificate bytes must never enter
+        // the index, even when the filename ends with a supported YAML or JSON extension.
+        file("config/verifier-signing.jwk.json", "{not json"),
+        file("config/verifier-chain.pem", "SYNTHETIC_CHAIN_CANARY"),
+    ])
+}
+
+#[test]
+fn verifier_secret_references_are_not_navigable_and_secret_bytes_are_not_indexed() {
+    let project = verifier_project();
+    let index = load(&project, ProductKind::EvidenceOid4vp);
+    for cursor in ["key", "chain"] {
+        assert!(index
+            .definitions_at(
+                &project.path("config/verifier.yaml"),
+                project.cursor("config/verifier.yaml", cursor),
+            )
+            .is_empty());
+    }
+    assert!(index.diagnostics().is_empty(), "{:?}", index.diagnostics());
+    assert!(index
+        .document_symbols(&project.path("config/verifier-signing.jwk.json"))
+        .is_empty());
+}
+
+#[test]
+fn verifier_policy_resolves_its_client_identifier_and_reports_an_unknown_one() {
+    let project = verifier_project();
+    let index = load(&project, ProductKind::EvidenceOid4vp);
+    let path = project.path("config/verifier.yaml");
+    let definitions = index.definitions_at(
+        &path,
+        project.cursor("config/verifier.yaml", "identifier-use"),
+    );
+    assert_eq!(definitions.len(), 1);
+    assert_eq!(definitions[0].path, path);
+
+    let broken = Project::new(&[
+        file(
+            ".registry-stack-editor/project.json",
+            r#"{"product":"evidence-oid4vp","document":"config/verifier.yaml"}"#,
+        ),
+        file(
+            "config/verifier.yaml",
+            &VERIFIER.replace(
+                "clientIdentifier: <|identifier-use|>haip",
+                "clientIdentifier: missing",
+            ),
+        ),
+    ]);
+    let index = load(&broken, ProductKind::EvidenceOid4vp);
+    assert_eq!(index.diagnostics().len(), 1, "{:?}", index.diagnostics());
+}
+
+#[test]
+fn maintained_verifier_example_indexes_without_diagnostics() {
+    let project = Project::new(&[
+        file(
+            ".registry-stack-editor/project.json",
+            r#"{"product":"evidence-oid4vp","document":"runtime.yaml"}"#,
+        ),
+        file(
+            "runtime.yaml",
+            &fixture("products/evidence/examples/oid4vp-runtime/runtime.yaml"),
+        ),
+    ]);
+    let index = load(&project, ProductKind::EvidenceOid4vp);
+    assert!(index.diagnostics().is_empty(), "{:?}", index.diagnostics());
+    assert!(index
+        .document_symbols(&project.path("runtime.yaml"))
+        .iter()
+        .any(|symbol| symbol.name == "clientIdentifiers"));
+}
+
 #[tokio::test]
 async fn every_supporting_product_is_discovered_and_exposes_symbols_over_the_protocol() {
     let manifest = Project::new(&[file("metadata.yaml", MANIFEST)]);
     let render = render_project();
     let delivery = delivery_project();
+    let verifier = verifier_project();
     let discovery = Project::new(&[file(
         "origins.yaml",
         &fixture("products/discovery/fixtures/project/origins.yaml"),
@@ -304,6 +401,7 @@ async fn every_supporting_product_is_discovered_and_exposes_symbols_over_the_pro
         (&manifest, "metadata.yaml", "snapshot"),
         (&render, "manifest.yaml", "receipt"),
         (&delivery, "config/wallet.yaml", "tokenClient"),
+        (&verifier, "config/verifier.yaml", "clientIdentifiers"),
         (&discovery, "origins.yaml", "example-evidence"),
     ] {
         let path = project.path(document);
@@ -366,6 +464,27 @@ async fn render_unsaved_reference_and_external_file_changes_refresh_navigation()
         updated[0]["uri"],
         uri(&project.path("templates/corrected.typ"))
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn verifier_navigation_never_follows_a_secret_symlink_outside_the_product_root() {
+    let project = verifier_project();
+    let outside = tempfile::tempdir().unwrap();
+    fs::write(outside.path().join("key"), "not editor content").unwrap();
+    fs::remove_file(project.path("config/verifier-signing.jwk.json")).unwrap();
+    std::os::unix::fs::symlink(
+        outside.path().join("key"),
+        project.path("config/verifier-signing.jwk.json"),
+    )
+    .unwrap();
+    let index = load(&project, ProductKind::EvidenceOid4vp);
+    assert!(index
+        .definitions_at(
+            &project.path("config/verifier.yaml"),
+            project.cursor("config/verifier.yaml", "key")
+        )
+        .is_empty());
 }
 
 #[cfg(unix)]

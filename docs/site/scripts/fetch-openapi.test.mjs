@@ -7,7 +7,11 @@ import { promisify } from 'node:util';
 import { test } from 'node:test';
 import YAML from 'yaml';
 
-import { docsetPublishesBregOpenApi, docsetPublishesEvidenceOid4vciOpenApi } from './fetch-openapi.mjs';
+import {
+  docsetPublishesBregOpenApi,
+  docsetPublishesEvidenceOid4vciOpenApi,
+  docsetPublishesEvidenceOid4vpOpenApi,
+} from './fetch-openapi.mjs';
 
 const run = promisify(execFile);
 const fetchOpenapi = resolve(import.meta.dirname, 'fetch-openapi.mjs');
@@ -15,6 +19,7 @@ const caseworkPath = 'products/casework/generated/registry-casework.openapi.json
 const discoveryPath = 'crates/registry-discovery/openapi.json';
 const evidencePath = 'products/evidence/generated/registry-evidence.openapi.json';
 const oid4vciPath = 'products/evidence/generated/registry-evidence-oid4vci.openapi.json';
+const oid4vpPath = 'products/evidence/generated/registry-evidence-oid4vp.openapi.json';
 const bregPath = 'products/breg/generated/facility/generated/openapi.json';
 
 function docset(id, availability, evidenceRef, caseworkRef) {
@@ -52,6 +57,7 @@ test('Discovery OpenAPI comes from the independently selected unit tag', async (
     await writeFile(join(source, discoveryPath), '{"info":{"version":"selected"}}\n');
     await writeFile(join(source, evidencePath), '{"info":{"version":"evidence"}}\n');
     await writeFile(join(source, oid4vciPath), '{"info":{"version":"oid4vci"}}\n');
+    await writeFile(join(source, oid4vpPath), '{"info":{"version":"oid4vp"}}\n');
     await writeFile(join(source, bregPath), '{"info":{"version":"breg"}}\n');
     await run('git', ['-C', source, 'add', '.']);
     await run('git', ['-C', source, '-c', 'user.name=Docs Test',
@@ -127,6 +133,7 @@ test('Casework OpenAPI follows current HEAD, excludes v0.29, and pins v0.30 arch
     await writeFile(join(source, caseworkPath), '{"info":{"version":"archived"}}\n');
     await writeFile(join(source, evidencePath), '{"info":{"version":"evidence"}}\n');
     await writeFile(join(source, oid4vciPath), '{"info":{"version":"oid4vci"}}\n');
+    await writeFile(join(source, oid4vpPath), '{"info":{"version":"oid4vp"}}\n');
     await writeFile(join(source, bregPath),
       '{"info":{"version":"breg"},"components":{"schemas":{"Row":{"properties":{"any":true}}}}}\n');
     await run('git', ['-C', source, 'add', '.']);
@@ -214,6 +221,7 @@ test('BReg OpenAPI defaults to the checked-out monorepo at the registry-stack re
     await writeFile(join(source, bregPath), '{"info":{"version":"facility"}}\n');
     await writeFile(join(source, evidencePath), '{"info":{"version":"evidence"}}\n');
     await writeFile(join(source, oid4vciPath), '{"info":{"version":"oid4vci"}}\n');
+    await writeFile(join(source, oid4vpPath), '{"info":{"version":"oid4vp"}}\n');
     await writeFile(join(data, 'repo-docs.yaml'), YAML.stringify({ repos: {
       'registry-evidence': { ref: 'HEAD', local: '../..', openapi: evidencePath, docs: [{ src: 'README.md' }] },
     } }));
@@ -249,6 +257,7 @@ test('BReg OpenAPI is published by the current docset and by release docsets fro
     await writeFile(join(source, bregPath), '{"info":{"version":"released"}}\n');
     await writeFile(join(source, evidencePath), '{"info":{"version":"evidence"}}\n');
     await writeFile(join(source, oid4vciPath), '{"info":{"version":"oid4vci"}}\n');
+    await writeFile(join(source, oid4vpPath), '{"info":{"version":"oid4vp"}}\n');
     await run('git', ['-C', source, 'add', '.']);
     await run('git', ['-C', source, '-c', 'user.name=Docs Test',
       '-c', 'user.email=docs-test@example.invalid', 'commit', '--quiet', '-m', 'release']);
@@ -316,6 +325,7 @@ test('BReg OpenAPI is absent from the beta archives that predate release version
   for (const id of ['beta-5', 'beta-3', 'beta-2026-06-12']) {
     assert.equal(docsetPublishesBregOpenApi({ id }, 'latest'), false, id);
     assert.equal(docsetPublishesEvidenceOid4vciOpenApi({ id }, 'latest'), false, id);
+    assert.equal(docsetPublishesEvidenceOid4vpOpenApi({ id }, 'latest'), false, id);
   }
   assert.throws(() => docsetPublishesBregOpenApi({ id: 'v0.42' }, 'latest'), /is not a release version/);
 
@@ -339,6 +349,7 @@ test('OID4VCI OpenAPI is published by the current docset and by release docsets 
     await run('git', ['init', '--quiet', source]);
     await writeFile(join(source, evidencePath), '{"info":{"version":"evidence"}}\n');
     await writeFile(join(source, oid4vciPath), '{"info":{"version":"released"}}\n');
+    await writeFile(join(source, oid4vpPath), '{"info":{"version":"oid4vp"}}\n');
     await run('git', ['-C', source, 'add', '.']);
     await run('git', ['-C', source, '-c', 'user.name=Docs Test',
       '-c', 'user.email=docs-test@example.invalid', 'commit', '--quiet', '-m', 'release']);
@@ -393,4 +404,11 @@ test('OID4VCI OpenAPI is published by the current docset and by release docsets 
   } finally {
     await rm(source, { recursive: true, force: true });
   }
+});
+
+test('OID4VP OpenAPI is published by the current docset and by release docsets from v0.46.0', () => {
+  assert.equal(docsetPublishesEvidenceOid4vpOpenApi({ id: 'latest' }, 'latest'), true);
+  assert.equal(docsetPublishesEvidenceOid4vpOpenApi({ id: 'v0.46.0' }, 'latest'), true);
+  assert.equal(docsetPublishesEvidenceOid4vpOpenApi({ id: 'v0.45.0' }, 'latest'), false);
+  assert.equal(docsetPublishesEvidenceOid4vpOpenApi({ id: 'v0.20.0' }, 'latest'), false);
 });

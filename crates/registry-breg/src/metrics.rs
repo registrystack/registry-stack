@@ -43,12 +43,14 @@ use axum::{
     Router,
 };
 
+use registry_platform_metrics::{
+    Exposition, HistogramSnapshot, MetricKind, SumCountOrder, CONTENT_TYPE as METRICS_MEDIA_TYPE,
+};
+
 use crate::postgres::RuntimePool;
 
 /// Route label used when no registered route template matched the request.
 pub(crate) const UNMATCHED_ROUTE: &str = "unmatched";
-
-const METRICS_MEDIA_TYPE: &str = "text/plain; version=0.0.4";
 
 /// The bound on the one statement that samples the queue ages.
 const QUEUE_SAMPLE_STATEMENT_TIMEOUT: &str = "5s";
@@ -303,47 +305,47 @@ impl Metrics {
             .series
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let mut body = String::new();
-        body.push_str(
-            "# HELP breg_http_requests_total Requests served by the Registry boundary.\n",
+        let mut out = Exposition::new();
+        declare(
+            &mut out,
+            "breg_http_requests_total",
+            "Requests served by the Registry boundary.",
+            MetricKind::Counter,
         );
-        body.push_str("# TYPE breg_http_requests_total counter\n");
         for (key, value) in series.iter() {
-            body.push_str(&format!(
-                "breg_http_requests_total{{{}}} {}\n",
-                labels(key),
-                value.requests
-            ));
+            sample(
+                &mut out,
+                "breg_http_requests_total",
+                &key.labels(),
+                value.requests,
+            );
         }
-        body.push_str(
-            "# HELP breg_http_request_duration_seconds Request duration at the Registry boundary.\n",
+        declare(
+            &mut out,
+            "breg_http_request_duration_seconds",
+            "Request duration at the Registry boundary.",
+            MetricKind::Histogram,
         );
-        body.push_str("# TYPE breg_http_request_duration_seconds histogram\n");
         for (key, value) in series.iter() {
-            for (count, bound) in value.bucket_counts.iter().zip(DURATION_BUCKETS) {
-                body.push_str(&format!(
-                    "breg_http_request_duration_seconds_bucket{{{},le=\"{bound}\"}} {count}\n",
-                    labels(key)
-                ));
-            }
-            body.push_str(&format!(
-                "breg_http_request_duration_seconds_bucket{{{},le=\"+Inf\"}} {}\n",
-                labels(key),
-                value.requests
-            ));
-            body.push_str(&format!(
-                "breg_http_request_duration_seconds_sum{{{}}} {}\n",
-                labels(key),
-                value.duration_sum
-            ));
-            body.push_str(&format!(
-                "breg_http_request_duration_seconds_count{{{}}} {}\n",
-                labels(key),
-                value.requests
-            ));
+            out.histogram(
+                "breg_http_request_duration_seconds",
+                &key.labels(),
+                &DURATION_BUCKETS,
+                &HistogramSnapshot {
+                    cumulative: value.bucket_counts.to_vec(),
+                    count: value.requests,
+                    sum: value.duration_sum,
+                },
+                SumCountOrder::SumThenCount,
+            )
+            .expect(DECLARATION);
         }
-        body.push_str("# HELP breg_pool_connections Runtime pool connections by state.\n");
-        body.push_str("# TYPE breg_pool_connections gauge\n");
+        declare(
+            &mut out,
+            "breg_pool_connections",
+            "Runtime pool connections by state.",
+            MetricKind::Gauge,
+        );
         // Sampled fresh on every scrape rather than cached from request
         // handling, so the gauges reflect the pool's state at scrape time. A
         // registry built without a pool (see `Metrics::default`) has nothing
@@ -355,134 +357,178 @@ impl Metrics {
             ("available", status.as_ref().map(|s| s.available)),
             ("waiting", status.as_ref().map(|s| s.waiting)),
         ] {
-            body.push_str(&format!(
-                "breg_pool_connections{{state=\"{state}\"}} {}\n",
-                count.unwrap_or(0)
-            ));
+            sample(
+                &mut out,
+                "breg_pool_connections",
+                &[("state", state)],
+                count.unwrap_or(0),
+            );
         }
-        body.push_str(
-            "# HELP breg_worker_last_success_age_seconds Seconds since each background worker last completed an iteration without failure; absent until the first.\n",
+        declare(
+            &mut out,
+            "breg_worker_last_success_age_seconds",
+            "Seconds since each background worker last completed an iteration without failure; absent until the first.",
+            MetricKind::Gauge,
         );
-        body.push_str("# TYPE breg_worker_last_success_age_seconds gauge\n");
         for (worker, last_success) in &self.workers {
             if let Some(age) = last_success.age() {
-                body.push_str(&format!(
-                    "breg_worker_last_success_age_seconds{{worker=\"{}\"}} {}\n",
-                    worker.label(),
-                    age.as_secs_f64()
-                ));
+                sample(
+                    &mut out,
+                    "breg_worker_last_success_age_seconds",
+                    &[("worker", worker.label())],
+                    age.as_secs_f64(),
+                );
             }
         }
-        body.push_str(
-            "# HELP breg_queue_oldest_pending_age_seconds Seconds the oldest due item in each queue has waited to be claimed, sampled at scrape; zero when none is due.\n",
+        declare(
+            &mut out,
+            "breg_queue_oldest_pending_age_seconds",
+            "Seconds the oldest due item in each queue has waited to be claimed, sampled at scrape; zero when none is due.",
+            MetricKind::Gauge,
         );
-        body.push_str("# TYPE breg_queue_oldest_pending_age_seconds gauge\n");
         for (queue, seconds) in queue_sample
             .map(|sample| sample.ages.as_slice())
             .unwrap_or_default()
         {
-            body.push_str(&format!(
-                "breg_queue_oldest_pending_age_seconds{{queue=\"{}\"}} {seconds}\n",
-                queue.label()
-            ));
+            sample(
+                &mut out,
+                "breg_queue_oldest_pending_age_seconds",
+                &[("queue", queue.label())],
+                *seconds,
+            );
         }
-        body.push_str("# HELP breg_proposal_application_blocked_jobs Application jobs closed or held by a package change on the current submitted proposal, sampled at scrape.\n");
-        body.push_str("# TYPE breg_proposal_application_blocked_jobs gauge\n");
-        if let Some(sample) = queue_sample {
-            body.push_str(&format!(
-                "breg_proposal_application_blocked_jobs {}\n",
-                sample.blocked_application_jobs
-            ));
+        declare(
+            &mut out,
+            "breg_proposal_application_blocked_jobs",
+            "Application jobs closed or held by a package change on the current submitted proposal, sampled at scrape.",
+            MetricKind::Gauge,
+        );
+        if let Some(queue_sample) = queue_sample {
+            sample(
+                &mut out,
+                "breg_proposal_application_blocked_jobs",
+                &[],
+                queue_sample.blocked_application_jobs,
+            );
         }
-        body.push_str(
-            "# HELP breg_record_timer_observed_live_lease_owners Distinct observed current live lease owners, not a census of running replicas.\n",
-        );
-        body.push_str("# TYPE breg_record_timer_observed_live_lease_owners gauge\n");
-        body.push_str(
-            "# HELP breg_record_timer_oldest_due_lag_seconds Seconds since the oldest sampled current due timer became due according to PostgreSQL; absent when none is due.\n",
-        );
-        body.push_str("# TYPE breg_record_timer_oldest_due_lag_seconds gauge\n");
-        body.push_str(
-            "# HELP breg_record_timer_current_occurrences Current timer occurrences in the bounded sample by closed state and block kind.\n",
-        );
-        body.push_str("# TYPE breg_record_timer_current_occurrences gauge\n");
-        body.push_str(
-            "# HELP breg_record_timer_current_executed_attempts Cumulative executed attempts recorded on the bounded current-occurrence sample; a gauge, not a monotonic retry counter.\n",
-        );
-        body.push_str("# TYPE breg_record_timer_current_executed_attempts gauge\n");
-        body.push_str(
-            "# HELP breg_record_timer_retained_attempts Retained value-free attempt details for the bounded current-occurrence sample.\n",
-        );
-        body.push_str("# TYPE breg_record_timer_retained_attempts gauge\n");
-        body.push_str(
-            "# HELP breg_record_timer_stale_current_occurrences Current unfinished occurrences whose cached policy revision differs from the open binding.\n",
-        );
-        body.push_str("# TYPE breg_record_timer_stale_current_occurrences gauge\n");
-        body.push_str(
-            "# HELP breg_record_timer_control_compatible Whether the durable timer protocol, bound instance epoch, and active package match this process.\n",
-        );
-        body.push_str("# TYPE breg_record_timer_control_compatible gauge\n");
-        body.push_str(
-            "# HELP breg_record_timer_counts_truncated Whether current occurrence, attempt, or lease-owner counts reached the bounded sample ceiling.\n",
-        );
-        body.push_str("# TYPE breg_record_timer_counts_truncated gauge\n");
+        for (name, help) in [
+            (
+                "breg_record_timer_observed_live_lease_owners",
+                "Distinct observed current live lease owners, not a census of running replicas.",
+            ),
+            (
+                "breg_record_timer_oldest_due_lag_seconds",
+                "Seconds since the oldest sampled current due timer became due according to PostgreSQL; absent when none is due.",
+            ),
+            (
+                "breg_record_timer_current_occurrences",
+                "Current timer occurrences in the bounded sample by closed state and block kind.",
+            ),
+            (
+                "breg_record_timer_current_executed_attempts",
+                "Cumulative executed attempts recorded on the bounded current-occurrence sample; a gauge, not a monotonic retry counter.",
+            ),
+            (
+                "breg_record_timer_retained_attempts",
+                "Retained value-free attempt details for the bounded current-occurrence sample.",
+            ),
+            (
+                "breg_record_timer_stale_current_occurrences",
+                "Current unfinished occurrences whose cached policy revision differs from the open binding.",
+            ),
+            (
+                "breg_record_timer_control_compatible",
+                "Whether the durable timer protocol, bound instance epoch, and active package match this process.",
+            ),
+            (
+                "breg_record_timer_counts_truncated",
+                "Whether current occurrence, attempt, or lease-owner counts reached the bounded sample ceiling.",
+            ),
+        ] {
+            declare(&mut out, name, help, MetricKind::Gauge);
+        }
         if let Some(timer) = queue_sample.and_then(|sample| sample.timer.as_ref()) {
-            body.push_str(&format!(
-                "breg_record_timer_observed_live_lease_owners {}\n",
-                timer.observed_live_lease_owners
-            ));
+            sample(
+                &mut out,
+                "breg_record_timer_observed_live_lease_owners",
+                &[],
+                timer.observed_live_lease_owners,
+            );
             if let Some(seconds) = timer.oldest_due_lag_seconds {
-                body.push_str(&format!(
-                    "breg_record_timer_oldest_due_lag_seconds {seconds}\n"
-                ));
+                sample(
+                    &mut out,
+                    "breg_record_timer_oldest_due_lag_seconds",
+                    &[],
+                    seconds,
+                );
             }
             for (state, count) in TIMER_STATES.into_iter().zip(timer.occurrence_counts) {
                 if state == "blocked" {
                     for (block_kind, blocked) in
                         TIMER_BLOCK_KINDS.into_iter().zip(timer.block_counts)
                     {
-                        body.push_str(&format!(
-                            "breg_record_timer_current_occurrences{{state=\"{state}\",block_kind=\"{block_kind}\"}} {blocked}\n"
-                        ));
+                        sample(
+                            &mut out,
+                            "breg_record_timer_current_occurrences",
+                            &[("state", state), ("block_kind", block_kind)],
+                            blocked,
+                        );
                     }
                 } else {
-                    body.push_str(&format!(
-                        "breg_record_timer_current_occurrences{{state=\"{state}\",block_kind=\"none\"}} {count}\n"
-                    ));
+                    sample(
+                        &mut out,
+                        "breg_record_timer_current_occurrences",
+                        &[("state", state), ("block_kind", "none")],
+                        count,
+                    );
                 }
             }
-            body.push_str(&format!(
-                "breg_record_timer_current_executed_attempts {}\n",
-                timer.current_executed_attempts
-            ));
-            body.push_str(&format!(
-                "breg_record_timer_retained_attempts {}\n",
-                timer.retained_attempts
-            ));
-            body.push_str(&format!(
-                "breg_record_timer_stale_current_occurrences {}\n",
-                timer.stale_current_occurrences
-            ));
-            body.push_str(&format!(
-                "breg_record_timer_control_compatible{{state=\"{}\"}} {}\n",
-                timer.control_state,
-                u8::from(timer.control_compatible)
-            ));
-            body.push_str(&format!(
-                "breg_record_timer_counts_truncated {}\n",
-                u8::from(timer.counts_truncated)
-            ));
+            sample(
+                &mut out,
+                "breg_record_timer_current_executed_attempts",
+                &[],
+                timer.current_executed_attempts,
+            );
+            sample(
+                &mut out,
+                "breg_record_timer_retained_attempts",
+                &[],
+                timer.retained_attempts,
+            );
+            sample(
+                &mut out,
+                "breg_record_timer_stale_current_occurrences",
+                &[],
+                timer.stale_current_occurrences,
+            );
+            sample(
+                &mut out,
+                "breg_record_timer_control_compatible",
+                &[("state", timer.control_state)],
+                u8::from(timer.control_compatible),
+            );
+            sample(
+                &mut out,
+                "breg_record_timer_counts_truncated",
+                &[],
+                u8::from(timer.counts_truncated),
+            );
         }
-        body.push_str(
-            "# HELP breg_active_package_info The package this process verified at startup, by digest.\n",
+        declare(
+            &mut out,
+            "breg_active_package_info",
+            "The package this process verified at startup, by digest.",
+            MetricKind::Gauge,
         );
-        body.push_str("# TYPE breg_active_package_info gauge\n");
         if let Some(digest) = &self.active_package_digest {
-            body.push_str(&format!(
-                "breg_active_package_info{{package_digest=\"{digest}\"}} 1\n"
-            ));
+            sample(
+                &mut out,
+                "breg_active_package_info",
+                &[("package_digest", digest)],
+                1_u8,
+            );
         }
-        body
+        out.finish()
     }
 
     /// Sample how long the oldest due item in each queue has waited, at one
@@ -869,11 +915,31 @@ async fn read_timer_sample(
     })
 }
 
-fn labels(key: &HttpSeriesKey) -> String {
-    format!(
-        "route=\"{}\",method=\"{}\",status=\"{}\"",
-        key.route, key.method, key.status
-    )
+/// The metric and label names are fixed in this file, so a declaration the
+/// exposition refuses is a defect in the source, not a runtime condition.
+const DECLARATION: &str = "the metric declarations are valid";
+
+fn declare(out: &mut Exposition, name: &str, help: &str, kind: MetricKind) {
+    out.header(name, Some(help), kind).expect(DECLARATION);
+}
+
+fn sample(
+    out: &mut Exposition,
+    name: &str,
+    labels: &[(&str, &str)],
+    value: impl Into<registry_platform_metrics::Value>,
+) {
+    out.sample(name, labels, value).expect(DECLARATION);
+}
+
+impl HttpSeriesKey {
+    fn labels(&self) -> [(&'static str, &str); 3] {
+        [
+            ("route", self.route.as_str()),
+            ("method", self.method),
+            ("status", self.status),
+        ]
+    }
 }
 
 /// Resolve the matched route template for metrics recording.
@@ -1126,6 +1192,65 @@ mod tests {
                 "breg_active_package_info{{package_digest=\"{digest}\"}} 1"
             )],
             "one sample carrying the verified digest:\n{rendered}"
+        );
+    }
+
+    /// A registry with a fixed history: series across every status class, the
+    /// unmatched route, a duration beyond the last bucket, a worker that has
+    /// not yet succeeded, and the active package.
+    fn golden_registry() -> Metrics {
+        let metrics = Metrics::default()
+            .with_worker_progress(ProgressWorker::Hook, Arc::new(LastSuccess::default()))
+            .with_active_package(&format!("sha256:{}", "ab".repeat(32)));
+        for (route, method, status, millis) in [
+            ("/v1/records/{record_id}", "GET", "success", 30),
+            ("/v1/records/{record_id}", "GET", "success", 4),
+            ("/v1/records/{record_id}", "GET", "client-error", 1_000),
+            ("/v1/records", "POST", "success", 7_300),
+            ("/v1/records", "POST", "server-error", 250),
+            (UNMATCHED_ROUTE, "OTHER", "client-error", 1),
+        ] {
+            metrics.record_http(route, method, status, Duration::from_millis(millis));
+        }
+        metrics
+    }
+
+    fn golden_queue_sample() -> QueueSample {
+        QueueSample {
+            ages: vec![
+                (PendingQueue::HookDelivery, 0.0),
+                (PendingQueue::ReviewSubmission, 90.5),
+                (PendingQueue::ReviewApplication, 12.25),
+            ],
+            blocked_application_jobs: 2,
+            timer: Some(TimerSample {
+                observed_live_lease_owners: 2,
+                oldest_due_lag_seconds: Some(12.5),
+                occurrence_counts: [1, 2, 3, 4, 2, 5, 6, 7],
+                block_counts: [1, 1],
+                current_executed_attempts: 8,
+                retained_attempts: 7,
+                stale_current_occurrences: 1,
+                control_state: "paused",
+                control_compatible: true,
+                counts_truncated: false,
+            }),
+        }
+    }
+
+    #[test]
+    fn the_unsampled_scrape_is_byte_stable() {
+        assert_eq!(
+            golden_registry().render(None),
+            include_str!("../tests/golden/metrics-scrape-unsampled.txt")
+        );
+    }
+
+    #[test]
+    fn the_sampled_scrape_is_byte_stable() {
+        assert_eq!(
+            golden_registry().render(Some(&golden_queue_sample())),
+            include_str!("../tests/golden/metrics-scrape-sampled.txt")
         );
     }
 

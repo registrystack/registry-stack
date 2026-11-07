@@ -44,7 +44,7 @@ use super::{
         record_applied, record_chunk_progress, record_failed, record_postconditions_complete,
         record_preconditions_complete, record_reverted, record_started, record_step_complete,
         statement_checksum, step_progress, verify_resumable, ActivationPlanKind,
-        MigrationLedgerEntry, MigrationLedgerStep, MigrationLedgerStepKind,
+        MigrationLedgerEntry, MigrationLedgerStep, MigrationLedgerStepKind, MigrationStepProgress,
     },
     schema::{
         execute_compiled_ddl_statement, is_spatial_candidate_view_drop_sql,
@@ -144,6 +144,26 @@ pub(crate) struct ReviewedPackageExecutionRequest<'a> {
     pub fault_after_committed_chunks: Option<u64>,
 }
 
+/// The checks one blind-index re-index step passes before the apply commits.
+struct BlindIndexReindexPreflightRequest<'a> {
+    service: &'a FieldEncryptionService,
+    table: &'a str,
+    reindexed: &'a [ReindexedBlindIndex<'a>],
+    step_id: &'a str,
+    progress: MigrationStepProgress,
+    max_total_rows: u64,
+}
+
+/// The plan-wide field-encryption checks that run before the apply commits.
+struct FieldEncryptionPreflightRequest<'a> {
+    registry: &'a CompiledRegistry,
+    target_package_revision: &'a str,
+    plan: &'a ValidatedReviewedMigrationPlan,
+    predecessor_baseline: Option<&'a CompiledRegistryMigrationBaseline>,
+    field_encryption: Option<&'a ReviewedFieldEncryptionContext<'a>>,
+    ledger: &'a MigrationLedgerEntry,
+}
+
 /// One covered field of a field-encryption backfill step: the successor field
 /// that owns the envelope and blind-index columns, paired with the predecessor
 /// field that owns the plaintext column being sealed.
@@ -158,6 +178,29 @@ pub(crate) struct FieldEncryptionCoveredField<'a> {
     pub(crate) predecessor_api_name: &'a str,
     /// The stable logical field id retained in outbox projections.
     pub(crate) logical_field_id: &'a str,
+}
+
+/// One field whose blind-index digests a re-index step re-derives from the
+/// stored envelopes: the successor field that owns both columns and the
+/// blind index whose normalization list changed.
+pub(crate) struct ReindexedBlindIndex<'a> {
+    pub(crate) entity_id: &'a str,
+    pub(crate) field: &'a CompiledField,
+    pub(crate) blind: &'a CompiledBlindIndex,
+}
+
+/// The per-chunk request one blind-index re-index execution carries.
+struct BlindIndexReindexChunkRequest<'a> {
+    step: &'a ValidatedReviewedMigrationStep,
+    ledger: &'a MigrationLedgerEntry,
+    ledger_step: &'a MigrationLedgerStep,
+    table: &'a str,
+    reindexed: &'a [ReindexedBlindIndex<'a>],
+    service: &'a FieldEncryptionService,
+    chunk_size: u32,
+    max_total_rows: u64,
+    lock_timeout_ms: u64,
+    statement_timeout_ms: u64,
 }
 
 /// The per-chunk request one field-encryption backfill execution carries.
@@ -484,6 +527,16 @@ impl DedicatedApplyConnection {
             return Err(PostgresKernelError::RegistryUnavailable);
         }
 
+        self.field_encryption_preflight(FieldEncryptionPreflightRequest {
+            registry,
+            target_package_revision,
+            plan,
+            predecessor_baseline,
+            field_encryption: field_encryption.as_ref(),
+            ledger,
+        })
+        .await?;
+
         // Reviewed successors execute compiler DDL before runtime ACL
         // reconciliation. The seed step needs allocation state during that
         // compiler phase, including when the predecessor predates this feature.
@@ -607,6 +660,50 @@ impl DedicatedApplyConnection {
                         let context = field_encryption
                             .as_ref()
                             .ok_or(PostgresKernelError::RegistryUnavailable)?;
+                        if step.descriptor.is_blind_index_reindex() {
+                            let service = self
+                                .initialize_field_encryption_service(
+                                    context,
+                                    registry,
+                                    target_package_revision,
+                                )
+                                .await?;
+                            let reindexed =
+                                reindexed_blind_index_fields(registry, entity_id, step)?;
+                            let table = &registry
+                                .entities()
+                                .get(entity_id)
+                                .ok_or(PostgresKernelError::RegistryUnavailable)?
+                                .physical_table;
+                            loop {
+                                let advanced = self
+                                    .execute_blind_index_reindex_chunk(
+                                        BlindIndexReindexChunkRequest {
+                                            step,
+                                            ledger,
+                                            ledger_step,
+                                            table,
+                                            reindexed: &reindexed,
+                                            service: &service,
+                                            chunk_size: *chunk_size,
+                                            max_total_rows: *max_total_rows,
+                                            lock_timeout_ms: *lock_timeout_ms,
+                                            statement_timeout_ms: *statement_timeout_ms,
+                                        },
+                                    )
+                                    .await?;
+                                if !advanced {
+                                    break;
+                                }
+                                committed_chunks = committed_chunks
+                                    .checked_add(1)
+                                    .ok_or(PostgresKernelError::RegistryUnavailable)?;
+                                if fault_after_committed_chunks == Some(committed_chunks) {
+                                    return Ok(ReviewedExecutionOutcome::Interrupted);
+                                }
+                            }
+                            continue;
+                        }
                         let history_choice = migration
                             .descriptor
                             .history
@@ -629,10 +726,6 @@ impl DedicatedApplyConnection {
                             .get(entity_id)
                             .ok_or(PostgresKernelError::RegistryUnavailable)?
                             .physical_table;
-                        self.refuse_retained_plaintext_proposal_snapshots(history_choice, &covered)
-                            .await?;
-                        self.field_encryption_duplicate_preflight(&service, table, &covered)
-                            .await?;
                         loop {
                             let advanced = self
                                 .execute_field_encryption_chunk(FieldEncryptionChunkRequest {
@@ -1040,6 +1133,100 @@ impl DedicatedApplyConnection {
         .map_err(|_| PostgresKernelError::RegistryUnavailable)
     }
 
+    /// Run every check that can refuse a field-encryption step, across every
+    /// step of the plan, before the apply commits anything: ahead of the
+    /// compiler DDL, the pre-assertions, and the read-view drop. A refusal
+    /// here leaves the active catalog and every ledger step as the target pin
+    /// left them, so reconcile can revert the target. A step the ledger
+    /// records complete is skipped, so a resume checks only remaining work.
+    async fn field_encryption_preflight(
+        &mut self,
+        request: FieldEncryptionPreflightRequest<'_>,
+    ) -> Result<()> {
+        let FieldEncryptionPreflightRequest {
+            registry,
+            target_package_revision,
+            plan,
+            predecessor_baseline,
+            field_encryption,
+            ledger,
+        } = request;
+        let mut service = None;
+        for (migration_index, migration) in plan.migrations().iter().enumerate() {
+            let migration_ordinal = i32::try_from(migration_index + 1)
+                .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+            for (step_index, step) in migration.steps.iter().enumerate() {
+                let ReviewedMigrationStepDescriptor::FieldEncryptionBackfill {
+                    entity_id,
+                    max_total_rows,
+                    ..
+                } = &step.descriptor
+                else {
+                    continue;
+                };
+                let step_ordinal = i32::try_from(step_index)
+                    .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+                let ledger_step = ledger_step(ledger, migration_ordinal, step_ordinal)?;
+                if ledger_step.kind != MigrationLedgerStepKind::FieldEncryptionBackfill {
+                    return Err(PostgresKernelError::RegistryUnavailable);
+                }
+                let transaction = self.client.transaction().await?;
+                let progress = step_progress(&transaction, ledger, ledger_step).await?;
+                transaction.commit().await?;
+                if progress.complete {
+                    continue;
+                }
+                let context = field_encryption.ok_or(PostgresKernelError::RegistryUnavailable)?;
+                if service.is_none() {
+                    service = Some(
+                        self.initialize_field_encryption_service(
+                            context,
+                            registry,
+                            target_package_revision,
+                        )
+                        .await?,
+                    );
+                }
+                let service = service
+                    .as_ref()
+                    .ok_or(PostgresKernelError::RegistryUnavailable)?;
+                let table = &registry
+                    .entities()
+                    .get(entity_id)
+                    .ok_or(PostgresKernelError::RegistryUnavailable)?
+                    .physical_table;
+                if step.descriptor.is_blind_index_reindex() {
+                    let reindexed = reindexed_blind_index_fields(registry, entity_id, step)?;
+                    self.blind_index_reindex_preflight(BlindIndexReindexPreflightRequest {
+                        service,
+                        table,
+                        reindexed: &reindexed,
+                        step_id: &ledger_step.step_id,
+                        progress,
+                        max_total_rows: *max_total_rows,
+                    })
+                    .await?;
+                    continue;
+                }
+                let history_choice = migration
+                    .descriptor
+                    .history
+                    .ok_or(PostgresKernelError::RegistryUnavailable)?;
+                let covered = covered_field_encryption_fields(
+                    registry,
+                    predecessor_baseline,
+                    entity_id,
+                    step,
+                )?;
+                self.refuse_retained_plaintext_proposal_snapshots(history_choice, &covered)
+                    .await?;
+                self.field_encryption_duplicate_preflight(service, table, &covered)
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
     /// Refuse the whole step, before any sealing, when normalizing two
     /// existing records onto one unique blind index would collide. The refusal
     /// names record ids only, never field values, and caps the named set so a
@@ -1156,6 +1343,202 @@ impl DedicatedApplyConnection {
             .await
             .map_err(|_| PostgresKernelError::Connection)?;
         Ok(())
+    }
+
+    /// Refuse the whole re-index, before any digest changes, when two records'
+    /// re-derived digests would collide on a unique blind index, or when the
+    /// step would walk more rows than its reviewed `maxTotalRows` and so stop
+    /// partway with mixed digests. A collision names the first colliding field's
+    /// record ids only, never field values, and caps the named set.
+    async fn blind_index_reindex_preflight(
+        &mut self,
+        request: BlindIndexReindexPreflightRequest<'_>,
+    ) -> Result<()> {
+        let BlindIndexReindexPreflightRequest {
+            service,
+            table,
+            reindexed,
+            step_id,
+            progress,
+            max_total_rows,
+        } = request;
+        let transaction = self.client.transaction().await?;
+        let scan = scan_blind_index_reindex(
+            &transaction,
+            service,
+            table,
+            reindexed,
+            progress.checkpoint_record_id,
+        )
+        .await?;
+        let entity_id = reindexed
+            .first()
+            .map(|field| field.entity_id)
+            .ok_or(PostgresKernelError::RegistryUnavailable)?;
+        if let Some(record_ids) = scan
+            .duplicate_record_ids
+            .into_iter()
+            .find(|record_ids| !record_ids.is_empty())
+        {
+            return Err(PostgresKernelError::FieldEncryptionBlindCollision {
+                entity_id: entity_id.to_owned(),
+                record_ids,
+            });
+        }
+        // A resumed step has already walked `affected_rows` rows up to its
+        // checkpoint; the scan counts the rows after it.
+        let row_count = progress
+            .affected_rows
+            .checked_add(scan.remaining_rows)
+            .ok_or(PostgresKernelError::RegistryUnavailable)?;
+        if row_count > max_total_rows {
+            return Err(PostgresKernelError::BlindIndexReindexRowLimit {
+                entity_id: entity_id.to_owned(),
+                step_id: step_id.to_owned(),
+                row_count,
+                maximum_total_rows: max_total_rows,
+            });
+        }
+        transaction
+            .commit()
+            .await
+            .map_err(|_| PostgresKernelError::Connection)?;
+        Ok(())
+    }
+
+    /// Re-derive the blind-index digests of one keyset chunk from the stored
+    /// envelopes and advance the durable cursor, in one transaction. Record
+    /// content, envelopes, and history are untouched: only the digest columns
+    /// of the covered fields change, and on a unique lookup a later row's
+    /// stale digest equal to a new one is cleared first. The draining chunk,
+    /// which selects no rows, closes the step.
+    async fn execute_blind_index_reindex_chunk(
+        &mut self,
+        request: BlindIndexReindexChunkRequest<'_>,
+    ) -> Result<bool> {
+        let BlindIndexReindexChunkRequest {
+            step,
+            ledger,
+            ledger_step,
+            table,
+            reindexed,
+            service,
+            chunk_size,
+            max_total_rows,
+            lock_timeout_ms,
+            statement_timeout_ms,
+        } = request;
+        if step.sha256 != statement_checksum(&step.sql)
+            || ledger_step.checksum != step.sha256
+            || chunk_size == 0
+            || max_total_rows == 0
+        {
+            return Err(PostgresKernelError::RegistryUnavailable);
+        }
+        let table = SqlIdentifier::parse(table)?;
+        let transaction = self.client.transaction().await?;
+        set_local_migration_timeouts(&transaction, lock_timeout_ms, statement_timeout_ms).await?;
+        let progress = step_progress(&transaction, ledger, ledger_step).await?;
+        if progress.complete {
+            transaction.commit().await?;
+            return Ok(false);
+        }
+        if progress.affected_rows > max_total_rows {
+            return Err(PostgresKernelError::RegistryUnavailable);
+        }
+        set_force_row_security(&transaction, &[table.as_str().to_owned()], false).await?;
+        let envelopes = reindexed_envelope_projection(reindexed);
+        let select_sql = format!(
+            "SELECT record_id, {envelopes}
+             FROM registry_data.{}
+             WHERE ($1::pg_catalog.uuid IS NULL OR record_id > $1)
+             ORDER BY record_id
+             LIMIT $2
+             FOR UPDATE",
+            table.quoted()
+        );
+        let limit = i64::from(chunk_size);
+        let rows = transaction
+            .query(&select_sql, &[&progress.checkpoint_record_id, &limit])
+            .await
+            .map_err(|_| PostgresKernelError::Connection)?;
+        if rows.is_empty() {
+            set_force_row_security(&transaction, &[table.as_str().to_owned()], true).await?;
+            record_step_complete(&transaction, ledger, ledger_step, progress.affected_rows).await?;
+            transaction.commit().await?;
+            return Ok(false);
+        }
+        let selected =
+            u64::try_from(rows.len()).map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+        let total = progress
+            .affected_rows
+            .checked_add(selected)
+            .filter(|total| *total <= max_total_rows)
+            .ok_or(PostgresKernelError::RegistryUnavailable)?;
+        let assignments = reindexed
+            .iter()
+            .enumerate()
+            .map(|(index, field)| {
+                format!(
+                    "{} = ${}",
+                    crate::generated_ddl::quote_identifier(&field.blind.physical_name),
+                    index + 2
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let update_sql = format!(
+            "UPDATE registry_data.{} SET {assignments} WHERE record_id = $1",
+            table.quoted()
+        );
+        let mut rederived = Vec::with_capacity(rows.len());
+        for row in &rows {
+            let record_id: Uuid = row
+                .try_get(0)
+                .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+            let digests = reindexed
+                .iter()
+                .enumerate()
+                .map(|(index, field)| rederived_digest(service, field, row, index))
+                .collect::<Result<Vec<_>>>()?;
+            rederived.push((record_id, digests));
+        }
+        clear_stale_unique_digests(
+            &transaction,
+            &table,
+            reindexed,
+            progress.checkpoint_record_id,
+            &rederived,
+        )
+        .await?;
+        let mut checkpoint = None;
+        for (record_id, digests) in &rederived {
+            let mut parameters: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = vec![record_id];
+            parameters.extend(
+                digests
+                    .iter()
+                    .map(|digest| digest as &(dyn tokio_postgres::types::ToSql + Sync)),
+            );
+            let changed = transaction
+                .execute(&update_sql, &parameters)
+                .await
+                .map_err(|_| PostgresKernelError::Connection)?;
+            if changed != 1 {
+                return Err(PostgresKernelError::RegistryUnavailable);
+            }
+            checkpoint = Some(*record_id);
+        }
+        set_force_row_security(&transaction, &[table.as_str().to_owned()], true).await?;
+        record_chunk_progress(
+            &transaction,
+            ledger,
+            ledger_step,
+            checkpoint.ok_or(PostgresKernelError::RegistryUnavailable)?,
+            total,
+        )
+        .await?;
+        transaction.commit().await?;
+        Ok(true)
     }
 
     /// Phase 1 cannot safely reinterpret retained Proposal copies after
@@ -3219,6 +3602,263 @@ async fn execute_boolean_assertion(
         .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
     if accepted != Some(true) {
         return Err(PostgresKernelError::RegistryUnavailable);
+    }
+    Ok(())
+}
+
+/// Resolve the fields a blind-index re-index step re-derives: the successor
+/// fields whose blind-index columns the step's objects name. The reviewed plan
+/// validation already bound each object to a declared lookup; a step that
+/// names anything else fails closed here.
+pub(crate) fn reindexed_blind_index_fields<'a>(
+    registry: &'a CompiledRegistry,
+    entity_id: &'a str,
+    step: &ValidatedReviewedMigrationStep,
+) -> Result<Vec<ReindexedBlindIndex<'a>>> {
+    let entity: &CompiledEntity = registry
+        .entities()
+        .get(entity_id)
+        .ok_or(PostgresKernelError::RegistryUnavailable)?;
+    let mut reindexed = Vec::new();
+    for object in step.descriptor.objects() {
+        let field_id = object
+            .member_id
+            .as_deref()
+            .and_then(|member| member.strip_suffix("#lookup"))
+            .ok_or(PostgresKernelError::RegistryUnavailable)?;
+        let field = entity
+            .fields
+            .get(field_id)
+            .ok_or(PostgresKernelError::RegistryUnavailable)?;
+        let blind = field
+            .encryption
+            .as_ref()
+            .and_then(|encryption| encryption.blind_index.as_ref())
+            .filter(|blind| blind.physical_name == object.physical_name)
+            .ok_or(PostgresKernelError::RegistryUnavailable)?;
+        reindexed.push(ReindexedBlindIndex {
+            entity_id,
+            field,
+            blind,
+        });
+    }
+    if reindexed.is_empty() {
+        return Err(PostgresKernelError::RegistryUnavailable);
+    }
+    Ok(reindexed)
+}
+
+/// The envelope columns a re-index reads, in the order of its fields.
+fn reindexed_envelope_projection(reindexed: &[ReindexedBlindIndex<'_>]) -> String {
+    reindexed
+        .iter()
+        .map(|field| crate::generated_ddl::quote_identifier(&field.field.physical_name))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The digest one row's envelope yields under the field's current
+/// normalization list, or `None` for a null envelope. An envelope that does
+/// not open, or whose plaintext is not text, fails closed without a value.
+fn rederived_digest(
+    service: &FieldEncryptionService,
+    field: &ReindexedBlindIndex<'_>,
+    row: &tokio_postgres::Row,
+    field_index: usize,
+) -> Result<Option<Vec<u8>>> {
+    let record_id: Uuid = row
+        .try_get(0)
+        .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+    let envelope: Option<Vec<u8>> = row
+        .try_get(field_index + 1)
+        .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+    let Some(envelope) = envelope else {
+        return Ok(None);
+    };
+    let opened = service
+        .open(
+            field.entity_id,
+            field.field.id.as_str(),
+            &record_id.to_string(),
+            &envelope,
+        )
+        .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+    let plaintext =
+        std::str::from_utf8(&opened).map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+    Ok(Some(
+        service
+            .blind_index(
+                field.entity_id,
+                field.field.id.as_str(),
+                &FieldEncryptionService::normalize(&field.blind.normalization, plaintext),
+            )
+            .to_vec(),
+    ))
+}
+
+/// The value-free result of scanning the rows one blind-index re-index step
+/// walks: how many rows the step has still to walk, and, per re-indexed field
+/// in field order, the record ids whose new digests would collide on a unique
+/// blind index, capped at [`MAX_NAMED_REINDEX_DUPLICATES`].
+#[derive(Debug)]
+pub(crate) struct BlindIndexReindexScan {
+    pub(crate) remaining_rows: u64,
+    pub(crate) duplicate_record_ids: Vec<Vec<String>>,
+}
+
+/// Bound the records one re-index collision report names, per field, so a
+/// bulk collision cannot flood an operator surface.
+const MAX_NAMED_REINDEX_DUPLICATES: usize = 64;
+
+/// Scan, inside the caller's transaction, every row a blind-index re-index
+/// step would re-derive. It counts the rows after `after_record_id` (every
+/// row when `None`) and, for each unique lookup, re-derives every row's new
+/// digest from its envelope to find the records that would collide. Both the
+/// apply and the operator preflight use it, so they agree on what the apply
+/// refuses. Nothing is written; `FORCE ROW LEVEL SECURITY` is lifted for the
+/// scan and restored before it returns.
+pub(crate) async fn scan_blind_index_reindex(
+    transaction: &tokio_postgres::Transaction<'_>,
+    service: &FieldEncryptionService,
+    table: &str,
+    reindexed: &[ReindexedBlindIndex<'_>],
+    after_record_id: Option<Uuid>,
+) -> Result<BlindIndexReindexScan> {
+    let table = SqlIdentifier::parse(table)?;
+    // The migration role owns the table, but FORCE ROW LEVEL SECURITY would
+    // subject this read to the default deny and hide every row.
+    set_force_row_security(transaction, &[table.as_str().to_owned()], false).await?;
+    let remaining: i64 = transaction
+        .query_one(
+            &format!(
+                "SELECT pg_catalog.count(*)
+                 FROM registry_data.{}
+                 WHERE ($1::pg_catalog.uuid IS NULL OR record_id > $1)",
+                table.quoted()
+            ),
+            &[&after_record_id],
+        )
+        .await
+        .map_err(|_| PostgresKernelError::Connection)?
+        .try_get(0)
+        .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+    let remaining_rows =
+        u64::try_from(remaining).map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+    let mut duplicates = vec![BTreeSet::new(); reindexed.len()];
+    if reindexed.iter().any(|field| field.blind.unique) {
+        let envelopes = reindexed_envelope_projection(reindexed);
+        let select_sql = format!(
+            "SELECT record_id, {envelopes}
+             FROM registry_data.{}
+             WHERE ($1::uuid IS NULL OR record_id > $1::uuid)
+             ORDER BY record_id
+             LIMIT $2",
+            table.quoted()
+        );
+        prepare_unique_blind_index_preflight(transaction).await?;
+        let named_cap = i64::try_from(MAX_NAMED_REINDEX_DUPLICATES)
+            .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+        let mut page_after: Option<Uuid> = None;
+        loop {
+            let rows = transaction
+                .query(
+                    &select_sql,
+                    &[&page_after, &FIELD_ENCRYPTION_DUPLICATE_PREFLIGHT_PAGE_SIZE],
+                )
+                .await
+                .map_err(|_| PostgresKernelError::Connection)?;
+            if rows.is_empty() {
+                break;
+            }
+            for (field_index, field) in reindexed.iter().enumerate() {
+                if !field.blind.unique {
+                    continue;
+                }
+                let mut digests = Vec::with_capacity(rows.len());
+                let mut record_ids = Vec::with_capacity(rows.len());
+                for row in &rows {
+                    let record_id: Uuid = row
+                        .try_get(0)
+                        .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+                    if let Some(digest) = rederived_digest(service, field, row, field_index)? {
+                        digests.push(digest);
+                        record_ids.push(record_id);
+                    }
+                }
+                let field_slot = i16::try_from(field_index)
+                    .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+                let page_duplicates = record_unique_blind_index_page(
+                    transaction,
+                    field_slot,
+                    &digests,
+                    &record_ids,
+                    named_cap,
+                )
+                .await?;
+                let named = &mut duplicates[field_index];
+                for record_id in page_duplicates {
+                    if named.len() < MAX_NAMED_REINDEX_DUPLICATES {
+                        named.insert(record_id);
+                    }
+                }
+            }
+            page_after = Some(
+                rows.last()
+                    .and_then(|row| row.try_get(0).ok())
+                    .ok_or(PostgresKernelError::RegistryUnavailable)?,
+            );
+        }
+    }
+    set_force_row_security(transaction, &[table.as_str().to_owned()], true).await?;
+    Ok(BlindIndexReindexScan {
+        remaining_rows,
+        duplicate_record_ids: duplicates
+            .into_iter()
+            .map(|named| named.into_iter().collect())
+            .collect(),
+    })
+}
+
+/// Clear, on the rows the walk has not re-derived yet (every row after
+/// `after_record_id`, this chunk included), each stored digest of a unique
+/// lookup that equals a digest this chunk is about to write. The apply
+/// preflight proved the new digests unique and maintenance keeps every other
+/// writer out, so a stored digest equal to a new one is stale: its row takes
+/// its own new digest when the walk reaches it. Clearing it first keeps the
+/// unique index from refusing that valid end state mid-run. Until the walk
+/// reaches a cleared row, a lookup cannot find it; maintenance keeps every
+/// reader out until the step completes.
+async fn clear_stale_unique_digests(
+    transaction: &tokio_postgres::Transaction<'_>,
+    table: &SqlIdentifier,
+    reindexed: &[ReindexedBlindIndex<'_>],
+    after_record_id: Option<Uuid>,
+    rederived: &[(Uuid, Vec<Option<Vec<u8>>>)],
+) -> Result<()> {
+    for (field_index, field) in reindexed.iter().enumerate() {
+        if !field.blind.unique {
+            continue;
+        }
+        let digests = rederived
+            .iter()
+            .filter_map(|(_, digests)| digests[field_index].clone())
+            .collect::<Vec<_>>();
+        if digests.is_empty() {
+            continue;
+        }
+        let column = crate::generated_ddl::quote_identifier(&field.blind.physical_name);
+        transaction
+            .execute(
+                &format!(
+                    "UPDATE registry_data.{} SET {column} = NULL
+                     WHERE ($1::pg_catalog.uuid IS NULL OR record_id > $1)
+                       AND {column} = ANY($2::pg_catalog.bytea[])",
+                    table.quoted()
+                ),
+                &[&after_record_id, &digests],
+            )
+            .await
+            .map_err(|_| PostgresKernelError::Connection)?;
     }
     Ok(())
 }

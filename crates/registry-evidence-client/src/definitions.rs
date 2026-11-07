@@ -10,7 +10,7 @@
 //! integration suite proves they agree with a real deployment.
 
 use registry_evidence_verifier::{
-    model::SubjectBindingMode,
+    model::{ChannelKind, SubjectBindingMode},
     verifier::{
         ExpectedFormDocument, ExpectedListDocument, ExpectedListFormDocument,
         ExpectedListItemFormDocument, ExpectedOutputDocument, ExpectedScalarFormDocument,
@@ -160,6 +160,7 @@ impl EvidenceDefinitionsDocument {
                 || !unique_uris(&definition.reference_frameworks)
                 || !valid_formats(definition)
                 || !valid_subjects(&definition.subjects)
+                || !valid_alternatives(definition)
                 || !valid_concepts(&definition.concepts)
             {
                 return Err(invalid_contract());
@@ -209,6 +210,77 @@ pub struct EvidenceDefinition {
     pub reference_frameworks: Vec<String>,
     pub subjects: Vec<DefinitionSubject>,
     pub concepts: Vec<DefinitionConcept>,
+    /// The acquisition channel of this entry's own `subjects`. Absent means
+    /// the source channel, the only channel a definition without a
+    /// holder-presented acquisition has.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<ChannelKind>,
+    /// The request shapes of the other channels of this definition that the
+    /// requester is entitled to. Absent when there are none, and a client that
+    /// ignores it keeps requesting through the entry's own channel.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub alternatives: Vec<DefinitionAlternative>,
+}
+
+/// One more channel of a definition: the grant-dependent members that can
+/// differ from the entry's own.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DefinitionAlternative {
+    pub channel: ChannelKind,
+    pub response_formats: Vec<DefinitionResponseFormat>,
+    pub subjects: Vec<DefinitionSubject>,
+}
+
+/// The request shape of one channel of a definition: the members a request
+/// through that channel takes from the catalog.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DefinitionRequestShape<'a> {
+    pub channel: ChannelKind,
+    pub response_formats: &'a [DefinitionResponseFormat],
+    pub subjects: &'a [DefinitionSubject],
+}
+
+impl EvidenceDefinition {
+    /// The channel of the entry's own `subjects`.
+    #[must_use]
+    pub fn own_channel(&self) -> ChannelKind {
+        self.channel.unwrap_or(ChannelKind::Source)
+    }
+
+    /// The channels the requester may request this definition through, the
+    /// entry's own first.
+    #[must_use]
+    pub fn channels(&self) -> Vec<ChannelKind> {
+        std::iter::once(self.own_channel())
+            .chain(
+                self.alternatives
+                    .iter()
+                    .map(|alternative| alternative.channel),
+            )
+            .collect()
+    }
+
+    /// The request shape for `channel`, or `None` when the requester is not
+    /// entitled to that channel of this definition.
+    #[must_use]
+    pub fn request_shape(&self, channel: ChannelKind) -> Option<DefinitionRequestShape<'_>> {
+        if channel == self.own_channel() {
+            return Some(DefinitionRequestShape {
+                channel,
+                response_formats: &self.response_formats,
+                subjects: &self.subjects,
+            });
+        }
+        self.alternatives
+            .iter()
+            .find(|alternative| alternative.channel == channel)
+            .map(|alternative| DefinitionRequestShape {
+                channel,
+                response_formats: &alternative.response_formats,
+                subjects: &alternative.subjects,
+            })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -455,31 +527,54 @@ fn unique_uris(values: &[String]) -> bool {
 }
 
 fn valid_formats(definition: &EvidenceDefinition) -> bool {
-    if definition.response_formats.is_empty() || definition.response_formats.len() > 4 {
+    valid_format_set(
+        &definition.response_formats,
+        definition.subject_binding_mode,
+    )
+}
+
+/// An alternative is announced by an entry that states its own channel, names
+/// a channel the entry and the other alternatives do not, and is held to the
+/// same format and subject rules as the entry.
+fn valid_alternatives(definition: &EvidenceDefinition) -> bool {
+    if definition.alternatives.is_empty() {
+        return true;
+    }
+    let Some(own_channel) = definition.channel else {
+        return false;
+    };
+    let mut channels = vec![own_channel];
+    definition.alternatives.iter().all(|alternative| {
+        let new_channel = !channels.contains(&alternative.channel);
+        channels.push(alternative.channel);
+        new_channel
+            && valid_format_set(
+                &alternative.response_formats,
+                definition.subject_binding_mode,
+            )
+            && (1..=8).contains(&alternative.subjects.len())
+            && valid_subjects(&alternative.subjects)
+    })
+}
+
+fn valid_format_set(
+    formats: &[DefinitionResponseFormat],
+    subject_binding_mode: Option<SubjectBindingMode>,
+) -> bool {
+    if formats.is_empty() || formats.len() > 4 {
         return false;
     }
     let mut unique = BTreeSet::new();
-    if !definition
-        .response_formats
-        .iter()
-        .all(|format| unique.insert(*format))
-    {
+    if !formats.iter().all(|format| unique.insert(*format)) {
         return false;
     }
-    let binding = definition
-        .subject_binding_mode
-        .unwrap_or(SubjectBindingMode::AudienceScoped);
-    match binding {
-        SubjectBindingMode::AudienceScoped => !definition
-            .response_formats
-            .contains(&DefinitionResponseFormat::SdJwtVcBatch),
+    match subject_binding_mode.unwrap_or(SubjectBindingMode::AudienceScoped) {
+        SubjectBindingMode::AudienceScoped => {
+            !formats.contains(&DefinitionResponseFormat::SdJwtVcBatch)
+        }
         SubjectBindingMode::HolderBound => {
-            !definition
-                .response_formats
-                .contains(&DefinitionResponseFormat::SignedJws)
-                && !definition
-                    .response_formats
-                    .contains(&DefinitionResponseFormat::UnsignedJson)
+            !formats.contains(&DefinitionResponseFormat::SignedJws)
+                && !formats.contains(&DefinitionResponseFormat::UnsignedJson)
         }
     }
 }
@@ -1147,6 +1242,152 @@ mod tests {
             .as_object()
             .expect("a definition serializes as an object")
             .contains_key("subjectBindingMode"));
+    }
+
+    const ALTERNATIVES: &str = r#""channel": "source", "alternatives": [{
+      "channel": "holder-presented",
+      "responseFormats": ["signed-jws"],
+      "subjects": [{
+        "role": "subject",
+        "cardinality": "one",
+        "selector": {
+          "profile": "session-reference-v1",
+          "valueOrigin": "request",
+          "fields": [{"type": "string", "name": "session_reference", "minimumBytes": 1, "maximumBytes": 128}]
+        }
+      }]
+    }],"#;
+
+    fn two_channel_document(alternatives: &str) -> String {
+        DOCUMENT.replace(
+            r#""kind": "criterion","#,
+            &format!(r#""kind": "criterion", {alternatives}"#),
+        )
+    }
+
+    #[test]
+    fn a_definition_granted_on_two_channels_parses_and_picks_a_shape_by_channel() {
+        let parsed: EvidenceDefinitionsDocument =
+            serde_json::from_str(&two_channel_document(ALTERNATIVES)).expect("the document parses");
+        parsed.validate_for_request().expect("the catalog is valid");
+        let definition = &parsed.definitions[0];
+        assert_eq!(definition.channel, Some(ChannelKind::Source));
+        assert_eq!(
+            definition.channels(),
+            [ChannelKind::Source, ChannelKind::HolderPresented]
+        );
+        let source = definition.request_shape(ChannelKind::Source).unwrap();
+        assert_eq!(source.subjects[0].selector.profile, "record-lookup-v1");
+        assert_eq!(
+            source.response_formats,
+            [
+                DefinitionResponseFormat::SignedJws,
+                DefinitionResponseFormat::SdJwtVc
+            ]
+        );
+        let presented = definition
+            .request_shape(ChannelKind::HolderPresented)
+            .unwrap();
+        assert_eq!(presented.channel, ChannelKind::HolderPresented);
+        assert_eq!(
+            presented.subjects[0].selector.profile,
+            "session-reference-v1"
+        );
+        assert_eq!(
+            presented.response_formats,
+            [DefinitionResponseFormat::SignedJws]
+        );
+        let reserialized: EvidenceDefinitionsDocument =
+            serde_json::from_value(serde_json::to_value(&parsed).unwrap()).unwrap();
+        assert_eq!(reserialized, parsed);
+    }
+
+    #[test]
+    fn a_definition_without_channel_members_is_the_source_channel_alone() {
+        let parsed = document();
+        parsed.validate_for_request().expect("the catalog is valid");
+        let definition = &parsed.definitions[0];
+        assert_eq!(definition.channel, None);
+        assert_eq!(definition.own_channel(), ChannelKind::Source);
+        assert_eq!(definition.channels(), [ChannelKind::Source]);
+        assert!(definition.request_shape(ChannelKind::Source).is_some());
+        assert!(definition
+            .request_shape(ChannelKind::HolderPresented)
+            .is_none());
+        let wire = serde_json::to_value(&parsed).unwrap();
+        assert!(wire["definitions"][0].get("channel").is_none());
+        assert!(wire["definitions"][0].get("alternatives").is_none());
+    }
+
+    #[test]
+    fn an_unknown_channel_name_is_refused() {
+        for document in [
+            two_channel_document(ALTERNATIVES)
+                .replace(r#""channel": "source""#, r#""channel": "carrier-pigeon""#),
+            two_channel_document(ALTERNATIVES).replace(
+                r#""channel": "holder-presented""#,
+                r#""channel": "carrier-pigeon""#,
+            ),
+        ] {
+            assert!(serde_json::from_str::<EvidenceDefinitionsDocument>(&document).is_err());
+        }
+    }
+
+    #[test]
+    fn a_repeated_or_unannounced_channel_is_refused_by_catalog_validation() {
+        let same_as_own = two_channel_document(ALTERNATIVES)
+            .replace(r#""channel": "holder-presented""#, r#""channel": "source""#);
+        let without_own = two_channel_document(ALTERNATIVES).replace(
+            r#""channel": "source", "alternatives""#,
+            r#""alternatives""#,
+        );
+        let presented_own = two_channel_document(ALTERNATIVES).replace(
+            r#""channel": "source", "alternatives""#,
+            r#""channel": "holder-presented", "alternatives""#,
+        );
+        let duplicated = {
+            let one = &ALTERNATIVES
+                [ALTERNATIVES.find("[{").unwrap() + 1..ALTERNATIVES.rfind("}]").unwrap() + 1];
+            two_channel_document(&format!(
+                r#""channel": "source", "alternatives": [{one}, {one}],"#
+            ))
+        };
+        for (name, document) in [
+            ("alternative repeats the entry's channel", same_as_own),
+            ("alternatives without a stated channel", without_own),
+            (
+                "alternative repeats the entry's holder-presented channel",
+                presented_own,
+            ),
+            ("alternative channel listed twice", duplicated),
+        ] {
+            let parsed: EvidenceDefinitionsDocument = serde_json::from_str(&document).expect(name);
+            assert!(parsed.validate_for_request().is_err(), "{name}");
+        }
+    }
+
+    #[test]
+    fn an_alternative_is_validated_like_the_entry_it_belongs_to() {
+        for (name, document) in [
+            (
+                "format outside the closed set",
+                two_channel_document(ALTERNATIVES).replace(r#""responseFormats": ["signed-jws"],"#, r#""responseFormats": ["signed-jws", "signed-jws"],"#),
+            ),
+            (
+                "invalid selector profile",
+                two_channel_document(ALTERNATIVES).replace("session-reference-v1", "Session"),
+            ),
+            (
+                "no selector fields",
+                two_channel_document(ALTERNATIVES).replace(
+                    r#"[{"type": "string", "name": "session_reference", "minimumBytes": 1, "maximumBytes": 128}]"#,
+                    "[]",
+                ),
+            ),
+        ] {
+            let parsed: EvidenceDefinitionsDocument = serde_json::from_str(&document).expect(name);
+            assert!(parsed.validate_for_request().is_err(), "{name}");
+        }
     }
 
     #[test]

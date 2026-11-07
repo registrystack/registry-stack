@@ -9,8 +9,11 @@
 //!   covered fields the backfill would seal, echoes the descriptor's explicit
 //!   history choice, counts every stored copy the flip touches, and names the
 //!   records whose normalized values would collide on a unique blind index.
-//!   The apply-side preflight refuses those collisions authoritatively; this
-//!   surface lets an operator see them first, value-free.
+//!   For a blind-index re-index step it opens the envelopes through the
+//!   configured key, counts the rows the step walks, and names the records
+//!   whose re-derived digests would collide. The apply-side preflight refuses
+//!   those collisions authoritatively; this surface lets an operator see them
+//!   first, value-free.
 //! - The erase-history lifecycle runs only after the flip's package is active.
 //!   For every flip that declared erase-and-rebaseline it enumerates the
 //!   records that still hold plaintext pre-flip revisions, erases each
@@ -28,6 +31,7 @@ use tokio_postgres::Client;
 use zeroize::Zeroizing;
 
 use crate::audit::RegistryAudit;
+use crate::field_encryption::FieldEncryptionService;
 use crate::history_commit::lock_history_head;
 use crate::history_erasure::{
     erase_record_history_for_lifecycle, HistoryErasureError, HistoryErasureRequest,
@@ -41,6 +45,7 @@ use crate::history_rebaseline::{
     history_rebaseline_entry, rebaseline_history_coverage_in_transaction, HistoryRebaselineError,
     HistoryRebaselineOutcome, HistoryRebaselineRequest,
 };
+use crate::migration::AppliedFieldEncryptionKeySource;
 use crate::migration_plan::{
     ReviewedFieldEncryptionHistory, ReviewedMigrationStepDescriptor, ValidatedReviewedMigrationPlan,
 };
@@ -49,8 +54,9 @@ use crate::package::CompiledRegistryMigrationBaseline;
 use crate::postgres::{
     covered_field_encryption_fields, field_plaintext_string, prepare_unique_blind_index_preflight,
     prior_plaintext_projection, record_unique_blind_index_page, recursive_member_path,
-    set_force_row_security, verify_migration_role, ConnectionConfig, ExpectedRegistryIdentity,
-    FieldEncryptionCoveredField, RegistryLockKey, SqlIdentifier,
+    reindexed_blind_index_fields, scan_blind_index_reindex, set_force_row_security,
+    verify_migration_role, ConnectionConfig, ExpectedRegistryIdentity, FieldEncryptionCoveredField,
+    RegistryLockKey, SqlIdentifier,
 };
 
 pub use crate::history_maintenance::HistoryMaintenanceTimeouts as FieldEncryptionBackfillTimeouts;
@@ -88,6 +94,10 @@ pub struct FieldEncryptionBackfillPreflightRequest<'a> {
     pub predecessor_baseline: Option<&'a CompiledRegistryMigrationBaseline>,
     /// The successor package revision the backfill journals under.
     pub target_package_revision: &'a str,
+    /// The configured field-encryption key. A blind-index re-index step
+    /// re-derives digests from envelopes, so its scan needs the key; a plan
+    /// that only seals plaintext does not.
+    pub field_encryption: Option<AppliedFieldEncryptionKeySource<'a>>,
 }
 
 /// The value-free counts and duplicate names one backfill step's preflight
@@ -97,6 +107,32 @@ pub struct FieldEncryptionBackfillPreflightRequest<'a> {
 #[serde(rename_all = "camelCase")]
 pub struct FieldEncryptionBackfillPreflightReport {
     pub steps: Vec<FieldEncryptionBackfillStepPreflight>,
+    pub reindex_steps: Vec<BlindIndexReindexStepPreflight>,
+}
+
+/// The value-free scan of one blind-index re-index step: the rows the step
+/// walks against its reviewed ceiling, and per re-indexed field the records
+/// whose re-derived digests would collide on a unique blind index.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlindIndexReindexStepPreflight {
+    pub entity_id: String,
+    pub step_id: String,
+    /// The step's reviewed `maxTotalRows`.
+    pub maximum_total_rows: u64,
+    /// Every row the step re-derives, valued or null.
+    pub row_count: u64,
+    pub fields: Vec<BlindIndexReindexFieldPreflight>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlindIndexReindexFieldPreflight {
+    pub field_id: String,
+    pub unique_blind_index: bool,
+    /// Authored record identifiers whose re-derived digests would collide on
+    /// the field's unique blind index. Empty unless `unique_blind_index`.
+    pub duplicate_record_ids: Vec<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -133,6 +169,8 @@ pub enum FieldEncryptionBackfillPreflightError {
     InvalidInput,
     #[error("field-encryption preflight requires the configured migration authority")]
     MigrationAuthority,
+    #[error("field-encryption preflight of a blind-index re-index requires the configured field-encryption key")]
+    KeySource,
     #[error("field-encryption preflight storage is unavailable")]
     Unavailable,
 }
@@ -187,12 +225,14 @@ pub async fn preflight_field_encryption_backfill(
     request: FieldEncryptionBackfillPreflightRequest<'_>,
 ) -> Result<FieldEncryptionBackfillPreflightReport, FieldEncryptionBackfillPreflightError> {
     request.expected.validate()?;
-    if !request
-        .plan
-        .migrations()
-        .iter()
-        .any(|migration| migration.descriptor.history.is_some())
-    {
+    if !request.plan.migrations().iter().any(|migration| {
+        migration.steps.iter().any(|step| {
+            matches!(
+                step.descriptor,
+                ReviewedMigrationStepDescriptor::FieldEncryptionBackfill { .. }
+            )
+        })
+    }) {
         return Err(FieldEncryptionBackfillPreflightError::InvalidInput);
     }
     verify_migration_role(client, request.migration_role).await?;
@@ -211,13 +251,51 @@ pub async fn preflight_field_encryption_backfill(
     verify_ready_identity(&transaction, request.expected).await?;
 
     let mut steps = Vec::new();
+    let mut reindex_steps = Vec::new();
+    let mut service = None;
     for migration in request.plan.migrations() {
         for step in &migration.steps {
-            let ReviewedMigrationStepDescriptor::FieldEncryptionBackfill { entity_id, .. } =
-                &step.descriptor
+            let ReviewedMigrationStepDescriptor::FieldEncryptionBackfill {
+                entity_id,
+                max_total_rows,
+                ..
+            } = &step.descriptor
             else {
                 continue;
             };
+            if step.descriptor.is_blind_index_reindex() {
+                if service.is_none() {
+                    let key_source = request
+                        .field_encryption
+                        .as_ref()
+                        .ok_or(FieldEncryptionBackfillPreflightError::KeySource)?;
+                    service = Some(
+                        FieldEncryptionService::open_existing(
+                            key_source.provider,
+                            request.registry.registry_id(),
+                            key_source.secrets,
+                            &transaction,
+                        )
+                        .await
+                        .map_err(|_| FieldEncryptionBackfillPreflightError::KeySource)?,
+                    );
+                }
+                let service = service
+                    .as_ref()
+                    .ok_or(FieldEncryptionBackfillPreflightError::KeySource)?;
+                reindex_steps.push(
+                    reindex_step_preflight(
+                        &transaction,
+                        service,
+                        request.registry,
+                        entity_id,
+                        step,
+                        *max_total_rows,
+                    )
+                    .await?,
+                );
+                continue;
+            }
             // The plan validation already refused a missing or unmatched
             // history choice for this backfill. Unrelated descriptors in the
             // same reviewed plan do not need a field-encryption choice.
@@ -266,7 +344,49 @@ pub async fn preflight_field_encryption_backfill(
         .commit()
         .await
         .map_err(|_| FieldEncryptionBackfillPreflightError::Unavailable)?;
-    Ok(FieldEncryptionBackfillPreflightReport { steps })
+    Ok(FieldEncryptionBackfillPreflightReport {
+        steps,
+        reindex_steps,
+    })
+}
+
+/// Scan one blind-index re-index step with the scan the apply refuses on, so
+/// the operator sees the same row count and collisions first.
+async fn reindex_step_preflight(
+    transaction: &tokio_postgres::Transaction<'_>,
+    service: &FieldEncryptionService,
+    registry: &CompiledRegistry,
+    entity_id: &str,
+    step: &crate::migration_plan::ValidatedReviewedMigrationStep,
+    maximum_total_rows: u64,
+) -> Result<BlindIndexReindexStepPreflight, FieldEncryptionBackfillPreflightError> {
+    let reindexed = reindexed_blind_index_fields(registry, entity_id, step)
+        .map_err(|_| FieldEncryptionBackfillPreflightError::InvalidInput)?;
+    let table = &registry
+        .entities()
+        .get(entity_id)
+        .ok_or(FieldEncryptionBackfillPreflightError::InvalidInput)?
+        .physical_table;
+    let scan = scan_blind_index_reindex(transaction, service, table, &reindexed, None)
+        .await
+        .map_err(|_| FieldEncryptionBackfillPreflightError::Unavailable)?;
+    Ok(BlindIndexReindexStepPreflight {
+        entity_id: entity_id.to_owned(),
+        step_id: registry_platform_yaml::Identified::id(&step.descriptor).to_owned(),
+        maximum_total_rows,
+        row_count: scan.remaining_rows,
+        fields: reindexed
+            .iter()
+            .zip(scan.duplicate_record_ids)
+            .map(
+                |(field, duplicate_record_ids)| BlindIndexReindexFieldPreflight {
+                    field_id: field.field.id.as_str().to_owned(),
+                    unique_blind_index: field.blind.unique,
+                    duplicate_record_ids,
+                },
+            )
+            .collect(),
+    })
 }
 
 #[allow(clippy::too_many_lines)] // One bounded query set per covered field, kept together.

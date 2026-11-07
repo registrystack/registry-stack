@@ -30,6 +30,7 @@ pub(super) fn spec(product: ProductKind) -> Option<ProductSpec> {
         // Delivery has no product discriminator. It requires explicit editor setup so an ordinary
         // version: 1 YAML document can never cause this family to claim a directory.
         ProductKind::EvidenceOid4vci => ("", "", "", "", OID4VCI),
+        ProductKind::EvidenceOid4vp => ("", "", "", "", OID4VP),
         _ => return None,
     };
     Some(ProductSpec {
@@ -242,5 +243,23 @@ const OID4VCI: &[DocumentRules] = &[DocumentRules {
     pattern: "@document",
     declarations: &[NameRule::global("$key", "configuration-section")],
     references: &[],
+    files: &[],
+}];
+
+// A verifier runtime names its signing keys and certificate chains by secret reference, resolved
+// by the configured secret provider when the service starts, so no member is a navigable file and
+// key bytes never enter the index. A policy names the client identifier it presents under, a
+// declaration in the same document.
+const OID4VP: &[DocumentRules] = &[DocumentRules {
+    pattern: "@document",
+    declarations: &[
+        NameRule::global("$key", "configuration-section"),
+        NameRule::global("clientIdentifiers/*/id", "client-identifier"),
+        NameRule::global("policies/*/id", "policy"),
+    ],
+    references: &[NameRule::global(
+        "policies/*/clientIdentifier",
+        "client-identifier",
+    )],
     files: &[],
 }];

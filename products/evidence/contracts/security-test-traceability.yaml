@@ -55,6 +55,56 @@ entries:
       - {file: crates/registry-evidence/src/evidence_source_tests.rs, name: signed_evidence_source_pins_revocations_and_refuses_invalid_preparation}
       - {file: crates/registry-evidence/src/evidence_source_tests.rs, name: signed_evidence_host_config_has_no_access_attribution_override_surface}
       - {file: crates/registry-evidence/src/evidence_source_tests.rs, name: signed_evidence_pack_refuses_unauthenticated_protocol_before_io}
+  - id: sec-wallet-presentation-source
+    tests:
+      - {file: crates/registry-evidence/src/wallet_channel_tests.rs, name: a_holder_presented_request_returns_a_signed_assertion_that_states_its_channel}
+      - {file: crates/registry-evidence/src/wallet_channel_tests.rs, name: the_credential_age_bound_caps_the_assertion_validity}
+      - {file: crates/registry-evidence/src/wallet_channel_tests.rs, name: a_source_profile_request_reaches_only_the_source_channel}
+      - {file: crates/registry-evidence/src/wallet_channel_tests.rs, name: a_holder_presented_batch_states_the_channel_on_every_item}
+      - {file: crates/registry-evidence/src/wallet_channel_tests.rs, name: a_source_profile_batch_reaches_only_the_source_channel}
+      - {file: crates/registry-evidence/src/wallet_channel_tests.rs, name: a_credential_from_an_untrusted_issuer_is_a_dependency_failure}
+      - {file: crates/registry-evidence/src/wallet_channel_tests.rs, name: a_session_created_by_another_principal_is_a_dependency_failure}
+      - {file: crates/registry-evidence/src/wallet_channel_tests.rs, name: a_session_with_no_presentation_yet_is_a_dependency_failure}
+      - {file: crates/registry-evidence/src/wallet_channel_tests.rs, name: a_read_response_without_a_trace_context_is_a_dependency_failure}
+      - {file: crates/registry-evidence/src/wallet_channel_tests.rs, name: two_channels_that_accept_one_selector_profile_refuse_at_startup}
+      - {file: crates/registry-evidence/tests/wallet_presentation.rs, name: compile_refuses_an_endpoint_without_authentication}
+      - {file: crates/registry-evidence/tests/wallet_presentation.rs, name: compile_refuses_incomplete_unsafe_and_unknown_configuration}
+      - {file: crates/registry-evidence/tests/wallet_presentation.rs, name: the_request_refuses_an_extra_body_member}
+      - {file: crates/registry-evidence/tests/wallet_presentation.rs, name: the_request_refuses_a_missing_principal_or_reference}
+      - {file: crates/registry-evidence/tests/wallet_presentation.rs, name: the_request_refuses_a_query_string_and_a_get}
+      - {file: crates/registry-evidence/tests/wallet_presentation.rs, name: a_verified_presentation_projects_only_declared_claims_and_attaches_facts}
+      - {file: crates/registry-evidence/tests/wallet_presentation.rs, name: an_x5c_credential_under_a_trusted_anchor_verifies}
+      - {file: crates/registry-evidence/tests/wallet_presentation.rs, name: the_age_bound_caps_validity_when_the_credential_has_no_expiry}
+      - {file: crates/registry-evidence/tests/wallet_presentation.rs, name: the_earlier_of_expiry_and_the_age_bound_applies}
+      - {file: crates/registry-evidence/tests/wallet_presentation.rs, name: an_untrusted_issuer_is_refused}
+      - {file: crates/registry-evidence/tests/wallet_presentation.rs, name: a_denied_issuer_is_refused}
+      - {file: crates/registry-evidence/tests/wallet_presentation.rs, name: a_denied_intermediate_under_a_trusted_anchor_is_refused}
+      - {file: crates/registry-evidence-presentation/tests/deny.rs, name: a_denied_issuer_is_refused_before_the_allow_list_lookup}
+      - {file: crates/registry-evidence-presentation/tests/deny.rs, name: a_denied_issuer_is_refused_before_any_signature_work}
+      - {file: crates/registry-evidence-presentation/tests/deny.rs, name: a_denied_certificate_is_refused_before_chain_verification}
+      - {file: crates/registry-evidence-presentation/tests/deny.rs, name: configuration_requires_both_members_and_refuses_unknown_ones}
+      - {file: crates/registry-evidence-presentation/tests/deny.rs, name: the_debug_output_of_a_deny_list_holds_no_identifier}
+      - {file: crates/registry-evidence/tests/wallet_presentation.rs, name: a_key_binding_for_another_session_is_refused}
+      - {file: crates/registry-evidence/tests/wallet_presentation.rs, name: a_context_for_another_channel_or_principal_is_refused}
+      - {file: crates/registry-evidence/tests/wallet_presentation.rs, name: a_presentation_that_is_not_exactly_one_string_under_the_configured_query_is_refused}
+      - {file: crates/registry-evidence/tests/wallet_presentation.rs, name: a_credential_older_than_the_maximum_age_is_refused}
+      - {file: crates/registry-evidence/tests/wallet_presentation.rs, name: an_expired_credential_at_the_injected_instant_is_refused}
+      - {file: crates/registry-evidence/tests/wallet_presentation.rs, name: a_credential_without_an_issue_time_is_refused_never_defaulted}
+      - {file: crates/registry-evidence/tests/wallet_presentation.rs, name: a_credential_that_expires_inside_the_clock_skew_window_is_refused}
+      - {file: crates/registry-evidence/tests/wallet_presentation.rs, name: the_read_endpoint_refusals_and_malformed_answers_are_refused}
+      - {file: crates/registry-evidence/tests/host_protocols.rs, name: the_wallet_presentation_protocol_is_registered_only_with_its_feature}
+      - {file: crates/registry-evidence/src/wallet_presentation.rs, name: status_required_is_refused_with_a_message_that_says_why}
+      - {file: crates/registry-evidence/src/wallet_presentation.rs, name: holder_binding_is_always_required}
+      - {file: crates/registry-evidence/src/wallet_presentation.rs, name: every_member_is_required_and_unknown_members_are_refused}
+      - {file: crates/registry-evidence/src/wallet_presentation.rs, name: the_request_body_is_exactly_a_reference_and_a_principal}
+      - {file: crates/registry-evidence/src/wallet_presentation.rs, name: attribute_match_with_no_disclosed_claim_is_refused}
+      - {file: crates/registry-evidence/src/wallet_presentation.rs, name: the_receipt_time_window_has_exact_edges}
+      - {file: crates/registry-evidence/src/wallet_channel_tests.rs, name: a_presentation_received_beyond_the_result_window_is_a_dependency_failure}
+      - {file: crates/registry-evidence/src/wallet_channel_tests.rs, name: a_presentation_received_in_the_future_is_a_dependency_failure}
+      - {file: crates/registry-evidence/src/wallet_channel_tests.rs, name: a_batch_naming_one_session_twice_yields_no_assertion_from_the_repeat}
+      - {file: crates/registry-evidence/src/wallet_channel_tests.rs, name: a_holder_presented_source_that_does_not_use_the_wallet_protocol_is_refused}
+      - {file: crates/registry-evidence/src/wallet_channel_tests.rs, name: a_source_channel_source_that_uses_the_wallet_protocol_is_refused}
+      - {file: crates/registry-evidence/src/discovery_channel_tests.rs, name: a_caller_with_only_the_source_grant_of_a_two_channel_definition_sees_no_alternative}
   - id: sec-provider-public-projection
     tests:
       - {file: crates/registry-evidence/src/discovery.rs, name: provider_discovery_description_excludes_private_configuration_fields}
@@ -474,6 +524,21 @@ entries:
       - {file: crates/registry-evidence/src/audit.rs, name: pseudonyms_are_byte_identical_for_one_secret_and_key_version}
       - {file: crates/registry-evidence/src/audit.rs, name: pseudonyms_keep_key_epochs_distinguishable}
       - {file: crates/registry-evidence/src/audit.rs, name: an_unusable_key_version_opens_no_destination}
+  - id: sec-x5c-pinned-leaf
+    tests:
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: x5c_header_is_accepted_only_when_the_pinned_key_carries_the_same_leaf}
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: a_pinned_x5c_member_does_not_affect_credentials_without_the_header}
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: malformed_x5c_headers_and_pinned_members_are_refused}
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: x5c_in_the_flattened_jws_header_stays_refused_with_a_pinned_chain}
+      - {file: crates/registry-evidence/src/signing.rs, name: evidences_own_verifier_accepts_x5c_only_against_the_pinned_leaf}
+      - {file: crates/registry-evidence/src/signing.rs, name: credentials_carry_x5c_and_a_third_party_verifies_them_to_the_test_root}
+      - {file: crates/registry-evidence/src/signing.rs, name: only_the_active_key_publishes_a_chain}
+      - {file: crates/registry-evidence/src/signing.rs, name: without_an_identity_credentials_and_the_key_set_carry_no_x5c}
+      - {file: crates/registry-evidence/src/signing.rs, name: startup_refuses_a_leaf_that_does_not_certify_the_signing_key}
+      - {file: crates/registry-evidence/src/signing.rs, name: startup_refuses_a_leaf_that_is_not_valid_now}
+      - {file: crates/registry-evidence/src/signing.rs, name: startup_refuses_a_chain_longer_than_the_chain_policy_allows}
+      - {file: crates/registry-evidence/src/bundle.rs, name: certificate_chain_startup_refusals_name_the_artifact_and_the_cause}
+      - {file: crates/registry-evidence/tests/cli.rs, name: check_rejects_secret_material_the_server_would_refuse_at_startup}
   - id: sec-sd-jwt-claims-closed
     tests: [{file: crates/registry-evidence-verifier/src/verifier.rs, name: sd_jwt_prohibited_claim_rejected}]
   - id: sec-local-source-none-boundary
@@ -601,6 +666,18 @@ entries:
       - {file: crates/registry-evidence-verifier/src/verifier.rs, name: the_trailing_tilde_selects_which_serialization_was_named}
       - {file: crates/registry-evidence/tests/cli.rs, name: verify_refuses_a_holder_bound_presentation}
       - {file: crates/registry-evidence/tests/cli.rs, name: verify_presentation_refuses_an_audience_scoped_credential}
+  - id: sec-channel-declared-and-consumer-bound
+    tests:
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: a_holder_presented_assertion_verifies_only_where_the_channel_is_accepted}
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: a_source_assertion_is_refused_where_only_holder_presented_is_accepted}
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: a_credential_issued_after_the_observation_is_always_refused}
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: a_channel_and_its_presented_credential_must_agree}
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: the_maximum_credential_age_bounds_a_holder_presented_assertion_only}
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: the_policy_documents_default_to_source_only_and_bound_the_credential_age}
+      - {file: crates/registry-evidence-verifier/src/contracts.rs, name: the_payload_contract_ties_the_presented_credential_to_its_channel}
+      - {file: crates/registry-evidence-verifier/src/sdjwt_vc.rs, name: a_holder_presented_assertion_has_no_sd_jwt_vc_form}
+      - {file: crates/registry-evidence-verifier/src/sdjwt_vc.rs, name: an_sd_jwt_vc_is_always_a_source_assertion}
+      - {file: crates/registry-evidence/src/kernel.rs, name: a_holder_presented_construction_refuses_a_credential_issued_after_the_observation}
   - id: sec-holder-bound-purpose-is-issuance-provenance
     tests:
       - {file: crates/registry-evidence-verifier/src/verifier.rs, name: the_expected_issuance_purpose_is_compared_as_signed_provenance}
@@ -741,3 +818,51 @@ entries:
       - {file: crates/registry-evidence-oid4vci/src/config.rs, name: unscoped_ipv6_unicast_link_local_metrics_addresses_are_refused}
       - {file: crates/registry-evidence-oid4vci/src/service.rs, name: a_configured_private_metrics_listener_serves_beside_the_delivery_listener}
       - {file: crates/registry-evidence-oid4vci/src/service.rs, name: serve_revalidates_the_metrics_listener_before_any_socket_is_bound}
+  - id: sec-holder-presented-channel-selection
+    tests:
+      - {file: crates/registry-evidence/src/wallet_channel_tests.rs, name: a_holder_presented_request_returns_a_signed_assertion_that_states_its_channel}
+      - {file: crates/registry-evidence/src/wallet_channel_tests.rs, name: the_credential_age_bound_caps_the_assertion_validity}
+      - {file: crates/registry-evidence/src/wallet_channel_tests.rs, name: a_source_profile_request_reaches_only_the_source_channel}
+      - {file: crates/registry-evidence/src/wallet_channel_tests.rs, name: a_holder_presented_batch_states_the_channel_on_every_item}
+      - {file: crates/registry-evidence/src/wallet_channel_tests.rs, name: a_source_profile_batch_reaches_only_the_source_channel}
+      - {file: crates/registry-evidence/src/wallet_channel_tests.rs, name: a_credential_from_an_untrusted_issuer_is_a_dependency_failure}
+      - {file: crates/registry-evidence/src/wallet_channel_tests.rs, name: a_session_created_by_another_principal_is_a_dependency_failure}
+      - {file: crates/registry-evidence/src/wallet_channel_tests.rs, name: a_session_with_no_presentation_yet_is_a_dependency_failure}
+      - {file: crates/registry-evidence/src/wallet_channel_tests.rs, name: a_read_response_without_a_trace_context_is_a_dependency_failure}
+      - {file: crates/registry-evidence/src/wallet_channel_tests.rs, name: two_channels_that_accept_one_selector_profile_refuse_at_startup}
+      - {file: crates/registry-evidence/src/wallet_channel_tests.rs, name: a_holder_presented_source_that_does_not_use_the_wallet_protocol_is_refused}
+      - {file: crates/registry-evidence/src/wallet_channel_tests.rs, name: a_source_channel_source_that_uses_the_wallet_protocol_is_refused}
+      - {file: crates/registry-evidence/src/holder_presented_tests.rs, name: a_profile_cannot_select_both_channels}
+      - {file: crates/registry-evidence/src/holder_presented_tests.rs, name: both_channels_cannot_name_one_source}
+      - {file: crates/registry-evidence/src/holder_presented_tests.rs, name: an_acquisition_with_neither_channel_is_refused}
+      - {file: crates/registry-evidence/src/holder_presented_tests.rs, name: a_definition_without_a_source_must_list_every_allowed_profile}
+      - {file: crates/registry-evidence/src/holder_presented_tests.rs, name: a_holder_presented_definition_offers_no_sd_jwt_vc_representation}
+      - {file: crates/registry-evidence/src/holder_presented_tests.rs, name: a_holder_presented_definition_refuses_unsigned_json}
+      - {file: crates/registry-evidence/src/holder_presented_tests.rs, name: a_grant_has_no_channels_member}
+      - {file: crates/registry-evidence/src/holder_presented_tests.rs, name: the_projection_of_an_existing_definition_is_unchanged}
+      - {file: crates/registry-evidence/src/holder_presented_tests.rs, name: a_profile_routes_to_exactly_its_channels_source}
+      - {file: crates/registry-evidence/src/holder_presented_tests.rs, name: a_mixed_or_missing_profile_acquires_nothing}
+      - {file: crates/registry-evidence/src/holder_presented_tests.rs, name: the_channel_must_match_the_trusted_attachment}
+      - {file: crates/registry-evidence/src/holder_presented_tests.rs, name: a_holder_presented_construction_carries_the_credential_and_caps_validity}
+      - {file: crates/registry-evidence/src/holder_presented_tests.rs, name: a_presented_credential_without_issued_at_is_refused}
+  - id: sec-oid4vp-verifier-negative-paths
+    tests:
+      - {file: crates/registry-evidence-oid4vp/tests/responses.rs, name: a_response_is_refused_for_the_wrong_state_session_key_or_encryption}
+      - {file: crates/registry-evidence-oid4vp/tests/responses.rs, name: a_payload_that_repeats_a_member_is_refused}
+      - {file: crates/registry-evidence-oid4vp/tests/responses.rs, name: a_vp_token_must_match_the_policy_query}
+      - {file: crates/registry-evidence-oid4vp/tests/responses.rs, name: the_response_body_is_bounded_before_it_is_read}
+      - {file: crates/registry-evidence-oid4vp/src/response.rs, name: a_form_is_one_encrypted_response_or_one_plain_error}
+      - {file: crates/registry-evidence-oid4vp/tests/responses.rs, name: only_one_response_is_accepted_per_session}
+      - {file: crates/registry-evidence-oid4vp/tests/responses.rs, name: an_expired_session_refuses_a_response}
+      - {file: crates/registry-evidence-oid4vp/tests/responses.rs, name: a_response_recorded_as_accepted_is_accepted_when_the_window_closes_during_the_record}
+      - {file: crates/registry-evidence-oid4vp/tests/responses.rs, name: a_reserved_session_survives_the_expiry_sweep}
+      - {file: crates/registry-evidence-oid4vp/tests/responses.rs, name: only_the_evidence_service_credential_reads}
+      - {file: crates/registry-evidence-oid4vp/tests/responses.rs, name: a_foreign_principal_and_an_unknown_reference_read_identically}
+      - {file: crates/registry-evidence-oid4vp/tests/responses.rs, name: a_read_returns_the_presentation_and_the_session_context}
+      - {file: crates/registry-evidence-oid4vp/tests/responses.rs, name: a_read_releases_the_held_bytes_and_leaves_the_status}
+      - {file: crates/registry-evidence-oid4vp/tests/responses.rs, name: a_wallet_error_is_consumed_by_its_first_read}
+      - {file: crates/registry-evidence-oid4vp/tests/responses.rs, name: a_read_that_does_not_succeed_consumes_nothing}
+      - {file: crates/registry-evidence-oid4vp/tests/responses.rs, name: two_concurrent_reads_yield_exactly_one_result}
+      - {file: crates/registry-evidence-oid4vp/tests/responses.rs, name: a_delivered_read_is_journalled_as_consumed}
+      - {file: crates/registry-evidence-oid4vp/tests/endpoints.rs, name: readiness_fails_once_the_client_identifier_certificate_has_expired}
+      - {file: crates/registry-evidence-oid4vp/tests/certificate_expiry_log.rs, name: certificate_expiry_logs_one_warning_without_certificate_content}
