@@ -28,6 +28,7 @@ required-features = ["test-authorization-server"]
 axum.workspace = true
 base64.workspace = true
 bytes.workspace = true
+futures.workspace = true
 jsonwebtoken.workspace = true
 registry-platform-crypto = { workspace = true }
 registry-platform-httpsec = { workspace = true, features = ["server"] }

@@ -200,15 +200,66 @@ pub enum ValidationMode {
 
 /// The signature algorithms an offer token may be signed with.
 ///
-/// The same closed vocabulary Evidence accepts on its own resource-server
-/// profile. Mixing families is refused when the configuration loads rather than
-/// when the first token arrives.
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
-pub enum AccessTokenAlgorithm {
-    EdDSA,
-    ES256,
-    RS256,
+/// The shared access-token roster, narrowed to the closed vocabulary Evidence
+/// accepts on its own resource-server profile by [`admitted_algorithms`].
+/// Mixing families is refused when the configuration loads rather than when
+/// the first token arrives.
+pub use registry_platform_oidc::AccessTokenAlgorithm;
+
+/// The members of the shared roster an offer token may be signed with.
+const ADMITTED_ALGORITHM_NAMES: [&str; 3] = ["EdDSA", "ES256", "RS256"];
+
+/// One roster member, read only when this service admits it.
+#[derive(Eq, Hash, PartialEq)]
+struct AdmittedAlgorithm(AccessTokenAlgorithm);
+
+impl<'de> Deserialize<'de> for AdmittedAlgorithm {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let algorithm = AccessTokenAlgorithm::deserialize(deserializer)?;
+        if ADMITTED_ALGORITHM_NAMES.contains(&algorithm.jwa_name()) {
+            Ok(Self(algorithm))
+        } else {
+            Err(serde::de::Error::unknown_variant(
+                algorithm.jwa_name(),
+                &ADMITTED_ALGORITHM_NAMES,
+            ))
+        }
+    }
+}
+
+/// A list of distinct offer-token algorithms, each one this service admits.
+fn admitted_algorithms<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<UniqueList<AccessTokenAlgorithm>, D::Error> {
+    let admitted = Vec::<AdmittedAlgorithm>::deserialize(deserializer)?;
+    UniqueList::new(admitted.into_iter().map(|admitted| admitted.0).collect())
+        .map_err(serde::de::Error::custom)
+}
+
+/// The published schema of an offer-token algorithm: the admitted members of
+/// the shared roster.
+#[cfg(feature = "schema")]
+struct AdmittedAlgorithmSchema;
+
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for AdmittedAlgorithmSchema {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "AccessTokenAlgorithm".into()
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        let mut schema = AccessTokenAlgorithm::subset_schema(&[
+            AccessTokenAlgorithm::EdDSA,
+            AccessTokenAlgorithm::ES256,
+            AccessTokenAlgorithm::RS256,
+        ]);
+        schema.insert(
+            "description".to_owned(),
+            "The signature algorithms an offer token may be signed with.\n\nThe same closed vocabulary Evidence accepts on its own resource-server\nprofile. Mixing families is refused when the configuration loads rather than\nwhen the first token arrives."
+                .into(),
+        );
+        schema
+    }
 }
 
 /// The listener a wallet and an adopter reach.
@@ -379,6 +430,28 @@ impl Default for StoreConfig {
     }
 }
 
+/// Request budgets, as token buckets.
+///
+/// Offers are budgeted per authorized principal (the token's client, else its
+/// subject), so one adopter front end cannot spend another's budget. The
+/// wallet endpoints are unauthenticated and their callers are not reliably
+/// distinguishable behind a proxy, so each of the token, nonce and credential
+/// endpoints has one budget shared by every wallet. Keying a bucket by anything
+/// a caller chooses would let a caller fill the limiter's bounded key table.
+#[derive(Debug, Eq, PartialEq)]
+pub struct RateLimitsConfig {
+    pub offers_per_principal_per_minute: u32,
+    pub offer_burst: u32,
+    pub wallet_requests_per_minute: u32,
+    pub wallet_request_burst: u32,
+}
+
+impl Default for RateLimitsConfig {
+    fn default() -> Self {
+        RateLimitsDocument::default().into_config()
+    }
+}
+
 /// The whole startup configuration.
 ///
 /// There is deliberately no member for the credential configurations this
@@ -402,6 +475,10 @@ pub struct DeliveryConfig {
     pub token_client: TokenClientConfig,
     pub offers: OfferAuthorizationConfig,
     pub store: StoreConfig,
+    pub rate_limits: RateLimitsConfig,
+    /// Whether the OpenID4VCI Draft 13 compatibility profile is served beside
+    /// the 1.0 Final profile. See [`crate::draft13`].
+    pub draft13_profile: bool,
 }
 
 impl DeliveryConfig {
@@ -501,6 +578,22 @@ fn default_maximum_transaction_code_attempts() -> BoundedU32<1, 10> {
     bounded_u32(3)
 }
 
+fn default_offers_per_principal_per_minute() -> BoundedU32<1, 100_000> {
+    bounded_u32(600)
+}
+
+fn default_offer_burst() -> BoundedU32<1, 100_000> {
+    bounded_u32(60)
+}
+
+fn default_wallet_requests_per_minute() -> BoundedU32<1, 1_000_000> {
+    bounded_u32(3_000)
+}
+
+fn default_wallet_request_burst() -> BoundedU32<1, 100_000> {
+    bounded_u32(300)
+}
+
 /// The wallet-delivery runtime file: one deployment of the OID4VCI delivery
 /// front end for Evidence credentials.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -541,7 +634,26 @@ pub struct DeliveryDocument {
     /// The bounds of the in-memory store.
     #[serde(default)]
     pub store: StoreDocument,
+    /// Request budgets. Absent means the defaults of each member.
+    #[serde(default)]
+    pub rate_limits: RateLimitsDocument,
+    /// Serves the OpenID4VCI Draft 13 compatibility profile beside the 1.0
+    /// Final profile, at its own issuer identifier: the `credentialIssuer`
+    /// followed by `/protocol/oid4vci/draft-13`. Written as an empty mapping,
+    /// `draft13Profile: {}`; absent means the profile is not served and none of
+    /// its routes exist. It shares the offer store and the offer authorization
+    /// with the 1.0 profile, and an offer made for one profile cannot be
+    /// redeemed through the other.
+    #[serde(default)]
+    #[cfg_attr(feature = "schema", schemars(with = "Draft13ProfileDocument"))]
+    pub draft13_profile: Option<Draft13ProfileDocument>,
 }
+
+/// The Draft 13 compatibility profile switch. It takes no settings.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Draft13ProfileDocument {}
 
 /// The process-local audit destination and keyed-pseudonym secret.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -826,8 +938,14 @@ pub struct OffersDocument {
     #[cfg_attr(feature = "schema", schemars(length(min = 1)))]
     pub audiences: UniqueList<ExternalId>,
     /// The one signature algorithm an offer token may be signed with.
-    #[serde(default = "default_offer_token_algorithms")]
-    #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 1)))]
+    #[serde(
+        default = "default_offer_token_algorithms",
+        deserialize_with = "admitted_algorithms"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "UniqueList<AdmittedAlgorithmSchema>", length(min = 1, max = 1))
+    )]
     pub algorithms: UniqueList<AccessTokenAlgorithm>,
     /// Client identifiers permitted to create offers, each at most 128 bytes,
     /// or `unrestricted` for any client the issuer vouched for.
@@ -887,6 +1005,49 @@ impl StoreDocument {
             access_token_lifetime_seconds: self.access_token_lifetime_seconds.get(),
             nonce_lifetime_seconds: self.nonce_lifetime_seconds.get(),
             maximum_transaction_code_attempts: self.maximum_transaction_code_attempts.get(),
+        }
+    }
+}
+
+/// Request budgets. A request over its budget is answered 429 with a
+/// `Retry-After` header.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RateLimitsDocument {
+    /// Offers one authorized principal may create per minute.
+    #[serde(default = "default_offers_per_principal_per_minute")]
+    pub offers_per_principal_per_minute: BoundedU32<1, 100_000>,
+    /// The most offers one authorized principal may create in a burst.
+    #[serde(default = "default_offer_burst")]
+    pub offer_burst: BoundedU32<1, 100_000>,
+    /// Requests per minute each of the token, nonce and credential endpoints
+    /// takes from all wallets together.
+    #[serde(default = "default_wallet_requests_per_minute")]
+    pub wallet_requests_per_minute: BoundedU32<1, 1_000_000>,
+    /// The most requests each wallet endpoint admits in a burst.
+    #[serde(default = "default_wallet_request_burst")]
+    pub wallet_request_burst: BoundedU32<1, 100_000>,
+}
+
+impl Default for RateLimitsDocument {
+    fn default() -> Self {
+        Self {
+            offers_per_principal_per_minute: default_offers_per_principal_per_minute(),
+            offer_burst: default_offer_burst(),
+            wallet_requests_per_minute: default_wallet_requests_per_minute(),
+            wallet_request_burst: default_wallet_request_burst(),
+        }
+    }
+}
+
+impl RateLimitsDocument {
+    fn into_config(self) -> RateLimitsConfig {
+        RateLimitsConfig {
+            offers_per_principal_per_minute: self.offers_per_principal_per_minute.get(),
+            offer_burst: self.offer_burst.get(),
+            wallet_requests_per_minute: self.wallet_requests_per_minute.get(),
+            wallet_request_burst: self.wallet_request_burst.get(),
         }
     }
 }
@@ -1217,6 +1378,8 @@ impl DeliveryDocument {
                 maximum_token_lifetime_seconds: self.offers.maximum_token_lifetime_seconds.get(),
             },
             store: self.store.into_config(),
+            rate_limits: self.rate_limits.into_config(),
+            draft13_profile: self.draft13_profile.is_some(),
         }
     }
 }
@@ -1854,6 +2017,46 @@ store:
     }
 
     #[test]
+    fn the_rate_limits_block_is_optional_and_defaulted() {
+        let config = load_from(VALID).expect("the configuration loads");
+        assert_eq!(config.rate_limits, RateLimitsConfig::default());
+        assert_eq!(config.rate_limits.offers_per_principal_per_minute, 600);
+        assert_eq!(config.rate_limits.offer_burst, 60);
+        assert_eq!(config.rate_limits.wallet_requests_per_minute, 3_000);
+        assert_eq!(config.rate_limits.wallet_request_burst, 300);
+    }
+
+    #[test]
+    fn the_rate_limits_block_sets_each_limit_and_refuses_zero() {
+        let with = |block: &str| format!("{VALID}rateLimits:\n{block}");
+        let config = load_from(&with(
+            "  offersPerPrincipalPerMinute: 30\n  offerBurst: 5\n  walletRequestsPerMinute: 90\n  walletRequestBurst: 9\n",
+        ))
+        .expect("the configuration loads");
+        assert_eq!(
+            config.rate_limits,
+            RateLimitsConfig {
+                offers_per_principal_per_minute: 30,
+                offer_burst: 5,
+                wallet_requests_per_minute: 90,
+                wallet_request_burst: 9,
+            }
+        );
+        for member in [
+            "offersPerPrincipalPerMinute",
+            "offerBurst",
+            "walletRequestsPerMinute",
+            "walletRequestBurst",
+        ] {
+            assert!(
+                load_from(&with(&format!("  {member}: 0\n"))).is_err(),
+                "{member}: 0 is refused"
+            );
+        }
+        assert!(load_from(&with("  unknownLimit: 1\n")).is_err());
+    }
+
+    #[test]
     fn the_client_assertion_audience_defaults_to_the_token_endpoint() {
         let config = load_from(VALID).expect("the configuration loads");
         assert_eq!(
@@ -2085,6 +2288,22 @@ store:
         // Nothing in the offer boundary is derived from the outbound
         // token-client identity this service authenticates with.
         assert_ne!(config.offers.issuer, config.token_client.token_endpoint);
+    }
+
+    #[test]
+    fn offer_token_algorithms_accept_exactly_eddsa_es256_and_rs256() {
+        for accepted in ["EdDSA", "ES256", "RS256"] {
+            let text = VALID.replace("algorithms: [EdDSA]", &format!("algorithms: [{accepted}]"));
+            load_from(&text).unwrap_or_else(|error| panic!("{accepted} is accepted: {error:?}"));
+        }
+        for rejected in ["ES384", "RS384", "HS256", "PS256", "none", "es256", "EDDSA"] {
+            let text = VALID.replace("algorithms: [EdDSA]", &format!("algorithms: [{rejected}]"));
+            assert_eq!(
+                refused(&text),
+                ["config.unknown-variant"],
+                "{rejected} must be refused when the configuration loads"
+            );
+        }
     }
 
     #[test]

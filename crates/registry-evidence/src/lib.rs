@@ -23,8 +23,10 @@ pub mod host_protocol;
 pub mod kernel;
 pub mod local_verification;
 pub mod model;
+pub mod name_normalisation;
 pub mod observability;
 pub mod pack_source;
+pub mod presented;
 pub mod problem;
 pub mod rate_limit;
 pub mod rhai_runtime;
@@ -42,6 +44,8 @@ pub mod status;
 pub mod trace;
 pub mod values;
 pub mod verification_policy;
+#[cfg(feature = "wallet-presentation")]
+mod wallet_presentation;
 
 /// The response formats, their payload contract, and the strict verifier are
 /// owned by the portable `registry-evidence-verifier` crate and served here at
@@ -55,6 +59,10 @@ pub use registry_evidence_verifier::{
 
 pub use cli::command;
 
+#[cfg(test)]
+mod certificate_test_support;
+#[cfg(test)]
+mod holder_presented_tests;
 #[cfg(test)]
 mod normalized_tests;
 #[cfg(test)]

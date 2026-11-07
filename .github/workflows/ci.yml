@@ -395,8 +395,11 @@ jobs:
             target_a: authcommon_parsers
             target_b: sqlite_statement
           - group: sd-jwt
-            target_a: sdjwt_holder_proof
-            target_b: sdjwt_issuance
+            target_a: sdjwt_issuance
+            target_b: sdjwt_presentation_parse
+          - group: jose
+            target_a: crypto_jws_parse
+            target_b: crypto_jwe_decrypt
           - group: yaml
             target_a: yaml_reader
             target_b: yaml_decode
@@ -455,6 +458,7 @@ jobs:
           - group: verifier
             target_a: verifier_flattened_jws
             target_b: verifier_sd_jwt_vc
+            target_c: verifier_holder_proof
           - group: authoring
             target_a: authoring_openapi
             target_b: authoring_project
@@ -486,7 +490,8 @@ jobs:
         env:
           FUZZ_TARGET_A: ${{ matrix.target_a }}
           FUZZ_TARGET_B: ${{ matrix.target_b }}
-        run: products/evidence/scripts/run-fuzz-smoke.sh "$FUZZ_TARGET_A" "$FUZZ_TARGET_B"
+          FUZZ_TARGET_C: ${{ matrix.target_c }}
+        run: products/evidence/scripts/run-fuzz-smoke.sh "$FUZZ_TARGET_A" "$FUZZ_TARGET_B" ${FUZZ_TARGET_C:+"$FUZZ_TARGET_C"}
 
       - name: Upload fuzz failures
         if: failure()
@@ -496,6 +501,7 @@ jobs:
           path: |
             products/evidence/fuzz/artifacts/${{ matrix.target_a }}/
             products/evidence/fuzz/artifacts/${{ matrix.target_b }}/
+            products/evidence/fuzz/artifacts/${{ matrix.target_c || matrix.target_a }}/
           if-no-files-found: ignore
 
   rust-policy:
@@ -733,6 +739,21 @@ jobs:
 
       - name: Enforce Evidence verifier portability
         run: products/evidence/scripts/check-verifier-portability.sh
+
+      # A deployment without wallet sources links none of the presentation
+      # verification dependencies, so the runtime must build without the
+      # default `wallet-presentation` feature and must not reach that crate.
+      - name: Build Evidence without wallet presentation
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo check --locked -p registry-evidence --no-default-features --all-targets
+          cargo test --locked -p registry-evidence --no-default-features --test host_protocols
+          if cargo tree --locked -p registry-evidence --no-default-features -e normal --prefix none \
+            | grep -q '^registry-evidence-presentation '; then
+            echo "::error::registry-evidence reaches registry-evidence-presentation without the wallet-presentation feature"
+            exit 1
+          fi
 
       - name: Install uv
         uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
@@ -1968,6 +1989,7 @@ jobs:
           -p registry-documentsctl -p registry-adapterctl
           -p registry-evidence -p registry-evidencectl -p registry-manifest-cli
           -p registry-breg-mcp -p registry-breg-review -p registry-evidence-oid4vci -p registry-mcp
+          -p registry-evidence-oid4vp
 
       - name: Run configuration conformance corpus
         run: products/platform/scripts/run-config-conformance.sh --strict --bin-dir target/debug
@@ -2427,6 +2449,24 @@ jobs:
             -- --ignored --exact \
             | tee "${RUNNER_TEMP}/evidence-source-recipes.log"
           grep -q 'test result: ok\. 1 passed' "${RUNNER_TEMP}/evidence-source-recipes.log" || { echo "::error::expected exactly one passing test for curated_source_recipes_import_check_and_run_the_existing_evaluator"; exit 1; }
+
+      - name: Test the composed wallet presentation journey
+        shell: bash
+        env:
+          EVIDENCE_BIN: ${{ github.workspace }}/target/debug/evidence
+          EVIDENCECTL_BIN: ${{ github.workspace }}/target/debug/evidencectl
+        run: |
+          set -euo pipefail
+          cargo test --locked -p registry-evidence-oid4vp --test evidence_journey \
+            a_presented_credential_becomes_a_verified_assertion \
+            -- --ignored --exact \
+            | tee "${RUNNER_TEMP}/evidence-wallet-journey.log"
+          grep -q 'test result: ok\. 1 passed' "${RUNNER_TEMP}/evidence-wallet-journey.log" || { echo "::error::expected exactly one passing test for a_presented_credential_becomes_a_verified_assertion"; exit 1; }
+          cargo test --locked -p registry-evidence-oid4vp --test device_run \
+            a_simulated_wallet_completes_the_device_run_harness \
+            -- --ignored --exact \
+            | tee "${RUNNER_TEMP}/evidence-wallet-device-run.log"
+          grep -q 'test result: ok\. 1 passed' "${RUNNER_TEMP}/evidence-wallet-device-run.log" || { echo "::error::expected exactly one passing test for a_simulated_wallet_completes_the_device_run_harness"; exit 1; }
 
       - name: Execute the Evidence tutorials with the stock issuer
         shell: bash

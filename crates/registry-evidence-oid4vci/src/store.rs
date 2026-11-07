@@ -59,6 +59,9 @@ pub(crate) const OFFER_DOMAIN: &str = "oid4vci.offer";
 pub(crate) const TRANSACTION_CODE_DOMAIN: &str = "oid4vci.transaction-code";
 pub(crate) const ACCESS_TOKEN_DOMAIN: &str = "oid4vci.access-token";
 const NONCE_DOMAIN: &str = "oid4vci.nonce";
+/// The key-space of a nonce bound to one access token. It shares no tag with
+/// [`NONCE_DOMAIN`], so neither kind verifies as the other.
+const BOUND_NONCE_DOMAIN: &str = "oid4vci.nonce.bound";
 
 #[derive(Debug, Error, Eq, PartialEq)]
 pub enum StoreError {
@@ -758,9 +761,37 @@ impl NonceMinter {
         format!("{expires_at}.{tag}")
     }
 
+    /// Mint a nonce bound to `binding`, a secret the verifier will hold again:
+    /// the access token the nonce is delivered with. The binding is part of the
+    /// tag and appears nowhere in the nonce.
+    #[must_use]
+    pub fn mint_bound(&self, binding: &str, now: i64) -> String {
+        let expires_at = now.saturating_add(self.lifetime_seconds);
+        let tag = Self::bound_tag(self.keys.current(), binding, expires_at);
+        format!("{expires_at}.{tag}")
+    }
+
     /// Verify a nonce by recomputing it. Never reads a stored value, because
     /// there is none.
     pub fn verify(&self, nonce: &str, now: i64) -> Result<(), NonceError> {
+        self.verify_with(nonce, now, Self::tag)
+    }
+
+    /// Verify a nonce minted by [`Self::mint_bound`] for the same `binding`.
+    /// A nonce minted for another binding, or by [`Self::mint`], is refused as
+    /// tampered.
+    pub fn verify_bound(&self, nonce: &str, binding: &str, now: i64) -> Result<(), NonceError> {
+        self.verify_with(nonce, now, |key, expires_at| {
+            Self::bound_tag(key, binding, expires_at)
+        })
+    }
+
+    fn verify_with(
+        &self,
+        nonce: &str,
+        now: i64,
+        recompute: impl Fn(&VersionedKey, i64) -> String,
+    ) -> Result<(), NonceError> {
         let (expiry, presented) = nonce.split_once('.').ok_or(NonceError::Invalid)?;
         if presented.is_empty() || presented.contains('.') {
             return Err(NonceError::Invalid);
@@ -778,7 +809,7 @@ impl NonceMinter {
             .accepted()
             .fold(Choice::from(0), |found, key| {
                 found
-                    | Self::tag(key, expires_at)
+                    | recompute(key, expires_at)
                         .as_bytes()
                         .ct_eq(presented.as_bytes())
             })
@@ -794,6 +825,11 @@ impl NonceMinter {
 
     fn tag(key: &VersionedKey, expires_at: i64) -> String {
         tag(key, NONCE_DOMAIN, &expires_at.to_string()).to_string()
+    }
+
+    fn bound_tag(key: &VersionedKey, binding: &str, expires_at: i64) -> String {
+        let secret = Zeroizing::new(format!("{expires_at}\u{0}{binding}"));
+        tag(key, BOUND_NONCE_DOMAIN, &secret).to_string()
     }
 }
 
@@ -1195,6 +1231,30 @@ mod tests {
         minter
             .verify(&nonce, NOW + 119)
             .expect("the nonce verifies up to its expiry");
+    }
+
+    #[test]
+    fn a_bound_nonce_verifies_only_for_its_binding_and_is_not_a_plain_nonce() {
+        let minter = NonceMinter::new(120);
+        let bound = minter.mint_bound("token-a", NOW);
+
+        minter
+            .verify_bound(&bound, "token-a", NOW)
+            .expect("a bound nonce verifies for its own binding");
+        assert_eq!(
+            minter.verify_bound(&bound, "token-b", NOW),
+            Err(NonceError::Tampered)
+        );
+        assert_eq!(minter.verify(&bound, NOW), Err(NonceError::Tampered));
+        assert_eq!(
+            minter.verify_bound(&minter.mint(NOW), "token-a", NOW),
+            Err(NonceError::Tampered)
+        );
+        assert_eq!(
+            minter.verify_bound(&bound, "token-a", NOW + 121),
+            Err(NonceError::Expired)
+        );
+        assert!(!bound.contains("token-a"));
     }
 
     #[test]

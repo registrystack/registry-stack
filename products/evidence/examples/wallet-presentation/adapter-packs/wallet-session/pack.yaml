@@ -1,0 +1,147 @@
+{
+  "apiVersion": "id.registrystack.org/formats/adapter/pack/v1alpha1",
+  "kind": "AdapterPack",
+  "id": "wallet-session",
+  "version": "1",
+  "testedVersions": [],
+  "endpoints": [
+    {
+      "id": "credential-possession",
+      "component": "http",
+      "authentication": {
+        "type": "static-authorization"
+      },
+      "attemptTimeoutMilliseconds": 2000,
+      "maximumResponseBytes": 65536,
+      "requestHeaders": [],
+      "responseHeaders": [],
+      "operations": [
+        {
+          "id": "read",
+          "safeUpstream": true
+        }
+      ],
+      "testedVersions": [],
+      "hostProtocol": {
+        "id": "wallet-presentation-v1",
+        "config": {
+          "path": "protocols/credential-possession.json",
+          "digest": "sha256:779509bf0e15265d716886a80cabba780158efea225a5013d8156bc535fa09ad"
+        }
+      }
+    },
+    {
+      "id": "identity-match",
+      "component": "http",
+      "authentication": {
+        "type": "static-authorization"
+      },
+      "attemptTimeoutMilliseconds": 2000,
+      "maximumResponseBytes": 65536,
+      "requestHeaders": [],
+      "responseHeaders": [],
+      "operations": [
+        {
+          "id": "read",
+          "safeUpstream": true
+        }
+      ],
+      "testedVersions": [],
+      "hostProtocol": {
+        "id": "wallet-presentation-v1",
+        "config": {
+          "path": "protocols/identity-match.json",
+          "digest": "sha256:8b1d02f30a9f1ecf37060a837b7974d763f27e00644dfc1d9521dbcb918de00c"
+        }
+      }
+    }
+  ],
+  "scripts": [
+    {
+      "path": "scripts/wallet.rhai",
+      "digest": "sha256:707d0dc31f56c6e77d8297996c82cc8dac4b8ae7daf898f11df1a966e73927d4"
+    }
+  ],
+  "sourceRoutes": [
+    {
+      "id": "possession",
+      "evidence": {
+        "inputsSchema": {
+          "path": "schemas/inputs.json",
+          "digest": "sha256:b7fb890352c614d6bb7ff41d5a3bfbdf606d5b56c05f5b49bf9fce3e84f92dc1"
+        },
+        "factsSchema": {
+          "path": "schemas/possession.json",
+          "digest": "sha256:d160b761dd6637f2c99f34e01ce3e9ab10a1e73fb2e49ae7a10edbd363e07aac"
+        },
+        "acquisitionPosture": "field-projected"
+      },
+      "steps": [
+        {
+          "to": {
+            "uri": "http:credential-possession",
+            "parameters": {
+              "httpMethod": "POST",
+              "operation": "read",
+              "path": "/v1/presentations/read",
+              "body": {
+                "rhai": {
+                  "file": "scripts/wallet.rhai",
+                  "entrypoint": "read_request"
+                }
+              }
+            }
+          }
+        },
+        {
+          "setBody": {
+            "rhai": {
+              "file": "scripts/wallet.rhai",
+              "entrypoint": "possession"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "identity",
+      "evidence": {
+        "inputsSchema": {
+          "path": "schemas/inputs.json",
+          "digest": "sha256:b7fb890352c614d6bb7ff41d5a3bfbdf606d5b56c05f5b49bf9fce3e84f92dc1"
+        },
+        "factsSchema": {
+          "path": "schemas/identity.json",
+          "digest": "sha256:3aa4605990f4a7a3bc41a3c143b6af595dc9c95522ab28dc4c20ea06fb6b1fff"
+        },
+        "acquisitionPosture": "field-projected"
+      },
+      "steps": [
+        {
+          "to": {
+            "uri": "http:identity-match",
+            "parameters": {
+              "httpMethod": "POST",
+              "operation": "read",
+              "path": "/v1/presentations/read",
+              "body": {
+                "rhai": {
+                  "file": "scripts/wallet.rhai",
+                  "entrypoint": "read_request"
+                }
+              }
+            }
+          }
+        },
+        {
+          "setBody": {
+            "rhai": {
+              "file": "scripts/wallet.rhai",
+              "entrypoint": "identity"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

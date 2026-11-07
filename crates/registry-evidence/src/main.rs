@@ -33,8 +33,8 @@ use registry_evidence::{
     },
     local_verification::{prepare_local_relying_procedure, LocalRelyingProcedureInput},
     model::{
-        JwksDocument, LookupResult, PublicValue, ScalarOrEntityReference, SubjectBinding,
-        EVIDENCE_REQUEST_BATCH_MAX_ITEMS,
+        AssertionChannel, JwksDocument, LookupResult, PublicValue, ScalarOrEntityReference,
+        SubjectBinding, EVIDENCE_REQUEST_BATCH_MAX_ITEMS,
     },
     pack_source::{PackSourceError, PackSourceExecutor},
     problem::ProblemCode,
@@ -676,6 +676,9 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
         }
         Command::Serve { runtime_config } => {
             install_operational_logging();
+            // Installed before anything is loaded or served, so a failure to
+            // install a handler refuses startup.
+            let shutdown = stop_signal(registry_platform_httpsec::shutdown_signal)?;
             // The inputs are loaded here rather than inside the runtime so a
             // refused configuration reports its diagnostics, not only a class.
             let deployment =
@@ -689,7 +692,7 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
             // after both listeners are held. Nothing is reported here, because
             // a start reported before the bind describes a service that may
             // never have got its port.
-            server::serve(runtime, shutdown_signal())
+            server::serve(runtime, shutdown)
                 .await
                 .map_err(|error| CommandError::Service(error.to_string()))?;
             Ok(ExitCode::SUCCESS)
@@ -1336,6 +1339,10 @@ fn runtime_initialization_error(error: RuntimeInitializationError) -> CommandErr
         }
         RuntimeInitializationError::Signing(fault) => CommandError::Signing(fault),
         RuntimeInitializationError::Source => CliError(SOURCES_UNAVAILABLE).into(),
+        RuntimeInitializationError::ChannelSource { pointer, cause } => {
+            tracing::error!(%pointer, cause, "an Evidence source is on the wrong acquisition channel");
+            CliError(SOURCES_UNAVAILABLE).into()
+        }
         RuntimeInitializationError::RateLimit => CliError(RATE_LIMIT_UNAVAILABLE).into(),
         RuntimeInitializationError::IssuerTrust => CliError(
             "runtime authentication initialization failed: the access-token issuer TLS trust profile does not resolve to a bound certificate bundle trusted beside the system roots",
@@ -1404,37 +1411,21 @@ fn install_operational_logging() {
         .init();
 }
 
-/// Resolve on the first operator stop signal.
+/// Install the operator stop signal handlers, or refuse startup.
 ///
 /// A service manager and a container runtime both stop a process with
-/// SIGTERM, and an interactive operator uses Ctrl-C. Both resolve here, so the
-/// same drain runs either way: the server stops accepting, finishes its
-/// in-flight evaluations, and flushes the audit destination before the process
-/// exits.
-async fn shutdown_signal() {
-    #[cfg(unix)]
-    {
-        use tokio::signal::unix::{signal, SignalKind};
-
-        match signal(SignalKind::terminate()) {
-            Ok(mut terminate) => {
-                tokio::select! {
-                    _ = tokio::signal::ctrl_c() => {}
-                    _ = terminate.recv() => {}
-                }
-            }
-            Err(error) => {
-                eprintln!(
-                    "evidence: SIGTERM handler unavailable ({error}); stopping on Ctrl-C only"
-                );
-                let _ = tokio::signal::ctrl_c().await;
-            }
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = tokio::signal::ctrl_c().await;
-    }
+/// SIGTERM, and an interactive operator uses Ctrl-C. Both resolve the returned
+/// future, so the same drain runs either way: the server stops accepting,
+/// finishes its in-flight evaluations, and flushes the audit destination
+/// before the process exits. A handler that cannot be installed is a startup
+/// error, so a service that no signal can drain is never left running.
+/// `install` is [`registry_platform_httpsec::shutdown_signal`] in production.
+fn stop_signal<S>(install: impl FnOnce() -> std::io::Result<S>) -> Result<S, CommandError> {
+    install().map_err(|error| {
+        CommandError::Service(format!(
+            "the stop signal handlers could not be installed, so Evidence did not start: {error}"
+        ))
+    })
 }
 
 /// Longest accepted verification input.
@@ -3439,6 +3430,7 @@ async fn sign_and_verify_fixture_evidence(
                 issued_at,
                 observed_at,
                 source_valid_until: None,
+                channel: AssertionChannel::Source,
                 subjects,
             },
         )
@@ -5063,6 +5055,31 @@ mod tests {
     use registry_evidence::config::SubjectBindingMode;
     use registry_evidence::verifier::{ExpectedListItemForm, ExpectedValueForm};
     use std::fs;
+
+    /// A stop signal handler that cannot be installed refuses startup with
+    /// the operating system's cause, rather than a service no signal can stop.
+    #[test]
+    fn a_stop_signal_that_cannot_be_installed_refuses_startup() {
+        let refusal = stop_signal(|| {
+            Err::<(), _>(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "install refused",
+            ))
+        })
+        .expect_err("an install failure is a startup error");
+        let CommandError::Service(message) = refusal else {
+            panic!("a stop signal refusal is a service error");
+        };
+        assert_eq!(
+            message,
+            "the stop signal handlers could not be installed, so Evidence did not start: install refused"
+        );
+    }
+
+    #[test]
+    fn an_installed_stop_signal_is_handed_to_the_server() {
+        assert_eq!(stop_signal(|| Ok(7_u8)).expect("the install succeeds"), 7);
+    }
 
     /// The issuer trust refusal covers every way a named profile fails to
     /// resolve, not only a file that holds no certificate.

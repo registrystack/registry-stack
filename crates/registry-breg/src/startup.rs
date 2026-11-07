@@ -2037,7 +2037,14 @@ fn timeout_problem() -> Response {
 /// preparation gate, which prevents production from accepting an externally
 /// opened database connection before package verification.
 pub async fn serve(prepared: PreparedServer) -> Result<()> {
-    serve_until_shutdown(prepared, shutdown_signal()).await
+    // The handlers are installed before the listener is bound: a failure
+    // refuses startup instead of leaving a server that SIGTERM ends abruptly.
+    let signal = shutdown_after(registry_platform_httpsec::shutdown_signal)?;
+    serve_until_shutdown(prepared, async move {
+        signal.await;
+        Ok(())
+    })
+    .await
 }
 
 pub async fn serve_until_shutdown(
@@ -2315,32 +2322,14 @@ impl SupervisedTask {
     }
 }
 
-async fn shutdown_signal() -> Result<()> {
-    #[cfg(unix)]
-    {
-        let mut terminate =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                .map_err(|_| StartupError::Shutdown)?;
-        first_shutdown_signal(tokio::signal::ctrl_c(), terminate.recv()).await
-    }
-    #[cfg(not(unix))]
-    {
-        tokio::signal::ctrl_c()
-            .await
-            .map_err(|_| StartupError::Shutdown)
-    }
-}
-
-#[cfg(unix)]
-async fn first_shutdown_signal<C, T, E>(ctrl_c: C, terminate: T) -> Result<()>
+/// Install the stop-signal handlers with `install`. A failure refuses startup
+/// with [`StartupError::Shutdown`], so the runtime never serves with no way to
+/// be stopped by a signal.
+fn shutdown_after<I, S>(install: I) -> Result<S>
 where
-    C: Future<Output = std::result::Result<(), E>>,
-    T: Future<Output = Option<()>>,
+    I: FnOnce() -> std::io::Result<S>,
 {
-    tokio::select! {
-        result = ctrl_c => result.map_err(|_| StartupError::Shutdown),
-        result = terminate => result.ok_or(StartupError::Shutdown),
-    }
+    install().map_err(|_| StartupError::Shutdown)
 }
 
 fn map_server_result(
@@ -2873,6 +2862,31 @@ async fn verify_configured_runtime_role(
         return Err(StartupError::DatabaseUnready);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod shutdown_tests {
+    use super::*;
+
+    #[test]
+    fn a_stop_signal_install_failure_refuses_startup() {
+        let error = shutdown_after(|| -> std::io::Result<std::future::Pending<()>> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "install refused",
+            ))
+        })
+        .expect_err("an install failure is an error, never a silent wait");
+        assert_eq!(error, StartupError::Shutdown);
+    }
+
+    #[tokio::test]
+    async fn an_installed_stop_signal_resolves_when_it_fires() {
+        let signal = shutdown_after(|| Ok(std::future::ready(()))).expect("installs");
+        tokio::time::timeout(Duration::from_secs(5), signal)
+            .await
+            .expect("a fired signal resolves");
+    }
 }
 
 #[cfg(all(test, feature = "runtime", feature = "tooling"))]

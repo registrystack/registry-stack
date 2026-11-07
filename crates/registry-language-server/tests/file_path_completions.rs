@@ -139,6 +139,29 @@ fn private_key_reference_does_not_enumerate_unrelated_key_roles() {
 }
 
 #[test]
+fn signing_key_reference_does_not_enumerate_unrelated_key_roles() {
+    let project = Project::new(&[
+        file(
+            ".registry-stack-editor/project.json",
+            r#"{"product":"evidence-oid4vp","document":"verifier.yaml"}"#,
+        ),
+        file(
+            "verifier.yaml",
+            "apiVersion: id.registrystack.org/formats/evidence/oid4vp-runtime/v1alpha1\nkind: EvidenceOid4vpRuntimeConfig\nclientIdentifiers:\n  - id: haip\n    signingKeyRef: secret:file/<|key|>keys/missing.jwk.json\n",
+        ),
+        file("keys/signing.jwk.json", "SYNTHETIC_SIGNING_KEY_CANARY"),
+        file("keys/other.pem", "SYNTHETIC_UNRELATED_KEY_CANARY"),
+    ]);
+    let index = ProjectIndex::load_product(project.root(), ProductKind::EvidenceOid4vp).unwrap();
+    assert!(index
+        .completions_at(
+            &project.path("verifier.yaml"),
+            project.cursor("verifier.yaml", "key")
+        )
+        .is_empty());
+}
+
+#[test]
 fn oversized_opaque_template_is_offered_without_indexing_its_contents() {
     use std::fs;
     let project = Project::new(&[

@@ -48,6 +48,7 @@ pub mod authorizer;
 pub mod cli;
 pub mod config;
 pub mod contracts;
+pub mod draft13;
 pub mod issuer;
 pub mod metadata;
 mod observability;

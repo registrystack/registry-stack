@@ -1,6 +1,46 @@
 {
   "$comment": "The authenticated response contains only complete request shapes that match exactly one configured authority path. It never exposes source plans, scripts, credentials, requester tags, authority-profile identifiers, selector values, codelist values, codelist paths, internal constraints, or unrelated definitions.",
   "$defs": {
+    "alternative": {
+      "additionalProperties": false,
+      "properties": {
+        "channel": {
+          "enum": [
+            "source",
+            "holder-presented"
+          ]
+        },
+        "responseFormats": {
+          "items": {
+            "enum": [
+              "signed-jws",
+              "unsigned-json",
+              "sd-jwt-vc",
+              "sd-jwt-vc-batch"
+            ]
+          },
+          "maxItems": 4,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "subjects": {
+          "items": {
+            "$ref": "#/$defs/subject"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "channel",
+        "responseFormats",
+        "subjects"
+      ],
+      "type": "object"
+    },
     "concept": {
       "additionalProperties": false,
       "properties": {
@@ -151,6 +191,23 @@
     "definition": {
       "additionalProperties": false,
       "properties": {
+        "alternatives": {
+          "description": "The request shapes of the other channels of this definition that the caller is entitled to. Absent when there are none. A channel the caller is not entitled to is never listed.",
+          "items": {
+            "$ref": "#/$defs/alternative"
+          },
+          "maxItems": 1,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "channel": {
+          "description": "The acquisition channel of this entry's own subjects. Present only when the caller is entitled to a holder-presented channel of the definition, as the entry's own channel or as an alternative; absence means the source channel. A caller entitled to the source channel alone receives the entry a source-only definition produces, so the member never reveals that a holder-presented channel exists.",
+          "enum": [
+            "source",
+            "holder-presented"
+          ]
+        },
         "concepts": {
           "items": {
             "$ref": "#/$defs/concept"

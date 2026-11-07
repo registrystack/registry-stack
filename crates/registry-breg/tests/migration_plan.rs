@@ -2,6 +2,7 @@
 
 #![cfg(all(feature = "runtime", feature = "tooling"))]
 
+use std::collections::BTreeSet;
 use std::fs;
 
 use registry_breg::compiler::{compile_project, module_digest, CompileProfile};
@@ -1020,6 +1021,431 @@ fn reviewed_encryption_flip_refuses_multiple_backfill_steps_for_one_entity() {
 }
 
 #[test]
+fn reviewed_blind_index_reindex_binds_only_the_lookup_column() {
+    let previous = compile_variant(Variant::EncryptedFlipOn);
+    let candidate = compile_variant(Variant::EncryptedUnicodeLookup);
+
+    // A normalization-only change is one backfill-classified lookup change
+    // with no compiler DDL of its own beyond the view refresh.
+    let change_set = compiled_registry_change_set(&previous, &candidate, PRIOR_REVISION);
+    assert_eq!(change_set.changes.len(), 1);
+    assert_eq!(
+        (change_set.changes[0].code, change_set.changes[0].class),
+        (
+            CompiledRegistryChangeCode::FieldLookupChanged,
+            CompiledRegistryChangeClass::DataBackfillRequired
+        )
+    );
+
+    let artifacts = blind_index_reindex_artifacts("reindex", &previous, &candidate);
+    prepare_reviewed_package(
+        Variant::EncryptedUnicodeLookup,
+        previous,
+        vec![artifacts.source()],
+    )
+    .expect("a reviewed blind-index re-index prepares");
+}
+
+#[test]
+fn reviewed_blind_index_reindex_refuses_a_history_choice() {
+    let previous = compile_variant(Variant::EncryptedFlipOn);
+    let candidate = compile_variant(Variant::EncryptedUnicodeLookup);
+    let mut artifacts = blind_index_reindex_artifacts("reindex", &previous, &candidate);
+    // A re-index rewrites no record content and flips nothing into
+    // encryption, so there is no plaintext history to choose about.
+    artifacts.descriptor.history = Some(ReviewedFieldEncryptionHistory::EraseAndRebaseline);
+    artifacts.rebind();
+    assert_refused(
+        Variant::EncryptedUnicodeLookup,
+        previous,
+        vec![artifacts.source()],
+        ReviewedMigrationError::Descriptor,
+        "a history choice on a blind-index re-index",
+    );
+}
+
+#[test]
+fn reviewed_blind_index_reindex_refuses_a_plan_without_steps() {
+    let previous = compile_variant(Variant::EncryptedFlipOn);
+    let candidate = compile_variant(Variant::EncryptedUnicodeLookup);
+    let mut artifacts = blind_index_reindex_artifacts("reindex", &previous, &candidate);
+    // Authored SQL cannot open the envelopes, so a covered lookup change with
+    // no engine re-index would leave the old digests behind the new package;
+    // a descriptor with no step at all is not a plan.
+    artifacts.descriptor.steps.clear();
+    artifacts.receipt.row_assertions.clear();
+    artifacts.rebind();
+    assert_refused(
+        Variant::EncryptedUnicodeLookup,
+        previous,
+        vec![artifacts.source()],
+        ReviewedMigrationError::Descriptor,
+        "a covered lookup change without a re-index step",
+    );
+}
+
+#[test]
+fn reviewed_blind_index_reindex_refuses_a_second_step_for_one_field() {
+    let previous = compile_variant(Variant::EncryptedFlipOn);
+    let candidate = compile_variant(Variant::EncryptedUnicodeLookup);
+    let mut artifacts = blind_index_reindex_artifacts("reindex", &previous, &candidate);
+    let mut second = artifacts.descriptor.steps[0].clone();
+    let ReviewedMigrationStepDescriptor::FieldEncryptionBackfill { id, .. } = &mut second else {
+        panic!("the re-index step is the engine-executed backfill");
+    };
+    *id = "reindex-second".to_owned();
+    artifacts.descriptor.steps.push(second);
+    artifacts
+        .receipt
+        .row_assertions
+        .push(RehearsalRowAssertion {
+            step_id: "reindex-second".to_owned(),
+            affected_rows: 10,
+        });
+    artifacts.rebind();
+    assert_refused(
+        Variant::EncryptedUnicodeLookup,
+        previous,
+        vec![artifacts.source()],
+        ReviewedMigrationError::Coverage,
+        "two re-index steps for one field",
+    );
+}
+
+#[test]
+fn reviewed_blind_index_reindex_refuses_authored_sql_in_place_of_the_engine_step() {
+    let previous = compile_variant(Variant::EncryptedFlipOn);
+    let candidate = compile_variant(Variant::EncryptedUnicodeLookup);
+    let mut artifacts = blind_index_reindex_artifacts("reindex", &previous, &candidate);
+    // Authored SQL can name the lookup column, which satisfies the object
+    // inventory, but it cannot open the envelopes to derive the new digests,
+    // so only the engine re-index step covers a lookup change.
+    let entity = &candidate.entities()["asset"];
+    let blind = entity.fields["secret"]
+        .encryption
+        .as_ref()
+        .and_then(|encryption| encryption.blind_index.as_ref())
+        .expect("the candidate declares a blind index");
+    artifacts.descriptor.steps = vec![ReviewedMigrationStepDescriptor::TransactionalSql {
+        id: "reindex".to_owned(),
+        sql_path: "modules/core/migrations/reindex/steps/reindex.sql".to_owned(),
+        objects: vec![ReviewedMigrationObject {
+            schema: "registry_data".to_owned(),
+            table: entity.physical_table.clone(),
+            entity_id: "asset".to_owned(),
+            kind: ReviewedMigrationObjectKind::Field,
+            member_id: Some("secret#lookup".to_owned()),
+            physical_name: blind.physical_name.clone(),
+        }],
+        affected_rows: Some(AffectedRowBounds { min: 0, max: 1_000 }),
+    }];
+    artifacts.step_sql = format!(
+        "UPDATE registry_data.{} SET {} = NULL WHERE record_id = ANY($1::pg_catalog.uuid[])",
+        entity.physical_table, blind.physical_name
+    )
+    .into_bytes();
+    artifacts.rebind();
+    assert_refused(
+        Variant::EncryptedUnicodeLookup,
+        previous,
+        vec![artifacts.source()],
+        ReviewedMigrationError::Coverage,
+        "authored SQL on the lookup column in place of the engine re-index",
+    );
+}
+
+#[test]
+fn reviewed_blind_index_reindex_refuses_an_authored_lookup_write_after_the_engine_step() {
+    let previous = compile_variant(Variant::EncryptedFlipOn);
+    let candidate = compile_variant(Variant::EncryptedUnicodeLookup);
+    let mut artifacts = blind_index_reindex_artifacts("reindex", &previous, &candidate);
+    // The engine step covers the lookup change, so coverage holds; an
+    // authored write after it would overwrite the derived digests.
+    add_authored_lookup_write(
+        &mut artifacts,
+        &candidate,
+        1,
+        AuthoredStepKind::Transactional,
+    );
+    assert_refused(
+        Variant::EncryptedUnicodeLookup,
+        previous,
+        vec![artifacts.source()],
+        lookup_write_refusal(),
+        "authored SQL writing the lookup column after the engine re-index",
+    );
+}
+
+#[test]
+fn reviewed_blind_index_reindex_refuses_an_authored_lookup_write_before_the_engine_step() {
+    let previous = compile_variant(Variant::EncryptedFlipOn);
+    let candidate = compile_variant(Variant::EncryptedUnicodeLookup);
+    let mut artifacts = blind_index_reindex_artifacts("reindex", &previous, &candidate);
+    add_authored_lookup_write(
+        &mut artifacts,
+        &candidate,
+        0,
+        AuthoredStepKind::Transactional,
+    );
+    assert_refused(
+        Variant::EncryptedUnicodeLookup,
+        previous,
+        vec![artifacts.source()],
+        lookup_write_refusal(),
+        "authored SQL writing the lookup column before the engine re-index",
+    );
+}
+
+#[test]
+fn reviewed_encryption_flip_refuses_an_authored_lookup_write() {
+    let previous = compile_variant(Variant::EncryptedBase);
+    let candidate = compile_variant(Variant::EncryptedFlipOn);
+    let mut artifacts = encryption_flip_artifacts("encryption-flip", &previous, &candidate);
+    // A flip carries no re-index step; the refusal still holds.
+    add_authored_lookup_write(
+        &mut artifacts,
+        &candidate,
+        1,
+        AuthoredStepKind::Transactional,
+    );
+    assert_refused(
+        Variant::EncryptedFlipOn,
+        previous,
+        vec![artifacts.source()],
+        lookup_write_refusal(),
+        "authored SQL writing the lookup column beside an encryption flip",
+    );
+}
+
+#[test]
+fn reviewed_encryption_flip_refuses_a_chunked_lookup_write() {
+    let previous = compile_variant(Variant::EncryptedBase);
+    let candidate = compile_variant(Variant::EncryptedFlipOn);
+    let mut artifacts = encryption_flip_artifacts("encryption-flip", &previous, &candidate);
+    add_authored_lookup_write(&mut artifacts, &candidate, 1, AuthoredStepKind::Chunked);
+    assert_refused(
+        Variant::EncryptedFlipOn,
+        previous,
+        vec![artifacts.source()],
+        lookup_write_refusal(),
+        "a chunked backfill writing the lookup column beside an encryption flip",
+    );
+}
+
+fn lookup_write_refusal() -> ReviewedMigrationError {
+    ReviewedMigrationError::BlindIndexWrite {
+        entity_id: "asset".to_owned(),
+        field_id: "secret".to_owned(),
+    }
+}
+
+#[derive(Clone, Copy)]
+enum AuthoredStepKind {
+    Transactional,
+    Chunked,
+}
+
+/// Insert, at `position`, an authored step that writes the `secret` field's
+/// blind-index column directly, with its rehearsal row assertion in the same
+/// position. Authored SQL cannot open envelopes, so only the engine may
+/// derive these digests.
+fn add_authored_lookup_write(
+    artifacts: &mut ReviewedArtifacts,
+    candidate: &CompiledRegistry,
+    position: usize,
+    kind: AuthoredStepKind,
+) {
+    let entity = &candidate.entities()["asset"];
+    let blind = entity.fields["secret"]
+        .encryption
+        .as_ref()
+        .and_then(|encryption| encryption.blind_index.as_ref())
+        .expect("the candidate declares a blind index");
+    let sql_path = format!(
+        "modules/core/migrations/{}/steps/write-lookup.sql",
+        artifacts.descriptor.id
+    );
+    let objects = vec![ReviewedMigrationObject {
+        schema: "registry_data".to_owned(),
+        table: entity.physical_table.clone(),
+        entity_id: "asset".to_owned(),
+        kind: ReviewedMigrationObjectKind::Field,
+        member_id: Some("secret#lookup".to_owned()),
+        physical_name: blind.physical_name.clone(),
+    }];
+    let step = match kind {
+        AuthoredStepKind::Transactional => ReviewedMigrationStepDescriptor::TransactionalSql {
+            id: "write-lookup".to_owned(),
+            sql_path,
+            objects,
+            affected_rows: Some(AffectedRowBounds { min: 0, max: 1_000 }),
+        },
+        AuthoredStepKind::Chunked => ReviewedMigrationStepDescriptor::ChunkedBackfill {
+            id: "write-lookup".to_owned(),
+            entity_id: "asset".to_owned(),
+            sql_path,
+            objects,
+            cursor: ChunkCursorProtocol::RecordIdUuidArray,
+            chunk_size: 100,
+            max_total_rows: 1_000,
+            lock_timeout_ms: 1_000,
+            statement_timeout_ms: 10_000,
+            exact_affected_rows: true,
+        },
+    };
+    artifacts.descriptor.steps.insert(position, step);
+    artifacts.receipt.row_assertions.insert(
+        position,
+        RehearsalRowAssertion {
+            step_id: "write-lookup".to_owned(),
+            affected_rows: 10,
+        },
+    );
+    artifacts.step_sql = format!(
+        "UPDATE registry_data.{} SET {} = NULL WHERE record_id = ANY($1::pg_catalog.uuid[])",
+        entity.physical_table, blind.physical_name
+    )
+    .into_bytes();
+    artifacts.rebind();
+}
+
+#[test]
+fn reviewed_blind_index_reindex_refuses_a_column_other_than_the_lookup() {
+    let previous = compile_variant(Variant::EncryptedFlipOn);
+    let candidate = compile_variant(Variant::EncryptedUnicodeLookup);
+    let mut artifacts = blind_index_reindex_artifacts("reindex", &previous, &candidate);
+    let ReviewedMigrationStepDescriptor::FieldEncryptionBackfill { objects, .. } =
+        &mut artifacts.descriptor.steps[0]
+    else {
+        panic!("the re-index step is the engine-executed backfill");
+    };
+    objects[0].physical_name = "not_the_lookup_column".to_owned();
+    artifacts.rebind();
+    assert_refused(
+        Variant::EncryptedUnicodeLookup,
+        previous,
+        vec![artifacts.source()],
+        ReviewedMigrationError::Descriptor,
+        "a re-index naming a column other than the declared lookup",
+    );
+}
+
+#[test]
+fn reviewed_blind_index_reindex_refuses_an_object_of_another_entity() {
+    // Coverage reads each object's entity while the runtime re-indexes the
+    // step's entity. A second `asset` step whose object claims the `site`
+    // lookup would satisfy coverage for both changed lookups, yet re-derive
+    // `asset` twice and leave `site` on its old digests.
+    let previous = compile_variant(Variant::EncryptedSiteLookup);
+    let candidate = compile_variant(Variant::EncryptedSiteUnicodeLookup);
+    let lookup_object = |entity_id: &str| {
+        let entity = &candidate.entities()[entity_id];
+        ReviewedMigrationObject {
+            schema: "registry_data".to_owned(),
+            table: entity.physical_table.clone(),
+            entity_id: entity_id.to_owned(),
+            kind: ReviewedMigrationObjectKind::Field,
+            member_id: Some("secret#lookup".to_owned()),
+            physical_name: entity.fields["secret"]
+                .encryption
+                .as_ref()
+                .and_then(|encryption| encryption.blind_index.as_ref())
+                .expect("the candidate declares a blind index")
+                .physical_name
+                .clone(),
+        }
+    };
+    let two_steps = |second_entity: &str, second_object: ReviewedMigrationObject| {
+        let mut artifacts = blind_index_reindex_artifacts("reindex", &previous, &candidate);
+        artifacts.descriptor.covers =
+            compiled_registry_change_set(&previous, &candidate, PRIOR_REVISION)
+                .changes
+                .iter()
+                .filter(|change| change.code == CompiledRegistryChangeCode::FieldLookupChanged)
+                .map(ReviewedChangeCover::from)
+                .collect();
+        assert_eq!(artifacts.descriptor.covers.len(), 2);
+        let mut second = artifacts.descriptor.steps[0].clone();
+        let ReviewedMigrationStepDescriptor::FieldEncryptionBackfill {
+            id,
+            entity_id,
+            objects,
+            ..
+        } = &mut second
+        else {
+            panic!("the re-index step is the engine-executed backfill");
+        };
+        *id = "reindex-second".to_owned();
+        second_entity.clone_into(entity_id);
+        *objects = vec![second_object];
+        artifacts.descriptor.steps.push(second);
+        artifacts
+            .receipt
+            .row_assertions
+            .push(RehearsalRowAssertion {
+                step_id: "reindex-second".to_owned(),
+                affected_rows: 10,
+            });
+        artifacts.rebind();
+        artifacts.source()
+    };
+    prepare_reviewed_package(
+        Variant::EncryptedSiteUnicodeLookup,
+        compile_variant(Variant::EncryptedSiteLookup),
+        vec![two_steps("site", lookup_object("site"))],
+    )
+    .expect("one re-index step per entity, each naming its own lookup, prepares");
+
+    // An object for `site.secret#lookup` that names the `asset` column, so
+    // it matches the step's declared lookup column.
+    let mut claims_site = lookup_object("site");
+    claims_site.physical_name = lookup_object("asset").physical_name;
+    assert_refused(
+        Variant::EncryptedSiteUnicodeLookup,
+        compile_variant(Variant::EncryptedSiteLookup),
+        vec![two_steps("asset", claims_site)],
+        ReviewedMigrationError::Descriptor,
+        "an asset re-index step naming the site lookup",
+    );
+
+    // The object's table must be the step entity's table as well.
+    let mut other_table = lookup_object("site");
+    other_table.table = candidate.entities()["asset"].physical_table.clone();
+    assert_refused(
+        Variant::EncryptedSiteUnicodeLookup,
+        compile_variant(Variant::EncryptedSiteLookup),
+        vec![two_steps("site", other_table)],
+        ReviewedMigrationError::Descriptor,
+        "a site re-index step naming the asset table",
+    );
+}
+
+#[test]
+fn a_lookup_change_beyond_the_normalization_list_stays_unsupported() {
+    // Dropping the uniqueness of a lookup changes the index, not only the
+    // digests, so no reviewed plan can cover it.
+    let previous = compile_variant(Variant::EncryptedFlipOn);
+    let base = source_for_variant(Variant::EncryptedFlipOn);
+    let mut module: serde_json::Value =
+        serde_json::from_slice(&base.module_bytes).expect("fixture module is JSON");
+    module["recordTypes"][0]["fields"][1]["lookup"]["unique"] = serde_json::json!(false);
+    let module_bytes = serde_json::to_vec(&module).expect("module serializes");
+    let digest = module_digest(&parse_module_yaml(&module_bytes).expect("module parses"));
+    let mut project: serde_json::Value =
+        serde_json::from_slice(&base.project_bytes).expect("fixture project is JSON");
+    project["modules"][0]["digest"] = serde_json::json!(digest);
+    let candidate = compile_source(&SourceFixture {
+        project_bytes: serde_json::to_vec(&project).expect("project serializes"),
+        module_bytes,
+    });
+    let change_set = compiled_registry_change_set(&previous, &candidate, PRIOR_REVISION);
+    assert!(change_set.changes.iter().any(|change| {
+        change.code == CompiledRegistryChangeCode::FieldLookupChanged
+            && change.class == CompiledRegistryChangeClass::Unsupported
+    }));
+}
+
+#[test]
 fn reviewed_encryption_flip_refuses_plaintext_drop_before_backfill() {
     let previous = compile_variant(Variant::EncryptedBase);
     let candidate = compile_variant(Variant::EncryptedFlipOn);
@@ -1288,7 +1714,14 @@ impl ReviewedArtifacts {
             self.descriptor.id
         );
         let mut files = Vec::new();
-        if let Some(step_path) = self.descriptor.steps[0].sql_path() {
+        // Every authored step binds the same SQL bytes; engine steps bind none.
+        let step_paths = self
+            .descriptor
+            .steps
+            .iter()
+            .filter_map(StepPath::sql_path)
+            .collect::<BTreeSet<_>>();
+        for step_path in step_paths {
             files.push(ReviewedMigrationFile {
                 path: step_path.to_owned(),
                 bytes: self.step_sql.clone(),
@@ -1842,6 +2275,86 @@ fn encryption_flip_artifacts(
     artifacts
 }
 
+/// A reviewed blind-index re-index declared the way the engine executes it:
+/// one engine-executed `FieldEncryptionBackfill` step with no authored SQL and
+/// no history choice, whose only object is the blind-index column of the
+/// covered field under the implicit `#lookup` member.
+fn blind_index_reindex_artifacts(
+    id: &str,
+    previous: &CompiledRegistry,
+    candidate: &CompiledRegistry,
+) -> ReviewedArtifacts {
+    let change_set = compiled_registry_change_set(previous, candidate, PRIOR_REVISION);
+    let change = change_set
+        .changes
+        .iter()
+        .find(|change| change.code == CompiledRegistryChangeCode::FieldLookupChanged)
+        .expect("the normalization change is classified as a lookup change");
+    let entity = &candidate.entities()["asset"];
+    let blind = entity.fields["secret"]
+        .encryption
+        .as_ref()
+        .and_then(|encryption| encryption.blind_index.as_ref())
+        .expect("the candidate declares a blind index");
+    let base = format!("modules/core/migrations/{id}");
+    let pre_path = format!("{base}/assertions/pre.sql");
+    let post_path = format!("{base}/assertions/post.sql");
+    let assertion_sql = format!(
+        "SELECT pg_catalog.count(*) >= 0 FROM registry_data.{}",
+        entity.physical_table
+    )
+    .into_bytes();
+    let descriptor = ReviewedMigrationDescriptor {
+        id: id.to_owned(),
+        change_class: change.class,
+        covers: vec![ReviewedChangeCover::from(change)],
+        recovery: ReviewedMigrationRecovery::ExactTargetResume,
+        lock_timeout_ms: 10_000,
+        statement_timeout_ms: 60_000,
+        steps: vec![ReviewedMigrationStepDescriptor::FieldEncryptionBackfill {
+            id: "reindex".to_owned(),
+            entity_id: "asset".to_owned(),
+            objects: vec![ReviewedMigrationObject {
+                schema: "registry_data".to_owned(),
+                table: entity.physical_table.clone(),
+                entity_id: "asset".to_owned(),
+                kind: ReviewedMigrationObjectKind::Field,
+                member_id: Some("secret#lookup".to_owned()),
+                physical_name: blind.physical_name.clone(),
+            }],
+            cursor: ChunkCursorProtocol::RecordIdUuidArray,
+            chunk_size: 100,
+            max_total_rows: 1_000,
+            lock_timeout_ms: 1_000,
+            statement_timeout_ms: 10_000,
+        }],
+        pre_assertions: vec![ReviewedMigrationAssertionDescriptor {
+            id: "pre".to_owned(),
+            sql_path: pre_path,
+        }],
+        post_assertions: vec![ReviewedMigrationAssertionDescriptor {
+            id: "post".to_owned(),
+            sql_path: post_path,
+        }],
+        rehearsal_receipt_path: format!("{base}/rehearsal.json"),
+        backup_binding_path: None,
+        history: None,
+    };
+    let mut artifacts = ReviewedArtifacts {
+        descriptor,
+        receipt: receipt(vec![RehearsalRowAssertion {
+            step_id: "reindex".to_owned(),
+            affected_rows: 10,
+        }]),
+        step_sql: Vec::new(),
+        pre_sql: assertion_sql.clone(),
+        post_sql: assertion_sql,
+        fixture_bytes: b"{\"fixture\":\"representative\"}\n".to_vec(),
+    };
+    artifacts.rebind();
+    artifacts
+}
+
 fn receipt(row_assertions: Vec<RehearsalRowAssertion>) -> MigrationRehearsalReceipt {
     MigrationRehearsalReceipt {
         prior_package_digest: PRIOR_REVISION.to_owned(),
@@ -1924,6 +2437,11 @@ enum Variant {
     DifferentRegistry,
     EncryptedBase,
     EncryptedFlipOn,
+    EncryptedUnicodeLookup,
+    /// `EncryptedFlipOn` with the same encrypted `secret` lookup on `site`.
+    EncryptedSiteLookup,
+    /// `EncryptedSiteLookup` with both lookups on `[nfc, case-fold]`.
+    EncryptedSiteUnicodeLookup,
 }
 
 struct SourceFixture {
@@ -2155,15 +2673,27 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
         Variant::EncryptedBase => {
             r#"{"id":"code","type":"string","maximumLength":8,"classification":"internal"},{"id":"secret","type":"string","maximumLength":256,"classification":"restricted"}"#
         }
-        Variant::EncryptedFlipOn => {
+        Variant::EncryptedFlipOn | Variant::EncryptedSiteLookup => {
             r#"{"id":"code","type":"string","maximumLength":8,"classification":"internal"},{"id":"secret","type":"string","maximumLength":256,"classification":"restricted","encrypted":true,"lookup":{"normalization":["uppercase"],"unique":true}}"#
+        }
+        Variant::EncryptedUnicodeLookup | Variant::EncryptedSiteUnicodeLookup => {
+            r#"{"id":"code","type":"string","maximumLength":8,"classification":"internal"},{"id":"secret","type":"string","maximumLength":256,"classification":"restricted","encrypted":true,"lookup":{"normalization":["nfc","case-fold"],"unique":true}}"#
         }
         Variant::Base | Variant::DifferentRegistry => {
             r#"{"id":"code","type":"string","maximumLength":8,"classification":"internal"},{"id":"rank","type":"int64","classification":"internal"}"#
         }
     };
+    let site_secret = match variant {
+        Variant::EncryptedSiteLookup => {
+            r#",{"id":"secret","type":"string","maximumLength":256,"classification":"restricted","encrypted":true,"lookup":{"normalization":["uppercase"],"unique":true}}"#
+        }
+        Variant::EncryptedSiteUnicodeLookup => {
+            r#",{"id":"secret","type":"string","maximumLength":256,"classification":"restricted","encrypted":true,"lookup":{"normalization":["nfc","case-fold"],"unique":true}}"#
+        }
+        _ => "",
+    };
     format!(
-        r#"{{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[{{"id":"asset","primaryDataset":"neutral-registry","route":"assets","mutationMode":"create-only","fields":[{fields}],"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted", "id":"reader","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]}}]}},{{"id":"site","primaryDataset":"neutral-registry","route":"sites","mutationMode":"create-only","fields":[{{"id":"code","type":"string","maximumLength":8,"classification":"internal"}}],"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted", "id":"reader","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]}}]}}]}}"#
+        r#"{{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[{{"id":"asset","primaryDataset":"neutral-registry","route":"assets","mutationMode":"create-only","fields":[{fields}],"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted", "id":"reader","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]}}]}},{{"id":"site","primaryDataset":"neutral-registry","route":"sites","mutationMode":"create-only","fields":[{{"id":"code","type":"string","maximumLength":8,"classification":"internal"}}{site_secret}],"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted", "id":"reader","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]}}]}}]}}"#
     )
     .into_bytes()
 }

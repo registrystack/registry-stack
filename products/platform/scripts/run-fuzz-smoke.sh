@@ -9,7 +9,7 @@ fi
 seen=' '
 for target in "$@"; do
   case "$target" in
-    authcommon_parsers | sdjwt_holder_proof | sdjwt_issuance | sqlite_statement | yaml_decode | yaml_reader) ;;
+    authcommon_parsers | crypto_jwe_decrypt | crypto_jws_parse | sdjwt_issuance | sdjwt_presentation_parse | sqlite_statement | yaml_decode | yaml_reader) ;;
     *)
       printf 'unknown platform fuzz target: %s\n' "$target" >&2
       exit 2

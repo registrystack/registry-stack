@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     definitions::{EvidenceDefinition, SelectorValueOrigin},
     error::EvidenceClientError,
-    prepare::{EvidenceRequestSpec, SubjectExpectations, SubjectRequest},
+    prepare::{ChannelPolicy, EvidenceRequestSpec, SubjectExpectations, SubjectRequest},
     request::SelectorValue,
     response_format::EvidenceResponseFormat,
     retained::RetainedEvidenceVerification,
@@ -28,6 +28,7 @@ pub struct AudienceScopedRequest {
     pub(crate) subjects: Option<BTreeMap<String, BTreeMap<String, SelectorValue>>>,
     pub(crate) response_format: EvidenceResponseFormat,
     pub(crate) binding_receipt: Option<SubjectBindingReceipt>,
+    pub(crate) channel_policy: ChannelPolicy,
 }
 
 #[derive(Clone, Debug)]
@@ -45,6 +46,7 @@ impl AudienceScopedRequest {
             subjects: None,
             response_format: EvidenceResponseFormat::SignedJws,
             binding_receipt: None,
+            channel_policy: ChannelPolicy::default(),
         }
     }
 
@@ -63,6 +65,7 @@ impl AudienceScopedRequest {
             subjects: None,
             response_format: EvidenceResponseFormat::SignedJws,
             binding_receipt: None,
+            channel_policy: ChannelPolicy::default(),
         }
     }
 
@@ -84,6 +87,15 @@ impl AudienceScopedRequest {
     #[must_use]
     pub fn with_binding_receipt(mut self, receipt: SubjectBindingReceipt) -> Self {
         self.binding_receipt = Some(receipt);
+        self
+    }
+
+    /// Replace the default channel policy (`source` only, no credential age
+    /// bound). A policy outside the verification policy contract is refused
+    /// when the request is prepared.
+    #[must_use]
+    pub fn with_channel_policy(mut self, channel_policy: ChannelPolicy) -> Self {
+        self.channel_policy = channel_policy;
         self
     }
 }

@@ -37,14 +37,17 @@
 //! retention run by `messagingctl` is a separate process and is recorded in
 //! the journal, not here.
 
-use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex};
+use std::fmt;
+use std::sync::Arc;
 
 use axum::extract::{MatchedPath, State};
 use axum::http::header::CONTENT_TYPE;
 use axum::http::{Method, Request, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
+use registry_platform_metrics::{
+    CounterVec, Exposition, LabelSpace, MetricKind, CONTENT_TYPE as METRICS_CONTENT_TYPE,
+};
 
 use crate::auth::AuthenticationError;
 use crate::store::{DispatchDepth, PostgresStore};
@@ -52,16 +55,74 @@ use crate::store::{DispatchDepth, PostgresStore};
 /// Route label used when no route template matched the request.
 pub const UNMATCHED_ROUTE: &str = "unmatched";
 
-const METRICS_MEDIA_TYPE: &str = "text/plain; version=0.0.4";
+/// The most request series the registry holds: the route table (ten
+/// templates plus `unmatched`) times the method and status vocabularies a
+/// route can answer with stays well under it. A request past it is counted
+/// as refused, never added.
+const REQUEST_SERIES_LIMIT: usize = 512;
 
-#[derive(Debug, Default)]
+/// The most authentication-refusal series: one per [`AuthenticationError`].
+const REFUSAL_SERIES_LIMIT: usize = 8;
+
+const DECLARATION: &str = "the metric declarations are valid";
+
 pub struct Metrics {
-    requests: Mutex<BTreeMap<RequestKey, u64>>,
-    refusals: Mutex<BTreeMap<&'static str, u64>>,
-    callbacks: Mutex<BTreeMap<&'static str, u64>>,
-    attempts: Mutex<BTreeMap<&'static str, u64>>,
-    limits: Mutex<BTreeMap<&'static str, u64>>,
-    retention: Mutex<BTreeMap<&'static str, u64>>,
+    requests: CounterVec,
+    refusals: CounterVec,
+    callbacks: CounterVec,
+    attempts: CounterVec,
+    limits: CounterVec,
+    retention: CounterVec,
+}
+
+impl fmt::Debug for Metrics {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Metrics").finish_non_exhaustive()
+    }
+}
+
+impl Default for Metrics {
+    fn default() -> Self {
+        Self {
+            requests: CounterVec::new(
+                "messaging_http_requests_total",
+                "Answered HTTP requests.",
+                LabelSpace::bounded(&["route", "method", "status"], REQUEST_SERIES_LIMIT)
+                    .expect(DECLARATION),
+            )
+            .expect(DECLARATION),
+            refusals: CounterVec::new(
+                "messaging_authentication_refusals_total",
+                "Bearer credentials refused before a caller was resolved.",
+                LabelSpace::bounded(&["reason"], REFUSAL_SERIES_LIMIT).expect(DECLARATION),
+            )
+            .expect(DECLARATION),
+            callbacks: closed_counter(
+                "messaging_provider_callbacks_total",
+                "Provider delivery callbacks, by what became of them.",
+                "outcome",
+                CallbackOutcome::ALL.map(CallbackOutcome::as_str),
+            ),
+            attempts: closed_counter(
+                "messaging_provider_attempts_total",
+                "Provider attempts, by the outcome the attempt history records.",
+                "outcome",
+                AttemptOutcome::ALL.map(AttemptOutcome::as_str),
+            ),
+            limits: closed_counter(
+                "messaging_limit_refusals_total",
+                "Submissions, attempts, and provider callbacks a limit refused, by the limit.",
+                "limit",
+                LimitKind::ALL.map(LimitKind::as_str),
+            ),
+            retention: closed_counter(
+                "messaging_retention_runs_total",
+                "Retention sweeps this process ran, by outcome.",
+                "outcome",
+                RetentionRun::ALL.map(RetentionRun::as_str),
+            ),
+        }
+    }
 }
 
 /// What one provider attempt came to, the closed label of
@@ -206,27 +267,13 @@ impl CallbackOutcome {
     }
 }
 
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-struct RequestKey {
-    route: String,
-    method: &'static str,
-    status: &'static str,
-}
-
 impl Metrics {
     /// Count one answered request under its closed labels.
     pub fn record_request(&self, route: &str, method: &Method, status: StatusCode) {
-        let key = RequestKey {
-            route: route.to_owned(),
-            method: method_label(method),
-            status: status_class(status),
-        };
-        *self
-            .requests
-            .lock()
-            .expect("the metrics registry is never held across a panic")
-            .entry(key)
-            .or_default() += 1;
+        count(
+            &self.requests,
+            &[route, method_label(method), status_class(status)],
+        );
     }
 
     /// Count one authentication refusal by its outcome.
@@ -237,159 +284,88 @@ impl Metrics {
             AuthenticationError::Profile => "profile",
             AuthenticationError::Unavailable => "unavailable",
         };
-        *self
-            .refusals
-            .lock()
-            .expect("the metrics registry is never held across a panic")
-            .entry(reason)
-            .or_default() += 1;
+        count(&self.refusals, &[reason]);
     }
 
     /// Count one provider callback by its outcome.
     pub fn record_callback(&self, outcome: CallbackOutcome) {
-        bump(&self.callbacks, outcome.as_str());
+        count(&self.callbacks, &[outcome.as_str()]);
     }
 
     /// Count one provider attempt by its outcome.
     pub fn record_attempt(&self, outcome: AttemptOutcome) {
-        bump(&self.attempts, outcome.as_str());
+        count(&self.attempts, &[outcome.as_str()]);
     }
 
     /// Count one refusal by the limit that refused.
     pub fn record_limit_refusal(&self, limit: LimitKind) {
-        bump(&self.limits, limit.as_str());
+        count(&self.limits, &[limit.as_str()]);
     }
 
     /// Count one retention sweep by its outcome.
     pub fn record_retention_run(&self, run: RetentionRun) {
-        bump(&self.retention, run.as_str());
+        count(&self.retention, &[run.as_str()]);
     }
 
     /// Render the Prometheus text exposition, with the dispatch queue when
     /// it was sampled.
     #[must_use]
     pub fn render(&self, depth: Option<DispatchDepth>) -> String {
-        let mut text = String::new();
-        text.push_str("# HELP messaging_http_requests_total Answered HTTP requests.\n");
-        text.push_str("# TYPE messaging_http_requests_total counter\n");
-        for (key, count) in self
-            .requests
-            .lock()
-            .expect("the metrics registry is never held across a panic")
-            .iter()
-        {
-            text.push_str(&format!(
-                "messaging_http_requests_total{{route=\"{}\",method=\"{}\",status=\"{}\"}} {count}\n",
-                key.route, key.method, key.status
-            ));
-        }
-        text.push_str(
-            "# HELP messaging_authentication_refusals_total Bearer credentials refused before \
-             a caller was resolved.\n",
-        );
-        text.push_str("# TYPE messaging_authentication_refusals_total counter\n");
-        for (reason, count) in self
-            .refusals
-            .lock()
-            .expect("the metrics registry is never held across a panic")
-            .iter()
-        {
-            text.push_str(&format!(
-                "messaging_authentication_refusals_total{{reason=\"{reason}\"}} {count}\n"
-            ));
-        }
-        text.push_str(
-            "# HELP messaging_provider_callbacks_total Provider delivery callbacks, by what \
-             became of them.\n",
-        );
-        text.push_str("# TYPE messaging_provider_callbacks_total counter\n");
-        closed_counter(
-            &mut text,
+        let mut out = Exposition::new();
+        for counter in [
+            &self.requests,
+            &self.refusals,
             &self.callbacks,
-            "messaging_provider_callbacks_total",
-            "outcome",
-            CallbackOutcome::ALL.map(CallbackOutcome::as_str),
-        );
-        text.push_str(
-            "# HELP messaging_provider_attempts_total Provider attempts, by the outcome the \
-             attempt history records.\n",
-        );
-        text.push_str("# TYPE messaging_provider_attempts_total counter\n");
-        closed_counter(
-            &mut text,
             &self.attempts,
-            "messaging_provider_attempts_total",
-            "outcome",
-            AttemptOutcome::ALL.map(AttemptOutcome::as_str),
-        );
-        text.push_str(
-            "# HELP messaging_limit_refusals_total Submissions, attempts, and provider \
-             callbacks a limit refused, by the limit.\n",
-        );
-        text.push_str("# TYPE messaging_limit_refusals_total counter\n");
-        closed_counter(
-            &mut text,
             &self.limits,
-            "messaging_limit_refusals_total",
-            "limit",
-            LimitKind::ALL.map(LimitKind::as_str),
-        );
-        text.push_str(
-            "# HELP messaging_retention_runs_total Retention sweeps this process ran, by \
-             outcome.\n",
-        );
-        text.push_str("# TYPE messaging_retention_runs_total counter\n");
-        closed_counter(
-            &mut text,
             &self.retention,
-            "messaging_retention_runs_total",
-            "outcome",
-            RetentionRun::ALL.map(RetentionRun::as_str),
-        );
-        text.push_str(
-            "# HELP messaging_dispatch_jobs Messages waiting to be sent, being sent, or held \
-             unknown, sampled at scrape.\n",
-        );
-        text.push_str("# TYPE messaging_dispatch_jobs gauge\n");
+        ] {
+            counter.write(&mut out).expect(DECLARATION);
+        }
+        out.header(
+            "messaging_dispatch_jobs",
+            Some("Messages waiting to be sent, being sent, or held unknown, sampled at scrape."),
+            MetricKind::Gauge,
+        )
+        .expect(DECLARATION);
         if let Some(depth) = depth {
             for (state, count) in [
                 ("pending", depth.pending),
                 ("leased", depth.leased),
                 ("unknown", depth.unknown),
             ] {
-                text.push_str(&format!(
-                    "messaging_dispatch_jobs{{state=\"{state}\"}} {count}\n"
-                ));
+                out.sample("messaging_dispatch_jobs", &[("state", state)], count)
+                    .expect(DECLARATION);
             }
         }
-        text
+        out.finish()
     }
 }
 
-fn bump(counter: &Mutex<BTreeMap<&'static str, u64>>, label: &'static str) {
-    *counter
-        .lock()
-        .expect("the metrics registry is never held across a panic")
-        .entry(label)
-        .or_default() += 1;
+/// Count one event. A series the space refuses is not added; the refusal is
+/// logged by metric name alone, never by label value.
+fn count(counter: &CounterVec, values: &[&str]) {
+    if let Err(error) = counter.inc(values) {
+        tracing::warn!(error = %error, "a metric series was refused");
+    }
 }
 
-/// Write one sample per label value, from zero, so every series exists
-/// before its first event.
+/// A counter family whose every label value is declared, so every series is
+/// exposed from zero before its first event.
 fn closed_counter<const N: usize>(
-    text: &mut String,
-    counter: &Mutex<BTreeMap<&'static str, u64>>,
     name: &str,
-    label: &str,
+    help: &str,
+    label: &'static str,
     values: [&'static str; N],
-) {
-    let counts = counter
-        .lock()
-        .expect("the metrics registry is never held across a panic");
-    for value in values {
-        let count = counts.get(value).copied().unwrap_or_default();
-        text.push_str(&format!("{name}{{{label}=\"{value}\"}} {count}\n"));
-    }
+) -> CounterVec {
+    let declared: Vec<[&str; 1]> = values.iter().map(|value| [*value]).collect();
+    let declared: Vec<&[&str]> = declared.iter().map(|value| value.as_slice()).collect();
+    CounterVec::new(
+        name,
+        help,
+        LabelSpace::closed_zero_filled(&[label], &declared).expect(DECLARATION),
+    )
+    .expect(DECLARATION)
 }
 
 fn method_label(method: &Method) -> &'static str {
@@ -455,7 +431,7 @@ pub async fn serve_metrics(State(state): State<MetricsState>) -> Response {
         None => None,
     };
     (
-        [(CONTENT_TYPE, METRICS_MEDIA_TYPE)],
+        [(CONTENT_TYPE, METRICS_CONTENT_TYPE)],
         state.metrics.render(depth),
     )
         .into_response()
@@ -485,6 +461,79 @@ mod tests {
         ));
         assert!(text.contains("method=\"other\""));
         assert!(text.contains("messaging_authentication_refusals_total{reason=\"unavailable\"} 1"));
+    }
+
+    /// The full scrape for a representative state, byte for byte.
+    #[test]
+    fn the_scrape_is_byte_stable() {
+        let metrics = Metrics::default();
+        metrics.record_request(
+            "/v1/messages/{message_id}",
+            &Method::GET,
+            StatusCode::NOT_FOUND,
+        );
+        metrics.record_request(
+            UNMATCHED_ROUTE,
+            &Method::from_bytes(b"BREW").unwrap(),
+            StatusCode::OK,
+        );
+        metrics.record_authentication_refusal(AuthenticationError::Unavailable);
+        metrics.record_authentication_refusal(AuthenticationError::Claims);
+        metrics.record_callback(CallbackOutcome::Unmatched);
+        metrics.record_callback(CallbackOutcome::Unmatched);
+        metrics.record_attempt(AttemptOutcome::MaybeSent);
+        metrics.record_limit_refusal(LimitKind::Daily);
+        metrics.record_retention_run(RetentionRun::Failed);
+        let head = "\
+# HELP messaging_http_requests_total Answered HTTP requests.
+# TYPE messaging_http_requests_total counter
+messaging_http_requests_total{route=\"/v1/messages/{message_id}\",method=\"GET\",status=\"4xx\"} 1
+messaging_http_requests_total{route=\"unmatched\",method=\"other\",status=\"2xx\"} 1
+# HELP messaging_authentication_refusals_total Bearer credentials refused before a caller was resolved.
+# TYPE messaging_authentication_refusals_total counter
+messaging_authentication_refusals_total{reason=\"claims\"} 1
+messaging_authentication_refusals_total{reason=\"unavailable\"} 1
+# HELP messaging_provider_callbacks_total Provider delivery callbacks, by what became of them.
+# TYPE messaging_provider_callbacks_total counter
+messaging_provider_callbacks_total{outcome=\"unverified\"} 0
+messaging_provider_callbacks_total{outcome=\"unreadable\"} 0
+messaging_provider_callbacks_total{outcome=\"ignored\"} 0
+messaging_provider_callbacks_total{outcome=\"applied\"} 0
+messaging_provider_callbacks_total{outcome=\"unchanged\"} 0
+messaging_provider_callbacks_total{outcome=\"unmatched\"} 2
+messaging_provider_callbacks_total{outcome=\"ambiguous\"} 0
+messaging_provider_callbacks_total{outcome=\"unavailable\"} 0
+# HELP messaging_provider_attempts_total Provider attempts, by the outcome the attempt history records.
+# TYPE messaging_provider_attempts_total counter
+messaging_provider_attempts_total{outcome=\"accepted\"} 0
+messaging_provider_attempts_total{outcome=\"transient\"} 0
+messaging_provider_attempts_total{outcome=\"permanent\"} 0
+messaging_provider_attempts_total{outcome=\"maybe-sent\"} 1
+# HELP messaging_limit_refusals_total Submissions, attempts, and provider callbacks a limit refused, by the limit.
+# TYPE messaging_limit_refusals_total counter
+messaging_limit_refusals_total{limit=\"rate\"} 0
+messaging_limit_refusals_total{limit=\"daily\"} 1
+messaging_limit_refusals_total{limit=\"pacing\"} 0
+messaging_limit_refusals_total{limit=\"callback\"} 0
+# HELP messaging_retention_runs_total Retention sweeps this process ran, by outcome.
+# TYPE messaging_retention_runs_total counter
+messaging_retention_runs_total{outcome=\"erased\"} 0
+messaging_retention_runs_total{outcome=\"idle\"} 0
+messaging_retention_runs_total{outcome=\"failed\"} 1
+# HELP messaging_dispatch_jobs Messages waiting to be sent, being sent, or held unknown, sampled at scrape.
+# TYPE messaging_dispatch_jobs gauge
+";
+        assert_eq!(metrics.render(None), head);
+        assert_eq!(
+            metrics.render(Some(DispatchDepth {
+                pending: 3,
+                leased: 1,
+                unknown: 2,
+            })),
+            format!(
+                "{head}messaging_dispatch_jobs{{state=\"pending\"}} 3\nmessaging_dispatch_jobs{{state=\"leased\"}} 1\nmessaging_dispatch_jobs{{state=\"unknown\"}} 2\n"
+            )
+        );
     }
 
     #[test]

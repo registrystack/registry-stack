@@ -29,6 +29,8 @@ members = [
     "crates/registry-evidence-client-node",
     "crates/registry-evidence-client-py",
     "crates/registry-evidence-oid4vci",
+    "crates/registry-evidence-oid4vp",
+    "crates/registry-evidence-presentation",
     "crates/registry-evidence-verifier",
     "crates/registry-evidencectl",
     "crates/registry-platform-audit",
@@ -43,6 +45,7 @@ members = [
     "crates/registry-platform-hooks",
     "crates/registry-platform-httpsec",
     "crates/registry-platform-httputil",
+    "crates/registry-platform-metrics",
     "crates/registry-platform-objectstore",
     "crates/registry-platform-oidc",
     "crates/registry-platform-ratelimit",
@@ -51,6 +54,8 @@ members = [
     "crates/registry-platform-sdjwt",
     "crates/registry-platform-sqlite",
     "crates/registry-platform-testing",
+    "crates/registry-platform-text",
+    "crates/registry-platform-x509",
     "crates/registry-platform-yaml",
     "crates/registry-thunderid-tooling",
     "crates/registry-manifest-core",
@@ -135,6 +140,8 @@ registry-evidence = { path = "crates/registry-evidence", version = "0.45.1" }
 registry-evidence-authoring = { path = "crates/registry-evidence-authoring", version = "0.45.1" }
 registry-evidence-client = { path = "crates/registry-evidence-client", version = "0.45.1" }
 registry-evidence-oid4vci = { path = "crates/registry-evidence-oid4vci", version = "0.45.1" }
+registry-evidence-oid4vp = { path = "crates/registry-evidence-oid4vp", version = "0.45.1" }
+registry-evidence-presentation = { path = "crates/registry-evidence-presentation", version = "0.45.1" }
 registry-evidence-verifier = { path = "crates/registry-evidence-verifier", version = "0.45.1" }
 registry-evidencectl = { path = "crates/registry-evidencectl", version = "0.45.1" }
 registry-language-server = { path = "crates/registry-language-server", version = "0.45.1" }
@@ -187,6 +194,7 @@ registry-platform-dispatch = { path = "crates/registry-platform-dispatch", versi
 registry-platform-hooks = { path = "crates/registry-platform-hooks", version = "0.45.1" }
 registry-platform-httpsec = { path = "crates/registry-platform-httpsec", version = "0.45.1", default-features = false }
 registry-platform-httputil = { path = "crates/registry-platform-httputil", version = "0.45.1" }
+registry-platform-metrics = { path = "crates/registry-platform-metrics", version = "0.45.1" }
 registry-platform-objectstore = { path = "crates/registry-platform-objectstore", version = "0.45.1" }
 registry-platform-oidc = { path = "crates/registry-platform-oidc", version = "0.45.1" }
 registry-platform-ratelimit = { path = "crates/registry-platform-ratelimit", version = "0.45.1" }
@@ -195,6 +203,8 @@ registry-platform-script = { path = "crates/registry-platform-script", version =
 registry-platform-sdjwt = { path = "crates/registry-platform-sdjwt", version = "0.45.1" }
 registry-platform-sqlite = { path = "crates/registry-platform-sqlite", version = "0.45.1" }
 registry-platform-testing = { path = "crates/registry-platform-testing", version = "0.45.1" }
+registry-platform-text = { path = "crates/registry-platform-text", version = "0.45.1" }
+registry-platform-x509 = { path = "crates/registry-platform-x509", version = "0.45.1" }
 registry-platform-yaml = { path = "crates/registry-platform-yaml", version = "0.45.1" }
 
 anstream = { version = "1" }
@@ -216,7 +226,7 @@ cms = { version = "0.2.3" }
 clap = { version = "4", features = ["derive", "env"] }
 criterion = { version = "0.8", features = ["html_reports", "async_tokio"] }
 deadpool-postgres = { version = "=0.14.2", default-features = false, features = ["rt_tokio_1"] }
-der = { version = "0.7.10", features = ["alloc", "derive", "oid", "pem"] }
+der = { version = "0.7.10", default-features = false, features = ["alloc", "derive", "oid", "pem", "std"] }
 ed25519-dalek = { version = "2", features = ["pkcs8", "rand_core"] }
 fake = { version = "=4.4.0", default-features = false }
 fs2 = { version = "0.4" }
@@ -237,6 +247,7 @@ http = { version = "1" }
 http-body = { version = "1" }
 icu_casemap = { version = "~2.2.0", default-features = false, features = ["compiled_data"] }
 icu_normalizer = { version = "~2.2.0", default-features = false, features = ["compiled_data"] }
+icu_properties = { version = "~2.2.0", default-features = false, features = ["compiled_data"] }
 inquire = { version = "0.9.4" }
 ipnet = { version = "2" }
 # Default features pull an HTTP client for remote $ref resolution and a command
@@ -303,6 +314,9 @@ rustix = { version = "1", features = ["fs", "process"] }
 russh = { version = "=0.65.0", default-features = false, features = ["aws-lc-rs"] }
 russh-sftp = { version = "=3.0.1" }
 rustls-native-certs = { version = "0.8.4" }
+# `ring` matches the backend rustls already resolves; the `aws-lc-rs` feature would add a second crypto provider.
+rustls-pki-types = { version = "1" }
+rustls-webpki = { version = "0.103.16", default-features = false, features = ["std", "ring"] }
 ryu-js = { version = "=1.0.3" }
 saphyr-parser = { version = "=0.1.0" }
 serde = { version = "1", features = ["derive"] }
@@ -340,7 +354,7 @@ url = { version = "2" }
 utoipa = { version = "6" }
 uuid = { version = "1", features = ["v4"] }
 wiremock = { version = "0.6" }
-x509-cert = { version = "0.2.5" }
+x509-cert = { version = "0.2.5", default-features = false, features = ["std", "pem"] }
 zeroize = { version = "1", features = ["derive"] }
 
 [profile.dev]

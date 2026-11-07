@@ -2,6 +2,74 @@
 
 ## Unreleased
 
+- `registry-platform-text`: `TextStep::StripNonspacingMarksIn` replaces
+  `StripCombiningMarks`. It strips General_Category Mn characters only inside
+  caller-named code point ranges (1 to 64, `MAX_MARK_RANGES`; an empty, inverted
+  or oversized list is `TextError::InvalidMarkRanges`) and the ranges are part of
+  the pipeline fingerprint, so a consumer keeps the marks that are part of a
+  spelling in scripts it does not fold.
+- BREAKING: `registry-platform-sdjwt` no longer exports `validate_holder_proof`,
+  `validate_holder_proof_for_confirmation`, `HolderProofPolicy`,
+  `HolderProofBindings` or `HolderProofClaims`. They were Evidence's own
+  holder-proof profile and moved to `registry_evidence_verifier::holder_proof`;
+  nothing else called them. Their fuzz target moved to the Evidence fuzz crate as
+  `verifier_holder_proof`. `SdJwtError::HolderProofInvalid` stays for the
+  key-binding and OpenID4VCI proof checks.
+- `registry-platform-sdjwt` gains RFC 9901 presentation handling for credentials
+  from any issuer (`parse_presentation`, `resolve_disclosures`, `sd_hash`),
+  `validate_key_binding_jwt_with_options` with `KeyBindingOptions` (the default
+  stays ES256 only; `KeyBindingOptions::third_party()` allows ES256 and EdDSA and
+  ignores unknown claims), and `SdJwtIssuer::from_certified_signer` for an `x5c`
+  chain in the issuer header. The crate no longer depends on `jsonwebtoken`.
+- New crate `registry-platform-text`: deterministic, bounded Unicode text
+  normalisation steps (NFC, NFKC, full case folding, mark removal, declared
+  transliteration) that a product composes into its own named profile, with a
+  `Pipeline::fingerprint` that covers `UNICODE_DATA_VERSION` so a product that
+  stores derived values can tell when to recompute them. `registry-platform-yaml`
+  now takes `display_text_comparison_key` from it and re-exports it; the function
+  and its path are unchanged.
+- New crate `registry-platform-metrics`: Prometheus text exposition 0.0.4 with
+  name validation and label escaping, plus `CounterVec` and `HistogramVec` over
+  closed or bounded label spaces (at most 10,000 series, label values at most
+  256 bytes). A refusal never adds a series and is counted. Products keep their
+  metric names and the listener that serves `/metrics`.
+- New crate `registry-platform-x509`: X.509 `x5c` chain validation against
+  operator-configured trust anchors outside TLS (`verify_chain`, returning the
+  leaf JWK, SAN DNS names and URIs, and the OpenID4VP `x509_hash`), and
+  `CertifiedSigner`, which binds a signing provider to its chain. It does not
+  check revocation.
+- `registry-platform-crypto` gains compact JWS (`jws`: bounded parse, verify
+  against an algorithm allow-list, and `sign_compact_jws`; `crit` and `b64` are
+  refused), compact ECDH-ES JWE decryption over P-256 with A128GCM or A256GCM
+  (feature `jwe`, with `jwe-test-support` for tests only), `random_base64url`
+  (16 to 64 operating-system random bytes), `constant_time_eq` at the crate root,
+  and XChaCha20-Poly1305 `seal` and `open` (feature `xchacha-seal`). Client
+  assertions in `registry-platform-authcommon` and the fixture JWTs in
+  `registry-platform-testing` are now signed through `jws`.
+- `registry-platform-httpsec` (feature `server`) gains `shutdown_signal`, which
+  installs the SIGTERM (Unix) and Ctrl-C handlers before it returns and fails
+  with the operating-system error when one cannot be installed, so a service
+  refuses startup instead of waiting on a signal it cannot observe. It also
+  gains `normalize_framework_rejection`, which re-answers axum's 400, 413, 415
+  and 422 framework bodies in the service's own problem vocabulary.
+  `registry-platform-httputil` now exports `normalize_ipv4_mapped`.
+- `registry-platform-oidc` gains `AccessTokenAlgorithm`, the one roster of
+  asymmetric access-token algorithms (`EdDSA`, `ES256`, `ES384`, `RS256`,
+  `RS384`, spelled as the JWA name). A product still chooses which members it
+  accepts; the Adapter, Casework, Coordinator, Documents, Messaging and
+  Scheduling keep RS256 and ES256 only. The `schema` feature derives its
+  configuration schema.
+- BREAKING (Rust API, no configuration change): `registry-mcp-edge` no longer
+  defines its own `AccessTokenAlgorithm`; it re-exports the `registry-platform-oidc`
+  one, and the `jsonwebtoken()` method is now `to_jsonwebtoken()`. The accepted
+  `resourceServer.algorithms` values and the published configuration schema are
+  unchanged.
+- `registry-mcp` and `registry-breg-mcp` (see the BReg changelog) install their
+  stop-signal handlers through `registry_platform_httpsec::shutdown_signal`
+  before they start serving. A handler that cannot be installed used to be
+  logged while the process kept running with that signal unobserved; startup now
+  fails with "the stop signals cannot be observed" and the operating-system
+  cause. SIGINT is installed at startup alongside SIGTERM.
 - BREAKING: `registry-platform-script` replaces `RhaiBaseEngine::Standard`
   with `RhaiBaseEngine::Deterministic`, so a deadline checked between
   operations holds for every call a script can make. The base carries Rhai's

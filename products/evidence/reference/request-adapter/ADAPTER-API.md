@@ -270,6 +270,7 @@ through derivation context.
 | `required` code handling | The bundle-owned code is validated for shape and then discarded. It documents the reviewed script; it never reaches the public problem, audit, logs, or the raised signal, which is a host-private, unforgeable, uncatchable value |
 | `is_missing` | `value -> bool`; true only for unit |
 | `get_path` | `(value, json_pointer) -> value`; resolves one RFC 6901 pointer and returns unit when any segment resolves to nothing. Only `~0` and `~1` escapes; an array segment is a non-negative decimal integer with no leading zero. A pointer that is not resolvable syntax, exceeds 256 bytes, or exceeds 16 segments is a script fault and fails the invocation rather than answering missing |
+| `normalise_name` | `(profile, value) -> string`; applies the named, versioned profile `name-match-v1` and returns the normalised text for one exact comparison with one expected value normalised the same way; the script compares the results with `==`. Steps in order: NFKC; full case fold (no locale tailoring); NFKC; removal of the nonspacing marks (Mn) in `U+0300` to `U+036F`, `U+1AB0` to `U+1AFF`, `U+1DC0` to `U+1DFF`, `U+20D0` to `U+20FF`, `U+FE20` to `U+FE2F`, `U+064B` to `U+065F`, `U+0670` and `U+0591` to `U+05C7` after NFD, then NFC; transliteration (`đ` and `ð` to `d`, `ø` to `o`, `ł` to `l`, `æ` to `ae`, `œ` to `oe`, `ı` to `i`, `þ` to `th`); removal of `U+00AD`, `U+061C`, `U+200B` through `U+200F` and `U+2060`; collapse of White_Space runs to one space; removal of hyphen-minus, `U+2010`, `U+2011`, apostrophe, grave accent, `U+2018`, `U+2019`, `U+02BC`, `U+02BB` and space. Spacing marks, Hangul syllables and every nonspacing mark outside those ranges survive (Devanagari virama, nukta and anusvara, Thai tone marks); Latin, Greek and Cyrillic accents, Arabic vowel signs and Hebrew points are removed. An unknown profile name, input over 1,024 bytes, or growth past 8,192 bytes in any step is a script fault and fails the invocation. It never searches, ranks, or scores; a pinned fingerprint test makes an ICU data or step change a reviewed change under a new profile name |
 
 `NumericBucket` has exactly `minimumInclusive: Decimal`,
 `maximumExclusive: Decimal`, and `code: string`. `LegalLocalTime` is another
@@ -346,6 +347,8 @@ These engine ceilings apply independently of script logic:
 | Entity-reference seeds in one derived value | 64 |
 | `get_path` pointer | 256 bytes |
 | `get_path` pointer segments | 16 |
+| `normalise_name` input | 1,024 bytes |
+| `normalise_name` text after any step | 8,192 bytes |
 | Entity-reference seed input | 512 bytes |
 | `required` error code | 64 ASCII bytes |
 | Exact decimal precision | 28 significant digits |

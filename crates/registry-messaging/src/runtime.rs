@@ -103,33 +103,15 @@ pub async fn run(matches: &clap::ArgMatches, transports: Transports) -> Result<(
         .ok_or(RuntimeError::Arguments)?;
     match matches.subcommand_name() {
         Some("serve") => {
-            let shutdown = shutdown_signal()?;
+            // Installed before anything is served, so a failure to install a
+            // handler refuses startup rather than leaving a runtime that a
+            // stop signal would end with sends in flight.
+            let shutdown =
+                registry_platform_httpsec::shutdown_signal().map_err(RuntimeError::Signal)?;
             serve_from_path_until(path, transports, shutdown).await
         }
         _ => Err(RuntimeError::Arguments),
     }
-}
-
-/// Resolve on the first SIGTERM or SIGINT. The SIGTERM handler is
-/// installed here, before anything is served, so a failure to install it
-/// refuses startup rather than leaving a runtime that SIGTERM would stop
-/// with sends in flight.
-fn shutdown_signal() -> Result<impl std::future::Future<Output = ()>, RuntimeError> {
-    #[cfg(unix)]
-    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-        .map_err(RuntimeError::Signal)?;
-    Ok(async move {
-        let interrupt = tokio::signal::ctrl_c();
-        #[cfg(unix)]
-        tokio::select! {
-            _ = interrupt => {}
-            _ = terminate.recv() => {}
-        }
-        #[cfg(not(unix))]
-        if let Err(error) = interrupt.await {
-            tracing::error!(error = %error, "the Messaging interrupt handler failed; shutting down");
-        }
-    })
 }
 
 /// The runtime document at `path`, or a refusal that reports every rule it

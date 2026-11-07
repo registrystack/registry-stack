@@ -26,11 +26,12 @@ standards_profile:
   proof_type: jwt, with the bare header type openid4vci-proof+jwt
   evolution_rule: A later revision is a reviewed profile change, never an implicit library upgrade.
   draft_compatibility: >-
-    None. Only 1.0 Final is spoken. Draft 13's vc+sd-jwt format identifier and
-    its token-response c_nonce are not accepted and not emitted. Supporting two
-    wire shapes would double the protocol surface to chase an ecosystem that is
-    mid-migration, and the Final identifier is the one the frozen SD-JWT VC
-    profile already emits.
+    None in the 1.0 Final profile described by this contract: it accepts and
+    emits no Draft 13 shape. Draft 13's vc+sd-jwt format identifier is never
+    used, and the token-response c_nonce is neither accepted nor emitted by
+    any 1.0 route. A Draft 13 compatibility profile exists beside it as a
+    separate profile (see draft13_compatibility_profile), off unless
+    configured, and removable as one unit; it widens nothing in this profile.
   interoperability_target:
     status: exact-pinned-evidence-passed
     tested_on: 2026-08-09
@@ -43,6 +44,87 @@ standards_profile:
       is bounded interoperability evidence for the exact revisions and test
       conditions, not device or UI evidence, another-revision compatibility,
       certification, full conformance, or general Inji compatibility.
+draft13_compatibility_profile:
+  status: draft
+  purpose: >-
+    The France Identite Partenaires test wallet accepts third-party issuance
+    only over OpenID4VCI Draft 13. This profile lets it receive the same
+    dc+sd-jwt credentials Evidence signs. It is a compatibility profile for
+    that wallet family, not a second supported protocol revision, and it is
+    removed when the wallet moves to 1.0.
+  separation:
+    - Its own issuer identifier is the 1.0 credential issuer followed by /protocol/oid4vci/draft-13, and its own path prefix is that same suffix. Every route of the profile lives under the prefix.
+    - It is off unless the runtime file carries draft13Profile as an empty mapping. When absent, none of its routes exist and the 1.0 routes, metadata and wire behaviour are exactly what this contract describes. When present, the 1.0 routes, metadata and wire behaviour are unchanged.
+    - It is removable as one unit; the profile module, its handlers, the draft13Profile configuration member and the one route registration are the whole of it.
+    - It shares the offer store, the offer authorization and the Evidence client with the 1.0 profile and nothing redeemable. Offers and access tokens are bound to a catalog generation of the profile's own, so a code or token minted for one profile is unknown to the other and a refused cross-profile attempt spends nothing.
+    - Nonces are not shared. The c_nonce is a keyed tag over its expiry and the access token it is delivered with, in a key-space of its own, so it opens that one exchange and neither a 1.0 nonce nor another exchange's c_nonce verifies.
+    - The service still signs nothing and alters no credential. The credential is the dc+sd-jwt credential Evidence signed for the holder key the proof presented, delivered byte for byte, binding that key in cnf.jwk.
+  endpoints:
+    - path: GET /protocol/oid4vci/draft-13/.well-known/openid-credential-issuer
+      rule: >-
+        Plain JSON, never signed. Publishes credential_issuer (the profile's
+        issuer identifier), credential_endpoint, token_endpoint,
+        grant_types_supported, the singular token_endpoint_auth_method of
+        none, and credential_configurations_supported derived from the same
+        authenticated Evidence discovery as the 1.0 catalog. It publishes no
+        authorization_servers, no nonce_endpoint and no batch member. The
+        document is addressed by appending the well-known suffix to the
+        profile's issuer identifier, not by inserting it between host and path.
+    - path: POST /protocol/oid4vci/draft-13/offers
+      rule: >-
+        The adopter-facing offer endpoint of the profile, with the same request
+        body, the same resource-server authorization, the same attribution
+        audit and the same refusals as POST /offers. It returns the Draft 13
+        offer object: credential_issuer is the profile's issuer identifier, the
+        grant carries the pre-authorized_code and, when a transaction code was
+        asked for, a tx_code description, otherwise user_pin_required false.
+    - path: POST /protocol/oid4vci/draft-13/token
+      rule: >-
+        Form-encoded, pre-authorized code grant only, no client authentication.
+        Returns access_token, token_type of lowercase bearer, expires_in,
+        c_nonce and c_nonce_expires_in. There is no nonce endpoint.
+    - path: POST /protocol/oid4vci/draft-13/credential
+      rule: >-
+        Bearer access token. Accepts format (dc+sd-jwt), vct (the type the offer
+        was created for) and one proof object whose proof_type is jwt. The
+        plural proofs member and credential_configuration_id are refused. The
+        access token is claimed before the request is read, so every later
+        refusal is terminal for the exchange and returns no fresh c_nonce.
+        Returns one credential. Errors are invalid_credential_request,
+        unsupported_credential_format, unsupported_credential_type,
+        invalid_proof (which also covers an unusable nonce, because Draft 13 has
+        no invalid_nonce), and the post-claim credential_request_denied.
+  proof_rules: >-
+    The proof validator is the 1.0 profile's, with these differences only: aud
+    is the profile's issuer identifier, so the 1.0 issuer identifier is
+    refused, and the nonce must be the c_nonce delivered with the same access
+    token. The header type, the ES256 algorithm, the closed key reference
+    rules, the iss absence rule, the freshness window and the signature-first
+    parsing are unchanged.
+  wallet_workaround:
+    rule: >-
+      Partenaires Android 1.3.5078 rejects the specification binding method jwk
+      for dc+sd-jwt. Every configuration in this profile, and only this
+      profile, therefore advertises cryptographic_binding_methods_supported of
+      cose_key. The credential is unchanged and still binds the holder key in
+      cnf.jwk; the advertised value only lets that build proceed. The 1.0
+      metadata never advertises cose_key.
+  wire_differences_from_1_0: >-
+    Issuer identifier and well-known location; token_endpoint, grant_types_supported
+    and token_endpoint_auth_method in the metadata and no authorization_servers
+    or nonce_endpoint; lowercase bearer and c_nonce in the token response;
+    format and vct with a singular proof in place of credential_configuration_id
+    with plural proofs; a singular credential in place of a credentials array;
+    invalid_proof in place of invalid_nonce; the Draft 13 offer object. Sources:
+    OpenID4VCI Draft 13 sections 6.2 and 7.2, and the Partenaires Draft 13
+    guide, whose sections follow the order of this list.
+  not_supported:
+    - signed metadata, DPoP, pushed authorization requests, wallet attestation and client authentication
+    - the authorization code flow, deferred issuance, the notification endpoint and offers by reference
+    - batch issuance, plural proofs and any credential format other than dc+sd-jwt
+    - the mso_mdoc format and the vc+sd-jwt format identifier
+  open_items:
+    - Behaviour on a Partenaires device is unconfirmed. The wallet might need user_pin_required or a by-reference offer URI; neither has been tested on a device.
 service_boundary:
   rule: >-
     Each of the following is a property the service must not have. The first
@@ -253,7 +335,7 @@ prohibitions:
     - delivering a credential for a requirement that is not holder-bound, which would launder an audience-scoped credential into a wallet
     - wallet attestation, trust-list membership, and any judgement about which wallet is asking
     - remote DID resolution or any key lookup selected by a proof
-    - draft-13 compatibility in either direction
+    - draft-13 compatibility inside the 1.0 profile or in the 1.0 routes; the Draft 13 compatibility profile above is a separate, removable profile
     - the authorization code flow, pushed authorization requests, and DPoP
     - any credential format other than dc+sd-jwt
     - credential status, revocation, lifecycle, or management operations

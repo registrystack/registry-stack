@@ -13,11 +13,12 @@ use crate::config::{AssuranceProfile, ResponseFormat};
 /// `registry-evidence-verifier` crate and served here at the runtime's own
 /// paths, beside the request-side types that only the runtime needs.
 pub use registry_evidence_verifier::model::{
-    BucketForm, BucketValue, EntityReferenceForm, EntityReferenceValue, Evidence,
-    EvidenceObjectType, FlattenedJws, HolderPublicKey, JwksDocument, PublicValue,
+    AssertionChannel, BucketForm, BucketValue, ChannelKind, EntityReferenceForm,
+    EntityReferenceValue, Evidence, EvidenceObjectType, FlattenedJws, HolderPublicKey,
+    JwksDocument, PresentedCredential, PresentedCredentialError, PublicValue,
     ScalarOrEntityReference, StructuredValue, StructuredValueForm, SubjectBinding,
-    SubjectBindingMode, SupportedValue, UnsignedEnvelopeType, UnsignedEnvelopeWarning,
-    UnsignedEvidenceEnvelope, UnsignedIntegrityProtection,
+    SubjectBindingMode, SubjectLinkMode, SupportedValue, UnsignedEnvelopeType,
+    UnsignedEnvelopeWarning, UnsignedEvidenceEnvelope, UnsignedIntegrityProtection,
 };
 
 /// Exact encoded length of the required caller-generated request nonce: the
@@ -199,6 +200,29 @@ pub struct EvidenceDefinition {
     pub reference_frameworks: Vec<String>,
     pub subjects: Vec<EvidenceDefinitionSubject>,
     pub concepts: Vec<EvidenceDefinitionConcept>,
+    /// The acquisition channel of this entry's own `subjects`. Stated only
+    /// when the caller is entitled to a holder-presented channel of the
+    /// definition, so a source-only grantee receives exactly the entry a
+    /// source-only definition produces.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<ChannelKind>,
+    /// The request shapes of the other channels of this definition that the
+    /// caller is entitled to. Omitted when there are none; a channel the
+    /// caller is not entitled to is never listed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub alternatives: Vec<EvidenceDefinitionAlternative>,
+}
+
+/// One more channel of a definition: the grant-dependent members that can
+/// differ from the entry's own.
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EvidenceDefinitionAlternative {
+    pub channel: ChannelKind,
+    /// Exact intersection permitted by the bundle, this channel's matched
+    /// grant, and subject binding mode.
+    pub response_formats: Vec<ResponseFormat>,
+    pub subjects: Vec<EvidenceDefinitionSubject>,
 }
 
 #[derive(Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema, ToSchema)]
@@ -477,6 +501,8 @@ mod tests {
             schema: crate::EVIDENCE_SCHEMA_V1.to_string(),
             assurance_profile: AssuranceProfile::EvidenceGrade,
             subject_binding: SubjectBindingMode::AudienceScoped,
+            channel: ChannelKind::Source,
+            presented_credential: None,
             request_nonce: Some("A".repeat(43)),
             id: "urn:ulid:01K1EXAMPLE0000000000000000".to_string(),
             evidence_type_name: EvidenceObjectType::Evidence,
@@ -528,6 +554,8 @@ mod tests {
             schema: "protected-schema-canary".to_owned(),
             assurance_profile: AssuranceProfile::EvidenceGrade,
             subject_binding: SubjectBindingMode::AudienceScoped,
+            channel: ChannelKind::Source,
+            presented_credential: None,
             request_nonce: Some("protected-request-nonce-canary".to_owned()),
             id: "protected-evidence-id-canary".to_owned(),
             evidence_type_name: EvidenceObjectType::Evidence,
@@ -578,6 +606,8 @@ mod tests {
                 reference_frameworks: vec!["protected-discovery-framework-canary".to_owned()],
                 subjects: Vec::new(),
                 concepts: Vec::new(),
+                channel: None,
+                alternatives: Vec::new(),
             }],
         };
 

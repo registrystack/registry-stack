@@ -1,0 +1,28 @@
+[package]
+name = "registry-platform-x509"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "X.509 certificate chain validation and x5c handling outside TLS for Registry Stack."
+repository.workspace = true
+readme = "README.md"
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+base64.workspace = true
+der.workspace = true
+registry-platform-crypto.workspace = true
+rustls-pki-types.workspace = true
+rustls-webpki.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+x509-cert.workspace = true
+
+[dev-dependencies]
+async-trait.workspace = true
+rcgen.workspace = true
+time.workspace = true

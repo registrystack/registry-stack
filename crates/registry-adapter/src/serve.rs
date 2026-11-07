@@ -11,16 +11,15 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod, Runtime};
-use jsonwebtoken::Algorithm;
 use registry_adapter_core::AdapterRuntimeConfig;
 use registry_platform_authcommon::validate_compact_access_token;
 use registry_platform_config::{
     DatabaseConfig, JwksSource, SecretReference as ConfigSecretReference, SecretResolver,
 };
 use registry_platform_oidc::{
-    access_token_typ_set, fetch_discovery_for_issuer, parse_static_jwks, AuthenticationStage,
-    IssuerNetworkPolicy, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, OidcError,
-    TokenVerifier, TokenVerifierConfig, ASSERTION_ISSUER_CLAIM,
+    access_token_typ_set, fetch_discovery_for_issuer, parse_static_jwks, AccessTokenAlgorithm,
+    AuthenticationStage, IssuerNetworkPolicy, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig,
+    OidcError, TokenVerifier, TokenVerifierConfig, ASSERTION_ISSUER_CLAIM,
 };
 use registry_platform_yaml::SecretReference;
 use thiserror::Error;
@@ -251,7 +250,7 @@ async fn authenticator(
     let config = TokenVerifierConfig::access_token_profile(
         oidc.issuer.to_string(),
         vec![oidc.audience.clone()],
-        vec![Algorithm::RS256, Algorithm::ES256],
+        accepted_algorithms(),
         access_token_typ_set(ACCESS_TOKEN_TYPE),
     )
     .with_allowed_clients(
@@ -390,21 +389,32 @@ fn tls_connector(
     }
 }
 
+/// The access-token signature algorithms the facade accepts.
+const ACCEPTED_ALGORITHMS: [AccessTokenAlgorithm; 2] =
+    [AccessTokenAlgorithm::RS256, AccessTokenAlgorithm::ES256];
+
+fn accepted_algorithms() -> Vec<jsonwebtoken::Algorithm> {
+    ACCEPTED_ALGORITHMS
+        .into_iter()
+        .map(AccessTokenAlgorithm::to_jsonwebtoken)
+        .collect()
+}
+
 /// Resolve on the first SIGTERM or SIGINT. The handlers are installed here,
 /// before anything is served, so a failure to install one refuses startup
 /// rather than leaving a runtime that SIGTERM would stop with sends in
 /// flight.
-fn shutdown_signal() -> Result<impl std::future::Future<Output = ()>, ServeError> {
-    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-        .map_err(|error| ServeError::Signal(error.to_string()))?;
-    let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
-        .map_err(|error| ServeError::Signal(error.to_string()))?;
-    Ok(async move {
-        tokio::select! {
-            _ = interrupt.recv() => {}
-            _ = terminate.recv() => {}
-        }
-    })
+fn shutdown_signal() -> Result<impl std::future::Future<Output = ()> + Send, ServeError> {
+    shutdown_after(registry_platform_httpsec::shutdown_signal)
+}
+
+/// Install the stop signals with `install`, turning a failure into the
+/// startup error [`ServeError::Signal`].
+fn shutdown_after<I, S>(install: I) -> Result<S, ServeError>
+where
+    I: FnOnce() -> std::io::Result<S>,
+{
+    install().map_err(|error| ServeError::Signal(error.to_string()))
 }
 
 /// Run one bounded `sweep` per `cadence` until shutdown. A batch that
@@ -857,6 +867,41 @@ mod tests {
 
     use std::collections::VecDeque;
     use std::sync::Mutex;
+
+    #[test]
+    fn the_facade_accepts_exactly_rs256_and_es256_access_tokens() {
+        assert_eq!(
+            accepted_algorithms(),
+            vec![
+                jsonwebtoken::Algorithm::RS256,
+                jsonwebtoken::Algorithm::ES256
+            ]
+        );
+    }
+
+    #[test]
+    fn a_stop_signal_install_failure_refuses_startup() {
+        let error = shutdown_after(|| -> std::io::Result<std::future::Pending<()>> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "install refused",
+            ))
+        })
+        .expect_err("an install failure is an error, never a silent wait");
+        assert!(matches!(error, ServeError::Signal(_)), "{error:?}");
+        assert_eq!(
+            error.to_string(),
+            "the stop signal handler could not be installed: install refused"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_installed_stop_signal_resolves_when_it_fires() {
+        let signal = shutdown_after(|| Ok(std::future::ready(()))).expect("installs");
+        tokio::time::timeout(Duration::from_secs(5), signal)
+            .await
+            .expect("a fired signal resolves");
+    }
 
     #[tokio::test]
     async fn a_full_batch_is_followed_at_once_until_one_falls_short() {

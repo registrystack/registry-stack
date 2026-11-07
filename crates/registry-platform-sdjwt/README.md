@@ -1,6 +1,6 @@
 # registry-platform-sdjwt
 
-SD-JWT VC issuance and holder-proof validation helpers.
+SD-JWT VC issuance, RFC 9901 presentation handling, and key-binding validation helpers.
 
 ## What It Provides
 
@@ -10,11 +10,25 @@ SD-JWT VC issuance and holder-proof validation helpers.
   credential id, validity, profile, optional status claim, holder confirmation,
   and disclosures.
 - Disclosure digest sorting for deterministic `_sd` payload ordering.
-- Holder-proof validation with signature, audience, lifetime, subject, replay id,
-  disclosure hash, evaluation id, credential profile, and claim-set bindings.
 - `validate_key_binding_jwt` for RFC 9901 section 4.3 key-binding JWTs: the
   confirmed holder key signs a closed four-claim payload over a challenge, an
   audience, an issue time, and the `sd_hash` of the presented SD-JWT.
+- `validate_key_binding_jwt_with_options` for the same checks against a holder
+  key the caller already resolved, with a `KeyBindingOptions` algorithm
+  allow-list and extra-claims policy. The default (`Strict`, ES256 only) is the
+  profile above; `KeyBindingOptions::third_party()` allows ES256 and EdDSA and
+  ignores unknown claims, as RFC 9901 section 4.3 permits for wallets the
+  verifier does not control. `aud` is compared exactly, so callers pass the
+  complete prefixed OpenID4VP `client_id`.
+- `parse_presentation`, `resolve_disclosures` and `sd_hash` for RFC 9901
+  presentations from any issuer: bounded splitting into issuer JWT,
+  Disclosures and key-binding JWT, then `_sd` and `...` resolution (nested and
+  recursive Disclosures, decoys). Duplicate digests, repeated or unreferenced
+  Disclosures, claim-name collisions, reserved names, malformed Disclosures and
+  excess depth are refused. The caller verifies the issuer signature and
+  resolves the holder key from `cnf` first.
+- `SdJwtIssuer::from_certified_signer` for credentials that carry the signer's
+  certificate chain in the `x5c` header.
 - `validate_oid4vci_proof_jwt` for OpenID for Verifiable Credential Issuance 1.0
   proof JWTs, returning the one public key the proof authenticated.
 
@@ -62,19 +76,13 @@ Ok(())
 
 - This crate currently signs with EdDSA/Ed25519, ES256/P-256, RS256/RSA,
   ES384/P-384, or RS384/RSA through a `registry-platform-crypto`
-  `SigningProvider`. Holder-proof validation only accepts an EdDSA holder
-  proof (see `HOLDER_PROOF_ALLOWED_ALGORITHM` in `src/lib.rs`); the issuance
-  algorithm list above does not extend to holder proofs.
+  `SigningProvider`.
 - `SdJwtIssuer::from_jwk` is intended for local development, tests, and simple
   deployments using mounted private JWK material. Production deployments that
   require key isolation should pass an external signer implementation with
   `SdJwtIssuer::from_signing_provider`.
 - The SD-JWT header `kid` is always taken from the signing provider. Issuance
   input cannot override it.
-- Holder-proof validation returns `jti` so consumers can perform replay
-  detection in their own storage.
-- `HolderProofPolicy::default` uses a 5-minute max lifetime and an empty
-  audience. Set the audience explicitly in production.
 - `validate_key_binding_jwt` and `validate_oid4vci_proof_jwt` verify the
   signature before parsing any claim, so no decision is taken from an unverified
   token. Both reject duplicate JSON members outright instead of resolving them,

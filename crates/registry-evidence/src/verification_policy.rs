@@ -14,12 +14,13 @@
 
 use std::path::Path;
 
+use registry_evidence_verifier::model::ChannelKind;
 use registry_evidence_verifier::verifier::{
     EvidenceVerificationPolicyDocument, HolderBoundDeclaration,
     HolderBoundPresentationPolicyDocument, MAXIMUM_ASSERTION_LIFETIME_SECONDS,
-    MAXIMUM_CLOCK_SKEW_SECONDS, MAXIMUM_EXPECTED_LIST_ITEMS, MAXIMUM_KEY_BINDING_AGE_SECONDS,
-    MINIMUM_ASSERTION_LIFETIME_SECONDS, MINIMUM_EXPECTED_LIST_ITEMS,
-    MINIMUM_KEY_BINDING_AGE_SECONDS,
+    MAXIMUM_CLOCK_SKEW_SECONDS, MAXIMUM_CREDENTIAL_AGE_SECONDS, MAXIMUM_EXPECTED_LIST_ITEMS,
+    MAXIMUM_KEY_BINDING_AGE_SECONDS, MINIMUM_ASSERTION_LIFETIME_SECONDS,
+    MINIMUM_CREDENTIAL_AGE_SECONDS, MINIMUM_EXPECTED_LIST_ITEMS, MINIMUM_KEY_BINDING_AGE_SECONDS,
 };
 use registry_evidence_verifier::AssuranceProfile;
 use registry_platform_yaml::{
@@ -83,6 +84,9 @@ type AssertionLifetime =
     BoundedU64<MINIMUM_ASSERTION_LIFETIME_SECONDS, MAXIMUM_ASSERTION_LIFETIME_SECONDS>;
 type ClockSkew = BoundedU64<0, MAXIMUM_CLOCK_SKEW_SECONDS>;
 type KeyBindingAge = BoundedU64<MINIMUM_KEY_BINDING_AGE_SECONDS, MAXIMUM_KEY_BINDING_AGE_SECONDS>;
+type CredentialAge = BoundedU64<MINIMUM_CREDENTIAL_AGE_SECONDS, MAXIMUM_CREDENTIAL_AGE_SECONDS>;
+/// Most channels `acceptedChannels` can name: the closed vocabulary has two.
+const MAXIMUM_ACCEPTED_CHANNELS: usize = 2;
 type ListItems = BoundedU32<1, 64>;
 
 /// Read a Version 1 verification policy. `file` is the name the diagnostics
@@ -227,6 +231,10 @@ struct VerificationPolicyFile {
     expected_subjects: UniqueList<ExpectedSubject>,
     expected_outputs: UniqueList<ExpectedOutput>,
     revoked_key_ids: UniqueList<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    accepted_channels: Option<UniqueList<ChannelKind>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    maximum_credential_age_seconds: Option<CredentialAge>,
     maximum_assertion_lifetime_seconds: AssertionLifetime,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     clock_skew_seconds: Option<ClockSkew>,
@@ -239,6 +247,7 @@ impl PolicyFile for VerificationPolicyFile {
             &self.expected_subjects,
             &self.expected_outputs,
             &self.revoked_key_ids,
+            self.accepted_channels.as_deref(),
         )
     }
 }
@@ -260,6 +269,10 @@ struct HolderBoundPolicyFile {
     expected_subjects: UniqueList<ExpectedSubject>,
     expected_outputs: UniqueList<ExpectedOutput>,
     revoked_key_ids: UniqueList<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    accepted_channels: Option<UniqueList<ChannelKind>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    maximum_credential_age_seconds: Option<CredentialAge>,
     maximum_assertion_lifetime_seconds: AssertionLifetime,
     key_binding_audience: String,
     key_binding_nonce: String,
@@ -277,6 +290,7 @@ impl PolicyFile for HolderBoundPolicyFile {
             &self.expected_subjects,
             &self.expected_outputs,
             &self.revoked_key_ids,
+            self.accepted_channels.as_deref(),
         )
     }
 }
@@ -356,6 +370,7 @@ fn check_expectations(
     subjects: &[ExpectedSubject],
     outputs: &[ExpectedOutput],
     revoked_key_ids: &[String],
+    accepted_channels: Option<&[ChannelKind]>,
 ) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
     let mut count =
@@ -391,6 +406,15 @@ fn check_expectations(
         MAXIMUM_REVOKED_KEY_IDS,
         "revokedKeyIds lists at most 33 key ids",
     );
+    if let Some(channels) = accepted_channels {
+        count(
+            "/acceptedChannels",
+            channels.len(),
+            1,
+            MAXIMUM_ACCEPTED_CHANNELS,
+            "acceptedChannels names 1 or 2 channels; omit it to accept source only",
+        );
+    }
     for (index, output) in outputs.iter().enumerate() {
         if let ExpectedForm::List {
             items,
@@ -538,6 +562,99 @@ maximumAssertionLifetimeSeconds: 3600
             read_holder_bound_policy("policy.yaml", holder_bound_policy().as_bytes())
                 .expect("the holder-bound policy reads");
         assert_eq!(holder_bound.maximum_key_binding_age_seconds, 60);
+    }
+
+    /// Absence of the channel members keeps the original behaviour: `source`
+    /// only and no credential age bound, in both documents.
+    #[test]
+    fn channel_members_default_to_source_only() {
+        let policy = read_verification_policy("policy.yaml", verification_policy().as_bytes())
+            .expect("the Version 1 policy reads");
+        assert_eq!(policy.accepted_channels, vec![ChannelKind::Source]);
+        assert_eq!(policy.maximum_credential_age_seconds, None);
+        let holder_bound =
+            read_holder_bound_policy("policy.yaml", holder_bound_policy().as_bytes())
+                .expect("the holder-bound policy reads");
+        assert_eq!(holder_bound.accepted_channels, vec![ChannelKind::Source]);
+        assert_eq!(holder_bound.maximum_credential_age_seconds, None);
+    }
+
+    #[test]
+    fn both_documents_read_the_accepted_channels_and_the_credential_age() {
+        let members =
+            "acceptedChannels: [source, holder-presented]\nmaximumCredentialAgeSeconds: 86400\n";
+        let policy = read_verification_policy(
+            "policy.yaml",
+            format!("{}{members}", verification_policy()).as_bytes(),
+        )
+        .expect("the Version 1 policy reads");
+        assert_eq!(
+            policy.accepted_channels,
+            vec![ChannelKind::Source, ChannelKind::HolderPresented]
+        );
+        assert_eq!(policy.maximum_credential_age_seconds, Some(86_400));
+        let holder_bound = read_holder_bound_policy(
+            "policy.yaml",
+            format!("{}{members}", holder_bound_policy()).as_bytes(),
+        )
+        .expect("the holder-bound policy reads");
+        assert_eq!(
+            holder_bound.accepted_channels,
+            vec![ChannelKind::Source, ChannelKind::HolderPresented]
+        );
+        assert_eq!(holder_bound.maximum_credential_age_seconds, Some(86_400));
+    }
+
+    #[test]
+    fn the_channel_members_refuse_what_the_contract_forbids() {
+        for (label, members, code, path) in [
+            (
+                "empty list",
+                "acceptedChannels: []\n".to_owned(),
+                "evidence.policy.invalid-count",
+                "/acceptedChannels",
+            ),
+            (
+                "repeated channel",
+                "acceptedChannels: [source, source]\n".to_owned(),
+                "config.duplicate-item",
+                "/acceptedChannels/1",
+            ),
+            (
+                "unknown channel",
+                format!("acceptedChannels: [{CANARY}]\n"),
+                "config.unknown-variant",
+                "/acceptedChannels/0",
+            ),
+            (
+                "age below the minimum",
+                "maximumCredentialAgeSeconds: 0\n".to_owned(),
+                "config.out-of-range",
+                "/maximumCredentialAgeSeconds",
+            ),
+            (
+                "age above the maximum",
+                "maximumCredentialAgeSeconds: 315360001\n".to_owned(),
+                "config.out-of-range",
+                "/maximumCredentialAgeSeconds",
+            ),
+        ] {
+            for text in [
+                format!("{}{members}", verification_policy()),
+                format!("{}{members}", holder_bound_policy()),
+            ] {
+                let report = if text.contains("holder-bound-verification-policy") {
+                    read_holder_bound_policy("policy.yaml", text.as_bytes()).map(|_| ())
+                } else {
+                    read_verification_policy("policy.yaml", text.as_bytes()).map(|_| ())
+                }
+                .expect_err(label);
+                let diagnostic = &report.diagnostics()[0];
+                assert_eq!(diagnostic.code, code, "{label}: {diagnostic:?}");
+                assert_eq!(diagnostic.path, path, "{label}");
+                assert!(!report.render_human().contains(CANARY), "{label}");
+            }
+        }
     }
 
     #[test]

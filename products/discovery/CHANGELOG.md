@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- The serving binary installs its stop-signal handlers before it binds the
+  listener, so a handler that cannot be installed refuses startup. If a signal
+  stream later ends because the runtime's signal driver is gone, shutdown now
+  proceeds gracefully instead of failing with the Discovery shutdown signal
+  error. SIGTERM and Ctrl-C remain the signals that stop the process.
+
 ## 0.45.0 - 2026-11-03
 
 - BREAKING: `discoveryctl` adopts the shared report envelope. `status` `passed`

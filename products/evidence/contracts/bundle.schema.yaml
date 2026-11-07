@@ -192,6 +192,16 @@ properties:
           Names the bundle-held public JWK the runtime signer's key must equal exactly, proven
           by one sign-and-verify test before readiness.
         $ref: '#/$defs/public-jwk-path'
+      certificateChainFile:
+        description: >-
+          Optional PEM certificate chain, leaf first, certifying the active signing key; omission
+          means credentials and the served key set carry no `x5c`. The file is public material
+          named `public-keys/<kid>.chain.pem` for the active key's thumbprint, so a rotated or
+          revoked key's chain is never reused. Startup refuses a chain that does not parse, is
+          longer than the platform chain policy allows, has a leaf for a different key, or has
+          a certificate that is not valid at startup. Relying parties validate the chain to
+          their own trust anchors; Evidence's verifier only compares the leaf with a pinned key.
+        $ref: '#/$defs/certificate-chain-path'
       publishedPublicJwkFiles:
         description: >-
           Retains predecessor public keys in the served key set so assertions signed before
@@ -474,6 +484,9 @@ $defs:
   public-jwk-path:
     type: string
     pattern: ^public-keys/[A-Za-z0-9._-]+\.jwk\.json$
+  certificate-chain-path:
+    type: string
+    pattern: ^public-keys/[A-Za-z0-9._-]+\.chain\.pem$
   service-key-id:
     type: string
     pattern: ^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$
@@ -1338,13 +1351,41 @@ $defs:
                           - valueClaims
   acquisition:
     description: >-
-      Selects one configured source. The pinned pack route owns every preparation,
-      extraction, branching and bounded data operation in that acquisition.
+      Selects the configured source of each acquisition channel. The pinned pack route owns
+      every preparation, extraction, branching and bounded data operation in that
+      acquisition. `source` is the source channel's Source. The optional `holderPresented`
+      block is the holder-presented channel: a Source whose pack route reaches an endpoint
+      with the `wallet-presentation-v1` host protocol, and the selector profiles whose
+      requests acquire through it. A request's selector profile selects exactly one
+      channel, so a profile listed under `holderPresented` never reaches `source`, and a
+      `source` Source never uses the wallet presentation protocol. `source` may be omitted
+      only beside `holderPresented`, and then `holderPresented.selectorProfiles` lists
+      every selector profile the definition's subject roles allow.
     type: object
     additionalProperties: false
-    required: [source]
+    anyOf:
+      - required: [source]
+      - required: [holderPresented]
     properties:
       source: {$ref: '#/$defs/local-id'}
+      holderPresented:
+        description: >-
+          The holder-presented channel. The definition offers only the signed JWS representation,
+          because a holder-presented assertion answers as a signed flattened JWS.
+        type: object
+        additionalProperties: false
+        required: [source, selectorProfiles]
+        properties:
+          source: {$ref: '#/$defs/local-id'}
+          selectorProfiles:
+            description: >-
+              Selector profiles that select this channel. Each is a profile one of the
+              definition's subject roles allows.
+            type: array
+            minItems: 1
+            maxItems: 16
+            uniqueItems: true
+            items: {$ref: '#/$defs/local-id'}
   requirement:
     type: object
     additionalProperties: false

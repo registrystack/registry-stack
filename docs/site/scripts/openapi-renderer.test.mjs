@@ -101,6 +101,7 @@ test('installed renderer generates examples from every maintained product schema
     ['coordinator', 'products/coordinator/generated/openapi/coordinator.openapi.json'],
     ['evidence', 'products/evidence/generated/registry-evidence.openapi.json'],
     ['evidence-oid4vci', 'products/evidence/generated/registry-evidence-oid4vci.openapi.json'],
+    ['evidence-oid4vp', 'products/evidence/generated/registry-evidence-oid4vp.openapi.json'],
     ['breg', 'products/breg/generated/facility/generated/openapi.json'],
   ];
   for (const [product, path] of sources) {

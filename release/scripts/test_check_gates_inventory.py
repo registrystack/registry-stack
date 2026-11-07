@@ -1701,10 +1701,10 @@ class GateInventoryTest(unittest.TestCase):
         text = self.workflow.replace("--redact", "--verbose")
         self.assertIn("Gitleaks redaction", self.module.missing_gates(text))
 
-    def test_root_secret_scan_names_all_synthetic_platform_jwt_fixtures(self) -> None:
+    def test_root_secret_scan_names_all_synthetic_evidence_jwt_fixtures(self) -> None:
         for fixture_path in (
-            r"^products/platform/fuzz/corpus/sdjwt_holder_proof/holder_proof\.jwt$",
-            r"^products/platform/fuzz/corpus/sdjwt_holder_proof/valid-holder-proof-jwt$",
+            r"^products/evidence/fuzz/corpus/verifier_holder_proof/holder_proof\.jwt$",
+            r"^products/evidence/fuzz/corpus/verifier_holder_proof/valid-holder-proof-jwt$",
         ):
             with self.subTest(fixture_path=fixture_path):
                 self.assertIn(fixture_path, self.gitleaks_paths)

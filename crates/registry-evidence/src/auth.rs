@@ -17,9 +17,7 @@ use registry_platform_oidc::{
 use serde_json::{Map, Value};
 use thiserror::Error;
 
-use crate::config::{
-    AccessTokenAlgorithm, AccessTokenType, AuthenticationConfig, OidcAuthenticationConfig,
-};
+use crate::config::{AccessTokenType, AuthenticationConfig, OidcAuthenticationConfig};
 
 const MAX_PRINCIPAL_BYTES: usize = 512;
 const MAX_TAGS: usize = 32;
@@ -271,11 +269,7 @@ impl Authenticator {
         let algorithms = config
             .algorithms
             .iter()
-            .map(|algorithm| match algorithm {
-                AccessTokenAlgorithm::EdDSA => jsonwebtoken::Algorithm::EdDSA,
-                AccessTokenAlgorithm::ES256 => jsonwebtoken::Algorithm::ES256,
-                AccessTokenAlgorithm::RS256 => jsonwebtoken::Algorithm::RS256,
-            })
+            .map(|algorithm| algorithm.to_jsonwebtoken())
             .collect();
         let token_types = config
             .token_types

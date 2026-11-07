@@ -4,11 +4,12 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use libfuzzer_sys::fuzz_target;
-use registry_platform_crypto::PublicJwk;
-use registry_platform_sdjwt::{
-    validate_holder_proof, validate_holder_proof_for_confirmation, HolderConfirmation,
-    HolderProofBindings, HolderProofPolicy,
+use registry_evidence_verifier::holder_proof::{
+    validate_holder_proof, validate_holder_proof_for_confirmation, HolderProofBindings,
+    HolderProofPolicy,
 };
+use registry_platform_crypto::PublicJwk;
+use registry_platform_sdjwt::HolderConfirmation;
 use sha2::{Digest, Sha256};
 
 const HOLDER_PUBLIC_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"did:jwk:holder#key-1"}"#;

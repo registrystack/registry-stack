@@ -3,6 +3,7 @@
 use serde_json::{json, Value};
 
 use crate::{
+    draft13,
     service::{
         AUTHORIZATION_SERVER_METADATA_PATH, CREDENTIAL_PATH, HEALTH_PATH, ISSUER_METADATA_PATH,
         NONCE_PATH, OFFERS_PATH, READY_PATH, TOKEN_PATH,
@@ -65,6 +66,7 @@ pub fn openapi_document() -> Value {
                     "401": bearer_problem_response("The offer bearer token is missing or refused"),
                     "403": catalog_refusal_response(),
                     "408": problem_response("The configured request deadline elapsed"),
+                    "429": retry_response("The request budget is spent; retry after the interval in Retry-After"),
                     "413": framework_response("The request body exceeds the configured byte limit"),
                     "503": problem_response("Authorization, Evidence discovery, or bounded state is unavailable")
                 }
@@ -87,11 +89,11 @@ pub fn openapi_document() -> Value {
                 },
                 "responses": {
                     "200": json_response("Single-use access token", "TokenResponse"),
-                    "400": problem_response("The grant or code was refused"),
+                    "400": problem_response("The form cannot be decoded, or the grant or code was refused"),
                     "408": problem_response("The configured request deadline elapsed"),
+                    "429": retry_response("The request budget is spent; retry after the interval in Retry-After"),
                     "413": framework_response("The request body exceeds the configured byte limit"),
                     "415": framework_response("The request is not form encoded"),
-                    "422": framework_response("The form body cannot be decoded"),
                     "503": problem_response("The bounded state store is unavailable")
                 }
             }
@@ -111,6 +113,7 @@ pub fn openapi_document() -> Value {
                     "200": json_response("Stateless nonce", "NonceResponse"),
                     "400": problem_response("The nonce request was not empty"),
                     "408": problem_response("The configured request deadline elapsed"),
+                    "429": retry_response("The request budget is spent; retry after the interval in Retry-After"),
                     "413": framework_response("The request body exceeds the configured byte limit")
                 }
             }
@@ -129,19 +132,30 @@ pub fn openapi_document() -> Value {
                     "400": credential_bad_request_response(),
                     "401": bearer_problem_response("The access token is missing, unknown, expired, or already claimed"),
                     "408": problem_response("The configured request deadline elapsed"),
+                    "429": retry_response("The request budget is spent; retry after the interval in Retry-After"),
                     "413": framework_response("The request body exceeds the configured byte limit"),
                     "503": problem_response("Bounded state is unavailable before the access token can be claimed")
                 }
             }
         }),
     );
+    for (path, item) in draft13::openapi_paths() {
+        paths.insert(path.to_owned(), item);
+    }
+    let mut component_schemas = schemas();
+    if let (Some(target), Value::Object(additions)) = (
+        component_schemas.as_object_mut(),
+        draft13::openapi_schemas(),
+    ) {
+        target.extend(additions);
+    }
 
     json!({
         "openapi": "3.1.0",
         "info": {
             "title": "Registry Evidence OID4VCI delivery API",
             "version": "1",
-            "description": "Narrow OID4VCI 1.0 Final delivery profile. The normative source is products/evidence/contracts/oid4vci-profile.yaml. This contract does not claim full issuer certification or conformance."
+            "description": "Narrow OID4VCI 1.0 Final delivery profile, plus an optional, separately identified OID4VCI Draft 13 compatibility profile under /protocol/oid4vci/draft-13 that exists only when the deployment configures draft13Profile. The normative source is products/evidence/contracts/oid4vci-profile.yaml. This contract does not claim full issuer certification or conformance."
         },
         "paths": Value::Object(paths),
         "components": {
@@ -149,14 +163,20 @@ pub fn openapi_document() -> Value {
                 "offerBearer": {"type": "http", "scheme": "bearer", "bearerFormat": "JWT"},
                 "credentialBearer": {"type": "http", "scheme": "bearer"}
             },
-            "schemas": schemas()
+            "schemas": component_schemas
         },
         "x-unsupported-capabilities": [
             "authorization-code", "par", "dpop", "remote-did-resolution",
             "additional-credential-formats", "deferred-issuance", "notifications",
-            "credential-status-or-lifecycle", "multi-replica-state", "plugin-extensibility",
-            "draft-13"
-        ]
+            "credential-status-or-lifecycle", "multi-replica-state", "plugin-extensibility"
+        ],
+        "x-compatibility-profiles": {
+            "draft-13": {
+                "pathPrefix": draft13::PATH_PREFIX,
+                "enabledBy": "draft13Profile",
+                "scope": "pre-authorized code only, for wallets that accept third-party issuance over OpenID4VCI Draft 13 only"
+            }
+        }
     })
 }
 
@@ -188,7 +208,7 @@ fn required_json_body(schema: &str) -> Value {
     })
 }
 
-fn json_response(description: &str, schema: &str) -> Value {
+pub(crate) fn json_response(description: &str, schema: &str) -> Value {
     json!({
         "description": description,
         "headers": {
@@ -199,7 +219,7 @@ fn json_response(description: &str, schema: &str) -> Value {
     })
 }
 
-fn problem_response(description: &str) -> Value {
+pub(crate) fn problem_response(description: &str) -> Value {
     json!({
         "description": description,
         "headers": {
@@ -240,7 +260,7 @@ fn credential_bad_request_response() -> Value {
     response
 }
 
-fn catalog_refusal_response() -> Value {
+pub(crate) fn catalog_refusal_response() -> Value {
     let mut response = problem_response("Backing Evidence refused authenticated catalog discovery");
     response["content"]["application/json"]["schema"] = json!({
         "allOf": [
@@ -265,22 +285,22 @@ fn catalog_refusal_response() -> Value {
     response
 }
 
-fn bearer_problem_response(description: &str) -> Value {
+pub(crate) fn bearer_problem_response(description: &str) -> Value {
     let mut response = problem_response(description);
     response["headers"]["WWW-Authenticate"] =
         json!({"schema": {"type": "string", "const": "Bearer"}});
     response
 }
 
-fn framework_response(description: &str) -> Value {
-    json!({
-        "description": description,
-        "headers": {
-            "Cache-Control": {"schema": {"type": "string", "const": "no-store"}},
-            "Pragma": {"schema": {"type": "string", "const": "no-cache"}}
-        },
-        "content": {"text/plain; charset=utf-8": {"schema": {"type": "string"}}}
-    })
+pub(crate) fn framework_response(description: &str) -> Value {
+    problem_response(description)
+}
+
+/// A refusal that tells the caller when to come back.
+pub(crate) fn retry_response(description: &str) -> Value {
+    let mut response = problem_response(description);
+    response["headers"]["Retry-After"] = json!({"schema": {"type": "integer", "minimum": 1}});
+    response
 }
 
 fn schemas() -> Value {
@@ -506,6 +526,7 @@ mod tests {
         let expected = PUBLIC_ROUTES
             .into_iter()
             .map(|route| route.path())
+            .chain(draft13::ROUTES)
             .collect::<BTreeSet<_>>();
         assert_eq!(actual, expected);
     }
@@ -513,7 +534,11 @@ mod tests {
     #[test]
     fn the_contract_includes_middleware_and_extractor_refusals() {
         let document = openapi_document();
-        for path in PUBLIC_ROUTES.map(|route| route.path()) {
+        for path in PUBLIC_ROUTES
+            .map(|route| route.path())
+            .into_iter()
+            .chain(draft13::ROUTES)
+        {
             let operation = document["paths"][path]
                 .as_object()
                 .expect("a route publishes an operation")
@@ -522,7 +547,15 @@ mod tests {
                 .expect("a route has one operation");
             assert!(operation["responses"].get("408").is_some(), "{path}");
         }
-        for path in [OFFERS_PATH, TOKEN_PATH, NONCE_PATH, CREDENTIAL_PATH] {
+        for path in [
+            OFFERS_PATH,
+            TOKEN_PATH,
+            NONCE_PATH,
+            CREDENTIAL_PATH,
+            draft13::OFFERS_PATH,
+            draft13::TOKEN_PATH,
+            draft13::CREDENTIAL_PATH,
+        ] {
             assert!(
                 document["paths"][path]["post"]["responses"]
                     .get("413")
@@ -530,12 +563,49 @@ mod tests {
                 "{path}"
             );
         }
-        assert!(document["paths"][TOKEN_PATH]["post"]["responses"]
-            .get("415")
-            .is_some());
-        assert!(document["paths"][TOKEN_PATH]["post"]["responses"]
-            .get("422")
-            .is_some());
+        for path in [
+            OFFERS_PATH,
+            TOKEN_PATH,
+            NONCE_PATH,
+            CREDENTIAL_PATH,
+            draft13::OFFERS_PATH,
+            draft13::TOKEN_PATH,
+            draft13::CREDENTIAL_PATH,
+        ] {
+            let refusal = &document["paths"][path]["post"]["responses"]["429"];
+            assert_eq!(
+                refusal["headers"]["Retry-After"]["schema"]["minimum"], 1,
+                "{path}"
+            );
+            assert!(
+                refusal["content"].get("application/json").is_some(),
+                "{path}"
+            );
+            // A framework rejection is re-answered in the service's error
+            // shape, so none of them is documented as plain text.
+            let responses = document["paths"][path]["post"]["responses"]
+                .as_object()
+                .expect("an operation has responses");
+            for status in ["413", "415"] {
+                if let Some(rejection) = responses.get(status) {
+                    assert!(
+                        rejection["content"].get("application/json").is_some(),
+                        "{path} {status}"
+                    );
+                }
+            }
+            // An undecodable body is re-answered as 400 `invalid_request`,
+            // as OAuth 2.0 token errors require, so no operation answers 422.
+            assert!(responses.get("422").is_none(), "{path}");
+        }
+        for path in [TOKEN_PATH, draft13::TOKEN_PATH] {
+            assert!(
+                document["paths"][path]["post"]["responses"]
+                    .get("415")
+                    .is_some(),
+                "{path}"
+            );
+        }
         for path in [OFFERS_PATH, CREDENTIAL_PATH] {
             assert_eq!(
                 document["paths"][path]["post"]["responses"]["401"]["headers"]["WWW-Authenticate"]
@@ -590,18 +660,48 @@ mod tests {
         ] {
             assert!(rendered.contains(required), "contract omitted {required}");
         }
-        for unsupported in [
-            "authorization-code",
-            "dpop",
-            "remote-did-resolution",
-            "draft-13",
-        ] {
+        for unsupported in ["authorization-code", "dpop", "remote-did-resolution"] {
             assert!(document["x-unsupported-capabilities"]
                 .as_array()
                 .expect("unsupported list")
                 .iter()
                 .any(|entry| entry == unsupported));
         }
+    }
+
+    #[test]
+    fn draft13_is_published_as_a_separate_optional_profile() {
+        let document = openapi_document();
+        assert!(!document["x-unsupported-capabilities"]
+            .as_array()
+            .expect("unsupported list")
+            .iter()
+            .any(|entry| entry == "draft-13"));
+        assert_eq!(
+            document["x-compatibility-profiles"]["draft-13"]["pathPrefix"],
+            draft13::PATH_PREFIX
+        );
+        // The 1.0 operations are untouched by the compatibility profile.
+        for path in [ISSUER_METADATA_PATH, TOKEN_PATH, CREDENTIAL_PATH] {
+            assert!(
+                !document["paths"][path].to_string().contains("Draft13"),
+                "{path}"
+            );
+        }
+        let schemas = &document["components"]["schemas"];
+        assert_eq!(
+            schemas["Draft13CredentialConfiguration"]["properties"]
+                ["cryptographic_binding_methods_supported"]["prefixItems"][0]["const"],
+            "cose_key"
+        );
+        assert!(!schemas["CredentialConfiguration"]
+            .to_string()
+            .contains("cose_key"));
+        assert!(schemas["Draft13CredentialRequest"]["required"]
+            .as_array()
+            .expect("required members")
+            .iter()
+            .any(|member| member == "proof"));
     }
 
     #[test]

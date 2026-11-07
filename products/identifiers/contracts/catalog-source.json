@@ -23,6 +23,16 @@
       "cargoExample": "problem-catalog"
     },
     {
+      "owner": "evidence",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "uriPrefix": "https://id.registrystack.org/problems/registry-evidence-oid4vp/",
+      "sourcePath": "crates/registry-evidence-oid4vp/src/problem.rs",
+      "exporterPath": "crates/registry-evidence-oid4vp/examples/problem-catalog.rs",
+      "cargoPackage": "registry-evidence-oid4vp",
+      "cargoExample": "problem-catalog"
+    },
+    {
       "owner": "breg",
       "status": "active",
       "compatibilityLine": "v1alpha1",
@@ -590,6 +600,14 @@
       "status": "active",
       "compatibilityLine": "v1alpha1",
       "description": "Evidence OID4VCI delivery runtime configuration JSON Schema."
+    },
+    {
+      "glob": "products/evidence/generated/oid4vp-runtime/*.schema.json",
+      "sourcePath": "crates/registry-evidence-oid4vp/src/schema.rs",
+      "owner": "evidence",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Evidence OpenID4VP verifier runtime configuration JSON Schema."
     },
     {
       "glob": "products/evidence/generated/client-profile/*.schema.json",

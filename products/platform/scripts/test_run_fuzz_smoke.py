@@ -107,7 +107,7 @@ raise SystemExit(17 if target in os.environ.get("FAKE_CARGO_FAILURES", "").split
             self.assertTrue((self.product_dir / "fuzz" / "artifacts" / target).is_dir())
 
     def test_failure_is_aggregated_after_every_target_is_attempted(self) -> None:
-        targets = ("sdjwt_holder_proof", "sdjwt_issuance")
+        targets = ("sdjwt_issuance", "sdjwt_presentation_parse")
         result = self.run_runner(*targets, failures=(targets[0],))
 
         self.assertEqual(1, result.returncode)
@@ -139,12 +139,19 @@ raise SystemExit(17 if target in os.environ.get("FAKE_CARGO_FAILURES", "").split
 
 
 class PlatformFuzzWorkflowTest(unittest.TestCase):
-    def test_pr_matrix_runs_every_declared_fuzz_target_once_in_pairs(self) -> None:
+    def test_pr_matrix_runs_every_declared_fuzz_target_once_in_groups(self) -> None:
         workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
         strategy = workflow["jobs"]["platform-fuzz"]["strategy"]
         matrix = strategy["matrix"]["include"]
-        pairs = [(entry["target_a"], entry["target_b"]) for entry in matrix]
-        flattened = [target for pair in pairs for target in pair]
+        groups = [
+            tuple(
+                entry[key]
+                for key in ("target_a", "target_b", "target_c")
+                if key in entry
+            )
+            for entry in matrix
+        ]
+        flattened = [target for group in groups for target in group]
 
         manifest = tomllib.loads(FUZZ_MANIFEST.read_text(encoding="utf-8"))
         declared = [binary["name"] for binary in manifest["bin"]]
@@ -153,10 +160,11 @@ class PlatformFuzzWorkflowTest(unittest.TestCase):
         self.assertEqual(
             {
                 ("authcommon_parsers", "sqlite_statement"),
-                ("sdjwt_holder_proof", "sdjwt_issuance"),
+                ("sdjwt_issuance", "sdjwt_presentation_parse"),
+                ("crypto_jws_parse", "crypto_jwe_decrypt"),
                 ("yaml_reader", "yaml_decode"),
             },
-            set(pairs),
+            set(groups),
         )
         self.assertEqual(len(flattened), len(set(flattened)))
         self.assertCountEqual(declared, flattened)

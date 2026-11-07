@@ -14,10 +14,10 @@ description = "Ignore the generated, gitignored VS Code test installation."
 paths = ["^editors/vscode/\\.vscode-test/"]
 
 [[allowlists]]
-description = "Allow synthetic JWT fixtures used only by the platform fuzz harnesses."
+description = "Allow synthetic JWT fixtures used only by the Evidence fuzz harnesses."
 paths = [
-  "^products/platform/fuzz/corpus/sdjwt_holder_proof/holder_proof\\.jwt$",
-  "^products/platform/fuzz/corpus/sdjwt_holder_proof/valid-holder-proof-jwt$",
+  "^products/evidence/fuzz/corpus/verifier_holder_proof/holder_proof\\.jwt$",
+  "^products/evidence/fuzz/corpus/verifier_holder_proof/valid-holder-proof-jwt$",
 ]
 
 [[allowlists]]
@@ -73,3 +73,20 @@ condition = "AND"
 paths = ["^crates/registry-adapterctl/tests/fixtures_replay\\.rs$"]
 regexTarget = "line"
 regexes = ['''^\s*idempotency-key: [0-9a-f]{64}$''']
+
+[[allowlists]]
+description = "Allow the OpenID4VP refusal codes in the client identifier module; they are diagnostic code strings that name a secret or key, not credentials."
+condition = "AND"
+paths = ["^crates/registry-evidence-oid4vp/src/client_identifier\\.rs$"]
+regexTarget = "line"
+regexes = ['''=> "evidence\.oid4vp\.[a-z0-9-]+",$''']
+
+[[allowlists]]
+description = "Allow the SD-JWT VC presentations in the SD-JWT test vectors: the RFC 9901 section 5.2 example, and a vector generated with the OpenWallet Foundation library from a throwaway issuer key whose public half the vector pins; neither is a credential any deployment trusts."
+condition = "AND"
+paths = [
+  "^crates/registry-platform-sdjwt/tests/data/rfc-9901-section-5-2-presentation\\.txt$",
+  "^crates/registry-evidence-presentation/tests/vectors/es256-pinned-key\\.json$",
+]
+regexTarget = "line"
+regexes = ['''^(\s*"presentation": ")?eyJhbGciOiAiRVMyNTYiLCAidHlwIjogI(mV4YW1wbGUrc2Qtand0In0\.|mRjK3NkLWp3dCIsICJraWQiOiAi)''']

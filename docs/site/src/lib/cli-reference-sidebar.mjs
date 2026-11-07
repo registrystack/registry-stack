@@ -27,6 +27,7 @@ const binaries = [
   'evidencectl',
   'mint',
   'evidence-oid4vci',
+  'evidence-oid4vp',
   'registry-render',
   'adapter',
   'adapter-job',

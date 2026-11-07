@@ -101,6 +101,11 @@
       },
       "type": "object"
     },
+    "Draft13ProfileDocument": {
+      "additionalProperties": false,
+      "description": "The Draft 13 compatibility profile switch. It takes no settings.",
+      "type": "object"
+    },
     "EnvironmentSecretProviderConfig": {
       "additionalProperties": false,
       "description": "The environment secret provider. It takes no settings.",
@@ -289,6 +294,45 @@
       ],
       "type": "object"
     },
+    "RateLimitsDocument": {
+      "additionalProperties": false,
+      "description": "Request budgets. A request over its budget is answered 429 with a\n`Retry-After` header.",
+      "properties": {
+        "offerBurst": {
+          "default": 60,
+          "description": "The most offers one authorized principal may create in a burst.",
+          "format": "uint32",
+          "maximum": 100000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "offersPerPrincipalPerMinute": {
+          "default": 600,
+          "description": "Offers one authorized principal may create per minute.",
+          "format": "uint32",
+          "maximum": 100000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "walletRequestBurst": {
+          "default": 300,
+          "description": "The most requests each wallet endpoint admits in a burst.",
+          "format": "uint32",
+          "maximum": 100000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "walletRequestsPerMinute": {
+          "default": 3000,
+          "description": "Requests per minute each of the token, nonce and credential endpoints\ntakes from all wallets together.",
+          "format": "uint32",
+          "maximum": 1000000,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
     "SecretProvidersConfig": {
       "additionalProperties": false,
       "anyOf": [
@@ -461,6 +505,10 @@
       "$ref": "#/$defs/Url",
       "description": "The `credential_issuer` identifier this service publishes, and the\nvalue a wallet proof must carry as its `aud`: a bare origin with no\npath, query, or fragment. https in strict mode. A trailing slash is\nremoved, so what is published and what is compared are the same bytes."
     },
+    "draft13Profile": {
+      "$ref": "#/$defs/Draft13ProfileDocument",
+      "description": "Serves the OpenID4VCI Draft 13 compatibility profile beside the 1.0\nFinal profile, at its own issuer identifier: the `credentialIssuer`\nfollowed by `/protocol/oid4vci/draft-13`. Written as an empty mapping,\n`draft13Profile: {}`; absent means the profile is not served and none of\nits routes exist. It shares the offer store and the offer authorization\nwith the 1.0 profile, and an offer made for one profile cannot be\nredeemed through the other."
+    },
     "evidence": {
       "$ref": "#/$defs/EvidenceDocument",
       "description": "The Evidence deployment this service requests credentials from."
@@ -481,6 +529,10 @@
     "offers": {
       "$ref": "#/$defs/OffersDocument",
       "description": "The authorization boundary of the adopter-facing offer endpoint."
+    },
+    "rateLimits": {
+      "$ref": "#/$defs/RateLimitsDocument",
+      "description": "Request budgets. Absent means the defaults of each member."
     },
     "secretProviders": {
       "$ref": "#/$defs/SecretProvidersConfig",

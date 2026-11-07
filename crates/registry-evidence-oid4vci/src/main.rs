@@ -94,12 +94,15 @@ fn run(cli: Cli) -> Result<(), String> {
             let config = load_config(&config)?;
             let runtime = runtime()?;
             runtime.block_on(async move {
+                // Installed before anything is served, so a failure to install
+                // a handler refuses startup.
+                let shutdown = stop_signal(registry_platform_httpsec::shutdown_signal)?;
                 let service = Arc::new(
                     DeliveryService::load(config)
                         .await
                         .map_err(|error| format!("the service could not start: {error}"))?,
                 );
-                serve(service, shutdown_signal())
+                serve(service, shutdown)
                     .await
                     .map_err(|error| format!("the listener failed: {error}"))
             })
@@ -229,27 +232,41 @@ fn as_given(mut diagnostics: Vec<Diagnostic>, absolute: &Path, given: &Path) -> 
     diagnostics
 }
 
-async fn shutdown_signal() {
-    let interrupt = async {
-        let _ = tokio::signal::ctrl_c().await;
-    };
-    let terminate = async {
-        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
-            Ok(mut terminate) => {
-                terminate.recv().await;
-            }
-            Err(_) => std::future::pending::<()>().await,
-        }
-    };
-    tokio::select! {
-        () = interrupt => {}
-        () = terminate => {}
-    }
+/// Install the stop signal handlers, or refuse startup.
+///
+/// A handler that cannot be installed leaves a service that no signal can
+/// drain, so the failure is a startup error. `install` is
+/// [`registry_platform_httpsec::shutdown_signal`] in production.
+fn stop_signal<S>(install: impl FnOnce() -> std::io::Result<S>) -> Result<S, String> {
+    install().map_err(|error| {
+        format!("the stop signal handlers could not be installed, so the service did not start: {error}")
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_stop_signal_that_cannot_be_installed_refuses_startup() {
+        let error = stop_signal(|| {
+            Err::<(), _>(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "install refused",
+            ))
+        })
+        .expect_err("an install failure is a startup error");
+
+        assert_eq!(
+            error,
+            "the stop signal handlers could not be installed, so the service did not start: install refused"
+        );
+    }
+
+    #[test]
+    fn an_installed_stop_signal_is_handed_to_the_listener() {
+        assert_eq!(stop_signal(|| Ok(7_u8)).expect("the install succeeds"), 7);
+    }
 
     #[test]
     fn an_openapi_write_failure_keeps_the_operating_system_cause() {

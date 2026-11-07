@@ -19,6 +19,10 @@ and authoring crates. These live outside the main workspace (see the root
   credential check, disclosure resolution, the rebuilt payload contract, and
   the policy comparison; every other input exercises the compact split and
   the stages before the signature check (`registry-evidence-verifier`).
+- `verifier_holder_proof`: holder-bound proof-of-possession JWT checks over
+  arbitrary text, through `validate_holder_proof` and
+  `validate_holder_proof_for_confirmation` against a fixed holder key
+  (`registry-evidence-verifier`, `holder_proof`).
 - `authoring_openapi`: OpenAPI description parsing, operation resolution,
   and schema flattening into candidate leaves
   (`registry-evidence-authoring`).
@@ -40,7 +44,7 @@ runs.
 Not yet covered: the SD-JWT VC targets never mutate the disclosure tail
 behind a valid issuer signature (the disclosures they verify are the ones the
 fixture issuer produced), and no target reaches holder presentation or
-key-binding JWT verification. The Evidence runtime's request parsing is not
+key-binding JWT verification (`verifier_holder_proof` covers only the holder proof). The Evidence runtime's request parsing is not
 fuzzed here either.
 
 ## Running locally

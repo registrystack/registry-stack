@@ -1679,9 +1679,9 @@ checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
 
 [[package]]
 name = "crypto-bigint"
-version = "0.7.6"
+version = "0.7.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6bb08299a6046833a879ace115697f12fd2bd6c8d3e93c909ffc9e0738e7cae0"
+checksum = "9c035cb64cba03dad2fb921f3e218785e8cf9a41790da5eb3a1400f62fa2be11"
 dependencies = [
  "cpubits",
  "ctutils",
@@ -6131,10 +6131,12 @@ dependencies = [
  "registry-platform-hooks",
  "registry-platform-httpsec",
  "registry-platform-httputil",
+ "registry-platform-metrics",
  "registry-platform-objectstore",
  "registry-platform-oidc",
  "registry-platform-script",
  "registry-platform-testing",
+ "registry-platform-text",
  "registry-platform-yaml",
  "registry-review-client",
  "registry-review-protocol",
@@ -6277,7 +6279,6 @@ dependencies = [
  "axum",
  "base64 0.23.1",
  "clap",
- "getrandom 0.4.3",
  "jsonschema",
  "jsonwebtoken",
  "minijinja",
@@ -6298,7 +6299,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.1",
- "subtle",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
@@ -6395,6 +6395,7 @@ dependencies = [
  "registry-platform-dispatch",
  "registry-platform-httpsec",
  "registry-platform-httputil",
+ "registry-platform-metrics",
  "registry-platform-oidc",
  "registry-platform-testing",
  "registry-platform-yaml",
@@ -6611,6 +6612,7 @@ dependencies = [
  "registry-documentsctl",
  "registry-evidence",
  "registry-evidence-oid4vci",
+ "registry-evidence-oid4vp",
  "registry-evidencectl",
  "registry-manifest-cli",
  "registry-mcp",
@@ -6670,6 +6672,7 @@ dependencies = [
  "registry-platform-hooks",
  "registry-platform-httpsec",
  "registry-platform-httputil",
+ "registry-platform-metrics",
  "registry-platform-oidc",
  "registry-platform-script",
  "registry-platform-testing",
@@ -7008,6 +7011,7 @@ dependencies = [
  "registry-discovery-profile",
  "registry-evidence-authoring",
  "registry-evidence-client",
+ "registry-evidence-presentation",
  "registry-evidence-verifier",
  "registry-platform-audit",
  "registry-platform-authcommon",
@@ -7016,10 +7020,13 @@ dependencies = [
  "registry-platform-crypto",
  "registry-platform-httpsec",
  "registry-platform-httputil",
+ "registry-platform-metrics",
  "registry-platform-oidc",
  "registry-platform-ratelimit",
  "registry-platform-sdjwt",
  "registry-platform-sqlite",
+ "registry-platform-text",
+ "registry-platform-x509",
  "registry-platform-yaml",
  "reqwest 0.12.28",
  "rhai",
@@ -7045,6 +7052,7 @@ dependencies = [
  "utoipa",
  "uuid",
  "wiremock",
+ "x509-cert",
  "zeroize",
 ]
 
@@ -7054,6 +7062,7 @@ version = "0.45.1"
 dependencies = [
  "anyhow",
  "jsonschema",
+ "registry-platform-oidc",
  "registry-platform-yaml",
  "rhai",
  "schemars",
@@ -7167,8 +7176,11 @@ dependencies = [
  "registry-platform-buildinfo",
  "registry-platform-config",
  "registry-platform-crypto",
+ "registry-platform-httpsec",
  "registry-platform-httputil",
+ "registry-platform-metrics",
  "registry-platform-oidc",
+ "registry-platform-ratelimit",
  "registry-platform-sdjwt",
  "registry-platform-yaml",
  "registry-thunderid-tooling",
@@ -7186,6 +7198,64 @@ dependencies = [
  "url",
  "uuid",
  "zeroize",
+]
+
+[[package]]
+name = "registry-evidence-oid4vp"
+version = "0.45.1"
+dependencies = [
+ "axum",
+ "axum-test",
+ "base64 0.23.1",
+ "chrono",
+ "clap",
+ "der 0.7.10",
+ "jsonschema",
+ "rcgen",
+ "registry-evidence-authoring",
+ "registry-evidence-client",
+ "registry-platform-audit",
+ "registry-platform-authcommon",
+ "registry-platform-buildinfo",
+ "registry-platform-canonical-json",
+ "registry-platform-config",
+ "registry-platform-crypto",
+ "registry-platform-httpsec",
+ "registry-platform-metrics",
+ "registry-platform-oidc",
+ "registry-platform-ratelimit",
+ "registry-platform-testing",
+ "registry-platform-x509",
+ "registry-platform-yaml",
+ "reqwest 0.12.28",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "x509-cert",
+ "zeroize",
+]
+
+[[package]]
+name = "registry-evidence-presentation"
+version = "0.45.1"
+dependencies = [
+ "base64 0.23.1",
+ "rcgen",
+ "registry-platform-crypto",
+ "registry-platform-sdjwt",
+ "registry-platform-x509",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "thiserror 2.0.21",
+ "time",
 ]
 
 [[package]]
@@ -7242,6 +7312,7 @@ dependencies = [
  "registry-platform-buildinfo",
  "registry-platform-config",
  "registry-platform-crypto",
+ "registry-platform-httpsec",
  "registry-platform-yaml",
  "registry-thunderid-tooling",
  "rhai",
@@ -7340,6 +7411,7 @@ dependencies = [
  "registry-platform-canonical-json",
  "registry-platform-config",
  "registry-platform-crypto",
+ "registry-platform-httpsec",
  "registry-platform-httputil",
  "registry-platform-oidc",
  "registry-platform-testing",
@@ -7369,7 +7441,6 @@ dependencies = [
  "axum",
  "base64 0.23.1",
  "http",
- "jsonwebtoken",
  "registry-platform-audit",
  "registry-platform-authcommon",
  "registry-platform-buildinfo",
@@ -7424,6 +7495,7 @@ dependencies = [
  "registry-platform-dispatch",
  "registry-platform-httpsec",
  "registry-platform-httputil",
+ "registry-platform-metrics",
  "registry-platform-oidc",
  "registry-platform-ratelimit",
  "registry-platform-script",
@@ -7592,6 +7664,7 @@ name = "registry-platform-authcommon"
 version = "0.45.1"
 dependencies = [
  "base64 0.23.1",
+ "futures",
  "proptest",
  "registry-platform-crypto",
  "serde",
@@ -7651,6 +7724,7 @@ dependencies = [
  "async-trait",
  "aws-lc-rs",
  "base64 0.23.1",
+ "chacha20poly1305",
  "cms",
  "der 0.7.10",
  "ed25519-dalek 2.2.0",
@@ -7772,6 +7846,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "registry-platform-metrics"
+version = "0.45.1"
+
+[[package]]
 name = "registry-platform-objectstore"
 version = "0.45.1"
 dependencies = [
@@ -7805,6 +7883,7 @@ dependencies = [
  "registry-platform-httputil",
  "registry-platform-yaml",
  "reqwest 0.12.28",
+ "schemars",
  "serde",
  "serde_json",
  "tempfile",
@@ -7848,12 +7927,12 @@ dependencies = [
  "async-trait",
  "base64 0.23.1",
  "getrandom 0.4.3",
- "jsonwebtoken",
+ "rcgen",
  "registry-platform-crypto",
+ "registry-platform-x509",
  "serde",
  "serde_json",
  "sha2 0.11.1",
- "subtle",
  "thiserror 2.0.21",
  "tokio",
  "ulid",
@@ -7879,6 +7958,7 @@ dependencies = [
  "axum",
  "base64 0.23.1",
  "bytes",
+ "futures",
  "jsonwebtoken",
  "registry-platform-audit",
  "registry-platform-crypto",
@@ -7901,13 +7981,41 @@ dependencies = [
 ]
 
 [[package]]
+name = "registry-platform-text"
+version = "0.45.1"
+dependencies = [
+ "hex",
+ "icu_casemap",
+ "icu_normalizer",
+ "icu_properties",
+ "sha2 0.11.1",
+]
+
+[[package]]
+name = "registry-platform-x509"
+version = "0.45.1"
+dependencies = [
+ "async-trait",
+ "base64 0.23.1",
+ "der 0.7.10",
+ "rcgen",
+ "registry-platform-crypto",
+ "rustls-pki-types",
+ "rustls-webpki",
+ "serde_json",
+ "sha2 0.11.1",
+ "thiserror 2.0.21",
+ "time",
+ "x509-cert",
+]
+
+[[package]]
 name = "registry-platform-yaml"
 version = "0.45.1"
 dependencies = [
- "icu_casemap",
- "icu_normalizer",
  "jsonschema",
  "regex",
+ "registry-platform-text",
  "saphyr-parser",
  "schemars",
  "serde",

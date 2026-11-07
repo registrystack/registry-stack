@@ -15,7 +15,11 @@ import { cliReferenceSidebar } from './src/lib/cli-reference-sidebar.mjs';
 import { flattenSidebarGroups } from './src/lib/sidebar.mjs';
 import { buildNotaryRetirementRedirects } from './src/lib/notary-retirement-redirects.mjs';
 import { buildRelayRetirementRedirects } from './src/lib/relay-retirement-redirects.mjs';
-import { docsetPublishesBregOpenApi, docsetPublishesEvidenceOid4vciOpenApi } from './scripts/fetch-openapi.mjs';
+import {
+  docsetPublishesBregOpenApi,
+  docsetPublishesEvidenceOid4vciOpenApi,
+  docsetPublishesEvidenceOid4vpOpenApi,
+} from './scripts/fetch-openapi.mjs';
 import { omittedCliBinaries, productRoutes, remarkDocsetProducts } from './src/lib/docset-products.mjs';
 
 // Marketing site that now owns the persuasion layer (the pitch). Old docs
@@ -130,6 +134,7 @@ const {
 } = resolveDocsetBuildContext(docsetsManifest);
 const hasBregOpenApi = docsetPublishesBregOpenApi(selectedDocset, docsetsManifest.current);
 const hasEvidenceOid4vciOpenApi = docsetPublishesEvidenceOid4vciOpenApi(selectedDocset, docsetsManifest.current);
+const hasEvidenceOid4vpOpenApi = docsetPublishesEvidenceOid4vpOpenApi(selectedDocset, docsetsManifest.current);
 const hasDiscovery = Boolean(selectedDocset.products?.['registry-discovery']);
 const productSidebar = loadProductSidebar();
 
@@ -178,6 +183,19 @@ const evidenceOid4vciOpenApiSchema = {
   sidebar: {
     group: evidenceOid4vciOpenApiSidebarGroup,
     label: 'API operations (wallet delivery)',
+    collapsed: true,
+    operations: { labels: /** @type {'path'} */ ('path'), badges: true },
+  },
+};
+// The OpenID4VP verifier front end publishes its own document, fetched and
+// gated like the OID4VCI one.
+const evidenceOid4vpOpenApiSidebarGroup = createOpenAPISidebarGroup();
+const evidenceOid4vpOpenApiSchema = {
+  base: 'reference/apis/evidence-oid4vp',
+  schema: './openapi/registry-evidence-oid4vp.render.openapi.json',
+  sidebar: {
+    group: evidenceOid4vpOpenApiSidebarGroup,
+    label: 'API operations (wallet presentation)',
     collapsed: true,
     operations: { labels: /** @type {'path'} */ ('path'), badges: true },
   },
@@ -573,6 +591,7 @@ export default defineConfig({
         starlightOpenAPI([
           evidenceOpenApiSchema,
           ...[evidenceOid4vciOpenApiSchema].filter(() => hasEvidenceOid4vciOpenApi),
+          ...[evidenceOid4vpOpenApiSchema].filter(() => hasEvidenceOid4vpOpenApi),
           ...[caseworkOpenApiSchema].filter(() => hasCasework),
           ...[schedulingOpenApiSchema].filter(() => hasScheduling),
           ...[messagingOpenApiSchema].filter(() => hasMessaging),
@@ -682,6 +701,7 @@ export default defineConfig({
               items: [
                 { label: 'Enable SD-JWT VC', slug: 'configure/enable-sd-jwt-vc' },
                 { label: 'Deliver to a wallet', slug: 'configure/evidence-oid4vci' },
+                { label: 'Verify a wallet presentation', slug: 'configure/evidence-oid4vp' },
               ],
             },
             { label: 'Configuration reference', slug: 'reference/evidence-configuration' },
@@ -691,6 +711,7 @@ export default defineConfig({
             // API wrapper would add a disclosure without helping navigation.
             evidenceOpenApiSidebarGroup,
             ...(hasEvidenceOid4vciOpenApi ? [evidenceOid4vciOpenApiSidebarGroup] : []),
+            ...(hasEvidenceOid4vpOpenApi ? [evidenceOid4vpOpenApiSidebarGroup] : []),
             { label: 'Security model', slug: 'security/evidence' },
           ],
         },

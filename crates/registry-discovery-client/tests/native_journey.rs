@@ -270,6 +270,7 @@ async fn evidence_response(state: ProviderState, request: Request<Body>) -> Resp
         "schema": EVIDENCE_SCHEMA_V1,
         "assuranceProfile": "local",
         "subjectBinding": "audience-scoped",
+        "channel": "source",
         "requestNonce": nonce,
         "id": "urn:example:journey:evidence:00000000-0000-4000-8000-000000000001",
         "type": "Evidence",

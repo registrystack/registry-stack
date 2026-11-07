@@ -66,7 +66,7 @@ pub fn evidence_schema() -> Value {
         "type": "object",
         "additionalProperties": false,
         "required": [
-            "schema", "assuranceProfile", "subjectBinding", "id", "type", "supportsRequirement", "isConformantTo",
+            "schema", "assuranceProfile", "subjectBinding", "channel", "id", "type", "supportsRequirement", "isConformantTo",
             "issuedBy", "providedBy", "issuedAt", "observedAt", "validUntil",
             "purpose", "configurationRevision", "subjects", "supportedValues"
         ],
@@ -78,10 +78,17 @@ pub fn evidence_schema() -> Value {
             "audience": ["requestNonce"],
             "requestNonce": ["audience"]
         },
+        // A holder-presented assertion carries the presented credential and a
+        // source assertion carries none.
+        "if": {"properties": {"channel": {"const": "holder-presented"}}, "required": ["channel"]},
+        "then": {"required": ["presentedCredential"]},
+        "else": {"not": {"required": ["presentedCredential"]}},
         "properties": {
             "schema": {"const": "registry.assertion-evidence/v1"},
             "assuranceProfile": {"enum": ["local", "production", "evidence-grade"]},
             "subjectBinding": {"enum": ["audience-scoped", "holder-bound"]},
+            "channel": {"enum": ["source", "holder-presented"]},
+            "presentedCredential": {"$ref": "#/$defs/presented-credential"},
             "requestNonce": {"type": "string", "pattern": REQUEST_NONCE_PATTERN},
             "id": {"type": "string", "format": "uri", "maxLength": 512},
             "type": {"const": "Evidence"},
@@ -105,6 +112,17 @@ pub fn evidence_schema() -> Value {
             }
         },
         "$defs": {
+            "presented-credential": {
+                "type": "object", "additionalProperties": false,
+                "required": ["trustEntry", "issuer", "type", "issuedAt", "subjectLink"],
+                "properties": {
+                    "trustEntry": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"},
+                    "issuer": {"type": "string", "format": "uri", "maxLength": 512},
+                    "type": {"type": "string", "minLength": 1, "maxLength": 512},
+                    "issuedAt": {"type": "string", "format": "date-time"},
+                    "subjectLink": {"enum": ["possession", "attribute-match"]}
+                }
+            },
             "subject-binding": {
                 "type": "object", "additionalProperties": false,
                 "required": ["role", "binding"],
@@ -178,6 +196,7 @@ mod tests {
             "schema": "registry.assertion-evidence/v1",
             "assuranceProfile": "evidence-grade",
             "subjectBinding": "audience-scoped",
+            "channel": "source",
             "requestNonce": "A".repeat(43),
             "id": "urn:evidence:assertion:v1_2f0a",
             "type": "Evidence",
@@ -240,6 +259,96 @@ mod tests {
                 "removing {absent} must not be accepted"
             );
         }
+    }
+
+    fn holder_presented_payload() -> Value {
+        let mut value = payload();
+        let members = value.as_object_mut().expect("object");
+        members.insert("channel".to_string(), json!("holder-presented"));
+        members.insert(
+            "presentedCredential".to_string(),
+            json!({
+                "trustEntry": "national-id",
+                "issuer": "https://issuer.example",
+                "type": "https://credentials.example/identity",
+                "issuedAt": "2026-08-01T00:00:00Z",
+                "subjectLink": "attribute-match"
+            }),
+        );
+        value
+    }
+
+    #[test]
+    fn the_payload_contract_requires_a_declared_channel() {
+        let mut absent = payload();
+        absent.as_object_mut().expect("object").remove("channel");
+        assert!(!evidence_contract_accepts(&absent).expect("contract compiles"));
+
+        for unknown in ["holder_presented", "wallet", ""] {
+            let mut value = payload();
+            value["channel"] = json!(unknown);
+            assert!(
+                !evidence_contract_accepts(&value).expect("contract compiles"),
+                "{unknown:?} is outside the closed vocabulary"
+            );
+        }
+    }
+
+    #[test]
+    fn the_payload_contract_ties_the_presented_credential_to_its_channel() {
+        assert!(evidence_contract_accepts(&holder_presented_payload()).expect("contract compiles"));
+
+        let mut missing = holder_presented_payload();
+        missing
+            .as_object_mut()
+            .expect("object")
+            .remove("presentedCredential");
+        assert!(!evidence_contract_accepts(&missing).expect("contract compiles"));
+
+        let mut on_source = holder_presented_payload();
+        on_source["channel"] = json!("source");
+        assert!(!evidence_contract_accepts(&on_source).expect("contract compiles"));
+    }
+
+    #[test]
+    fn the_payload_contract_closes_the_presented_credential() {
+        for (member, replacement) in [
+            ("trustEntry", Some(json!("Not A Local Id"))),
+            ("issuer", Some(json!("not a uri"))),
+            (
+                "issuer",
+                Some(json!(format!("https://{}.example", "a".repeat(512)))),
+            ),
+            ("type", Some(json!(""))),
+            ("type", Some(json!("t".repeat(513)))),
+            ("issuedAt", Some(json!("yesterday"))),
+            ("subjectLink", Some(json!("fuzzy-match"))),
+            ("subjectLink", None),
+            ("trustEntry", None),
+            ("issuer", None),
+            ("type", None),
+            ("issuedAt", None),
+        ] {
+            let mut value = holder_presented_payload();
+            let credential = value["presentedCredential"]
+                .as_object_mut()
+                .expect("object");
+            match replacement {
+                Some(replacement) => {
+                    credential.insert(member.to_string(), replacement);
+                }
+                None => {
+                    credential.remove(member);
+                }
+            }
+            assert!(
+                !evidence_contract_accepts(&value).expect("contract compiles"),
+                "{member} must be refused"
+            );
+        }
+        let mut extra = holder_presented_payload();
+        extra["presentedCredential"]["claims"] = json!({"name": "x"});
+        assert!(!evidence_contract_accepts(&extra).expect("contract compiles"));
     }
 
     #[test]

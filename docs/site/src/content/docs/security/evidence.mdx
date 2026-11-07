@@ -82,6 +82,20 @@ trace identifier but never the internal audit operation identifier, and
     missing_principal_never_falls_back_to_client_id_or_azp and
     disclosure_audit_failure_prevents_signed_response_release. */}
 
+A caller cannot mistake a presentation for a source read. Every assertion carries a signed
+`channel`, and nothing a source script emits can set it. A `holder-presented` assertion exists only
+when Evidence itself verified the presented credential against the pinned issuer allow-list, never
+against a key the presentation supplies, and holder binding is always required. A relying party's
+channel policy decides whether to accept one; the default accepts `source` only. Base Registry Engine (BReg)
+refuses a correctly signed `holder-presented` assertion for a governed action with `action.evidence_failed`,
+and no configuration key changes that.
+
+{/* Evidence: crates/registry-evidence/src/kernel.rs, AssertionChannel;
+    crates/registry-evidence/src/wallet_presentation.rs, WalletPresentationVerifier;
+    crates/registry-evidence-client/src/prepare.rs, default_accepted_channels;
+    crates/registry-breg/tests/postgres_action_evidence.rs, holder-presented;
+    crates/registry-breg/src/problem.rs, ActionEvidenceFailed. */}
+
 ## How the guarantees are held
 
 The [invariant matrix](https://github.com/registrystack/registry-stack/blob/main/products/evidence/contracts/security-invariant-matrix.yaml)

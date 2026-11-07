@@ -59,8 +59,11 @@
 //!
 //! # Algorithm: XChaCha20-Poly1305
 //!
-//! The AEAD is `chacha20poly1305`'s `XChaCha20Poly1305`, chosen over
-//! `aws-lc-rs` AES-256-GCM, both of which the workspace already carries:
+//! The AEAD is XChaCha20-Poly1305, sealed and opened through
+//! `registry_platform_crypto::xchacha_seal` (the nonce, ciphertext and tag
+//! layout is that primitive's; the version byte, key derivation and
+//! associated data stay here), chosen over `aws-lc-rs` AES-256-GCM, both of
+//! which the workspace already carries:
 //!
 //! - Nonce safety under random nonces. Cursors are minted by every
 //!   facade instance concurrently under one long-lived key with no shared
@@ -114,6 +117,7 @@ use chacha20poly1305::{KeyInit, XChaCha20Poly1305, XNonce};
 use hmac::{Hmac, Mac};
 use registry_adapter_core::ErrorClass;
 use registry_platform_canonical_json::canonicalize_json;
+use registry_platform_crypto::xchacha_seal;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
@@ -167,7 +171,7 @@ type HmacSha256 = Hmac<Sha256>;
 /// derived key is wiped when the value drops.
 #[derive(Zeroize, ZeroizeOnDrop)]
 pub struct CursorKey {
-    aead: [u8; CURSOR_KEY_BYTES],
+    aead: Zeroizing<[u8; CURSOR_KEY_BYTES]>,
 }
 
 impl CursorKey {
@@ -188,12 +192,8 @@ impl CursorKey {
         mac.update(AEAD_KEY_INFO);
         mac.update(&[1]);
         Ok(Self {
-            aead: mac.finalize().into_bytes().into(),
+            aead: Zeroizing::new(mac.finalize().into_bytes().into()),
         })
-    }
-
-    fn cipher(&self) -> Option<XChaCha20Poly1305> {
-        XChaCha20Poly1305::new_from_slice(&self.aead).ok()
     }
 }
 
@@ -206,7 +206,8 @@ impl fmt::Debug for CursorKey {
 // HKDF-Expand from an already uniform cursor key, with separate purpose
 // labels for stable bounded values, encryption and nonce derivation.
 fn bound_value_key(key: &CursorKey, purpose: &[u8]) -> Zeroizing<[u8; 32]> {
-    let mut mac = HmacSha256::new_from_slice(&key.aead).expect("HMAC accepts a 32-byte key");
+    let mut mac =
+        HmacSha256::new_from_slice(key.aead.as_slice()).expect("HMAC accepts a 32-byte key");
     mac.update(b"registry-adapter/bound-value/v1/");
     mac.update(purpose);
     mac.update(&[1]);
@@ -596,9 +597,12 @@ impl ContinuationCodec {
         binding: &CursorBinding<'_>,
         now: SystemTime,
     ) -> Result<Option<String>, SealError> {
-        let mut nonce = [0_u8; NONCE_BYTES];
-        getrandom::fill(&mut nonce).map_err(|_| SealError::Randomness)?;
-        self.seal_with_nonce(next, binding, now, nonce)
+        self.seal_envelope(next, binding, now, |key, aad, plaintext| {
+            xchacha_seal::seal(key, aad, plaintext).map_err(|error| match error {
+                xchacha_seal::XChaChaSealError::Randomness => SealError::Randomness,
+                _ => SealError::Encryption,
+            })
+        })
     }
 
     /// Seal with a deterministic nonce that only offline fixture replay can
@@ -610,15 +614,39 @@ impl ContinuationCodec {
         binding: &CursorBinding<'_>,
         now: SystemTime,
     ) -> Result<Option<String>, SealError> {
-        self.seal_with_nonce(next, binding, now, nonce.into_bytes())
+        let nonce = nonce.into_bytes();
+        self.seal_envelope(next, binding, now, |key, aad, plaintext| {
+            let cipher = XChaCha20Poly1305::new_from_slice(key.as_slice())
+                .map_err(|_| SealError::Encryption)?;
+            let ciphertext = cipher
+                .encrypt(
+                    &XNonce::from(nonce),
+                    Payload {
+                        msg: plaintext,
+                        aad,
+                    },
+                )
+                .map_err(|_| SealError::Encryption)?;
+            let mut sealed = Vec::with_capacity(NONCE_BYTES + ciphertext.len());
+            sealed.extend_from_slice(&nonce);
+            sealed.extend_from_slice(&ciphertext);
+            Ok(sealed)
+        })
     }
 
-    fn seal_with_nonce(
+    /// Frame the plaintext, encrypt it with `encrypt` (key, associated data,
+    /// plaintext in; `nonce || ciphertext || tag` out), and encode the
+    /// version-1 cursor.
+    fn seal_envelope(
         &self,
         next: Option<&Value>,
         binding: &CursorBinding<'_>,
         now: SystemTime,
-        nonce: [u8; NONCE_BYTES],
+        encrypt: impl FnOnce(
+            &Zeroizing<[u8; CURSOR_KEY_BYTES]>,
+            &[u8],
+            &[u8],
+        ) -> Result<Vec<u8>, SealError>,
     ) -> Result<Option<String>, SealError> {
         let Some(value) = next.filter(|value| !value.is_null()) else {
             return Ok(None);
@@ -633,22 +661,10 @@ impl ContinuationCodec {
         plaintext.extend_from_slice(&issued_at.to_be_bytes());
         plaintext.extend_from_slice(&serialized);
 
-        let cipher = self.current.cipher().ok_or(SealError::Encryption)?;
-        let aad = binding.associated_data();
-        let ciphertext = cipher
-            .encrypt(
-                &XNonce::from(nonce),
-                Payload {
-                    msg: plaintext.as_slice(),
-                    aad: &aad,
-                },
-            )
-            .map_err(|_| SealError::Encryption)?;
-
-        let mut envelope = Vec::with_capacity(HEADER_BYTES + ciphertext.len());
+        let sealed = encrypt(&self.current.aead, &binding.associated_data(), &plaintext)?;
+        let mut envelope = Vec::with_capacity(1 + sealed.len());
         envelope.push(WIRE_VERSION);
-        envelope.extend_from_slice(&nonce);
-        envelope.extend_from_slice(&ciphertext);
+        envelope.extend_from_slice(&sealed);
         Ok(Some(URL_SAFE_NO_PAD.encode(envelope)))
     }
 
@@ -681,11 +697,9 @@ impl ContinuationCodec {
         if envelope[0] != WIRE_VERSION {
             return Err(CursorRefusal::UnsupportedVersion);
         }
-        let (nonce, ciphertext) = envelope[1..].split_at(NONCE_BYTES);
-        let nonce: [u8; NONCE_BYTES] = nonce.try_into().map_err(|_| CursorRefusal::Malformed)?;
         let aad = binding.associated_data();
         let plaintext = self
-            .decrypt(&nonce, ciphertext, &aad)
+            .decrypt(&envelope[1..], &aad)
             .ok_or(CursorRefusal::Unauthenticated)?;
 
         let (issued_at, value) = plaintext
@@ -700,27 +714,12 @@ impl ContinuationCodec {
         serde_json::from_slice(value).map_err(|_| CursorRefusal::Malformed)
     }
 
-    /// Decrypt under the current key, then the previous one.
-    fn decrypt(
-        &self,
-        nonce: &[u8; NONCE_BYTES],
-        ciphertext: &[u8],
-        aad: &[u8],
-    ) -> Option<Zeroizing<Vec<u8>>> {
+    /// Open `sealed` (`nonce || ciphertext || tag`) under the current key,
+    /// then the previous one.
+    fn decrypt(&self, sealed: &[u8], aad: &[u8]) -> Option<Zeroizing<Vec<u8>>> {
         std::iter::once(&self.current)
             .chain(self.previous.as_ref())
-            .find_map(|key| {
-                key.cipher()?
-                    .decrypt(
-                        &XNonce::from(*nonce),
-                        Payload {
-                            msg: ciphertext,
-                            aad,
-                        },
-                    )
-                    .ok()
-                    .map(Zeroizing::new)
-            })
+            .find_map(|key| xchacha_seal::open(&key.aead, aad, sealed).ok())
     }
 }
 
@@ -793,5 +792,160 @@ mod bound_value_tests {
         assert_ne!(next, token);
         assert!(old.open_bound_value(b"context", &next).is_err());
         assert!(codec(9, None).open_bound_value(b"context", &token).is_err());
+    }
+}
+
+#[cfg(test)]
+mod wire_format_tests {
+    use super::*;
+
+    const ISSUED_AT: u64 = 1_700_000_000;
+
+    fn codec(secret: u8, previous: Option<u8>) -> ContinuationCodec {
+        let key = |byte| CursorKey::new(Zeroizing::new(vec![byte; 32])).unwrap();
+        ContinuationCodec::new(key(secret), previous.map(key), CursorTtl::default())
+    }
+
+    fn at(seconds: u64) -> SystemTime {
+        UNIX_EPOCH + std::time::Duration::from_secs(seconds)
+    }
+
+    fn value() -> Value {
+        json!({"page": 2, "after": "record-0042"})
+    }
+
+    fn with_binding<R>(subject: &str, run: impl FnOnce(&CursorBinding<'_>) -> R) -> R {
+        let filters = filter_digest(&json!({"name": "Ada"}), 25).unwrap();
+        run(&CursorBinding {
+            operation: "searchPeople",
+            binding_id: "people-binding",
+            issuer: "https://issuer.example",
+            subject,
+            client: "client-a",
+            deployment: "deployment-digest",
+            filters,
+        })
+    }
+
+    // Sealed by the codec at version 1 with the fixed nonces below, under the
+    // key `[7; 32]`, the binding of `with_binding("subject-1", ..)`, and
+    // `value()` issued at `ISSUED_AT`. They pin the wire format.
+    const GOLDEN_NONCE_11: &str = "AREREREREREREREREREREREREREREREREWX4yDtD_BO6ndkzALOJsJ8C3cQtLDF92aeHP9UkYle9yM230adlI6a6Z43uzxdhmXbnOZpLxLWK";
+    const GOLDEN_NONCE_A5: &str = "AaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpb1d4n1QcHXoMbL9ZUhBgGffUHjVJAt9ZHPZBU65lBZNTHnG3UZ_adETh4sL2j6Bxs_QC46mVOmO";
+
+    #[test]
+    fn golden_cursors_open_to_their_value() {
+        for (token, nonce) in [(GOLDEN_NONCE_11, 0x11_u8), (GOLDEN_NONCE_A5, 0xA5)] {
+            let wire = URL_SAFE_NO_PAD.decode(token).unwrap();
+            assert_eq!(wire[0], WIRE_VERSION);
+            assert_eq!(wire[1..=NONCE_BYTES], [nonce; NONCE_BYTES]);
+            let opened = with_binding("subject-1", |binding| {
+                codec(7, None).open(token, binding, at(ISSUED_AT + 1))
+            });
+            assert_eq!(opened.unwrap(), value());
+        }
+    }
+
+    #[test]
+    fn golden_cursors_open_under_the_previous_key_only_after_rotation() {
+        let rotated = with_binding("subject-1", |binding| {
+            codec(8, Some(7)).open(GOLDEN_NONCE_11, binding, at(ISSUED_AT + 1))
+        });
+        assert_eq!(rotated.unwrap(), value());
+        let unrelated = with_binding("subject-1", |binding| {
+            codec(9, None).open(GOLDEN_NONCE_11, binding, at(ISSUED_AT + 1))
+        });
+        assert_eq!(unrelated, Err(CursorRefusal::Unauthenticated));
+    }
+
+    #[test]
+    fn golden_cursors_refuse_other_bindings_expiry_and_tampering() {
+        let other_subject = with_binding("subject-2", |binding| {
+            codec(7, None).open(GOLDEN_NONCE_11, binding, at(ISSUED_AT + 1))
+        });
+        assert_eq!(other_subject, Err(CursorRefusal::Unauthenticated));
+
+        let expired = with_binding("subject-1", |binding| {
+            codec(7, None).open(
+                GOLDEN_NONCE_11,
+                binding,
+                at(ISSUED_AT + CURSOR_TTL_DEFAULT_SECONDS),
+            )
+        });
+        assert_eq!(expired, Err(CursorRefusal::Expired));
+
+        let mut wire = URL_SAFE_NO_PAD.decode(GOLDEN_NONCE_11).unwrap();
+        let last = wire.len() - 1;
+        wire[last] ^= 1;
+        let tampered = with_binding("subject-1", |binding| {
+            codec(7, None).open(&URL_SAFE_NO_PAD.encode(&wire), binding, at(ISSUED_AT + 1))
+        });
+        assert_eq!(tampered, Err(CursorRefusal::Unauthenticated));
+
+        let mut wire = URL_SAFE_NO_PAD.decode(GOLDEN_NONCE_11).unwrap();
+        wire[0] = 2;
+        let unsupported = with_binding("subject-1", |binding| {
+            codec(7, None).open(&URL_SAFE_NO_PAD.encode(&wire), binding, at(ISSUED_AT + 1))
+        });
+        assert_eq!(unsupported, Err(CursorRefusal::UnsupportedVersion));
+    }
+
+    #[test]
+    fn replay_sealing_reproduces_the_golden_cursors() {
+        let sealed = |nonce: u8| {
+            with_binding("subject-1", |binding| {
+                codec(7, None)
+                    .seal_replay(
+                        ReplayCursorNonce([nonce; 24]),
+                        Some(&value()),
+                        binding,
+                        at(ISSUED_AT),
+                    )
+                    .unwrap()
+                    .unwrap()
+            })
+        };
+        assert_eq!(sealed(0x11), GOLDEN_NONCE_11);
+        assert_eq!(sealed(0xA5), GOLDEN_NONCE_A5);
+    }
+
+    #[test]
+    fn random_seals_round_trip_with_the_documented_layout() {
+        let codec = codec(7, None);
+        let (first, second) = with_binding("subject-1", |binding| {
+            let seal = || {
+                codec
+                    .seal(Some(&value()), binding, at(ISSUED_AT))
+                    .unwrap()
+                    .unwrap()
+            };
+            let (first, second) = (seal(), seal());
+            for token in [&first, &second] {
+                assert_eq!(
+                    codec.open(token, binding, at(ISSUED_AT + 1)).unwrap(),
+                    value()
+                );
+            }
+            (first, second)
+        });
+        assert_ne!(first, second, "each seal draws a fresh nonce");
+        let wire = URL_SAFE_NO_PAD.decode(&first).unwrap();
+        let plaintext_bytes = ISSUED_AT_BYTES + serde_json::to_vec(&value()).unwrap().len();
+        assert_eq!(wire[0], WIRE_VERSION);
+        assert_eq!(wire.len(), 1 + NONCE_BYTES + plaintext_bytes + TAG_BYTES);
+    }
+
+    #[test]
+    fn a_last_page_seals_to_no_cursor() {
+        let sealed = with_binding("subject-1", |binding| {
+            let codec = codec(7, None);
+            (
+                codec.seal(None, binding, at(ISSUED_AT)).unwrap(),
+                codec
+                    .seal(Some(&Value::Null), binding, at(ISSUED_AT))
+                    .unwrap(),
+            )
+        });
+        assert_eq!(sealed, (None, None));
     }
 }

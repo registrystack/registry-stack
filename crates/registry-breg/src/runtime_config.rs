@@ -26,8 +26,8 @@ use registry_platform_httputil::destination::{
     MAX_DESTINATION_ORIGIN_URL_BYTES, MAX_DESTINATION_PRIVATE_CIDRS, MAX_DESTINATION_TARGET_BYTES,
 };
 use registry_platform_oidc::{
-    access_token_typ_set, fetch_discovery_for_issuer, ClaimNames, IssuerNetworkPolicy, JwksFetcher,
-    JwksFetcherConfig, OidcDiscoveryConfig, TokenVerifierConfig,
+    access_token_typ_set, fetch_discovery_for_issuer, AccessTokenAlgorithm, ClaimNames,
+    IssuerNetworkPolicy, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, TokenVerifierConfig,
 };
 use registry_platform_yaml::{
     lookalike_local_id_pairs, Diagnostic, Report, RetiredApiVersion, Severity, Source, Url,
@@ -1964,7 +1964,7 @@ impl fmt::Debug for AuthenticationConfig {
 pub struct OidcVerifierConfig {
     issuer: String,
     audience: String,
-    allowed_algorithm: OidcAlgorithm,
+    allowed_algorithm: AccessTokenAlgorithm,
     access_token_type: String,
     scope_claim: String,
     scope_separator: char,
@@ -2092,7 +2092,7 @@ impl OidcVerifierConfig {
         TokenVerifierConfig::access_token_profile(
             self.issuer.clone(),
             vec![self.audience.clone()],
-            vec![self.allowed_algorithm.as_jsonwebtoken()],
+            vec![self.allowed_algorithm.to_jsonwebtoken()],
             access_token_typ_set(&self.access_token_type),
         )
         .with_scope_claim(self.scope_claim.clone())
@@ -2178,39 +2178,13 @@ impl fmt::Debug for OidcVerifierConfig {
     }
 }
 
-#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
-pub enum OidcAlgorithm {
-    EdDSA,
-    ES256,
-    ES384,
-    RS256,
-    RS384,
-}
-
-impl OidcAlgorithm {
-    fn as_jsonwebtoken(self) -> jsonwebtoken::Algorithm {
-        match self {
-            Self::EdDSA => jsonwebtoken::Algorithm::EdDSA,
-            Self::ES256 => jsonwebtoken::Algorithm::ES256,
-            Self::ES384 => jsonwebtoken::Algorithm::ES384,
-            Self::RS256 => jsonwebtoken::Algorithm::RS256,
-            Self::RS384 => jsonwebtoken::Algorithm::RS384,
-        }
-    }
-
-    fn as_signing_algorithm(self) -> SigningAlgorithm {
-        match self {
-            Self::EdDSA => SigningAlgorithm::EdDsa,
-            Self::ES256 => SigningAlgorithm::Es256,
-            Self::ES384 => SigningAlgorithm::Es384,
-            Self::RS256 => SigningAlgorithm::Rs256,
-            Self::RS384 => SigningAlgorithm::Rs384,
-        }
-    }
-
-    fn as_jwa_name(self) -> &'static str {
-        self.as_signing_algorithm().jwa_name()
+fn signing_algorithm_of(algorithm: AccessTokenAlgorithm) -> SigningAlgorithm {
+    match algorithm {
+        AccessTokenAlgorithm::EdDSA => SigningAlgorithm::EdDsa,
+        AccessTokenAlgorithm::ES256 => SigningAlgorithm::Es256,
+        AccessTokenAlgorithm::ES384 => SigningAlgorithm::Es384,
+        AccessTokenAlgorithm::RS256 => SigningAlgorithm::Rs256,
+        AccessTokenAlgorithm::RS384 => SigningAlgorithm::Rs384,
     }
 }
 
@@ -2255,7 +2229,7 @@ enum OidcJwksSourceKind {
 
 fn validate_static_jwks(
     bytes: &[u8],
-    allowed_algorithm: OidcAlgorithm,
+    allowed_algorithm: AccessTokenAlgorithm,
     denied_kids: &[String],
 ) -> Result<JwkSet> {
     let value = parse_json_strict(bytes).map_err(|_| RuntimeConfigError::InvalidOidc)?;
@@ -2279,7 +2253,7 @@ fn validate_static_jwks(
 
 fn validate_static_jwk(
     value: &Value,
-    allowed_algorithm: OidcAlgorithm,
+    allowed_algorithm: AccessTokenAlgorithm,
     denied_kids: &[String],
     kids: &mut HashSet<String>,
 ) -> Result<()> {
@@ -2295,7 +2269,7 @@ fn validate_static_jwk(
     if denied_kids.iter().any(|denied| denied == kid) || !kids.insert(kid.to_owned()) {
         return Err(RuntimeConfigError::InvalidOidc);
     }
-    if object.get("alg").and_then(Value::as_str) != Some(allowed_algorithm.as_jwa_name()) {
+    if object.get("alg").and_then(Value::as_str) != Some(allowed_algorithm.jwa_name()) {
         return Err(RuntimeConfigError::InvalidOidc);
     }
     let public_jwk = PublicJwk::parse(
@@ -2308,7 +2282,7 @@ fn validate_static_jwk(
     if public_jwk
         .algorithm()
         .map_err(|_| RuntimeConfigError::InvalidOidc)?
-        != allowed_algorithm.as_signing_algorithm()
+        != signing_algorithm_of(allowed_algorithm)
     {
         return Err(RuntimeConfigError::InvalidOidc);
     }
@@ -2350,10 +2324,10 @@ fn validate_static_jwk_key_ops(object: &Map<String, Value>) -> Result<()> {
 
 fn validate_static_jwk_shape(
     object: &Map<String, Value>,
-    allowed_algorithm: OidcAlgorithm,
+    allowed_algorithm: AccessTokenAlgorithm,
 ) -> Result<()> {
     match allowed_algorithm {
-        OidcAlgorithm::EdDSA => {
+        AccessTokenAlgorithm::EdDSA => {
             if object.get("kty").and_then(Value::as_str) != Some("OKP")
                 || object.get("crv").and_then(Value::as_str) != Some("Ed25519")
                 || object.contains_key("y")
@@ -2364,10 +2338,10 @@ fn validate_static_jwk_shape(
             }
             decode_exact_jwk_member(object, "x", 32)?;
         }
-        OidcAlgorithm::ES256 | OidcAlgorithm::ES384 => {
+        AccessTokenAlgorithm::ES256 | AccessTokenAlgorithm::ES384 => {
             let (curve, coordinate_len) = match allowed_algorithm {
-                OidcAlgorithm::ES256 => ("P-256", 32),
-                OidcAlgorithm::ES384 => ("P-384", 48),
+                AccessTokenAlgorithm::ES256 => ("P-256", 32),
+                AccessTokenAlgorithm::ES384 => ("P-384", 48),
                 _ => unreachable!("only EC algorithms enter this branch"),
             };
             if object.get("kty").and_then(Value::as_str) != Some("EC")
@@ -2380,7 +2354,7 @@ fn validate_static_jwk_shape(
             decode_exact_jwk_member(object, "x", coordinate_len)?;
             decode_exact_jwk_member(object, "y", coordinate_len)?;
         }
-        OidcAlgorithm::RS256 | OidcAlgorithm::RS384 => {
+        AccessTokenAlgorithm::RS256 | AccessTokenAlgorithm::RS384 => {
             if object.get("kty").and_then(Value::as_str) != Some("RSA")
                 || object.contains_key("crv")
                 || object.contains_key("x")
@@ -3127,7 +3101,7 @@ struct RawOidcVerifierConfig {
     #[serde(rename(deserialize = "registry-platform-yaml/shared-block/oidc-issuer"))]
     #[cfg_attr(feature = "schema", schemars(flatten))]
     provider: OidcIssuerConfig,
-    allowed_algorithm: OidcAlgorithm,
+    allowed_algorithm: AccessTokenAlgorithm,
     /// The one admitted access-token `typ` semantics. Configuring the
     /// RFC 9068 access-token media type as `at+jwt` or
     /// `application/at+jwt` admits both spellings of that one type; any

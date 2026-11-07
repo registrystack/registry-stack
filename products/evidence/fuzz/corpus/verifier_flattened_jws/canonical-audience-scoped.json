@@ -2,6 +2,7 @@
   "schema": "registry.assertion-evidence/v1",
   "assuranceProfile": "evidence-grade",
   "subjectBinding": "audience-scoped",
+  "channel": "source",
   "requestNonce": "r1N1mq48U3PpZ5keuZEgmA5KMC2KDrF1hT6640koy6I",
   "id": "urn:ulid:01K1EXAMPLE0000000000000000",
   "type": "Evidence",

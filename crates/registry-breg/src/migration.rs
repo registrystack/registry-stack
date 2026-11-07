@@ -162,6 +162,17 @@ pub enum MigrationError {
         "retain-plaintext-history requires clearing retained Proposal snapshots before encrypting field `{field_id}` on entity `{entity_id}`"
     )]
     FieldEncryptionRetainedProposalSnapshots { entity_id: String, field_id: String },
+    /// Refused before any write: the re-index would stop partway with mixed
+    /// digests. Authored identifiers and row counts only.
+    #[error(
+        "blind-index re-index step `{step_id}` on entity `{entity_id}` would walk {row_count} rows, more than its reviewed maxTotalRows of {maximum_total_rows}"
+    )]
+    BlindIndexReindexRowLimit {
+        entity_id: String,
+        step_id: String,
+        row_count: u64,
+        maximum_total_rows: u64,
+    },
     #[error("active Proposals must retain inspection and cancellation in the candidate package")]
     ActiveProposalRecoveryUnavailable,
     #[error("destructive backup evidence is invalid")]
@@ -824,8 +835,8 @@ pub struct ApplyVerifiedPackageRequest<'a> {
 /// borrows the already-configured provider and secret resolver; it opens no
 /// connection and carries no authority beyond the apply it is bound to.
 pub struct AppliedFieldEncryptionKeySource<'a> {
-    provider: &'a crate::field_encryption::FieldEncryptionProvider,
-    secrets: &'a registry_platform_config::SecretResolver,
+    pub(crate) provider: &'a crate::field_encryption::FieldEncryptionProvider,
+    pub(crate) secrets: &'a registry_platform_config::SecretResolver,
 }
 
 impl<'a> AppliedFieldEncryptionKeySource<'a> {
@@ -2193,6 +2204,17 @@ async fn fail_with_error_and_release<T>(
         } => MigrationError::FieldEncryptionRetainedProposalSnapshots {
             entity_id,
             field_id,
+        },
+        crate::postgres::PostgresKernelError::BlindIndexReindexRowLimit {
+            entity_id,
+            step_id,
+            row_count,
+            maximum_total_rows,
+        } => MigrationError::BlindIndexReindexRowLimit {
+            entity_id,
+            step_id,
+            row_count,
+            maximum_total_rows,
         },
         crate::postgres::PostgresKernelError::Statement(failure) => {
             MigrationError::StatementFailed(failure)

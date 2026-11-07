@@ -23,6 +23,11 @@ struct ComposedRuntime {
     protocol: crate::source_evidence::EvidenceSourceConfig,
 }
 
+/// Fault mode under which the upstream signs an otherwise genuine response
+/// only after a whole-second boundary has passed since the downstream request
+/// arrived, so its `issuedAt` is later than the downstream acquisition began.
+const SIGN_IN_A_LATER_SECOND: usize = 30;
+
 struct ReplayHooks;
 
 impl registry_adapter_engine::evidence::EvidenceHostHooks for ReplayHooks {
@@ -146,6 +151,9 @@ async fn composed_runtime_with_route(
                     .lock()
                     .await
                     .push(serde_json::from_slice(&bytes).unwrap());
+                if fault.load(Ordering::SeqCst) == SIGN_IN_A_LATER_SECOND {
+                    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+                }
                 let response = next
                     .run(Request::from_parts(parts, Body::from(bytes)))
                     .await;
@@ -162,7 +170,10 @@ async fn composed_runtime_with_route(
                     registry_platform_httpsec::response_trace_id(response.headers())
                         .expect("the upstream trace context has the canonical response shape");
                 }
-                let mode = fault.load(Ordering::SeqCst);
+                let mode = match fault.load(Ordering::SeqCst) {
+                    SIGN_IN_A_LATER_SECOND => 0,
+                    mode => mode,
+                };
                 if !response.status().is_success() {
                     return response;
                 }
@@ -663,7 +674,7 @@ async fn signed_evidence_source_composes_two_authorized_services_with_fresh_valu
             .unwrap();
             let (projected, _) = fixture
                 .protocol
-                .verified_values(&retained, &fixture.responses.lock().await[0])
+                .verified_values(&retained, &fixture.responses.lock().await[0], Utc::now())
                 .expect("the retained verifier reproduces the host-protocol projection");
             let projected_values_match = projected == json!({"values": {"region": "REGION-NORTH"}});
             panic!(
@@ -744,6 +755,36 @@ async fn signed_evidence_source_composes_two_authorized_services_with_fresh_valu
             assert!(!audit.contains(request["requestNonce"].as_str().unwrap()));
         }
     }
+}
+
+/// An upstream assertion is necessarily issued after the downstream request
+/// was sent, so it must not be judged "issued in the future" against the
+/// instant the downstream acquisition began. With no clock skew allowed, the
+/// upstream here signs in a later whole second than that instant.
+#[tokio::test]
+async fn signed_evidence_source_accepts_an_upstream_issued_after_the_acquisition_began() {
+    let fixture = composed_runtime().await;
+    assert_eq!(fixture.protocol.clock_skew_seconds, 0);
+    fixture
+        .fault
+        .store(SIGN_IN_A_LATER_SECOND, Ordering::SeqCst);
+    mount_residence_source(&fixture.upstream.server).await;
+
+    let response = TestServer::new(build_app(Arc::clone(&fixture.runtime)))
+        .post("/v1/evidence")
+        .add_header("authorization", format!("Bearer {}", access_token(None)))
+        .add_header("accept", EVIDENCE_JWS_MEDIA_TYPE)
+        .json(&residence_request())
+        .await;
+
+    assert_eq!(fixture.requests.lock().await.len(), 1);
+    assert_eq!(
+        response.status_code(),
+        StatusCode::OK,
+        "a genuine upstream assertion issued during the acquisition verifies"
+    );
+    let audit = fs::read_to_string(&fixture.downstream.audit_path).unwrap();
+    assert_eq!(released_evidence_ids(&audit).len(), 1);
 }
 
 #[tokio::test]
@@ -1525,7 +1566,43 @@ async fn signed_evidence_source_pins_revocations_and_refuses_invalid_preparation
         .await;
     response.assert_status_ok();
     assert!(matches!(
-        revoked.verified_values(&verification, response.as_bytes()),
+        revoked.verified_values(&verification, response.as_bytes(), Utc::now()),
+        Err(crate::source_evidence::SignedSourceError::Verification)
+    ));
+}
+
+#[tokio::test]
+async fn signed_evidence_source_judges_freshness_at_the_injected_instant() {
+    let fixture = composed_runtime().await;
+    let subjects = json!({"subjects": residence_request().subjects});
+    let (bytes, verification) = fixture.protocol.prepare(Some(&subjects), 65536).unwrap();
+    mount_residence_source(&fixture.upstream.server).await;
+    let response = TestServer::new(build_app(Arc::clone(&fixture.upstream.runtime)))
+        .post("/v1/evidence")
+        .add_header(
+            "authorization",
+            format!(
+                "Bearer {}",
+                access_token_for(
+                    "downstream-source-service",
+                    Some(json!({"evidence_audience": UPSTREAM_AUDIENCE, "client_id": BASIC_USER}))
+                )
+            ),
+        )
+        .add_header("accept", EVIDENCE_JWS_MEDIA_TYPE)
+        .json(&serde_json::from_slice::<Value>(&bytes).unwrap())
+        .await;
+    response.assert_status_ok();
+    fixture
+        .protocol
+        .verified_values(&verification, response.as_bytes(), Utc::now())
+        .expect("the response verifies at the current instant");
+    assert!(matches!(
+        fixture.protocol.verified_values(
+            &verification,
+            response.as_bytes(),
+            Utc::now() + chrono::Duration::days(365)
+        ),
         Err(crate::source_evidence::SignedSourceError::Verification)
     ));
 }

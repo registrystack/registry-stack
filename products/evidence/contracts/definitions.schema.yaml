@@ -84,6 +84,43 @@ $defs:
         maxItems: 16
         uniqueItems: true
         items: {$ref: '#/$defs/concept'}
+      channel:
+        description: >-
+          The acquisition channel of this entry's own subjects. Present only
+          when the caller is entitled to a holder-presented channel of the
+          definition, as the entry's own channel or as an alternative; absence
+          means the source channel. A caller entitled to the source channel
+          alone receives the entry a source-only definition produces, so the
+          member never reveals that a holder-presented channel exists.
+        enum: [source, holder-presented]
+      alternatives:
+        description: >-
+          The request shapes of the other channels of this definition that the
+          caller is entitled to. Absent when there are none. A channel the
+          caller is not entitled to is never listed.
+        type: array
+        minItems: 1
+        maxItems: 1
+        uniqueItems: true
+        items: {$ref: '#/$defs/alternative'}
+  alternative:
+    type: object
+    additionalProperties: false
+    required: [channel, responseFormats, subjects]
+    properties:
+      channel: {enum: [source, holder-presented]}
+      responseFormats:
+        type: array
+        minItems: 1
+        maxItems: 4
+        uniqueItems: true
+        items: {enum: [signed-jws, unsigned-json, sd-jwt-vc, sd-jwt-vc-batch]}
+      subjects:
+        type: array
+        minItems: 1
+        maxItems: 8
+        uniqueItems: true
+        items: {$ref: '#/$defs/subject'}
   subject:
     type: object
     additionalProperties: false

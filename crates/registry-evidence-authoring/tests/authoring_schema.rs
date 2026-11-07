@@ -1424,3 +1424,234 @@ fn target_signing_block_is_closed_and_complete() {
     )
     .expect_err("an empty signing block states nothing and is refused");
 }
+
+fn with_adult_status_acquisition(acquisition: Value) -> Vec<u8> {
+    let mut document = yaml_as_json(NORMALIZED_PROJECT);
+    document["assertionDefinitions"]["adult-status"]["acquisition"] = acquisition;
+    serde_json::to_vec(&document).expect("the project renders")
+}
+
+fn holder_presented_codes(
+    acquisition: Value,
+    extra_representation: Option<&str>,
+) -> Vec<(String, String)> {
+    holder_presented_findings(acquisition, extra_representation)
+        .into_iter()
+        .map(|(code, path, _)| (code, path))
+        .collect()
+}
+
+fn holder_presented_findings(
+    acquisition: Value,
+    extra_representation: Option<&str>,
+) -> Vec<(String, String, String)> {
+    let mut document: Value =
+        serde_json::from_slice(&with_adult_status_acquisition(acquisition)).unwrap();
+    if let Some(representation) = extra_representation {
+        document["assertionDefinitions"]["adult-status"]["representations"] =
+            serde_json::json!(["signed-jws", representation]);
+    }
+    let bytes = serde_json::to_vec(&document).unwrap();
+    match project::read_project("evidence.json", &bytes) {
+        Ok(_) => Vec::new(),
+        Err(report) => report
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| {
+                (
+                    diagnostic.code.to_string(),
+                    diagnostic.path.to_string(),
+                    diagnostic.message.to_string(),
+                )
+            })
+            .collect(),
+    }
+}
+
+#[test]
+fn a_wallet_only_acquisition_is_accepted() {
+    let acquisition = serde_json::json!({"holderPresented": {
+        "source": "person-record", "selectorProfiles": ["record-by-id"]}});
+    let bytes = with_adult_status_acquisition(acquisition);
+    assert!(schema(PROJECT_SCHEMA_FILE).is_valid(&serde_json::from_slice(&bytes).unwrap()));
+    project::read_project("evidence.json", &bytes)
+        .unwrap_or_else(|report| panic!("{}", report.render_human()));
+}
+
+#[test]
+fn holder_presented_acquisition_reports_the_startup_refusals_at_their_members() {
+    let base = "/assertionDefinitions/adult-status";
+    let block = |source: &str, profiles: Value| serde_json::json!({"holderPresented": {"source": source, "selectorProfiles": profiles}});
+    let cases = [
+        (
+            serde_json::json!({}),
+            None,
+            "evidence.project.acquisition-source",
+            format!("{base}/acquisition"),
+        ),
+        (
+            block("missing-source", serde_json::json!(["record-by-id"])),
+            None,
+            "evidence.project.acquisition-source",
+            format!("{base}/acquisition/holderPresented/source"),
+        ),
+        (
+            block("person-record", serde_json::json!(["no-such-profile"])),
+            None,
+            "evidence.project.acquisition-channel-profile",
+            format!("{base}/acquisition/holderPresented/selectorProfiles/0"),
+        ),
+        (
+            block("person-record", serde_json::json!(["record-by-id"])),
+            Some("sd-jwt-vc"),
+            "evidence.project.acquisition-channel-representation",
+            format!("{base}/representations"),
+        ),
+        (
+            block("person-record", serde_json::json!(["record-by-id"])),
+            Some("unsigned-json"),
+            "evidence.project.acquisition-channel-representation",
+            format!("{base}/representations"),
+        ),
+    ];
+    for (acquisition, extra_representation, code, path) in cases {
+        let found = holder_presented_codes(acquisition, extra_representation);
+        assert!(
+            found.contains(&(code.to_owned(), path.clone())),
+            "expected {code} at {path}, found {found:?}"
+        );
+    }
+    let mut both = block("person-record", serde_json::json!(["record-by-id"]));
+    both["source"] = serde_json::json!("person-record");
+    let found = holder_presented_codes(both, None);
+    assert!(
+        found.contains(&(
+            "evidence.project.acquisition-channel-source".to_owned(),
+            format!("{base}/acquisition/holderPresented/source")
+        )),
+        "{found:?}"
+    );
+}
+
+#[test]
+fn a_holder_presented_definition_refuses_unsigned_json_with_the_signed_only_message() {
+    let acquisition = serde_json::json!({"holderPresented": {
+        "source": "person-record", "selectorProfiles": ["record-by-id"]}});
+    for representation in ["unsigned-json", "sd-jwt-vc", "sd-jwt-vc-batch"] {
+        let findings = holder_presented_findings(acquisition.clone(), Some(representation));
+        assert!(
+            findings.iter().any(|(code, path, message)| code
+                == "evidence.project.acquisition-channel-representation"
+                && path == "/assertionDefinitions/adult-status/representations"
+                && message
+                    == "a definition with holder-presented acquisition must offer only the signed JWS representation (signed-jws)"),
+            "{representation}: {findings:?}"
+        );
+    }
+}
+
+/// The standalone project with a second selector profile, `session-ref`, a
+/// second Source reading `wallet_profile`, and the adult-status definition
+/// allowing both profiles. `person-record` reads `record-by-id`.
+fn two_channel_project(wallet_profile: &str, acquisition: Value) -> Vec<u8> {
+    let mut document = yaml_as_json(NORMALIZED_PROJECT);
+    document["selectorProfiles"]["session-ref"] = serde_json::json!({
+        "maximumAggregateBytes": 64,
+        "fields": {"session-id": {"type": "string", "minimumBytes": 1, "maximumBytes": 64}}
+    });
+    let field = if wallet_profile == "session-ref" {
+        "session-id"
+    } else {
+        "record-id"
+    };
+    document["sources"]["wallet-person"] = serde_json::json!({
+        "pack": {"id": "synthetic-register", "version": "1"},
+        "route": "wallet",
+        "connection": "synthetic-register",
+        "acquisitionPosture": "record-transformed",
+        "inputs": {"recordId": {"selector": {
+            "role": "subject", "profile": wallet_profile, "field": field}}},
+    });
+    let definition = &mut document["assertionDefinitions"]["adult-status"];
+    definition["subjects"][0]["selectors"] = serde_json::json!(["record-by-id", "session-ref"]);
+    definition["acquisition"] = acquisition;
+    serde_json::to_vec(&document).expect("the project renders")
+}
+
+fn project_findings(bytes: &[u8]) -> Vec<(String, String)> {
+    match project::read_project("evidence.json", bytes) {
+        Ok(_) => Vec::new(),
+        Err(report) => report
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| (diagnostic.code.to_string(), diagnostic.path.to_string()))
+            .collect(),
+    }
+}
+
+#[test]
+fn a_source_reading_the_profiles_of_its_own_channel_is_accepted() {
+    let acquisition = serde_json::json!({
+        "source": "person-record",
+        "holderPresented": {"source": "wallet-person", "selectorProfiles": ["session-ref"]}
+    });
+    let found = project_findings(&two_channel_project("session-ref", acquisition));
+    assert_eq!(found, Vec::<(String, String)>::new());
+}
+
+#[test]
+fn a_source_reading_a_profile_of_the_other_channel_is_refused_like_the_runtime() {
+    let base = "/assertionDefinitions/adult-status/acquisition";
+    let code = "evidence.project.acquisition-channel-profile";
+    // The holder-presented Source reads a profile the block does not list, so
+    // that profile selects the source channel.
+    let wallet_reads_a_source_profile = serde_json::json!({
+        "source": "person-record",
+        "holderPresented": {"source": "wallet-person", "selectorProfiles": ["session-ref"]}
+    });
+    let found = project_findings(&two_channel_project(
+        "record-by-id",
+        wallet_reads_a_source_profile,
+    ));
+    assert!(
+        found.contains(&(code.to_owned(), base.to_owned())),
+        "{found:?}"
+    );
+
+    // The source-channel Source reads a profile the block claims.
+    let source_reads_a_claimed_profile = serde_json::json!({
+        "source": "person-record",
+        "holderPresented": {
+            "source": "wallet-person",
+            "selectorProfiles": ["record-by-id", "session-ref"]
+        }
+    });
+    let found = project_findings(&two_channel_project(
+        "session-ref",
+        source_reads_a_claimed_profile,
+    ));
+    assert!(
+        found.contains(&(code.to_owned(), base.to_owned())),
+        "{found:?}"
+    );
+
+    // A wallet-only definition whose Source reads a profile its block lists is
+    // accepted; one whose Source reads an unlisted profile is refused.
+    let wallet_only = |listed: Value| {
+        serde_json::json!({"holderPresented": {
+            "source": "wallet-person", "selectorProfiles": listed}})
+    };
+    let found = project_findings(&two_channel_project(
+        "session-ref",
+        wallet_only(serde_json::json!(["record-by-id", "session-ref"])),
+    ));
+    assert_eq!(found, Vec::<(String, String)>::new());
+    let found = project_findings(&two_channel_project(
+        "record-by-id",
+        wallet_only(serde_json::json!(["session-ref"])),
+    ));
+    assert!(
+        found.contains(&(code.to_owned(), base.to_owned())),
+        "{found:?}"
+    );
+}

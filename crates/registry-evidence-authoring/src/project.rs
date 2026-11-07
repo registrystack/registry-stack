@@ -353,19 +353,50 @@ pub enum BindingMode {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Acquisition {
-    /// One reviewed route owns the complete bounded provider interaction.
+    /// One reviewed route owns the complete bounded provider interaction for
+    /// the selector profiles that `holderPresented` does not claim. Optional
+    /// only when `holderPresented` lists every profile the subject roles allow.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<LocalId>,
+    /// A wallet presentation Source for the selector profiles it lists. A
+    /// request on one of those profiles acquires only through this Source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub holder_presented: Option<HolderPresented>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HolderPresented {
     pub source: LocalId,
+    #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 16)))]
+    pub selector_profiles: UniqueList<LocalId>,
 }
 
 impl Acquisition {
     pub fn derivation_source_ids(&self) -> Vec<&LocalId> {
-        vec![&self.source]
+        self.source_ids()
     }
 
     pub fn source_ids(&self) -> Vec<&LocalId> {
-        vec![&self.source]
+        self.source
+            .iter()
+            .chain(self.holder_presented.iter().map(|block| &block.source))
+            .collect()
+    }
+
+    /// Whether `id` is acquired through for a request on `profile`.
+    pub fn serves(&self, id: &LocalId, profile: &LocalId) -> bool {
+        let claimed = self
+            .holder_presented
+            .as_ref()
+            .is_some_and(|block| block.selector_profiles.iter().any(|p| p == profile));
+        match &self.holder_presented {
+            Some(block) if block.source == *id => claimed,
+            _ => self.source.as_ref() == Some(id) && !claimed,
+        }
     }
 }
 
@@ -1133,12 +1164,95 @@ fn validate_project_without_id_collisions(project: &EvidenceProject) -> Vec<Find
                 }
             }
         }
-        if !project.sources.contains_key(&definition.acquisition.source) {
+        let acquisition_at = at.clone().key("acquisition");
+        if definition.acquisition.source.is_none()
+            && definition.acquisition.holder_presented.is_none()
+        {
             push(
-                at.clone().key("acquisition").key("source"),
+                acquisition_at.clone(),
                 "acquisition-source",
-                "acquisition must name an existing pack Source",
+                "acquisition must name a source or a holderPresented block",
             );
+        }
+        if let Some(source) = &definition.acquisition.source {
+            if !project.sources.contains_key(source) {
+                push(
+                    acquisition_at.clone().key("source"),
+                    "acquisition-source",
+                    "acquisition must name an existing pack Source",
+                );
+            }
+        }
+        if let Some(block) = &definition.acquisition.holder_presented {
+            let block_at = acquisition_at.clone().key("holderPresented");
+            if !project.sources.contains_key(&block.source) {
+                push(
+                    block_at.clone().key("source"),
+                    "acquisition-source",
+                    "acquisition must name an existing pack Source",
+                );
+            }
+            if definition.acquisition.source.as_ref() == Some(&block.source) {
+                push(
+                    block_at.clone().key("source"),
+                    "acquisition-channel-source",
+                    "the holder-presented Source must differ from acquisition.source",
+                );
+            }
+            let allowed: BTreeSet<&LocalId> = definition
+                .subjects
+                .iter()
+                .flat_map(|subject| subject.selectors.iter())
+                .collect();
+            for (index, profile) in block.selector_profiles.iter().enumerate() {
+                if !allowed.contains(profile) {
+                    push(
+                        block_at.clone().key("selectorProfiles").index(index),
+                        "acquisition-channel-profile",
+                        "list only a selector profile the subject roles allow",
+                    );
+                }
+            }
+            if definition.acquisition.source.is_none()
+                && allowed
+                    .iter()
+                    .any(|profile| !block.selector_profiles.iter().any(|p| p == *profile))
+            {
+                push(
+                    block_at.clone().key("selectorProfiles"),
+                    "acquisition-channel-profile",
+                    "without acquisition.source, list every selector profile the subject roles allow",
+                );
+            }
+            if definition
+                .representations
+                .iter()
+                .any(|representation| !matches!(representation, Representation::SignedJws))
+            {
+                push(
+                    at.clone().key("representations"),
+                    "acquisition-channel-representation",
+                    "a definition with holder-presented acquisition must offer only the signed JWS representation (signed-jws)",
+                );
+            }
+        }
+        // A selector profile selects one channel, so a Source reads only the
+        // profiles of its own channel.
+        for source_id in definition.acquisition.source_ids() {
+            let Some(source) = project.sources.get(source_id) else {
+                continue;
+            };
+            if source.inputs.values().any(|input| {
+                !definition
+                    .acquisition
+                    .serves(source_id, &input.selector.profile)
+            }) {
+                push(
+                    acquisition_at.clone(),
+                    "acquisition-channel-profile",
+                    "a Source must read only selector profiles that select its own acquisition channel",
+                );
+            }
         }
         if functions
             .get(&definition.derive.function)
@@ -1344,7 +1458,7 @@ fn validate_project_without_id_collisions(project: &EvidenceProject) -> Vec<Find
                 );
             }
             for definition in project.assertion_definitions.values() {
-                if definition.acquisition.source == *id
+                if definition.acquisition.source_ids().contains(&id)
                     && !definition.subjects.iter().any(|subject| {
                         subject.role == selector.role
                             && subject.selectors.contains(&selector.profile)

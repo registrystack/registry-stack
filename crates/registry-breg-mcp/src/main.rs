@@ -120,39 +120,57 @@ fn serve(config: &RuntimeConfig) -> Result<(), String> {
         .enable_all()
         .build()
         .map_err(|error| format!("the async runtime could not start: {error}"))?;
-    runtime
-        .block_on(runtime::serve(config, shutdown_signal()))
-        .map_err(|error| format!("the gateway could not serve: {error}"))
+    runtime.block_on(async {
+        let shutdown = shutdown_after(registry_platform_httpsec::shutdown_signal)?;
+        runtime::serve(config, shutdown)
+            .await
+            .map_err(|error| format!("the gateway could not serve: {error}"))
+    })
 }
 
-async fn shutdown_signal() {
-    let interrupt = async {
-        if let Err(error) = tokio::signal::ctrl_c().await {
-            tracing::error!(target: "registry_breg_mcp", %error, "the interrupt signal cannot be observed");
-            std::future::pending::<()>().await;
-        }
-    };
-    let terminate = async {
-        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
-            Ok(mut terminate) => {
-                terminate.recv().await;
-            }
-            Err(error) => {
-                tracing::error!(target: "registry_breg_mcp", %error, "the terminate signal cannot be observed");
-                std::future::pending::<()>().await;
-            }
-        }
-    };
-    tokio::select! {
-        () = interrupt => {}
-        () = terminate => {}
-    }
-    tracing::info!(target: "registry_breg_mcp", "shutting down");
+/// Installs the stop-signal handlers before the gateway starts serving. An
+/// install failure refuses startup, so the process is never left with no way
+/// to be stopped by a signal.
+fn shutdown_after<I, S>(
+    install: I,
+) -> Result<impl std::future::Future<Output = ()> + Send + 'static, String>
+where
+    I: FnOnce() -> std::io::Result<S>,
+    S: std::future::Future<Output = ()> + Send + 'static,
+{
+    let signal =
+        install().map_err(|error| format!("the stop signals cannot be observed: {error}"))?;
+    Ok(async move {
+        signal.await;
+        tracing::info!(target: "registry_breg_mcp", "shutting down");
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_stop_signal_install_failure_refuses_startup() {
+        let error = shutdown_after(|| -> std::io::Result<std::future::Pending<()>> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "install refused",
+            ))
+        })
+        .err()
+        .expect("an install failure is an error, never a silent wait");
+        assert!(error.contains("stop signals cannot be observed"), "{error}");
+        assert!(error.contains("install refused"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn the_shutdown_future_resolves_when_the_signal_fires() {
+        let shutdown = shutdown_after(|| Ok(std::future::ready(()))).expect("installs");
+        tokio::time::timeout(std::time::Duration::from_secs(5), shutdown)
+            .await
+            .expect("a fired signal resolves the shutdown future");
+    }
 
     #[test]
     fn the_log_level_vocabulary_is_closed() {

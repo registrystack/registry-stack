@@ -4,6 +4,7 @@
 use std::collections::BTreeMap;
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use chrono::{DateTime, SecondsFormat, Utc};
 use p256::ecdsa::VerifyingKey;
 use schemars::JsonSchema;
 use serde::{de, Deserialize, Deserializer, Serialize};
@@ -111,6 +112,213 @@ pub fn validate_subject_binding_shape(evidence: &Evidence) -> Result<(), Subject
     Ok(())
 }
 
+/// How an assertion's facts were obtained, as the signed `channel` member
+/// spells it.
+///
+/// `Source` means Evidence acquired the facts itself from an authoritative
+/// source. `HolderPresented` means a holder presented another issuer's
+/// credential and Evidence verified it. The vocabulary is closed; a consumer
+/// declares the channels it accepts and refuses any other.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Deserialize,
+    Serialize,
+    JsonSchema,
+    ToSchema,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum ChannelKind {
+    Source,
+    HolderPresented,
+}
+
+/// How a presented credential was linked to the subject of the request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema, ToSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum SubjectLinkMode {
+    /// Proof of possession only, for claims that are not about who the person is.
+    Possession,
+    /// The disclosed attributes matched the expected record.
+    AttributeMatch,
+}
+
+/// The longest `issuer` or `type` a presented credential member may carry.
+pub const MAX_PRESENTED_CREDENTIAL_TEXT_CHARS: usize = 512;
+
+/// What an assertion states about the credential a holder presented.
+///
+/// Present if and only if the assertion's channel is `holder-presented`.
+/// `issued_at` is the credential's own issue time and is never defaulted to
+/// the verification or evaluation instant.
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PresentedCredential {
+    /// The identifier of the issuer allow-list entry that matched.
+    pub trust_entry: String,
+    /// The credential's `iss`.
+    pub issuer: String,
+    /// The credential's `vct`.
+    #[serde(rename = "type")]
+    pub credential_type: String,
+    /// The credential's own issue time.
+    pub issued_at: String,
+    pub subject_link: SubjectLinkMode,
+}
+
+/// A presented credential that cannot be stated in an assertion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum PresentedCredentialError {
+    #[error("the trust entry identifier is not a local identifier")]
+    TrustEntry,
+    #[error("the credential issuer is empty or longer than the contract allows")]
+    Issuer,
+    #[error("the credential type is empty or longer than the contract allows")]
+    CredentialType,
+    #[error("the credential issue time is not an RFC 3339 instant")]
+    IssuedAt,
+}
+
+impl PresentedCredential {
+    /// State a verified presented credential.
+    ///
+    /// The issue time is a required instant: there is no constructor that
+    /// leaves it out, so it cannot default to the instant of verification.
+    pub fn new(
+        trust_entry: impl Into<String>,
+        issuer: impl Into<String>,
+        credential_type: impl Into<String>,
+        issued_at: DateTime<Utc>,
+        subject_link: SubjectLinkMode,
+    ) -> Result<Self, PresentedCredentialError> {
+        let credential = Self {
+            trust_entry: trust_entry.into(),
+            issuer: issuer.into(),
+            credential_type: credential_type.into(),
+            issued_at: issued_at.to_rfc3339_opts(SecondsFormat::Secs, true),
+            subject_link,
+        };
+        credential.validate_members()?;
+        Ok(credential)
+    }
+
+    fn validate_members(&self) -> Result<(), PresentedCredentialError> {
+        let mut entry = self.trust_entry.chars();
+        let entry_ok = entry.next().is_some_and(|first| first.is_ascii_lowercase())
+            && self.trust_entry.len() <= 64
+            && entry.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-');
+        if !entry_ok {
+            return Err(PresentedCredentialError::TrustEntry);
+        }
+        let text_ok = |text: &str| {
+            !text.is_empty() && text.chars().count() <= MAX_PRESENTED_CREDENTIAL_TEXT_CHARS
+        };
+        if !text_ok(&self.issuer) {
+            return Err(PresentedCredentialError::Issuer);
+        }
+        if !text_ok(&self.credential_type) {
+            return Err(PresentedCredentialError::CredentialType);
+        }
+        self.issued_at_instant()?;
+        Ok(())
+    }
+
+    /// The credential's own issue time as an instant.
+    pub fn issued_at_instant(&self) -> Result<DateTime<Utc>, PresentedCredentialError> {
+        DateTime::parse_from_rfc3339(&self.issued_at)
+            .map(|instant| instant.with_timezone(&Utc))
+            .map_err(|_| PresentedCredentialError::IssuedAt)
+    }
+}
+
+/// The channel of an assertion with the members it implies, so that a
+/// `holder-presented` assertion cannot be stated without its credential and a
+/// `source` assertion cannot be stated with one.
+///
+/// [`Evidence`] carries the two wire members separately because one closed
+/// payload object cannot express the implication; this type is how code builds
+/// and reads them.
+#[derive(Clone, PartialEq, Eq)]
+pub enum AssertionChannel {
+    Source,
+    HolderPresented(PresentedCredential),
+}
+
+impl AssertionChannel {
+    #[must_use]
+    pub fn kind(&self) -> ChannelKind {
+        match self {
+            Self::Source => ChannelKind::Source,
+            Self::HolderPresented(_) => ChannelKind::HolderPresented,
+        }
+    }
+
+    /// The `channel` and `presentedCredential` payload members.
+    #[must_use]
+    pub fn into_members(self) -> (ChannelKind, Option<PresentedCredential>) {
+        match self {
+            Self::Source => (ChannelKind::Source, None),
+            Self::HolderPresented(credential) => (ChannelKind::HolderPresented, Some(credential)),
+        }
+    }
+}
+
+impl ::core::fmt::Debug for AssertionChannel {
+    fn fmt(&self, formatter: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        formatter
+            .debug_tuple("AssertionChannel")
+            .field(&self.kind())
+            .finish()
+    }
+}
+
+/// An assertion whose declared channel and `presentedCredential` disagree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum ChannelShapeError {
+    #[error("a holder-presented assertion must carry a presented credential")]
+    PresentedCredentialMissing,
+    #[error("a source assertion must carry no presented credential")]
+    PresentedCredentialPresent,
+    #[error("the presented credential is malformed")]
+    PresentedCredential(PresentedCredentialError),
+    #[error("the presented credential was issued after the assertion's observation")]
+    CredentialIssuedAfterObservation,
+    #[error("the assertion observation time is not an RFC 3339 instant")]
+    ObservedAt,
+}
+
+/// Read the channel of an assertion, refusing one whose members disagree with
+/// it. A `holder-presented` credential issued later than `observedAt` is
+/// refused here as well, because the credential cannot have existed when the
+/// facts were observed.
+pub fn validate_channel_shape(evidence: &Evidence) -> Result<AssertionChannel, ChannelShapeError> {
+    match (evidence.channel, evidence.presented_credential.as_ref()) {
+        (ChannelKind::Source, None) => Ok(AssertionChannel::Source),
+        (ChannelKind::Source, Some(_)) => Err(ChannelShapeError::PresentedCredentialPresent),
+        (ChannelKind::HolderPresented, None) => Err(ChannelShapeError::PresentedCredentialMissing),
+        (ChannelKind::HolderPresented, Some(credential)) => {
+            credential
+                .validate_members()
+                .map_err(ChannelShapeError::PresentedCredential)?;
+            let issued = credential
+                .issued_at_instant()
+                .map_err(ChannelShapeError::PresentedCredential)?;
+            let observed = DateTime::parse_from_rfc3339(&evidence.observed_at)
+                .map_err(|_| ChannelShapeError::ObservedAt)?;
+            if issued > observed {
+                return Err(ChannelShapeError::CredentialIssuedAfterObservation);
+            }
+            Ok(AssertionChannel::HolderPresented(credential.clone()))
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Evidence {
@@ -119,6 +327,13 @@ pub struct Evidence {
     /// What the subject bindings below are derived under. Always present, so a
     /// verifier never has to infer the mode from which members are absent.
     pub subject_binding: SubjectBindingMode,
+    /// How the facts were obtained. Always present and signed, so a verifier
+    /// never infers the channel from which members are absent.
+    pub channel: ChannelKind,
+    /// What the presented credential was. Present if and only if `channel` is
+    /// `holder-presented`; build and read it through [`AssertionChannel`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presented_credential: Option<PresentedCredential>,
     /// Exact echo of the caller's request nonce for request-response
     /// correlation. The runtime does not store it or reject reuse. Absent from
     /// a holder-bound assertion, which has no single request to correlate to.
@@ -409,6 +624,7 @@ macro_rules! redacted_debug {
 redacted_debug!(
     HolderPublicKey,
     Evidence,
+    PresentedCredential,
     SubjectBinding,
     SupportedValue,
     PublicValue,
@@ -436,6 +652,8 @@ mod tests {
             schema: "protected-schema-canary".to_owned(),
             assurance_profile: AssuranceProfile::EvidenceGrade,
             subject_binding: SubjectBindingMode::AudienceScoped,
+            channel: ChannelKind::Source,
+            presented_credential: None,
             request_nonce: Some("protected-request-nonce-canary".to_owned()),
             id: "protected-evidence-id-canary".to_owned(),
             evidence_type_name: EvidenceObjectType::Evidence,
@@ -635,6 +853,8 @@ mod tests {
             schema: crate::EVIDENCE_SCHEMA_V1.to_owned(),
             assurance_profile: AssuranceProfile::Production,
             subject_binding: mode,
+            channel: ChannelKind::Source,
+            presented_credential: None,
             request_nonce: None,
             id: "urn:evidence:assertion:v1_2f0a".to_owned(),
             evidence_type_name: EvidenceObjectType::Evidence,
@@ -728,5 +948,97 @@ mod tests {
             object.get("subjectBinding"),
             Some(&Value::String("holder-bound".to_owned()))
         );
+    }
+
+    fn credential(issued_at: &str) -> PresentedCredential {
+        PresentedCredential::new(
+            "national-id",
+            "https://issuer.example",
+            "https://credentials.example/identity",
+            issued_at.parse().expect("time parses"),
+            SubjectLinkMode::Possession,
+        )
+        .expect("members are in contract")
+    }
+
+    /// The code-level form of the implication the payload schema also states.
+    #[test]
+    fn the_channel_must_agree_with_the_presented_credential() {
+        let mut source = shaped_evidence(SubjectBindingMode::HolderBound);
+        assert_eq!(
+            validate_channel_shape(&source),
+            Ok(AssertionChannel::Source)
+        );
+
+        source.presented_credential = Some(credential("2026-08-04T00:00:00Z"));
+        assert_eq!(
+            validate_channel_shape(&source),
+            Err(ChannelShapeError::PresentedCredentialPresent)
+        );
+
+        let mut presented = shaped_evidence(SubjectBindingMode::HolderBound);
+        let (channel, member) =
+            AssertionChannel::HolderPresented(credential("2026-08-04T00:00:00Z")).into_members();
+        presented.channel = channel;
+        presented.presented_credential = member;
+        assert!(matches!(
+            validate_channel_shape(&presented),
+            Ok(AssertionChannel::HolderPresented(_))
+        ));
+
+        presented.presented_credential = None;
+        assert_eq!(
+            validate_channel_shape(&presented),
+            Err(ChannelShapeError::PresentedCredentialMissing)
+        );
+
+        let (_, later) =
+            AssertionChannel::HolderPresented(credential("2026-08-05T00:00:01Z")).into_members();
+        presented.presented_credential = later;
+        assert_eq!(
+            validate_channel_shape(&presented),
+            Err(ChannelShapeError::CredentialIssuedAfterObservation)
+        );
+    }
+
+    #[test]
+    fn a_presented_credential_states_only_in_contract_members() {
+        let issued: DateTime<Utc> = "2026-08-04T00:00:00Z".parse().expect("time parses");
+        let build = |entry: &str, issuer: &str, kind: &str| {
+            PresentedCredential::new(entry, issuer, kind, issued, SubjectLinkMode::Possession)
+        };
+        assert_eq!(
+            build("Bad Entry", "https://issuer.example", "t"),
+            Err(PresentedCredentialError::TrustEntry)
+        );
+        assert_eq!(build("e", "", "t"), Err(PresentedCredentialError::Issuer));
+        assert_eq!(
+            build("e", &"i".repeat(513), "t"),
+            Err(PresentedCredentialError::Issuer)
+        );
+        assert_eq!(
+            build("e", "https://issuer.example", ""),
+            Err(PresentedCredentialError::CredentialType)
+        );
+        assert_eq!(
+            build("e", "https://issuer.example", &"t".repeat(513)),
+            Err(PresentedCredentialError::CredentialType)
+        );
+    }
+
+    #[test]
+    fn the_channel_serializes_to_its_contract_spelling() {
+        assert_eq!(
+            serde_json::to_value(ChannelKind::Source).expect("serializes"),
+            Value::String("source".to_owned())
+        );
+        assert_eq!(
+            serde_json::to_value(ChannelKind::HolderPresented).expect("serializes"),
+            Value::String("holder-presented".to_owned())
+        );
+        let source = serde_json::to_value(shaped_evidence(SubjectBindingMode::HolderBound))
+            .expect("serializes");
+        assert_eq!(source["channel"], "source");
+        assert!(source.get("presentedCredential").is_none());
     }
 }

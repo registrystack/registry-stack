@@ -276,7 +276,8 @@ pub async fn serve_foreground<F>(
 where
     F: FnOnce(&Readiness),
 {
-    serve_with_shutdown(snapshot, bind_addr, on_ready, shutdown_signal()).await
+    let shutdown = stop_signal(registry_platform_httpsec::shutdown_signal)?;
+    serve_with_shutdown(snapshot, bind_addr, on_ready, shutdown).await
 }
 
 pub async fn serve_with_shutdown<F, S>(
@@ -476,26 +477,13 @@ fn compare_specificity(left: &[bool], right: &[bool]) -> Ordering {
     right.len().cmp(&left.len())
 }
 
-async fn shutdown_signal() {
-    let ctrl_c = async {
-        let _ = tokio::signal::ctrl_c().await;
-    };
-    #[cfg(unix)]
-    {
-        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
-            Ok(mut sigterm) => {
-                tokio::select! {
-                    _ = ctrl_c => {}
-                    _ = sigterm.recv() => {}
-                }
-            }
-            Err(_) => ctrl_c.await,
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        ctrl_c.await;
-    }
+/// Install the stop signal handlers, or refuse startup.
+///
+/// A handler that cannot be installed leaves a foreground server that no
+/// signal can stop, so the failure is a startup error. `install` is
+/// [`registry_platform_httpsec::shutdown_signal`] in production.
+fn stop_signal<S>(install: impl FnOnce() -> std::io::Result<S>) -> Result<S> {
+    install().context("installing the source mock stop signal handlers")
 }
 
 #[cfg(test)]
@@ -752,6 +740,26 @@ mod tests {
         drop(stream);
         stop_tx.send(()).expect("server still running");
         task.await.expect("join").expect("server result");
+    }
+
+    #[test]
+    fn a_stop_signal_that_cannot_be_installed_refuses_startup() {
+        let error = stop_signal(|| {
+            Err::<(), _>(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "install refused",
+            ))
+        })
+        .expect_err("an install failure is a startup error");
+        assert_eq!(
+            format!("{error:#}"),
+            "installing the source mock stop signal handlers: install refused"
+        );
+    }
+
+    #[test]
+    fn an_installed_stop_signal_is_handed_to_the_listener() {
+        assert_eq!(stop_signal(|| Ok(7_u8)).expect("the install succeeds"), 7);
     }
 
     #[tokio::test]

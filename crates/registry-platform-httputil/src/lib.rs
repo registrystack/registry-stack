@@ -805,7 +805,11 @@ fn is_unspecified_ip(ip: IpAddr) -> bool {
     }
 }
 
-fn normalize_ipv4_mapped(ip: IpAddr) -> IpAddr {
+/// An IPv4-mapped IPv6 address (`::ffff:a.b.c.d`) as the IPv4 address it
+/// carries; every other address unchanged. Address classification applies
+/// this first so a mapped private or loopback address is judged as IPv4.
+#[must_use]
+pub fn normalize_ipv4_mapped(ip: IpAddr) -> IpAddr {
     match ip {
         IpAddr::V6(ip) => ip
             .to_ipv4_mapped()
@@ -826,6 +830,28 @@ mod tests {
     use std::process::Command;
 
     use super::*;
+
+    #[test]
+    fn ipv4_mapped_addresses_normalise_to_ipv4_and_others_are_unchanged() {
+        use std::net::{Ipv4Addr, Ipv6Addr};
+
+        let mapped: Ipv6Addr = "::ffff:10.0.0.1".parse().unwrap();
+        assert_eq!(
+            normalize_ipv4_mapped(IpAddr::V6(mapped)),
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))
+        );
+        let mapped_loopback: Ipv6Addr = "::ffff:127.0.0.1".parse().unwrap();
+        assert_eq!(
+            normalize_ipv4_mapped(IpAddr::V6(mapped_loopback)),
+            IpAddr::V4(Ipv4Addr::LOCALHOST)
+        );
+        let plain_v4 = IpAddr::V4(Ipv4Addr::new(192, 0, 2, 7));
+        assert_eq!(normalize_ipv4_mapped(plain_v4), plain_v4);
+        for text in ["::1", "2001:db8::1", "::", "::10.0.0.1", "64:ff9b::a00:1"] {
+            let ip: IpAddr = text.parse().unwrap();
+            assert_eq!(normalize_ipv4_mapped(ip), ip, "{text}");
+        }
+    }
     use axum::{
         body::Body,
         http::{header, HeaderValue, StatusCode},

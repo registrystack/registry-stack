@@ -5,6 +5,7 @@
 //! identity, and scopes; it does not implement browser login, OAuth
 //! authorization endpoints, PKCE, token minting, or refresh flows.
 
+mod access_token_algorithm;
 mod authorization_claims;
 mod diagnostics;
 pub use diagnostics::{AuthenticationDiagnostics, AuthenticationStage};
@@ -12,6 +13,7 @@ pub use diagnostics::{AuthenticationDiagnostics, AuthenticationStage};
 pub use tracing as __tracing;
 pub mod task_grant;
 
+pub use access_token_algorithm::AccessTokenAlgorithm;
 pub use authorization_claims::{
     actor_kind, grant_claims, ActorKind, BregPermission, ClaimError, ClaimMember, ClaimNames,
     GrantBounds, GrantClaims, GrantContextError, MatchedClientError, SchedulingPermission,

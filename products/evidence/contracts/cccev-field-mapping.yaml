@@ -48,6 +48,12 @@ mapping:
   Evidence.purpose:
     source: evidence_extension
     rule: Authorized configured purpose code, not caller-defined prose.
+  Evidence.channel:
+    source: evidence_extension
+    rule: Closed vocabulary source or holder-presented, stating how the facts were obtained; signed with every other member and never inferred from which members are absent.
+  Evidence.presentedCredential:
+    source: evidence_extension
+    rule: Present if and only if channel is holder-presented; states the allow-list entry that matched, the credential issuer and type, the credential's own issue time, and the subject-link mode, and no credential claim values.
   Evidence.audience:
     source: evidence_extension
     rule: Audience derived from authenticated authority context.

@@ -635,6 +635,24 @@ resolved authoritative record. When count plus one minimized result is unavailab
 request may retrieve at most two minimally projected results solely to detect
 ambiguity.
 
+A definition may name a second Source for holder-presented acquisition
+(`acquisition.holderPresented`). The request's selector profile selects exactly
+one channel, with no fallback, and the assertion's `channel` member records
+which one produced it. The holder-presented Source must use the
+`wallet-presentation-v1` host protocol, the definition answers as signed JWS
+only, and a relying party must opt in to the `holder-presented` channel through
+its channel policy. The authoring reference lists the startup refusals.
+
+The wallet presentation service (`evidence-oid4vp`) releases a received
+presentation or wallet error to Evidence once: the first successful read
+consumes it, and a later read of the same reference is a 404 (a read is not
+retried safely after delivery). Its `/ready` answers 503 once a client
+identifier certificate is past its `notAfter`, because wallets refuse the
+request objects. Its limiters for the wallet-facing request and response paths
+use one key for all wallets and bound the service as a whole, so a deployment
+must rate limit per source at its ingress in front of those two paths; without
+that, one client can exhaust the budget for every wallet.
+
 Every source declares its acquisition posture, exactly equal to the posture in
 the digest-pinned Adapter route contract. Its requirement inherits that
 posture:
@@ -1343,6 +1361,17 @@ A successful `GET /v1/evidence-definitions` response uses `application/json`
 and the closed requester-scoped definition schema. It requires the same strict
 Bearer authentication profile and per-principal request budget as evidence
 creation.
+
+The response carries one entry per definition handle. A definition that
+declares holder-presented acquisition states the `channel` (`source` or
+`holder-presented`) of the entry's own `subjects`. When the caller is entitled
+to both channels of one definition, the entry carries the source channel's shape
+as its own and one item in `alternatives` for the holder-presented channel, with
+that channel's `subjects` and `responseFormats`. A channel the caller is not
+entitled to is never listed. The entry of a source-only definition has neither
+member. Two entries that share a handle in any other way (two shapes on one
+channel, or different purposes under one handle) refuse the complete document
+with `service.unavailable`.
 
 A successful `POST /v1/evidence` response uses `application/jose+json` and the
 flattened JWS JSON Serialization unless the requester selected another enabled

@@ -40,28 +40,69 @@
 //! by `coordinatorctl` is a separate process and is recorded in the journal,
 //! not here.
 
-use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex};
+use std::fmt;
+use std::sync::Arc;
 
 use axum::extract::State;
 use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
+use registry_platform_metrics::{
+    CounterVec, Exposition, LabelSpace, MetricKind, CONTENT_TYPE as METRICS_CONTENT_TYPE,
+};
 
 use crate::store::Store;
 
 /// The only route the metrics listener serves.
 pub const METRICS_PATH: &str = "/metrics";
 
-const METRICS_MEDIA_TYPE: &str = "text/plain; version=0.0.4";
+const DECLARATION: &str = "the metric declarations are valid";
 
-#[derive(Debug, Default)]
+/// Every label is an enum declared below, so each counter family is closed
+/// over that enum's values and the whole series set is fixed by this file.
 pub struct Metrics {
-    admitted: Mutex<u64>,
-    finished: Mutex<BTreeMap<&'static str, u64>>,
-    attempts: Mutex<BTreeMap<&'static str, u64>>,
-    refusals: Mutex<BTreeMap<&'static str, u64>>,
+    admitted: CounterVec,
+    finished: CounterVec,
+    attempts: CounterVec,
+    refusals: CounterVec,
+}
+
+impl fmt::Debug for Metrics {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Metrics").finish_non_exhaustive()
+    }
+}
+
+impl Default for Metrics {
+    fn default() -> Self {
+        Self {
+            admitted: CounterVec::new(
+                "coordinator_runs_admitted_total",
+                "Runs whose admission committed.",
+                LabelSpace::closed_zero_filled(&[], &[&[]]).expect(DECLARATION),
+            )
+            .expect(DECLARATION),
+            finished: closed_counter(
+                "coordinator_runs_finished_total",
+                "Committed moves of a run into a terminal state, by that state.",
+                "state",
+                RunOutcome::ALL.map(RunOutcome::as_str),
+            ),
+            attempts: closed_counter(
+                "coordinator_step_attempts_total",
+                "Step attempts the worker made, by what each came to.",
+                "outcome",
+                StepAttempt::ALL.map(StepAttempt::as_str),
+            ),
+            refusals: closed_counter(
+                "coordinator_authentication_refusals_total",
+                "Bearer credentials refused before a caller was resolved.",
+                "reason",
+                AuthenticationRefusal::ALL.map(AuthenticationRefusal::as_str),
+            ),
+        }
+    }
 }
 
 /// The terminal state a run reached, the closed label of
@@ -195,121 +236,82 @@ pub struct DispatchDepth {
 impl Metrics {
     /// Count one committed admission.
     pub fn record_run_admitted(&self) {
-        *self
-            .admitted
-            .lock()
-            .expect("the metrics registry is never held across a panic") += 1;
+        count(&self.admitted, &[]);
     }
 
     /// Count one committed move of a run into a terminal state.
     pub fn record_run_finished(&self, outcome: RunOutcome) {
-        bump(&self.finished, outcome.as_str());
+        count(&self.finished, &[outcome.as_str()]);
     }
 
     /// Count one step attempt by its outcome.
     pub fn record_step_attempt(&self, attempt: StepAttempt) {
-        bump(&self.attempts, attempt.as_str());
+        count(&self.attempts, &[attempt.as_str()]);
     }
 
     /// Count one authentication refusal by its reason.
     pub fn record_authentication_refusal(&self, refusal: AuthenticationRefusal) {
-        bump(&self.refusals, refusal.as_str());
+        count(&self.refusals, &[refusal.as_str()]);
     }
 
     /// Render the Prometheus text exposition, with the dispatch queue when
     /// it was sampled.
     #[must_use]
     pub fn render(&self, depth: Option<DispatchDepth>) -> String {
-        let mut text = String::new();
-        text.push_str("# HELP coordinator_runs_admitted_total Runs whose admission committed.\n");
-        text.push_str("# TYPE coordinator_runs_admitted_total counter\n");
-        text.push_str(&format!(
-            "coordinator_runs_admitted_total {}\n",
-            *self
-                .admitted
-                .lock()
-                .expect("the metrics registry is never held across a panic")
-        ));
-        text.push_str(
-            "# HELP coordinator_runs_finished_total Committed moves of a run into a terminal \
-             state, by that state.\n",
-        );
-        text.push_str("# TYPE coordinator_runs_finished_total counter\n");
-        closed_counter(
-            &mut text,
+        let mut out = Exposition::new();
+        for counter in [
+            &self.admitted,
             &self.finished,
-            "coordinator_runs_finished_total",
-            "state",
-            RunOutcome::ALL.map(RunOutcome::as_str),
-        );
-        text.push_str(
-            "# HELP coordinator_step_attempts_total Step attempts the worker made, by what \
-             each came to.\n",
-        );
-        text.push_str("# TYPE coordinator_step_attempts_total counter\n");
-        closed_counter(
-            &mut text,
             &self.attempts,
-            "coordinator_step_attempts_total",
-            "outcome",
-            StepAttempt::ALL.map(StepAttempt::as_str),
-        );
-        text.push_str(
-            "# HELP coordinator_authentication_refusals_total Bearer credentials refused \
-             before a caller was resolved.\n",
-        );
-        text.push_str("# TYPE coordinator_authentication_refusals_total counter\n");
-        closed_counter(
-            &mut text,
             &self.refusals,
-            "coordinator_authentication_refusals_total",
-            "reason",
-            AuthenticationRefusal::ALL.map(AuthenticationRefusal::as_str),
-        );
-        text.push_str(
-            "# HELP coordinator_dispatch_jobs Steps waiting to run, running, or held unknown, \
-             sampled at scrape.\n",
-        );
-        text.push_str("# TYPE coordinator_dispatch_jobs gauge\n");
+        ] {
+            counter.write(&mut out).expect(DECLARATION);
+        }
+        out.header(
+            "coordinator_dispatch_jobs",
+            Some("Steps waiting to run, running, or held unknown, sampled at scrape."),
+            MetricKind::Gauge,
+        )
+        .expect(DECLARATION);
         if let Some(depth) = depth {
             for (state, count) in [
                 ("pending", depth.pending),
                 ("leased", depth.leased),
                 ("unknown", depth.unknown),
             ] {
-                text.push_str(&format!(
-                    "coordinator_dispatch_jobs{{state=\"{state}\"}} {count}\n"
-                ));
+                out.sample("coordinator_dispatch_jobs", &[("state", state)], count)
+                    .expect(DECLARATION);
             }
         }
-        text
+        out.finish()
     }
 }
 
-fn bump(counter: &Mutex<BTreeMap<&'static str, u64>>, label: &'static str) {
-    *counter
-        .lock()
-        .expect("the metrics registry is never held across a panic")
-        .entry(label)
-        .or_default() += 1;
+/// Count one event. Every value comes from a closed enum, so the space
+/// admits it; a refusal would be a programming error, and is logged by
+/// metric name alone, never by label value.
+fn count(counter: &CounterVec, values: &[&str]) {
+    if let Err(error) = counter.inc(values) {
+        tracing::warn!(error = %error, "a metric series was refused");
+    }
 }
 
-/// Write one sample per label value, from zero, so every series exists
-/// before its first event.
+/// A counter family whose every label value is declared, so every series is
+/// exposed from zero before its first event.
 fn closed_counter<const N: usize>(
-    text: &mut String,
-    counter: &Mutex<BTreeMap<&'static str, u64>>,
     name: &str,
-    label: &str,
+    help: &str,
+    label: &'static str,
     values: [&'static str; N],
-) {
-    let counts = counter
-        .lock()
-        .expect("the metrics registry is never held across a panic");
-    for value in values {
-        let count = counts.get(value).copied().unwrap_or_default();
-        text.push_str(&format!("{name}{{{label}=\"{value}\"}} {count}\n"));
-    }
+) -> CounterVec {
+    let declared: Vec<[&str; 1]> = values.iter().map(|value| [*value]).collect();
+    let declared: Vec<&[&str]> = declared.iter().map(|value| value.as_slice()).collect();
+    CounterVec::new(
+        name,
+        help,
+        LabelSpace::closed_zero_filled(&[label], &declared).expect(DECLARATION),
+    )
+    .expect(DECLARATION)
 }
 
 /// What the metrics listener reads: the store the counters live in and the
@@ -335,7 +337,7 @@ pub async fn serve_metrics(State(state): State<MetricsState>) -> Response {
     };
     (
         [
-            (CONTENT_TYPE, METRICS_MEDIA_TYPE),
+            (CONTENT_TYPE, METRICS_CONTENT_TYPE),
             (CACHE_CONTROL, "no-store"),
         ],
         state.store.metrics().render(depth),
@@ -426,6 +428,54 @@ mod tests {
         ] {
             assert!(text.lines().any(|l| l == line), "{line} in {text}");
         }
+    }
+
+    /// The full scrape for a representative state, byte for byte.
+    #[test]
+    fn the_scrape_is_byte_stable() {
+        let metrics = Metrics::default();
+        metrics.record_run_admitted();
+        metrics.record_run_admitted();
+        metrics.record_run_finished(RunOutcome::CancelledAfterEffect);
+        metrics.record_step_attempt(StepAttempt::Accepted);
+        metrics.record_authentication_refusal(AuthenticationRefusal::Policy);
+        let text = metrics.render(Some(DispatchDepth {
+            pending: 5,
+            leased: 0,
+            unknown: 1,
+        }));
+        assert_eq!(
+            text,
+            "\
+# HELP coordinator_runs_admitted_total Runs whose admission committed.
+# TYPE coordinator_runs_admitted_total counter
+coordinator_runs_admitted_total 2
+# HELP coordinator_runs_finished_total Committed moves of a run into a terminal state, by that state.
+# TYPE coordinator_runs_finished_total counter
+coordinator_runs_finished_total{state=\"finished\"} 0
+coordinator_runs_finished_total{state=\"failed\"} 0
+coordinator_runs_finished_total{state=\"cancelled\"} 0
+coordinator_runs_finished_total{state=\"cancelled-after-effect\"} 1
+coordinator_runs_finished_total{state=\"expired\"} 0
+# HELP coordinator_step_attempts_total Step attempts the worker made, by what each came to.
+# TYPE coordinator_step_attempts_total counter
+coordinator_step_attempts_total{outcome=\"accepted\"} 1
+coordinator_step_attempts_total{outcome=\"transient\"} 0
+coordinator_step_attempts_total{outcome=\"permanent\"} 0
+coordinator_step_attempts_total{outcome=\"maybe-sent\"} 0
+coordinator_step_attempts_total{outcome=\"unavailable\"} 0
+# HELP coordinator_authentication_refusals_total Bearer credentials refused before a caller was resolved.
+# TYPE coordinator_authentication_refusals_total counter
+coordinator_authentication_refusals_total{reason=\"refused\"} 0
+coordinator_authentication_refusals_total{reason=\"policy\"} 1
+coordinator_authentication_refusals_total{reason=\"unavailable\"} 0
+# HELP coordinator_dispatch_jobs Steps waiting to run, running, or held unknown, sampled at scrape.
+# TYPE coordinator_dispatch_jobs gauge
+coordinator_dispatch_jobs{state=\"pending\"} 5
+coordinator_dispatch_jobs{state=\"leased\"} 0
+coordinator_dispatch_jobs{state=\"unknown\"} 1
+"
+        );
     }
 
     #[test]

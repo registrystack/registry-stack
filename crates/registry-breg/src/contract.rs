@@ -2464,6 +2464,17 @@ pub enum NormalizationStep {
     CollapseWhitespace,
     /// Strips spaces, hyphens, slashes, and dots from the canonical form.
     RemoveSeparators,
+    /// Canonical composition (Unicode NFC), so a precomposed letter and its
+    /// base letter plus combining mark give the same value. Compatibility
+    /// forms such as ligatures are not mapped.
+    Nfc,
+    /// NFC, then full Unicode case folding with no locale tailoring, then NFC
+    /// again: `ß` and `ẞ` fold to `ss`, `ς` folds to `σ`, canonically
+    /// equivalent spellings fold alike whatever the order of their combining
+    /// marks, and a capital that folds to a decomposed sequence is composed
+    /// again. Unlike `lowercase` it is meant for matching, so it is the case
+    /// step to pair with `nfc`.
+    CaseFold,
 }
 
 /// The authored blind-index declaration for an encrypted field. Normalization

@@ -1,0 +1,35 @@
+{
+  "clientId": "x509_san_dns:verifier.example",
+  "expectedClaims": {
+    "address": {
+      "city": "Wellington",
+      "street": "1 Lambton Quay"
+    },
+    "given_name": "Aroha",
+    "nationalities": [
+      "NZ",
+      "FR"
+    ]
+  },
+  "expiresAt": 1802592000,
+  "generator": "sd-jwt (OpenWallet Foundation) 0.10.4 via generate.py",
+  "issuedAt": 1799999000,
+  "issuer": "https://vectors.example/issuer",
+  "issuerKey": {
+    "alg": "ES256",
+    "crv": "P-256",
+    "kid": "vector-issuer-es256",
+    "kty": "EC",
+    "x": "Gp8VE_E5ua2HpBppIbZMlHHTWvnuhf1wZW594tOMU08",
+    "y": "MntKFbL-hZ1dmkjylsFfpBaluftN0MGBRqbxnIPU4hU"
+  },
+  "keyBindingRequired": true,
+  "nonce": "vector-nonce-5e1c9b",
+  "now": 1800000000,
+  "presentation": "eyJhbGciOiAiRVMyNTYiLCAidHlwIjogImRjK3NkLWp3dCIsICJraWQiOiAidmVjdG9yLWlzc3Vlci1lczI1NiJ9.eyJfc2QiOiBbIjZWR21sZFBSWHJYTmpqcFhoVnhzbVlnajZReV9qeXZnaVEzRmFCUmVaMG8iLCAiRWpfZE5HMFlseGV5Q3AyT01CM29zWjFWM2xnS3lTUDgwc2p2VXo4SmdFTSIsICJIOWR1VUs4eGktRTI2R0RNNjNzenJJVTRWSVJ5dG5ZaXFTV2trYkFyVDdvIiwgIktoYmVHVVFTakFURDR2S0h6T2lkVzlmUDJPRHZ0M3llclZhdGhGa0t3RkUiLCAiY0xzZ1Z0WUsxaVJLTEs4bFRLbmRZWkpaRDZJR3VIVkhLSlk4VXliSm9fUSIsICJ6LV8xbFVZVWk4ZVhZUmp2eThUR1QzZTZ1VENxUXVnNzd5WXNaN3lCQl84Il0sICJpc3MiOiAiaHR0cHM6Ly92ZWN0b3JzLmV4YW1wbGUvaXNzdWVyIiwgInZjdCI6ICJodHRwczovL3ZlY3RvcnMuZXhhbXBsZS92Y3QvcGVyc29uIiwgImlhdCI6IDE3OTk5OTkwMDAsICJuYmYiOiAxNzk5OTk5MDAwLCAiZXhwIjogMTgwMjU5MjAwMCwgImFkZHJlc3MiOiB7Il9zZCI6IFsiOVl5WEJEdEF3YW1uTDA2RVpXLW80LXRubUdBM2t5Y2w1ZlFDaktabTdLWSIsICJMaVdVVHVTdWRNc0U1a0ozLW1WRFZGWWREN2dIRmhsbGVYWVpiNnVQMlJJIiwgImZIWU9uSDhUZkxtT3VLS1B3bVh6d1hFbXVHZ2VPRkNmNnJLbTJZcmxBQmMiLCAibkMyWFp6dVYyQ2IydnVsQzYzdV9fNE9KanU0YzZONDVKaFZGbGZXNnJPOCJdLCAiY2l0eSI6ICJXZWxsaW5ndG9uIn0sICJuYXRpb25hbGl0aWVzIjogW3siLi4uIjogImRwTDdUWkpEVDZGaXZXelVHeGF0anEtdUR3WEo3V0twN0RFd3lkbElBMVUifSwgIkZSIl0sICJfc2RfYWxnIjogInNoYS0yNTYiLCAiY25mIjogeyJqd2siOiB7Imt0eSI6ICJFQyIsICJjcnYiOiAiUC0yNTYiLCAieCI6ICJaSXRnQjBjaUZkVjRJUXdhd04wWlBjZzZELXY2RVBvYzBNdHBPaWxtZ2pZIiwgInkiOiAicHBZOERpQk5mSTJpcnFuMXVLa3pPdzBFMlJpSGFydjhxblNKUldFaUN4SSJ9fX0.Ft-o9VpM0xUyTsYvdomcq8B9n536NMXo6Utf0D_YBw8d-aanedQUaCjCqhoU7neRJFrYBF0sePd2BybB_oPsgg~WyJuSkNzTi1iZHc4aFk4NFZzNHYxMlJBIiwgImdpdmVuX25hbWUiLCAiQXJvaGEiXQ~WyJENFpWYnBYV2hlS2Y3bEFEZ1RWSDNRIiwgInN0cmVldCIsICIxIExhbWJ0b24gUXVheSJd~WyJiNGJyNG1LeHZzejhCODhRYWJBdzBnIiwgIk5aIl0~eyJhbGciOiAiRVMyNTYiLCAidHlwIjogImtiK2p3dCJ9.eyJub25jZSI6ICJ2ZWN0b3Itbm9uY2UtNWUxYzliIiwgImF1ZCI6ICJ4NTA5X3Nhbl9kbnM6dmVyaWZpZXIuZXhhbXBsZSIsICJpYXQiOiAxODAwMDAwMDAwLCAic2RfaGFzaCI6ICJOQkxsVkhtSVVQWkthdGR5SnRhSUZHUGR3bE9YengwVHhDY1ZabjFaVmFjIn0.HnYEodU5rsxq0B7W7rTVrocFZtAN2YhKXlb5_CwlmOZV_hcRN1hN6fK9x5msS4W44plOw7YZO9Bsh67IfFUgOg",
+  "receivedAt": 1800000000,
+  "vct": "https://vectors.example/vct/person",
+  "withheldClaims": [
+    "family_name"
+  ]
+}

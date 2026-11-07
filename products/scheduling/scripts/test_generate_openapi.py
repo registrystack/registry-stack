@@ -952,11 +952,19 @@ class GeneratedOpenApiTests(unittest.TestCase):
 
     def test_the_request_edge_rejection_map_is_the_rust_one(self) -> None:
         http = GENERATOR.production_source(ROOT, GENERATOR.HTTP_SOURCE)
+        httpsec = GENERATOR.production_source(ROOT, GENERATOR.HTTPSEC_SOURCE)
         for text in (
-            "StatusCode::BAD_REQUEST => Some(ProblemCode::RequestInvalid)",
-            "StatusCode::PAYLOAD_TOO_LARGE => Some(ProblemCode::RequestBodyTooLarge)",
-            "StatusCode::UNSUPPORTED_MEDIA_TYPE => Some(ProblemCode::RequestUnsupportedMediaType)",
-            "StatusCode::UNPROCESSABLE_ENTITY => Some(ProblemCode::RequestUnprocessable)",
+            "StatusCode::BAD_REQUEST => FrameworkRejection::Invalid",
+            "StatusCode::PAYLOAD_TOO_LARGE => FrameworkRejection::BodyTooLarge",
+            "StatusCode::UNSUPPORTED_MEDIA_TYPE => FrameworkRejection::UnsupportedMediaType",
+            "StatusCode::UNPROCESSABLE_ENTITY => FrameworkRejection::Unprocessable",
+        ):
+            self.assertIn(text, httpsec)
+        for text in (
+            "FrameworkRejection::Invalid => ProblemCode::RequestInvalid",
+            "FrameworkRejection::BodyTooLarge => ProblemCode::RequestBodyTooLarge",
+            "FrameworkRejection::UnsupportedMediaType => ProblemCode::RequestUnsupportedMediaType",
+            "FrameworkRejection::Unprocessable => ProblemCode::RequestUnprocessable",
             "problem_response(ProblemCode::RequestNotFound)",
             "problem_response(ProblemCode::RequestMethodNotAllowed)",
         ):

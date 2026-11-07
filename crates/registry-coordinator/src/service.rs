@@ -147,30 +147,16 @@ fn check_event_ingress_keys(runtime: &RuntimeConfig, recovery_only: bool) -> Res
     }
 }
 
-/// Resolve on the first SIGTERM or SIGINT. The SIGTERM handler is installed
-/// before anything is served, so a service that SIGTERM could not stop
+/// Resolve on the first SIGTERM or SIGINT. The handlers are installed before
+/// anything is served, so a service that a stop signal could not stop
 /// gracefully refuses to start.
 fn shutdown_signal() -> Result<impl Future<Output = ()>> {
-    #[cfg(unix)]
-    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-        .map_err(|_| {
+    registry_platform_httpsec::shutdown_signal().map_err(|_| {
         CoordinatorError::new(
             "signal-unavailable",
             "the SIGTERM handler could not be installed",
         )
         .suggest("start the service again; it does not serve when it could not stop gracefully")
-    })?;
-    Ok(async move {
-        let interrupt = tokio::signal::ctrl_c();
-        #[cfg(unix)]
-        tokio::select! {
-            _ = interrupt => {}
-            _ = terminate.recv() => {}
-        }
-        #[cfg(not(unix))]
-        if interrupt.await.is_err() {
-            tracing::error!("the interrupt handler failed; stopping");
-        }
     })
 }
 

@@ -31,8 +31,9 @@ shared primitives. Integration maintainers own `registry-mcp`, a supporting
 composition service over explicit product bindings and the Live Adapter HTTP
 contract. Platform owns its neutral `registry-mcp-edge` primitive; product
 maintainers own each provider's authority and disclosure semantics.
-`registry-breg-mcp`, `registry-breg-review`, and `registry-evidence-oid4vci`
-remain supporting services beside their product, not products of their own.
+`registry-breg-mcp`, `registry-breg-review`, `registry-evidence-oid4vci`, and
+`registry-evidence-oid4vp` remain supporting services beside their product,
+not products of their own.
 
 ## Repository map
 
@@ -109,7 +110,12 @@ remain supporting services beside their product, not products of their own.
 | `crates/registry-manifest-*` | Manifest core types and CLI |
 | `crates/registry-platform-*` | Shared primitives used by the maintained runtimes and tooling |
 | `crates/registry-platform-sqlite` | Shared bounded read-only SQLite security boundary used by Evidence |
+| `crates/registry-platform-x509` | Pure X.509 path validation outside TLS, against configured anchors only |
+| `crates/registry-platform-text` | Pure, versioned Unicode text normalisation pipelines; products own their named profiles |
+| `crates/registry-platform-metrics` | Prometheus text exposition primitive shared by the runtimes |
 | `crates/registry-evidence-oid4vci` | Wallet-facing OID4VCI delivery front end for Evidence credentials, and the `evidence-oid4vci` binary |
+| `crates/registry-evidence-oid4vp` | Wallet-facing OpenID4VP verifier exchange for holder-presented Evidence sources, and the `evidence-oid4vp` binary |
+| `crates/registry-evidence-presentation` | Pure verification of third-party SD-JWT VC presentations against a channel's issuer trust and policy; no network, storage or clock |
 | `crates/registry-language-server` | Editor language server for Evidence authoring documents, hosted for adopters by `evidencectl`; product navigation rules add no runtime dependencies |
 | `crates/registry-thunderid-tooling` | Tooling-only support for adopter CLIs and integration tests against a pinned upstream ThunderID issuer; no runtime depends on it |
 | `crates/registry-cli-docs` | Deterministic CLI reference data generated from Registry Stack Clap command trees, consumed by the docs site's CLI reference build |
@@ -226,7 +232,14 @@ tracked product material; do not call the product implemented on a subset of
 that DoD, and stop before the approved concept's non-goals and future
 profiles. `registry-evidence-oid4vci` delivers Evidence credentials to a
 wallet over OID4VCI 1.0 Final; it never signs, never holds a holder private
-key, and no Evidence crate depends on it at runtime. The optional credential
+key, and no Evidence crate depends on it at runtime.
+`registry-evidence-oid4vp` runs the OpenID4VP exchange for holder-presented
+sources (`products/evidence/CONCEPT.md` section 15.10): it holds a received
+presentation in memory only, until Evidence reads it or the result window
+ends, and never verifies a credential, decides issuer trust, or signs. Evidence
+reads it over its public HTTP contract through a fixed source binding and
+verifies the credential itself with `registry-evidence-presentation`; no
+Evidence crate depends on the protocol service. The optional credential
 status module inside `registry-evidence` (`products/evidence/CONCEPT.md`
 section 15.9, approved; its ledger is library code the served runtime does not
 call yet) follows these rules: it is the only

@@ -44,7 +44,7 @@ use tokio::sync::Semaphore;
 use tokio::time::{timeout_at, Instant};
 use zeroize::Zeroizing;
 
-use crate::{is_cloud_metadata_ip, DEFAULT_VALIDATED_FETCH_CONNECT_TIMEOUT};
+use crate::{is_cloud_metadata_ip, normalize_ipv4_mapped, DEFAULT_VALIDATED_FETCH_CONNECT_TIMEOUT};
 
 pub mod json;
 pub mod oauth;
@@ -4857,16 +4857,6 @@ fn ipv4_in_prefix(ip: Ipv4Addr, network: Ipv4Addr, prefix_len: u32) -> bool {
 fn ipv6_in_prefix(ip: Ipv6Addr, network: Ipv6Addr, prefix_len: u32) -> bool {
     let mask = u128::MAX.checked_shl(128 - prefix_len).unwrap_or(0);
     u128::from(ip) & mask == u128::from(network) & mask
-}
-
-fn normalize_ipv4_mapped(ip: IpAddr) -> IpAddr {
-    match ip {
-        IpAddr::V6(ip) => ip
-            .to_ipv4_mapped()
-            .map(IpAddr::V4)
-            .unwrap_or(IpAddr::V6(ip)),
-        IpAddr::V4(ip) => IpAddr::V4(ip),
-    }
 }
 
 fn is_ipv6_unicast_link_local(ip: Ipv6Addr) -> bool {

@@ -20,7 +20,10 @@ use serde_json::{Map, Value};
 use thiserror::Error;
 
 use crate::{
-    model::{validate_subject_binding_shape, Evidence, HolderPublicKey, SubjectBindingMode},
+    model::{
+        validate_channel_shape, validate_subject_binding_shape, AssertionChannel, ChannelKind,
+        Evidence, HolderPublicKey, SubjectBindingMode,
+    },
     EVIDENCE_SCHEMA_V1,
 };
 
@@ -75,6 +78,10 @@ pub enum SdJwtVcMappingError {
     StructuredProjection,
     #[error("the evidence binding mode disagrees with the members it carries")]
     SubjectBindingShape,
+    #[error("the evidence channel disagrees with the members it carries")]
+    ChannelShape,
+    #[error("only a source assertion has an SD-JWT VC form")]
+    ChannelNotRepresentable,
 }
 
 /// Map a constructed payload and an optional holder key onto the issuance
@@ -90,6 +97,15 @@ pub fn issuance_input(
     // whose mode disagrees with its members can reach a signature.
     validate_subject_binding_shape(evidence)
         .map_err(|_| SdJwtVcMappingError::SubjectBindingShape)?;
+    // The SD-JWT VC profile has no claim that states a channel, so a verifier
+    // reads every such credential as `source`. Serializing any other channel
+    // would make the credential claim more than it can say.
+    match validate_channel_shape(evidence).map_err(|_| SdJwtVcMappingError::ChannelShape)? {
+        AssertionChannel::Source => {}
+        AssertionChannel::HolderPresented(_) => {
+            return Err(SdJwtVcMappingError::ChannelNotRepresentable)
+        }
+    }
     // Deterministic because the kernel canonicalizes subjects to requirement
     // declaration order. The complete set travels as a public claim; `sub` is
     // a convenience projection of the first role.
@@ -369,6 +385,9 @@ pub fn evidence_payload_from_claims(
         "schema": EVIDENCE_SCHEMA_V1,
         "assuranceProfile": claims.get("assuranceProfile").ok_or(SdJwtVcClaimError::MissingClaim)?,
         "subjectBinding": claims.get("subjectBinding").ok_or(SdJwtVcClaimError::MissingClaim)?,
+        // The profile carries no channel claim; every SD-JWT VC is a `source`
+        // assertion.
+        "channel": ChannelKind::Source,
         "id": id,
         "type": "Evidence",
         "supportsRequirement": claims.get("supportsRequirement").ok_or(SdJwtVcClaimError::MissingClaim)?,
@@ -528,6 +547,8 @@ mod tests {
             schema: EVIDENCE_SCHEMA_V1.to_string(),
             assurance_profile: crate::AssuranceProfile::EvidenceGrade,
             subject_binding: SubjectBindingMode::AudienceScoped,
+            channel: ChannelKind::Source,
+            presented_credential: None,
             request_nonce: Some(OFFLINE_EVALUATION_REQUEST_NONCE.to_string()),
             id: "urn:evidence:assertion:v1_2f0a".to_string(),
             evidence_type_name: EvidenceObjectType::Evidence,
@@ -992,6 +1013,71 @@ mod tests {
         assert_eq!(
             evidence_payload_from_claims(&bad_mode, &disclosed).unwrap_err(),
             SdJwtVcClaimError::ClaimShape
+        );
+    }
+
+    /// The profile has no channel claim, so the inverse projection states
+    /// `source`, and the forward projection refuses to claim anything else.
+    #[test]
+    fn an_sd_jwt_vc_is_always_a_source_assertion() {
+        let evidence = evidence();
+        let input = issuance_input(&evidence, None, &BTreeMap::new()).expect("projects");
+        assert!(!input.public_claims.contains_key("channel"));
+        assert!(!input.public_claims.contains_key("presentedCredential"));
+
+        let mut claims = Map::new();
+        claims.insert("iss".into(), input.iss.clone().into());
+        claims.insert("sub".into(), input.sub_ref.clone().into());
+        claims.insert("iat".into(), input.iat.into());
+        claims.insert("exp".into(), input.exp.into());
+        claims.insert("vct".into(), input.vct.clone().into());
+        claims.insert("id".into(), evidence.id.clone().into());
+        claims.insert("jti".into(), evidence.id.clone().into());
+        for (name, value) in &input.public_claims {
+            claims.insert(name.clone(), value.clone());
+        }
+        let disclosed: Vec<(String, Value)> = input
+            .disclosures
+            .iter()
+            .map(|disclosure| (disclosure.name.clone(), disclosure.value.clone()))
+            .collect();
+        let payload = evidence_payload_from_claims(&claims, &disclosed).expect("rebuilds");
+        assert_eq!(payload["channel"], "source");
+
+        let mut named = claims.clone();
+        named.insert("channel".into(), "holder-presented".into());
+        assert_eq!(
+            evidence_payload_from_claims(&named, &disclosed).unwrap_err(),
+            SdJwtVcClaimError::UnexpectedClaim
+        );
+    }
+
+    #[test]
+    fn a_holder_presented_assertion_has_no_sd_jwt_vc_form() {
+        let mut presented = evidence();
+        let (channel, member) = AssertionChannel::HolderPresented(
+            crate::model::PresentedCredential::new(
+                "national-id",
+                "https://issuer.example",
+                "https://credentials.example/identity",
+                "2026-08-02T09:00:00Z".parse().expect("time parses"),
+                crate::model::SubjectLinkMode::Possession,
+            )
+            .expect("members are in contract"),
+        )
+        .into_members();
+        presented.channel = channel;
+        presented.presented_credential = member;
+        assert_eq!(
+            issuance_input(&presented, None, &BTreeMap::new()).unwrap_err(),
+            SdJwtVcMappingError::ChannelNotRepresentable
+        );
+
+        let mut disagreeing = evidence();
+        disagreeing.channel = ChannelKind::HolderPresented;
+        assert_eq!(
+            issuance_input(&disagreeing, None, &BTreeMap::new()).unwrap_err(),
+            SdJwtVcMappingError::ChannelShape
         );
     }
 }

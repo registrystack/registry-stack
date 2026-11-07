@@ -1,0 +1,64 @@
+apiVersion: id.registrystack.org/formats/evidence/target/v1alpha1
+kind: EvidenceTarget
+id: wallet
+project: wallet-presentation-evidence
+package:
+  root: .generated/package
+authority: wallet-authority.yaml
+service:
+  providerId: urn:example:provider:wallet-presentation-evidence
+  issuer: urn:example:issuer:wallet-presentation-evidence
+  publicOrigin: http://127.0.0.1:8080
+  trustDomain: urn:example:trust:wallet-presentation-evidence
+listener:
+  bind: 127.0.0.1:8080
+  trustProxyIdentityHeaders: false
+authentication:
+  oidc:
+    issuer: http://127.0.0.1:8082
+    audience: urn:example:resource:wallet-presentation-evidence
+    tokenTypes:
+    - at+jwt
+    algorithms:
+    - EdDSA
+    jwksSource:
+      type: uri
+      uri: http://127.0.0.1:8082/jwks.json
+    principalClaim: sub
+    requesterTagsClaim: evidence_tags
+    evidenceAudienceClaim: evidence_audience
+    requiredScopes:
+    - evidence:request
+    maximumTokenLifetimeSeconds: 3600
+connections:
+  wallet-verifier:
+    endpoints:
+      credential-possession:
+        origin: http://127.0.0.1:8095
+        authentication:
+          type: static-authorization
+          tokenRef: secret:file/verifier-read-token
+      identity-match:
+        origin: http://127.0.0.1:8095
+        authentication:
+          type: static-authorization
+          tokenRef: secret:file/verifier-read-token
+secretProviders:
+  file:
+    root: .generated/secrets
+signer:
+  type: local-jwk
+  algorithm: ES256
+  privateKeyRef: secret:file/signing-p256-private-jwk
+  publicJwkFile: .generated/secrets/signing-p256-public.jwk.json
+subjectBinding:
+  secretRef: secret:file/subject-binding-hmac-key
+  keyVersion: 1
+audit:
+  path: .generated/audit/evidence.jsonl
+  hashKeyRef: secret:file/audit-hmac-key
+  hashKeyVersion: 1
+rateLimits:
+  requestsPerPrincipalPerMinute: 60
+  burstPerPrincipal: 16
+  failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 10

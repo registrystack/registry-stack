@@ -1,0 +1,63 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/evidence/oid4vp-runtime/oid4vp-runtime.v1alpha1.schema.json
+# The OpenID4VP verifier runtime file for the wallet presentation example. The
+# policy ids and the credential query ids match the wallet-presentation-v1
+# protocol configurations in adapter-packs/wallet-session/protocols/. The
+# issuer and listener origins are loopback placeholders (a plain-HTTP issuer
+# needs allowInsecureHttp, which a deployment behind HTTPS drops); the composed
+# gate replaces the origins and the two absolute paths with its own.
+apiVersion: id.registrystack.org/formats/evidence/oid4vp-runtime/v1alpha1
+kind: EvidenceOid4vpRuntimeConfig
+publicBaseUrl: https://verifier.example.org
+listener:
+  bind: 127.0.0.1:8095
+secretProviders:
+  file:
+    root: /run/secrets/wallet-verifier
+audit:
+  destination: file
+  path: /var/lib/wallet-verifier/audit.jsonl
+  hashKeyRef: secret:file/audit-hash-key
+applicantTokens:
+  issuer: http://127.0.0.1:8082
+  audience: https://verifier.example.org
+  allowInsecureHttp: true
+  jwksSource:
+    type: uri
+    uri: http://127.0.0.1:8082/jwks.json
+  algorithms: [EdDSA]
+  requiredScope: oid4vp:session
+evidenceCredentials:
+  issuer: http://127.0.0.1:8082
+  audience: https://verifier.example.org
+  allowInsecureHttp: true
+  jwksSource:
+    type: uri
+    uri: http://127.0.0.1:8082/jwks.json
+  algorithms: [EdDSA]
+  allowedClient: evidence
+  requiredScope: oid4vp:read-result
+clientIdentifiers:
+  - id: verifier
+    type: x509-san-dns
+    certificateChainRef: secret:file/chain.pem
+    signingKeyRef: secret:file/signing.jwk.json
+policies:
+  - id: credential-possession
+    clientIdentifier: verifier
+    credentials:
+      - id: credential
+        format: dc+sd-jwt
+        vctValues: [https://credentials.example.org/example-credential]
+  - id: identity-match
+    clientIdentifier: verifier
+    credentials:
+      - id: identity
+        format: dc+sd-jwt
+        vctValues: [https://credentials.example.org/example-credential]
+        claims:
+          - path: [name]
+sessions:
+  sessionTtlSeconds: 300
+  resultTtlSeconds: 1800
+  maximumLiveSessions: 64
+  maximumHeldPresentationBytes: 1048576

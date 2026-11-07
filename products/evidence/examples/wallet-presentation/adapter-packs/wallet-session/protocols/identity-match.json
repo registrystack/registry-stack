@@ -1,0 +1,23 @@
+{
+  "policyId": "identity-match",
+  "clientId": "x509_san_dns:verifier.example.org",
+  "credentialQueryId": "identity",
+  "trust": [
+    {
+      "id": "example-issuer",
+      "issuer": "https://issuer.example.org",
+      "vct": ["https://credentials.example.org/example-credential"],
+      "keys": {
+        "jwks": [
+          {"kty": "OKP", "crv": "Ed25519", "kid": "example-issuer-test-key", "x": "LC1rBDiHo7eDhVqNR9jB4WgF9TK2KJSeGnJhHhrC87g"}
+        ]
+      }
+    }
+  ],
+  "deny": {"issuers": [], "certificateSha256": []},
+  "policy": {"vct": ["https://credentials.example.org/example-credential"], "keyBindingRequired": true},
+  "disclosedClaims": ["name"],
+  "status": "not-checked",
+  "maximumCredentialAgeSeconds": 86400,
+  "subjectLink": "attribute-match"
+}

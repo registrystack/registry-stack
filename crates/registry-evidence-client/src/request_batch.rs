@@ -12,7 +12,10 @@ use serde::Serialize;
 use crate::{
     client::VerifiedEvidence,
     error::EvidenceClientError,
-    prepare::{EvidenceRequestSpec, PreparedEvidenceRequest, SubjectExpectations, SubjectRequest},
+    prepare::{
+        ChannelPolicy, EvidenceRequestSpec, PreparedEvidenceRequest, SubjectExpectations,
+        SubjectRequest,
+    },
     request::RequestedSubject,
     response_format::EvidenceResponseFormat,
 };
@@ -124,6 +127,21 @@ impl PreparedEvidenceRequestBatch {
             items,
             sent: AtomicBool::new(false),
         })
+    }
+
+    /// Replace the default channel policy (`source` only, no credential age
+    /// bound) of every item before the batch is sent.
+    pub fn with_channel_policy(
+        mut self,
+        channel_policy: ChannelPolicy,
+    ) -> Result<Self, EvidenceClientError> {
+        channel_policy.validate()?;
+        self.items = self
+            .items
+            .into_iter()
+            .map(|item| item.with_channel_policy(channel_policy.clone()))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(self)
     }
 
     /// Number of positional items and independently generated nonces.

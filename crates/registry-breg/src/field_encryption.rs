@@ -48,6 +48,8 @@ use thiserror::Error;
 use tokio_postgres::GenericClient;
 use zeroize::Zeroizing;
 
+use registry_platform_text::{Pipeline, TextStep, TransliterationTable};
+
 use crate::contract::{FieldTypeSource, NormalizationStep};
 
 /// The label recorded for the Transit datakey provider in key rows.
@@ -484,6 +486,21 @@ impl FieldEncryptionService {
                     .chars()
                     .filter(|character| !matches!(character, ' ' | '-' | '/' | '.'))
                     .collect(),
+                NormalizationStep::Nfc => apply_text_step(TextStep::Nfc, &normalized),
+                // Folding turns some combining marks into base letters
+                // (U+0345 folds to iota), which fixes the marks' order in
+                // place, so the step composes first to put canonically
+                // equivalent spellings in one order. Folding can also leave a
+                // sequence NFC composes (capital iota with dialytika and
+                // tonos folds to a decomposed small iota), so the step closes
+                // with NFC to keep one digest per spelling.
+                NormalizationStep::CaseFold => apply_text_step(
+                    TextStep::Nfc,
+                    &apply_text_step(
+                        TextStep::FullCaseFold,
+                        &apply_text_step(TextStep::Nfc, &normalized),
+                    ),
+                ),
             };
         }
         normalized
@@ -512,6 +529,16 @@ impl FieldEncryptionService {
             key_version,
         }
     }
+}
+
+/// Run one platform text step over a value. The pipeline is bounded by the
+/// value's own length, and each step used here (NFC or full case folding)
+/// grows text by at most three times, well inside the pipeline's eightfold
+/// ceiling, so a refusal can only be a defect in the step list built here.
+fn apply_text_step(step: TextStep, value: &str) -> String {
+    Pipeline::new(vec![step], TransliterationTable::empty())
+        .and_then(|pipeline| pipeline.apply(value, value.len()))
+        .expect("an NFC or case-fold step over a bounded value is within the pipeline limits")
 }
 
 impl fmt::Debug for FieldEncryptionService {
@@ -1035,6 +1062,261 @@ mod tests {
             FieldEncryptionService::normalize(&[], " Ada Lovelace "),
             " Ada Lovelace "
         );
+    }
+
+    /// Every existing step's exact output, including the Unicode cases where
+    /// the standard-library mapping and the platform text pipeline differ. A
+    /// stored blind index is an HMAC of these strings, so a change to any
+    /// line below orphans every index written under the step.
+    #[test]
+    fn existing_steps_keep_their_exact_output() {
+        use Step::*;
+        let vectors: &[(&[Step], &str, &str)] = &[
+            (&[Trim], "  Ada \t", "Ada"),
+            // Trim removes every Unicode White_Space character at the ends
+            // and nothing else: U+00A0 and U+3000 go, U+200B stays.
+            (&[Trim], "\u{a0}\u{3000}Ada\u{3000}\u{a0}", "Ada"),
+            (&[Trim], "\u{200b}Ada\u{200b}", "\u{200b}Ada\u{200b}"),
+            (&[Uppercase], "stra\u{df}e", "STRASSE"),
+            (&[Uppercase], "\u{1e9e}", "\u{1e9e}"),
+            (&[Uppercase], "\u{fb03}", "FFI"),
+            (&[Uppercase], "i\u{307}", "I\u{307}"),
+            (&[Uppercase], "\u{131}", "I"),
+            (&[Uppercase], "\u{3c3}\u{3c2}", "\u{3a3}\u{3a3}"),
+            (&[Lowercase], "STRA\u{df}E", "stra\u{df}e"),
+            (&[Lowercase], "\u{1e9e}", "\u{df}"),
+            (&[Lowercase], "\u{130}", "i\u{307}"),
+            (&[Lowercase], "\u{391}\u{3a3}", "\u{3b1}\u{3c2}"),
+            (&[Lowercase], "\u{3a3}", "\u{3c3}"),
+            (&[Lowercase], "E\u{301}", "e\u{301}"),
+            (&[Lowercase], "\u{c9}", "\u{e9}"),
+            // Collapse splits on White_Space and rejoins with one space, so
+            // it also trims.
+            (&[CollapseWhitespace], " a \t\n b\u{a0}\u{a0}c ", "a b c"),
+            (&[CollapseWhitespace], "a\u{200b}b", "a\u{200b}b"),
+            (&[CollapseWhitespace], "", ""),
+            (&[CollapseWhitespace], " \t ", ""),
+            // Separators are exactly space, hyphen, slash, and dot.
+            (&[RemoveSeparators], "a b-c/d.e", "abcde"),
+            (
+                &[RemoveSeparators],
+                "a\u{a0}b\u{2010}c\u{2013}d\u{2215}e\u{b7}f",
+                "a\u{a0}b\u{2010}c\u{2013}d\u{2215}e\u{b7}f",
+            ),
+            (&[RemoveSeparators], "a\tb\n", "a\tb\n"),
+            // Composition runs in declared order.
+            (&[Uppercase, Lowercase], "stra\u{df}e", "strasse"),
+            (&[Lowercase, Uppercase], "stra\u{df}e", "STRASSE"),
+            (&[RemoveSeparators, Trim], " a-b ", "ab"),
+            (&[Trim, RemoveSeparators], " a-b ", "ab"),
+        ];
+        for (steps, input, expected) in vectors {
+            assert_eq!(
+                FieldEncryptionService::normalize(steps, input),
+                *expected,
+                "{steps:?} over {input:?}"
+            );
+        }
+    }
+
+    /// Documents the defect the Unicode steps close: under the steps that
+    /// existed first, a name typed precomposed and decomposed, or with a
+    /// sharp s and with `ss`, normalizes to different strings and so gets
+    /// different blind indexes.
+    #[test]
+    fn existing_steps_leave_unicode_equivalent_spellings_apart() {
+        use Step::*;
+        let steps: &[&[Step]] = &[
+            &[],
+            &[Trim, Uppercase],
+            &[Trim, Lowercase],
+            &[Trim, CollapseWhitespace, Lowercase],
+        ];
+        for steps in steps {
+            let normalize = |input| FieldEncryptionService::normalize(steps, input);
+            assert_ne!(
+                normalize("Jos\u{e9}"),
+                normalize("Jose\u{301}"),
+                "{steps:?}"
+            );
+        }
+        let lowercase = |input| FieldEncryptionService::normalize(&[Lowercase], input);
+        assert_ne!(lowercase("Stra\u{df}e"), lowercase("Strasse"));
+    }
+
+    #[test]
+    fn unicode_steps_give_equivalent_spellings_one_blind_index() {
+        use Step::*;
+        let service = service(7);
+        let index = |steps: &[Step], input: &str| {
+            service.blind_index(
+                ENTITY_ID,
+                FIELD_ID,
+                &FieldEncryptionService::normalize(steps, input),
+            )
+        };
+        let steps = [Trim, Nfc, CaseFold];
+        // Precomposed and decomposed spellings of one name.
+        assert_eq!(
+            index(&steps, "Jos\u{e9} Mu\u{f1}oz"),
+            index(&steps, "Jose\u{301} Mun\u{303}oz")
+        );
+        // Sharp s, capital sharp s, and `ss`.
+        let sharp = index(&steps, "Stra\u{df}e");
+        assert_eq!(sharp, index(&steps, "STRA\u{1e9e}E"));
+        assert_eq!(sharp, index(&steps, "strasse"));
+        assert_eq!(sharp, index(&steps, "  Strasse"));
+        // Two canonically equivalent orders of one letter's marks. U+0345
+        // folds to a base iota, so folding before canonical ordering would
+        // fix each order in place and give two digests; `case-fold` alone
+        // must match them, as it does after `nfc`.
+        for steps in [&[CaseFold][..], &[Nfc, CaseFold]] {
+            assert_eq!(
+                index(steps, "\u{3b1}\u{301}\u{345}"),
+                index(steps, "\u{3b1}\u{345}\u{301}"),
+                "{steps:?}"
+            );
+        }
+        // Different names stay different.
+        assert_ne!(sharp, index(&steps, "Strase"));
+        assert_ne!(
+            index(&steps, "Jos\u{e9}"),
+            index(&steps, "Jose"),
+            "no accent stripping"
+        );
+        // Without the Unicode steps the same spellings split, which is the
+        // defect the steps close.
+        assert_ne!(
+            index(&[Trim, Lowercase], "Jos\u{e9}"),
+            index(&[Trim, Lowercase], "Jose\u{301}")
+        );
+    }
+
+    #[test]
+    fn case_fold_closes_with_nfc_so_folded_spellings_match() {
+        use Step::*;
+        let normalize = |steps: &[Step], input| FieldEncryptionService::normalize(steps, input);
+        // Folding a capital Greek letter with dialytika leaves a sequence NFC
+        // would compose; without the closing NFC these spellings of one
+        // letter keep different digests.
+        for (left, right) in [
+            ("\u{3aa}\u{301}", "\u{390}"),
+            ("\u{3ab}\u{301}", "\u{3b0}"),
+            ("\u{399}\u{308}\u{301}", "\u{390}"),
+        ] {
+            assert_eq!(
+                normalize(&[Nfc, CaseFold], left),
+                normalize(&[Nfc, CaseFold], right),
+                "{left:?} and {right:?}"
+            );
+        }
+        assert_eq!(normalize(&[CaseFold], "\u{3aa}\u{301}"), "\u{390}");
+    }
+
+    /// Golden outputs of the name-lookup list `[nfc, case-fold]`. A stored
+    /// blind index is the HMAC of exactly this string, so any change here,
+    /// from a code edit or a Unicode data upgrade, changes stored digests and
+    /// needs a reviewed re-index.
+    #[test]
+    fn name_lookup_normalization_has_golden_outputs() {
+        use Step::*;
+        let golden: &[(&str, &str)] = &[
+            // Greek capitals whose fold decomposes, and their spellings.
+            ("\u{3aa}\u{301}", "\u{390}"),
+            ("\u{399}\u{308}\u{301}", "\u{390}"),
+            ("\u{3b9}\u{308}\u{301}", "\u{390}"),
+            ("\u{390}", "\u{390}"),
+            ("\u{3ab}\u{301}", "\u{3b0}"),
+            ("\u{3c5}\u{308}\u{301}", "\u{3b0}"),
+            ("\u{3b0}", "\u{3b0}"),
+            // Sharp s, its capital, and its expansion.
+            ("\u{df}", "ss"),
+            ("\u{1e9e}", "ss"),
+            ("Stra\u{df}e", "strasse"),
+            ("STRASSE", "strasse"),
+            // Decomposed (NFD) forms and their composed spellings.
+            ("e\u{301}", "\u{e9}"),
+            ("E\u{301}", "\u{e9}"),
+            ("\u{c9}", "\u{e9}"),
+            ("Zoe\u{308}", "zo\u{eb}"),
+            ("A\u{30a}", "\u{e5}"),
+            ("\u{212b}", "\u{e5}"),
+            ("\u{1100}\u{1161}", "\u{ac00}"),
+        ];
+        for (input, expected) in golden {
+            assert_eq!(
+                FieldEncryptionService::normalize(&[Nfc, CaseFold], input),
+                *expected,
+                "{input:?}"
+            );
+        }
+    }
+
+    /// Stored `nfc` and `case-fold` digests are HMACs of text whose bytes
+    /// follow the Unicode data the platform text crate carries, and a
+    /// compiled blind index does not record that version, so a data bump
+    /// would change stored digests with no re-index to follow.
+    #[test]
+    fn blind_index_unicode_data_version_is_pinned() {
+        assert_eq!(
+            registry_platform_text::UNICODE_DATA_VERSION,
+            "icu4x~2.2.0/unicode-17.0",
+            "a Unicode data version bump changes stored blind-index digests for `nfc` and \
+             `case-fold` lookups and needs a re-index path before it lands"
+        );
+    }
+
+    #[test]
+    fn unicode_steps_have_exact_outputs() {
+        use Step::*;
+        let vectors: &[(&[Step], &str, &str)] = &[
+            (&[Nfc], "e\u{301}", "\u{e9}"),
+            (&[Nfc], "\u{e9}", "\u{e9}"),
+            (&[Nfc], "\u{1100}\u{1161}", "\u{ac00}"),
+            // NFC composes; it does not apply compatibility mappings.
+            (&[Nfc], "\u{fb01}", "\u{fb01}"),
+            (&[Nfc], "\u{212b}", "\u{c5}"),
+            (&[CaseFold], "Stra\u{df}e", "strasse"),
+            (&[CaseFold], "\u{1e9e}", "ss"),
+            (&[CaseFold], "\u{fb03}", "ffi"),
+            (&[CaseFold], "\u{3c2}", "\u{3c3}"),
+            // No locale tailoring: the Turkish dotted capital folds to `i`
+            // plus a combining dot, and the dotless small `\u{131}` is kept.
+            (&[CaseFold], "\u{130}", "i\u{307}"),
+            (&[CaseFold], "\u{131}", "\u{131}"),
+            (&[CaseFold], "I", "i"),
+            (&[Nfc, CaseFold], "E\u{301}", "\u{e9}"),
+            (&[CaseFold, Nfc], "E\u{301}", "\u{e9}"),
+            (&[], "E\u{301}", "E\u{301}"),
+        ];
+        for (steps, input, expected) in vectors {
+            assert_eq!(
+                FieldEncryptionService::normalize(steps, input),
+                *expected,
+                "{steps:?} over {input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn unicode_steps_accept_the_worst_case_growth_and_the_empty_value() {
+        use Step::*;
+        // U+0390 folds to three characters, the largest expansion per byte
+        // of input that full case folding performs; the closing NFC
+        // composes them back.
+        let input = "\u{390}".repeat(1024);
+        assert_eq!(
+            FieldEncryptionService::normalize(&[CaseFold], &input),
+            "\u{390}".repeat(1024)
+        );
+        // U+1D160 is excluded from composition and decomposes to three
+        // characters, the largest expansion per byte that NFC performs.
+        let input = "\u{1d160}".repeat(1024);
+        assert_eq!(
+            FieldEncryptionService::normalize(&[Nfc, CaseFold], &input),
+            "\u{1d158}\u{1d165}\u{1d16e}".repeat(1024)
+        );
+        assert_eq!(FieldEncryptionService::normalize(&[Nfc, CaseFold], ""), "");
     }
 
     #[test]

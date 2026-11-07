@@ -20,11 +20,17 @@ use crate::{source::SourceAccessAttribution, source_evidence::EvidenceSourceConf
 /// The closed built-in protocol registry used for both pure checks and live
 /// source execution. Ordinary endpoints select no protocol.
 pub fn registry() -> Result<HostProtocolRegistry, HostProtocolError> {
-    HostProtocolRegistry::try_new([
+    #[allow(unused_mut, reason = "optional protocols are appended by feature")]
+    let mut compilers = vec![
         Arc::new(SignedEvidenceCompiler) as Arc<dyn HostProtocolCompiler>,
         Arc::new(AttributionCompiler) as Arc<dyn HostProtocolCompiler>,
         Arc::new(LookupCompiler) as Arc<dyn HostProtocolCompiler>,
-    ])
+    ];
+    #[cfg(feature = "wallet-presentation")]
+    compilers.push(Arc::new(
+        crate::wallet_presentation::WalletPresentationCompiler,
+    ));
+    HostProtocolRegistry::try_new(compilers)
 }
 
 static SIGNED_REQUEST_HEADERS: [HeaderName; 1] = [header::ACCEPT];
@@ -144,9 +150,17 @@ impl HostProtocolResponseVerifier for SignedEvidenceVerifier {
         {
             return Err(HostProtocolResponseRefusal::Protocol);
         }
+        // An upstream assertion is issued after this request was sent, so it is
+        // judged at the instant its response is verified. The acquisition's
+        // evaluation instant is earlier and would refuse an assertion issued in
+        // a later whole second as issued in the future.
         let (values, valid_until) = self
             .config
-            .verified_values(&self.verification, &response.into_body())
+            .verified_values(
+                &self.verification,
+                &response.into_body(),
+                chrono::Utc::now(),
+            )
             .map_err(|_| HostProtocolResponseRefusal::Verification)?;
         Ok(VerifiedHostProtocolResponse::new(
             values,

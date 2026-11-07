@@ -1,6 +1,7 @@
 //! Optional operator-private telemetry. Labels contain no caller or subject values.
 use crate::PostgresStore;
 use axum::{extract::State, http::header::CONTENT_TYPE, routing::get, Json, Router};
+use registry_platform_metrics::{Exposition, MetricKind, CONTENT_TYPE as METRICS_CONTENT_TYPE};
 use serde_json::json;
 use std::sync::Arc;
 #[derive(Clone)]
@@ -59,10 +60,17 @@ async fn metrics(
     State(state): State<MetricsState>,
 ) -> ([(axum::http::header::HeaderName, &'static str); 1], String) {
     let readings = state.readings().await;
-    let mut output = format!(
-        "# TYPE casework_database_up gauge\ncasework_database_up {}\n",
-        u8::from(readings.is_some())
-    );
+    ([(CONTENT_TYPE, METRICS_CONTENT_TYPE)], render(readings))
+}
+/// The exposition for one scrape: `readings` are the open requests, open
+/// tasks, and due tasks, or `None` when the database could not be read.
+fn render(readings: Option<[i64; 3]>) -> String {
+    const DECLARATION: &str = "the metric declarations are valid";
+    let mut out = Exposition::new();
+    out.header("casework_database_up", None, MetricKind::Gauge)
+        .expect(DECLARATION);
+    out.sample("casework_database_up", &[], u8::from(readings.is_some()))
+        .expect(DECLARATION);
     if let Some(values) = readings {
         for (name, value) in [
             "casework_open_review_requests",
@@ -72,8 +80,29 @@ async fn metrics(
         .into_iter()
         .zip(values)
         {
-            output.push_str(&format!("# TYPE {name} gauge\n{name} {value}\n"));
+            out.header(name, None, MetricKind::Gauge)
+                .expect(DECLARATION);
+            out.sample(name, &[], value).expect(DECLARATION);
         }
     }
-    ([(CONTENT_TYPE, "text/plain; version=0.0.4")], output)
+    out.finish()
+}
+#[cfg(test)]
+mod tests {
+    use super::render;
+
+    #[test]
+    fn the_scrape_is_byte_stable() {
+        assert_eq!(
+            render(Some([4, 9, 2])),
+            "# TYPE casework_database_up gauge\ncasework_database_up 1\n\
+             # TYPE casework_open_review_requests gauge\ncasework_open_review_requests 4\n\
+             # TYPE casework_open_review_tasks gauge\ncasework_open_review_tasks 9\n\
+             # TYPE casework_due_review_tasks gauge\ncasework_due_review_tasks 2\n"
+        );
+        assert_eq!(
+            render(None),
+            "# TYPE casework_database_up gauge\ncasework_database_up 0\n"
+        );
+    }
 }

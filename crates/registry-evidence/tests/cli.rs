@@ -3712,6 +3712,26 @@ fn check_rejects_secret_material_the_server_would_refuse_at_startup() {
                        bundle's governed active public JWK",
         },
         SecretFailureCase {
+            label: "signing certificate chain has expired",
+            break_secrets: |deployment| {
+                deployment.install_signing_certificate_chain(SigningChain::Expired);
+            },
+            exit: 1,
+            code: "evidence.deployment.signing-refused",
+            expected: "runtime signing initialization failed: a certificate in the signing \
+                       certificate chain is not valid at startup",
+        },
+        SecretFailureCase {
+            label: "signing certificate leaf certifies a different key",
+            break_secrets: |deployment| {
+                deployment.install_signing_certificate_chain(SigningChain::OtherKey);
+            },
+            exit: 1,
+            code: "evidence.deployment.signing-refused",
+            expected: "runtime signing initialization failed: the signing certificate leaf \
+                       does not certify the active signing key",
+        },
+        SecretFailureCase {
             label: "Transit signer socket is missing",
             break_secrets: |deployment| {
                 // Transit custody is what the evidence-grade profile demands,
@@ -3773,6 +3793,32 @@ fn check_rejects_secret_material_the_server_would_refuse_at_startup() {
         );
         assert_one_check_error(&output, case.exit, case.code, case.expected);
     }
+}
+
+/// A signing certificate chain that certifies the governed key is not itself a
+/// refusal. The all-definitions deployment reaches no source here, so the proof
+/// ends at the first unreachable dependency, after the signing boundary; the
+/// same check without a chain ends in the same place.
+#[test]
+fn check_passes_the_signing_boundary_with_a_chain_that_certifies_the_governed_key() {
+    let baseline = Deployment::stage("all-definitions");
+    baseline.stage_acceptance_secrets();
+    let without_chain = baseline.check_with_runtime_dependencies();
+
+    let deployment = Deployment::stage("all-definitions");
+    deployment.stage_acceptance_secrets();
+    deployment.install_signing_certificate_chain(SigningChain::Valid);
+    let with_chain = deployment.check_with_runtime_dependencies();
+
+    for output in [&without_chain, &with_chain] {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("error[evidence.deployment.dependency-unavailable]"),
+            "{stderr}"
+        );
+        assert!(!stderr.contains("signing"), "{stderr}");
+    }
+    assert_eq!(without_chain.status.code(), with_chain.status.code());
 }
 
 /// One audit initialization failure class, with the exact operator text it
@@ -4009,6 +4055,102 @@ const VERIFY_KEY_ID: &str = "_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo";
 const VERIFY_PRIVATE_JWK: &str = r#"{"kty":"EC","crv":"P-256","d":"MInq88dvxx-e1-MEfmdes4I6Gt2QbsKoEmYyk2j0Oj4","x":"3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4","y":"GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU","alg":"ES256","kid":"_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo"}"#;
 
 /// A different valid P-256 key used to prove exact public-key matching.
+/// Which certificate chain a deployment names for its signing key.
+enum SigningChain {
+    Valid,
+    Expired,
+    OtherKey,
+}
+
+impl SigningChain {
+    /// A leaf and intermediate generated for this run, certifying the
+    /// governed signing key (or a different key) for the stated period.
+    fn pem(&self) -> String {
+        use base64::{
+            engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
+            Engine as _,
+        };
+        use rcgen::{
+            BasicConstraints, CertificateParams, CertifiedIssuer, DistinguishedName, DnType, IsCa,
+            KeyPair, KeyUsagePurpose,
+        };
+        let day = time::Duration::days(1);
+        let now = time::OffsetDateTime::now_utc();
+        let (not_before, not_after) = match self {
+            Self::Expired => (now - day * 3, now - day),
+            _ => (now - day, now + day),
+        };
+        let jwk: Value = serde_json::from_str(match self {
+            Self::OtherKey => MISMATCHED_PRIVATE_JWK,
+            _ => VERIFY_PRIVATE_JWK,
+        })
+        .expect("test key parses");
+        let part = |name: &str| {
+            URL_SAFE_NO_PAD
+                .decode(jwk[name].as_str().expect("JWK member"))
+                .expect("base64url")
+        };
+        let pkcs8 = [
+            [
+                0x30, 0x81, 0x87, 0x02, 0x01, 0x00, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce,
+                0x3d, 0x02, 0x01, 0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, 0x04,
+                0x6d, 0x30, 0x6b, 0x02, 0x01, 0x01, 0x04, 0x20,
+            ]
+            .as_slice(),
+            part("d").as_slice(),
+            [0xa1, 0x44, 0x03, 0x42, 0x00, 0x04].as_slice(),
+            part("x").as_slice(),
+            part("y").as_slice(),
+        ]
+        .concat();
+        let authority = |name: &str, constraint| {
+            let mut params = CertificateParams::new(vec![]).expect("params");
+            let mut dn = DistinguishedName::new();
+            dn.push(DnType::CommonName, name);
+            params.distinguished_name = dn;
+            params.is_ca = IsCa::Ca(constraint);
+            params.key_usages = vec![KeyUsagePurpose::KeyCertSign];
+            params.not_before = now - day * 30;
+            params.not_after = now + day * 30;
+            params
+        };
+        let root = CertifiedIssuer::self_signed(
+            authority("test root", BasicConstraints::Unconstrained),
+            KeyPair::generate().expect("key"),
+        )
+        .expect("root");
+        let intermediate = CertifiedIssuer::signed_by(
+            authority("test intermediate", BasicConstraints::Constrained(0)),
+            KeyPair::generate().expect("key"),
+            &root,
+        )
+        .expect("intermediate");
+        let mut params = CertificateParams::new(vec![]).expect("params");
+        params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+        params.not_before = not_before;
+        params.not_after = not_after;
+        let leaf = params
+            .signed_by(
+                &KeyPair::try_from(pkcs8.as_slice()).expect("signing key pair"),
+                &intermediate,
+            )
+            .expect("leaf");
+        [leaf.der().to_vec(), intermediate.der().to_vec()]
+            .iter()
+            .map(|der| {
+                let encoded = STANDARD.encode(der);
+                let lines = encoded
+                    .as_bytes()
+                    .chunks(64)
+                    .map(|line| std::str::from_utf8(line).expect("base64"))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                format!("-----BEGIN CERTIFICATE-----\n{lines}\n-----END CERTIFICATE-----\n")
+            })
+            .collect()
+    }
+}
+
 const MISMATCHED_PRIVATE_JWK: &str = r#"{"kty":"EC","crv":"P-256","d":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE","x":"axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY","y":"T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU","alg":"ES256","kid":"xx0BcA-wMohw8atYDJOe6peGModklG2wRHBlXHMvl0M"}"#;
 
 /// A staged request nonce, of the exact 43-character request-nonce shape.
@@ -4486,6 +4628,7 @@ fn fixture_evidence() -> serde_json::Value {
         "schema": "registry.assertion-evidence/v1",
         "assuranceProfile": "evidence-grade",
         "subjectBinding": "audience-scoped",
+        "channel": "source",
         "requestNonce": FIXTURE_NONCE,
         "id": "urn:ulid:01K1EXAMPLE0000000000000000",
         "type": "Evidence",
@@ -5407,6 +5550,18 @@ outboundTls:
             .collect::<String>();
         assert_ne!(replaced, text, "staged artifact has no {prefix:?} line");
         fs::write(path, replaced).expect("write staged artifact");
+    }
+
+    /// Name a certificate chain for the governed signing key in the bundle
+    /// and stage its PEM file under `public-keys/`.
+    fn install_signing_certificate_chain(&self, chain: SigningChain) {
+        let file = "public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.chain.pem";
+        self.replace(
+            "bundle/evidence.yaml",
+            "  publishedPublicJwkFiles: []",
+            &format!("  certificateChainFile: {file}\n  publishedPublicJwkFiles: []"),
+        );
+        fs::write(self.path("bundle").join(file), chain.pem()).expect("stage signing chain");
     }
 
     fn write_secret(&self, name: &str, value: &str) {

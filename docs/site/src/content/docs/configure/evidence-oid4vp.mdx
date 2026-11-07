@@ -1,0 +1,314 @@
+---
+title: Verify a wallet presentation
+description: Run the evidence-oid4vp verifier front end beside a Registry Evidence so a holder can present an SD-JWT VC from a wallet and Evidence can answer from it.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-11-06"
+doc_type: how-to
+persona:
+  - operator
+locale: en
+standards_referenced:
+  - sd-jwt-vc
+---
+
+import ConfigurationReference from '../../../components/ConfigurationReference.astro';
+import reference from '../../../data/generated/evidence-configuration.json';
+
+If you run Registry Evidence and a holder must present a credential from a wallet for Evidence to
+answer from, run `evidence-oid4vp` beside it. The verifier runs the wallet-facing
+[OpenID4VP](../../reference/glossary/#oid4vp) exchange and holds the wallet's response until
+Evidence reads it. Evidence then verifies the credential and decides; the verifier only checks
+protocol facts, so [how Evidence works](../../explanation/how-evidence-works/) still describes every
+decision.
+
+{/* Evidence: products/evidence/contracts/oid4vp-profile.yaml, service_boundary, summary;
+    crates/registry-evidence-oid4vp/README.md. */}
+{/* TODO[evidence]: OpenID4VP 1.0 and HAIP 1.0 have no row in src/data/standards.yaml. A row needs
+    evidence_docs pinned to a release tag or commit, and no release carries the verifier or its
+    profile contract yet. Add both rows when a release pins products/evidence/contracts/oid4vp-profile.yaml. */}
+
+## What you need
+
+- A running Registry Evidence whose project has a definition with `acquisition.holderPresented`
+  (see [Pair it with an Evidence definition](#pair-it-with-an-evidence-definition)).
+- A TLS proxy that publishes the verifier's public HTTPS origin, `publicBaseUrl`.
+- An OIDC issuer that mints two kinds of bearer token: one for the applicant who starts a session,
+  and one, distinct from it, for the Evidence service that reads the result.
+- A wallet that holds a holder-bound `dc+sd-jwt` credential and can encrypt its authorization
+  response. [Check wallet interoperability](#check-wallet-interoperability) says what is and is not
+  established about any wallet.
+- A build of `evidence-oid4vp` from source.
+
+:::caution
+`evidence-oid4vp` is in no release. No release script builds it, the release images and the
+`rstack` toolset do not carry it, and no install command fetches it. Build it from the repository
+with `cargo build --locked --release -p registry-evidence-oid4vp`. The `evidence` runtime that
+reads `acquisition.holderPresented` does ship in releases.
+:::
+
+{/* Evidence: release/scripts/release_roster.py; release/manifests/;
+    crates/registry-evidence-oid4vp/Cargo.toml;
+    docs/site/src/data/cli-reference.yaml, source_build_only_binaries. */}
+
+## What the verifier does and does not do
+
+The verifier creates a presentation session for an authenticated applicant, serves the signed
+request object to the wallet, receives the wallet's encrypted response, and releases the
+presentation to Evidence on request. It holds the presentation in memory only, bounded by
+`sessions.maximumHeldPresentationBytes`, and drops the result after `sessions.resultTtlSeconds`
+or when Evidence reads it, whichever comes first.
+
+It never opens a credential, verifies an SD-JWT, or checks a key binding. It holds no Evidence
+signing key and signs no assertion; its only signing keys sign request objects. Evidence verifies
+what the wallet presented, so a compromised verifier can withhold or misroute a presentation but
+cannot make Evidence accept a forged one.
+
+{/* Evidence: products/evidence/contracts/oid4vp-profile.yaml, service_boundary, sessions,
+    held_presentation_budget;
+    crates/registry-evidence-oid4vp/src/config.rs, maximum_held_presentation_bytes. */}
+
+## Write the runtime file
+
+The runtime file names the verifier's public origin, the tokens it accepts, the client identifiers
+it signs requests as, and the policies that say what to ask a wallet for. This excerpt of the
+repository's example shows the two client identifier kinds most wallets need and one policy for
+each; replace every origin and reference with your own:
+
+```yaml title="runtime.yaml"
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/evidence/oid4vp-runtime/oid4vp-runtime.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/evidence/oid4vp-runtime/v1alpha1
+kind: EvidenceOid4vpRuntimeConfig
+publicBaseUrl: https://verifier.example.org
+listener:
+  bind: 127.0.0.1:8095
+secretProviders:
+  file:
+    root: /run/secrets/evidence-oid4vp
+audit:
+  destination: file
+  path: /var/lib/registry-evidence-oid4vp/audit.jsonl
+  hashKeyRef: secret:file/audit-hash-key
+applicantTokens:
+  issuer: https://mint.example.org
+  audience: https://verifier.example.org
+  requiredScope: oid4vp:session
+evidenceCredentials:
+  issuer: https://mint.example.org
+  audience: https://verifier.example.org
+  allowedClient: evidence
+  requiredScope: oid4vp:read-result
+clientIdentifiers:
+  - id: haip
+    type: x509-san-dns
+    certificateChainRef: secret:file/verifier-chain.pem
+    signingKeyRef: secret:file/verifier-signing.jwk.json
+  - id: inji
+    type: decentralized-identifier
+    did: did:web:verifier.example.org
+    signingKeyRef: secret:file/verifier-did-signing.jwk.json
+policies:
+  - id: national-id
+    clientIdentifier: haip
+    credentials:
+      - id: national_id
+        format: dc+sd-jwt
+        vctValues:
+          - https://credentials.example.org/national-id
+        claims:
+          - path: [given_name]
+          - path: [family_name]
+```
+
+`listener.bind` is the private address your proxy forwards to; the listener speaks plain HTTP.
+Every policy names one client identifier, and startup refuses an unknown reference, a duplicate
+`id`, an identifier no policy uses, and two identifiers that yield the same `client_id`. A policy
+whose credential lists no `claims` requests no claim, which is how a possession-only check
+discloses nothing; an empty `claims` list is refused. Every key has the bounds and default its
+schema gives it, and the generated [reference](#configuration-reference) lists them.
+
+{/* Evidence: products/evidence/examples/oid4vp-runtime/runtime.yaml;
+    products/evidence/contracts/oid4vp-profile.yaml, client_identifiers, dcql;
+    crates/registry-evidence-oid4vp/src/config.rs, ClientIdentifierKind;
+    crates/registry-evidence-oid4vp/tests/startup.rs. */}
+
+## Choose a client identifier
+
+The client identifier is how a wallet recognizes the verifier, and wallets differ in which kinds
+they accept. Declare the kind your wallet trusts; the verifier signs every request object for that
+policy with it.
+
+| Type | Wallet sees `client_id` | Request signed with | Also serves |
+| --- | --- | --- | --- |
+| `x509-san-dns` | `x509_san_dns:` and the host of `publicBaseUrl` | ES256, certificate chain in `x5c` | Nothing |
+| `x509-hash` | `x509_hash:` and the SHA-256 of the leaf certificate | ES256, certificate chain in `x5c` | Nothing |
+| `decentralized-identifier` | `decentralized_identifier:did:web:<host>` | EdDSA | `/.well-known/did.json` and `/v1/jwks` |
+| `pre-registered` | The configured `clientId`, with no colon | EdDSA | `/v1/jwks` |
+
+An X.509 leaf certificate must name the host of `publicBaseUrl` as a DNS subject alternative name
+(`x509-san-dns`) and must hold the signing key. A `did:web` identifier names a host with no port and
+no path, and the `publicBaseUrl` must have no port. A `pre-registered` identifier works only when
+the wallet operator has registered the client identifier, the response URI, and the keys served at
+`/v1/jwks`; the verifier cannot do that registration for you.
+
+{/* Evidence: products/evidence/contracts/oid4vp-profile.yaml, client_identifiers.prefixes,
+    endpoints;
+    crates/registry-evidence-oid4vp/src/client_identifier.rs;
+    crates/registry-evidence-oid4vp/src/config.rs, X509SanDns, X509Hash,
+    DecentralizedIdentifier, PreRegistered. */}
+
+## Response mode and credential format
+
+The verifier speaks one response mode and one credential format.
+
+- `direct_post.jwt` is the only response mode. The wallet encrypts its authorization response to a
+  per-session key the request publishes in `client_metadata`, accepting `A128GCM` or `A256GCM` as the
+  policy allows. A wallet that cannot encrypt the response cannot complete the flow; the only
+  unencrypted shape the verifier accepts is an error that echoes the session state.
+- `dc+sd-jwt` ([SD-JWT VC](../../reference/glossary/#sd-jwt-vc)) is the only credential format,
+  asked for through a DCQL query. An mdoc credential is not supported.
+- The verifier implements OpenID4VP 1.0 and the HAIP 1.0 verifier flow profile. It is not
+  certified, and no conformance suite result is claimed. Draft wire shapes such as
+  `presentation_definition` are not spoken.
+- Only the cross-device flow exists: the wallet reads the request over a link or QR code the portal
+  shows. A same-device redirect is not supported.
+
+{/* Evidence: products/evidence/contracts/oid4vp-profile.yaml, standards_profile, response,
+    not_built;
+    crates/registry-evidence-oid4vp/src/request_object.rs;
+    crates/registry-evidence-oid4vp/src/policy.rs, CREDENTIAL_FORMAT;
+    crates/registry-evidence-oid4vp/tests/responses.rs. */}
+
+## Pair it with an Evidence definition
+
+The verifier decides nothing about the credential, so an Evidence definition does. Declare the
+holder-presented channel on the definition and read the presentation through a Source that uses
+the built-in `wallet-presentation-v1` host protocol:
+
+```yaml
+acquisition:
+  holderPresented:
+    source: presented-possession
+    selectorProfiles:
+      - wallet-session
+```
+
+A request's selector profile selects exactly one acquisition channel, with no fallback to the
+other. The selector profile carries the session reference and the presenting principal, and the
+principal must be the one that created the session in `evidence-oid4vp`. The caller states both the
+presenting principal and the session reference. Evidence refuses a principal that did not create the
+session, but it cannot tell which relying party a session was meant for, so run one relying party
+per Evidence deployment that serves wallet channels. The Source's route sends
+Evidence's read to the verifier's `POST /v1/presentations/read` with the Evidence service
+credential, whose token the `evidenceCredentials` block admits.
+
+The `wallet-presentation-v1` configuration is pinned by digest in the Adapter pack. It states the
+trusted issuers and their keys, the credential types, the claims to disclose, the maximum
+credential age, and the subject-link mode, and it carries an explicit issuer deny-list. Holder
+binding is always required. Status checking is not available: write `status: not-checked`, because
+`required` is refused. Startup refuses a holder-presented Source that does not use
+`wallet-presentation-v1`, and a source-channel Source that does.
+
+What Evidence signs is an ordinary assertion on the `holder-presented` channel; see
+[how Evidence works](../../explanation/how-evidence-works/#what-may-an-answer-carry) for what a
+relying party sees and decides. The `holderPresented` keys are in the generated
+[Evidence configuration reference](../../reference/evidence-configuration/).
+
+{/* Evidence: products/evidence/examples/wallet-presentation/evidence.yaml, holderPresented;
+    products/evidence/examples/wallet-presentation/adapter-packs/wallet-session/protocols/identity-match.json,
+    disclosedClaims, subjectLink, maximumCredentialAgeSeconds;
+    crates/registry-evidence/src/wallet_presentation.rs, StatusMode, RawConfig, READ_PATH,
+    status_required_is_refused_with_a_message_that_says_why;
+    crates/registry-evidence/src/wallet_channel_tests.rs, holderPresented;
+    products/evidence/contracts/oid4vp-profile.yaml, evidence_read_contract. */}
+
+## Check and serve
+
+Check the file before the service reads it:
+
+```sh
+evidence-oid4vp check --runtime-config runtime.yaml
+```
+
+`evidence-oid4vp --help` lists the commands and flags; its command reference is not published until it
+is reviewed. `check` reads that one file and nothing else. It exits 0 when nothing is refused, 1 when something
+is refused (or, with `--deny-warnings`, a warning is reported), 2 for an invalid command line, and
+3 when the file cannot be read. It does not prove that the certificate chain and signing key
+resolve, match, or are unexpired; `serve` proves all three when it starts. Then start the service,
+and render its HTTP contract if your portal needs it:
+
+```sh
+evidence-oid4vp serve --runtime-config runtime.yaml
+evidence-oid4vp openapi --output evidence-oid4vp.openapi.json
+```
+
+Your portal creates a session at `POST /v1/sessions` with an applicant token and shows the returned
+wallet link; the wallet fetches the request object and posts its encrypted response; Evidence reads
+the result. The [wallet presentation API reference](../../reference/apis/evidence-oid4vp/) renders
+the same contract. `GET /v1/sessions/{reference}` reports `pending`, `received`, or `failed`, and
+adds a `failureCategory` when the wallet reported an error; it never returns presented content.
+`/health` answers while the process runs, and `/ready` tracks the local audit destination and the
+client identifier certificates: it answers `503` once an X.509 certificate is past its `notAfter`,
+because wallets refuse every request object signed under it, and the service logs one warning per
+identifier at that transition. The certificate is checked for validity at load only, so replace it
+and restart before it expires.
+
+The first successful read of a result (`200`, or the `422` that reports a wallet error) consumes it
+and releases its held bytes. Any later read of that reference is the same `404` as an unknown or
+expired reference, and two concurrent reads yield exactly one result. A read that does not succeed
+(authentication, rate limit, unknown reference, principal mismatch, session still pending, audit
+unavailable) consumes nothing. Reads are not retried safely after delivery: if Evidence loses the
+response, the portal creates a new session. The audit record of a delivering read has the outcome
+`delivered_and_consumed` (`failed_and_consumed` for a wallet error).
+
+A session takes one response, and sessions, presentations, and results live in process memory, so
+run one replica and expect a restart to end every open session. A response that would pass
+`sessions.maximumHeldPresentationBytes` is refused with `503` and `Retry-After`, and the session
+stays pending. Each endpoint family has a request budget under `rateLimits`; an exceeded budget is
+answered with `429` and `Retry-After`. The budgets for the request-object fetch and the wallet response
+use one key for all wallets, so they bound the service as a
+whole and cannot tell one client from another: a single source can exhaust them for everyone.
+Rate limit per source address at your ingress in front of those two paths.
+
+{/* Evidence: crates/registry-evidence-oid4vp/src/cli.rs, Command;
+    crates/registry-evidence-oid4vp/src/service.rs, retry_after;
+    products/evidence/contracts/oid4vp-profile.yaml, endpoints, sessions, held_presentation_budget;
+    products/evidence/generated/registry-evidence-oid4vp.openapi.json. */}
+
+## Check wallet interoperability
+
+No wallet is verified against this verifier. The repository's gate runs the verifier and Evidence
+together over loopback with a simulated wallet, which proves the flow between the two services and
+nothing about a real wallet. A wallet is described as working only by a reviewed device-run receipt
+under `products/evidence/fixtures/interoperability/oid4vp-device-run/`, and none exists yet.
+
+What you can rely on is the wire profile the verifier speaks (above) and what the research expects
+each wallet to need. The expectations in the repository's device-run procedure are unverified for
+every wallet it lists, and one is expected to fail: a wallet that presents only mdoc cannot satisfy a
+`dc+sd-jwt` request. To confirm your own wallet, run the repository's device-run harness against a
+deployment you control, or create a session from your portal and present from the wallet while you
+watch the verifier's audit journal and Evidence's response. A refused or failed session is the
+information; the `failureCategory` the session reports is a closed set that names the wallet's own
+error class.
+
+{/* Evidence: products/evidence/examples/wallet-presentation/README.md, Device run,
+    Expected wallet needs, Limits;
+    products/evidence/fixtures/interoperability/oid4vp-device-run/receipt.schema.json;
+    crates/registry-evidence-oid4vp/tests/device_run.rs;
+    crates/registry-evidence-oid4vp/tests/evidence_journey.rs,
+    a_presented_credential_becomes_a_verified_assertion;
+    products/evidence/contracts/oid4vp-profile.yaml, interoperability_target. */}
+
+## Configuration reference
+
+{/* The runtime grammar is generated into evidence-configuration.json from
+    products/evidence/generated/oid4vp-runtime/oid4vp-runtime.schema.json by
+    docs/site/scripts/generate-evidence-configuration.mjs. Run npm run generate from docs/site. */}
+<ConfigurationReference contracts={reference.contracts.filter((contract) => contract.id === 'oid4vp-runtime')} prefix="evidence-oid4vp" />
+
+## Next
+
+- [Wallet presentation API reference](../../reference/apis/evidence-oid4vp/)
+- [Registry Evidence security model](../../security/evidence/)

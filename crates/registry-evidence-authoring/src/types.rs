@@ -165,7 +165,11 @@ pub(crate) fn function_shape(
         if definition.derive.function != function.id {
             continue;
         }
-        let facts = compiled_facts(compiled, definition.acquisition.source.as_str());
+        // Type contexts follow the first Source a validated definition names.
+        let Some(source) = definition.acquisition.source_ids().first().copied() else {
+            continue;
+        };
+        let facts = compiled_facts(compiled, source.as_str());
         let context = fields([
             (
                 "parameters".to_owned(),

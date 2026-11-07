@@ -78,8 +78,12 @@ use registry_evidence_verifier::model::{
     EvidenceRequestBatchResponse, EvidenceRequestBatchResponseItem,
 };
 
+#[path = "discovery_channel_tests.rs"]
+mod discovery_channel_tests;
 #[path = "evidence_source_tests.rs"]
 mod evidence_source_tests;
+#[path = "wallet_channel_tests.rs"]
+mod wallet_channel_tests;
 
 const AUTH_PRIVATE_JWK: &str = r#"{"kty":"EC","crv":"P-256","d":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE","x":"axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY","y":"T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU","alg":"ES256","kid":"acceptance-auth-key"}"#;
 const EVIDENCE_KEY_ID: &str = "_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo";
@@ -2556,6 +2560,8 @@ fn local_procedure_policy_document(
         expected_subjects: procedure.expected_subjects.clone(),
         expected_outputs: procedure.expected_outputs.clone(),
         revoked_key_ids: procedure.revoked_key_ids.clone(),
+        accepted_channels: registry_evidence_verifier::verifier::default_accepted_channels(),
+        maximum_credential_age_seconds: None,
         maximum_assertion_lifetime_seconds: procedure.maximum_assertion_lifetime_seconds,
         clock_skew_seconds: procedure.clock_skew_seconds,
     }
@@ -8201,6 +8207,8 @@ fn verification_policy_stub(
         expected_subjects: Vec::new(),
         expected_outputs: Vec::new(),
         revoked_key_ids: Vec::new(),
+        accepted_channels: registry_evidence_verifier::verifier::default_accepted_channels(),
+        maximum_credential_age_seconds: None,
         maximum_assertion_lifetime_seconds: 48 * 60 * 60,
         clock_skew_seconds: 30,
     }
@@ -14125,6 +14133,10 @@ fn signing_initialization_faults_name_distinct_causes() {
         SigningInitializationFault::GovernedKey,
         SigningInitializationFault::SelfTest,
         SigningInitializationFault::KeySet,
+        SigningInitializationFault::CertificateChain,
+        SigningInitializationFault::CertificateKey,
+        SigningInitializationFault::CertificateNotValid,
+        SigningInitializationFault::CertificateChainTooLong,
         SigningInitializationFault::Transit(TransitInitializationError::Client),
         SigningInitializationFault::Transit(TransitInitializationError::Unavailable),
         SigningInitializationFault::Transit(TransitInitializationError::Refused),

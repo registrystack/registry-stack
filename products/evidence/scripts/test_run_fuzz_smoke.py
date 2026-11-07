@@ -139,12 +139,19 @@ raise SystemExit(17 if target in os.environ.get("FAKE_CARGO_FAILURES", "").split
 
 
 class EvidenceFuzzWorkflowTest(unittest.TestCase):
-    def test_assurance_matrix_runs_every_declared_fuzz_target_once_in_two_pairs(self) -> None:
+    def test_assurance_matrix_runs_every_declared_fuzz_target_once_in_groups(self) -> None:
         workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
         strategy = workflow["jobs"]["evidence-fuzz"]["strategy"]
         matrix = strategy["matrix"]["include"]
-        pairs = [(entry["target_a"], entry["target_b"]) for entry in matrix]
-        flattened = [target for pair in pairs for target in pair]
+        groups = [
+            tuple(
+                entry[key]
+                for key in ("target_a", "target_b", "target_c")
+                if key in entry
+            )
+            for entry in matrix
+        ]
+        flattened = [target for group in groups for target in group]
 
         manifest = tomllib.loads(FUZZ_MANIFEST.read_text(encoding="utf-8"))
         declared = [binary["name"] for binary in manifest["bin"]]
@@ -152,10 +159,14 @@ class EvidenceFuzzWorkflowTest(unittest.TestCase):
         self.assertIs(False, strategy["fail-fast"])
         self.assertEqual(
             {
-                ("verifier_flattened_jws", "verifier_sd_jwt_vc"),
+                (
+                    "verifier_flattened_jws",
+                    "verifier_sd_jwt_vc",
+                    "verifier_holder_proof",
+                ),
                 ("authoring_openapi", "authoring_project"),
             },
-            set(pairs),
+            set(groups),
         )
         self.assertEqual(len(flattened), len(set(flattened)))
         self.assertCountEqual(declared, flattened)

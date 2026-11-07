@@ -130,6 +130,11 @@ or refuses, with the context needed to apply it.
   requires an accepted audit attempt and records its outcome without assertion
   values. `bregctl evidence-retention erase-expired` remains available for manual
   use; this does not change request or history erasure.
+- Governed-action Evidence acceptance requires an assertion whose signed
+  `channel` member is `source`. A correctly signed `holder-presented` assertion
+  is refused through `action.evidence_failed`, and no configuration key accepts
+  another channel. BReg has no intake, store, or verifier for wallet
+  presentations.
 - `products/breg/starters/` holds ready-made, versioned BReg projects with
   fixed scenarios and synthetic clients, pinned to the same PublicSchema
   draft vocabulary snapshot as `bregctl init --from publicschema`.
@@ -158,6 +163,22 @@ or refuses, with the context needed to apply it.
   covers direct database reads (DBA, replica, dump, backup); the serving
   process, holders of the key-transit credential, and backups retained from
   before a flip stay outside it and are documented operator risk.
+- A changed `normalization` list on an already encrypted lookup is a reviewed
+  `field-encryption-backfill` step that names only the field's `#lookup`
+  column and re-derives each digest from the stored envelope. It refuses
+  before changing a digest when two records would collide on a unique lookup.
+  A new digest may equal the stale digest a later record still holds; on a
+  unique lookup each chunk clears that stale digest before it writes its own,
+  so the step completes in any record order. The cost: a cleared record is
+  not found by lookup until the walk reaches it, and maintenance serves no
+  reads until the step completes. Adding or removing a lookup, or changing
+  `unique`, stays unsupported.
+- Stored `nfc` and `case-fold` digests follow the Unicode data
+  `registry-platform-text` carries (`UNICODE_DATA_VERSION`), which a compiled
+  blind index does not record, so a data bump would change stored digests
+  with no re-index path. A BReg test pins the version; the durable fix,
+  carrying the data version in the compiled blind index so a bump reads as a
+  normalization change, belongs with the bump.
 - Field encryption runs on the AWS-LC FIPS build everywhere the workspace
   links it; there is no non-FIPS backend selection and no runtime mode switch.
   A local-file data-key provider exists for local assurance only and the

@@ -29,13 +29,16 @@ integration-test fixtures.
 | [`registry-platform-hooks`](../../crates/registry-platform-hooks/README.md) | Shared hook contract: declarations, envelope, handler messages, compile-time rules, and the delivery core behind the `postgres` feature. |
 | [`registry-platform-httpsec`](../../crates/registry-platform-httpsec/README.md) | Axum/Tower HTTP security middleware, CORS policy validation, body limits, and RFC 9457 Problem Details responses. |
 | [`registry-platform-httputil`](../../crates/registry-platform-httputil/README.md) | Outbound HTTP clients, bounded response reads, URL construction, and SSRF-resistant fetch validation. |
+| [`registry-platform-metrics`](../../crates/registry-platform-metrics/README.md) | Prometheus text exposition (format 0.0.4) writer and counter and histogram state with bounded, value-free label sets. |
 | [`registry-platform-objectstore`](../../crates/registry-platform-objectstore/README.md) | S3-compatible object storage and HTTP content verification transports, bound to a caller-supplied namespace, with fixed refusals and no retries. |
 | [`registry-platform-oidc`](../../crates/registry-platform-oidc/README.md) | OIDC discovery, JWKS caching, and JWT verifier configuration shared by registry services. |
 | [`registry-platform-ratelimit`](../../crates/registry-platform-ratelimit/README.md) | Bounded in-memory keyed rate limiting: a token bucket and a fixed window counter over opaque caller keys. |
 | [`registry-platform-resilience`](../../crates/registry-platform-resilience/README.md) | Bounded in-process resilience: the retry delay computation and a process-local circuit breaker state machine. |
-| [`registry-platform-sdjwt`](../../crates/registry-platform-sdjwt/README.md) | SD-JWT VC issuance and holder-proof validation helpers. |
+| [`registry-platform-sdjwt`](../../crates/registry-platform-sdjwt/README.md) | SD-JWT VC issuance, RFC 9901 presentation handling, and key-binding validation helpers. |
 | [`registry-platform-sqlite`](../../crates/registry-platform-sqlite/README.md) | Bounded read-only SQLite execution for Evidence source adapters. |
 | [`registry-platform-testing`](../../crates/registry-platform-testing/README.md) | Mock IdP, mock HTTP upstreams, key fixtures, and cross-crate assertions for consumers. |
+| [`registry-platform-text`](../../crates/registry-platform-text/README.md) | Deterministic Unicode text normalisation steps that products compose into their own named profiles. |
+| [`registry-platform-x509`](../../crates/registry-platform-x509/README.md) | X.509 chain validation for JOSE `x5c` headers against configured trust anchors, outside TLS. |
 | [`registry-platform-yaml`](../../crates/registry-platform-yaml/README.md) | The shared configuration reader: one YAML subset, typed decoding, and value-free diagnostics with a code, a position, and the fix. |
 
 ## Design Principles

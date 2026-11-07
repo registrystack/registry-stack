@@ -4,7 +4,6 @@
 use std::collections::BTreeSet;
 use std::fs;
 #[cfg(unix)]
-use std::future::Future;
 use std::io::Read as _;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -133,6 +132,7 @@ pub fn prepare(runtime_path: &Path) -> Result<PreparedDiscovery, StartupError> {
 pub async fn serve(runtime_path: &Path) -> Result<(), StartupError> {
     tracing::info!(target: "registry_discovery::startup", "Discovery startup began");
     let prepared = prepare(runtime_path)?;
+    let shutdown = shutdown_after(registry_platform_httpsec::shutdown_signal)?;
     let listener = TcpListener::bind(prepared.bind)
         .await
         .map_err(|_| StartupError::Listener)?;
@@ -153,8 +153,7 @@ pub async fn serve(runtime_path: &Path) -> Result<(), StartupError> {
     });
     tokio::select! {
         result = &mut server => map_server_result(result),
-        signal = shutdown_signal() => {
-            signal?;
+        () = shutdown => {
             let _ = shutdown_tx.send(());
             match tokio::time::timeout(shutdown_timeout, &mut server).await {
                 Ok(result) => map_server_result(result),
@@ -167,32 +166,21 @@ pub async fn serve(runtime_path: &Path) -> Result<(), StartupError> {
     }
 }
 
-async fn shutdown_signal() -> Result<(), StartupError> {
-    #[cfg(unix)]
-    {
-        let mut terminate =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                .map_err(|_| StartupError::Shutdown)?;
-        first_shutdown_signal(tokio::signal::ctrl_c(), terminate.recv()).await
-    }
-    #[cfg(not(unix))]
-    {
-        tokio::signal::ctrl_c()
-            .await
-            .map_err(|_| StartupError::Shutdown)
-    }
-}
-
-#[cfg(unix)]
-async fn first_shutdown_signal<C, T, E>(ctrl_c: C, terminate: T) -> Result<(), StartupError>
+/// Install the stop-signal handlers with `install`. A failure refuses startup
+/// with [`StartupError::Shutdown`], so the service never runs with no way to
+/// be stopped by a signal.
+fn shutdown_after<I, S>(install: I) -> Result<S, StartupError>
 where
-    C: Future<Output = Result<(), E>>,
-    T: Future<Output = Option<()>>,
+    I: FnOnce() -> std::io::Result<S>,
 {
-    tokio::select! {
-        result = ctrl_c => result.map_err(|_| StartupError::Shutdown),
-        result = terminate => result.ok_or(StartupError::Shutdown),
-    }
+    install().map_err(|error| {
+        tracing::error!(
+            target: "registry_discovery::startup",
+            %error,
+            "the stop signals cannot be observed"
+        );
+        StartupError::Shutdown
+    })
 }
 
 fn map_server_result(
@@ -760,19 +748,23 @@ logLevel: info
         }
     }
 
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn injected_ctrl_c_enters_the_shared_graceful_shutdown_path() {
-        let ctrl_c = async { Ok::<(), ()>(()) };
-        let terminate = std::future::pending::<Option<()>>();
-        assert_eq!(first_shutdown_signal(ctrl_c, terminate).await, Ok(()));
+    #[test]
+    fn a_stop_signal_install_failure_refuses_startup() {
+        let error = shutdown_after(|| -> std::io::Result<std::future::Pending<()>> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "install refused",
+            ))
+        })
+        .expect_err("an install failure is an error, never a silent wait");
+        assert_eq!(error, StartupError::Shutdown);
     }
 
-    #[cfg(unix)]
     #[tokio::test]
-    async fn injected_sigterm_enters_the_shared_graceful_shutdown_path() {
-        let ctrl_c = std::future::pending::<Result<(), ()>>();
-        let terminate = async { Some(()) };
-        assert_eq!(first_shutdown_signal(ctrl_c, terminate).await, Ok(()));
+    async fn an_installed_stop_signal_resolves_when_it_fires() {
+        let signal = shutdown_after(|| Ok(std::future::ready(()))).expect("installs");
+        tokio::time::timeout(Duration::from_secs(5), signal)
+            .await
+            .expect("a fired signal resolves");
     }
 }

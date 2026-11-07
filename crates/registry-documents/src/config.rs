@@ -11,7 +11,6 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use jsonwebtoken::Algorithm;
 use registry_documents_core::{
     DocumentsProject, HookHandler, DOCUMENTS_RUNTIME_API_VERSION, DOCUMENTS_RUNTIME_KIND,
 };
@@ -31,8 +30,8 @@ use registry_platform_config::{
 };
 use registry_platform_objectstore::{s3::S3Settings, verifier::HttpVerifierSettings};
 use registry_platform_oidc::{
-    access_token_typ_set, fetch_discovery_for_issuer, parse_static_jwks, IssuerNetworkPolicy,
-    JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, TokenVerifierConfig,
+    access_token_typ_set, fetch_discovery_for_issuer, parse_static_jwks, AccessTokenAlgorithm,
+    IssuerNetworkPolicy, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, TokenVerifierConfig,
 };
 use registry_platform_yaml::{BoundedU32, BoundedU64, Diagnostic, ExternalId, LocalId, Report};
 use serde::Deserialize;
@@ -599,7 +598,10 @@ impl RuntimeConfig {
         TokenVerifierConfig::access_token_profile(
             oidc.provider.issuer.to_string(),
             vec![oidc.provider.audience.clone()],
-            vec![Algorithm::RS256, Algorithm::ES256],
+            vec![
+                AccessTokenAlgorithm::RS256.to_jsonwebtoken(),
+                AccessTokenAlgorithm::ES256.to_jsonwebtoken(),
+            ],
             access_token_typ_set(DOCUMENTS_ACCESS_TOKEN_TYPE),
         )
         .with_scope_claim(oidc.scope_claim.as_str().to_owned())

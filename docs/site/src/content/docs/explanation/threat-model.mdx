@@ -178,6 +178,33 @@ does not claim certification of itself.
   including the failed-selector enumeration defense.
 - Released assertions have no recall, revocation, status list, or presentation-time check. Validity
   windows and key publication determine how long they verify.
+- A wallet presentation passes through the OpenID4VP verifier, which holds it in memory until
+  Evidence reads it and never verifies it. A compromised verifier can withhold or misroute a
+  presentation or read the claims a holder disclosed; it cannot make Evidence accept a forged
+  credential, because Evidence checks the issuer, the disclosures, and the holder binding itself.
+  A restart discards open sessions. A `holder-presented` assertion is accepted only by a relying
+  party whose channel policy lists it; BReg never accepts one for a governed action.
+  {/* Evidence: products/evidence/contracts/oid4vp-profile.yaml, service_boundary, sessions;
+       crates/registry-evidence/src/wallet_presentation.rs, WalletPresentationVerifier;
+       crates/registry-evidence-client/src/prepare.rs, default_accepted_channels;
+       crates/registry-breg/src/problem.rs, ActionEvidenceFailed. */}
+- A cross-device wallet flow lets a holder present into a session someone else started, by relay
+  or by cooperation. Holder binding proves the presenter controls the wallet key, not that the
+  presenter is the applicant. `possession` proves a credential from a trusted issuer was presented
+  into the session; with `attribute-match`, the requirement's derivation compares the disclosed
+  claims with the one expected record, so another person's credential yields a mismatch. Evidence
+  also refuses a read whose stated receipt time falls outside the verifier's largest result window
+  plus clock skew, so a verifier that kept a presentation cannot replay it beyond that window.
+  {/* Evidence: crates/registry-evidence/src/wallet_presentation.rs, received_within_window,
+       SubjectLinkMode; products/evidence/CONCEPT.md, 15.10 Linking a credential to the subject. */}
+- The calling relying party states the presenting principal and the session reference for a
+  wallet read. Evidence refuses a principal that did not create the session, but it cannot tell
+  which relying party a session was meant for. Run one relying party per Evidence deployment that
+  serves wallet channels.
+  {/* Evidence: crates/registry-evidence/src/wallet_presentation.rs, ReadRequest,
+       WalletPresentationVerifier::verified (created_by);
+       products/evidence/examples/wallet-presentation/evidence.yaml, wallet-session selector
+       profile. */}
 - The request nonce is echoed correlation data, not replay prevention. Evidence does not enforce
   uniqueness or consume it.
 - Secret provisioning, key custody and rotation, audit retention, backups, database access,

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Adopt the shared platform implementations for the access-token algorithm
+  roster (still exactly RS256 and ES256), framework-rejection normalization
+  (400, 413, 415 and 422 answer the same `request.*` problem codes), the stop
+  signal and the Prometheus exposition. `serve` refuses startup with the
+  signal error when a stop-signal handler cannot be installed; SIGINT is now
+  installed at startup alongside SIGTERM.
+- Bound the `messaging_http_requests_total` series at 512 and the
+  `messaging_authentication_refusals_total` series at 8. A series past its bound
+  is not added; it is logged as a warning by metric name, never by label value.
+  The scrape keeps its other series, values and `text/plain; version=0.0.4`
+  content type.
 - BREAKING: provider `prepare`, `interpret` and `receipt` scripts run on a
   deterministic engine, so the script budget holds for every call a script can
   make. `timestamp`, `elapsed`, `sleep`, `exit`, `take`, `tag`, `set_tag`,

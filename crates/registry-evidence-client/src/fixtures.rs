@@ -135,6 +135,25 @@ impl SignedEvidenceFixture {
             .into_bytes()
     }
 
+    /// A signed assertion that states the `holder-presented` channel, with a
+    /// presented credential issued at `credential_issued_at`.
+    pub(crate) fn sign_holder_presented(
+        &self,
+        request_nonce: &str,
+        credential_issued_at: &str,
+    ) -> Vec<u8> {
+        let mut payload = self.payload(request_nonce, PURPOSE);
+        payload["channel"] = json!("holder-presented");
+        payload["presentedCredential"] = json!({
+            "trustEntry": "national-id",
+            "issuer": "https://issuer.example",
+            "type": "https://credentials.example/identity",
+            "issuedAt": credential_issued_at,
+            "subjectLink": "attribute-match",
+        });
+        self.sign_payload(&payload)
+    }
+
     /// A signed assertion whose stated purpose is not the one the relying party
     /// asked for.
     pub(crate) fn sign_with_purpose(&self, request_nonce: &str, purpose: &str) -> Vec<u8> {
@@ -168,6 +187,7 @@ impl SignedEvidenceFixture {
             "schema": EVIDENCE_SCHEMA_V1,
             "assuranceProfile": "local",
             "subjectBinding": "audience-scoped",
+            "channel": "source",
             "requestNonce": request_nonce,
             "id": "urn:example:client:evidence:00000000-0000-4000-8000-000000000001",
             "type": "Evidence",

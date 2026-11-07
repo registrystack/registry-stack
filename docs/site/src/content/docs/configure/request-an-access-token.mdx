@@ -89,7 +89,7 @@ Its claims carry:
 An issuer checks `iat` and `exp` against its own clock, so keep yours synchronized.
 
 {/* Evidence: crates/registry-platform-authcommon/src/client_assertion.rs, sign_client_assertion,
-    DEFAULT_ASSERTION_LIFETIME_SECONDS, MAXIMUM_ASSERTION_LIFETIME_SECONDS, header_algorithm;
+    DEFAULT_ASSERTION_LIFETIME_SECONDS, MAXIMUM_ASSERTION_LIFETIME_SECONDS;
     crates/registry-platform-httputil/src/client/private_key_jwt.rs, PrivateKeyJwtConfig,
     with_audience, with_scopes, CLIENT_ASSERTION_TYPE;
     crates/registry-evidencectl/src/client.rs, client_assertion_audience;

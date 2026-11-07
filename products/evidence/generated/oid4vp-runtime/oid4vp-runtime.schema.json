@@ -1,0 +1,859 @@
+{
+  "$defs": {
+    "AccessTokenAlgorithm": {
+      "enum": [
+        "EdDSA",
+        "ES256",
+        "ES384",
+        "RS256",
+        "RS384"
+      ],
+      "type": "string"
+    },
+    "ApplicantTokensDocument": {
+      "additionalProperties": false,
+      "description": "The issuer of applicant tokens.",
+      "properties": {
+        "algorithms": {
+          "default": [
+            "ES256"
+          ],
+          "description": "The signature algorithms a token may use; one family only.",
+          "items": {
+            "$ref": "#/$defs/AccessTokenAlgorithm"
+          },
+          "maxItems": 5,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "allowInsecureHttp": {
+          "default": false,
+          "description": "Permit plain HTTP beyond loopback to the configured issuer and to a\nJWKS URI declared in configuration. TLS remains required unless the\noperator explicitly accepts this transport risk.",
+          "type": "boolean"
+        },
+        "audience": {
+          "description": "The audience every accepted access token must carry in `aud`.",
+          "maxLength": 512,
+          "minLength": 1,
+          "type": "string"
+        },
+        "issuer": {
+          "$ref": "#/$defs/Url",
+          "description": "Exact issuer accepted in access-token `iss` claims, an absolute\n`https` URL, or a plain `http` URL when `allowInsecureHttp` is set."
+        },
+        "jwksSource": {
+          "$ref": "#/$defs/JwksSource",
+          "default": {
+            "type": "discovery"
+          },
+          "description": "Where the issuer's signing keys come from. Absent reads the issuer's\nOpenID Connect discovery document."
+        },
+        "maximumTokenLifetimeSeconds": {
+          "default": 900,
+          "description": "The longest lifetime a token may carry, in seconds.",
+          "format": "uint64",
+          "maximum": 3600,
+          "minimum": 60,
+          "type": "integer"
+        },
+        "requiredScope": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "The scope every token must carry to create a session. The creating\nprincipal is the token's issuer, subject, and client."
+        }
+      },
+      "required": [
+        "issuer",
+        "audience",
+        "requiredScope"
+      ],
+      "type": "object"
+    },
+    "AuditDestinationKind": {
+      "description": "The configured audit destination kind, as written in product configuration.",
+      "oneOf": [
+        {
+          "const": "file",
+          "description": "Durable, rotated JSON Lines file.",
+          "type": "string"
+        },
+        {
+          "const": "stdout",
+          "description": "One JSON line per entry on standard output, flushed per entry.",
+          "type": "string"
+        }
+      ]
+    },
+    "AuditDocument": {
+      "additionalProperties": false,
+      "description": "The process-local audit destination and keyed-pseudonym secret.",
+      "properties": {
+        "destination": {
+          "$ref": "#/$defs/AuditDestinationKind",
+          "default": "file"
+        },
+        "hashKeyRef": {
+          "$ref": "#/$defs/SecretReference",
+          "description": "Secret reference to the audit hash key."
+        },
+        "path": {
+          "pattern": "^/",
+          "type": "string"
+        },
+        "retentionDays": {
+          "format": "uint32",
+          "maximum": 36500,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "rotateBytes": {
+          "format": "uint64",
+          "maximum": 4294967295,
+          "minimum": 1048576,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "hashKeyRef"
+      ],
+      "type": "object"
+    },
+    "ClaimQueryDocument": {
+      "additionalProperties": false,
+      "description": "One claim a credential query asks for.",
+      "properties": {
+        "path": {
+          "description": "The claims path: object member names from the credential root, 1 to 8.\nA name may repeat along a path (`address`, `address`), so this is an\nordered list, not a set.",
+          "items": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "ClientIdentifierDocument": {
+      "description": "One client identifier. The `type` member names the choice.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "`x509_san_dns`: the leaf certificate's DNS subject alternative name is\nthe public host. Requests are signed with the certificate's key (ES256).",
+          "properties": {
+            "certificateChainRef": {
+              "$ref": "#/$defs/SecretReference",
+              "description": "The PEM certificate chain, leaf first, as a secret reference."
+            },
+            "id": {
+              "$ref": "#/$defs/LocalId",
+              "description": "The identifier policies name in `clientIdentifier`."
+            },
+            "signingKeyRef": {
+              "$ref": "#/$defs/SecretReference",
+              "description": "The private JWK that signs request objects, as a secret reference.\nIt must be the leaf certificate's key."
+            },
+            "type": {
+              "const": "x509-san-dns",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "certificateChainRef",
+            "signingKeyRef"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`x509_hash`: the client identifier is the SHA-256 hash of the leaf\ncertificate. Requests are signed with the certificate's key (ES256).",
+          "properties": {
+            "certificateChainRef": {
+              "$ref": "#/$defs/SecretReference",
+              "description": "The PEM certificate chain, leaf first, as a secret reference."
+            },
+            "id": {
+              "$ref": "#/$defs/LocalId",
+              "description": "The identifier policies name in `clientIdentifier`."
+            },
+            "signingKeyRef": {
+              "$ref": "#/$defs/SecretReference",
+              "description": "The private JWK that signs request objects, as a secret reference.\nIt must be the leaf certificate's key."
+            },
+            "type": {
+              "const": "x509-hash",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "certificateChainRef",
+            "signingKeyRef"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`decentralized_identifier` with a `did:web` DID. The service serves the\nDID document at `/.well-known/did.json`. Requests are signed with an\nEd25519 key (EdDSA).",
+          "properties": {
+            "did": {
+              "$ref": "#/$defs/ExternalId",
+              "description": "`did:web:` and the host of `publicBaseUrl`, with no port and no\npath."
+            },
+            "id": {
+              "$ref": "#/$defs/LocalId",
+              "description": "The identifier policies name in `clientIdentifier`."
+            },
+            "signingKeyRef": {
+              "$ref": "#/$defs/SecretReference",
+              "description": "The private Ed25519 JWK (`kty` OKP, `alg` EdDSA) that signs request\nobjects, as a secret reference."
+            },
+            "type": {
+              "const": "decentralized-identifier",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "did",
+            "signingKeyRef"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`pre-registered`: the client identifier is the bare `clientId` a wallet\noperator registers, with this service's `/v1/jwks` as the key set.\nRequests are signed with an Ed25519 key (EdDSA).",
+          "properties": {
+            "clientId": {
+              "$ref": "#/$defs/ExternalId",
+              "description": "The client identifier as registered with the wallet operator. It\nholds no `:`, which is what marks it as pre-registered."
+            },
+            "id": {
+              "$ref": "#/$defs/LocalId",
+              "description": "The identifier policies name in `clientIdentifier`."
+            },
+            "signingKeyRef": {
+              "$ref": "#/$defs/SecretReference",
+              "description": "The private Ed25519 JWK (`kty` OKP, `alg` EdDSA) that signs request\nobjects, as a secret reference."
+            },
+            "type": {
+              "const": "pre-registered",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "clientId",
+            "signingKeyRef"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "CredentialFormat": {
+      "description": "The only credential format the service requests.",
+      "enum": [
+        "dc+sd-jwt"
+      ],
+      "type": "string"
+    },
+    "CredentialQueryDocument": {
+      "additionalProperties": false,
+      "description": "One DCQL credential query.",
+      "properties": {
+        "claims": {
+          "description": "The claims asked for, 1 to 64. Ask only for what the policy needs.\nAbsent, the query requests no selectively disclosable claim and the\nwallet presents the credential with none (OpenID4VP 1.0 section 6.4.1);\nan empty list is refused.",
+          "items": {
+            "$ref": "#/$defs/ClaimQueryDocument"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "type": "array"
+        },
+        "format": {
+          "$ref": "#/$defs/CredentialFormat",
+          "description": "The credential format, `dc+sd-jwt`."
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The query identifier the wallet keys its `vp_token` by."
+        },
+        "vctValues": {
+          "description": "The credential types (`vct`) the wallet may present for this query, 1\nto 16.",
+          "items": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "id",
+        "format",
+        "vctValues"
+      ],
+      "type": "object"
+    },
+    "EnvironmentSecretProviderConfig": {
+      "additionalProperties": false,
+      "description": "The environment secret provider. It takes no settings.",
+      "type": "object"
+    },
+    "EvidenceCredentialsDocument": {
+      "additionalProperties": false,
+      "description": "The issuer of the Evidence service credential.",
+      "properties": {
+        "algorithms": {
+          "default": [
+            "ES256"
+          ],
+          "description": "The signature algorithms a token may use; one family only.",
+          "items": {
+            "$ref": "#/$defs/AccessTokenAlgorithm"
+          },
+          "maxItems": 5,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "allowInsecureHttp": {
+          "default": false,
+          "description": "Permit plain HTTP beyond loopback to the configured issuer and to a\nJWKS URI declared in configuration. TLS remains required unless the\noperator explicitly accepts this transport risk.",
+          "type": "boolean"
+        },
+        "allowedClient": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "The one client allowed to read results: Evidence's service client."
+        },
+        "audience": {
+          "description": "The audience every accepted access token must carry in `aud`.",
+          "maxLength": 512,
+          "minLength": 1,
+          "type": "string"
+        },
+        "issuer": {
+          "$ref": "#/$defs/Url",
+          "description": "Exact issuer accepted in access-token `iss` claims, an absolute\n`https` URL, or a plain `http` URL when `allowInsecureHttp` is set."
+        },
+        "jwksSource": {
+          "$ref": "#/$defs/JwksSource",
+          "default": {
+            "type": "discovery"
+          },
+          "description": "Where the issuer's signing keys come from. Absent reads the issuer's\nOpenID Connect discovery document."
+        },
+        "maximumTokenLifetimeSeconds": {
+          "default": 900,
+          "description": "The longest lifetime a token may carry, in seconds.",
+          "format": "uint64",
+          "maximum": 3600,
+          "minimum": 60,
+          "type": "integer"
+        },
+        "requiredScope": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "The scope the Evidence token must carry to read a result."
+        }
+      },
+      "required": [
+        "issuer",
+        "audience",
+        "allowedClient",
+        "requiredScope"
+      ],
+      "type": "object"
+    },
+    "ExternalId": {
+      "description": "An identifier another system issues, written exactly as its issuer gives it.",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "type": "string"
+    },
+    "FileSecretProviderConfig": {
+      "additionalProperties": false,
+      "description": "The file secret provider.",
+      "properties": {
+        "root": {
+          "description": "Absolute directory holding one file per secret. Each file must be a\nregular file owned by the runtime user, mode 0400 or 0600, with exactly\none hard link.",
+          "pattern": "^/",
+          "type": "string"
+        }
+      },
+      "required": [
+        "root"
+      ],
+      "type": "object"
+    },
+    "JwksSource": {
+      "description": "Where a runtime obtains the OIDC issuer's signing keys.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Read `jwks_uri` from the issuer's OpenID Connect discovery document.",
+          "properties": {
+            "type": {
+              "const": "discovery",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Fetch the key set from this absolute `https` URI, skipping discovery.\nA plain `http` URI is accepted on loopback for supervised local\ndevelopment, and beyond loopback only when the issuer block sets\n`allowInsecureHttp`.",
+          "properties": {
+            "type": {
+              "const": "uri",
+              "type": "string"
+            },
+            "uri": {
+              "$ref": "#/$defs/Url"
+            }
+          },
+          "required": [
+            "type",
+            "uri"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Read the key set from a secret, for deployments without network access\nto the issuer.",
+          "properties": {
+            "documentRef": {
+              "$ref": "#/$defs/SecretReference"
+            },
+            "type": {
+              "const": "static",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "documentRef"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ListenerBind": {
+      "description": "Socket address the runtime listens on, written host:port with an IP address host ([addr]:port for IPv6).",
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "ListenerConfig": {
+      "additionalProperties": false,
+      "description": "The listener of a runtime that declares no TLS or exposure settings.",
+      "properties": {
+        "bind": {
+          "$ref": "#/$defs/ListenerBind"
+        }
+      },
+      "required": [
+        "bind"
+      ],
+      "type": "object"
+    },
+    "ListenerDocument": {
+      "additionalProperties": false,
+      "description": "The listener a wallet and a portal reach.",
+      "properties": {
+        "bind": {
+          "$ref": "#/$defs/ListenerBind"
+        },
+        "maximumRequestBytes": {
+          "default": 16384,
+          "description": "The largest request body accepted, in bytes.",
+          "format": "uint32",
+          "maximum": 1048576,
+          "minimum": 1024,
+          "type": "integer"
+        },
+        "requestTimeoutMilliseconds": {
+          "default": 5000,
+          "description": "How long one request may take, in milliseconds.",
+          "format": "uint64",
+          "maximum": 30000,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "bind"
+      ],
+      "type": "object"
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
+    "PolicyDocument": {
+      "additionalProperties": false,
+      "description": "A presentation policy.",
+      "properties": {
+        "acceptedResponseEncryption": {
+          "default": [
+            "A128GCM",
+            "A256GCM"
+          ],
+          "description": "The `enc` values of an encrypted authorization response the service\naccepts and advertises.",
+          "items": {
+            "$ref": "#/$defs/ResponseEncryption"
+          },
+          "maxItems": 2,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "clientIdentifier": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The client identifier requests under this policy use: the `id` of an\nentry in `clientIdentifiers`."
+        },
+        "credentials": {
+          "description": "The credential queries, 1 to 8.",
+          "items": {
+            "$ref": "#/$defs/CredentialQueryDocument"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "type": "array"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The policy identifier a portal names when it creates a session."
+        },
+        "trustedAuthorities": {
+          "description": "Trusted authority hints applied to every credential query. Omit for a\nwallet that does not support them.",
+          "items": {
+            "$ref": "#/$defs/TrustedAuthorityDocument"
+          },
+          "maxItems": 4,
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "clientIdentifier",
+        "credentials"
+      ],
+      "type": "object"
+    },
+    "RateLimitsDocument": {
+      "additionalProperties": false,
+      "description": "Request-rate limits.",
+      "properties": {
+        "evidenceReadBurst": {
+          "default": 100,
+          "description": "The most result reads one Evidence client may make in a burst.",
+          "format": "uint32",
+          "maximum": 100000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "evidenceReadsPerMinute": {
+          "default": 600,
+          "description": "Result reads per minute for one Evidence client.",
+          "format": "uint32",
+          "maximum": 1000000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "responseBurstPerRequest": {
+          "default": 6,
+          "description": "The most response attempts against one session in a burst.",
+          "format": "uint32",
+          "maximum": 1000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "responsesPerRequestPerMinute": {
+          "default": 12,
+          "description": "Response attempts per minute against one session.",
+          "format": "uint32",
+          "maximum": 6000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "sessionCreationBurst": {
+          "default": 10,
+          "description": "The most sessions one principal may create in a burst.",
+          "format": "uint32",
+          "maximum": 100000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "sessionCreationsPerPrincipalPerMinute": {
+          "default": 30,
+          "description": "Sessions one principal may create per minute.",
+          "format": "uint32",
+          "maximum": 100000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "walletRequestBurst": {
+          "default": 100,
+          "description": "The most wallet requests admitted in a burst.",
+          "format": "uint32",
+          "maximum": 100000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "walletRequestsPerMinute": {
+          "default": 600,
+          "description": "Request object fetches per minute, across all wallets.",
+          "format": "uint32",
+          "maximum": 1000000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "walletResponseBurst": {
+          "default": 100,
+          "description": "The most wallet responses admitted in a burst.",
+          "format": "uint32",
+          "maximum": 100000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "walletResponsesPerMinute": {
+          "default": 600,
+          "description": "Wallet responses per minute across all sessions. Every attempt counts,\nincluding those for unknown request identifiers.",
+          "format": "uint32",
+          "maximum": 1000000,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "ResponseEncryption": {
+      "description": "The accepted `enc` values of an encrypted authorization response.",
+      "enum": [
+        "A128GCM",
+        "A256GCM"
+      ],
+      "type": "string"
+    },
+    "SecretProvidersConfig": {
+      "additionalProperties": false,
+      "anyOf": [
+        {
+          "properties": {
+            "file": {
+              "$ref": "#/$defs/FileSecretProviderConfig"
+            }
+          },
+          "required": [
+            "file"
+          ]
+        },
+        {
+          "properties": {
+            "environment": {
+              "$ref": "#/$defs/EnvironmentSecretProviderConfig"
+            }
+          },
+          "required": [
+            "environment"
+          ]
+        }
+      ],
+      "description": "The secret providers a runtime enables. A reference is resolved only by a\nprovider declared here: `secret:file/name` under `file.root`, and\n`secret:env/NAME` only when `environment: {}` is present.",
+      "properties": {
+        "environment": {
+          "$ref": "#/$defs/EnvironmentSecretProviderConfig",
+          "description": "Enables `secret:env/NAME` references, read from the process\nenvironment. Declared as an empty mapping: `environment: {}`."
+        },
+        "file": {
+          "$ref": "#/$defs/FileSecretProviderConfig",
+          "description": "Enables `secret:file/name` references, read from files under `root`."
+        }
+      },
+      "type": "object"
+    },
+    "SecretReference": {
+      "description": "An exact secret reference: secret:file/name, resolved under secretProviders.file.root, or secret:env/NAME, resolved only when secretProviders.environment is declared.",
+      "pattern": "^(?:secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
+      "type": "string"
+    },
+    "SessionsDocument": {
+      "additionalProperties": false,
+      "description": "The bounds of the in-memory session store.",
+      "properties": {
+        "maximumHeldPresentationBytes": {
+          "default": 268435456,
+          "description": "The most presentation bytes the store holds across all sessions, from\nthe moment a response is accepted until its session ends or its result\nexpires. A response that would exceed it is refused with a retryable\n503; the sessions already holding results are unaffected.",
+          "format": "uint64",
+          "maximum": 17179869184,
+          "minimum": 1048576,
+          "type": "integer"
+        },
+        "maximumLiveSessions": {
+          "default": 4096,
+          "description": "How many sessions the store holds. A full store refuses new sessions\nrather than forgetting live ones.",
+          "format": "uint32",
+          "maximum": 1048576,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "resultTtlSeconds": {
+          "default": 1800,
+          "description": "How long an accepted presentation is held for Evidence to read, in\nseconds.",
+          "format": "uint64",
+          "maximum": 3600,
+          "minimum": 30,
+          "type": "integer"
+        },
+        "sessionTtlSeconds": {
+          "default": 300,
+          "description": "How long a session waits for the wallet's response, in seconds. The\nrequest object expires with it.",
+          "format": "uint64",
+          "maximum": 900,
+          "minimum": 30,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "TrustedAuthorityDocument": {
+      "additionalProperties": false,
+      "description": "A trusted authority hint passed to the wallet for minimisation. The service\nstill decides trust itself.",
+      "properties": {
+        "type": {
+          "$ref": "#/$defs/TrustedAuthorityType",
+          "description": "The authority type."
+        },
+        "values": {
+          "description": "Authority Key Identifiers, base64url, 1 to 16.",
+          "items": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "type",
+        "values"
+      ],
+      "type": "object"
+    },
+    "TrustedAuthorityType": {
+      "description": "The trusted authority type; only `aki` is offered.",
+      "enum": [
+        "aki"
+      ],
+      "type": "string"
+    },
+    "Url": {
+      "description": "An absolute http or https URL with a host preserved as written, no user information, and no backslash, whitespace or control character. DNS case and equivalent IPv6 literals are permitted.",
+      "format": "uri",
+      "maxLength": 2048,
+      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@\\u005C\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]+([/?#][^\\u005C\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*)?$",
+      "type": "string"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/evidence/oid4vp-runtime/oid4vp-runtime.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The wallet protocol service runtime file: one deployment of the OpenID4VP\nverifier front end for Evidence.",
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/evidence/oid4vp-runtime/v1alpha1",
+      "description": "The format version of this file.",
+      "type": "string"
+    },
+    "applicantTokens": {
+      "$ref": "#/$defs/ApplicantTokensDocument",
+      "description": "The issuer of the applicant tokens a portal presents to create a\nsession."
+    },
+    "audit": {
+      "$ref": "#/$defs/AuditDocument",
+      "description": "The required durable audit journal."
+    },
+    "clientIdentifiers": {
+      "description": "How the service identifies itself to a wallet: one or more client\nidentifiers, each named by a local id. Every policy names the one it\nuses, and every identifier is used by at least one policy.",
+      "items": {
+        "$ref": "#/$defs/ClientIdentifierDocument"
+      },
+      "maxItems": 8,
+      "minItems": 1,
+      "type": "array"
+    },
+    "evidenceCredentials": {
+      "$ref": "#/$defs/EvidenceCredentialsDocument",
+      "description": "The issuer of the Evidence service credential that reads a result."
+    },
+    "kind": {
+      "const": "EvidenceOid4vpRuntimeConfig",
+      "description": "The document kind.",
+      "type": "string"
+    },
+    "listener": {
+      "$ref": "#/$defs/ListenerDocument",
+      "description": "The listener a wallet and a portal reach."
+    },
+    "metricsListener": {
+      "$ref": "#/$defs/ListenerConfig",
+      "description": "The optional operator-only metrics listener: a loopback or private\naddress the service listener does not use. Absent means no metrics\nendpoint exists."
+    },
+    "policies": {
+      "description": "What a portal may ask a wallet to present. At least one.",
+      "items": {
+        "$ref": "#/$defs/PolicyDocument"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "publicBaseUrl": {
+      "$ref": "#/$defs/Url",
+      "description": "The public origin wallets reach this service at: a bare https origin\nwith no path, query, or fragment. The response URI and the request URI\nare built from it. A trailing slash is removed."
+    },
+    "rateLimits": {
+      "$ref": "#/$defs/RateLimitsDocument",
+      "description": "Request-rate limits."
+    },
+    "secretProviders": {
+      "$ref": "#/$defs/SecretProvidersConfig",
+      "description": "The secret providers the `*Ref` members may name."
+    },
+    "sessions": {
+      "$ref": "#/$defs/SessionsDocument",
+      "description": "The bounds of the in-memory session store."
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "publicBaseUrl",
+    "listener",
+    "secretProviders",
+    "audit",
+    "applicantTokens",
+    "evidenceCredentials",
+    "clientIdentifiers",
+    "policies"
+  ],
+  "title": "Evidence OpenID4VP verifier runtime configuration",
+  "type": "object"
+}

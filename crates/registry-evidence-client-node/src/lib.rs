@@ -54,8 +54,8 @@ use registry_evidence_client::{
 use convert::{
     audience_scoped_request_from_json, batch_spec_from_json, config_from_json,
     datetime_from_unix_millis, evidence_to_json, exchange_from_authorization_json,
-    map_client_error, map_config_error, map_conversion_error, spec_from_json,
-    subject_expectations_to_json,
+    map_client_error, map_config_error, map_conversion_error, spec_channel_policy_from_json,
+    spec_from_json, subject_expectations_to_json,
 };
 
 /// Every mapped failure (see `convert::map_client_error` and friends) carries
@@ -370,6 +370,8 @@ impl SdJwtVcBatchResponse {
 #[napi(object)]
 pub struct VerifiedEvidence {
     /// The verified payload, serialized field for field with no hand mapping.
+    /// Its `channel` is `source` or `holder-presented`, and a
+    /// `holder-presented` payload also carries `presentedCredential`.
     pub evidence: serde_json::Value,
     /// The validated W3C trace identifier for the exchange that produced this
     /// payload. It is support correlation only, not an Evidence audit operation
@@ -708,11 +710,14 @@ impl EvidenceClient {
     )]
     pub fn prepare(&self, spec: serde_json::Value) -> Result<PreparedEvidenceRequest> {
         catch_panic("preparing a request", || {
+            let channel_policy = spec_channel_policy_from_json(&spec)
+                .map_err(|error| to_napi_error(map_conversion_error(&error)))?;
             let spec = spec_from_json(&spec)
                 .map_err(|error| to_napi_error(map_conversion_error(&error)))?;
             let prepared = self
                 .inner
                 .prepare(spec)
+                .and_then(|prepared| prepared.with_channel_policy(channel_policy))
                 .map_err(|error| to_napi_error(map_client_error(&error)))?;
             Ok(PreparedEvidenceRequest {
                 inner: Arc::new(prepared),
@@ -724,15 +729,18 @@ impl EvidenceClient {
     /// a multi-subject request batch. No I/O happens here, and the returned
     /// opaque batch is good for exactly one exchange.
     #[napi(
-        ts_args_type = "spec: { requirement: string; purpose: string; audience: string; evidenceType: string; issuedBy: string; providedBy: string; configurationRevision: string; expectedAssuranceProfile: any; expectedOutputs: ReadonlyArray<Readonly<Record<string, any>>>; maximumAssertionLifetimeSeconds: number; clockSkewSeconds: number; items: ReadonlyArray<{ subjects: ReadonlyArray<{ role: string; selectorProfile: string; selectorValues?: Readonly<Record<string, string | number | boolean>> | null }>; subjectExpectations: 'acceptFirstUse' | { pinned: ReadonlyArray<{ role: string; binding: string }> } }> }"
+        ts_args_type = "spec: { requirement: string; purpose: string; audience: string; evidenceType: string; issuedBy: string; providedBy: string; configurationRevision: string; expectedAssuranceProfile: any; expectedOutputs: ReadonlyArray<Readonly<Record<string, any>>>; maximumAssertionLifetimeSeconds: number; clockSkewSeconds: number; acceptedChannels?: ReadonlyArray<'source' | 'holder-presented'>; maximumCredentialAgeSeconds?: number; items: ReadonlyArray<{ subjects: ReadonlyArray<{ role: string; selectorProfile: string; selectorValues?: Readonly<Record<string, string | number | boolean>> | null }>; subjectExpectations: 'acceptFirstUse' | { pinned: ReadonlyArray<{ role: string; binding: string }> } }> }"
     )]
     pub fn prepare_batch(&self, spec: serde_json::Value) -> Result<PreparedEvidenceRequestBatch> {
         catch_panic("preparing a request batch", || {
+            let channel_policy = spec_channel_policy_from_json(&spec)
+                .map_err(|error| to_napi_error(map_conversion_error(&error)))?;
             let spec = batch_spec_from_json(&spec)
                 .map_err(|error| to_napi_error(map_conversion_error(&error)))?;
             let prepared = self
                 .inner
                 .prepare_batch(spec)
+                .and_then(|prepared| prepared.with_channel_policy(channel_policy))
                 .map_err(|error| to_napi_error(map_client_error(&error)))?;
             Ok(PreparedEvidenceRequestBatch {
                 inner: Arc::new(prepared),

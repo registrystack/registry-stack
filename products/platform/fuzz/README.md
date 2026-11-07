@@ -10,9 +10,13 @@ crates. These live outside the main workspace (see the root `Cargo.toml`
 - `authcommon_parsers` — Bearer, compact access-token, and API-key fingerprint
   parsing
   (`registry-platform-authcommon`).
-- `sdjwt_holder_proof` — SD-JWT holder-proof JWT verification
-  (`registry-platform-sdjwt`).
+- `crypto_jwe_decrypt`: compact `ECDH-ES` JWE decryption over arbitrary text
+  against a fixed key (`registry-platform-crypto`, `jwe` feature).
+- `crypto_jws_parse`: compact JWS parsing and verification over arbitrary
+  text (`registry-platform-crypto`).
 - `sdjwt_issuance` — SD-JWT issuance input parsing (`registry-platform-sdjwt`).
+- `sdjwt_presentation_parse`: SD-JWT presentation splitting and RFC 9901
+  disclosure resolution (`registry-platform-sdjwt`).
 - `sqlite_statement` — bounded reviewed-statement parsing and offline
   authorization (`registry-platform-sqlite`).
 - `yaml_reader`: the shared configuration reader over arbitrary bytes: the

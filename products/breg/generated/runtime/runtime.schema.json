@@ -1,5 +1,15 @@
 {
   "$defs": {
+    "AccessTokenAlgorithm": {
+      "enum": [
+        "EdDSA",
+        "ES256",
+        "ES384",
+        "RS256",
+        "RS384"
+      ],
+      "type": "string"
+    },
     "AllowedClients": {
       "anyOf": [
         {
@@ -253,16 +263,6 @@
         "error",
         "warn",
         "info"
-      ],
-      "type": "string"
-    },
-    "OidcAlgorithm": {
-      "enum": [
-        "EdDSA",
-        "ES256",
-        "ES384",
-        "RS256",
-        "RS384"
       ],
       "type": "string"
     },
@@ -953,7 +953,7 @@
           "type": "boolean"
         },
         "allowedAlgorithm": {
-          "$ref": "#/$defs/OidcAlgorithm"
+          "$ref": "#/$defs/AccessTokenAlgorithm"
         },
         "allowedClients": {
           "$ref": "#/$defs/AllowedClients",

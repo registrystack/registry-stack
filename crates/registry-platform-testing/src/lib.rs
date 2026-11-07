@@ -39,10 +39,10 @@ use std::{
 };
 
 use axum::{extract::State, response::IntoResponse, routing::get, Json, Router};
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use base64::Engine;
+use futures::executor::block_on;
 use jsonwebtoken::Algorithm;
-use registry_platform_crypto::{sign, PrivateJwk, PublicJwk};
+use registry_platform_crypto::jws::sign_compact_jws;
+use registry_platform_crypto::{LocalJwkSigner, PrivateJwk, PublicJwk, SigningAlgorithm};
 use serde_json::{json, Map, Value};
 use thiserror::Error;
 use tokio::{net::TcpListener, sync::oneshot, task::JoinHandle};
@@ -216,8 +216,14 @@ pub fn sign_ed25519_compact_jwt_with_key(
     kid: &str,
     claims: Value,
 ) -> String {
-    let header = json!({"alg": "EdDSA", "typ": typ, "kid": kid});
-    sign_compact_jwt_header(private, header, claims)
+    assert_eq!(
+        private
+            .algorithm()
+            .expect("fixture signing algorithm is supported"),
+        SigningAlgorithm::EdDsa,
+        "the Ed25519 helper signs with an Ed25519 key"
+    );
+    sign_compact_jwt(private, typ, kid, claims)
 }
 
 /// Sign a fixture JWT using the supplied key's shared crypto algorithm.
@@ -232,12 +238,7 @@ pub fn sign_compact_jwt_with_key(
     kid: &str,
     claims: Value,
 ) -> String {
-    let header = json!({
-        "alg": private.algorithm().expect("fixture signing algorithm is supported").jwa_name(),
-        "typ": typ,
-        "kid": kid,
-    });
-    sign_compact_jwt_header(private, header, claims)
+    sign_compact_jwt(private, typ, kid, claims)
 }
 
 /// Ephemeral asymmetric key for resource-server interoperability tests. No
@@ -256,10 +257,17 @@ pub fn access_token_test_key(algorithm: jsonwebtoken::Algorithm) -> PrivateJwk {
     key
 }
 
-fn sign_compact_jwt_header(private: &PrivateJwk, header: Value, claims: Value) -> String {
-    let signing_input = format!("{}.{}", encode_json(&header), encode_json(&claims));
-    let signature = sign(signing_input.as_bytes(), private).expect("fixture key signs JWT");
-    format!("{}.{}", signing_input, URL_SAFE_NO_PAD.encode(signature))
+/// Sign `claims` as a compact JWS whose header is `alg` (from the key), `typ`,
+/// and `kid`, through the shared JWS signer.
+fn sign_compact_jwt(private: &PrivateJwk, typ: &str, kid: &str, claims: Value) -> String {
+    let mut keyed = private.clone();
+    keyed.kid = Some(kid.to_owned());
+    let signer = LocalJwkSigner::new(keyed).expect("fixture key is a valid signing key");
+    let mut header = Map::new();
+    header.insert("typ".to_owned(), Value::String(typ.to_owned()));
+    let payload = serde_json::to_vec(&claims).expect("JWT JSON serializes");
+    // The signer is local, so its future completes without waiting on anything.
+    block_on(sign_compact_jws(header, &payload, &signer)).expect("fixture key signs JWT")
 }
 
 #[must_use]
@@ -282,10 +290,6 @@ fn normalize_claims(issuer: &str, claims: Value) -> Value {
         .entry("exp")
         .or_insert_with(|| json!(now + TOKEN_LIFETIME.as_secs() as i64));
     Value::Object(claims)
-}
-
-fn encode_json(value: &Value) -> String {
-    URL_SAFE_NO_PAD.encode(serde_json::to_vec(value).expect("JWT JSON serializes"))
 }
 
 fn now_unix_seconds() -> i64 {
@@ -444,7 +448,9 @@ pub fn oidc_verifier_config(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use registry_platform_crypto::verify;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine;
+    use registry_platform_crypto::{sign, verify};
     use registry_platform_httputil::FetchUrlPolicy;
     use registry_platform_oidc::{
         fetch_discovery_with_policy, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig,
@@ -457,6 +463,39 @@ mod tests {
         let payload = b"registry-platform-testing";
         let signature = sign(payload, &private).expect("fixture signs");
         verify(payload, &signature, &public).expect("fixture verifies");
+    }
+
+    #[test]
+    fn fixture_jwts_verify_through_the_shared_jws_verifier() {
+        use registry_platform_crypto::jws::{parse_compact_jws, JwsLimits};
+
+        let (private, public) = fixtures::ed25519_pair();
+        let claims = json!({"sub": "subject-1"});
+        for token in [
+            sign_ed25519_compact_jwt_with_key(&private, "JWT", "kid-1", claims.clone()),
+            sign_compact_jwt_with_key(&private, "JWT", "kid-1", claims.clone()),
+        ] {
+            let parsed = parse_compact_jws(&token, &JwsLimits::default()).expect("parses");
+            assert_eq!(
+                parsed.header(),
+                json!({"alg": "EdDSA", "typ": "JWT", "kid": "kid-1"})
+                    .as_object()
+                    .expect("object")
+            );
+            let payload = parsed
+                .verify(&public, &[SigningAlgorithm::EdDsa])
+                .expect("verifies under the fixture key");
+            assert_eq!(
+                serde_json::from_slice::<Value>(payload).expect("claims are JSON"),
+                claims
+            );
+            let header_segment = token.split('.').next().expect("header segment");
+            assert_eq!(
+                URL_SAFE_NO_PAD.decode(header_segment).expect("base64url"),
+                br#"{"alg":"EdDSA","kid":"kid-1","typ":"JWT"}"#,
+                "header member order is stable"
+            );
+        }
     }
 
     #[test]

@@ -24,7 +24,7 @@ use registry_platform_oidc::{
     TokenVerifier, TokenVerifierConfig,
 };
 
-use crate::config::{AccessTokenAlgorithm, OfferAuthorizationConfig, ValidationMode};
+use crate::config::{OfferAuthorizationConfig, ValidationMode};
 
 /// The access-token types this service accepts, which are the two spellings
 /// RFC 9068 permits for a JWT access token.
@@ -138,11 +138,7 @@ pub fn verifier_profile(config: &OfferAuthorizationConfig) -> TokenVerifierConfi
     let algorithms = config
         .algorithms
         .iter()
-        .map(|algorithm| match algorithm {
-            AccessTokenAlgorithm::EdDSA => jsonwebtoken::Algorithm::EdDSA,
-            AccessTokenAlgorithm::ES256 => jsonwebtoken::Algorithm::ES256,
-            AccessTokenAlgorithm::RS256 => jsonwebtoken::Algorithm::RS256,
-        })
+        .map(|algorithm| algorithm.to_jsonwebtoken())
         .collect();
     TokenVerifierConfig::access_token_profile(
         config.issuer.clone(),

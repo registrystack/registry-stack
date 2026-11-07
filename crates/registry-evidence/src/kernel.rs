@@ -20,9 +20,10 @@ use crate::binding::entity_reference;
 use crate::bundle::{ArtifactFault, Bundle, Codelist};
 use crate::config::{ConceptConfig, ConceptForm, RequirementConfig, SchemaFault};
 use crate::model::{
-    BucketForm, BucketValue, EntityReferenceForm, EntityReferenceValue, Evidence,
-    EvidenceObjectType, LookupResult, PublicValue, ScalarOrEntityReference, StructuredValue,
-    StructuredValueForm, SubjectBinding, SubjectBindingMode, SupportedValue,
+    AssertionChannel, BucketForm, BucketValue, ChannelKind, EntityReferenceForm,
+    EntityReferenceValue, Evidence, EvidenceObjectType, LookupResult, PublicValue,
+    ScalarOrEntityReference, StructuredValue, StructuredValueForm, SubjectBinding,
+    SubjectBindingMode, SupportedValue,
 };
 use crate::rhai_runtime::{
     CalendarDate, CodelistHandle, CompiledDerivation, DerivedConceptValue, DerivedValue,
@@ -30,6 +31,7 @@ use crate::rhai_runtime::{
     MAXIMUM_RESULT_BYTES,
 };
 use crate::values::Decimal;
+use registry_evidence_verifier::contracts::evidence_contract_accepts;
 
 const MAXIMUM_PUBLIC_STRING_BYTES: usize = 1_024;
 const MAXIMUM_BUCKET_CODE_BYTES: usize = 128;
@@ -216,6 +218,10 @@ pub struct EvidenceConstruction<'a> {
     /// this assertion. Ordinary HTTP and SQLite sources supply no cap.
     pub source_valid_until: Option<DateTime<Utc>>,
     pub subjects: Vec<SubjectBinding>,
+    /// How the facts were obtained. Every path that reads a Source states
+    /// `Source`; `HolderPresented` carries the verified credential's members,
+    /// including its own issue time.
+    pub channel: AssertionChannel,
 }
 
 /// One reviewed answer schema as the kernel holds it: the compiled validator
@@ -521,11 +527,25 @@ impl OfflineKernel {
             return Err(KernelError::Evidence);
         }
         let valid_until = format_utc(valid_until);
+        if let AssertionChannel::HolderPresented(credential) = &input.channel {
+            // The credential cannot have existed after the facts it supplied
+            // were observed. Both instants are compared at the precision the
+            // payload emits.
+            let credential_issued_at = credential
+                .issued_at_instant()
+                .map_err(|_| KernelError::Evidence)?;
+            if credential_issued_at > emitted_instant(input.observed_at)? {
+                return Err(KernelError::Evidence);
+            }
+        }
+        let (channel, presented_credential) = input.channel.into_members();
 
-        Ok(Evidence {
+        let evidence = Evidence {
             schema: crate::EVIDENCE_SCHEMA_V1.to_owned(),
             assurance_profile: self.bundle.config.assurance_profile,
             subject_binding: input.scope.mode(),
+            channel,
+            presented_credential,
             request_nonce: input.scope.request_nonce().map(ToOwned::to_owned),
             id: input.evidence_id.to_owned(),
             evidence_type_name: EvidenceObjectType::Evidence,
@@ -545,7 +565,19 @@ impl OfflineKernel {
                 .to_owned(),
             subjects: input.subjects,
             supported_values: values.0,
-        })
+        };
+        // A holder-presented member set is bounded by the payload contract in
+        // ways its builder cannot all see (a URI issuer), so the finished
+        // payload is checked against it before it can reach a signature.
+        if evidence.channel != ChannelKind::Source
+            && !serde_json::to_value(&evidence)
+                .ok()
+                .and_then(|payload| evidence_contract_accepts(&payload).ok())
+                .unwrap_or(false)
+        {
+            return Err(KernelError::Evidence);
+        }
+        Ok(evidence)
     }
 
     fn evaluation_context(
@@ -2017,6 +2049,7 @@ mod tests {
             issued_at: "2026-08-02T00:00:01Z".parse().expect("time"),
             observed_at: "2026-08-02T00:00:00Z".parse().expect("time"),
             source_valid_until: None,
+            channel: AssertionChannel::Source,
             subjects: vec![
                 SubjectBinding {
                     role: "child".to_owned(),
@@ -2067,6 +2100,7 @@ mod tests {
             issued_at,
             observed_at: "2026-08-02T00:00:00Z".parse().expect("time"),
             source_valid_until,
+            channel: AssertionChannel::Source,
             subjects: vec![
                 SubjectBinding {
                     role: "child".to_owned(),
@@ -2104,6 +2138,257 @@ mod tests {
         );
     }
 
+    /// The channel is built from an enum that carries the presented credential,
+    /// so a holder-presented assertion states its credential; the credential's
+    /// own issue time is a required instant that cannot follow the observation.
+    #[tokio::test]
+    async fn a_holder_presented_construction_refuses_a_credential_issued_after_the_observation() {
+        use crate::model::{PresentedCredential, SubjectLinkMode};
+        let copied = immutable_fixture("legal-parent-relationship");
+        let bundle = Arc::new(Bundle::load(copied.path()).expect("bundle loads"));
+        let kernel = OfflineKernel::compile(Arc::clone(&bundle)).expect("kernel compiles");
+        let requirement = &bundle.config.requirements[0];
+        let values = kernel
+            .validate_values(
+                &requirement.id,
+                vec![DerivedConceptValue {
+                    concept_id: requirement.concepts[0].id.clone(),
+                    value: DerivedValue::Json(json!(false)),
+                }],
+                projection(),
+            )
+            .expect("values validate");
+        let construct = |issuer: &str, credential_issued_at: &str| {
+            let credential = PresentedCredential::new(
+                "national-id",
+                issuer,
+                "https://credentials.example/identity",
+                credential_issued_at.parse().expect("time"),
+                SubjectLinkMode::AttributeMatch,
+            )
+            .expect("members are in contract");
+            kernel.construct_evidence(
+                &requirement.id,
+                values.clone(),
+                EvidenceConstruction {
+                    evidence_id: "urn:ulid:01K1EXAMPLE0000000000000000",
+                    purpose: &requirement.purposes[0],
+                    scope: EvidenceScope::AudienceScoped {
+                        audience: AUDIENCE,
+                        request_nonce: crate::model::OFFLINE_EVALUATION_REQUEST_NONCE,
+                    },
+                    issued_at: "2026-08-02T00:00:01Z".parse().expect("time"),
+                    observed_at: "2026-08-02T00:00:00Z".parse().expect("time"),
+                    source_valid_until: None,
+                    channel: AssertionChannel::HolderPresented(credential),
+                    subjects: vec![
+                        SubjectBinding {
+                            role: "child".to_owned(),
+                            binding: format!("urn:evidence:subject:v1_{}", "A".repeat(43)),
+                        },
+                        SubjectBinding {
+                            role: "candidate-parent".to_owned(),
+                            binding: format!("urn:evidence:subject:v1_{}", "B".repeat(43)),
+                        },
+                    ],
+                },
+            )
+        };
+
+        assert_eq!(
+            construct("https://issuer.example", "2026-08-02T00:00:01Z"),
+            Err(KernelError::Evidence),
+            "a credential issued after the observation is refused"
+        );
+        assert_eq!(
+            construct("not a uri", "2026-08-01T00:00:00Z"),
+            Err(KernelError::Evidence),
+            "a member outside the payload contract never reaches a signature"
+        );
+
+        let evidence = construct("https://issuer.example", "2026-08-02T00:00:00Z")
+            .expect("a credential issued at the observation constructs");
+        assert_eq!(evidence.channel, ChannelKind::HolderPresented);
+        assert_eq!(
+            evidence
+                .presented_credential
+                .as_ref()
+                .expect("credential member")
+                .issued_at,
+            "2026-08-02T00:00:00Z"
+        );
+
+        let signer = supported_values_signer().await;
+        let jws = signer.sign_json(&evidence).await.expect("evidence signs");
+        let serialized = serde_json::to_vec(&jws).expect("JWS serializes");
+        let jwks = jwks_document(signer.public_jwk(), []).expect("JWKS builds");
+        let policy = EvidenceVerificationPolicy::from_accepted_transaction(
+            &evidence,
+            evidence.request_nonce.as_deref().expect("audience-scoped"),
+            48 * 60 * 60,
+            "2026-08-02T00:03:00Z".parse().expect("time"),
+            30,
+        )
+        .expect("the policy states bounds the contract allows");
+        assert!(
+            verify_flattened_jws(&serialized, &jwks, &policy).is_err(),
+            "the default expectations accept source only"
+        );
+        let verified = verify_flattened_jws(
+            &serialized,
+            &jwks,
+            &policy
+                .with_accepted_channels(vec![ChannelKind::HolderPresented])
+                .expect("channel list"),
+        )
+        .expect("a holder-presented assertion round-trips where the channel is accepted");
+        assert_eq!(verified, evidence);
+    }
+
+    /// Construction takes the channel and the presented credential from the
+    /// trusted presented facts when a host protocol attached them, and caps
+    /// validity at the credential's expiry; without them the assertion is a
+    /// source assertion identical to one built with the literal source channel.
+    #[test]
+    fn presented_facts_set_the_channel_members_and_cap_validity_and_their_absence_changes_nothing()
+    {
+        use crate::model::{PresentedCredential, SubjectLinkMode};
+        use crate::presented::{construction_channel, PresentedFacts};
+        let copied = immutable_fixture("legal-parent-relationship");
+        let bundle = Arc::new(Bundle::load(copied.path()).expect("bundle loads"));
+        let kernel = OfflineKernel::compile(Arc::clone(&bundle)).expect("kernel compiles");
+        let requirement = &bundle.config.requirements[0];
+        let values = kernel
+            .validate_values(
+                &requirement.id,
+                vec![DerivedConceptValue {
+                    concept_id: requirement.concepts[0].id.clone(),
+                    value: DerivedValue::Json(json!(false)),
+                }],
+                projection(),
+            )
+            .expect("values validate");
+        let construct = |presented: Option<&PresentedFacts>| {
+            let (channel, source_valid_until) = construction_channel(presented, None);
+            kernel
+                .construct_evidence(
+                    &requirement.id,
+                    values.clone(),
+                    EvidenceConstruction {
+                        evidence_id: "urn:ulid:01K1EXAMPLE0000000000000000",
+                        purpose: &requirement.purposes[0],
+                        scope: EvidenceScope::AudienceScoped {
+                            audience: AUDIENCE,
+                            request_nonce: crate::model::OFFLINE_EVALUATION_REQUEST_NONCE,
+                        },
+                        issued_at: "2026-08-02T00:00:01Z".parse().expect("time"),
+                        observed_at: "2026-08-02T00:00:01Z".parse().expect("time"),
+                        source_valid_until,
+                        channel,
+                        subjects: vec![
+                            SubjectBinding {
+                                role: "child".to_owned(),
+                                binding: format!("urn:evidence:subject:v1_{}", "A".repeat(43)),
+                            },
+                            SubjectBinding {
+                                role: "candidate-parent".to_owned(),
+                                binding: format!("urn:evidence:subject:v1_{}", "B".repeat(43)),
+                            },
+                        ],
+                    },
+                )
+                .expect("constructs")
+        };
+
+        let source = construct(None);
+        let literal = kernel
+            .construct_evidence(
+                &requirement.id,
+                values.clone(),
+                EvidenceConstruction {
+                    evidence_id: "urn:ulid:01K1EXAMPLE0000000000000000",
+                    purpose: &requirement.purposes[0],
+                    scope: EvidenceScope::AudienceScoped {
+                        audience: AUDIENCE,
+                        request_nonce: crate::model::OFFLINE_EVALUATION_REQUEST_NONCE,
+                    },
+                    issued_at: "2026-08-02T00:00:01Z".parse().expect("time"),
+                    observed_at: "2026-08-02T00:00:01Z".parse().expect("time"),
+                    source_valid_until: None,
+                    channel: AssertionChannel::Source,
+                    subjects: source.subjects.clone(),
+                },
+            )
+            .expect("constructs");
+        assert_eq!(
+            serde_json::to_vec(&source).expect("serializes"),
+            serde_json::to_vec(&literal).expect("serializes"),
+            "no attachment leaves the assertion byte for byte as the source path built it"
+        );
+        let payload = serde_json::to_value(&source).expect("serializes");
+        assert_eq!(payload["channel"], "source");
+        assert!(payload.get("presentedCredential").is_none());
+        assert_eq!(source.valid_until, "2026-08-02T00:05:01Z");
+
+        let credential = PresentedCredential::new(
+            "national-id",
+            "https://issuer.example",
+            "https://credentials.example/identity",
+            "2026-08-01T00:00:00Z".parse().expect("time"),
+            SubjectLinkMode::AttributeMatch,
+        )
+        .expect("members are in contract");
+        let facts = PresentedFacts::new(credential, "2026-08-02T00:02:00Z".parse().expect("time"));
+        let presented = serde_json::to_value(construct(Some(&facts))).expect("serializes");
+        assert_eq!(presented["channel"], "holder-presented");
+        assert_eq!(
+            presented["presentedCredential"],
+            json!({
+                "trustEntry": "national-id",
+                "issuer": "https://issuer.example",
+                "type": "https://credentials.example/identity",
+                "issuedAt": "2026-08-01T00:00:00Z",
+                "subjectLink": "attribute-match"
+            })
+        );
+        assert_eq!(
+            presented["validUntil"], "2026-08-02T00:02:00Z",
+            "the credential expiry caps the assertion below the local validity"
+        );
+    }
+
+    /// A source script can emit only a lookup result. The closed result and
+    /// fact schema refuse any key that names a channel member, and nothing in
+    /// a lookup reaches the channel the assertion is constructed with.
+    #[test]
+    fn a_lookup_that_emits_channel_members_is_refused_and_cannot_set_the_channel() {
+        let copied = immutable_fixture("adult-status");
+        let bundle = Arc::new(Bundle::load(copied.path()).expect("bundle loads"));
+        let kernel = OfflineKernel::compile(Arc::clone(&bundle)).expect("kernel compiles");
+        let source = bundle.config.requirements[0].acquisition.initial_source();
+        let credential = json!({
+            "trustEntry": "national-id", "issuer": "https://issuer.example",
+            "type": "https://credentials.example/identity",
+            "issuedAt": "2026-08-01T00:00:00Z", "subjectLink": "possession"
+        });
+        for lookup in [
+            json!({"lookup": "matched", "channel": "holder-presented",
+                "facts": {"date_of_birth": "1970-01-01"}}),
+            json!({"lookup": "matched", "presentedCredential": credential,
+                "facts": {"date_of_birth": "1970-01-01"}}),
+            json!({"lookup": "matched", "facts": {
+                "date_of_birth": "1970-01-01", "channel": "holder-presented"}}),
+            json!({"lookup": "matched", "facts": {
+                "date_of_birth": "1970-01-01", "presentedCredential": credential}}),
+        ] {
+            assert_eq!(
+                kernel.validate_lookup(source, &lookup),
+                Err(KernelError::SourceProtocol),
+                "{lookup}"
+            );
+        }
+    }
+
     /// A holder-bound construction has no member in which to state an audience
     /// or a request nonce, so the constructed payload cannot carry either and
     /// still agrees with the mode it declares.
@@ -2134,6 +2419,7 @@ mod tests {
                     issued_at: "2026-08-02T00:00:01Z".parse().expect("time"),
                     observed_at: "2026-08-02T00:00:00Z".parse().expect("time"),
                     source_valid_until: None,
+                    channel: AssertionChannel::Source,
                     subjects: vec![
                         SubjectBinding {
                             role: "child".to_owned(),
@@ -2688,6 +2974,7 @@ mod tests {
                     issued_at: "2026-08-02T00:00:01Z".parse().expect("time"),
                     observed_at: "2026-08-02T00:00:00Z".parse().expect("time"),
                     source_valid_until: None,
+                    channel: AssertionChannel::Source,
                     subjects: vec![SubjectBinding {
                         role: "subject".to_owned(),
                         binding: format!("urn:evidence:subject:v1_{}", "A".repeat(43)),

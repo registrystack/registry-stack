@@ -1,0 +1,203 @@
+contract: registry.evidence.oid4vp-profile/v1
+status: draft
+status_rule: >-
+  This stays draft until a reviewed change graduates it. Its negative tests are
+  registered in security-test-traceability.yaml, and the traceability checker
+  resolves them.
+  Every statement here describes behavior that is built; a capability that is
+  not built is listed under not_built, never described as present.
+summary: >-
+  A wallet-facing OpenID for Verifiable Presentations verifier front end for
+  Evidence. A portal asks it to start a presentation exchange; it serves a
+  signed request object to the wallet, receives the wallet's encrypted
+  response, and holds the returned presentation until Evidence reads it once or
+  the result window ends. It is a supporting service and a protocol adapter,
+  not part of the Evidence runtime: it never opens, verifies, or interprets a
+  credential, and it adds no Evidence semantics. Evidence verifies what the
+  wallet presented.
+standards_profile:
+  oid4vp: OpenID for Verifiable Presentations 1.0
+  haip: OpenID4VC High Assurance Interoperability Profile 1.0, verifier flow only
+  credential_format: dc+sd-jwt
+  query_language: DCQL
+  claim_rule: >-
+    Implements OpenID4VP 1.0 and the HAIP 1.0 verifier flow profile; not
+    certified. No conformance suite result is claimed, and the statements below
+    are the whole of what is claimed.
+  draft_compatibility: >-
+    None. Only the final 1.0 wire shapes are spoken: dcql_query rather than
+    presentation_definition, and the prefixed client_id rather than a separate
+    client_id_scheme.
+  interoperability_target:
+    status: not-evidenced
+    claim_rule: >-
+      The Inji notes below describe the request shape built for Inji Verify and
+      the Inji wallet. No pinned-revision interoperability evidence is recorded
+      for this profile, so none is claimed.
+service_boundary:
+  items:
+    - It holds no Evidence signing key and signs no credential. Its only signing keys sign request objects.
+    - It never decrypts a credential, verifies an SD-JWT, or checks a key binding. It checks protocol facts only.
+    - It is source-product neutral and domain neutral, under the same sweeps as the Evidence runtime.
+    - No Evidence crate depends on it at runtime. The dependency runs one way only.
+endpoints:
+  - path: POST /v1/sessions
+    authorization: applicant bearer token, verified as a resource server through the shared OIDC primitive
+    rule: >-
+      Starts one presentation exchange under a named policy for the
+      authenticated applicant. The body is one JSON object with one member,
+      policy. It returns reference, requestUri, walletInvocation and
+      expiresAt. The audit entry is written before the session is released; a
+      session the journal did not accept is discarded. A full store is refused
+      with 503 and Retry-After.
+  - path: GET /v1/sessions/{reference}
+    authorization: the applicant bearer token of the session's creator
+    rule: >-
+      Returns status (pending, received, failed), policy and expiresAt. It
+      returns failureCategory, from the closed set access_denied,
+      invalid_request, invalid_client, vp_formats_not_supported,
+      wallet_unavailable, other, only when the wallet reported an error. It
+      never returns presented content. An unknown, expired, or foreign
+      reference reads identically as 404.
+  - path: GET /v1/requests/{request_id}
+    authorization: none; the request identifier is the capability
+    rule: >-
+      Serves the signed request object as application/oauth-authz-req+jwt
+      while the session is pending. The fetch is audited before the object is
+      released. The service limits this path and the response path with one
+      key for all wallets, so the limit bounds the service as a whole; a
+      deployment rate limits per source at its ingress.
+  - path: POST /v1/responses/{request_id}
+    authorization: none; the request identifier is the capability
+    rule: >-
+      Receives the wallet's direct_post.jwt response. Answers use the OAuth
+      error shape and carry no description.
+  - path: POST /v1/presentations/read
+    authorization: Evidence service credential, a bearer token distinct from the applicant's
+    rule: >-
+      Releases the presentation and the session context to Evidence, on behalf
+      of the principal who created the session. The read is audited before
+      anything is released. A pending session answers 409; a wallet error
+      answers 422 with the closed category. The first successful read of a
+      terminal result (200, or 422) consumes it and releases its held bytes;
+      every later read of that reference answers the 404 an unknown reference
+      gets. A read that does not succeed consumes nothing. A read is not
+      retried safely after delivery. The audit record states the outcome
+      delivered_and_consumed or failed_and_consumed.
+  - path: GET /.well-known/did.json
+    authorization: none
+    rule: >-
+      Served only when a decentralized-identifier client identifier is
+      configured. Public, application/json, Cache-Control public, max-age=300.
+  - path: GET /v1/jwks
+    authorization: none
+    rule: >-
+      Served only when at least one EdDSA client identifier is configured
+      (decentralized-identifier or pre-registered). Public, application/json,
+      Cache-Control public, max-age=300.
+  - path: GET /health and GET /ready
+    authorization: none
+    rule: >-
+      Liveness, and readiness that tracks the local audit destination and the
+      client identifier certificates: readiness answers 503 once a certificate
+      is past its notAfter by the service clock, with one warning logged per
+      identifier.
+client_identifiers:
+  rule: >-
+    The runtime file declares a list of clientIdentifiers, each with a local
+    id and a kebab-case type. Every policy names one by clientIdentifier.
+    Startup refuses an unknown reference, a duplicate id, an unused
+    identifier, and two identifiers that yield the same client_id.
+  prefixes:
+    - type: x509-san-dns
+      client_id: x509_san_dns:<host of publicBaseUrl>
+      signing: ES256 with the certificate chain, leaf first, in the x5c header
+      check: the leaf's DNS subject alternative name is the host of publicBaseUrl, and the signing key is the leaf's key
+    - type: x509-hash
+      client_id: x509_hash:<base64url SHA-256 of the leaf certificate DER>
+      signing: ES256 with the certificate chain in the x5c header
+      check: the signing key is the leaf's key; the certificate is unexpired
+    - type: decentralized-identifier
+      client_id: decentralized_identifier:did:web:<host>
+      signing: EdDSA, no x5c; kid is the DID plus a fragment, the RFC 7638 thumbprint of the key
+      check: the DID host matches the host of publicBaseUrl, carries no port or path, and the base URL has no port; the key is Ed25519
+    - type: pre-registered
+      client_id: the configured clientId, bare, containing no colon
+      signing: EdDSA, no x5c; kid is the RFC 7638 thumbprint of the key
+      check: the key is Ed25519; the wallet is expected to hold the verifier's keys from GET /v1/jwks
+  request_object:
+    typ: oauth-authz-req+jwt
+    audience: https://self-issued.me/v2
+    claims: client_id, response_type vp_token, response_mode direct_post.jwt, response_uri, nonce, state, dcql_query, client_metadata, aud, iat, exp
+    expiry: exp is the session expiry
+  did_document:
+    context: [https://www.w3.org/ns/did/v1, https://w3id.org/security/suites/ed25519-2020/v1]
+    verification_method: one Ed25519VerificationKey2020 whose publicKeyMultibase is z plus base58btc of the multicodec prefix 0xed 0x01 and the 32-byte key
+    relationships: the method id is listed under authentication and assertionMethod
+  jwks:
+    entry: kty OKP, crv Ed25519, x, kid equal to the request object's kid, use sig, alg EdDSA
+  algorithms:
+    x509_types: ES256
+    did_and_pre_registered: EdDSA
+dcql:
+  rule: >-
+    Each policy renders a dcql_query of credentials. Each credential carries id,
+    format dc+sd-jwt, meta.vct_values and claims as path lists. A credential
+    query whose policy lists no claims omits the claims member, which requests
+    no selectively disclosable claim (section 6.4.1); an empty claims list is
+    never rendered. A policy's
+    trusted_authorities apply to every credential as aki entries; with none
+    configured the member is omitted, which a wallet reads as no restriction.
+response:
+  mode: direct_post.jwt
+  encryption: ECDH-ES to a per-session key published in client_metadata.jwks; the enc values are the policy's accepted values, A128GCM and A256GCM
+  client_metadata: jwks, encrypted_response_enc_values_supported, and vp_formats_supported for dc+sd-jwt with sd-jwt_alg_values and kb-jwt_alg_values of ES256 and EdDSA
+  checks: the response decrypts under the session key, echoes the session state, and carries exactly the presentations the policy's query asked for
+  plaintext_error: a wallet that cannot encrypt may send an error unencrypted with the session state; it is the only plaintext shape accepted
+  bounds:
+    single_presentation_bytes: 262144
+    decrypted_payload_bytes: 524288
+  duplicate_members: a form, a decrypted payload, or a caller JSON body that repeats an object member is refused
+  one_acceptance: a session takes one response; an identical retry is answered again, a different one is refused
+  held_presentation_budget: >-
+    sessions.maximumHeldPresentationBytes (default 268435456) bounds the
+    presentation bytes the store holds across sessions. A response that would
+    pass it is refused with 503, Retry-After and temporarily_unavailable, the
+    session stays pending, and an audit record with category
+    held_presentation_budget is written. Bytes return when a session ends or
+    its result expires; results past their hold are swept before a refusal.
+sessions:
+  session_ttl_seconds: default 300, range 30 through 900
+  result_ttl_seconds: default 1800, range 30 through 3600
+  result_rule: >-
+    The result is held for result_ttl_seconds after the response is accepted,
+    and then dropped. A session is bound to the principal that created it.
+evidence_read_contract:
+  request: '{"reference": ..., "principal": {"issuer": ..., "subject": ...}}'
+  success: >-
+    200 with presentation (the DCQL credential query id to the list of
+    presented credentials, as received) and context (nonce, clientId,
+    responseUri, responseKeyThumbprint, policyId, createdBy, receivedAt).
+    Evidence verifies the presentation against this context.
+  refusals: 404 for an unknown, expired, or foreign session; 409 not yet presented; 422 wallet error with a closed category
+inji_notes:
+  - The Inji-shaped request uses dc+sd-jwt, no trusted_authorities, and an A256GCM-only policy.
+  - client_metadata carries an encryption key with alg ECDH-ES and a kid.
+  - Inji verifies EdDSA request objects only. Configure a decentralized-identifier or pre-registered client identifier for it.
+  - The DID document shape above is the one Inji resolves.
+audit:
+  rule: >-
+    Session creation, request fetch, response acceptance, wallet error, response
+    refusal, and Evidence read are each recorded. No record carries a request
+    identifier, a nonce, a state, a presentation value, or a wallet error
+    description.
+not_built:
+  - same-device redirect_uri and response_code
+  - auditing of requests for an unknown request identifier
+  - request_uri_method post
+  - verification of the credential, its issuer, its status, or its key binding (Evidence does this)
+tests:
+  - crates/registry-evidence-oid4vp/tests/endpoints.rs
+  - crates/registry-evidence-oid4vp/tests/responses.rs
+  - crates/registry-evidence-oid4vp/tests/startup.rs
+  - crates/registry-evidence-oid4vp/src/contracts.rs

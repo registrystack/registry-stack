@@ -34,7 +34,7 @@ use thiserror::Error;
 use url::{Host, Url};
 use utoipa::ToSchema;
 
-use crate::model::EVIDENCE_REQUEST_BATCH_MAX_ITEMS;
+use crate::model::{ChannelKind, EVIDENCE_REQUEST_BATCH_MAX_ITEMS};
 
 pub const MAX_CONFIG_BYTES: usize = 1024 * 1024;
 pub const MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
@@ -1420,6 +1420,22 @@ impl EvidenceConfig {
         for (index, requirement) in (0_u32..).zip(&self.requirements) {
             let at = format!("/requirements/{index}");
             requirement.validate().at(&at)?;
+            requirement
+                .acquisition
+                .validate_channels(&requirement.subject_roles, &at)?;
+            if requirement.acquisition.holder_presented.is_some()
+                && requirement
+                    .representations
+                    .as_ref()
+                    .unwrap_or(&self.response_formats)
+                    .iter()
+                    .any(|format| *format != ResponseFormat::SignedJws)
+            {
+                return invalid(
+                    "a definition with holder-presented acquisition must offer only the signed JWS representation (signed-jws)",
+                )
+                .at(format!("{at}/representations"));
+            }
             if self.project.is_some()
                 && (requirement.grant_ceiling.is_none() || requirement.representations.is_none())
             {
@@ -1562,6 +1578,18 @@ impl EvidenceConfig {
                 if !requirement_sources.contains(grant.requirement.as_str()) {
                     continue;
                 }
+                if !self.requirements.iter().any(|requirement| {
+                    requirement.id == grant.requirement
+                        && requirement.acquisition.serves(
+                            source_id,
+                            grant
+                                .subjects
+                                .iter()
+                                .map(|subject| subject.selector_profile.as_str()),
+                        )
+                }) {
+                    continue;
+                }
                 let source_pairs = source_selector_pairs(source);
                 let mut set = source_pairs
                     .iter()
@@ -1606,6 +1634,15 @@ impl EvidenceConfig {
                             "authority grant references an unknown requirement",
                         ))?;
                 for source_id in requirement.acquisition.source_ids() {
+                    if !requirement.acquisition.serves(
+                        source_id,
+                        grant
+                            .subjects
+                            .iter()
+                            .map(|subject| subject.selector_profile.as_str()),
+                    ) {
+                        continue;
+                    }
                     let source = self.sources.get(source_id).ok_or(ConfigError::Invalid(
                         "requirement acquisition references an unknown source",
                     ))?;
@@ -1689,10 +1726,30 @@ impl EvidenceConfig {
 
         for (index, requirement) in self.requirements.iter().enumerate() {
             let at = format!("/requirements/{index}");
+            if requirement.acquisition.source_channel_source().is_some()
+                && requirement.acquisition.source_channel_source()
+                    == requirement.acquisition.holder_presented_source()
+            {
+                return invalid("both acquisition channels name the same source")
+                    .at(format!("{at}/acquisition/holderPresented/source"));
+            }
             for source_id in requirement.acquisition.source_ids() {
-                if !self.sources.contains_key(source_id) {
+                let Some(source) = self.sources.get(source_id) else {
                     return invalid("requirement acquisition references an unknown source")
                         .at(format!("{at}/acquisition"));
+                };
+                // A profile selects one channel, so a Source reads only the
+                // profiles of its own channel.
+                if let Some(channel) = requirement.acquisition.channel_of_source(source_id) {
+                    if source.selector_bindings().iter().any(|binding| {
+                        requirement.acquisition.channel_for_profile(binding.profile)
+                            != Some(channel)
+                    }) {
+                        return invalid(
+                            "a source reads a selector profile that selects the other acquisition channel",
+                        )
+                        .at(format!("{at}/acquisition"));
+                    }
                 }
             }
             if requirement.validity_seconds > self.signing.maximum_assertion_validity_seconds {
@@ -1815,7 +1872,28 @@ impl EvidenceConfig {
                     return invalid("authority grant omits a required subject role")
                         .at(format!("{at}/subjects"));
                 }
+                let grant_profiles = grant
+                    .subjects
+                    .iter()
+                    .map(|subject| subject.selector_profile.as_str())
+                    .collect::<Vec<_>>();
+                let channels = grant_profiles
+                    .iter()
+                    .map(|profile| requirement.acquisition.channel_for_profile(profile))
+                    .collect::<BTreeSet<_>>();
+                if channels.len() != 1 {
+                    return invalid(
+                        "authority grant selects both acquisition channels through its selector profiles",
+                    )
+                    .at(format!("{at}/subjects"));
+                }
                 for source_id in requirement.acquisition.source_ids() {
+                    if !requirement
+                        .acquisition
+                        .serves(source_id, grant_profiles.iter().copied())
+                    {
+                        continue;
+                    }
                     let source = self
                         .sources
                         .get(source_id)
@@ -3167,6 +3245,7 @@ pub struct OidcAuthenticationConfig {
     #[serde(rename(deserialize = "registry-platform-yaml/shared-block/provider"))]
     pub provider: OidcIssuerConfig,
     pub token_types: Vec<AccessTokenType>,
+    #[serde(deserialize_with = "admitted_algorithms")]
     pub algorithms: Vec<AccessTokenAlgorithm>,
     pub principal_claim: String,
     pub requester_tags_claim: String,
@@ -3486,11 +3565,36 @@ pub enum AccessTokenType {
     ApplicationAtJwt,
 }
 
-#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
-pub enum AccessTokenAlgorithm {
-    EdDSA,
-    ES256,
-    RS256,
+/// The shared access-token roster, narrowed to the members Evidence admits by
+/// [`admitted_algorithms`].
+pub use registry_platform_oidc::AccessTokenAlgorithm;
+
+/// The members of the shared roster Evidence admits on its resource-server
+/// profile.
+const ADMITTED_ALGORITHM_NAMES: [&str; 3] = ["EdDSA", "ES256", "RS256"];
+
+/// One roster member, read only when Evidence admits it.
+struct AdmittedAlgorithm(AccessTokenAlgorithm);
+
+impl<'de> Deserialize<'de> for AdmittedAlgorithm {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let algorithm = AccessTokenAlgorithm::deserialize(deserializer)?;
+        if ADMITTED_ALGORITHM_NAMES.contains(&algorithm.jwa_name()) {
+            Ok(Self(algorithm))
+        } else {
+            Err(de::Error::unknown_variant(
+                algorithm.jwa_name(),
+                &ADMITTED_ALGORITHM_NAMES,
+            ))
+        }
+    }
+}
+
+fn admitted_algorithms<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<AccessTokenAlgorithm>, D::Error> {
+    let admitted = Vec::<AdmittedAlgorithm>::deserialize(deserializer)?;
+    Ok(admitted.into_iter().map(|admitted| admitted.0).collect())
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
@@ -3531,6 +3635,11 @@ pub struct SigningConfig {
     pub format: SigningFormat,
     pub algorithm: SigningAlgorithm,
     pub active_public_jwk_file: PublicJwkPath,
+    /// The PEM certificate chain (leaf first) certifying the active signing
+    /// key. It is public material held in the bundle beside the public JWK.
+    /// Absent, credentials carry no `x5c` and the key set publishes none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub certificate_chain_file: Option<CertificateChainPath>,
     pub published_public_jwk_files: Vec<PublicJwkPath>,
     pub revoked_key_ids: UniqueList<String>,
     pub jwks_path: String,
@@ -3642,6 +3751,65 @@ fn is_public_jwk_path(value: &str) -> bool {
         return false;
     };
     let Some(stem) = name.strip_suffix(".jwk.json") else {
+        return false;
+    };
+    !stem.is_empty()
+        && stem
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
+/// A bundle path `public-keys/<name>.chain.pem` naming a PEM certificate chain.
+#[derive(Clone, Eq, Ord, PartialEq, PartialOrd, Hash)]
+pub struct CertificateChainPath(String);
+
+impl CertificateChainPath {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for CertificateChainPath {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_tuple("CertificateChainPath")
+            .field(&self.0)
+            .finish()
+    }
+}
+
+impl<'de> Deserialize<'de> for CertificateChainPath {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        if is_certificate_chain_path(&value) {
+            Ok(Self(value))
+        } else {
+            Err(Invalid::expected(
+                "a path public-keys/<name>.chain.pem, where the name uses ASCII letters, digits, dots, underscores, or hyphens",
+                "Name a certificate chain file under public-keys/ ending in .chain.pem.",
+            )
+            .into_error())
+        }
+    }
+}
+
+impl Serialize for CertificateChainPath {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+fn is_certificate_chain_path(value: &str) -> bool {
+    let Some(name) = value.strip_prefix("public-keys/") else {
+        return false;
+    };
+    let Some(stem) = name.strip_suffix(".chain.pem") else {
         return false;
     };
     !stem.is_empty()
@@ -4329,11 +4497,78 @@ pub enum ValueOrigin {
     Request,
 }
 
-/// One pinned pack route supplies all acquisition work for a requirement.
+/// The host protocol id of the wallet presentation protocol. A Source whose
+/// pack route reaches an endpoint with this protocol acquires through the
+/// holder-presented channel, and no other Source does.
+pub(crate) const WALLET_PRESENTATION_PROTOCOL_ID: &str = "wallet-presentation-v1";
+
+/// The holder-presented acquisition beside a definition's `source`: one Source
+/// that uses the wallet presentation protocol, and the selector profiles whose
+/// requests acquire through it.
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct AcquisitionConfig {
+pub struct HolderPresentedAcquisition {
     pub source: String,
+    pub selector_profiles: Vec<String>,
+}
+
+/// One pinned pack route supplies all acquisition work for a requirement per
+/// channel: `source` for the source channel, and the optional
+/// `holderPresented` block for the holder-presented channel. A request's
+/// selector profile selects exactly one channel.
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(try_from = "AcquisitionDocument", into = "AcquisitionDocument")]
+pub struct AcquisitionConfig {
+    /// The Source acquisition starts from: the source channel's Source, or the
+    /// holder-presented Source when the definition declares no `source`. Read
+    /// the channel's own Source through [`Self::source_for_profile`].
+    pub source: String,
+    source_channel: bool,
+    pub holder_presented: Option<HolderPresentedAcquisition>,
+}
+
+/// The authored shape of [`AcquisitionConfig`]. Each channel is omitted when
+/// absent, so a definition written before holder-presented acquisition
+/// existed keeps exactly the projected configuration, and therefore exactly the
+/// `configurationRevision`, it already had.
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AcquisitionDocument {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    holder_presented: Option<HolderPresentedAcquisition>,
+}
+
+impl TryFrom<AcquisitionDocument> for AcquisitionConfig {
+    type Error = &'static str;
+
+    fn try_from(document: AcquisitionDocument) -> Result<Self, Self::Error> {
+        let source_channel = document.source.is_some();
+        let source = document
+            .source
+            .or_else(|| {
+                document
+                    .holder_presented
+                    .as_ref()
+                    .map(|holder_presented| holder_presented.source.clone())
+            })
+            .ok_or("requirement acquisition names no source")?;
+        Ok(Self {
+            source,
+            source_channel,
+            holder_presented: document.holder_presented,
+        })
+    }
+}
+
+impl From<AcquisitionConfig> for AcquisitionDocument {
+    fn from(acquisition: AcquisitionConfig) -> Self {
+        Self {
+            source: acquisition.source_channel.then_some(acquisition.source),
+            holder_presented: acquisition.holder_presented,
+        }
+    }
 }
 
 impl AcquisitionConfig {
@@ -4341,19 +4576,138 @@ impl AcquisitionConfig {
         if !valid_local_id(&self.source) {
             return invalid("requirement acquisition source identifier is invalid");
         }
+        if let Some(holder_presented) = &self.holder_presented {
+            if !valid_local_id(&holder_presented.source) {
+                return invalid("requirement holder-presented source identifier is invalid");
+            }
+        }
         Ok(())
     }
 
+    /// The Source of the source channel, absent for a wallet-only definition.
+    pub fn source_channel_source(&self) -> Option<&str> {
+        self.source_channel.then_some(self.source.as_str())
+    }
+
+    /// The Source of the holder-presented channel, when the definition has one.
+    pub fn holder_presented_source(&self) -> Option<&str> {
+        self.holder_presented
+            .as_ref()
+            .map(|holder_presented| holder_presented.source.as_str())
+    }
+
+    /// The channel a request on `profile` acquires through. A profile the
+    /// holder-presented block lists selects that channel; every other profile
+    /// selects the source channel, which a wallet-only definition lacks.
+    pub fn channel_for_profile(&self, profile: &str) -> Option<ChannelKind> {
+        if self
+            .holder_presented
+            .as_ref()
+            .is_some_and(|holder_presented| {
+                holder_presented
+                    .selector_profiles
+                    .iter()
+                    .any(|listed| listed == profile)
+            })
+        {
+            Some(ChannelKind::HolderPresented)
+        } else {
+            self.source_channel.then_some(ChannelKind::Source)
+        }
+    }
+
+    /// The only Source a request on `profile` may acquire through.
+    pub fn source_for_profile(&self, profile: &str) -> Option<&str> {
+        match self.channel_for_profile(profile)? {
+            ChannelKind::Source => self.source_channel_source(),
+            ChannelKind::HolderPresented => self.holder_presented_source(),
+        }
+    }
+
     pub fn source_ids(&self) -> Vec<&str> {
-        vec![self.source.as_str()]
+        let mut sources = Vec::with_capacity(2);
+        sources.extend(self.source_channel_source());
+        sources.extend(self.holder_presented_source());
+        sources
     }
 
     pub fn uses_source(&self, source_id: &str) -> bool {
-        self.source == source_id
+        self.source_ids().contains(&source_id)
     }
 
     pub fn initial_source(&self) -> &str {
         &self.source
+    }
+
+    /// The channel `source_id` serves for this definition.
+    fn channel_of_source(&self, source_id: &str) -> Option<ChannelKind> {
+        if self.source_channel_source() == Some(source_id) {
+            Some(ChannelKind::Source)
+        } else if self.holder_presented_source() == Some(source_id) {
+            Some(ChannelKind::HolderPresented)
+        } else {
+            None
+        }
+    }
+
+    /// Whether every one of `profiles` selects the channel `source_id` serves,
+    /// so a request or grant on them can reach that Source.
+    fn serves<'a>(&self, source_id: &str, profiles: impl IntoIterator<Item = &'a str>) -> bool {
+        let Some(channel) = self.channel_of_source(source_id) else {
+            return false;
+        };
+        profiles
+            .into_iter()
+            .all(|profile| self.channel_for_profile(profile) == Some(channel))
+    }
+
+    /// The channel rules that need the definition's subject roles. Each
+    /// refusal names the member to repair and carries no value.
+    fn validate_channels(&self, roles: &[SubjectRole], at: &str) -> Result<(), Violation> {
+        let Some(holder_presented) = &self.holder_presented else {
+            return Ok(());
+        };
+        let profiles_at = format!("{at}/acquisition/holderPresented/selectorProfiles");
+        validate_len(
+            holder_presented.selector_profiles.len(),
+            1,
+            16,
+            "holder-presented selector profiles",
+        )
+        .at(&profiles_at)?;
+        let mut listed = BTreeSet::new();
+        for (index, profile) in holder_presented.selector_profiles.iter().enumerate() {
+            let profile_at = format!("{profiles_at}/{index}");
+            if !valid_local_id(profile) {
+                return invalid("holder-presented selector profile identifier is invalid")
+                    .at(profile_at);
+            }
+            if !listed.insert(profile.as_str()) {
+                return invalid("holder-presented selector profiles must be unique").at(profile_at);
+            }
+            if !roles.iter().any(|role| {
+                role.selector_profiles
+                    .iter()
+                    .any(|allowed| allowed == profile)
+            }) {
+                return invalid(
+                    "holder-presented selector profile is not allowed by any subject role",
+                )
+                .at(profile_at);
+            }
+        }
+        if !self.source_channel
+            && roles
+                .iter()
+                .flat_map(|role| role.selector_profiles.iter())
+                .any(|allowed| !listed.contains(allowed.as_str()))
+        {
+            return invalid(
+                "a definition without a source lists every allowed selector profile under holderPresented",
+            )
+            .at(format!("{at}/acquisition"));
+        }
+        Ok(())
     }
 }
 
@@ -12657,5 +13011,35 @@ outboundTls:
             !validator.is_valid(&bundle_contract_instance(urn_provider.as_bytes())),
             "the published contract accepts a batch-only bundle with a URN provider identifier"
         );
+    }
+
+    #[test]
+    fn access_token_algorithms_accept_exactly_eddsa_es256_and_rs256() {
+        const FIXTURE: &str = include_str!(
+            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+        );
+        let with = |algorithm: &str| {
+            let text = FIXTURE.replace(
+                "    algorithms:\n      - ES256\n",
+                &format!("    algorithms:\n      - {algorithm}\n"),
+            );
+            assert!(text.contains(&format!("    algorithms:\n      - {algorithm}\n")));
+            EvidenceConfig::parse_yaml(text.as_bytes())
+        };
+        for accepted in ["EdDSA", "ES256", "RS256"] {
+            with(accepted).unwrap_or_else(|error| panic!("{accepted} is accepted: {error}"));
+        }
+        for rejected in ["ES384", "RS384", "HS256", "PS256", "none", "es256", "EDDSA"] {
+            let error = with(rejected).expect_err("an algorithm outside the profile is refused");
+            let ConfigError::Refused(report) = error else {
+                panic!("{rejected} is refused by the reader, got {error:?}");
+            };
+            let codes: Vec<&str> = report
+                .diagnostics()
+                .iter()
+                .map(|diagnostic| diagnostic.code.as_str())
+                .collect();
+            assert_eq!(codes, ["config.unknown-variant"], "{rejected}");
+        }
     }
 }

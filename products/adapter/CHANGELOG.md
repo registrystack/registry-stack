@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- A host protocol's verified response can carry one opaque attachment
+  (`VerifiedHostProtocolResponse::with_attachment`) that the engine hands to
+  the embedding Evidence host without reading it; the engine stays free of
+  Evidence semantics. A second attachment in one Evidence acquisition fails
+  the lookup as a protocol refusal, and an attachment the host does not read
+  has no effect. Every acquisition now fixes one evaluation instant (the
+  host-supplied one, or the wall clock read once at the start), and a host
+  protocol verifier receives it from `HostProtocolWireResponse::evaluation_instant`
+  so it never reads the wall clock itself. `registry-adapter-engine` depends
+  on `chrono` in every build.
 - BREAKING: pack scripts run on a deterministic engine, so the call deadline
   holds for every call a script can make. `timestamp`, `elapsed`, `sleep`,
   `exit`, `take`, `tag`, `set_tag`, `parse_json` and `get_fn_metadata_list`
@@ -172,3 +182,13 @@
   unchanged, so a project that still writes `mode` is refused at that key
   with `config.removed-key`, which names `type` as the replacement. Rename
   the member and keep its value (`status-link` or `bounded-wait`).
+- `adapter serve` takes its access-token algorithm roster from
+  `registry-platform-oidc`. The facade still accepts exactly RS256 and ES256,
+  now pinned by a test. It already installed SIGTERM and SIGINT before serving
+  and refused startup when one could not be installed; it now does so through
+  `registry_platform_httpsec::shutdown_signal`, with the same startup error
+  text and no change in behavior.
+- Continuation cursors are sealed and opened through the shared XChaCha20-Poly1305
+  primitive in `registry-platform-crypto`. The wire format is unchanged (golden
+  tokens pin it), so a cursor issued before the upgrade still opens, including
+  under the previous key after a rotation.

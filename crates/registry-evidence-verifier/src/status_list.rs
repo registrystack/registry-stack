@@ -17,7 +17,8 @@ use miniz_oxide::{
     deflate::compress_to_vec_zlib,
     inflate::{decompress_to_vec_zlib_with_limit, TINFLStatus},
 };
-use registry_platform_crypto::{parse_json_strict, verify, PublicJwk, SigningAlgorithm};
+use registry_platform_crypto::jws::{parse_compact_jws, CompactJws, JwsError, JwsLimits};
+use registry_platform_crypto::{parse_json_strict, PublicJwk, SigningAlgorithm};
 use serde_json::{Map, Value};
 use thiserror::Error;
 
@@ -469,33 +470,32 @@ fn evaluate(
         return Err(StatusUnknown::TokenTooLarge);
     }
     let token = std::str::from_utf8(token_bytes).map_err(|_| StatusUnknown::MalformedToken)?;
-    let mut parts = token.split('.');
-    let (Some(header_part), Some(payload_part), Some(signature_part), None) =
-        (parts.next(), parts.next(), parts.next(), parts.next())
-    else {
-        return Err(StatusUnknown::MalformedToken);
+    // The policy bound is the one size ceiling, so no segment is capped below it.
+    let limits = JwsLimits {
+        max_compact_bytes: policy.max_token_bytes,
+        max_header_bytes: policy.max_token_bytes,
+        max_payload_bytes: policy.max_token_bytes,
     };
-    let header = decode_object(header_part).ok_or(StatusUnknown::MalformedToken)?;
+    let jws = parse_compact_jws(token, &limits).map_err(|error| match error {
+        JwsError::TooLarge => StatusUnknown::TokenTooLarge,
+        JwsError::UnsupportedHeader => StatusUnknown::UnsupportedCriticalHeader,
+        _ => StatusUnknown::MalformedToken,
+    })?;
 
+    let header = jws.header();
     if header.get("typ").and_then(Value::as_str) != Some(STATUS_LIST_JWT_TYP) {
         return Err(StatusUnknown::WrongType);
     }
     if header.get("alg").and_then(Value::as_str) != Some("ES256") {
         return Err(StatusUnknown::UnsupportedAlgorithm);
     }
-    if header.contains_key("crit") {
-        return Err(StatusUnknown::UnsupportedCriticalHeader);
-    }
-    verify_signature(
-        &header,
-        header_part,
-        payload_part,
-        signature_part,
-        issuer_keys,
-    )?;
+    let payload = verified_payload(&jws, issuer_keys)?;
 
     // Claims are read only after the signature verifies.
-    let claims = decode_object(payload_part).ok_or(StatusUnknown::MalformedClaims)?;
+    let claims = match parse_json_strict(payload) {
+        Ok(Value::Object(members)) => members,
+        _ => return Err(StatusUnknown::MalformedClaims),
+    };
     if claims.get("sub").and_then(Value::as_str) != Some(reference.uri()) {
         return Err(StatusUnknown::SubjectMismatch);
     }
@@ -528,23 +528,15 @@ fn evaluate(
     })
 }
 
-/// Decode one base64url JWS segment as a JSON object with no repeated member.
-fn decode_object(segment: &str) -> Option<Map<String, Value>> {
-    let bytes = URL_SAFE_NO_PAD.decode(segment).ok()?;
-    match parse_json_strict(&bytes).ok()? {
-        Value::Object(members) => Some(members),
-        _ => None,
-    }
-}
-
-fn verify_signature(
-    header: &Map<String, Value>,
-    header_part: &str,
-    payload_part: &str,
-    signature_part: &str,
+/// The payload of a token whose signature verifies under a pinned issuer key.
+///
+/// A token that names a `kid` is checked against the pinned keys carrying that
+/// `kid`; one that names none is checked against every pinned ES256 key.
+fn verified_payload<'a>(
+    jws: &'a CompactJws<'_>,
     issuer_keys: &[PublicJwk],
-) -> Result<(), StatusUnknown> {
-    let kid = match header.get("kid") {
+) -> Result<&'a [u8], StatusUnknown> {
+    let kid = match jws.header().get("kid") {
         None => None,
         Some(Value::String(kid)) => Some(kid.as_str()),
         Some(_) => return Err(StatusUnknown::MalformedToken),
@@ -557,15 +549,9 @@ fn verify_signature(
     if candidates.peek().is_none() {
         return Err(StatusUnknown::UnknownKey);
     }
-    let signature = URL_SAFE_NO_PAD
-        .decode(signature_part)
-        .map_err(|_| StatusUnknown::BadSignature)?;
-    let signing_input = format!("{header_part}.{payload_part}");
-    if candidates.any(|key| verify(signing_input.as_bytes(), &signature, key).is_ok()) {
-        Ok(())
-    } else {
-        Err(StatusUnknown::BadSignature)
-    }
+    candidates
+        .find_map(|key| jws.verify(key, &[SigningAlgorithm::Es256]).ok())
+        .ok_or(StatusUnknown::BadSignature)
 }
 
 fn clamped_ttl(claims: &Map<String, Value>, policy: &StatusPolicy) -> Result<u64, StatusUnknown> {

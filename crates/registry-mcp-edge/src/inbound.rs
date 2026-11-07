@@ -11,6 +11,7 @@ use axum::{
 };
 use registry_platform_audit::AuditKeyHasher;
 use registry_platform_authcommon::{parse_bearer_token, BearerParseError};
+pub use registry_platform_oidc::AccessTokenAlgorithm;
 use registry_platform_oidc::{
     access_token_typ_set, JwksFetcher, OidcError, TokenVerifier, TokenVerifierConfig, VerifiedToken,
 };
@@ -24,29 +25,6 @@ use zeroize::Zeroizing;
 use crate::server::{problem, METADATA_PREFIX};
 
 const MAXIMUM_TOKEN_LIFETIME: Duration = Duration::from_secs(86_400);
-
-/// An asymmetric access-token signature algorithm.
-#[derive(Clone, Copy, Debug, serde::Deserialize, Eq, Hash, PartialEq)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-pub enum AccessTokenAlgorithm {
-    RS256,
-    RS384,
-    ES256,
-    ES384,
-    EdDSA,
-}
-
-impl AccessTokenAlgorithm {
-    pub const fn jsonwebtoken(self) -> jsonwebtoken::Algorithm {
-        match self {
-            Self::RS256 => jsonwebtoken::Algorithm::RS256,
-            Self::RS384 => jsonwebtoken::Algorithm::RS384,
-            Self::ES256 => jsonwebtoken::Algorithm::ES256,
-            Self::ES384 => jsonwebtoken::Algorithm::ES384,
-            Self::EdDSA => jsonwebtoken::Algorithm::EdDSA,
-        }
-    }
-}
 
 /// Complete product-neutral inbound resource-server settings.
 #[derive(Clone, Debug)]
@@ -571,7 +549,7 @@ fn verifier_config(options: &ResourceServerOptions) -> TokenVerifierConfig {
         options
             .algorithms
             .iter()
-            .map(|algorithm| algorithm.jsonwebtoken())
+            .map(|algorithm| algorithm.to_jsonwebtoken())
             .collect(),
         access_token_typ_set("at+jwt"),
     )

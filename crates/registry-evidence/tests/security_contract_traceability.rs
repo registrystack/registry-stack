@@ -357,6 +357,7 @@ fn assert_reference_is_an_executable_test(root: &Path, entry_id: &str, test: &Te
     // Evidence security invariants may be implemented by the runtime, its
     // adopter tooling, relying-party client, the portable verifier, the shared Adapter
     // acquisition engine, the narrowly shared platform primitives they use,
+    // the pure presentation verifier for holder-presented credentials,
     // the governed Casework authority, or the
     // OpenID4VCI delivery front end,
     // which owns the wallet-facing boundary the runtime deliberately does not
@@ -368,8 +369,10 @@ fn assert_reference_is_an_executable_test(root: &Path, entry_id: &str, test: &Te
         "crates/registry-evidencectl/",
         "crates/registry-evidence-client/",
         "crates/registry-evidence-verifier/",
+        "crates/registry-evidence-presentation/",
         "crates/registry-adapter-engine/",
         "crates/registry-evidence-oid4vci/",
+        "crates/registry-evidence-oid4vp/",
         "crates/registry-casework/",
         "crates/registry-platform-audit/",
         "crates/registry-platform-config/",

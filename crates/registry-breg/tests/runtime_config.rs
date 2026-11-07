@@ -241,6 +241,59 @@ fn runtime_log_level_defaults_to_info_and_accepts_the_closed_vocabulary() {
 }
 
 #[test]
+fn access_token_algorithm_accepts_exactly_the_asymmetric_roster() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
+    let expected = [
+        ("EdDSA", jsonwebtoken::Algorithm::EdDSA),
+        ("ES256", jsonwebtoken::Algorithm::ES256),
+        ("ES384", jsonwebtoken::Algorithm::ES384),
+        ("RS256", jsonwebtoken::Algorithm::RS256),
+        ("RS384", jsonwebtoken::Algorithm::RS384),
+    ];
+
+    for (spelling, algorithm) in expected {
+        let configured = base.replacen(
+            "allowedAlgorithm: EdDSA",
+            &format!("allowedAlgorithm: {spelling}"),
+            1,
+        );
+        let loaded = parse_runtime_config_with_env(&configured, env_lookup)
+            .unwrap_or_else(|error| panic!("{spelling} loads: {error}"));
+        assert_eq!(
+            loaded
+                .authentication()
+                .oidc()
+                .token_verifier_config()
+                .allowed_algorithms,
+            vec![algorithm],
+            "{spelling}"
+        );
+    }
+
+    for refused in [
+        "HS256", "HS384", "HS512", "PS256", "PS384", "PS512", "RS512", "ES512", "es256", "eddsa",
+        "none",
+    ] {
+        let configured = base.replacen(
+            "allowedAlgorithm: EdDSA",
+            &format!("allowedAlgorithm: {refused}"),
+            1,
+        );
+        let error = parse_runtime_config_with_env(&configured, env_lookup)
+            .expect_err("an algorithm outside the roster is refused");
+        assert_eq!(
+            reader_refusal(&error),
+            (
+                "config.unknown-variant",
+                "/authentication/oidc/allowedAlgorithm"
+            ),
+            "{refused}"
+        );
+    }
+}
+
+#[test]
 fn runtime_log_level_refuses_values_outside_the_closed_vocabulary() {
     let fixture = RuntimeFixture::new();
     let base = valid_runtime(&fixture.secret_root, &fixture.package_root);

@@ -895,8 +895,10 @@ REQUIRED_SECURITY_WORKFLOW_SELECTIONS: dict[str, frozenset[str]] = {
 REQUIRED_NIGHTLY_FUZZ_TARGETS: dict[str, tuple[str, ...]] = {
     "platform-fuzz": (
         "authcommon_parsers",
-        "sdjwt_holder_proof",
+        "crypto_jwe_decrypt",
+        "crypto_jws_parse",
         "sdjwt_issuance",
+        "sdjwt_presentation_parse",
         "sqlite_statement",
         "yaml_decode",
         "yaml_reader",

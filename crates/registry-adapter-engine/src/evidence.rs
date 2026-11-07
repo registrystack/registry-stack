@@ -25,7 +25,9 @@ use crate::artifacts::{ArtifactReadError, ArtifactSource, PackArtifactBytes};
 use crate::auth::{AuthPlan, TokenBudget};
 use crate::component::graphql::GraphQlQuery;
 use crate::exchange::Exchange;
-use crate::host_protocol::{CompiledHostProtocol, HostAccessAttribution, HostProtocolRegistry};
+use crate::host_protocol::{
+    CompiledHostProtocol, HostAccessAttribution, HostProtocolAttachment, HostProtocolRegistry,
+};
 use crate::route::{EndpointRuntime, RouteContext, RouteFailure, RouteTable};
 use crate::scripts::{CodeMaps, ScriptSet};
 
@@ -1309,12 +1311,8 @@ impl EvidenceProgram {
         &self,
         hooks: Arc<dyn EvidenceHostHooks>,
     ) -> Result<EvidenceAcquisition, EvidenceBeginError> {
-        #[cfg(feature = "sqlite-extract")]
-        return self
-            .begin_acquisition_inner(hooks, None, chrono::Utc::now())
-            .await;
-        #[cfg(not(feature = "sqlite-extract"))]
-        self.begin_acquisition_inner(hooks, None).await
+        self.begin_acquisition_inner(hooks, None, chrono::Utc::now())
+            .await
     }
 
     /// Record acquisition intent while retaining immutable, authorized access
@@ -1325,17 +1323,13 @@ impl EvidenceProgram {
         hooks: Arc<dyn EvidenceHostHooks>,
         attribution: Arc<HostAccessAttribution>,
     ) -> Result<EvidenceAcquisition, EvidenceBeginError> {
-        #[cfg(feature = "sqlite-extract")]
-        return self
-            .begin_acquisition_inner(hooks, Some(attribution), chrono::Utc::now())
-            .await;
-        #[cfg(not(feature = "sqlite-extract"))]
-        self.begin_acquisition_inner(hooks, Some(attribution)).await
+        self.begin_acquisition_inner(hooks, Some(attribution), chrono::Utc::now())
+            .await
     }
 
     /// Begin an acquisition with the host-captured evaluation instant used by
-    /// every SQLite statement and freshness check in this acquisition.
-    #[cfg(feature = "sqlite-extract")]
+    /// every SQLite statement, host-protocol verification, and freshness check
+    /// in this acquisition.
     pub async fn begin_acquisition_at(
         &self,
         hooks: Arc<dyn EvidenceHostHooks>,
@@ -1346,8 +1340,8 @@ impl EvidenceProgram {
     }
 
     /// Begin an attributed acquisition at the host-captured evaluation
-    /// instant used by SQLite freshness and statement execution.
-    #[cfg(feature = "sqlite-extract")]
+    /// instant used by SQLite freshness and statement execution and by
+    /// host-protocol verification.
     pub async fn begin_acquisition_at_with_attribution(
         &self,
         hooks: Arc<dyn EvidenceHostHooks>,
@@ -1362,7 +1356,7 @@ impl EvidenceProgram {
         &self,
         hooks: Arc<dyn EvidenceHostHooks>,
         attribution: Option<Arc<HostAccessAttribution>>,
-        #[cfg(feature = "sqlite-extract")] evaluation_instant: chrono::DateTime<chrono::Utc>,
+        evaluation_instant: chrono::DateTime<chrono::Utc>,
     ) -> Result<EvidenceAcquisition, EvidenceBeginError> {
         let intent = EvidenceAcquisitionIntent {
             pack: self.pack.clone(),
@@ -1421,7 +1415,6 @@ impl EvidenceProgram {
                 attribution,
                 #[cfg(feature = "sqlite-extract")]
                 sqlite_sources,
-                #[cfg(feature = "sqlite-extract")]
                 evaluation_instant,
             },
         ))
@@ -2231,10 +2224,10 @@ pub struct EvidenceAcquisition {
     attribution: Option<Arc<HostAccessAttribution>>,
     #[cfg(feature = "sqlite-extract")]
     sqlite_sources: Arc<BTreeMap<String, crate::component::sqlite_extract::SqliteExtractSource>>,
-    #[cfg(feature = "sqlite-extract")]
     evaluation_instant: chrono::DateTime<chrono::Utc>,
     state: tokio::sync::Mutex<EvidenceBudgetState>,
     trusted_protocol_metadata: tokio::sync::Mutex<Vec<EvidenceTrustedProtocolMetadata>>,
+    trusted_protocol_attachment: tokio::sync::Mutex<Option<HostProtocolAttachment>>,
     pub(crate) token_budget: tokio::sync::Mutex<TokenBudget>,
 }
 
@@ -2248,7 +2241,6 @@ struct EvidenceAcquisitionStart {
     attribution: Option<Arc<HostAccessAttribution>>,
     #[cfg(feature = "sqlite-extract")]
     sqlite_sources: Arc<BTreeMap<String, crate::component::sqlite_extract::SqliteExtractSource>>,
-    #[cfg(feature = "sqlite-extract")]
     evaluation_instant: chrono::DateTime<chrono::Utc>,
 }
 
@@ -2286,10 +2278,10 @@ impl EvidenceAcquisition {
             attribution: None,
             #[cfg(feature = "sqlite-extract")]
             sqlite_sources: Arc::new(BTreeMap::new()),
-            #[cfg(feature = "sqlite-extract")]
             evaluation_instant: chrono::Utc::now(),
             state: tokio::sync::Mutex::new(EvidenceBudgetState::default()),
             trusted_protocol_metadata: tokio::sync::Mutex::new(Vec::new()),
+            trusted_protocol_attachment: tokio::sync::Mutex::new(None),
             token_budget: tokio::sync::Mutex::new(TokenBudget::new_exchange()),
         })
     }
@@ -2306,10 +2298,10 @@ impl EvidenceAcquisition {
             attribution: start.attribution,
             #[cfg(feature = "sqlite-extract")]
             sqlite_sources: start.sqlite_sources,
-            #[cfg(feature = "sqlite-extract")]
             evaluation_instant: start.evaluation_instant,
             state: tokio::sync::Mutex::new(EvidenceBudgetState::default()),
             trusted_protocol_metadata: tokio::sync::Mutex::new(Vec::new()),
+            trusted_protocol_attachment: tokio::sync::Mutex::new(None),
             token_budget: tokio::sync::Mutex::new(TokenBudget::new_exchange()),
         }
     }
@@ -2343,6 +2335,29 @@ impl EvidenceAcquisition {
             });
     }
 
+    /// Retain the one opaque attachment a verified host-protocol response
+    /// carried. A second attachment in the same acquisition is refused rather
+    /// than merged or replaced.
+    pub(crate) async fn record_protocol_attachment(
+        &self,
+        attachment: HostProtocolAttachment,
+    ) -> Result<(), EvidenceTerminalError> {
+        let mut slot = self.trusted_protocol_attachment.lock().await;
+        if slot.is_some() {
+            return Err(EvidenceTerminalError::Protocol);
+        }
+        *slot = Some(attachment);
+        Ok(())
+    }
+
+    /// The opaque attachment a host protocol verifier returned for this
+    /// acquisition, if any. The engine never reads it; the embedding host
+    /// downcasts it to the type its protocol produces. It never enters the
+    /// Exchange processed by routes.
+    pub async fn trusted_protocol_attachment(&self) -> Option<HostProtocolAttachment> {
+        self.trusted_protocol_attachment.lock().await.clone()
+    }
+
     /// Trusted validity metadata returned only after host-protocol
     /// verification. Values never enter the Exchange processed by routes.
     pub async fn trusted_protocol_metadata(&self) -> Vec<EvidenceTrustedProtocolMetadata> {
@@ -2357,7 +2372,6 @@ impl EvidenceAcquisition {
         self.sqlite_sources.get(id)
     }
 
-    #[cfg(feature = "sqlite-extract")]
     pub(crate) fn evaluation_instant(&self) -> chrono::DateTime<chrono::Utc> {
         self.evaluation_instant
     }
@@ -4036,6 +4050,263 @@ mod tests {
             .to_ascii_lowercase()
             .contains("x-evidence-requester: requester@example.test"));
         assert!(!request_text.contains("eligibility"));
+    }
+
+    /// Observations a replay-bound attachment protocol makes while verifying.
+    #[derive(Default)]
+    struct AttachmentProbe {
+        instants: Mutex<Vec<chrono::DateTime<chrono::Utc>>>,
+    }
+
+    struct AttachmentProtocolCompiler {
+        attachment: Option<HostProtocolAttachment>,
+        probe: Arc<AttachmentProbe>,
+    }
+
+    impl crate::host_protocol::HostProtocolCompiler for AttachmentProtocolCompiler {
+        fn id(&self) -> &str {
+            "attachment-protocol"
+        }
+
+        fn compile(
+            &self,
+            _endpoint: &registry_adapter_core::Endpoint,
+            _config: &[u8],
+        ) -> Result<
+            Arc<dyn crate::host_protocol::CompiledHostProtocol>,
+            crate::host_protocol::HostProtocolError,
+        > {
+            Ok(Arc::new(AttachmentProtocol {
+                attachment: self.attachment.clone(),
+                probe: Arc::clone(&self.probe),
+            }))
+        }
+    }
+
+    struct AttachmentProtocol {
+        attachment: Option<HostProtocolAttachment>,
+        probe: Arc<AttachmentProbe>,
+    }
+
+    impl crate::host_protocol::CompiledHostProtocol for AttachmentProtocol {
+        fn response_header_names(&self) -> &[http::HeaderName] {
+            &[]
+        }
+
+        fn prepare_attempt(
+            &self,
+            _request: crate::host_protocol::HostProtocolRequestContext<'_>,
+            _attribution: Option<&crate::host_protocol::HostAccessAttribution>,
+            _maximum_request_bytes: usize,
+        ) -> Result<
+            crate::host_protocol::PreparedHostProtocolRequest,
+            crate::host_protocol::HostProtocolError,
+        > {
+            Ok(crate::host_protocol::PreparedHostProtocolRequest::new(
+                zeroize::Zeroizing::new(b"{}".to_vec()),
+                Vec::new(),
+                Box::new(AttachmentVerifier {
+                    attachment: self.attachment.clone(),
+                    probe: Arc::clone(&self.probe),
+                }),
+            ))
+        }
+    }
+
+    struct AttachmentVerifier {
+        attachment: Option<HostProtocolAttachment>,
+        probe: Arc<AttachmentProbe>,
+    }
+
+    impl crate::host_protocol::HostProtocolResponseVerifier for AttachmentVerifier {
+        fn verify(
+            self: Box<Self>,
+            response: crate::host_protocol::HostProtocolWireResponse,
+        ) -> Result<
+            crate::host_protocol::VerifiedHostProtocolResponse,
+            crate::host_protocol::HostProtocolResponseRefusal,
+        > {
+            self.probe
+                .instants
+                .lock()
+                .expect("probe")
+                .push(response.evaluation_instant());
+            let verified = crate::host_protocol::VerifiedHostProtocolResponse::new(
+                json!({"lookup": "no-match"}),
+                None,
+            );
+            Ok(match self.attachment {
+                Some(attachment) => verified.with_attachment(attachment),
+                None => verified,
+            })
+        }
+    }
+
+    /// Run `sends` consecutive protocol reads against a replay transcript and
+    /// return the acquisition with the lookup result.
+    async fn execute_attachment_protocol(
+        attachment: Option<HostProtocolAttachment>,
+        probe: &Arc<AttachmentProbe>,
+        sends: usize,
+        evaluation_instant: chrono::DateTime<chrono::Utc>,
+    ) -> (
+        EvidenceAcquisition,
+        Result<EvidenceLookup, EvidenceExecutionError>,
+    ) {
+        let schema = serde_json::to_vec(&json!({
+            "type": "object", "additionalProperties": false, "properties": {}
+        }))
+        .expect("schema");
+        let config = br#"{}"#.to_vec();
+        let step = json!({"to": {"uri": "http:register", "parameters": {
+            "httpMethod": "POST", "operation": "read-evidence",
+            "path": "/v1/evidence", "body": {"constant": {}}
+        }}});
+        let pack: AdapterPack = serde_json::from_value(json!({
+            "id": "attachment-protocol-pack", "version": "1", "testedVersions": [],
+            "endpoints": [{
+                "id": "register", "component": "http",
+                "authentication": {"type": "none"},
+                "attemptTimeoutMilliseconds": 1000,
+                "maximumResponseBytes": 4096,
+                "requestHeaders": [], "responseHeaders": [],
+                "operations": [{"id": "read-evidence", "safeUpstream": true}],
+                "testedVersions": [],
+                "hostProtocol": {
+                    "id": "attachment-protocol",
+                    "config": {"path": "protocol.json", "digest": sha256_uri(&config)}
+                }
+            }],
+            "sourceRoutes": [{
+                "id": "evidence",
+                "evidence": {
+                    "inputsSchema": {"path": "schema.json", "digest": sha256_uri(&schema)},
+                    "factsSchema": {"path": "schema.json", "digest": sha256_uri(&schema)}
+                },
+                "steps": vec![step; sends]
+            }]
+        }))
+        .expect("pack");
+        let artifacts = PackArtifactBytes::new([
+            ("schema.json".to_owned(), schema),
+            ("protocol.json".to_owned(), config),
+        ]);
+        let registry = HostProtocolRegistry::try_new([Arc::new(AttachmentProtocolCompiler {
+            attachment,
+            probe: Arc::clone(probe),
+        })
+            as Arc<dyn crate::host_protocol::HostProtocolCompiler>])
+        .expect("registry");
+        let checked = compile_evidence_pack_with_protocols(
+            &pack,
+            "evidence",
+            &artifacts,
+            EvidenceLimits::default(),
+            &registry,
+        )
+        .expect("checked program");
+        let exchanges = (0..sends)
+            .map(|_| {
+                json!({
+                    "request": {"endpoint": "register", "method": "POST",
+                        "path": "/v1/evidence", "body": {}},
+                    "response": {"status": 200,
+                        "rawBodyBase64": base64::engine::general_purpose::STANDARD.encode(b"signed")}
+                })
+            })
+            .collect::<Vec<_>>();
+        let transcript = Arc::new(crate::replay::ReplayTranscript::from_exchanges(
+            serde_json::from_value(json!([{"type": "endpoint", "endpoint": "register"}]))
+                .expect("intercepts"),
+            serde_json::from_value(Value::Array(exchanges)).expect("exchanges"),
+        ));
+        let program = checked.bind_replay(transcript).expect("replay binding");
+        let acquisition = program
+            .begin_acquisition_at(Arc::new(RecordingHooks::default()), evaluation_instant)
+            .await
+            .expect("acquisition");
+        let result = program.execute(&acquisition, json!({})).await;
+        (acquisition, result)
+    }
+
+    fn attachment_test_instant() -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339("2026-11-06T09:30:00Z")
+            .expect("instant")
+            .with_timezone(&chrono::Utc)
+    }
+
+    #[tokio::test]
+    async fn host_protocol_attachment_round_trips_untouched_and_verifier_sees_the_injected_instant()
+    {
+        let probe = Arc::new(AttachmentProbe::default());
+        let attachment: HostProtocolAttachment = Arc::new(String::from("opaque-facts"));
+        let (acquisition, result) = execute_attachment_protocol(
+            Some(Arc::clone(&attachment)),
+            &probe,
+            1,
+            attachment_test_instant(),
+        )
+        .await;
+
+        assert!(matches!(result, Ok(EvidenceLookup::NoMatch)));
+        let carried = acquisition
+            .trusted_protocol_attachment()
+            .await
+            .expect("attachment");
+        assert!(Arc::ptr_eq(&carried, &attachment));
+        assert_eq!(
+            carried.downcast_ref::<String>().map(String::as_str),
+            Some("opaque-facts")
+        );
+        assert_eq!(
+            *probe.instants.lock().expect("probe"),
+            vec![attachment_test_instant()],
+            "the verifier is handed the acquisition's instant, not the wall clock"
+        );
+    }
+
+    #[tokio::test]
+    async fn host_protocol_attachment_a_host_does_not_read_has_no_effect() {
+        let probe = Arc::new(AttachmentProbe::default());
+        let (with_attachment, with_result) = execute_attachment_protocol(
+            Some(Arc::new(7_u32)),
+            &probe,
+            1,
+            attachment_test_instant(),
+        )
+        .await;
+        let (without_attachment, without_result) =
+            execute_attachment_protocol(None, &probe, 1, attachment_test_instant()).await;
+
+        assert!(matches!(with_result, Ok(EvidenceLookup::NoMatch)));
+        assert!(matches!(without_result, Ok(EvidenceLookup::NoMatch)));
+        assert!(without_attachment
+            .trusted_protocol_attachment()
+            .await
+            .is_none());
+        assert_eq!(
+            with_attachment.trusted_protocol_metadata().await,
+            without_attachment.trusted_protocol_metadata().await,
+            "the attachment adds nothing to the validity metadata"
+        );
+    }
+
+    #[tokio::test]
+    async fn two_host_protocol_attachments_in_one_lookup_refuse() {
+        let probe = Arc::new(AttachmentProbe::default());
+        let (acquisition, result) =
+            execute_attachment_protocol(Some(Arc::new(1_u8)), &probe, 2, attachment_test_instant())
+                .await;
+
+        let Err(EvidenceExecutionError::Route(failure)) = result else {
+            panic!("a second attachment is a protocol refusal, got {result:?}");
+        };
+        assert_eq!(failure.code, Some("evidence.protocol-failed"));
+        assert_eq!(probe.instants.lock().expect("probe").len(), 2);
+        assert!(
+            acquisition.trusted_protocol_attachment().await.is_some(),
+            "the first attachment is not replaced by the refused second"
+        );
     }
 
     #[tokio::test]

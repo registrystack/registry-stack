@@ -14,7 +14,7 @@ base64 = { version = "0.23", default-features = false, features = ["std"] }
 jsonwebtoken = { version = "10", default-features = false, features = ["aws_lc_rs"] }
 libfuzzer-sys = "0.4"
 registry-platform-authcommon = { path = "../../../crates/registry-platform-authcommon" }
-registry-platform-crypto = { path = "../../../crates/registry-platform-crypto" }
+registry-platform-crypto = { path = "../../../crates/registry-platform-crypto", features = ["jwe"] }
 registry-platform-oidc = { path = "../../../crates/registry-platform-oidc" }
 registry-platform-sdjwt = { path = "../../../crates/registry-platform-sdjwt" }
 registry-platform-sqlite = { path = "../../../crates/registry-platform-sqlite" }
@@ -33,8 +33,15 @@ doc = false
 bench = false
 
 [[bin]]
-name = "sdjwt_holder_proof"
-path = "fuzz_targets/sdjwt_holder_proof.rs"
+name = "crypto_jwe_decrypt"
+path = "fuzz_targets/crypto_jwe_decrypt.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "crypto_jws_parse"
+path = "fuzz_targets/crypto_jws_parse.rs"
 test = false
 doc = false
 bench = false
@@ -42,6 +49,13 @@ bench = false
 [[bin]]
 name = "sdjwt_issuance"
 path = "fuzz_targets/sdjwt_issuance.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sdjwt_presentation_parse"
+path = "fuzz_targets/sdjwt_presentation_parse.rs"
 test = false
 doc = false
 bench = false

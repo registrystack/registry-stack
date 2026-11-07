@@ -2,23 +2,30 @@
 
 use crate::{
     bundle::{ArtifactFault, Bundle, RuntimeDocument, SourcePack},
-    config::{AssuranceProfile, SchemaFault, SourceConfig},
-    model::LookupResult,
+    config::{AssuranceProfile, SchemaFault, SourceConfig, WALLET_PRESENTATION_PROTOCOL_ID},
+    model::{ChannelKind, LookupResult},
     observability::{DependencyOutcome, SourceLookupOutcome, SourceObserver, UndeclaredNotFound},
+    presented::PresentedFacts,
     secrets::SecretResolver,
     selector::ResolvedAuthorization,
 };
 use chrono::{DateTime, Utc};
-use registry_adapter_core::{EndpointAuthentication, EvidenceConnectionPolicy};
+use registry_adapter_core::{
+    walk_steps, AdapterPack, EndpointAuthentication, EvidenceConnectionPolicy, SendComponent, Step,
+};
 use registry_adapter_engine::component::http::uri::PinnedOrigin;
 use registry_adapter_engine::evidence::{
     compile_evidence_with_protocols, EvidenceBeginError, EvidenceCompileInputs,
     EvidenceExecutionError, EvidenceHostHooks, EvidenceLimits, EvidenceLookup, EvidenceProgram,
     EvidenceRuntimeBindings, EvidenceTerminalError,
 };
+use registry_adapter_engine::host_protocol::{HostProtocolAttachment, HostProtocolRegistry};
 use registry_adapter_engine::route::{EvidenceHttpDiagnostic, RouteFailure};
 use serde_json::{Map, Value};
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 use thiserror::Error;
 
 /// Value-free failures at Evidence's pack boundary.
@@ -147,12 +154,15 @@ pub struct PackSourceExecutor {
     source: SourceConfig,
     closure: SourcePack,
     observer: Option<SourceObserver>,
+    channel: ChannelKind,
 }
 
-/// Private facts plus trusted upstream validity retained outside provider code.
+/// Private facts plus trusted upstream validity and, for a holder-presented
+/// protocol, the verified credential facts, retained outside provider code.
 pub struct AcquiredLookup {
     pub lookup: LookupResult,
     pub valid_until: Option<DateTime<Utc>>,
+    pub presented: Option<Arc<PresentedFacts>>,
     pub acquisition_deadline: tokio::time::Instant,
 }
 
@@ -204,6 +214,27 @@ impl PackSourceExecutor {
         policies: &[EvidenceConnectionPolicy],
         limits: EvidenceLimits,
     ) -> Result<Self, PackSourceError> {
+        Self::compile_with_registry(
+            source,
+            closure,
+            runtime,
+            policies,
+            limits,
+            &crate::host_protocol::registry().map_err(|_| PackSourceError::Plan)?,
+        )
+    }
+
+    /// [`Self::compile`] against a caller-supplied protocol registry. The
+    /// production path always passes the Evidence host registry; tests pass one
+    /// that installs a test double for a protocol.
+    pub(crate) fn compile_with_registry(
+        source: &SourceConfig,
+        closure: &SourcePack,
+        runtime: &EvidenceRuntimeBindings,
+        policies: &[EvidenceConnectionPolicy],
+        limits: EvidenceLimits,
+        protocols: &HostProtocolRegistry,
+    ) -> Result<Self, PackSourceError> {
         let pack = closure.pack();
         let artifacts = closure.artifacts();
         let program = compile_evidence_with_protocols(
@@ -216,15 +247,31 @@ impl PackSourceExecutor {
                 pack_artifacts: &artifacts,
                 limits,
             },
-            &crate::host_protocol::registry().map_err(|_| PackSourceError::Plan)?,
+            protocols,
         )
         .map_err(|_| PackSourceError::Plan)?;
+        let channel = if route_reaches_protocol(
+            &pack,
+            source.route.as_str(),
+            WALLET_PRESENTATION_PROTOCOL_ID,
+        ) {
+            ChannelKind::HolderPresented
+        } else {
+            ChannelKind::Source
+        };
         Ok(Self {
             program,
             source: source.clone(),
             closure: closure.clone(),
             observer: None,
+            channel,
         })
+    }
+
+    /// The channel this Source acquires through: holder-presented exactly when
+    /// its route reaches the wallet presentation protocol.
+    pub fn channel(&self) -> ChannelKind {
+        self.channel
     }
 
     pub(crate) fn observe(&mut self, observer: Option<SourceObserver>) {
@@ -363,12 +410,132 @@ impl PackSourceExecutor {
             valid_until =
                 Some(valid_until.map_or(expiry, |current: DateTime<Utc>| current.min(expiry)));
         }
+        let presented = presented_facts(acquisition.trusted_protocol_attachment().await)
+            .map_err(PackSourceFailure::categorical)?;
+        require_channel_facts(self.channel, presented.as_deref())
+            .map_err(PackSourceFailure::categorical)?;
         Ok(AcquiredLookup {
             lookup,
             valid_until,
+            presented,
             acquisition_deadline: acquisition.deadline(),
         })
     }
+}
+
+/// Read the host protocol's opaque attachment as the presented facts Evidence
+/// defines. An attachment of any other type is a protocol refusal.
+fn presented_facts(
+    attachment: Option<HostProtocolAttachment>,
+) -> Result<Option<Arc<PresentedFacts>>, PackSourceError> {
+    attachment
+        .map(|attachment| {
+            attachment
+                .downcast::<PresentedFacts>()
+                .map_err(|_| PackSourceError::Protocol)
+        })
+        .transpose()
+}
+
+/// Tie the declared channel to the trusted attachment. A holder-presented
+/// Source that returns no presented facts is a dependency failure, never a
+/// `source` assertion; a source-channel Source that returns presented facts
+/// violates its protocol. Neither releases a fact.
+pub(crate) fn require_channel_facts(
+    channel: ChannelKind,
+    presented: Option<&PresentedFacts>,
+) -> Result<(), PackSourceError> {
+    match (channel, presented) {
+        (ChannelKind::HolderPresented, None) => Err(PackSourceError::Dependency),
+        (ChannelKind::Source, Some(_)) => Err(PackSourceError::Protocol),
+        _ => Ok(()),
+    }
+}
+
+/// Whether `route` can reach an endpoint that selects `protocol`, following
+/// direct routes the way the engine does when it compiles the route.
+fn route_reaches_protocol(pack: &AdapterPack, route: &str, protocol: &str) -> bool {
+    let Some(source) = pack.source_routes.get(route) else {
+        return false;
+    };
+    let routes: BTreeMap<_, _> = pack
+        .routes
+        .iter()
+        .map(|route| (route.from.uri.id.as_str(), route.steps.as_slice()))
+        .collect();
+    let mut pending = vec![source.steps.as_slice()];
+    let mut visited = BTreeSet::new();
+    let mut endpoints = BTreeSet::new();
+    while let Some(steps) = pending.pop() {
+        let mut destinations = Vec::new();
+        walk_steps(steps, &mut |step, _| match step {
+            Step::To(send) => destinations.push(&send.uri),
+            Step::Enrich(send) => destinations.push(&send.uri),
+            _ => {}
+        });
+        for uri in destinations {
+            if uri.component == SendComponent::Direct {
+                if visited.insert(uri.id.as_str()) {
+                    pending.extend(routes.get(uri.id.as_str()).copied());
+                }
+            } else {
+                endpoints.insert(uri.id.as_str());
+            }
+        }
+    }
+    pack.endpoints.iter().any(|endpoint| {
+        endpoints.contains(endpoint.id.as_str())
+            && endpoint
+                .host_protocol
+                .as_ref()
+                .is_some_and(|selected| selected.id.as_str() == protocol)
+    })
+}
+
+/// A Source configured on the wrong acquisition channel, with the member of
+/// the definition to repair. The pointer and cause carry no value.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ChannelSourceRefusal {
+    pub pointer: String,
+    pub cause: &'static str,
+}
+
+/// Every requirement Source whose protocol does not match its channel: the
+/// holder-presented Source must reach the wallet presentation protocol, and a
+/// source-channel Source never does.
+pub fn channel_source_refusals(bundle: &Bundle) -> Vec<ChannelSourceRefusal> {
+    let reaches_wallet = |source_id: &str| {
+        bundle.config.sources.get(source_id).is_some_and(|source| {
+            bundle.source_pack(source_id).is_some_and(|closure| {
+                route_reaches_protocol(
+                    &closure.pack(),
+                    source.route.as_str(),
+                    WALLET_PRESENTATION_PROTOCOL_ID,
+                )
+            })
+        })
+    };
+    let mut refusals = Vec::new();
+    for (index, requirement) in bundle.config.requirements.iter().enumerate() {
+        let acquisition = &requirement.acquisition;
+        if let Some(source_id) = acquisition.source_channel_source() {
+            if reaches_wallet(source_id) {
+                refusals.push(ChannelSourceRefusal {
+                    pointer: format!("/requirements/{index}/acquisition/source"),
+                    cause: "a source-channel Source must not use the wallet presentation protocol",
+                });
+            }
+        }
+        if let Some(source_id) = acquisition.holder_presented_source() {
+            if !reaches_wallet(source_id) {
+                refusals.push(ChannelSourceRefusal {
+                    pointer: format!("/requirements/{index}/acquisition/holderPresented/source"),
+                    cause: "a holder-presented Source must use the wallet presentation protocol",
+                });
+            }
+        }
+    }
+    refusals
 }
 
 fn dependency_outcome(failure: &PackSourceFailure) -> DependencyOutcome {
@@ -430,6 +597,9 @@ pub fn build_sources(
     document: &RuntimeDocument,
     secrets: &Arc<SecretResolver>,
 ) -> Result<BTreeMap<String, PackSourceExecutor>, PackSourceError> {
+    if !channel_source_refusals(bundle).is_empty() {
+        return Err(PackSourceError::Plan);
+    }
     let limits = document
         .config
         .source_acquisition
@@ -752,6 +922,41 @@ mod outcome_tests {
             let rendered = format!("{failure:?} {failure}");
             assert!(rendered.contains(&category.to_string()));
             assert!(!rendered.contains("governed-endpoint"));
+        }
+    }
+
+    #[test]
+    fn the_attachment_is_read_only_as_presented_facts() {
+        use crate::model::{PresentedCredential, SubjectLinkMode};
+        let facts = PresentedFacts::new(
+            PresentedCredential::new(
+                "national-id",
+                "https://issuer.example",
+                "https://credentials.example/identity",
+                "2026-08-01T00:00:00Z".parse().expect("time"),
+                SubjectLinkMode::Possession,
+            )
+            .expect("members are in contract"),
+            "2026-08-02T00:00:00Z".parse().expect("time"),
+        );
+        let attachment: HostProtocolAttachment = Arc::new(facts.clone());
+
+        assert_eq!(presented_facts(None), Ok(None));
+        assert_eq!(
+            presented_facts(Some(attachment))
+                .expect("presented facts are accepted")
+                .as_deref(),
+            Some(&facts)
+        );
+        for foreign in [
+            Arc::new(String::from("channel: holder-presented")) as HostProtocolAttachment,
+            Arc::new(serde_json::json!({"channel": "holder-presented"})) as HostProtocolAttachment,
+        ] {
+            assert_eq!(
+                presented_facts(Some(foreign)),
+                Err(PackSourceError::Protocol),
+                "an attachment of any other type is a protocol refusal"
+            );
         }
     }
 }

@@ -8,18 +8,22 @@ use std::{
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, Utc};
+use registry_platform_crypto::jws::{parse_compact_jws, JwsError, JwsLimits};
 use registry_platform_crypto::{parse_json_strict, verify, PublicJwk, SigningAlgorithm};
-use registry_platform_sdjwt::{validate_key_binding_jwt, HolderConfirmation, KeyBindingPolicy};
+use registry_platform_sdjwt::{
+    resolve_disclosures as resolve_rfc9901_disclosures, sd_hash, validate_key_binding_jwt,
+    HolderConfirmation, KeyBindingPolicy, SdJwtLimits,
+};
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::{
     contracts::evidence_contract_accepts,
     model::{
-        validate_subject_binding_shape, Evidence, FlattenedJws, HolderPublicKey, JwksDocument,
-        SubjectBindingMode,
+        validate_channel_shape, validate_subject_binding_shape, ChannelKind, ChannelShapeError,
+        Evidence, FlattenedJws, HolderPublicKey, JwksDocument, SubjectBindingMode,
     },
     sdjwt_vc::{evidence_payload_from_claims, holder_jwk, holder_thumbprint},
     AssuranceProfile, EVIDENCE_JWS_CTY, EVIDENCE_JWS_TYP, EVIDENCE_SCHEMA_V1,
@@ -72,6 +76,14 @@ pub const MINIMUM_KEY_BINDING_AGE_SECONDS: u64 = 1;
 /// inside this interval is accepted as often as it is presented.
 pub const MAXIMUM_KEY_BINDING_AGE_SECONDS: u64 = 300;
 
+/// Shortest maximum credential age a policy may state, per the verification
+/// policy contracts.
+pub const MINIMUM_CREDENTIAL_AGE_SECONDS: u64 = 1;
+/// Longest maximum credential age a policy may state, per the same contracts.
+/// Ten years of 365 days; a presented credential can be long lived, unlike an
+/// assertion.
+pub const MAXIMUM_CREDENTIAL_AGE_SECONDS: u64 = 315_360_000;
+
 /// A policy stating a bound the verification policy contract forbids.
 ///
 /// This is a refusal to use the policy at all, not a verification outcome. Both
@@ -91,6 +103,50 @@ pub enum PolicyBoundsError {
     HolderBound,
     #[error("maximumKeyBindingAgeSeconds must be {MINIMUM_KEY_BINDING_AGE_SECONDS} to {MAXIMUM_KEY_BINDING_AGE_SECONDS}")]
     KeyBindingAge(u64),
+    #[error("maximumCredentialAgeSeconds must be {MINIMUM_CREDENTIAL_AGE_SECONDS} to {MAXIMUM_CREDENTIAL_AGE_SECONDS}")]
+    CredentialAge(u64),
+    #[error("acceptedChannels must name at least one channel, each once")]
+    AcceptedChannels,
+}
+
+/// The channels a policy accepts when it states none: `source` only, so a
+/// consumer written before the channel member existed refuses an assertion
+/// that a holder presented.
+#[must_use]
+pub fn default_accepted_channels() -> Vec<ChannelKind> {
+    vec![ChannelKind::Source]
+}
+
+fn is_default_accepted_channels(channels: &[ChannelKind]) -> bool {
+    channels == [ChannelKind::Source]
+}
+
+fn checked_accepted_channels(
+    channels: Vec<ChannelKind>,
+) -> Result<Vec<ChannelKind>, PolicyBoundsError> {
+    let mut unique = channels.clone();
+    unique.sort();
+    unique.dedup();
+    if channels.is_empty() || unique.len() != channels.len() {
+        return Err(PolicyBoundsError::AcceptedChannels);
+    }
+    Ok(channels)
+}
+
+fn checked_credential_age(seconds: u64) -> Result<Duration, PolicyBoundsError> {
+    if !(MINIMUM_CREDENTIAL_AGE_SECONDS..=MAXIMUM_CREDENTIAL_AGE_SECONDS).contains(&seconds) {
+        return Err(PolicyBoundsError::CredentialAge(seconds));
+    }
+    Ok(Duration::from_secs(seconds))
+}
+
+fn read_credential_age_seconds<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let seconds = u64::deserialize(deserializer)?;
+    checked_credential_age(seconds).map_err(serde::de::Error::custom)?;
+    Ok(Some(seconds))
 }
 
 fn checked_assertion_lifetime(seconds: u64) -> Result<Duration, PolicyBoundsError> {
@@ -160,6 +216,13 @@ pub struct EvidenceVerificationPolicy {
     /// Service key thumbprints that fail closed even if present in a stale or
     /// otherwise trusted JWKS document.
     pub revoked_key_ids: Vec<String>,
+    /// The channels this procedure accepts. Absence in a policy document
+    /// means `source` only.
+    pub accepted_channels: Vec<ChannelKind>,
+    /// Longest acceptable `observedAt - presentedCredential.issuedAt`, applied
+    /// to `holder-presented` assertions only. Read it with
+    /// [`EvidenceVerificationPolicy::maximum_credential_age`].
+    maximum_credential_age: Option<Duration>,
     /// Longest acceptable `validUntil - issuedAt` interval. Read it with
     /// [`EvidenceVerificationPolicy::maximum_assertion_lifetime`].
     maximum_assertion_lifetime: Duration,
@@ -236,6 +299,19 @@ pub struct EvidenceVerificationPolicyDocument {
     pub expected_subjects: Vec<ExpectedSubjectDocument>,
     pub expected_outputs: Vec<ExpectedOutputDocument>,
     pub revoked_key_ids: Vec<String>,
+    /// Absent means `source` only.
+    #[serde(
+        default = "default_accepted_channels",
+        skip_serializing_if = "is_default_accepted_channels"
+    )]
+    pub accepted_channels: Vec<ChannelKind>,
+    /// Applies to `holder-presented` assertions only. Absent means no bound.
+    #[serde(
+        default,
+        deserialize_with = "read_credential_age_seconds",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub maximum_credential_age_seconds: Option<u64>,
     #[serde(deserialize_with = "read_assertion_lifetime_seconds")]
     pub maximum_assertion_lifetime_seconds: u64,
     #[serde(default, deserialize_with = "read_clock_skew_seconds")]
@@ -319,6 +395,13 @@ pub struct HolderBoundPresentationPolicy {
     /// by the key-binding signature over the credential's own confirmation
     /// key, so this is an additional expectation rather than a requirement.
     pub expected_holder_key_thumbprint: Option<String>,
+    /// The channels this procedure accepts. Absence in a policy document
+    /// means `source` only.
+    pub accepted_channels: Vec<ChannelKind>,
+    /// Longest acceptable `observedAt - presentedCredential.issuedAt`, applied
+    /// to `holder-presented` assertions only. Read it with
+    /// [`HolderBoundPresentationPolicy::maximum_credential_age`].
+    maximum_credential_age: Option<Duration>,
     /// Read it with
     /// [`HolderBoundPresentationPolicy::maximum_assertion_lifetime`].
     maximum_assertion_lifetime: Duration,
@@ -360,6 +443,19 @@ pub struct HolderBoundPresentationPolicyDocument {
     pub clock_skew_seconds: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected_holder_key_thumbprint: Option<String>,
+    /// Absent means `source` only.
+    #[serde(
+        default = "default_accepted_channels",
+        skip_serializing_if = "is_default_accepted_channels"
+    )]
+    pub accepted_channels: Vec<ChannelKind>,
+    /// Applies to `holder-presented` assertions only. Absent means no bound.
+    #[serde(
+        default,
+        deserialize_with = "read_credential_age_seconds",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub maximum_credential_age_seconds: Option<u64>,
 }
 
 fn read_key_binding_age_seconds<'de, D>(deserializer: D) -> Result<u64, D::Error>
@@ -384,6 +480,11 @@ impl HolderBoundPresentationPolicyDocument {
         let maximum_key_binding_age =
             checked_key_binding_age(self.maximum_key_binding_age_seconds)?;
         let clock_skew = checked_clock_skew(self.clock_skew_seconds)?;
+        let accepted_channels = checked_accepted_channels(self.accepted_channels)?;
+        let maximum_credential_age = self
+            .maximum_credential_age_seconds
+            .map(checked_credential_age)
+            .transpose()?;
         Ok(HolderBoundPresentationPolicy {
             assurance_profile: self.expected_assurance_profile,
             issued_by: self.issued_by,
@@ -416,6 +517,8 @@ impl HolderBoundPresentationPolicyDocument {
             key_binding_audience: self.key_binding_audience,
             key_binding_nonce: self.key_binding_nonce,
             expected_holder_key_thumbprint: self.expected_holder_key_thumbprint,
+            accepted_channels,
+            maximum_credential_age,
             maximum_assertion_lifetime,
             maximum_key_binding_age,
             now,
@@ -445,9 +548,18 @@ impl HolderBoundPresentationPolicy {
         self.clock_skew
     }
 
+    /// Longest acceptable age of a presented credential at `observedAt`, when
+    /// the policy states one.
+    #[must_use]
+    pub fn maximum_credential_age(&self) -> Option<Duration> {
+        self.maximum_credential_age
+    }
+
     fn expectations(&self) -> EvidenceExpectations<'_> {
         EvidenceExpectations {
             subject_binding: SubjectBindingMode::HolderBound,
+            accepted_channels: &self.accepted_channels,
+            maximum_credential_age: self.maximum_credential_age,
             assurance_profile: self.assurance_profile,
             issued_by: &self.issued_by,
             provided_by: &self.provided_by,
@@ -749,6 +861,11 @@ impl EvidenceVerificationPolicyDocument {
         let maximum_assertion_lifetime =
             checked_assertion_lifetime(self.maximum_assertion_lifetime_seconds)?;
         let clock_skew = checked_clock_skew(self.clock_skew_seconds)?;
+        let accepted_channels = checked_accepted_channels(self.accepted_channels)?;
+        let maximum_credential_age = self
+            .maximum_credential_age_seconds
+            .map(checked_credential_age)
+            .transpose()?;
         Ok(EvidenceVerificationPolicy {
             assurance_profile: self.expected_assurance_profile,
             issued_by: self.issued_by,
@@ -780,6 +897,8 @@ impl EvidenceVerificationPolicyDocument {
                 })
                 .collect::<Result<Vec<_>, PolicyBoundsError>>()?,
             revoked_key_ids: self.revoked_key_ids,
+            accepted_channels,
+            maximum_credential_age,
             maximum_assertion_lifetime,
             now,
             clock_skew,
@@ -841,9 +960,38 @@ impl EvidenceVerificationPolicy {
         self.clock_skew
     }
 
+    /// Longest acceptable age of a presented credential at `observedAt`, when
+    /// the policy states one.
+    #[must_use]
+    pub fn maximum_credential_age(&self) -> Option<Duration> {
+        self.maximum_credential_age
+    }
+
+    /// Accept the named channels in addition to nothing else, replacing the
+    /// default of `source` only. An empty or repeating list is refused.
+    pub fn with_accepted_channels(
+        mut self,
+        channels: Vec<ChannelKind>,
+    ) -> Result<Self, PolicyBoundsError> {
+        self.accepted_channels = checked_accepted_channels(channels)?;
+        Ok(self)
+    }
+
+    /// Bound the age of a presented credential at `observedAt`. It applies to
+    /// `holder-presented` assertions only.
+    pub fn with_maximum_credential_age_seconds(
+        mut self,
+        seconds: u64,
+    ) -> Result<Self, PolicyBoundsError> {
+        self.maximum_credential_age = Some(checked_credential_age(seconds)?);
+        Ok(self)
+    }
+
     fn expectations(&self) -> EvidenceExpectations<'_> {
         EvidenceExpectations {
             subject_binding: SubjectBindingMode::AudienceScoped,
+            accepted_channels: &self.accepted_channels,
+            maximum_credential_age: self.maximum_credential_age,
             assurance_profile: self.assurance_profile,
             issued_by: &self.issued_by,
             provided_by: &self.provided_by,
@@ -919,6 +1067,8 @@ impl EvidenceVerificationPolicy {
                 })
                 .collect(),
             revoked_key_ids: Vec::new(),
+            accepted_channels: default_accepted_channels(),
+            maximum_credential_age: None,
             maximum_assertion_lifetime,
             now,
             clock_skew,
@@ -1108,6 +1258,44 @@ struct SdJwtHeader {
     alg: String,
     kid: String,
     typ: String,
+    /// A certificate chain the issuer offers for the signing key. It is never
+    /// trusted on its own: it is accepted only when its leaf equals the leaf
+    /// the pinned key set carries for the same `kid`.
+    #[serde(default)]
+    x5c: Option<Value>,
+}
+
+/// Most certificates an `x5c` value may hold, matching the platform chain
+/// bound.
+const MAX_X5C_CERTIFICATES: usize = 8;
+/// Largest DER certificate an `x5c` entry may decode to.
+const MAX_X5C_CERTIFICATE_BYTES: usize = 16 * 1024;
+
+/// The DER bytes of the first certificate of an `x5c` value, after checking
+/// the whole value is a bounded array of standard-base64 strings. The
+/// certificates are compared as bytes and never parsed here.
+fn x5c_leaf(value: &Value) -> Option<Vec<u8>> {
+    use base64::engine::general_purpose::STANDARD;
+    let entries = value.as_array()?;
+    if entries.is_empty() || entries.len() > MAX_X5C_CERTIFICATES {
+        return None;
+    }
+    let mut leaf = None;
+    for entry in entries {
+        let der = STANDARD.decode(entry.as_str()?).ok()?;
+        if der.is_empty() || der.len() > MAX_X5C_CERTIFICATE_BYTES {
+            return None;
+        }
+        leaf.get_or_insert(der);
+    }
+    leaf
+}
+
+/// One pinned verification key and, when the key set carries one, the leaf of
+/// the certificate chain the issuer published for it.
+struct TrustedKey {
+    jwk: PublicJwk,
+    x5c_leaf: Option<Vec<u8>>,
 }
 
 /// Whether a pinned trusted key set is one this verifier could ever use.
@@ -1176,7 +1364,7 @@ pub fn verify_flattened_jws_report(
     }
 
     let keys = trusted_keys(trusted_jwks)?;
-    let key = keys.get(&protected.kid).ok_or(VerificationError::Key)?;
+    let key = &keys.get(&protected.kid).ok_or(VerificationError::Key)?.jwk;
     if key.algorithm().ok() != Some(SigningAlgorithm::Es256) {
         return Err(VerificationError::Key);
     }
@@ -1428,22 +1616,20 @@ fn verify_issuer_signed_credential(
     trusted_jwks: &JwksDocument,
     revoked_key_ids: &[String],
 ) -> Result<IssuerVerifiedCredential, VerificationError> {
-    let mut parts = parsed.jwt.split('.');
-    let (Some(encoded_header), Some(encoded_payload), Some(encoded_signature), None) =
-        (parts.next(), parts.next(), parts.next(), parts.next())
-    else {
-        return Err(VerificationError::MalformedJws);
-    };
-
-    let header_bytes = decode_bounded(
-        encoded_header,
-        MAX_PROTECTED_BYTES,
-        VerificationError::ProtectedHeader,
-    )?;
-    let header_strict =
-        parse_json_strict(&header_bytes).map_err(|_| VerificationError::ProtectedHeader)?;
-    let header: SdJwtHeader =
-        serde_json::from_value(header_strict).map_err(|_| VerificationError::ProtectedHeader)?;
+    let jws = parse_compact_jws(
+        parsed.jwt,
+        &JwsLimits {
+            max_compact_bytes: MAX_JWS_BYTES,
+            max_header_bytes: MAX_PROTECTED_BYTES,
+            max_payload_bytes: MAX_PAYLOAD_BYTES,
+        },
+    )
+    .map_err(|error| match error {
+        JwsError::InvalidHeader | JwsError::UnsupportedHeader => VerificationError::ProtectedHeader,
+        _ => VerificationError::MalformedJws,
+    })?;
+    let header: SdJwtHeader = serde_json::from_value(Value::Object(jws.header().clone()))
+        .map_err(|_| VerificationError::ProtectedHeader)?;
     if header.alg != "ES256"
         || header.typ != EVIDENCE_SD_JWT_VC_TYP
         || !key_identifier_is_thumbprint(&header.kid)
@@ -1456,26 +1642,27 @@ fn verify_issuer_signed_credential(
     }
 
     let keys = trusted_keys(trusted_jwks)?;
-    let key = keys.get(&header.kid).ok_or(VerificationError::Key)?;
+    let trusted = keys.get(&header.kid).ok_or(VerificationError::Key)?;
+    let key = &trusted.jwk;
     if key.algorithm().ok() != Some(SigningAlgorithm::Es256) {
         return Err(VerificationError::Key);
     }
-    let signature = decode_bounded(
-        encoded_signature,
-        MAX_PROTECTED_BYTES,
-        VerificationError::Signature,
-    )?;
-    let signing_input = [encoded_header.as_bytes(), b".", encoded_payload.as_bytes()].concat();
-    verify(&signing_input, &signature, key).map_err(|_| VerificationError::Signature)?;
-
-    // Parse and act on the payload only after signature verification.
-    let payload_bytes = decode_bounded(
-        encoded_payload,
-        MAX_PAYLOAD_BYTES,
-        VerificationError::Payload,
-    )?;
+    // Trust stays pinned: an `x5c` header is only a restatement of the leaf
+    // the pinned key already carries. It is refused when the pinned key has no
+    // chain, and the signature below is still checked with the pinned key.
+    if let Some(offered) = &header.x5c {
+        let offered_leaf = x5c_leaf(offered).ok_or(VerificationError::ProtectedHeader)?;
+        if trusted.x5c_leaf.as_deref() != Some(offered_leaf.as_slice()) {
+            return Err(VerificationError::ProtectedHeader);
+        }
+    }
+    // The payload is reachable only once the signature verifies, and it is
+    // parsed and acted on only after that.
+    let payload_bytes = jws
+        .verify(key, &[SigningAlgorithm::Es256])
+        .map_err(|_| VerificationError::Signature)?;
     let payload_strict =
-        parse_json_strict(&payload_bytes).map_err(|_| VerificationError::Payload)?;
+        parse_json_strict(payload_bytes).map_err(|_| VerificationError::Payload)?;
     let Value::Object(mut claims) = payload_strict else {
         return Err(VerificationError::Payload);
     };
@@ -1532,6 +1719,15 @@ fn signed_digests(claims: &mut Map<String, Value>) -> Result<Vec<String>, Verifi
 /// presented disclosure must match exactly one signed digest, each must carry
 /// a distinct name, and none may shadow a public claim.
 ///
+/// The digest matching, duplicate and unreferenced-disclosure refusals and
+/// name collisions are RFC 9901 section 7.1, run by
+/// `registry_platform_sdjwt::resolve_disclosures` over the signed digest sets
+/// alone. The public claims never reach it, so their members are not read as
+/// selective-disclosure markers. What the Evidence issuance profile adds is
+/// kept here: three-member disclosures with a salt inside the salt window, no
+/// disclosure that is itself a marker carrier, bounded structured field names,
+/// and presentation order in the result.
+///
 /// A holder may withhold whole outputs, so a signed digest with no presented
 /// disclosure is an output the presentation leaves out, not an error. The
 /// relying party's policy decides whether that output was required. A
@@ -1543,23 +1739,16 @@ fn resolve_disclosures(
     digests: &[String],
     claims: &mut Map<String, Value>,
 ) -> Result<Vec<(String, Value)>, VerificationError> {
-    #[derive(Clone)]
-    enum Location {
-        Root,
-        Object(String),
-    }
-
-    let mut locations = BTreeMap::<String, Location>::new();
-    for digest in digests {
-        if locations.insert(digest.clone(), Location::Root).is_some() {
-            return Err(VerificationError::Disclosure);
-        }
-    }
     let structured_claims = match claims.get("structuredValues") {
         None => Vec::new(),
         Some(Value::Object(metadata)) => metadata.keys().cloned().collect::<Vec<_>>(),
         Some(_) => return Err(VerificationError::Disclosure),
     };
+    // The signed digest sets, in the shape the generic resolver reads: the
+    // root set and one `_sd` set per structured claim.
+    let mut signed = Map::new();
+    signed.insert("_sd_alg".to_owned(), json!("sha-256"));
+    signed.insert("_sd".to_owned(), json!(digests));
     // The number of field digests each structured claim signs.
     let mut signed_field_counts = BTreeMap::<String, usize>::new();
     for claim in structured_claims {
@@ -1587,92 +1776,139 @@ fn resolve_disclosures(
             return Err(VerificationError::Disclosure);
         }
         signed_field_counts.insert(claim.clone(), nested.len());
-        for digest in nested {
-            if locations
-                .insert(digest, Location::Object(claim.clone()))
-                .is_some()
-            {
-                return Err(VerificationError::Disclosure);
-            }
-        }
+        signed.insert(claim, json!({ "_sd": nested }));
     }
-    let mut resolved = Vec::with_capacity(encoded.len());
-    let mut seen_digests = BTreeSet::new();
-    let mut root_names = BTreeSet::new();
-    let mut object_names = BTreeMap::<String, BTreeSet<String>>::new();
-    for disclosure in encoded {
-        if disclosure.len() > MAX_DISCLOSURE_BYTES {
+
+    let presented = encoded
+        .iter()
+        .map(|disclosure| read_presented_disclosure(disclosure))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut resolved = resolve_rfc9901_disclosures(
+        &signed,
+        encoded,
+        &SdJwtLimits {
+            max_serialized_bytes: MAX_JWS_BYTES,
+            max_disclosures: MAX_DISCLOSURES,
+            max_disclosure_bytes: MAX_DISCLOSURE_BYTES,
+            max_depth: DISCLOSURE_MAX_DEPTH,
+            max_nodes: DISCLOSURE_MAX_NODES,
+        },
+    )
+    .map_err(|_| VerificationError::Disclosure)?;
+
+    for (claim, signed_count) in signed_field_counts {
+        let Some(Value::Object(fields)) = resolved.remove(&claim) else {
+            return Err(VerificationError::Disclosure);
+        };
+        if fields
+            .keys()
+            .any(|name| !structured_field_name_is_valid(name))
+        {
             return Err(VerificationError::Disclosure);
         }
-        let digest = URL_SAFE_NO_PAD.encode(Sha256::digest(disclosure.as_bytes()));
-        let location = locations
-            .get(&digest)
-            .cloned()
+        if fields.len() == signed_count {
+            claims.insert(claim, Value::Object(fields));
+        } else if fields.is_empty() {
+            withhold_structured_claim(claims, &claim)?;
+        } else {
+            return Err(VerificationError::Disclosure);
+        }
+    }
+
+    // Presentation order, which the rebuilt payload's value order follows.
+    let mut disclosed = Vec::new();
+    for disclosure in presented
+        .iter()
+        .filter(|disclosure| digests.contains(&disclosure.digest))
+    {
+        let value = resolved
+            .remove(&disclosure.name)
             .ok_or(VerificationError::Disclosure)?;
-        if !seen_digests.insert(digest) {
+        if claims.contains_key(&disclosure.name) {
             return Err(VerificationError::Disclosure);
         }
-        let decoded = decode_bounded(
-            disclosure,
-            MAX_DISCLOSURE_BYTES,
-            VerificationError::Disclosure,
-        )?;
-        let strict = parse_json_strict(&decoded).map_err(|_| VerificationError::Disclosure)?;
-        let Value::Array(members) = strict else {
-            return Err(VerificationError::Disclosure);
-        };
-        let [salt, name, value] = members.as_slice() else {
-            return Err(VerificationError::Disclosure);
-        };
-        let salt = salt.as_str().ok_or(VerificationError::Disclosure)?;
-        let salt_bytes = URL_SAFE_NO_PAD
-            .decode(salt)
-            .map_err(|_| VerificationError::Disclosure)?;
-        if salt_bytes.len() < MINIMUM_SALT_BYTES || salt_bytes.len() > MAXIMUM_SALT_BYTES {
-            return Err(VerificationError::Disclosure);
-        }
-        let name = name.as_str().ok_or(VerificationError::Disclosure)?;
-        match location {
-            Location::Root => {
-                if claims.contains_key(name) || !root_names.insert(name.to_owned()) {
-                    return Err(VerificationError::Disclosure);
-                }
-                resolved.push((name.to_owned(), value.clone()));
-            }
-            Location::Object(claim) => {
-                if name.is_empty()
-                    || name.len() > 128
-                    || name == "_sd"
-                    || name == "..."
-                    || name.chars().any(char::is_control)
-                    || !object_names
-                        .entry(claim.clone())
-                        .or_default()
-                        .insert(name.to_owned())
-                {
-                    return Err(VerificationError::Disclosure);
-                }
-                let object = claims
-                    .get_mut(&claim)
-                    .and_then(Value::as_object_mut)
-                    .ok_or(VerificationError::Disclosure)?;
-                if object.insert(name.to_owned(), value.clone()).is_some() {
-                    return Err(VerificationError::Disclosure);
-                }
-            }
-        }
+        disclosed.push((disclosure.name.clone(), value));
     }
-    for (claim, signed) in signed_field_counts {
-        let presented = object_names.get(&claim).map_or(0, BTreeSet::len);
-        if presented == signed {
-            continue;
-        }
-        if presented != 0 {
-            return Err(VerificationError::Disclosure);
-        }
-        withhold_structured_claim(claims, &claim)?;
+    if !resolved.is_empty() {
+        return Err(VerificationError::Disclosure);
     }
-    Ok(resolved)
+    Ok(disclosed)
+}
+
+/// Deepest nesting a disclosed value may reach. It is the recursion limit of
+/// the strict JSON parser that reads the value, so it never refuses a value the
+/// parser accepted.
+const DISCLOSURE_MAX_DEPTH: usize = 128;
+/// Most JSON values and digests the generic resolver may visit. Every visited
+/// value occupies at least one decoded byte of some disclosure, and each
+/// digest set holds at most 64 digests, so this bound refuses nothing the
+/// per-disclosure byte ceiling admits.
+const DISCLOSURE_MAX_NODES: usize = (MAX_DISCLOSURES + 1) * MAX_DISCLOSURE_BYTES;
+
+/// One presented disclosure, read under the Evidence issuance profile.
+struct PresentedDisclosure {
+    /// The digest the signed sets commit to.
+    digest: String,
+    name: String,
+}
+
+/// Read one presented disclosure as the issuer writes it: a JSON array of a
+/// salt, a name and a value, with a salt inside the salt window and a value
+/// that carries no selective-disclosure marker. The generic resolver would read
+/// such a marker as one more level of selective disclosure, which this profile
+/// does not issue.
+fn read_presented_disclosure(disclosure: &str) -> Result<PresentedDisclosure, VerificationError> {
+    if disclosure.len() > MAX_DISCLOSURE_BYTES {
+        return Err(VerificationError::Disclosure);
+    }
+    let decoded = decode_bounded(
+        disclosure,
+        MAX_DISCLOSURE_BYTES,
+        VerificationError::Disclosure,
+    )?;
+    let strict = parse_json_strict(&decoded).map_err(|_| VerificationError::Disclosure)?;
+    let Value::Array(members) = strict else {
+        return Err(VerificationError::Disclosure);
+    };
+    let [salt, name, value] = members.as_slice() else {
+        return Err(VerificationError::Disclosure);
+    };
+    let salt = salt.as_str().ok_or(VerificationError::Disclosure)?;
+    let salt_bytes = URL_SAFE_NO_PAD
+        .decode(salt)
+        .map_err(|_| VerificationError::Disclosure)?;
+    if salt_bytes.len() < MINIMUM_SALT_BYTES || salt_bytes.len() > MAXIMUM_SALT_BYTES {
+        return Err(VerificationError::Disclosure);
+    }
+    let name = name.as_str().ok_or(VerificationError::Disclosure)?;
+    if carries_disclosure_marker(value) {
+        return Err(VerificationError::Disclosure);
+    }
+    Ok(PresentedDisclosure {
+        digest: sd_hash(disclosure),
+        name: name.to_owned(),
+    })
+}
+
+/// Whether a JSON value holds a member named `_sd` or `...` at any depth.
+fn carries_disclosure_marker(value: &Value) -> bool {
+    match value {
+        Value::Object(members) => members.iter().any(|(name, member)| {
+            matches!(name.as_str(), "_sd" | "...") || carries_disclosure_marker(member)
+        }),
+        Value::Array(items) => items.iter().any(carries_disclosure_marker),
+        _ => false,
+    }
+}
+
+/// The name of one field of a structured value: bounded, free of control
+/// characters, and not one of the two selective-disclosure markers.
+fn structured_field_name_is_valid(name: &str) -> bool {
+    !(name.is_empty()
+        || name.len() > 128
+        || name == "_sd"
+        || name == "..."
+        || name.chars().any(char::is_control))
 }
 
 /// Remove a structured value no field of which was presented, together with
@@ -1714,7 +1950,7 @@ fn confirmed_holder_key(confirmation: &Value) -> Result<HolderPublicKey, Verific
     Ok(key)
 }
 
-fn trusted_keys(jwks: &JwksDocument) -> Result<BTreeMap<String, PublicJwk>, VerificationError> {
+fn trusted_keys(jwks: &JwksDocument) -> Result<BTreeMap<String, TrustedKey>, VerificationError> {
     if jwks.keys.is_empty() || jwks.keys.len() > MAX_TRUSTED_KEYS {
         return Err(VerificationError::Key);
     }
@@ -1724,16 +1960,28 @@ fn trusted_keys(jwks: &JwksDocument) -> Result<BTreeMap<String, PublicJwk>, Veri
         let exact_members = ["alg", "crv", "kid", "kty", "x", "y"]
             .into_iter()
             .collect::<BTreeSet<_>>();
-        if members.keys().map(String::as_str).collect::<BTreeSet<_>>() != exact_members {
+        let mut key_members = members.clone();
+        let x5c_leaf = match key_members.remove("x5c") {
+            Some(chain) => Some(x5c_leaf(&chain).ok_or(VerificationError::Key)?),
+            None => None,
+        };
+        if key_members
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>()
+            != exact_members
+        {
             return Err(VerificationError::Key);
         }
-        let serialized = serde_json::to_string(value).map_err(|_| VerificationError::Key)?;
+        let serialized = serde_json::to_string(&key_members).map_err(|_| VerificationError::Key)?;
         let key = PublicJwk::parse(&serialized).map_err(|_| VerificationError::Key)?;
         let kid = key.kid.clone().ok_or(VerificationError::Key)?;
         if !key_identifier_is_thumbprint(&kid)
             || key.algorithm().ok() != Some(SigningAlgorithm::Es256)
             || key.jkt().ok().as_deref() != Some(kid.as_str())
-            || output.insert(kid, key).is_some()
+            || output
+                .insert(kid, TrustedKey { jwk: key, x5c_leaf })
+                .is_some()
         {
             return Err(VerificationError::Key);
         }
@@ -1787,6 +2035,8 @@ fn key_identifier_is_thumbprint(kid: &str) -> bool {
 /// payload that must also carry `None`.
 struct EvidenceExpectations<'a> {
     subject_binding: SubjectBindingMode,
+    accepted_channels: &'a [ChannelKind],
+    maximum_credential_age: Option<Duration>,
     assurance_profile: AssuranceProfile,
     issued_by: &'a str,
     provided_by: &'a str,
@@ -1819,11 +2069,21 @@ fn validate_policy(
     // the assertion carries. The payload contract is a closed single object and
     // cannot express that implication.
     validate_subject_binding_shape(evidence).map_err(|_| VerificationError::Payload)?;
+    // The same holds for the channel and the presented credential it implies.
+    // A credential issued after the observation cannot have existed when the
+    // facts were observed, so it is a chronology error rather than a mismatch.
+    let channel = validate_channel_shape(evidence).map_err(|error| match error {
+        ChannelShapeError::CredentialIssuedAfterObservation | ChannelShapeError::ObservedAt => {
+            VerificationError::Time
+        }
+        _ => VerificationError::Payload,
+    })?;
     // The mode is compared in both directions from one expectation: a
     // holder-bound assertion never satisfies audience-scoped expectations and
     // an audience-scoped assertion never satisfies holder-bound ones.
     if evidence.schema != EVIDENCE_SCHEMA_V1
         || evidence.subject_binding != expectations.subject_binding
+        || !expectations.accepted_channels.contains(&channel.kind())
         || evidence.assurance_profile != expectations.assurance_profile
         || evidence.issued_by != expectations.issued_by
         || evidence.provided_by != expectations.provided_by
@@ -1859,6 +2119,20 @@ fn validate_policy(
         || valid_until - issued > maximum_lifetime
     {
         return Err(VerificationError::Time);
+    }
+    // The age bound applies to the credential the holder presented, measured
+    // at the observation and never at the verification instant.
+    if let (Some(maximum_age), crate::model::AssertionChannel::HolderPresented(credential)) =
+        (expectations.maximum_credential_age, &channel)
+    {
+        let maximum_age =
+            chrono::Duration::from_std(maximum_age).map_err(|_| VerificationError::Time)?;
+        let credential_issued = credential
+            .issued_at_instant()
+            .map_err(|_| VerificationError::Time)?;
+        if observed - credential_issued > maximum_age {
+            return Err(VerificationError::Policy);
+        }
     }
     let latest_acceptable_issue = expectations
         .now
@@ -2342,6 +2616,8 @@ mod tests {
             schema: EVIDENCE_SCHEMA_V1.to_string(),
             assurance_profile: AssuranceProfile::EvidenceGrade,
             subject_binding: SubjectBindingMode::AudienceScoped,
+            channel: ChannelKind::Source,
+            presented_credential: None,
             request_nonce: Some(FIXTURE_NONCE.to_string()),
             id: "urn:ulid:01K1EXAMPLE0000000000000000".to_string(),
             evidence_type_name: EvidenceObjectType::Evidence,
@@ -2395,6 +2671,203 @@ mod tests {
             30,
         )
         .expect("the fixture policy states bounds the contract allows")
+    }
+
+    fn holder_presented_evidence(credential_issued_at: &str) -> Evidence {
+        use crate::model::{AssertionChannel, PresentedCredential, SubjectLinkMode};
+        let credential = PresentedCredential::new(
+            "national-id",
+            "https://issuer.example",
+            "https://credentials.example/identity",
+            credential_issued_at.parse().expect("time parses"),
+            SubjectLinkMode::AttributeMatch,
+        )
+        .expect("credential members are in contract");
+        let (channel, presented_credential) =
+            AssertionChannel::HolderPresented(credential).into_members();
+        Evidence {
+            channel,
+            presented_credential,
+            ..fixture_evidence()
+        }
+    }
+
+    const FIXTURE_NOW: &str = "2026-08-02T12:00:00Z";
+
+    fn fixture_now() -> DateTime<Utc> {
+        FIXTURE_NOW.parse().expect("time parses")
+    }
+
+    /// A holder-presented assertion round-trips through signing and
+    /// verification once the consumer names the channel, and is refused under
+    /// the default expectations, which accept `source` only.
+    #[tokio::test]
+    async fn a_holder_presented_assertion_verifies_only_where_the_channel_is_accepted() {
+        let (jws, jwks, policy) = signed_evidence(
+            holder_presented_evidence("2026-07-01T00:00:00Z"),
+            fixture_now(),
+        )
+        .await;
+        assert_eq!(
+            verify_flattened_jws(&jws, &jwks, &policy).map(|_| ()),
+            Err(VerificationError::Policy),
+            "the default expectations accept source only"
+        );
+
+        let accepting = policy
+            .with_accepted_channels(vec![ChannelKind::Source, ChannelKind::HolderPresented])
+            .expect("a non-empty unique list");
+        let verified =
+            verify_flattened_jws(&jws, &jwks, &accepting).expect("accepted channel verifies");
+        assert_eq!(verified.channel, ChannelKind::HolderPresented);
+        let credential = verified.presented_credential.expect("credential member");
+        assert_eq!(credential.trust_entry, "national-id");
+        assert_eq!(credential.issued_at, "2026-07-01T00:00:00Z");
+    }
+
+    #[tokio::test]
+    async fn a_source_assertion_is_refused_where_only_holder_presented_is_accepted() {
+        let (jws, jwks, policy) = signed_fixture().await;
+        let policy = policy
+            .with_accepted_channels(vec![ChannelKind::HolderPresented])
+            .expect("a non-empty unique list");
+        assert_eq!(
+            verify_flattened_jws(&jws, &jwks, &policy).map(|_| ()),
+            Err(VerificationError::Policy)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_credential_issued_after_the_observation_is_always_refused() {
+        let (jws, jwks, policy) = signed_evidence(
+            holder_presented_evidence("2026-08-02T00:00:01Z"),
+            fixture_now(),
+        )
+        .await;
+        let policy = policy
+            .with_accepted_channels(vec![ChannelKind::HolderPresented])
+            .expect("channel list");
+        assert_eq!(
+            verify_flattened_jws(&jws, &jwks, &policy).map(|_| ()),
+            Err(VerificationError::Time)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_channel_and_its_presented_credential_must_agree() {
+        let accepted = |policy: EvidenceVerificationPolicy| {
+            policy
+                .with_accepted_channels(vec![ChannelKind::Source, ChannelKind::HolderPresented])
+                .expect("channel list")
+        };
+        let mut missing = holder_presented_evidence("2026-07-01T00:00:00Z");
+        missing.presented_credential = None;
+        let (jws, jwks, policy) = signed_evidence(missing, fixture_now()).await;
+        assert_eq!(
+            verify_flattened_jws(&jws, &jwks, &accepted(policy)).map(|_| ()),
+            Err(VerificationError::Payload)
+        );
+
+        let mut stray = holder_presented_evidence("2026-07-01T00:00:00Z");
+        stray.channel = ChannelKind::Source;
+        let (jws, jwks, policy) = signed_evidence(stray, fixture_now()).await;
+        assert_eq!(
+            verify_flattened_jws(&jws, &jwks, &accepted(policy)).map(|_| ()),
+            Err(VerificationError::Payload)
+        );
+    }
+
+    /// The age bound is `observedAt` minus the credential's own issue time and
+    /// applies to holder-presented assertions only.
+    #[tokio::test]
+    async fn the_maximum_credential_age_bounds_a_holder_presented_assertion_only() {
+        const DAY: u64 = 24 * 60 * 60;
+        // Observed 2026-08-02T00:00:00Z; the credential is 32 days older.
+        let (jws, jwks, policy) = signed_evidence(
+            holder_presented_evidence("2026-07-01T00:00:00Z"),
+            fixture_now(),
+        )
+        .await;
+        let policy = policy
+            .with_accepted_channels(vec![ChannelKind::Source, ChannelKind::HolderPresented])
+            .expect("channel list");
+        let too_tight = policy
+            .clone()
+            .with_maximum_credential_age_seconds(31 * DAY)
+            .expect("in bounds");
+        assert_eq!(
+            verify_flattened_jws(&jws, &jwks, &too_tight).map(|_| ()),
+            Err(VerificationError::Policy)
+        );
+        let exact = policy
+            .clone()
+            .with_maximum_credential_age_seconds(32 * DAY)
+            .expect("in bounds");
+        assert!(verify_flattened_jws(&jws, &jwks, &exact).is_ok());
+
+        let (source_jws, source_jwks, source_policy) = signed_fixture().await;
+        let source_policy = source_policy
+            .with_maximum_credential_age_seconds(1)
+            .expect("in bounds");
+        assert!(verify_flattened_jws(&source_jws, &source_jwks, &source_policy).is_ok());
+    }
+
+    #[test]
+    fn the_policy_documents_default_to_source_only_and_bound_the_credential_age() {
+        let base = || {
+            let mut value = serde_json::to_value(policy_document_with_time_bounds(3600, 0))
+                .expect("document serializes");
+            value
+                .as_object_mut()
+                .expect("object")
+                .remove("acceptedChannels");
+            value
+        };
+        let absent: EvidenceVerificationPolicyDocument =
+            serde_json::from_value(base()).expect("absence is allowed");
+        assert_eq!(absent.accepted_channels, vec![ChannelKind::Source]);
+        assert_eq!(absent.maximum_credential_age_seconds, None);
+        assert!(
+            serde_json::to_value(&absent)
+                .expect("serializes")
+                .get("acceptedChannels")
+                .is_none(),
+            "the default is not written back"
+        );
+
+        let parse = |members: Value| {
+            let mut value = base();
+            value
+                .as_object_mut()
+                .expect("object")
+                .extend(members.as_object().expect("object").clone());
+            serde_json::from_value::<EvidenceVerificationPolicyDocument>(value)
+                .map_err(|_| ())
+                .and_then(|document| document.try_into_policy(fixture_now()).map_err(|_| ()))
+        };
+        let both = parse(serde_json::json!({
+            "acceptedChannels": ["source", "holder-presented"],
+            "maximumCredentialAgeSeconds": 3600
+        }))
+        .expect("both channels with a bound");
+        assert_eq!(
+            both.accepted_channels,
+            vec![ChannelKind::Source, ChannelKind::HolderPresented]
+        );
+        assert_eq!(
+            both.maximum_credential_age(),
+            Some(Duration::from_secs(3600))
+        );
+
+        for refused in [
+            serde_json::json!({"acceptedChannels": []}),
+            serde_json::json!({"acceptedChannels": ["source", "source"]}),
+            serde_json::json!({"acceptedChannels": ["wallet"]}),
+            serde_json::json!({"maximumCredentialAgeSeconds": 0}),
+            serde_json::json!({"maximumCredentialAgeSeconds": MAXIMUM_CREDENTIAL_AGE_SECONDS + 1}),
+        ] {
+            assert!(parse(refused.clone()).is_err(), "{refused} must be refused");
+        }
     }
 
     async fn signed_fixture() -> (Vec<u8>, JwksDocument, EvidenceVerificationPolicy) {
@@ -3129,6 +3602,8 @@ mod tests {
             }],
             expected_outputs: Vec::new(),
             revoked_key_ids: Vec::new(),
+            accepted_channels: default_accepted_channels(),
+            maximum_credential_age_seconds: None,
             maximum_assertion_lifetime_seconds: 48 * 60 * 60,
             clock_skew_seconds: 30,
         };
@@ -3157,6 +3632,8 @@ mod tests {
             expected_subjects: Vec::new(),
             expected_outputs: Vec::new(),
             revoked_key_ids: Vec::new(),
+            accepted_channels: default_accepted_channels(),
+            maximum_credential_age_seconds: None,
             maximum_assertion_lifetime_seconds,
             clock_skew_seconds,
         }
@@ -4196,6 +4673,136 @@ mod tests {
         assert_eq!(evidence, fixture_evidence());
     }
 
+    /// Standard base64 of arbitrary bytes standing in for a DER certificate;
+    /// the verifier compares certificate bytes and never parses them.
+    fn certificate_stand_in(label: &str) -> String {
+        use base64::engine::general_purpose::STANDARD;
+        STANDARD.encode(format!("certificate-{label}"))
+    }
+
+    /// The issued credential with an `x5c` header member added and the
+    /// signature recomputed, so a refusal comes from the header rule alone.
+    async fn with_x5c_header(serialized: &str, x5c: Value) -> String {
+        let (jwt, disclosures) = split_issued_sd_jwt(serialized);
+        let claims = sd_jwt_claims(&jwt);
+        let header = json!({
+            "alg": "ES256", "kid": KEY_ID, "typ": EVIDENCE_SD_JWT_VC_TYP, "x5c": x5c
+        });
+        let payload = serde_json::to_vec(&claims).expect("claims serialize");
+        let reissued = sign_compact_jwt(&header, &payload, PRIVATE_JWK).await;
+        join_sd_jwt(&reissued, &disclosures)
+    }
+
+    fn pin_x5c(jwks: &mut JwksDocument, x5c: Value) {
+        jwks.keys[0]
+            .as_object_mut()
+            .expect("key is an object")
+            .insert("x5c".to_owned(), x5c);
+    }
+
+    #[tokio::test]
+    async fn x5c_header_is_accepted_only_when_the_pinned_key_carries_the_same_leaf() {
+        let (serialized, mut jwks, policy) = issued_sd_jwt_vc().await;
+        let leaf = certificate_stand_in("leaf");
+        let chain = json!([leaf, certificate_stand_in("intermediate")]);
+        let carried = with_x5c_header(&serialized, chain.clone()).await;
+
+        // No x5c on the pinned key: refused as an unknown header member.
+        assert_eq!(
+            verify_sd_jwt_vc(carried.as_bytes(), &jwks, &policy),
+            Err(VerificationError::ProtectedHeader)
+        );
+
+        // The pinned key carries the same chain.
+        pin_x5c(&mut jwks, chain);
+        assert_eq!(
+            verify_sd_jwt_vc(carried.as_bytes(), &jwks, &policy)
+                .expect("a header leaf equal to the pinned leaf verifies"),
+            fixture_evidence()
+        );
+
+        // Only the leaf is compared: a different chain behind the same leaf passes.
+        pin_x5c(&mut jwks, json!([leaf]));
+        assert!(verify_sd_jwt_vc(carried.as_bytes(), &jwks, &policy).is_ok());
+
+        // A different leaf is refused even though the signature is authentic.
+        pin_x5c(&mut jwks, json!([certificate_stand_in("other-leaf")]));
+        assert_eq!(
+            verify_sd_jwt_vc(carried.as_bytes(), &jwks, &policy),
+            Err(VerificationError::ProtectedHeader)
+        );
+
+        // A header leaf matching only a later pinned certificate is refused.
+        pin_x5c(&mut jwks, json!([certificate_stand_in("other-leaf"), leaf]));
+        assert_eq!(
+            verify_sd_jwt_vc(carried.as_bytes(), &jwks, &policy),
+            Err(VerificationError::ProtectedHeader)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_pinned_x5c_member_does_not_affect_credentials_without_the_header() {
+        let (serialized, mut jwks, policy) = issued_sd_jwt_vc().await;
+        pin_x5c(&mut jwks, json!([certificate_stand_in("leaf")]));
+        assert!(trusted_keys_are_usable(&jwks).is_ok());
+        assert!(verify_sd_jwt_vc(serialized.as_bytes(), &jwks, &policy).is_ok());
+    }
+
+    #[tokio::test]
+    async fn malformed_x5c_headers_and_pinned_members_are_refused() {
+        let (serialized, jwks, policy) = issued_sd_jwt_vc().await;
+        let leaf = certificate_stand_in("leaf");
+        for header_x5c in [
+            json!([]),
+            json!("not-an-array"),
+            json!([7]),
+            json!(["***not-base64***"]),
+            json!([leaf, leaf, leaf, leaf, leaf, leaf, leaf, leaf, leaf]),
+        ] {
+            let mut pinned = jwks.clone();
+            pin_x5c(&mut pinned, json!([leaf]));
+            let credential = with_x5c_header(&serialized, header_x5c.clone()).await;
+            assert_eq!(
+                verify_sd_jwt_vc(credential.as_bytes(), &pinned, &policy),
+                Err(VerificationError::ProtectedHeader),
+                "{header_x5c}"
+            );
+        }
+        for pinned_x5c in [
+            json!([]),
+            json!("not-an-array"),
+            json!([7]),
+            json!(["***not-base64***"]),
+            json!([leaf, leaf, leaf, leaf, leaf, leaf, leaf, leaf, leaf]),
+        ] {
+            let mut pinned = jwks.clone();
+            pin_x5c(&mut pinned, pinned_x5c.clone());
+            assert_eq!(
+                trusted_keys_are_usable(&pinned),
+                Err(VerificationError::Key),
+                "{pinned_x5c}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn x5c_in_the_flattened_jws_header_stays_refused_with_a_pinned_chain() {
+        let evidence = fixture_evidence();
+        let leaf = certificate_stand_in("leaf");
+        let header = json!({
+            "alg": "ES256", "kid": KEY_ID, "typ": EVIDENCE_JWS_TYP,
+            "cty": EVIDENCE_JWS_CTY, "x5c": [leaf]
+        });
+        let (serialized, public) = sign_with_protected_header(PRIVATE_JWK, header, &evidence).await;
+        let mut jwks = jwks_document(public, []).expect("JWKS builds");
+        pin_x5c(&mut jwks, json!([leaf]));
+        let (_, _, policy) = signed_fixture().await;
+        assert_eq!(
+            verify_flattened_jws(&serialized, &jwks, &policy),
+            Err(VerificationError::ProtectedHeader)
+        );
+    }
+
     #[tokio::test]
     async fn revoked_key_rejects_sd_jwt_even_when_cached_jwks_still_contains_it() {
         let (serialized, jwks, mut policy) = issued_sd_jwt_vc().await;
@@ -4508,6 +5115,196 @@ mod tests {
             verify_sd_jwt_vc(reissued.as_bytes(), &jwks, &policy),
             Err(VerificationError::Disclosure)
         );
+    }
+
+    /// Re-issue a credential with `disclosures[index]` replaced by a
+    /// caller-built disclosure, wherever its digest is signed, re-signing so the
+    /// signed digest sets commit to the replacement.
+    async fn reissued_replacing_disclosure(
+        jwt: &str,
+        disclosures: &[String],
+        index: usize,
+        replacement: &str,
+    ) -> String {
+        let mut claims = sd_jwt_claims(jwt);
+        let old = disclosure_digest(&disclosures[index]);
+        let new = disclosure_digest(replacement);
+        let mut replaced = 0;
+        let mut sets: Vec<&mut Vec<Value>> = Vec::new();
+        for (name, member) in claims.iter_mut() {
+            match member {
+                Value::Array(digests) if name == "_sd" => sets.push(digests),
+                Value::Object(object) => {
+                    if let Some(Value::Array(digests)) = object.get_mut("_sd") {
+                        sets.push(digests);
+                    }
+                }
+                _ => {}
+            }
+        }
+        for digests in sets {
+            if let Some(slot) = digests
+                .iter()
+                .position(|digest| digest.as_str() == Some(&old))
+            {
+                digests[slot] = Value::String(new.clone());
+                digests.sort_by(|left, right| left.as_str().cmp(&right.as_str()));
+                replaced += 1;
+            }
+        }
+        assert_eq!(
+            replaced, 1,
+            "the replaced disclosure's digest is signed once"
+        );
+        let mut presented = disclosures.to_vec();
+        presented[index] = replacement.to_owned();
+        reissued_with_claims(&presented, &claims).await
+    }
+
+    /// The failure class of each disclosure the issuance profile does not
+    /// produce, presented in place of a signed one under an authentic
+    /// signature. A reserved claim name, or a value that carries a `_sd` or
+    /// `...` member, is refused as a disclosure fault: the disclosure reader
+    /// sees it before the payload contract could. The first disclosure of the flat credential is a root
+    /// disclosure; the first of the structured credential is a field of the
+    /// structured container.
+    #[tokio::test]
+    async fn disclosures_outside_the_issuance_profile_draw_their_failure_class() {
+        let salt = URL_SAFE_NO_PAD.encode([9u8; 16]);
+        let long_name = "n".repeat(129);
+        let raw = |value: Value| {
+            URL_SAFE_NO_PAD.encode(serde_json::to_vec(&value).expect("disclosure serializes"))
+        };
+        let root_cases: Vec<(&str, String, Result<(), VerificationError>)> = vec![
+            (
+                "array element disclosure",
+                raw(json!([salt, "value"])),
+                Err(VerificationError::Disclosure),
+            ),
+            (
+                "four members",
+                raw(json!([salt, "name", 1, 2])),
+                Err(VerificationError::Disclosure),
+            ),
+            (
+                "salt is not a string",
+                raw(json!([7, "name", 1])),
+                Err(VerificationError::Disclosure),
+            ),
+            (
+                "name is not a string",
+                raw(json!([salt, 7, 1])),
+                Err(VerificationError::Disclosure),
+            ),
+            (
+                "name of an issuer-owned claim",
+                raw(json!([salt, "iss", "https://other.example"])),
+                Err(VerificationError::Disclosure),
+            ),
+            (
+                "disclosure is an object",
+                raw(json!({"salt": salt})),
+                Err(VerificationError::Disclosure),
+            ),
+            (
+                "salt past the salt window",
+                raw(json!([URL_SAFE_NO_PAD.encode([9u8; 65]), "name", 1])),
+                Err(VerificationError::Disclosure),
+            ),
+            (
+                "salt not base64url",
+                raw(json!(["!!!", "name", 1])),
+                Err(VerificationError::Disclosure),
+            ),
+            (
+                "disclosure not base64url",
+                "!!!".to_owned(),
+                Err(VerificationError::Disclosure),
+            ),
+            (
+                "reserved name _sd",
+                raw(json!([salt, "_sd", 1])),
+                Err(VerificationError::Disclosure),
+            ),
+            (
+                "reserved name ...",
+                raw(json!([salt, "...", 1])),
+                Err(VerificationError::Disclosure),
+            ),
+            (
+                "reserved name _sd_alg",
+                raw(json!([salt, "_sd_alg", 1])),
+                Err(VerificationError::Disclosure),
+            ),
+            (
+                "value carrying a digest marker",
+                raw(json!([salt, "urn:example:marked", {"_sd": ["x"]}])),
+                Err(VerificationError::Disclosure),
+            ),
+            (
+                "value carrying an array element marker",
+                raw(json!([salt, "urn:example:marked", [{"...": "x"}]])),
+                Err(VerificationError::Disclosure),
+            ),
+        ];
+        let (serialized, jwks, policy) = issued_sd_jwt_vc().await;
+        let (jwt, disclosures) = split_issued_sd_jwt(&serialized);
+        for (name, replacement, expected) in root_cases {
+            let reissued = reissued_replacing_disclosure(&jwt, &disclosures, 0, &replacement).await;
+            assert_eq!(
+                verify_sd_jwt_vc(reissued.as_bytes(), &jwks, &policy).map(|_| ()),
+                expected,
+                "root: {name}"
+            );
+        }
+
+        let field_cases: Vec<(&str, String, Result<(), VerificationError>)> = vec![
+            (
+                "empty field name",
+                raw(json!([salt, "", 1])),
+                Err(VerificationError::Disclosure),
+            ),
+            (
+                "field name past 128 bytes",
+                raw(json!([salt, long_name, 1])),
+                Err(VerificationError::Disclosure),
+            ),
+            (
+                "field name with a control character",
+                raw(json!([salt, "a\u{7}b", 1])),
+                Err(VerificationError::Disclosure),
+            ),
+            (
+                "field name _sd",
+                raw(json!([salt, "_sd", 1])),
+                Err(VerificationError::Disclosure),
+            ),
+            (
+                "field name ...",
+                raw(json!([salt, "...", 1])),
+                Err(VerificationError::Disclosure),
+            ),
+            (
+                "array element disclosure as a field",
+                raw(json!([salt, "value"])),
+                Err(VerificationError::Disclosure),
+            ),
+            (
+                "field value carrying a digest marker",
+                raw(json!([salt, "marked", {"_sd": ["x"]}])),
+                Err(VerificationError::Disclosure),
+            ),
+        ];
+        let (serialized, jwks, policy) = structured_sd_jwt_vc().await;
+        let (jwt, disclosures) = split_issued_sd_jwt(&serialized);
+        for (name, replacement, expected) in field_cases {
+            let reissued = reissued_replacing_disclosure(&jwt, &disclosures, 0, &replacement).await;
+            assert_eq!(
+                verify_sd_jwt_vc(reissued.as_bytes(), &jwks, &policy).map(|_| ()),
+                expected,
+                "field: {name}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -4861,6 +5658,191 @@ mod tests {
         );
     }
 
+    /// Sign the text `header.payload` exactly as given, so a test can present a
+    /// segment no serializer would produce while the signature stays authentic.
+    async fn sign_segments(header_segment: &str, payload_segment: &str) -> String {
+        let private = PrivateJwk::parse(PRIVATE_JWK).expect("key parses");
+        let signer = LocalJwkSigner::new(private).expect("signer builds");
+        let signing_input = format!("{header_segment}.{payload_segment}");
+        let signature = signer
+            .sign(signing_input.as_bytes())
+            .await
+            .expect("the test key signs");
+        format!("{signing_input}.{}", URL_SAFE_NO_PAD.encode(signature))
+    }
+
+    /// Every way the issuer JWS of an SD-JWT VC can be malformed at the
+    /// compact-serialization level, with the one failure class each draws.
+    /// Each row isolates one fault: the other segments are authentic.
+    #[tokio::test]
+    async fn the_issuer_jws_refuses_each_malformed_serialization_with_its_failure_class() {
+        let (serialized, jwks, policy) = issued_sd_jwt_vc().await;
+        let (jwt, disclosures) = split_issued_sd_jwt(&serialized);
+        let segments: Vec<&str> = jwt.split('.').collect();
+        let (header, payload, signature) = (segments[0], segments[1], segments[2]);
+        let good_header = json!({"alg": "ES256", "kid": KEY_ID, "typ": EVIDENCE_SD_JWT_VC_TYP});
+        let encode = |value: &Value| URL_SAFE_NO_PAD.encode(serde_json::to_vec(value).unwrap());
+        let with_member = |name: &str, value: Value| {
+            let mut header = good_header.clone();
+            header[name] = value;
+            encode(&header)
+        };
+        let padded_header = |decoded_bytes: usize| {
+            let mut bytes = serde_json::to_vec(&good_header).unwrap();
+            bytes.resize(decoded_bytes, b' ');
+            URL_SAFE_NO_PAD.encode(bytes)
+        };
+        let signed_payload = |decoded_bytes: usize| {
+            let mut bytes = serde_json::to_vec(&sd_jwt_claims(&jwt)).unwrap();
+            bytes.resize(decoded_bytes, b' ');
+            URL_SAFE_NO_PAD.encode(bytes)
+        };
+        let header_segment = encode(&good_header);
+
+        let cases: Vec<(&str, String, Result<(), VerificationError>)> = vec![
+            (
+                "two segments",
+                format!("{header}.{payload}"),
+                Err(VerificationError::MalformedJws),
+            ),
+            (
+                "four segments",
+                format!("{jwt}.extra"),
+                Err(VerificationError::MalformedJws),
+            ),
+            (
+                "empty header segment",
+                format!(".{payload}.{signature}"),
+                Err(VerificationError::MalformedJws),
+            ),
+            (
+                "header segment not base64url",
+                format!("!!!.{payload}.{signature}"),
+                Err(VerificationError::MalformedJws),
+            ),
+            (
+                "header not JSON",
+                format!(
+                    "{}.{payload}.{signature}",
+                    URL_SAFE_NO_PAD.encode("not json")
+                ),
+                Err(VerificationError::ProtectedHeader),
+            ),
+            (
+                "header repeats a member",
+                format!(
+                    "{}.{payload}.{signature}",
+                    URL_SAFE_NO_PAD.encode(format!(
+                        r#"{{"alg":"ES256","alg":"ES256","kid":"{KEY_ID}","typ":"{EVIDENCE_SD_JWT_VC_TYP}"}}"#
+                    ))
+                ),
+                Err(VerificationError::ProtectedHeader),
+            ),
+            (
+                "header is an array",
+                format!("{}.{payload}.{signature}", encode(&json!([1, 2]))),
+                Err(VerificationError::ProtectedHeader),
+            ),
+            (
+                "header at the ceiling",
+                sign_segments(&padded_header(MAX_PROTECTED_BYTES), payload).await,
+                Ok(()),
+            ),
+            (
+                "header past the ceiling",
+                format!(
+                    "{}.{payload}.{signature}",
+                    padded_header(MAX_PROTECTED_BYTES + 1)
+                ),
+                Err(VerificationError::MalformedJws),
+            ),
+            (
+                "critical header member",
+                format!(
+                    "{}.{payload}.{signature}",
+                    with_member("crit", json!(["exp"]))
+                ),
+                Err(VerificationError::ProtectedHeader),
+            ),
+            (
+                "unencoded-payload header member",
+                format!(
+                    "{}.{payload}.{signature}",
+                    with_member("b64", json!(false))
+                ),
+                Err(VerificationError::ProtectedHeader),
+            ),
+            (
+                "empty signature segment",
+                format!("{header}.{payload}."),
+                Err(VerificationError::MalformedJws),
+            ),
+            (
+                "signature segment not base64url",
+                format!("{header}.{payload}.!!!"),
+                Err(VerificationError::MalformedJws),
+            ),
+            (
+                "signature segment past the signature size",
+                format!(
+                    "{header}.{payload}.{}",
+                    URL_SAFE_NO_PAD.encode(vec![7u8; 2000])
+                ),
+                Err(VerificationError::MalformedJws),
+            ),
+            (
+                "signature segment past the ceiling",
+                format!(
+                    "{header}.{payload}.{}",
+                    URL_SAFE_NO_PAD.encode(vec![7u8; MAX_PROTECTED_BYTES + 1])
+                ),
+                Err(VerificationError::MalformedJws),
+            ),
+            (
+                "signed payload not base64url",
+                sign_segments(&header_segment, "!!!").await,
+                Err(VerificationError::MalformedJws),
+            ),
+            (
+                "signed payload empty",
+                sign_segments(&header_segment, "").await,
+                Err(VerificationError::Payload),
+            ),
+            (
+                "signed payload not JSON",
+                sign_segments(&header_segment, &URL_SAFE_NO_PAD.encode("not json")).await,
+                Err(VerificationError::Payload),
+            ),
+            (
+                "signed payload is an array",
+                sign_segments(&header_segment, &encode(&json!([1]))).await,
+                Err(VerificationError::Payload),
+            ),
+            (
+                "signed payload at the ceiling",
+                sign_segments(&header_segment, &signed_payload(MAX_PAYLOAD_BYTES)).await,
+                Ok(()),
+            ),
+            (
+                "signed payload past the ceiling",
+                sign_segments(&header_segment, &signed_payload(MAX_PAYLOAD_BYTES + 1)).await,
+                Err(VerificationError::MalformedJws),
+            ),
+        ];
+        for (name, mutated, expected) in cases {
+            assert_eq!(
+                verify_sd_jwt_vc(
+                    join_sd_jwt(&mutated, &disclosures).as_bytes(),
+                    &jwks,
+                    &policy
+                )
+                .map(|_| ()),
+                expected,
+                "{name}"
+            );
+        }
+    }
+
     fn generated_public_jwk() -> PublicJwk {
         let signing_key = p256::ecdsa::SigningKey::generate();
         let point = signing_key.verifying_key().to_sec1_point(false);
@@ -5158,6 +6140,8 @@ mod tests {
                 form: ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::Boolean),
             }],
             revoked_key_ids: Vec::new(),
+            accepted_channels: default_accepted_channels(),
+            maximum_credential_age_seconds: None,
             maximum_assertion_lifetime_seconds: 48 * 60 * 60,
             key_binding_audience: KEY_BINDING_AUDIENCE.to_owned(),
             key_binding_nonce: KEY_BINDING_NONCE.to_owned(),

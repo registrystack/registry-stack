@@ -31,6 +31,13 @@ client's offline request preparation and verifier with governed trust pins.
 - The [OID4VCI adapter](../../crates/registry-evidence-oid4vci/AGENTS.md) is a
   supporting service. Evidence has no runtime dependency on it. Reuse platform
   primitives where their contracts fit directly.
+- The [OpenID4VP verifier](../../crates/registry-evidence-oid4vp/README.md) is
+  a supporting service with the same dependency direction. It checks protocol
+  facts only (decryption, `state`, response shape, single acceptance, expiry)
+  and never persists a presentation. Every credential check runs in Evidence
+  through the pure `registry-evidence-presentation` crate, so a compromised
+  verifier service can withhold or misroute a presentation but cannot forge
+  one.
 
 The immutable governed bundle owns definition behavior, grant ceilings, scripts,
 source plans, schemas, codelists and signing identity. Separately activated target
@@ -97,6 +104,7 @@ the gates for the surface changed; CI owns the broader regression matrix.
 | Deployment and configuration | [OPERATOR-CONTRACT.md](OPERATOR-CONTRACT.md), [deployment CONFIG.md](reference/request-adapter/deployment-projects/CONFIG.md), [FIXTURES.md](reference/request-adapter/deployment-projects/FIXTURES.md) | Focused config/fixture tests and `products/evidence/scripts/check-config-key-paths.sh` |
 | Verifier or client | Verifier/client crate documentation and [client guidance](../../crates/CLIENTS.md) | Changed-crate tests; `products/evidence/scripts/check-verifier-portability.sh`; neutrality gate |
 | Credential status ledger or OID4VCI store | [CONCEPT.md](CONCEPT.md) section 15.9 | Changed-crate tests; with `--features postgres-test` and a disposable PostgreSQL server, `registry-evidence` `--test status_ledger --test status_transitions --test status_privacy` (`EVIDENCE_STATUS_TEST_DATABASE_URL`) and `registry-evidence-oid4vci` `--test store_contract` (`EVIDENCE_OID4VCI_TEST_DATABASE_URL`) |
+| Holder-presented channel or OpenID4VP verifier | [CONCEPT.md](CONCEPT.md) section 15.10, [contracts/oid4vp-profile.yaml](contracts/oid4vp-profile.yaml), and the [verifier README](../../crates/registry-evidence-oid4vp/README.md) | Changed-crate tests; with `EVIDENCE_BIN` and `EVIDENCECTL_BIN` built, `registry-evidence-oid4vp` `--test evidence_journey a_presented_credential_becomes_a_verified_assertion` and `--test device_run a_simulated_wallet_completes_the_device_run_harness`, each with `-- --ignored --exact`; `products/evidence/scripts/check-contracts.sh`, `check-verifier-portability.sh`, and the neutrality gate |
 | Authoring or editor model | [authoring CONFIG.md](reference/authoring-projects/CONFIG.md) and authoring crate types | Relevant authoring/editor tests; `products/evidence/scripts/check-authoring-schema.sh`, `products/evidence/scripts/check-authoring-no-io.sh`, config-key-path and neutrality gates |
 
 Use `cargo test --locked -p <changed-crate>` with a focused test filter while

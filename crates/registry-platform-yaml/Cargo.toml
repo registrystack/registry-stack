@@ -18,8 +18,7 @@ name = "reader_schema"
 required-features = ["schema"]
 
 [dependencies]
-icu_casemap.workspace = true
-icu_normalizer.workspace = true
+registry-platform-text.workspace = true
 saphyr-parser.workspace = true
 schemars = { workspace = true, optional = true }
 serde.workspace = true

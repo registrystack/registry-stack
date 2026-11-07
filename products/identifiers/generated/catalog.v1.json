@@ -2807,6 +2807,329 @@
       }
     },
     {
+      "uri": "https://id.registrystack.org/problems/registry-evidence-oid4vp/audit-unavailable",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "evidence",
+      "title": "Service Unavailable",
+      "description": "The audit destination did not accept the operation. Try again after the service recovers.",
+      "source": {
+        "path": "crates/registry-evidence-oid4vp/src/problem.rs",
+        "sha256": "50c4a646136a40b41e7026302ca16d6cfa757e84cc3b11394ca669fedfe8d644"
+      },
+      "problem": {
+        "code": "audit-unavailable",
+        "httpStatuses": [
+          503
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-evidence-oid4vp/body-too-large",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "evidence",
+      "title": "Payload Too Large",
+      "description": "The request body exceeds the accepted size.",
+      "source": {
+        "path": "crates/registry-evidence-oid4vp/src/problem.rs",
+        "sha256": "50c4a646136a40b41e7026302ca16d6cfa757e84cc3b11394ca669fedfe8d644"
+      },
+      "problem": {
+        "code": "body-too-large",
+        "httpStatuses": [
+          413
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-evidence-oid4vp/capacity",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "evidence",
+      "title": "Service Unavailable",
+      "description": "The service is at capacity or holds as many sessions as it allows. Retry after the interval given.",
+      "source": {
+        "path": "crates/registry-evidence-oid4vp/src/problem.rs",
+        "sha256": "50c4a646136a40b41e7026302ca16d6cfa757e84cc3b11394ca669fedfe8d644"
+      },
+      "problem": {
+        "code": "capacity",
+        "httpStatuses": [
+          503
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-evidence-oid4vp/internal-error",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "evidence",
+      "title": "Internal Server Error",
+      "description": "The request could not be completed.",
+      "source": {
+        "path": "crates/registry-evidence-oid4vp/src/problem.rs",
+        "sha256": "50c4a646136a40b41e7026302ca16d6cfa757e84cc3b11394ca669fedfe8d644"
+      },
+      "problem": {
+        "code": "internal-error",
+        "httpStatuses": [
+          500
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-evidence-oid4vp/invalid-request",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "evidence",
+      "title": "Invalid Request",
+      "description": "The request body is malformed or does not have the required members.",
+      "source": {
+        "path": "crates/registry-evidence-oid4vp/src/problem.rs",
+        "sha256": "50c4a646136a40b41e7026302ca16d6cfa757e84cc3b11394ca669fedfe8d644"
+      },
+      "problem": {
+        "code": "invalid-request",
+        "httpStatuses": [
+          400
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-evidence-oid4vp/issuer-unavailable",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "evidence",
+      "title": "Service Unavailable",
+      "description": "The token issuer is unavailable. Retry after the interval given.",
+      "source": {
+        "path": "crates/registry-evidence-oid4vp/src/problem.rs",
+        "sha256": "50c4a646136a40b41e7026302ca16d6cfa757e84cc3b11394ca669fedfe8d644"
+      },
+      "problem": {
+        "code": "issuer-unavailable",
+        "httpStatuses": [
+          503
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-evidence-oid4vp/method-not-allowed",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "evidence",
+      "title": "Method Not Allowed",
+      "description": "The route exists but not for this method.",
+      "source": {
+        "path": "crates/registry-evidence-oid4vp/src/problem.rs",
+        "sha256": "50c4a646136a40b41e7026302ca16d6cfa757e84cc3b11394ca669fedfe8d644"
+      },
+      "problem": {
+        "code": "method-not-allowed",
+        "httpStatuses": [
+          405
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-evidence-oid4vp/not-found",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "evidence",
+      "title": "Not Found",
+      "description": "The requested route does not exist.",
+      "source": {
+        "path": "crates/registry-evidence-oid4vp/src/problem.rs",
+        "sha256": "50c4a646136a40b41e7026302ca16d6cfa757e84cc3b11394ca669fedfe8d644"
+      },
+      "problem": {
+        "code": "not-found",
+        "httpStatuses": [
+          404
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-evidence-oid4vp/not-yet-presented",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "evidence",
+      "title": "Not Yet Presented",
+      "description": "The wallet has not presented yet.",
+      "source": {
+        "path": "crates/registry-evidence-oid4vp/src/problem.rs",
+        "sha256": "50c4a646136a40b41e7026302ca16d6cfa757e84cc3b11394ca669fedfe8d644"
+      },
+      "problem": {
+        "code": "not-yet-presented",
+        "httpStatuses": [
+          409
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-evidence-oid4vp/rate-limited",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "evidence",
+      "title": "Too Many Requests",
+      "description": "Too many requests. Retry after the interval given.",
+      "source": {
+        "path": "crates/registry-evidence-oid4vp/src/problem.rs",
+        "sha256": "50c4a646136a40b41e7026302ca16d6cfa757e84cc3b11394ca669fedfe8d644"
+      },
+      "problem": {
+        "code": "rate-limited",
+        "httpStatuses": [
+          429
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-evidence-oid4vp/request-not-found",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "evidence",
+      "title": "Not Found",
+      "description": "The request object is unknown, expired, or no longer pending.",
+      "source": {
+        "path": "crates/registry-evidence-oid4vp/src/problem.rs",
+        "sha256": "50c4a646136a40b41e7026302ca16d6cfa757e84cc3b11394ca669fedfe8d644"
+      },
+      "problem": {
+        "code": "request-not-found",
+        "httpStatuses": [
+          404
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-evidence-oid4vp/request-timeout",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "evidence",
+      "title": "Request Timeout",
+      "description": "The request took longer than the service waits.",
+      "source": {
+        "path": "crates/registry-evidence-oid4vp/src/problem.rs",
+        "sha256": "50c4a646136a40b41e7026302ca16d6cfa757e84cc3b11394ca669fedfe8d644"
+      },
+      "problem": {
+        "code": "request-timeout",
+        "httpStatuses": [
+          408
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-evidence-oid4vp/session-not-found",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "evidence",
+      "title": "Not Found",
+      "description": "The session is unknown, expired, already read, or created by another principal.",
+      "source": {
+        "path": "crates/registry-evidence-oid4vp/src/problem.rs",
+        "sha256": "50c4a646136a40b41e7026302ca16d6cfa757e84cc3b11394ca669fedfe8d644"
+      },
+      "problem": {
+        "code": "session-not-found",
+        "httpStatuses": [
+          404
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-evidence-oid4vp/unauthorized",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "evidence",
+      "title": "Unauthorized",
+      "description": "A valid bearer token is required.",
+      "source": {
+        "path": "crates/registry-evidence-oid4vp/src/problem.rs",
+        "sha256": "50c4a646136a40b41e7026302ca16d6cfa757e84cc3b11394ca669fedfe8d644"
+      },
+      "problem": {
+        "code": "unauthorized",
+        "httpStatuses": [
+          401
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-evidence-oid4vp/unknown-policy",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "evidence",
+      "title": "Unknown Policy",
+      "description": "No presentation policy has the identifier given.",
+      "source": {
+        "path": "crates/registry-evidence-oid4vp/src/problem.rs",
+        "sha256": "50c4a646136a40b41e7026302ca16d6cfa757e84cc3b11394ca669fedfe8d644"
+      },
+      "problem": {
+        "code": "unknown-policy",
+        "httpStatuses": [
+          422
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-evidence-oid4vp/unsupported-media-type",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "evidence",
+      "title": "Unsupported Media Type",
+      "description": "The request body is not application/json.",
+      "source": {
+        "path": "crates/registry-evidence-oid4vp/src/problem.rs",
+        "sha256": "50c4a646136a40b41e7026302ca16d6cfa757e84cc3b11394ca669fedfe8d644"
+      },
+      "problem": {
+        "code": "unsupported-media-type",
+        "httpStatuses": [
+          415
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-evidence-oid4vp/wallet-error",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "evidence",
+      "title": "Wallet Error",
+      "description": "The wallet reported an error instead of presenting. The closed category names it.",
+      "source": {
+        "path": "crates/registry-evidence-oid4vp/src/problem.rs",
+        "sha256": "50c4a646136a40b41e7026302ca16d6cfa757e84cc3b11394ca669fedfe8d644"
+      },
+      "problem": {
+        "code": "wallet-error",
+        "httpStatuses": [
+          422
+        ]
+      }
+    },
+    {
       "uri": "https://id.registrystack.org/problems/registry-evidence/auth/invalid-credential",
       "kind": "problem",
       "status": "active",
@@ -4582,7 +4905,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/tools/migration-descriptor.v1alpha1.schema.json",
-        "sha256": "8177563ac1261680db7070b59f8b651d1cfe8c33cb5423891902bab4d5f8173e",
+        "sha256": "a21e02c4ca6980e0eb4dc733b99b1fdb465aec8fa1c661ec70e86d71d4146e06",
         "mediaType": "application/schema+json"
       }
     },
@@ -4636,7 +4959,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/authoring/registry-module.schema.json",
-        "sha256": "9949f5e3a10d4deb0038359d76d1f59b160449472bcd0b6c99e45ad776d20f80",
+        "sha256": "2948465f69e8dd8856e245826adb47addbb0b0b3ae5a4a3eece660dfa77ba060",
         "mediaType": "application/schema+json"
       }
     },
@@ -4654,7 +4977,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/authoring/registry-project.schema.json",
-        "sha256": "4babace1053c7b8446b682ce2db17a220263e669b397a414d98ead9d47af459a",
+        "sha256": "bbc32e9b2474aff1f13633ab3b6b3499254f144c4cea5afbf0cd35f893412384",
         "mediaType": "application/schema+json"
       }
     },
@@ -4744,7 +5067,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/runtime/runtime.schema.json",
-        "sha256": "55959ae4cc86f1cd393cca382d7cdfd367ccc703c8676a350af4299b59ebb043",
+        "sha256": "785867b4f14c78862010b53406f62a420e53c4b17d5c8b9f7f95636130b75bd4",
         "mediaType": "application/schema+json"
       }
     },
@@ -5118,11 +5441,11 @@
       "description": "Evidence frozen Version 1 contract and configuration schemas, written as YAML.",
       "source": {
         "path": "products/evidence/contracts/bundle.schema.yaml",
-        "sha256": "e880da093ee3d0b6200fc8963109746765971ad1747dd3ea29edb390328ab36a"
+        "sha256": "17b761abf1faaaea1d0418d32f5d9c675570ba9d68c95c6aa0f52b6cd7b4e85c"
       },
       "artifact": {
         "path": "products/evidence/contracts/bundle.schema.yaml",
-        "sha256": "e880da093ee3d0b6200fc8963109746765971ad1747dd3ea29edb390328ab36a",
+        "sha256": "17b761abf1faaaea1d0418d32f5d9c675570ba9d68c95c6aa0f52b6cd7b4e85c",
         "mediaType": "application/yaml"
       }
     },
@@ -5208,11 +5531,11 @@
       "description": "Evidence frozen Version 1 contract and configuration schemas, written as YAML.",
       "source": {
         "path": "products/evidence/contracts/holder-bound-verification-policy.schema.yaml",
-        "sha256": "37d6a662a61c9a5730be870e1d202209d0bebeb658968f978f317bb8995c1cb5"
+        "sha256": "c731a74bea9e4d649dd2e0d074e20a10e617c6ef844ec6f8223fae78b3f0b28d"
       },
       "artifact": {
         "path": "products/evidence/contracts/holder-bound-verification-policy.schema.yaml",
-        "sha256": "37d6a662a61c9a5730be870e1d202209d0bebeb658968f978f317bb8995c1cb5",
+        "sha256": "c731a74bea9e4d649dd2e0d074e20a10e617c6ef844ec6f8223fae78b3f0b28d",
         "mediaType": "application/yaml"
       }
     },
@@ -5248,7 +5571,25 @@
       },
       "artifact": {
         "path": "products/evidence/generated/oid4vci-runtime/oid4vci-runtime.schema.json",
-        "sha256": "5bbc1b0c73e9eccde2ecd25339dbabed83e250b670d509058ca31cd8e96566a9",
+        "sha256": "fb01195c02d6b94784e17ea07f6de45f56370df8af933a2bb2142a3fd18c9146",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/evidence/oid4vp-runtime/oid4vp-runtime.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "evidence",
+      "title": "Evidence OpenID4VP verifier runtime configuration",
+      "description": "Evidence OpenID4VP verifier runtime configuration JSON Schema.",
+      "source": {
+        "path": "crates/registry-evidence-oid4vp/src/schema.rs",
+        "sha256": "7f111792435d2d9d6c18174e157b8ff05b3f19d733c2ea19f7327eaa99268eb4"
+      },
+      "artifact": {
+        "path": "products/evidence/generated/oid4vp-runtime/oid4vp-runtime.schema.json",
+        "sha256": "225b0d03402f422442432fd5195ccf3483ef79cf744d883bbfb9e96ba89e6465",
         "mediaType": "application/schema+json"
       }
     },
@@ -5266,7 +5607,7 @@
       },
       "artifact": {
         "path": "crates/registry-evidencectl/schemas/authoring/project.schema.json",
-        "sha256": "3acebd18796613bcbce03cf4f43429a55acfe78124216a319c233abe5ba87b51",
+        "sha256": "e2c8ceaa47492ec7b9d94d2dd973b38c8eefc64c76ac4fb7bab673ece2794af1",
         "mediaType": "application/schema+json"
       }
     },
@@ -5352,11 +5693,11 @@
       "description": "Evidence frozen Version 1 contract and configuration schemas, written as YAML.",
       "source": {
         "path": "products/evidence/contracts/verification-policy.schema.yaml",
-        "sha256": "b6a7e7200bf014a4b31dd064aa39bcbdb60fb624ef8c305f4c3431958b47bb12"
+        "sha256": "d54c2e60d478680238197bd57d5d5baf83975cf6f30a359d0d331d31f333495f"
       },
       "artifact": {
         "path": "products/evidence/contracts/verification-policy.schema.yaml",
-        "sha256": "b6a7e7200bf014a4b31dd064aa39bcbdb60fb624ef8c305f4c3431958b47bb12",
+        "sha256": "d54c2e60d478680238197bd57d5d5baf83975cf6f30a359d0d331d31f333495f",
         "mediaType": "application/yaml"
       }
     },

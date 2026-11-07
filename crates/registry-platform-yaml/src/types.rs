@@ -10,8 +10,7 @@ use std::fmt;
 use std::hash::Hash;
 use std::ops::Deref;
 
-use icu_casemap::CaseMapper;
-use icu_normalizer::ComposingNormalizerBorrowed;
+pub use registry_platform_text::display_text_comparison_key;
 use serde::de::{self, Deserialize, Deserializer, Visitor};
 use serde::{Serialize, Serializer};
 
@@ -181,22 +180,6 @@ where
         .map(|value| value.map(DisplayText::into_string))
 }
 
-/// The comparison key for two display labels.
-///
-/// NFC normalization surrounds full Unicode case folding. Characters retained
-/// for multilingual shaping or direction but invisible to a reviewer do not
-/// distinguish two labels.
-pub fn display_text_comparison_key(text: &str) -> String {
-    let visible = text
-        .chars()
-        .filter(|character| !is_ignored_display_comparison_character(*character))
-        .collect::<String>();
-    let normalizer = ComposingNormalizerBorrowed::new_nfc();
-    let normalized = normalizer.normalize(&visible);
-    let folded = CaseMapper::new().fold_string(&normalized);
-    normalizer.normalize(&folded).into_owned()
-}
-
 /// Every pair of values that has the same display-text comparison key.
 pub fn duplicate_display_text_pairs<'a>(
     values: impl IntoIterator<Item = &'a str>,
@@ -256,13 +239,6 @@ fn display_text_forbidden_schema_pattern() -> String {
         }
     }
     pattern
-}
-
-fn is_ignored_display_comparison_character(character: char) -> bool {
-    matches!(
-        character,
-        '\u{00ad}' | '\u{061c}' | '\u{200b}'..='\u{200f}' | '\u{2060}'
-    )
 }
 
 /// An identifier another system issues (a client id, a claim name, a scope,

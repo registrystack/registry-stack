@@ -4485,27 +4485,10 @@ fn field_encryption_preflight(
             package: &args.package,
         })
         .map_err(field_encryption_preflight_failure)?;
-    // A collision the apply-side preflight would refuse is reported here as a
-    // failed preflight, naming the authored record identifiers only.
-    let collisions = outcome
-        .report
-        .steps
-        .iter()
-        .flat_map(|step| {
-            step.fields
-                .iter()
-                .filter(|field| !field.duplicate_record_ids.is_empty())
-                .map(|field| {
-                    (
-                        step.entity_id.clone(),
-                        field.field_id.clone(),
-                        field.duplicate_record_ids.clone(),
-                    )
-                })
-        })
-        .collect::<Vec<_>>();
-    if !collisions.is_empty() {
-        return Err(field_encryption_duplicate_failure(collisions));
+    let collisions = field_encryption_preflight_collisions(&outcome.report);
+    let row_limits = field_encryption_preflight_row_limits(&outcome.report);
+    if !collisions.is_empty() || !row_limits.is_empty() {
+        return Err(field_encryption_preflight_refusal(collisions, &row_limits));
     }
     Ok(FieldEncryptionPreflightSuccessReport {
         ok: true,
@@ -4514,9 +4497,70 @@ fn field_encryption_preflight(
     })
 }
 
-fn field_encryption_duplicate_failure(
+/// A collision the apply-side preflight would refuse, from a flip or from a
+/// blind-index re-index, is reported as a failed preflight, naming the
+/// authored record identifiers only.
+fn field_encryption_preflight_collisions(
+    report: &registry_breg::field_encryption_backfill::FieldEncryptionBackfillPreflightReport,
+) -> Vec<(String, String, Vec<String>)> {
+    let flip_collisions = report.steps.iter().flat_map(|step| {
+        step.fields
+            .iter()
+            .filter(|field| !field.duplicate_record_ids.is_empty())
+            .map(|field| {
+                (
+                    step.entity_id.clone(),
+                    field.field_id.clone(),
+                    field.duplicate_record_ids.clone(),
+                )
+            })
+    });
+    let reindex_collisions = report.reindex_steps.iter().flat_map(|step| {
+        step.fields
+            .iter()
+            .filter(|field| !field.duplicate_record_ids.is_empty())
+            .map(|field| {
+                (
+                    step.entity_id.clone(),
+                    field.field_id.clone(),
+                    field.duplicate_record_ids.clone(),
+                )
+            })
+    });
+    flip_collisions.chain(reindex_collisions).collect()
+}
+
+/// The re-index steps that would walk more rows than their reviewed
+/// `maxTotalRows`, which the apply refuses before any write.
+fn field_encryption_preflight_row_limits(
+    report: &registry_breg::field_encryption_backfill::FieldEncryptionBackfillPreflightReport,
+) -> Vec<&registry_breg::field_encryption_backfill::BlindIndexReindexStepPreflight> {
+    report
+        .reindex_steps
+        .iter()
+        .filter(|step| step.row_count > step.maximum_total_rows)
+        .collect()
+}
+
+fn field_encryption_preflight_refusal(
     collisions: Vec<(String, String, Vec<String>)>,
+    row_limits: &[&registry_breg::field_encryption_backfill::BlindIndexReindexStepPreflight],
 ) -> FailureReport {
+    let row_limit_diagnostics = row_limits.iter().map(|step| {
+        tool_diagnostic(
+            diagnostic(
+                "field-encryption.preflight.reindex-row-limit",
+                "preflight",
+                &format!(
+                    "entity {} re-index step {}: {} rows exceed its reviewed maxTotalRows of {}, \
+                     so the apply will refuse it before changing any digest",
+                    step.entity_id, step.step_id, step.row_count, step.maximum_total_rows
+                ),
+            ),
+            DiagnosticArtifact::FieldEncryption,
+            SuggestedAction::ReviewFieldEncryptionBackfill,
+        )
+    });
     let diagnostics = collisions
         .into_iter()
         .map(|(entity_id, field_id, record_ids)| {
@@ -4535,6 +4579,7 @@ fn field_encryption_duplicate_failure(
                 SuggestedAction::ReviewFieldEncryptionBackfill,
             )
         })
+        .chain(row_limit_diagnostics)
         .collect();
     FailureReport {
         ok: false,
@@ -4631,6 +4676,13 @@ fn field_encryption_preflight_failure(
             DiagnosticArtifact::DatabaseMigration,
             SuggestedAction::VerifyMigrationAuthority,
         ),
+        FieldEncryptionPreflightLifecycleError::FieldEncryptionConfiguration => (
+            "field-encryption.preflight.field-encryption-configuration.refused",
+            "runtimeConfig",
+            "the configured field-encryption secret providers were refused",
+            DiagnosticArtifact::RuntimeConfiguration,
+            SuggestedAction::CorrectRuntimeConfiguration,
+        ),
         FieldEncryptionPreflightLifecycleError::Runtime => (
             "field-encryption.preflight.runtime.unavailable",
             "runtime",
@@ -4652,6 +4704,13 @@ fn field_encryption_preflight_failure(
                 "field-encryption preflight requires the configured migration authority",
                 DiagnosticArtifact::DatabaseMigration,
                 SuggestedAction::VerifyMigrationAuthority,
+            ),
+            registry_breg::field_encryption_backfill::FieldEncryptionBackfillPreflightError::KeySource => (
+                "field-encryption.preflight.key.refused",
+                "runtimeConfig",
+                "a blind-index re-index preflight opens the stored envelopes, so it requires the configured field-encryption key",
+                DiagnosticArtifact::FieldEncryption,
+                SuggestedAction::CorrectRuntimeConfiguration,
             ),
             registry_breg::field_encryption_backfill::FieldEncryptionBackfillPreflightError::Unavailable => (
                 "field-encryption.preflight.unavailable",
@@ -6047,46 +6106,7 @@ fn capture_candidate(
     };
     if args.reviewed_migrations.is_some() {
         candidate.prevalidate().map_err(|error| {
-            // The generic code is the fallback for a structural precondition
-            // (predecessor digest, baseline binding) that never reaches
-            // `ReviewedMigrationError`; a reviewed plan refusal names its kind.
-            let (code, timer_field) = match error {
-                PackageError::ReviewedMigration(ReviewedMigrationError::Descriptor) => {
-                    ("migration.review.descriptor-refused", None)
-                }
-                PackageError::ReviewedMigration(ReviewedMigrationError::Coverage) => {
-                    ("migration.review.coverage-refused", None)
-                }
-                PackageError::ReviewedMigration(ReviewedMigrationError::Sql) => {
-                    ("migration.review.sql-refused", None)
-                }
-                PackageError::ReviewedMigration(ReviewedMigrationError::Evidence) => {
-                    ("migration.review.evidence-refused", None)
-                }
-                PackageError::ReviewedMigration(ReviewedMigrationError::Closure) => {
-                    ("migration.review.closure-refused", None)
-                }
-                PackageError::ReviewedMigration(ReviewedMigrationError::TimerFieldUpdate {
-                    entity_id,
-                    field_id,
-                }) => (
-                    "migration.review.timer-field-update-refused",
-                    Some((entity_id, field_id)),
-                ),
-                _ => ("migration.review.refused", None),
-            };
-            let message = timer_field.map_or_else(
-                || {
-                    format!(
-                        "the reviewed plan was refused; it has to cover exactly these changes: {reviewed_changes}. Check change coverage, artifact digests, prior package and schema bindings, and target fingerprint. Use the same reviewed directory for test and package"
-                    )
-                },
-                |(record_type, field)| {
-                    format!(
-                        "the reviewed plan updates timer control or predicate field `{field}` on Record type `{record_type}`. Milestone 1 does not migrate those fields with authored SQL. Remove that update and change the field through an ordinary authorised Record write after activation"
-                    )
-                },
-            );
+            let (code, message) = reviewed_plan_refusal(error, &reviewed_changes);
             candidate_failure(
                 command,
                 code,
@@ -6098,6 +6118,55 @@ fn capture_candidate(
         })?;
     }
     Ok(candidate)
+}
+
+/// The diagnostic code and value-free message of a refused reviewed plan.
+/// The generic code is the fallback for a structural precondition
+/// (predecessor digest, baseline binding) that never reaches
+/// `ReviewedMigrationError`; a reviewed plan refusal names its kind.
+fn reviewed_plan_refusal(error: PackageError, reviewed_changes: &str) -> (&'static str, String) {
+    let code = match &error {
+        PackageError::ReviewedMigration(ReviewedMigrationError::Descriptor) => {
+            "migration.review.descriptor-refused"
+        }
+        PackageError::ReviewedMigration(ReviewedMigrationError::Coverage) => {
+            "migration.review.coverage-refused"
+        }
+        PackageError::ReviewedMigration(ReviewedMigrationError::Sql) => {
+            "migration.review.sql-refused"
+        }
+        PackageError::ReviewedMigration(ReviewedMigrationError::Evidence) => {
+            "migration.review.evidence-refused"
+        }
+        PackageError::ReviewedMigration(ReviewedMigrationError::Closure) => {
+            "migration.review.closure-refused"
+        }
+        PackageError::ReviewedMigration(ReviewedMigrationError::TimerFieldUpdate { .. }) => {
+            "migration.review.timer-field-update-refused"
+        }
+        PackageError::ReviewedMigration(ReviewedMigrationError::BlindIndexWrite { .. }) => {
+            "migration.review.blind-index-write-refused"
+        }
+        _ => "migration.review.refused",
+    };
+    let message = match error {
+        PackageError::ReviewedMigration(ReviewedMigrationError::TimerFieldUpdate {
+            entity_id,
+            field_id,
+        }) => format!(
+            "the reviewed plan updates timer control or predicate field `{field_id}` on Record type `{entity_id}`. Milestone 1 does not migrate those fields with authored SQL. Remove that update and change the field through an ordinary authorised Record write after activation"
+        ),
+        PackageError::ReviewedMigration(ReviewedMigrationError::BlindIndexWrite {
+            entity_id,
+            field_id,
+        }) => format!(
+            "the reviewed plan writes the blind-index column of field `{field_id}` on Record type `{entity_id}`. Only the engine derives blind-index digests. Remove that write; a changed lookup normalization is re-derived by a `field-encryption-backfill` step"
+        ),
+        _ => format!(
+            "the reviewed plan was refused; it has to cover exactly these changes: {reviewed_changes}. Check change coverage, artifact digests, prior package and schema bindings, and target fingerprint. Use the same reviewed directory for test and package"
+        ),
+    };
+    (code, message)
 }
 
 fn apply(args: &ApplyArgs) -> Result<ApplySuccessReport, Refusal> {
@@ -6902,6 +6971,29 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
                              pinned target: {}",
                             record_ids.len(),
                             record_ids.join(", ")
+                        ),
+                    ),
+                    DiagnosticArtifact::DatabaseMigration,
+                    SuggestedAction::ReviewFieldEncryptionBackfill,
+                );
+            }
+            registry_breg::migration::MigrationError::BlindIndexReindexRowLimit {
+                entity_id,
+                step_id,
+                row_count,
+                maximum_total_rows,
+            } => {
+                return source_failure(
+                    command,
+                    diagnostic(
+                        "field-encryption.reindex.row-limit",
+                        &format!("recordTypes[{entity_id}]"),
+                        &format!(
+                            "The blind-index re-index step {step_id} would walk {row_count} rows, \
+                             more than its reviewed maxTotalRows of {maximum_total_rows}, so the \
+                             apply refused before changing any digest. Reconcile reports the \
+                             target revertible; revert it, raise maxTotalRows in a reviewed \
+                             package rehearsed against this row count, and apply that package."
                         ),
                     ),
                     DiagnosticArtifact::DatabaseMigration,
@@ -12571,10 +12663,25 @@ fn write_field_encryption_preflight_success(
                 .iter()
                 .flat_map(|step| step.fields.iter().map(|field| field.plaintext_row_count))
                 .sum();
-            lines.lead(&format!(
-                "Preflighted the field-encryption backfill. {} to seal.",
-                report::counted_total(covered, "plaintext value")
-            ));
+            let reindexed: u64 = report
+                .outcome
+                .report
+                .reindex_steps
+                .iter()
+                .map(|step| step.row_count)
+                .sum();
+            if report.outcome.report.reindex_steps.is_empty() {
+                lines.lead(&format!(
+                    "Preflighted the field-encryption backfill. {} to seal.",
+                    report::counted_total(covered, "plaintext value")
+                ));
+            } else {
+                lines.lead(&format!(
+                    "Preflighted the field-encryption backfill. {} to seal, {} to re-index.",
+                    report::counted_total(covered, "plaintext value"),
+                    report::counted_total(reindexed, "row")
+                ));
+            }
             let mut pairs = vec![(
                 "package digest".to_owned(),
                 report.outcome.package_digest.clone(),
@@ -12604,6 +12711,15 @@ fn write_field_encryption_preflight_success(
                         ),
                     ));
                 }
+            }
+            for step in &report.outcome.report.reindex_steps {
+                pairs.push((
+                    format!("entity {} re-index {}", step.entity_id, step.step_id),
+                    format!(
+                        "{} rows, at most {} reviewed",
+                        step.row_count, step.maximum_total_rows
+                    ),
+                ));
             }
             let borrowed = pairs
                 .iter()
@@ -14339,6 +14455,112 @@ fn write_failure_with_exit(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reviewed_plan_refusal_names_a_blind_index_write_by_ids_only() {
+        let (code, message) = reviewed_plan_refusal(
+            PackageError::ReviewedMigration(ReviewedMigrationError::BlindIndexWrite {
+                entity_id: "asset".to_owned(),
+                field_id: "secret".to_owned(),
+            }),
+            "asset.secret FieldLookupChanged",
+        );
+        assert_eq!(code, "migration.review.blind-index-write-refused");
+        assert!(message.contains("field `secret` on Record type `asset`"));
+        assert!(message.contains("field-encryption-backfill"));
+        let (code, message) = reviewed_plan_refusal(
+            PackageError::ReviewedMigration(ReviewedMigrationError::TimerFieldUpdate {
+                entity_id: "asset".to_owned(),
+                field_id: "due".to_owned(),
+            }),
+            "asset.due FieldRequirednessChanged",
+        );
+        assert_eq!(code, "migration.review.timer-field-update-refused");
+        assert!(message.contains("field `due` on Record type `asset`"));
+        let (code, message) = reviewed_plan_refusal(
+            PackageError::ReviewedMigration(ReviewedMigrationError::Coverage),
+            "asset.secret FieldLookupChanged",
+        );
+        assert_eq!(code, "migration.review.coverage-refused");
+        assert!(message.contains("asset.secret FieldLookupChanged"));
+    }
+
+    #[test]
+    fn field_encryption_preflight_fails_on_a_reindex_collision_naming_record_ids_only() {
+        use registry_breg::field_encryption_backfill::{
+            BlindIndexReindexFieldPreflight, BlindIndexReindexStepPreflight,
+            FieldEncryptionBackfillPreflightReport,
+        };
+        let report = FieldEncryptionBackfillPreflightReport {
+            steps: Vec::new(),
+            reindex_steps: vec![BlindIndexReindexStepPreflight {
+                entity_id: "asset".to_owned(),
+                step_id: "reindex-secret-lookup".to_owned(),
+                maximum_total_rows: 10,
+                row_count: 3,
+                fields: vec![
+                    BlindIndexReindexFieldPreflight {
+                        field_id: "alias".to_owned(),
+                        unique_blind_index: true,
+                        duplicate_record_ids: Vec::new(),
+                    },
+                    BlindIndexReindexFieldPreflight {
+                        field_id: "secret".to_owned(),
+                        unique_blind_index: true,
+                        duplicate_record_ids: vec!["r-1".to_owned(), "r-3".to_owned()],
+                    },
+                ],
+            }],
+        };
+        let collisions = field_encryption_preflight_collisions(&report);
+        assert_eq!(
+            collisions,
+            vec![(
+                "asset".to_owned(),
+                "secret".to_owned(),
+                vec!["r-1".to_owned(), "r-3".to_owned()]
+            )]
+        );
+        assert!(field_encryption_preflight_row_limits(&report).is_empty());
+        let failure = field_encryption_preflight_refusal(collisions, &[]);
+        assert!(!failure.ok);
+        assert_eq!(failure.diagnostics.len(), 1);
+        let rendered = serde_json::to_string(&failure).expect("the failure renders");
+        assert!(rendered.contains("field-encryption.preflight.duplicate-records"));
+        assert!(rendered.contains("r-1, r-3"));
+    }
+
+    #[test]
+    fn field_encryption_preflight_fails_on_a_reindex_over_its_row_ceiling() {
+        use registry_breg::field_encryption_backfill::{
+            BlindIndexReindexFieldPreflight, BlindIndexReindexStepPreflight,
+            FieldEncryptionBackfillPreflightReport,
+        };
+        let step = |step_id: &str, row_count| BlindIndexReindexStepPreflight {
+            entity_id: "asset".to_owned(),
+            step_id: step_id.to_owned(),
+            maximum_total_rows: 2,
+            row_count,
+            fields: vec![BlindIndexReindexFieldPreflight {
+                field_id: "secret".to_owned(),
+                unique_blind_index: false,
+                duplicate_record_ids: Vec::new(),
+            }],
+        };
+        let report = FieldEncryptionBackfillPreflightReport {
+            steps: Vec::new(),
+            reindex_steps: vec![step("at-ceiling", 2), step("over-ceiling", 3)],
+        };
+        let row_limits = field_encryption_preflight_row_limits(&report);
+        assert_eq!(row_limits.len(), 1);
+        assert_eq!(row_limits[0].step_id, "over-ceiling");
+        let failure = field_encryption_preflight_refusal(Vec::new(), &row_limits);
+        assert!(!failure.ok);
+        assert_eq!(failure.diagnostics.len(), 1);
+        let rendered = serde_json::to_string(&failure).expect("the failure renders");
+        assert!(rendered.contains("field-encryption.preflight.reindex-row-limit"));
+        assert!(rendered.contains("over-ceiling: 3 rows exceed its reviewed maxTotalRows of 2"));
+    }
     use registry_breg::postgres::RoleMode;
 
     #[test]
@@ -18609,6 +18831,21 @@ mod field_encryption_lifecycle_cli_tests {
                             ],
                         },
                     ],
+                    reindex_steps: vec![
+                        registry_breg::field_encryption_backfill::BlindIndexReindexStepPreflight {
+                            entity_id: "membership".to_owned(),
+                            step_id: "reindex-alias-lookup".to_owned(),
+                            maximum_total_rows: 10,
+                            row_count: 4,
+                            fields: vec![
+                                registry_breg::field_encryption_backfill::BlindIndexReindexFieldPreflight {
+                                    field_id: "alias".to_owned(),
+                                    unique_blind_index: true,
+                                    duplicate_record_ids: Vec::new(),
+                                },
+                            ],
+                        },
+                    ],
                 },
             },
         }
@@ -18632,6 +18869,9 @@ mod field_encryption_lifecycle_cli_tests {
         assert!(rendered.contains("\"historyChoice\": \"erase-and-rebaseline\""));
         assert!(rendered.contains("\"plaintextRowCount\": 3"));
         assert!(rendered.contains("\"duplicateRecordIds\": ["));
+        assert!(rendered.contains("\"reindexSteps\": ["));
+        assert!(rendered.contains("\"rowCount\": 4"));
+        assert!(rendered.contains("\"maximumTotalRows\": 10"));
         // Record identifiers are authored identifiers and are named by design;
         // neither the human nor machine rendering carries anything else.
         assert!(rendered.contains("018feaa0-68f9-4a45-b9e3-58436df07af7"));
@@ -18652,6 +18892,8 @@ mod field_encryption_lifecycle_cli_tests {
         let rendered = String::from_utf8(plain_stdout).expect("plain output is UTF-8");
         assert!(rendered.contains("erase-and-rebaseline"));
         assert!(rendered.contains("3 plaintext"));
+        assert!(rendered.contains("4 rows to re-index"));
+        assert!(rendered.contains("4 rows, at most 10 reviewed"));
     }
 
     #[test]

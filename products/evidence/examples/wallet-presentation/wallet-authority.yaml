@@ -1,0 +1,31 @@
+apiVersion: id.registrystack.org/formats/evidence/target-authority/v1alpha1
+kind: EvidenceTargetAuthority
+target: wallet
+project: wallet-presentation-evidence
+accessProfiles:
+  wallet-service:
+    authority: organizational
+    actorKind: service
+    requesterTags:
+    - wallet-service
+    grants:
+    - definition: credential-possession
+      purpose: credential-check
+      audienceFrom: authenticated-requester
+      representations:
+      - signed-jws
+      subjectBinding: audience-scoped
+      subjects:
+      - role: subject
+        selectorProfile: wallet-session
+        valueOrigin: request
+    - definition: identity-match
+      purpose: identity-check
+      audienceFrom: authenticated-requester
+      representations:
+      - signed-jws
+      subjectBinding: audience-scoped
+      subjects:
+      - role: subject
+        selectorProfile: wallet-session-with-name
+        valueOrigin: request

@@ -1,0 +1,143 @@
+# HELP evidence_http_requests_total Requests served by the Evidence boundary.
+# TYPE evidence_http_requests_total counter
+evidence_http_requests_total{route="/health",method="GET",status="success",error="none"} 2
+evidence_http_requests_total{route="/v1/evidence",method="POST",status="client-error",error="evidence.invalid-request"} 1
+evidence_http_requests_total{route="/v1/evidence",method="POST",status="server-error",error="evidence.unavailable"} 1
+evidence_http_requests_total{route="/v1/evidence",method="POST",status="success",error="none"} 1
+evidence_http_requests_total{route="unmatched",method="other",status="client-error",error="none"} 1
+# HELP evidence_http_request_duration_seconds Request duration at the Evidence boundary.
+# TYPE evidence_http_request_duration_seconds histogram
+evidence_http_request_duration_seconds_bucket{route="/health",method="GET",status="success",error="none",le="0.005"} 1
+evidence_http_request_duration_seconds_bucket{route="/health",method="GET",status="success",error="none",le="0.01"} 1
+evidence_http_request_duration_seconds_bucket{route="/health",method="GET",status="success",error="none",le="0.025"} 1
+evidence_http_request_duration_seconds_bucket{route="/health",method="GET",status="success",error="none",le="0.05"} 2
+evidence_http_request_duration_seconds_bucket{route="/health",method="GET",status="success",error="none",le="0.1"} 2
+evidence_http_request_duration_seconds_bucket{route="/health",method="GET",status="success",error="none",le="0.25"} 2
+evidence_http_request_duration_seconds_bucket{route="/health",method="GET",status="success",error="none",le="0.5"} 2
+evidence_http_request_duration_seconds_bucket{route="/health",method="GET",status="success",error="none",le="1"} 2
+evidence_http_request_duration_seconds_bucket{route="/health",method="GET",status="success",error="none",le="5"} 2
+evidence_http_request_duration_seconds_bucket{route="/health",method="GET",status="success",error="none",le="+Inf"} 2
+evidence_http_request_duration_seconds_sum{route="/health",method="GET",status="success",error="none"} 0.033
+evidence_http_request_duration_seconds_count{route="/health",method="GET",status="success",error="none"} 2
+evidence_http_request_duration_seconds_bucket{route="/v1/evidence",method="POST",status="client-error",error="evidence.invalid-request",le="0.005"} 1
+evidence_http_request_duration_seconds_bucket{route="/v1/evidence",method="POST",status="client-error",error="evidence.invalid-request",le="0.01"} 1
+evidence_http_request_duration_seconds_bucket{route="/v1/evidence",method="POST",status="client-error",error="evidence.invalid-request",le="0.025"} 1
+evidence_http_request_duration_seconds_bucket{route="/v1/evidence",method="POST",status="client-error",error="evidence.invalid-request",le="0.05"} 1
+evidence_http_request_duration_seconds_bucket{route="/v1/evidence",method="POST",status="client-error",error="evidence.invalid-request",le="0.1"} 1
+evidence_http_request_duration_seconds_bucket{route="/v1/evidence",method="POST",status="client-error",error="evidence.invalid-request",le="0.25"} 1
+evidence_http_request_duration_seconds_bucket{route="/v1/evidence",method="POST",status="client-error",error="evidence.invalid-request",le="0.5"} 1
+evidence_http_request_duration_seconds_bucket{route="/v1/evidence",method="POST",status="client-error",error="evidence.invalid-request",le="1"} 1
+evidence_http_request_duration_seconds_bucket{route="/v1/evidence",method="POST",status="client-error",error="evidence.invalid-request",le="5"} 1
+evidence_http_request_duration_seconds_bucket{route="/v1/evidence",method="POST",status="client-error",error="evidence.invalid-request",le="+Inf"} 1
+evidence_http_request_duration_seconds_sum{route="/v1/evidence",method="POST",status="client-error",error="evidence.invalid-request"} 0.001
+evidence_http_request_duration_seconds_count{route="/v1/evidence",method="POST",status="client-error",error="evidence.invalid-request"} 1
+evidence_http_request_duration_seconds_bucket{route="/v1/evidence",method="POST",status="server-error",error="evidence.unavailable",le="0.005"} 0
+evidence_http_request_duration_seconds_bucket{route="/v1/evidence",method="POST",status="server-error",error="evidence.unavailable",le="0.01"} 0
+evidence_http_request_duration_seconds_bucket{route="/v1/evidence",method="POST",status="server-error",error="evidence.unavailable",le="0.025"} 0
+evidence_http_request_duration_seconds_bucket{route="/v1/evidence",method="POST",status="server-error",error="evidence.unavailable",le="0.05"} 0
+evidence_http_request_duration_seconds_bucket{route="/v1/evidence",method="POST",status="server-error",error="evidence.unavailable",le="0.1"} 0
+evidence_http_request_duration_seconds_bucket{route="/v1/evidence",method="POST",status="server-error",error="evidence.unavailable",le="0.25"} 0
+evidence_http_request_duration_seconds_bucket{route="/v1/evidence",method="POST",status="server-error",error="evidence.unavailable",le="0.5"} 0
+evidence_http_request_duration_seconds_bucket{route="/v1/evidence",method="POST",status="server-error",error="evidence.unavailable",le="1"} 0
+evidence_http_request_duration_seconds_bucket{route="/v1/evidence",method="POST",status="server-error",error="evidence.unavailable",le="5"} 0
+evidence_http_request_duration_seconds_bucket{route="/v1/evidence",method="POST",status="server-error",error="evidence.unavailable",le="+Inf"} 1
+evidence_http_request_duration_seconds_sum{route="/v1/evidence",method="POST",status="server-error",error="evidence.unavailable"} 6
+evidence_http_request_duration_seconds_count{route="/v1/evidence",method="POST",status="server-error",error="evidence.unavailable"} 1
+evidence_http_request_duration_seconds_bucket{route="/v1/evidence",method="POST",status="success",error="none",le="0.005"} 0
+evidence_http_request_duration_seconds_bucket{route="/v1/evidence",method="POST",status="success",error="none",le="0.01"} 0
+evidence_http_request_duration_seconds_bucket{route="/v1/evidence",method="POST",status="success",error="none",le="0.025"} 0
+evidence_http_request_duration_seconds_bucket{route="/v1/evidence",method="POST",status="success",error="none",le="0.05"} 0
+evidence_http_request_duration_seconds_bucket{route="/v1/evidence",method="POST",status="success",error="none",le="0.1"} 0
+evidence_http_request_duration_seconds_bucket{route="/v1/evidence",method="POST",status="success",error="none",le="0.25"} 1
+evidence_http_request_duration_seconds_bucket{route="/v1/evidence",method="POST",status="success",error="none",le="0.5"} 1
+evidence_http_request_duration_seconds_bucket{route="/v1/evidence",method="POST",status="success",error="none",le="1"} 1
+evidence_http_request_duration_seconds_bucket{route="/v1/evidence",method="POST",status="success",error="none",le="5"} 1
+evidence_http_request_duration_seconds_bucket{route="/v1/evidence",method="POST",status="success",error="none",le="+Inf"} 1
+evidence_http_request_duration_seconds_sum{route="/v1/evidence",method="POST",status="success",error="none"} 0.12
+evidence_http_request_duration_seconds_count{route="/v1/evidence",method="POST",status="success",error="none"} 1
+evidence_http_request_duration_seconds_bucket{route="unmatched",method="other",status="client-error",error="none",le="0.005"} 0
+evidence_http_request_duration_seconds_bucket{route="unmatched",method="other",status="client-error",error="none",le="0.01"} 1
+evidence_http_request_duration_seconds_bucket{route="unmatched",method="other",status="client-error",error="none",le="0.025"} 1
+evidence_http_request_duration_seconds_bucket{route="unmatched",method="other",status="client-error",error="none",le="0.05"} 1
+evidence_http_request_duration_seconds_bucket{route="unmatched",method="other",status="client-error",error="none",le="0.1"} 1
+evidence_http_request_duration_seconds_bucket{route="unmatched",method="other",status="client-error",error="none",le="0.25"} 1
+evidence_http_request_duration_seconds_bucket{route="unmatched",method="other",status="client-error",error="none",le="0.5"} 1
+evidence_http_request_duration_seconds_bucket{route="unmatched",method="other",status="client-error",error="none",le="1"} 1
+evidence_http_request_duration_seconds_bucket{route="unmatched",method="other",status="client-error",error="none",le="5"} 1
+evidence_http_request_duration_seconds_bucket{route="unmatched",method="other",status="client-error",error="none",le="+Inf"} 1
+evidence_http_request_duration_seconds_sum{route="unmatched",method="other",status="client-error",error="none"} 0.007
+evidence_http_request_duration_seconds_count{route="unmatched",method="other",status="client-error",error="none"} 1
+# HELP evidence_rate_limiter_tracked_keys Pseudonym keys currently tracked by the rate limiter.
+# TYPE evidence_rate_limiter_tracked_keys gauge
+evidence_rate_limiter_tracked_keys 5
+# HELP evidence_build_info Running version and captured governed identities.
+# TYPE evidence_build_info gauge
+evidence_build_info{version="{VERSION}",bundle="bundle\"x\\y\nz",authority="package"} 1
+# HELP evidence_source_requests_total Completed dependency attempts by closed outcome.
+# TYPE evidence_source_requests_total counter
+# HELP evidence_source_request_duration_seconds Dependency attempt latency including cancellation.
+# TYPE evidence_source_request_duration_seconds histogram
+# HELP evidence_signer_requests_total Completed dependency attempts by closed outcome.
+# TYPE evidence_signer_requests_total counter
+# HELP evidence_signer_request_duration_seconds Dependency attempt latency including cancellation.
+# TYPE evidence_signer_request_duration_seconds histogram
+evidence_source_requests_total{source="a\"b\\c\nd",outcome="cancelled"} 1
+evidence_source_request_duration_seconds_bucket{source="a\"b\\c\nd",outcome="cancelled",le="0.005"} 1
+evidence_source_request_duration_seconds_bucket{source="a\"b\\c\nd",outcome="cancelled",le="0.01"} 1
+evidence_source_request_duration_seconds_bucket{source="a\"b\\c\nd",outcome="cancelled",le="0.025"} 1
+evidence_source_request_duration_seconds_bucket{source="a\"b\\c\nd",outcome="cancelled",le="0.05"} 1
+evidence_source_request_duration_seconds_bucket{source="a\"b\\c\nd",outcome="cancelled",le="0.1"} 1
+evidence_source_request_duration_seconds_bucket{source="a\"b\\c\nd",outcome="cancelled",le="0.25"} 1
+evidence_source_request_duration_seconds_bucket{source="a\"b\\c\nd",outcome="cancelled",le="0.5"} 1
+evidence_source_request_duration_seconds_bucket{source="a\"b\\c\nd",outcome="cancelled",le="1"} 1
+evidence_source_request_duration_seconds_bucket{source="a\"b\\c\nd",outcome="cancelled",le="5"} 1
+evidence_source_request_duration_seconds_bucket{source="a\"b\\c\nd",outcome="cancelled",le="+Inf"} 1
+evidence_source_request_duration_seconds_count{source="a\"b\\c\nd",outcome="cancelled"} 1
+evidence_source_request_duration_seconds_sum{source="a\"b\\c\nd",outcome="cancelled"} 0.001
+evidence_source_requests_total{source="people",outcome="success"} 2
+evidence_source_request_duration_seconds_bucket{source="people",outcome="success",le="0.005"} 0
+evidence_source_request_duration_seconds_bucket{source="people",outcome="success",le="0.01"} 0
+evidence_source_request_duration_seconds_bucket{source="people",outcome="success",le="0.025"} 1
+evidence_source_request_duration_seconds_bucket{source="people",outcome="success",le="0.05"} 1
+evidence_source_request_duration_seconds_bucket{source="people",outcome="success",le="0.1"} 1
+evidence_source_request_duration_seconds_bucket{source="people",outcome="success",le="0.25"} 1
+evidence_source_request_duration_seconds_bucket{source="people",outcome="success",le="0.5"} 1
+evidence_source_request_duration_seconds_bucket{source="people",outcome="success",le="1"} 2
+evidence_source_request_duration_seconds_bucket{source="people",outcome="success",le="5"} 2
+evidence_source_request_duration_seconds_bucket{source="people",outcome="success",le="+Inf"} 2
+evidence_source_request_duration_seconds_count{source="people",outcome="success"} 2
+evidence_source_request_duration_seconds_sum{source="people",outcome="success"} 0.712
+evidence_source_requests_total{source="people",outcome="timeout"} 1
+evidence_source_request_duration_seconds_bucket{source="people",outcome="timeout",le="0.005"} 0
+evidence_source_request_duration_seconds_bucket{source="people",outcome="timeout",le="0.01"} 0
+evidence_source_request_duration_seconds_bucket{source="people",outcome="timeout",le="0.025"} 0
+evidence_source_request_duration_seconds_bucket{source="people",outcome="timeout",le="0.05"} 0
+evidence_source_request_duration_seconds_bucket{source="people",outcome="timeout",le="0.1"} 0
+evidence_source_request_duration_seconds_bucket{source="people",outcome="timeout",le="0.25"} 0
+evidence_source_request_duration_seconds_bucket{source="people",outcome="timeout",le="0.5"} 0
+evidence_source_request_duration_seconds_bucket{source="people",outcome="timeout",le="1"} 0
+evidence_source_request_duration_seconds_bucket{source="people",outcome="timeout",le="5"} 0
+evidence_source_request_duration_seconds_bucket{source="people",outcome="timeout",le="+Inf"} 1
+evidence_source_request_duration_seconds_count{source="people",outcome="timeout"} 1
+evidence_source_request_duration_seconds_sum{source="people",outcome="timeout"} 5.1
+evidence_signer_requests_total{signer="active",outcome="signing"} 1
+evidence_signer_request_duration_seconds_bucket{signer="active",outcome="signing",le="0.005"} 0
+evidence_signer_request_duration_seconds_bucket{signer="active",outcome="signing",le="0.01"} 0
+evidence_signer_request_duration_seconds_bucket{signer="active",outcome="signing",le="0.025"} 0
+evidence_signer_request_duration_seconds_bucket{signer="active",outcome="signing",le="0.05"} 1
+evidence_signer_request_duration_seconds_bucket{signer="active",outcome="signing",le="0.1"} 1
+evidence_signer_request_duration_seconds_bucket{signer="active",outcome="signing",le="0.25"} 1
+evidence_signer_request_duration_seconds_bucket{signer="active",outcome="signing",le="0.5"} 1
+evidence_signer_request_duration_seconds_bucket{signer="active",outcome="signing",le="1"} 1
+evidence_signer_request_duration_seconds_bucket{signer="active",outcome="signing",le="5"} 1
+evidence_signer_request_duration_seconds_bucket{signer="active",outcome="signing",le="+Inf"} 1
+evidence_signer_request_duration_seconds_count{signer="active",outcome="signing"} 1
+evidence_signer_request_duration_seconds_sum{signer="active",outcome="signing"} 0.04
+# HELP evidence_source_lookups_total Completed pack lookups by closed outcome.
+# TYPE evidence_source_lookups_total counter
+evidence_source_lookups_total{source="people",outcome="match"} 2
+evidence_source_lookups_total{source="people",outcome="unresolved"} 1
+# HELP evidence_source_shape_drift_total Source responses whose shape departed from the declared projection.
+# TYPE evidence_source_shape_drift_total counter
+evidence_source_shape_drift_total{source="a\"b\\c\nd"} 0
+evidence_source_shape_drift_total{source="people"} 1

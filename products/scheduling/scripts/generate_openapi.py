@@ -1792,6 +1792,15 @@ def verify_source(repository_root: Path) -> None:
     marker(config_source, 'fn default_reads_scope() -> String {\n    "scheduling:read".to_owned()', "config")
     marker(config_source, 'fn default_explain_scope() -> String {\n    "scheduling:explain".to_owned()', "config")
     marker(httpsec_source, "pub const DEFAULT_REQUEST_BODY_LIMIT_BYTES: usize = 1024 * 1024;", "httpsec")
+    # The platform maps the framework statuses to the rejection kinds the
+    # http edge answers in its own vocabulary.
+    for text in (
+        "StatusCode::BAD_REQUEST => FrameworkRejection::Invalid",
+        "StatusCode::PAYLOAD_TOO_LARGE => FrameworkRejection::BodyTooLarge",
+        "StatusCode::UNSUPPORTED_MEDIA_TYPE => FrameworkRejection::UnsupportedMediaType",
+        "StatusCode::UNPROCESSABLE_ENTITY => FrameworkRejection::Unprocessable",
+    ):
+        marker(httpsec_source, text, "httpsec")
     problem_body = re.search(
         r"#\[serde\(rename_all = \"camelCase\"\)\]\s*pub struct ProblemBody\s*\{(?P<body>.*?)^\}",
         httpsec_source,
@@ -1805,11 +1814,11 @@ def verify_source(repository_root: Path) -> None:
     for text in (
         "async fn route_not_found()",
         "async fn method_not_allowed()",
-        "fn normalize_framework_rejection",
-        "StatusCode::BAD_REQUEST => Some(ProblemCode::RequestInvalid)",
-        "StatusCode::PAYLOAD_TOO_LARGE => Some(ProblemCode::RequestBodyTooLarge)",
-        "StatusCode::UNSUPPORTED_MEDIA_TYPE => Some(ProblemCode::RequestUnsupportedMediaType)",
-        "StatusCode::UNPROCESSABLE_ENTITY => Some(ProblemCode::RequestUnprocessable)",
+        "normalize_framework_rejection(next.run(request).await, request_problem)",
+        "FrameworkRejection::Invalid => ProblemCode::RequestInvalid",
+        "FrameworkRejection::BodyTooLarge => ProblemCode::RequestBodyTooLarge",
+        "FrameworkRejection::UnsupportedMediaType => ProblemCode::RequestUnsupportedMediaType",
+        "FrameworkRejection::Unprocessable => ProblemCode::RequestUnprocessable",
         "problem_response(ProblemCode::RequestNotFound)",
         "problem_response(ProblemCode::RequestMethodNotAllowed)",
         "byte.is_ascii_graphic()",

@@ -28,7 +28,8 @@ use registry_documents_core::{
 };
 use registry_platform_authcommon::parse_bearer_token;
 use registry_platform_httpsec::{
-    request_body_limit_default, security_headers, CspBuilder, ProblemBody, TraceContext,
+    normalize_framework_rejection, request_body_limit_default, security_headers, CspBuilder,
+    FrameworkRejection, ProblemBody, TraceContext,
 };
 
 use serde::de::DeserializeOwned;
@@ -69,7 +70,7 @@ async fn http_boundary(request: axum::http::Request<axum::body::Body>, next: Nex
     let trace = TraceContext::from_headers(request.headers());
     let mut response = REQUEST_TRACE
         .scope(trace.clone(), async move {
-            normalize_framework_rejection(next.run(request).await)
+            normalize_framework_rejection(next.run(request).await, framework_rejection_problem)
         })
         .await;
     trace.apply(response.headers_mut());
@@ -85,24 +86,13 @@ async fn http_boundary(request: axum::http::Request<axum::body::Body>, next: Nex
 /// Framework rejections carry axum's own bodies, which no Document Store
 /// caller was promised. The statuses are kept; the body becomes the
 /// vocabulary's `request.*` problem for that status.
-fn normalize_framework_rejection(response: Response) -> Response {
-    let is_problem = response
-        .headers()
-        .get(CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.split(';').next())
-        == Some("application/problem+json");
-    if is_problem {
-        return response;
-    }
-    let problem = match response.status() {
-        StatusCode::BAD_REQUEST => Some(ProblemCode::RequestInvalid),
-        StatusCode::PAYLOAD_TOO_LARGE => Some(ProblemCode::RequestBodyTooLarge),
-        StatusCode::UNSUPPORTED_MEDIA_TYPE => Some(ProblemCode::RequestUnsupportedMediaType),
-        StatusCode::UNPROCESSABLE_ENTITY => Some(ProblemCode::RequestUnprocessable),
-        _ => None,
-    };
-    problem.map_or(response, problem_response)
+fn framework_rejection_problem(kind: FrameworkRejection) -> Response {
+    problem_response(match kind {
+        FrameworkRejection::Invalid => ProblemCode::RequestInvalid,
+        FrameworkRejection::BodyTooLarge => ProblemCode::RequestBodyTooLarge,
+        FrameworkRejection::UnsupportedMediaType => ProblemCode::RequestUnsupportedMediaType,
+        FrameworkRejection::Unprocessable => ProblemCode::RequestUnprocessable,
+    })
 }
 
 async fn route_not_found() -> Response {
@@ -734,7 +724,8 @@ mod tests {
                 ProblemCode::RequestUnprocessable,
             ),
         ] {
-            let response = normalize_framework_rejection(status.into_response());
+            let response =
+                normalize_framework_rejection(status.into_response(), framework_rejection_problem);
             assert_eq!(response.status().as_u16(), expected.http_status());
             assert_eq!(
                 response.headers().get(CONTENT_TYPE).unwrap(),

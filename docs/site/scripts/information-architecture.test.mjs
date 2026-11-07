@@ -13,7 +13,11 @@ import {
   RETIRED_RELAY_ROUTES,
 } from '../src/lib/relay-retirement-redirects.mjs';
 import { flattenSidebarGroups } from '../src/lib/sidebar.mjs';
-import { docsetPublishesBregOpenApi, docsetPublishesEvidenceOid4vciOpenApi } from './fetch-openapi.mjs';
+import {
+  docsetPublishesBregOpenApi,
+  docsetPublishesEvidenceOid4vciOpenApi,
+  docsetPublishesEvidenceOid4vpOpenApi,
+} from './fetch-openapi.mjs';
 
 const siteRoot = resolve(import.meta.dirname, '..');
 const configSource = readFileSync(resolve(siteRoot, 'astro.config.mjs'), 'utf8');
@@ -117,6 +121,8 @@ const evidenceOpenApiSidebarGroup = openApiGroup('reference/apis/evidence', 'API
 const evidenceOpenApiSchema = openApiSchema('reference/apis/evidence', evidenceOpenApiSidebarGroup);
 const evidenceOid4vciOpenApiSidebarGroup = openApiGroup('reference/apis/evidence-oid4vci', 'API operations (wallet delivery)');
 const evidenceOid4vciOpenApiSchema = openApiSchema('reference/apis/evidence-oid4vci', evidenceOid4vciOpenApiSidebarGroup);
+const evidenceOid4vpOpenApiSidebarGroup = openApiGroup('reference/apis/evidence-oid4vp', 'API operations (wallet presentation)');
+const evidenceOid4vpOpenApiSchema = openApiSchema('reference/apis/evidence-oid4vp', evidenceOid4vpOpenApiSidebarGroup);
 const caseworkOpenApiSidebarGroup = openApiGroup('reference/apis/casework', 'API operations');
 const caseworkOpenApiSchema = openApiSchema('reference/apis/casework', caseworkOpenApiSidebarGroup);
 const schedulingOpenApiSidebarGroup = openApiGroup('reference/apis/scheduling', 'API operations');
@@ -136,6 +142,7 @@ const bregOpenApiSchema = openApiSchema('reference/apis/breg', bregOpenApiSideba
 const productOpenApiSidebarGroups = [
   evidenceOpenApiSidebarGroup,
   evidenceOid4vciOpenApiSidebarGroup,
+  evidenceOid4vpOpenApiSidebarGroup,
   caseworkOpenApiSidebarGroup,
   schedulingOpenApiSidebarGroup,
   messagingOpenApiSidebarGroup,
@@ -146,6 +153,7 @@ const productOpenApiSidebarGroups = [
 const openApiSidebarGroups = [...productOpenApiSidebarGroups, bregOpenApiSidebarGroup];
 const apiSchemaFactory = new Function(
   'hasEvidenceOid4vciOpenApi',
+  'hasEvidenceOid4vpOpenApi',
   'hasBregOpenApi',
   'hasCasework',
   'hasScheduling',
@@ -155,6 +163,7 @@ const apiSchemaFactory = new Function(
   'hasDiscovery',
   'evidenceOpenApiSchema',
   'evidenceOid4vciOpenApiSchema',
+  'evidenceOid4vpOpenApiSchema',
   'caseworkOpenApiSchema',
   'schedulingOpenApiSchema',
   'messagingOpenApiSchema',
@@ -167,6 +176,7 @@ const apiSchemaFactory = new Function(
 const apiSchemaArguments = [
   evidenceOpenApiSchema,
   evidenceOid4vciOpenApiSchema,
+  evidenceOid4vpOpenApiSchema,
   caseworkOpenApiSchema,
   schedulingOpenApiSchema,
   messagingOpenApiSchema,
@@ -175,7 +185,7 @@ const apiSchemaArguments = [
   discoveryOpenApiSchema,
   bregOpenApiSchema,
 ];
-const apiSchemas = apiSchemaFactory(true, true, true, true, true, true, true, true, ...apiSchemaArguments);
+const apiSchemas = apiSchemaFactory(true, true, true, true, true, true, true, true, true, ...apiSchemaArguments);
 assert.ok(apiSchemas.includes(bregOpenApiSchema), 'the current docset registers the BReg OpenAPI schema');
 const sidebarFactory = new Function(
   'cliReferenceSidebar',
@@ -195,8 +205,10 @@ const sidebarFactory = new Function(
   'hasBregOpenApi',
   'bregOpenApiSidebarGroup',
   'hasEvidenceOid4vciOpenApi',
+  'hasEvidenceOid4vpOpenApi',
   'evidenceOpenApiSidebarGroup',
   'evidenceOid4vciOpenApiSidebarGroup',
+  'evidenceOid4vpOpenApiSidebarGroup',
   'caseworkOpenApiSidebarGroup',
   'schedulingOpenApiSidebarGroup',
   'messagingOpenApiSidebarGroup',
@@ -229,7 +241,7 @@ const everyProductDocset = {
   },
 };
 const sidebar = sidebarFactory(...sidebarArguments, true, true, true, true, true, true, true, true, everyProductDocset,
-  true, bregOpenApiSidebarGroup, true, ...productOpenApiSidebarGroups);
+  true, bregOpenApiSidebarGroup, true, true, ...productOpenApiSidebarGroups);
 
 const messagingPageRoutes = [
   '/start/messaging/',
@@ -415,6 +427,7 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
     const context = resolveDocsetBuildContext(docsets, { DOCS_DOCSET: id, ...env });
     const hasBregOpenApi = docsetPublishesBregOpenApi(context.selectedDocset, docsets.current);
     const hasEvidenceOid4vciOpenApi = docsetPublishesEvidenceOid4vciOpenApi(context.selectedDocset, docsets.current);
+    const hasEvidenceOid4vpOpenApi = docsetPublishesEvidenceOid4vpOpenApi(context.selectedDocset, docsets.current);
     const hasDiscovery = Boolean(context.selectedDocset.products['registry-discovery']);
     assert.equal(context.hasCasework, hasCasework, id);
     assert.equal(context.hasScheduling, hasScheduling, id);
@@ -437,6 +450,7 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
       hasBregOpenApi,
       bregOpenApiSidebarGroup,
       hasEvidenceOid4vciOpenApi,
+      hasEvidenceOid4vpOpenApi,
       ...productOpenApiSidebarGroups,
     );
     assert.equal(docsetSidebar.some((item) => item.label === 'Registry Casework'), hasCasework, id);
@@ -457,8 +471,11 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
     // The OID4VCI document is published by the current docset and by release
     // docsets from v0.20.0 onward.
     assert.equal(hasEvidenceOid4vciOpenApi, id !== 'v0.19.0', id);
+    // The OID4VP document is in no release yet, so only the current docset publishes it.
+    assert.equal(hasEvidenceOid4vpOpenApi, id === 'latest', id);
     const docsetSchemas = apiSchemaFactory(
       hasEvidenceOid4vciOpenApi,
+      hasEvidenceOid4vpOpenApi,
       hasBregOpenApi,
       context.hasCasework,
       context.hasScheduling,
@@ -470,7 +487,7 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
     );
     assert.equal(
       docsetSchemas.length,
-      1 + Number(hasEvidenceOid4vciOpenApi) + Number(hasCasework) + Number(hasScheduling) +
+      1 + Number(hasEvidenceOid4vciOpenApi) + Number(hasEvidenceOid4vpOpenApi) + Number(hasCasework) + Number(hasScheduling) +
         Number(hasMessaging) + Number(hasCoordinator) + Number(hasDocuments) + Number(hasDiscovery) + Number(hasBregOpenApi),
       id,
     );
@@ -480,9 +497,11 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
     const docsetEvidence = docsetSidebar.find((item) => item.label === 'Registry Evidence');
     assert.deepEqual(
       seatedGroups(docsetEvidence),
-      hasEvidenceOid4vciOpenApi
-        ? [evidenceOpenApiSidebarGroup, evidenceOid4vciOpenApiSidebarGroup]
-        : [evidenceOpenApiSidebarGroup],
+      [
+        evidenceOpenApiSidebarGroup,
+        ...(hasEvidenceOid4vciOpenApi ? [evidenceOid4vciOpenApiSidebarGroup] : []),
+        ...(hasEvidenceOid4vpOpenApi ? [evidenceOid4vpOpenApiSidebarGroup] : []),
+      ],
       id,
     );
     assert.deepEqual(seatedGroups(docsetBreg), hasBregOpenApi ? [bregOpenApiSidebarGroup] : [], id);
@@ -700,6 +719,7 @@ test('keeps consumer and wallet-provider guidance in separate Evidence groups', 
   assert.deepEqual(wallet.items.map((item) => item.slug), [
     'configure/enable-sd-jwt-vc',
     'configure/evidence-oid4vci',
+    'configure/evidence-oid4vp',
   ]);
   assert.equal(evidence.items[1].slug, 'tutorials/first-evidence-assertion');
   assert.equal(evidence.items[2].slug, 'explanation/how-evidence-works');
@@ -1040,6 +1060,7 @@ test('organizes Registry Evidence tasks without publishing the obsolete Relay co
       // The wallet-facing supporting service's operations follow the Evidence
       // operations and never leave the Evidence section.
       'evidenceOid4vciOpenApiSidebarGroup',
+      'evidenceOid4vpOpenApiSidebarGroup',
     ],
     'Registry Evidence task group',
   );

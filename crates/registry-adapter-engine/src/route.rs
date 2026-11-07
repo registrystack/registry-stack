@@ -55,6 +55,7 @@ use crate::exchange::{
 use crate::host_protocol::{
     HostProtocolMethod, HostProtocolRequestContext, HostProtocolResponseRefusal,
     HostProtocolResponseVerifier, HostProtocolWireResponse, PreparedHostProtocolBody,
+    VerifiedHostProtocolParts,
 };
 use crate::language::{compile_selector, JsonPathResult, LanguageError};
 use crate::processor;
@@ -3689,6 +3690,10 @@ impl Run<'_, '_> {
                                 status,
                                 reply.trusted_headers,
                                 reply.body,
+                                self.evidence.map_or_else(
+                                    chrono::Utc::now,
+                                    crate::evidence::EvidenceAcquisition::evaluation_instant,
+                                ),
                             ))
                             .map_err(|refusal| {
                                 let mut failure = evidence_terminal_failure(
@@ -3704,12 +3709,33 @@ impl Run<'_, '_> {
                                 }
                                 failure
                             })?;
-                        let (body, valid_until, keep_response_headers) = verified.into_parts();
-                        if let (Some(acquisition), Some(valid_until)) = (self.evidence, valid_until)
-                        {
-                            acquisition
-                                .record_protocol_validity(to.uri.id.as_str(), valid_until)
-                                .await;
+                        let VerifiedHostProtocolParts {
+                            body,
+                            valid_until,
+                            keep_response_headers,
+                            attachment,
+                        } = verified.into_parts();
+                        if let Some(acquisition) = self.evidence {
+                            if let Some(valid_until) = valid_until {
+                                acquisition
+                                    .record_protocol_validity(to.uri.id.as_str(), valid_until)
+                                    .await;
+                            }
+                            if let Some(attachment) = attachment {
+                                acquisition
+                                    .record_protocol_attachment(attachment)
+                                    .await
+                                    .map_err(|error| {
+                                        let mut failure = evidence_terminal_failure(error);
+                                        attach_evidence_http_diagnostic(
+                                            &mut failure,
+                                            to.uri.id.as_str(),
+                                            Some(status),
+                                            Some(HostProtocolResponseRefusal::Protocol),
+                                        );
+                                        failure
+                                    })?;
+                            }
                         }
                         (
                             Ok(SentReply {

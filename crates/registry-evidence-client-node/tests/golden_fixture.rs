@@ -23,10 +23,10 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use p256::{ecdsa::SigningKey, elliptic_curve::Generate as _};
 use registry_evidence_client::{
-    AssuranceProfile, Evidence, EvidenceObjectType, EvidenceVerificationPolicyDocument,
-    ExpectedFormDocument, ExpectedOutputDocument, ExpectedScalarFormDocument,
-    ExpectedSubjectDocument, JwksDocument, PublicValue, SubjectBinding, SubjectBindingMode,
-    SupportedValue,
+    AssuranceProfile, ChannelKind, Evidence, EvidenceObjectType,
+    EvidenceVerificationPolicyDocument, ExpectedFormDocument, ExpectedOutputDocument,
+    ExpectedScalarFormDocument, ExpectedSubjectDocument, JwksDocument, PublicValue, SubjectBinding,
+    SubjectBindingMode, SupportedValue,
 };
 use registry_evidence_verifier::{
     model::FlattenedJws, verifier::verify_flattened_jws, EVIDENCE_JWS_CTY, EVIDENCE_JWS_TYP,
@@ -112,6 +112,8 @@ fn fixture_evidence(issued_at: DateTime<Utc>, valid_until: DateTime<Utc>) -> Evi
         schema: EVIDENCE_SCHEMA_V1.to_owned(),
         assurance_profile: AssuranceProfile::Local,
         subject_binding: SubjectBindingMode::AudienceScoped,
+        channel: ChannelKind::Source,
+        presented_credential: None,
         request_nonce: Some(FIXTURE_NONCE.to_owned()),
         id: "urn:example:evidence:node-fixture".to_owned(),
         evidence_type_name: EvidenceObjectType::Evidence,
@@ -174,6 +176,8 @@ fn fixture_policy_document(evidence: &Evidence) -> EvidenceVerificationPolicyDoc
             })
             .collect(),
         revoked_key_ids: Vec::new(),
+        accepted_channels: vec![ChannelKind::Source],
+        maximum_credential_age_seconds: None,
         maximum_assertion_lifetime_seconds: (FIXTURE_LIFETIME_DAYS * 24 * 60 * 60) as u64,
         clock_skew_seconds: 30,
     }

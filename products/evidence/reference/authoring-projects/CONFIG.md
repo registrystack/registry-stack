@@ -151,6 +151,46 @@ and the Source-to-Fact-to-Output flow without source values or secrets. `types`
 generates TypeScript or Python declarations from that same model. A scalar
 FactSet value does not become public merely because its type is visible.
 
+### Holder-presented acquisition
+
+A definition may add a second acquisition channel beside `source`:
+
+```yaml
+acquisition:
+  source: person-record
+  holderPresented:
+    source: wallet-session
+    selectorProfiles: [session-reference-v1]
+```
+
+The request's selector profile selects exactly one channel. A profile listed in
+`holderPresented.selectorProfiles` acquires only through
+`holderPresented.source`; every other profile acquires only through `source`.
+There is no fallback from one channel to the other, and grants keep restricting
+callers by selector profile (a grant has no `channels` member). `source` may be
+omitted only when `holderPresented.selectorProfiles` lists every selector
+profile the subject roles allow. Omitting `holderPresented` leaves the
+definition, its compiled configuration and its revision unchanged.
+
+Startup refuses, at the named member and without echoing a value:
+
+1. `holderPresented.source` naming a Source whose pack route does not reach the
+   `wallet-presentation-v1` host protocol, or `source` naming one that does
+   (`acquisition/holderPresented/source`, `acquisition/source`);
+2. a `holderPresented.selectorProfiles` list that is empty, repeats a profile,
+   names a profile no subject role allows, leaves an allowed profile without a
+   channel when `source` is absent (`acquisition/holderPresented/selectorProfiles`),
+   or the same Source on both channels;
+3. an `sd-jwt-vc` or `sd-jwt-vc-batch` representation on a definition with
+   `holderPresented`, which answers as signed JWS only (`representations`);
+4. a `channels` member on a grant, a grant whose selector profiles span both
+   channels (`subjects`), and a definition with neither `source` nor
+   `holderPresented` (`acquisition`).
+
+At run time a holder-presented channel whose Source returns no verified
+presented facts is a dependency failure, and a source channel whose Source
+returns them is a protocol refusal; neither releases a fact.
+
 ### Migrate a retired Source project
 
 Use a matching Evidence compiler and runtime that support pack Sources. The
@@ -519,6 +559,10 @@ apiVersion
 assertionDefinitions
 assertionDefinitions.*
 assertionDefinitions.*.acquisition
+assertionDefinitions.*.acquisition.holderPresented
+assertionDefinitions.*.acquisition.holderPresented.selectorProfiles
+assertionDefinitions.*.acquisition.holderPresented.selectorProfiles[]
+assertionDefinitions.*.acquisition.holderPresented.source
 assertionDefinitions.*.acquisition.source
 assertionDefinitions.*.derive
 assertionDefinitions.*.derive.function

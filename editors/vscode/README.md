@@ -18,9 +18,10 @@ Project roots use each product's own authoring marker:
 | Registry Render | `manifest.yaml` declaring `RenderBundle` |
 | Registry Manifest | `metadata.yaml` declaring `registry-manifest/v1`, or an explicit editor marker |
 | Evidence OID4VCI | An explicit editor marker naming its configuration document |
+| Evidence OID4VP | An explicit editor marker naming its configuration document |
 
-An explicit marker is `.registry-stack-editor/project.json` with a `product` of `manifest` or
-`evidence-oid4vci` and a `document` naming an existing YAML file relative to the project.
+An explicit marker is `.registry-stack-editor/project.json` with a `product` of `manifest`,
+`evidence-oid4vci`, or `evidence-oid4vp` and a `document` naming an existing YAML file relative to the project.
 The shared editor configurator writes it for adopter-chosen filenames. A generic `runtime.yaml`
 alone cannot distinguish products. Markers and declared document paths must be regular local files
 and directories.

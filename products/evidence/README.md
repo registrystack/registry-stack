@@ -331,7 +331,10 @@ definition and concept handles, required and optional output status, list
 cardinality, subject roles, selector profiles, value origins, and safe selector
 field validation metadata. An unentitled caller receives an empty list. An
 ambiguous authority shape is omitted because the corresponding evidence request
-would be denied.
+would be denied. A definition that accepts both acquisition channels is one
+entry: its `channel` names the channel of the entry's own `subjects` and its
+`alternatives` carry the other channel's request shape, only when the caller is
+entitled to it.
 
 This is requester-scoped discovery, not a public or process-wide catalog. The
 response excludes source URLs and identifiers, paths, projections, scripts,

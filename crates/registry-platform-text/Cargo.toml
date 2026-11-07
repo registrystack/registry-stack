@@ -1,0 +1,19 @@
+[package]
+name = "registry-platform-text"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Deterministic Unicode text normalisation primitives for Registry Stack."
+repository.workspace = true
+readme = "README.md"
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+hex.workspace = true
+icu_casemap.workspace = true
+icu_normalizer.workspace = true
+icu_properties.workspace = true
+sha2.workspace = true

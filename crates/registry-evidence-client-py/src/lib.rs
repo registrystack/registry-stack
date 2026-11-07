@@ -43,8 +43,8 @@ use convert::{
     batch_spec_from_json, config_from_parts_with_authorization_durations,
     datetime_from_unix_seconds, evidence_to_json, exchange_from_authorization_json, json_to_python,
     map_client_error, map_config_error, map_conversion_error, progressive_subjects_from_json,
-    python_to_json, selector_values_from_json, spec_from_json, subject_expectations_to_json,
-    ConversionError, MappedError,
+    python_to_json, selector_values_from_json, spec_channel_policy_from_json, spec_from_json,
+    subject_expectations_to_json, ConversionError, MappedError,
 };
 use registry_platform_crypto::PrivateJwk;
 
@@ -1098,8 +1098,11 @@ impl EvidenceClient {
         response_format="signed-jws",
         binding_receipt=None,
         subjects=None,
+        accepted_channels=None,
+        maximum_credential_age_seconds=None,
         **selectors
     ))]
+    #[allow(clippy::too_many_arguments)]
     fn request(
         &self,
         py: Python<'_>,
@@ -1107,8 +1110,27 @@ impl EvidenceClient {
         response_format: &str,
         binding_receipt: Option<PyRef<'_, SubjectBindingReceipt>>,
         subjects: Option<&Bound<'_, PyAny>>,
+        accepted_channels: Option<&Bound<'_, PyAny>>,
+        maximum_credential_age_seconds: Option<u64>,
         selectors: Option<&Bound<'_, PyDict>>,
     ) -> PyResult<Py<PyAny>> {
+        let mut channel_members = serde_json::Map::new();
+        if let Some(channels) = accepted_channels {
+            channel_members.insert(
+                "accepted_channels".to_owned(),
+                python_to_json(channels)
+                    .map_err(|error| to_py_err(py, &map_conversion_error(&error)))?,
+            );
+        }
+        if let Some(seconds) = maximum_credential_age_seconds {
+            channel_members.insert(
+                "maximum_credential_age_seconds".to_owned(),
+                serde_json::Value::from(seconds),
+            );
+        }
+        let channel_policy =
+            spec_channel_policy_from_json(&serde_json::Value::Object(channel_members))
+                .map_err(|error| to_py_err(py, &map_conversion_error(&error)))?;
         let selector_json = selectors
             .map(|value| python_to_json(value.as_any()))
             .transpose()
@@ -1143,7 +1165,8 @@ impl EvidenceClient {
             )
         })?;
         let mut request = RealAudienceScopedRequest::new(handle.to_owned(), selector_values)
-            .with_response_format(response_format);
+            .with_response_format(response_format)
+            .with_channel_policy(channel_policy);
         if let Some(subjects) = subject_values {
             request = request.with_subjects(subjects);
         }
@@ -1168,11 +1191,14 @@ impl EvidenceClient {
     ) -> PyResult<PreparedEvidenceRequest> {
         let spec_json =
             python_to_json(spec).map_err(|error| to_py_err(py, &map_conversion_error(&error)))?;
+        let channel_policy = spec_channel_policy_from_json(&spec_json)
+            .map_err(|error| to_py_err(py, &map_conversion_error(&error)))?;
         let spec = spec_from_json(&spec_json)
             .map_err(|error| to_py_err(py, &map_conversion_error(&error)))?;
         let prepared = self
             .inner
             .prepare(spec)
+            .and_then(|prepared| prepared.with_channel_policy(channel_policy))
             .map_err(|error| to_py_err(py, &map_client_error(&error)))?;
         Ok(PreparedEvidenceRequest { inner: prepared })
     }
@@ -1187,11 +1213,14 @@ impl EvidenceClient {
     ) -> PyResult<PreparedEvidenceRequestBatch> {
         let spec_json =
             python_to_json(spec).map_err(|error| to_py_err(py, &map_conversion_error(&error)))?;
+        let channel_policy = spec_channel_policy_from_json(&spec_json)
+            .map_err(|error| to_py_err(py, &map_conversion_error(&error)))?;
         let spec = batch_spec_from_json(&spec_json)
             .map_err(|error| to_py_err(py, &map_conversion_error(&error)))?;
         let prepared = self
             .inner
             .prepare_batch(spec)
+            .and_then(|prepared| prepared.with_channel_policy(channel_policy))
             .map_err(|error| to_py_err(py, &map_client_error(&error)))?;
         Ok(PreparedEvidenceRequestBatch { inner: prepared })
     }

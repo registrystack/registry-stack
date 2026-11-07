@@ -348,7 +348,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "The engine-executed field-encryption backfill: it seals the plaintext\ncolumn of every covered field into envelopes and blind indexes, chunk\nby chunk, with the journal and cursor effects each chunk commits. It\ncarries no authored SQL; its bound statement content is the canonical\nJSON of this descriptor step, so the ledger checksum pins it without a\nSQL artifact.",
+          "description": "The engine-executed field-encryption backfill: it seals the plaintext\ncolumn of every covered field into envelopes and blind indexes, chunk\nby chunk, with the journal and cursor effects each chunk commits. It\ncarries no authored SQL; its bound statement content is the canonical\nJSON of this descriptor step, so the ledger checksum pins it without a\nSQL artifact. A step whose objects name only blind-index columns is\ninstead the re-index of a changed normalization list: it re-derives\neach digest from the stored envelope and touches nothing else.",
           "properties": {
             "chunkSize": {
               "format": "uint32",

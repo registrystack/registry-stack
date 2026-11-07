@@ -36,8 +36,9 @@ use std::{fs, path::Path};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use evidence_client_sdk::{
-    AssuranceProfile, Evidence, EvidenceObjectType, JwksDocument, PublicValue, SubjectBinding,
-    SubjectBindingMode, SupportedValue,
+    AssertionChannel, AssuranceProfile, ChannelKind, Evidence, EvidenceObjectType, JwksDocument,
+    PresentedCredential, PublicValue, SubjectBinding, SubjectBindingMode, SubjectLinkMode,
+    SupportedValue,
 };
 use p256::{
     ecdsa::{signature::Signer, Signature, SigningKey},
@@ -158,6 +159,8 @@ fn evidence_for(request_nonce: &str, subject_binding: &str) -> Evidence {
         schema: EVIDENCE_SCHEMA_V1.to_owned(),
         assurance_profile: AssuranceProfile::Local,
         subject_binding: SubjectBindingMode::AudienceScoped,
+        channel: ChannelKind::Source,
+        presented_credential: None,
         request_nonce: Some(request_nonce.to_owned()),
         id: "urn:example:evidence:python-live".to_owned(),
         evidence_type_name: EvidenceObjectType::Evidence,
@@ -179,6 +182,29 @@ fn evidence_for(request_nonce: &str, subject_binding: &str) -> Evidence {
             provides_value_for: "urn:example:concept:status-holds".to_owned(),
             value: PublicValue::Boolean(true),
         }],
+    }
+}
+
+/// The same assertion, stated as obtained from a credential a holder
+/// presented, issued a day before the observation.
+fn holder_presented_evidence_for(request_nonce: &str, subject_binding: &str) -> Evidence {
+    let evidence = evidence_for(request_nonce, subject_binding);
+    let observed_at: DateTime<Utc> = evidence.observed_at.parse().expect("the instant parses");
+    let (channel, presented_credential) = AssertionChannel::HolderPresented(
+        PresentedCredential::new(
+            "national-id",
+            "https://issuer.example",
+            "https://credentials.example/identity",
+            observed_at - ChronoDuration::days(1),
+            SubjectLinkMode::AttributeMatch,
+        )
+        .expect("the credential members are in contract"),
+    )
+    .into_members();
+    Evidence {
+        channel,
+        presented_credential,
+        ..evidence
     }
 }
 
@@ -699,5 +725,125 @@ fn a_stale_fixture_response_fails_verification_against_a_live_prepared_request()
         // expected nonce included. `time` here would mean the fixture expired
         // instead, which is the outcome the pinned instant rules out.
         assert_eq!(code, "policy");
+    });
+}
+
+/// Prepare `spec_json`, answer it with a signed holder-presented assertion,
+/// and return the outcome of `verify`.
+fn verify_a_holder_presented_answer<R>(
+    spec_json: &serde_json::Value,
+    inspect: impl FnOnce(Python<'_>, PyResult<Bound<'_, PyAny>>) -> R,
+) -> R {
+    let signing_key = fresh_signing_key();
+    let trusted_jwks = trusted_jwks_json(&signing_key);
+    let subject_binding = format!("urn:evidence:subject:v1_{}", "A".repeat(43));
+
+    let runtime = tokio::runtime::Runtime::new().expect("the stub's runtime starts");
+    let server = runtime.block_on(MockServer::start());
+    let base_url = server.uri();
+
+    Python::attach(|py| {
+        let module = evidence_client_module(py);
+        let client_class = module.getattr("EvidenceClient").expect("the class exists");
+        let client = client_class
+            .call1((
+                base_url.as_str(),
+                python_json(py, &trusted_jwks),
+                Vec::<String>::new(),
+                "test-token",
+            ))
+            .expect("the client is constructed");
+        let prepared = client
+            .call_method1("prepare", (python_json(py, spec_json),))
+            .expect("the specification is accepted");
+        let nonce: String = prepared
+            .getattr("request_nonce")
+            .expect("the nonce getter exists")
+            .extract()
+            .expect("the nonce is a string");
+
+        let body = sign(
+            &holder_presented_evidence_for(&nonce, &subject_binding),
+            &signing_key,
+        );
+        runtime.block_on(
+            Mock::given(method("POST"))
+                .and(path_matcher("/v1/evidence"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .insert_header("traceparent", TRACEPARENT)
+                        .set_body_raw(body, EVIDENCE_JWS_MEDIA_TYPE),
+                )
+                .expect(1)
+                .mount(&server),
+        );
+        let response = client
+            .call_method1("send", (&prepared,))
+            .expect("the stub answers the one send this request allows");
+        inspect(py, client.call_method1("verify", (&prepared, &response)))
+    })
+}
+
+#[test]
+fn the_default_policy_refuses_a_holder_presented_assertion() {
+    verify_a_holder_presented_answer(&request_spec_json(), |py, outcome| {
+        let error = outcome.expect_err("source is the only channel accepted by default");
+        let kind: String = error
+            .value(py)
+            .getattr("kind")
+            .expect("the exception carries a kind")
+            .extract()
+            .expect("kind is a string");
+        assert_eq!(kind, "verification");
+    });
+}
+
+#[test]
+fn a_policy_accepting_holder_presented_exposes_the_presented_credential() {
+    let mut spec_json = request_spec_json();
+    spec_json["accepted_channels"] = serde_json::json!(["source", "holder-presented"]);
+    spec_json["maximum_credential_age_seconds"] = serde_json::json!(7 * 24 * 60 * 60);
+    verify_a_holder_presented_answer(&spec_json, |_py, outcome| {
+        let verified = outcome.expect("the accepted channel verifies");
+        let evidence = verified.getattr("evidence").expect("evidence is exposed");
+        let channel: String = evidence
+            .get_item("channel")
+            .expect("channel is present")
+            .extract()
+            .expect("channel is a string");
+        assert_eq!(channel, "holder-presented");
+        let credential = evidence
+            .get_item("presentedCredential")
+            .expect("presentedCredential is present");
+        let trust_entry: String = credential
+            .get_item("trustEntry")
+            .unwrap()
+            .extract()
+            .unwrap();
+        let subject_link: String = credential
+            .get_item("subjectLink")
+            .unwrap()
+            .extract()
+            .unwrap();
+        assert_eq!(trust_entry, "national-id");
+        assert_eq!(subject_link, "attribute-match");
+    });
+}
+
+#[test]
+fn a_credential_older_than_the_maximum_credential_age_is_refused() {
+    let mut spec_json = request_spec_json();
+    spec_json["accepted_channels"] = serde_json::json!(["holder-presented"]);
+    // The credential was issued a day before the observation.
+    spec_json["maximum_credential_age_seconds"] = serde_json::json!(60 * 60);
+    verify_a_holder_presented_answer(&spec_json, |py, outcome| {
+        let error = outcome.expect_err("the credential is older than the policy allows");
+        let kind: String = error
+            .value(py)
+            .getattr("kind")
+            .expect("the exception carries a kind")
+            .extract()
+            .expect("kind is a string");
+        assert_eq!(kind, "verification");
     });
 }

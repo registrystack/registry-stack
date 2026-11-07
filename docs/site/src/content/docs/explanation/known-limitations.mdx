@@ -140,6 +140,32 @@ a signed assertion proves what the configured service asserted rather than the s
   verifiable until `validUntil`; rotating a signing key does not invalidate an assertion while its
   public key remains available. The bounded OID4VCI adapter does not add assertion revocation or a
   general wallet lifecycle.
+- A `holder-presented` assertion proves that Evidence verified a presented credential, not that a
+  source holds the fact. Status checking is not available for presented credentials: a
+  `wallet-presentation-v1` configuration must state `status: not-checked`, so a revoked credential
+  is not detected at presentation. Only `dc+sd-jwt` credentials are requested; mdoc is not
+  supported. No wallet is verified against the OpenID4VP verifier until a reviewed device-run
+  receipt exists, and none does; see [Verify a wallet presentation](../../configure/evidence-oid4vp/#check-wallet-interoperability).
+  {/* Evidence: crates/registry-evidence/src/wallet_presentation.rs, StatusMode,
+       status_required_is_refused_with_a_message_that_says_why;
+       products/evidence/contracts/oid4vp-profile.yaml, not_built, interoperability_target;
+       products/evidence/examples/wallet-presentation/README.md, Limits. */}
+- With a cross-device flow, a holder can present into a session someone else started, by relay or by
+  cooperation. `possession` proves that a credential from a trusted issuer was presented into the
+  session, not that the presenter is the applicant. With `attribute-match`, the requirement's
+  derivation compares the disclosed claims with the one expected record, so another person's
+  credential yields a mismatch, not a match.
+  {/* Evidence: crates/registry-evidence/src/wallet_presentation.rs, subject_link,
+       AttributeMatchWithoutClaims; products/evidence/CONCEPT.md, 15.10 Linking a credential to
+       the subject. */}
+- The relying party that calls Registry Evidence states the session reference and the presenting
+  principal. Evidence refuses a principal that did not create the session, but it cannot tell which
+  relying party a session was meant for. Run one relying party per Evidence deployment that serves
+  wallet channels.
+  {/* Evidence: crates/registry-evidence/src/wallet_presentation.rs, ReadRequest,
+       WalletPresentationVerifier::verified (created_by);
+       products/evidence/examples/wallet-presentation/evidence.yaml, wallet-session selector
+       profile. */}
 - The request nonce is uninterpreted correlation data echoed into the payload. Registry Evidence
   never stores it or checks uniqueness, so it becomes a freshness check only when a verifier
   independently retains the value it sent.

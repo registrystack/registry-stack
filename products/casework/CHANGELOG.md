@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Adopt the shared platform implementations for the access-token algorithm
+  roster (still exactly RS256 and ES256), framework-rejection normalization
+  (400, 413, 415 and 422 answer the same `request.*` problem codes) and the
+  Prometheus exposition. The `/metrics` scrape keeps its series, values and
+  `text/plain; version=0.0.4` content type, with no behavior change.
+
 ## 0.45.0 - 2026-11-03
 
 - Add default-off delegated staff-reader policies and dedicated assigned-task

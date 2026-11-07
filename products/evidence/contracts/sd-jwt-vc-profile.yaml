@@ -20,6 +20,7 @@ response:
   permission_rule: Format selection creates no permission. Denial does not reveal which layer withheld it.
 protected_header:
   exact_members: [alg, typ, kid]
+  optional_members: [x5c]
   alg:
     allowed: [ES256]
     rule: Must equal the algorithm bound to the trusted key. Identical to the signed-JWS profile.
@@ -27,7 +28,27 @@ protected_header:
   kid:
     required: true
     rule: Resolved only within the verifier-pinned provider JWKS.
-  prohibited: [jku, x5u, jwk, x5c, crit, b64]
+  x5c:
+    issuance_rule: >-
+      Present only when the deployment configures a certificate identity
+      (signing.certificateChainFile) for the active signing key. It carries
+      that configured chain, leaf first, as standard base64 DER, and the
+      served JWKS entry for the same key carries the same chain as its x5c
+      member (RFC 7517 section 4.7). Without the identity the header has
+      exactly the members above, byte for byte as before. The signing key,
+      algorithm and kid are unchanged; the chain only certifies the existing
+      key for relying parties that resolve issuer keys through x5c.
+    verification_rule: >-
+      Evidence's own verifier accepts an x5c header only when the pinned key
+      selected by kid in the trusted JWKS carries an x5c member whose first
+      certificate equals the header's first certificate byte for byte. The
+      signature is still verified with the pinned key. The verifier never
+      trusts a chain on its own and never validates a chain to trust anchors;
+      trust stays pinned. A pinned key without an x5c member refuses any
+      x5c header, as before. A relying party that wants chain validation to
+      anchors uses a verifier built for that, such as the pure presentation
+      verifier, with its own anchors.
+  prohibited: [jku, x5u, jwk, crit, b64]
 claims:
   always_disclosed:
     iss:
@@ -160,6 +181,7 @@ profile_non_goals:
 verifier_rules:
   - Split the compact serialization on tilde with strict rejection of an empty issuer-signed segment.
   - Reject any protected member outside the exact allowlist and require the allowlisted algorithm.
+  - Accept an x5c header only when the pinned key selected by kid carries an x5c member whose first certificate equals the header's first certificate byte for byte; never trust or validate a chain the credential supplies.
   - Resolve kid only in the pinned provider key set.
   - Reject a policy-denied kid before selecting a pinned public key.
   - Verify the issuer-signed JWT signature before parsing or acting on any claim or disclosure.
@@ -190,3 +212,4 @@ negative_tests:
   - sec-release-bytes-pre-audited
   - sec-audit-response-protection-mode
   - sec-verifier-independent-expectations
+  - sec-x5c-pinned-leaf

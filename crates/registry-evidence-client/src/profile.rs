@@ -10,7 +10,7 @@ use std::{
 };
 
 use registry_platform_crypto::PrivateJwk;
-use registry_platform_httputil::{is_cloud_metadata_ip, valid_resource_uri};
+use registry_platform_httputil::{is_cloud_metadata_ip, normalize_ipv4_mapped, valid_resource_uri};
 use registry_platform_yaml::MAXIMUM_DOCUMENT_BYTES;
 use serde::{Deserialize, Serialize};
 
@@ -243,16 +243,6 @@ pub(crate) fn strict_fetch_refuses_literal_origin(url: &url::Url) -> bool {
                 || is_ipv6_unicast_link_local(ip)
                 || is_cloud_metadata_ip(IpAddr::V6(ip))
         }
-    }
-}
-
-fn normalize_ipv4_mapped(ip: IpAddr) -> IpAddr {
-    match ip {
-        IpAddr::V6(ip) => ip
-            .to_ipv4_mapped()
-            .map(IpAddr::V4)
-            .unwrap_or(IpAddr::V6(ip)),
-        IpAddr::V4(ip) => IpAddr::V4(ip),
     }
 }
 
@@ -543,6 +533,28 @@ mod tests {
     use std::fs;
 
     use super::*;
+
+    /// The strict fetch policy judges an IPv4-mapped IPv6 literal as the IPv4
+    /// address it carries, so a mapped private or loopback address is refused
+    /// and a mapped public address is not.
+    #[test]
+    fn strict_fetch_judges_an_ipv4_mapped_literal_as_its_ipv4_address() {
+        for (origin, refused) in [
+            ("https://[::ffff:127.0.0.1]/", true),
+            ("https://[::ffff:10.0.0.1]/", true),
+            ("https://[::ffff:169.254.169.254]/", true),
+            ("https://[::ffff:8.8.8.8]/", false),
+            ("https://[2001:4860:4860::8888]/", false),
+            ("https://[::1]/", true),
+        ] {
+            let url = url::Url::parse(origin).expect("the origin parses");
+            assert_eq!(
+                strict_fetch_refuses_literal_origin(&url),
+                refused,
+                "{origin}"
+            );
+        }
+    }
 
     #[test]
     fn secret_reference_debug_is_redacted() {

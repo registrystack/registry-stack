@@ -225,7 +225,7 @@ spelling is read as an alias.
 | `audit` | `hashKeyRef` and positive `hashKeyVersion`, both required. The referenced master contains at least 32 raw secret bytes; Rust derives the audit pseudonym key from it, and `hashKeyVersion` is stamped into every audit pseudonym so pseudonyms under different key material stay distinguishable. Every audit gate is fail closed whatever this section says. The runtime file owns the audit destination. |
 | `subjectBinding` | `secretRef` and positive `keyVersion`. The referenced master contains at least 32 raw secret bytes, uses a distinct reference, and must resolve to bytes distinct from the audit master. Rust derives purpose-scoped bindings over the complete canonical role/profile/value bundle, never per-field hashes. The remaining scope input is the requirement's binding mode: the authenticated audience for an audience-scoped requirement, the presented holder key thumbprint for a holder-bound one. The two derivations are domain-separated, so one mode's binding can never be read as the other's. |
 | `rateLimits` | Positive `requestsPerPrincipalPerMinute`, `burstPerPrincipal`, and `failedSelectorAttemptsPerPrincipalAuthorityPerMinute`. A request batch costs one token per item, up to sixteen for any audience-scoped requirement, and a holder-bound release one per holder key, up to `maximumHolderBoundBatchSize` when `sd-jwt-vc-batch` is enabled. A cost above `burstPerPrincipal` can never be admitted and is refused as `evidence.invalid-request` without `Retry-After`. `evidence check` and `evidencectl doctor` warn when the burst is below the largest such cost; set it to at least that cost unless capping batches is intended. Raw selector values never become rate-limit labels. |
-| `signing` | Exact keys are `format: flattened-jws-json`, `algorithm: ES256`, `activePublicJwkFile`, `publishedPublicJwkFiles`, `revokedKeyIds`, fixed `jwksPath`, `maximumAssertionValiditySeconds`, and `verifierClockSkewSeconds`. Every exact public EC P-256 JWK has a 43-character RFC 7638 thumbprint `kid`; active, published, and revoked sets are disjoint. Missing signing material fails readiness; there is no unsigned fallback. |
+| `signing` | Exact keys are `format: flattened-jws-json`, `algorithm: ES256`, `activePublicJwkFile`, optional `certificateChainFile`, `publishedPublicJwkFiles`, `revokedKeyIds`, fixed `jwksPath`, `maximumAssertionValiditySeconds`, and `verifierClockSkewSeconds`. Every exact public EC P-256 JWK has a 43-character RFC 7638 thumbprint `kid`; active, published, and revoked sets are disjoint. `certificateChainFile` names `public-keys/<kid>.chain.pem` for the active key's thumbprint: a PEM chain, leaf first, of at most three certificates whose leaf certifies the signing key and which is valid at startup. It puts `x5c` in SD-JWT VC issuer headers and on the active key's JWKS entry; omitted, neither carries `x5c`. Missing signing material fails readiness; there is no unsigned fallback. |
 | `responseFormats` | Closed unique list of 1 through 3 entries drawn from `signed-jws`, `unsigned-json`, and `sd-jwt-vc`. `signed-jws` must always be present; a bundle that omits it is rejected at startup. Every other format additionally requires the matched grant to permit it, and signing material must still be ready even for an unsigned response. |
 
 `audit.hashKeyRef` replaced `audit.hashSecretRef`, which is refused at startup
@@ -388,10 +388,22 @@ Each requirement declares these fields:
 | `disclosureGuard.families` | yes | Non-empty reviewed disclosure-family URI set. Reuse across enabled requirements is rejected; distinct labels still require human combined-disclosure review. |
 | `existenceDisclosure` | yes | Exactly `collapse-unresolved` in Version 1. |
 
-`acquisition` is a closed `{source: <id>}` object. The source id names one
-pack-route binding from `sources`. The route contains the complete reviewed
-sequence of provider operations, so the requirement cannot add a second source,
-choose a route from caller data, or extend the operation budget.
+`acquisition` is a closed object with `source: <id>`, an optional
+`holderPresented: {source: <id>, selectorProfiles: [<profile id>, ...]}`, or
+both. Each source id names one pack-route binding from `sources`. The route
+contains the complete reviewed sequence of provider operations, so the
+requirement cannot choose a route from caller data or extend the operation
+budget. With both channels, the request's selector profile selects exactly one
+of them with no fallback: a profile listed in `holderPresented.selectorProfiles`
+acquires only through `holderPresented.source`, any other only through `source`.
+`source` may be omitted only when `selectorProfiles` lists every selector
+profile the subject roles allow. `holderPresented.source` must name a Source
+whose pack route reaches the `wallet-presentation-v1` host protocol, and
+`source` must not. `selectorProfiles` is non-empty (at most 16), unique, and
+limited to profiles the subject roles allow. A requirement with `holderPresented`
+must offer only the signed JWS representation (`signed-jws`; unsigned JSON and SD-JWT VC are refused), and a grant has no `channels`
+member. Each refusal names its member, for example
+`/requirements/0/acquisition/holderPresented/source`.
 
 Supported concept forms, written as the concept's `type`, are `boolean`, `controlled-code`,
 `controlled-category`, `bounded-identifier`, `bounded-integer`, `bounded-decimal`, `date-bucket`,
@@ -1255,6 +1267,10 @@ rateLimits.requestsPerPrincipalPerMinute
 requirements
 requirements[]
 requirements[].acquisition
+requirements[].acquisition.holderPresented
+requirements[].acquisition.holderPresented.selectorProfiles
+requirements[].acquisition.holderPresented.selectorProfiles[]
+requirements[].acquisition.holderPresented.source
 requirements[].acquisition.source
 requirements[].concepts
 requirements[].concepts[]
@@ -1359,6 +1375,7 @@ service.trustDomain
 signing
 signing.activePublicJwkFile
 signing.algorithm
+signing.certificateChainFile
 signing.format
 signing.jwksPath
 signing.maximumAssertionValiditySeconds

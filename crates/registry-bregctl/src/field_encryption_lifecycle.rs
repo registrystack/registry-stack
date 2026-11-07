@@ -25,6 +25,7 @@ use registry_breg::field_encryption_backfill::{
     FieldEncryptionBackfillTimeouts, FieldEncryptionHistoryErasureError,
     FieldEncryptionHistoryErasureOutcome, FieldEncryptionHistoryErasureRequest,
 };
+use registry_breg::migration::AppliedFieldEncryptionKeySource;
 use registry_breg::migration_plan::ReviewedMigrationStepDescriptor;
 use registry_breg::package::{load_package, PackageError};
 use registry_breg::postgres::RegistryLockKey;
@@ -50,6 +51,8 @@ pub(crate) enum FieldEncryptionPreflightLifecycleError {
     TargetPackage(PackageError),
     DatabaseConfiguration,
     TimeoutConfiguration,
+    /// The configured field-encryption secret providers could not be built.
+    FieldEncryptionConfiguration,
     Runtime,
     Preflight(FieldEncryptionBackfillPreflightError),
 }
@@ -111,6 +114,24 @@ pub(crate) fn run_preflight(
     }) {
         return Err(FieldEncryptionPreflightLifecycleError::NoBackfillSteps);
     }
+    // A blind-index re-index re-derives digests from the stored envelopes, so
+    // its scan opens the configured field-encryption key. A plan that only
+    // seals plaintext reads no key material.
+    let reindexes = plan.migrations().iter().any(|migration| {
+        migration
+            .steps
+            .iter()
+            .any(|step| step.descriptor.is_blind_index_reindex())
+    });
+    let field_encryption_provider = if reindexes {
+        config.field_encryption().provider()
+    } else {
+        None
+    };
+    let field_encryption_secrets = field_encryption_provider
+        .map(|_| config.secret_resolver())
+        .transpose()
+        .map_err(|_| FieldEncryptionPreflightLifecycleError::FieldEncryptionConfiguration)?;
     let connection = config
         .migration_database_connection_config()
         .map_err(|_| FieldEncryptionPreflightLifecycleError::DatabaseConfiguration)?;
@@ -142,6 +163,11 @@ pub(crate) fn run_preflight(
                 plan,
                 predecessor_baseline: Some(predecessor.migration_baseline()),
                 target_package_revision: target.package_digest(),
+                field_encryption: field_encryption_provider
+                    .zip(field_encryption_secrets.as_ref())
+                    .map(|(provider, secrets)| {
+                        AppliedFieldEncryptionKeySource::new(provider, secrets)
+                    }),
             },
         ))
         .map_err(FieldEncryptionPreflightLifecycleError::Preflight)?;

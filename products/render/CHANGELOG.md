@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- The serving adapter installs its SIGTERM and Ctrl-C handlers together before
+  it accepts requests. The startup error for a handler that cannot be installed
+  now reads "cannot install the stop signal handlers", and a Ctrl-C handler that
+  cannot be installed now refuses startup instead of stopping the server after
+  it has started. The drain sequence and the signals that stop the process are
+  unchanged.
+
 - BREAKING: the runtime file's `auth` block is now `authentication`, the
   name other Registry Stack runtime files use; its `oidc` and `apiKeyRef`
   members are unchanged. A file that still says `auth` is refused with

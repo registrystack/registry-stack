@@ -157,31 +157,31 @@ exceptions:
   resolution: Permanent.
 - rule: CFG-NAME-2
   format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/$defs/OidcAlgorithm/enum/ES256
+  location: products/breg/generated/runtime/runtime.schema.json#/$defs/AccessTokenAlgorithm/enum/ES256
   class: protocol-constant
   reason: ES256 is written as JSON Web Algorithms (RFC 7518) defines it
   resolution: Permanent.
 - rule: CFG-NAME-2
   format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/$defs/OidcAlgorithm/enum/ES384
+  location: products/breg/generated/runtime/runtime.schema.json#/$defs/AccessTokenAlgorithm/enum/ES384
   class: protocol-constant
   reason: ES384 is written as JSON Web Algorithms (RFC 7518) defines it
   resolution: Permanent.
 - rule: CFG-NAME-2
   format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/$defs/OidcAlgorithm/enum/EdDSA
+  location: products/breg/generated/runtime/runtime.schema.json#/$defs/AccessTokenAlgorithm/enum/EdDSA
   class: protocol-constant
   reason: EdDSA is written as JOSE EdDSA (RFC 8037) defines it
   resolution: Permanent.
 - rule: CFG-NAME-2
   format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/$defs/OidcAlgorithm/enum/RS256
+  location: products/breg/generated/runtime/runtime.schema.json#/$defs/AccessTokenAlgorithm/enum/RS256
   class: protocol-constant
   reason: RS256 is written as JSON Web Algorithms (RFC 7518) defines it
   resolution: Permanent.
 - rule: CFG-NAME-2
   format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/$defs/OidcAlgorithm/enum/RS384
+  location: products/breg/generated/runtime/runtime.schema.json#/$defs/AccessTokenAlgorithm/enum/RS384
   class: protocol-constant
   reason: RS384 is written as JSON Web Algorithms (RFC 7518) defines it
   resolution: Permanent.
@@ -238,6 +238,54 @@ exceptions:
   location: products/evidence/generated/oid4vci-runtime/oid4vci-runtime.schema.json#/$defs/AccessTokenAlgorithm/enum/RS256
   class: protocol-constant
   reason: RS256 is written as JSON Web Algorithms (RFC 7518) defines it
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: evidence/oid4vp-runtime
+  location: products/evidence/generated/oid4vp-runtime/oid4vp-runtime.schema.json#/$defs/AccessTokenAlgorithm/enum/ES256
+  class: protocol-constant
+  reason: ES256 is written as JSON Web Algorithms (RFC 7518) defines it
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: evidence/oid4vp-runtime
+  location: products/evidence/generated/oid4vp-runtime/oid4vp-runtime.schema.json#/$defs/AccessTokenAlgorithm/enum/ES384
+  class: protocol-constant
+  reason: ES384 is written as JSON Web Algorithms (RFC 7518) defines it
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: evidence/oid4vp-runtime
+  location: products/evidence/generated/oid4vp-runtime/oid4vp-runtime.schema.json#/$defs/AccessTokenAlgorithm/enum/EdDSA
+  class: protocol-constant
+  reason: EdDSA is written as JOSE EdDSA (RFC 8037) defines it
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: evidence/oid4vp-runtime
+  location: products/evidence/generated/oid4vp-runtime/oid4vp-runtime.schema.json#/$defs/AccessTokenAlgorithm/enum/RS256
+  class: protocol-constant
+  reason: RS256 is written as JSON Web Algorithms (RFC 7518) defines it
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: evidence/oid4vp-runtime
+  location: products/evidence/generated/oid4vp-runtime/oid4vp-runtime.schema.json#/$defs/AccessTokenAlgorithm/enum/RS384
+  class: protocol-constant
+  reason: RS384 is written as JSON Web Algorithms (RFC 7518) defines it
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: evidence/oid4vp-runtime
+  location: products/evidence/generated/oid4vp-runtime/oid4vp-runtime.schema.json#/$defs/CredentialFormat/enum/dc+sd-jwt
+  class: protocol-constant
+  reason: dc+sd-jwt is written as SD-JWT VC and OpenID4VP 1.0 Appendix B.3 defines it
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: evidence/oid4vp-runtime
+  location: products/evidence/generated/oid4vp-runtime/oid4vp-runtime.schema.json#/$defs/ResponseEncryption/enum/A128GCM
+  class: protocol-constant
+  reason: A128GCM is written as JSON Web Algorithms (RFC 7518) section 5.3 defines it
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: evidence/oid4vp-runtime
+  location: products/evidence/generated/oid4vp-runtime/oid4vp-runtime.schema.json#/$defs/ResponseEncryption/enum/A256GCM
+  class: protocol-constant
+  reason: A256GCM is written as JSON Web Algorithms (RFC 7518) section 5.3 defines it
   resolution: Permanent.
 - rule: CFG-NAME-2
   format: render/bundle

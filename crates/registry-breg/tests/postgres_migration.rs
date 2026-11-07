@@ -9,11 +9,13 @@ use std::{collections::BTreeSet, fs, os::unix::fs::PermissionsExt as _, time::Du
 
 use postgres_harness::TestDatabase;
 use registry_breg::compiler::{compile_project, module_digest, CompileProfile};
+use registry_breg::contract::NormalizationStep;
 use registry_breg::contract::{parse_module_yaml, parse_project_yaml};
-use registry_breg::field_encryption::FieldEncryptionProvider;
+use registry_breg::field_encryption::{FieldEncryptionProvider, FieldEncryptionService};
 use registry_breg::field_encryption_backfill::{
-    preflight_field_encryption_backfill, FieldEncryptionBackfillPreflightRequest,
-    FieldEncryptionBackfillTimeouts,
+    preflight_field_encryption_backfill, BlindIndexReindexFieldPreflight,
+    BlindIndexReindexStepPreflight, FieldEncryptionBackfillPreflightError,
+    FieldEncryptionBackfillPreflightRequest, FieldEncryptionBackfillTimeouts,
 };
 use registry_breg::migration::{
     apply_verified_package, bind_active_package, plan_verified_package, read_activation_status,
@@ -32,6 +34,7 @@ use registry_breg::migration_plan::{
 use registry_breg::migration_reconcile::{
     reconcile_failed_migration, ReconcileAudit, ReconcileError, ReconcileOutcome, ReconcileReport,
     ReconcileRequest, ReconcileTimeouts, UNRESOLVABLE_CATALOG_UNMATCHED,
+    UNRESOLVABLE_STEPS_COMMITTED,
 };
 use registry_breg::package::{
     compiled_registry_change_set, load_package, prepare_package, CompiledRegistryChangeClass,
@@ -40,10 +43,11 @@ use registry_breg::package::{
     PreparedPackage, VerifiedPackage,
 };
 use registry_breg::postgres::{
-    find_runtime_write_authority_for_test, index_revisions_for_test, install_compiled_schema,
-    managed_schema_fingerprint, rehearse_successor_migration, verify_catalog_identity_for_catalog,
-    ExpectedManagedCatalog, ExpectedRegistryIdentity, MigrationRehearsalError, PostgresFailure,
-    PostgresKernelError, RehearsalAssertionPhase, RehearsalOutcome, RuntimeWriteAuthority,
+    begin_record_transaction, find_runtime_write_authority_for_test, index_revisions_for_test,
+    install_compiled_schema, managed_schema_fingerprint, rehearse_successor_migration,
+    verify_catalog_identity_for_catalog, ClaimContext, ExpectedManagedCatalog,
+    ExpectedRegistryIdentity, MigrationRehearsalError, PostgresFailure, PostgresKernelError,
+    RegistryLockKey, RehearsalAssertionPhase, RehearsalOutcome, RuntimeWriteAuthority,
     SuccessorMigrationRehearsal,
 };
 use registry_breg::CompiledRegistry;
@@ -4534,6 +4538,7 @@ async fn real_postgres_field_encryption_flip_seals_resumes_and_drops_the_plainte
                 .expect("the successor carries its reviewed plan"),
             predecessor_baseline: Some(&predecessor_baseline),
             target_package_revision: package.package_digest(),
+            field_encryption: None,
         },
     )
     .await
@@ -4784,9 +4789,9 @@ async fn real_postgres_field_encryption_flip_retains_pre_boundary_plaintext_hist
 
 /// The normalized-duplicate preflight: two rows whose plaintexts collide only
 /// after the declared blind-index normalization refuse the whole flip before
-/// any chunk seals, naming the duplicate record ids and never the values. The
-/// plaintext column and every value survive untouched, and no flip boundary
-/// is recorded.
+/// any chunk seals or any compiler DDL commits, naming the duplicate record
+/// ids and never the values. The plaintext column and every value survive
+/// untouched, no flip boundary is recorded, and the target stays revertible.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_postgres_field_encryption_flip_refuses_normalized_duplicates_value_free() {
     let database = TestDatabase::create(1).await;
@@ -4856,6 +4861,7 @@ async fn real_postgres_field_encryption_flip_refuses_normalized_duplicates_value
                 .expect("the successor carries its reviewed plan"),
             predecessor_baseline: Some(&predecessor_baseline),
             target_package_revision: package.package_digest(),
+            field_encryption: None,
         },
     )
     .await
@@ -4893,25 +4899,26 @@ async fn real_postgres_field_encryption_flip_refuses_normalized_duplicates_value
     assert_plaintext_column_present(&database, &prior).await;
 
     let entity = &candidate.entities()["asset"];
-    let envelope = quote(&entity.fields["secret"].physical_name);
     let table = quote(&entity.physical_table);
-    let unsealed = database
+    let envelope_columns: i64 = database
         .admin
         .query_one(
-            &format!(
-                "SELECT count(*) FILTER (WHERE {envelope} IS NOT NULL)::bigint,
-                        count(*)::bigint
-                 FROM registry_data.{table}"
-            ),
-            &[],
+            "SELECT count(*)
+             FROM information_schema.columns
+             WHERE table_schema = 'registry_data'
+               AND table_name = $1
+               AND column_name = $2",
+            &[
+                &entity.physical_table,
+                &entity.fields["secret"].physical_name,
+            ],
         )
         .await
-        .expect("envelope column state reads");
-    assert_eq!(unsealed.get::<_, i64>(0), 0, "no row was sealed");
+        .expect("envelope column presence reads")
+        .get(0);
     assert_eq!(
-        unsealed.get::<_, i64>(1),
-        secrets.len() as i64,
-        "the compiler-added envelope column exists"
+        envelope_columns, 0,
+        "the preflight refuses before the compiler DDL adds the envelope column"
     );
 
     let plaintext_column = quote(&prior.entities()["asset"].fields["secret"].physical_name);
@@ -4932,6 +4939,13 @@ async fn real_postgres_field_encryption_flip_refuses_normalized_duplicates_value
         "every plaintext value survives untouched"
     );
     assert_flip_boundary_absent(&database).await;
+
+    let assessed = reconcile(&database, &package, &active, &prior, false)
+        .await
+        .expect("the refused flip is assessed");
+    assert_eq!(assessed.outcome, ReconcileOutcome::Revertible);
+    assert_eq!(assessed.active_catalog_finding, None);
+    assert_eq!(assessed.durable_step_progress, Some(false));
     database.cleanup().await;
 }
 
@@ -5074,6 +5088,22 @@ enum Variant {
     PatternQuoted,
     EncryptedBase,
     EncryptedFlipOn,
+    /// The encrypted unique lookup after its normalization list gains the
+    /// Unicode steps, over the same column and uniqueness as `EncryptedFlipOn`.
+    EncryptedUnicodeLookup,
+    /// An encrypted unique lookup that strips separators, the predecessor
+    /// shape of a re-index whose new digests can meet stored ones.
+    EncryptedSeparatorLookup,
+    /// `EncryptedFlipOn` with `nfc` added before `uppercase`.
+    EncryptedNfcUppercaseLookup,
+    /// Two encrypted unique lookups, `secret` and `alias`, both upper-casing.
+    EncryptedPairLookups,
+    /// `EncryptedPairLookups` with `nfc` added to both lists.
+    EncryptedPairNfcLookups,
+    /// An encrypted lookup that is not unique, upper-casing.
+    EncryptedSharedLookup,
+    /// `EncryptedSharedLookup` with `nfc` added to its list.
+    EncryptedSharedNfcLookup,
 }
 
 #[derive(Clone, Copy)]
@@ -5460,10 +5490,37 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
         Variant::EncryptedFlipOn => {
             r#",{"id":"secret","type":"string","maximumLength":256,"classification":"restricted","encrypted":true,"lookup":{"normalization":["uppercase"],"unique":true}}"#
         }
+        Variant::EncryptedUnicodeLookup => {
+            r#",{"id":"secret","type":"string","maximumLength":256,"classification":"restricted","encrypted":true,"lookup":{"normalization":["nfc","case-fold"],"unique":true}}"#
+        }
+        Variant::EncryptedSeparatorLookup => {
+            r#",{"id":"secret","type":"string","maximumLength":256,"classification":"restricted","encrypted":true,"lookup":{"normalization":["remove-separators"],"unique":true}}"#
+        }
+        Variant::EncryptedNfcUppercaseLookup | Variant::EncryptedPairNfcLookups => {
+            r#",{"id":"secret","type":"string","maximumLength":256,"classification":"restricted","encrypted":true,"lookup":{"normalization":["nfc","uppercase"],"unique":true}}"#
+        }
+        Variant::EncryptedPairLookups => {
+            r#",{"id":"secret","type":"string","maximumLength":256,"classification":"restricted","encrypted":true,"lookup":{"normalization":["uppercase"],"unique":true}}"#
+        }
+        Variant::EncryptedSharedLookup => {
+            r#",{"id":"secret","type":"string","maximumLength":256,"classification":"restricted","encrypted":true,"lookup":{"normalization":["uppercase"],"unique":false}}"#
+        }
+        Variant::EncryptedSharedNfcLookup => {
+            r#",{"id":"secret","type":"string","maximumLength":256,"classification":"restricted","encrypted":true,"lookup":{"normalization":["nfc","uppercase"],"unique":false}}"#
+        }
+        _ => "",
+    };
+    let alias = match variant {
+        Variant::EncryptedPairLookups => {
+            r#",{"id":"alias","type":"string","maximumLength":256,"classification":"restricted","encrypted":true,"lookup":{"normalization":["uppercase"],"unique":true}}"#
+        }
+        Variant::EncryptedPairNfcLookups => {
+            r#",{"id":"alias","type":"string","maximumLength":256,"classification":"restricted","encrypted":true,"lookup":{"normalization":["nfc","uppercase"],"unique":true}}"#
+        }
         _ => "",
     };
     format!(
-        r#"{{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[{{"id":"asset","primaryDataset":"migration-registry","route":"assets","mutationMode":"create-only","fields":[{{"id":"code","type":"string","maximumLength":8,"classification":"internal"}},{{"id":"rank","type":"int64","classification":"internal"{rank_required}}}{legacy}{batch}{secret}],"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted", "id":"reader","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]}}]}}]}}"#
+        r#"{{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[{{"id":"asset","primaryDataset":"migration-registry","route":"assets","mutationMode":"create-only","fields":[{{"id":"code","type":"string","maximumLength":8,"classification":"internal"}},{{"id":"rank","type":"int64","classification":"internal"{rank_required}}}{legacy}{batch}{secret}{alias}],"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted", "id":"reader","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]}}]}}]}}"#
     )
     .into_bytes()
 }
@@ -8183,4 +8240,1012 @@ async fn real_postgres_encryption_erasure_refuses_missing_indexes_and_activation
         task.abort();
         database.cleanup().await;
     }
+}
+
+/// A reviewed blind-index re-index over rows an active registry already
+/// holds: the predecessor and the successor declare the same encrypted
+/// lookups, and only their normalization lists differ.
+struct ReindexScenario {
+    database: TestDatabase,
+    prior: CompiledRegistry,
+    candidate: CompiledRegistry,
+    active: ExpectedRegistryIdentity,
+    package: VerifiedPackage,
+    keys: FlipKeySource,
+    service: FieldEncryptionService,
+    successor_normalization: Vec<NormalizationStep>,
+}
+
+struct ReindexScenarioRequest<'a> {
+    prior_variant: Variant,
+    prior_normalization: &'a [NormalizationStep],
+    candidate_variant: Variant,
+    successor_normalization: &'a [NormalizationStep],
+    /// The plaintext of each seeded record, sealed under the predecessor's
+    /// normalization; record ids count up from one.
+    secrets: &'a [Option<&'a str>],
+    /// The `alias` plaintext of each seeded record under the same lists, one
+    /// per secret; empty when the variants declare no `alias`.
+    aliases: &'a [Option<&'a str>],
+    /// The `maximumTotalRows` of every re-index step.
+    max_total_rows: u64,
+}
+
+fn blind_column(registry: &CompiledRegistry, field: &str) -> String {
+    registry.entities()["asset"].fields[field]
+        .encryption
+        .as_ref()
+        .and_then(|encryption| encryption.blind_index.as_ref())
+        .expect("the field declares a blind index")
+        .physical_name
+        .clone()
+}
+
+/// Seal one seeded plaintext the way a write under the predecessor stored it.
+fn seed_seal(
+    service: &FieldEncryptionService,
+    field: &str,
+    record_id: Uuid,
+    normalization: &[NormalizationStep],
+    plaintext: Option<&str>,
+) -> (Option<Vec<u8>>, Option<Vec<u8>>) {
+    let Some(plaintext) = plaintext else {
+        return (None, None);
+    };
+    let envelope = service
+        .seal("asset", field, &record_id.to_string(), plaintext.as_bytes())
+        .expect("the seed value seals");
+    let digest = service
+        .blind_index(
+            "asset",
+            field,
+            &FieldEncryptionService::normalize(normalization, plaintext),
+        )
+        .to_vec();
+    (Some(envelope), Some(digest))
+}
+
+async fn reindex_scenario(request: ReindexScenarioRequest<'_>) -> ReindexScenario {
+    assert!(request.aliases.is_empty() || request.aliases.len() == request.secrets.len());
+    let database = TestDatabase::create(1).await;
+    database
+        .admin
+        .batch_execute("CREATE EXTENSION btree_gist")
+        .await
+        .expect("administrator installs the required extension");
+    let prior = compile_variant(request.prior_variant);
+    let fingerprint = initial_fingerprint(&database, &prior).await;
+    let initial = prepare_and_load_initial_variant(request.prior_variant, &prior, &fingerprint);
+    let keys = flip_key_source();
+    let active = apply_verified_package(
+        self::request(&database, &initial, ApplyPrecondition::InitialActivation)
+            .with_field_encryption_key_source(AppliedFieldEncryptionKeySource::new(
+                &keys.provider,
+                &keys.secrets,
+            )),
+    )
+    .await
+    .expect("the encrypted predecessor activates");
+    let service = FieldEncryptionService::open_existing(
+        &keys.provider,
+        prior.registry_id(),
+        &keys.secrets,
+        &database.admin,
+    )
+    .await
+    .expect("the activated key state opens");
+
+    let entity = &prior.entities()["asset"];
+    let table = quote(&entity.physical_table);
+    let code = quote(&entity.fields["code"].physical_name);
+    let mut columns = vec![
+        quote(&entity.fields["secret"].physical_name),
+        quote(&blind_column(&prior, "secret")),
+    ];
+    if !request.aliases.is_empty() {
+        columns.push(quote(&entity.fields["alias"].physical_name));
+        columns.push(quote(&blind_column(&prior, "alias")));
+    }
+    let placeholders = (0..columns.len())
+        .map(|index| format!("${}", index + 4))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let insert = format!(
+        "INSERT INTO registry_data.{table}
+             (record_id, active_package_revision, {code}, {})
+         VALUES ($1, $2, $3, {placeholders})",
+        columns.join(", ")
+    );
+    for (index, secret) in request.secrets.iter().enumerate() {
+        let record_id = Uuid::from_u128(index as u128 + 1);
+        let row_code = format!("c{index}");
+        let (secret_envelope, secret_digest) = seed_seal(
+            &service,
+            "secret",
+            record_id,
+            request.prior_normalization,
+            *secret,
+        );
+        let (alias_envelope, alias_digest) = seed_seal(
+            &service,
+            "alias",
+            record_id,
+            request.prior_normalization,
+            request.aliases.get(index).copied().flatten(),
+        );
+        let mut parameters: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = vec![
+            &record_id,
+            &active.activation_id,
+            &row_code,
+            &secret_envelope,
+            &secret_digest,
+        ];
+        if !request.aliases.is_empty() {
+            parameters.push(&alias_envelope);
+            parameters.push(&alias_digest);
+        }
+        database
+            .admin
+            .execute(&insert, &parameters)
+            .await
+            .expect("administrator seeds a sealed row");
+    }
+
+    let candidate = compile_variant(request.candidate_variant);
+    let source = blind_index_reindex_source(
+        &active,
+        &prior,
+        &candidate,
+        request.secrets.len(),
+        request.max_total_rows,
+    );
+    let package = prepare_and_load_reviewed(
+        &active,
+        &prior,
+        request.candidate_variant,
+        &active.schema_fingerprint,
+        source,
+    );
+    ReindexScenario {
+        database,
+        prior,
+        candidate,
+        active,
+        package,
+        keys,
+        service,
+        successor_normalization: request.successor_normalization.to_vec(),
+    }
+}
+
+/// The reviewed plan of a re-index: one engine step per changed lookup, in
+/// field order `secret` then `alias`, each naming only that blind-index
+/// column, with no authored SQL, no history choice, and no column change,
+/// since a lookup keeps its column and uniqueness.
+fn blind_index_reindex_source(
+    current: &ExpectedRegistryIdentity,
+    prior: &CompiledRegistry,
+    candidate: &CompiledRegistry,
+    rehearsed_rows: usize,
+    max_total_rows: u64,
+) -> ReviewedMigrationSource {
+    let changes = compiled_registry_change_set(prior, candidate, &current.package_digest)
+        .changes
+        .into_iter()
+        .filter(|change| change.code == CompiledRegistryChangeCode::FieldLookupChanged)
+        .collect::<Vec<_>>();
+    assert!(
+        !changes.is_empty(),
+        "the normalization change is classified"
+    );
+    assert!(changes
+        .iter()
+        .all(|change| change.class == CompiledRegistryChangeClass::DataBackfillRequired));
+    let entity = &candidate.entities()["asset"];
+    let fields = ["secret", "alias"]
+        .into_iter()
+        .filter(|field| {
+            changes
+                .iter()
+                .any(|change| change.target.member_id.as_deref() == Some(*field))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(fields.len(), changes.len());
+    let base = "modules/core/migrations/reindex-secret";
+    let pre_path = format!("{base}/assertions/pre.sql");
+    let post_path = format!("{base}/assertions/post.sql");
+    let assertion_sql = format!(
+        "SELECT pg_catalog.count(*) >= 0 FROM registry_data.{}",
+        entity.physical_table
+    );
+    let steps = fields
+        .iter()
+        .map(
+            |field| ReviewedMigrationStepDescriptor::FieldEncryptionBackfill {
+                id: format!("reindex-{field}-lookup"),
+                entity_id: "asset".to_owned(),
+                objects: vec![ReviewedMigrationObject {
+                    schema: "registry_data".to_owned(),
+                    table: entity.physical_table.clone(),
+                    entity_id: "asset".to_owned(),
+                    kind: ReviewedMigrationObjectKind::Field,
+                    member_id: Some(format!("{field}#lookup")),
+                    physical_name: blind_column(candidate, field),
+                }],
+                cursor: ChunkCursorProtocol::RecordIdUuidArray,
+                chunk_size: 2,
+                max_total_rows,
+                lock_timeout_ms: 50,
+                statement_timeout_ms: 5_000,
+            },
+        )
+        .collect();
+    let descriptor = ReviewedMigrationDescriptor {
+        id: "reindex-secret".to_owned(),
+        change_class: CompiledRegistryChangeClass::DataBackfillRequired,
+        covers: changes.iter().map(ReviewedChangeCover::from).collect(),
+        recovery: ReviewedMigrationRecovery::ExactTargetResume,
+        lock_timeout_ms: 50,
+        statement_timeout_ms: 5_000,
+        steps,
+        pre_assertions: vec![ReviewedMigrationAssertionDescriptor {
+            id: "pre".to_owned(),
+            sql_path: pre_path.clone(),
+        }],
+        post_assertions: vec![ReviewedMigrationAssertionDescriptor {
+            id: "post".to_owned(),
+            sql_path: post_path.clone(),
+        }],
+        rehearsal_receipt_path: format!("{base}/rehearsal.json"),
+        backup_binding_path: None,
+        history: None,
+    };
+    // The rehearsal ran over a representative fixture, so it never reports
+    // more rows than the reviewed ceiling, whatever the live table holds.
+    let rehearsed = (rehearsed_rows as u64).min(max_total_rows);
+    reviewed_source(ReviewedSourceRequest {
+        descriptor,
+        current,
+        final_fingerprint: &current.schema_fingerprint,
+        steps: Vec::new(),
+        pre: (pre_path, assertion_sql.clone()),
+        post: (post_path, assertion_sql),
+        row_assertions: fields
+            .iter()
+            .map(|field| RehearsalRowAssertion {
+                step_id: format!("reindex-{field}-lookup"),
+                affected_rows: rehearsed,
+            })
+            .collect(),
+    })
+}
+
+async fn stored_envelopes_and_digests(
+    scenario: &ReindexScenario,
+) -> Vec<(Option<Vec<u8>>, Option<Vec<u8>>)> {
+    let entity = &scenario.candidate.entities()["asset"];
+    let envelope = quote(&entity.fields["secret"].physical_name);
+    let blind = quote(
+        &entity.fields["secret"]
+            .encryption
+            .as_ref()
+            .and_then(|encryption| encryption.blind_index.as_ref())
+            .expect("the candidate declares a blind index")
+            .physical_name,
+    );
+    scenario
+        .database
+        .admin
+        .query(
+            &format!(
+                "SELECT {envelope}, {blind} FROM registry_data.{} ORDER BY record_id",
+                quote(&entity.physical_table)
+            ),
+            &[],
+        )
+        .await
+        .expect("stored columns read")
+        .into_iter()
+        .map(|row| (row.get(0), row.get(1)))
+        .collect()
+}
+
+/// Rows sealed under the old normalization list are re-indexed in resumable
+/// chunks: the digests follow the new list, envelopes are untouched, and the
+/// unique index then refuses a record whose spelling is Unicode-equivalent to
+/// a stored one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_blind_index_reindex_resumes_and_makes_the_unique_index_unicode_aware() {
+    let nfc = "Zo\u{eb}";
+    let nfd = "Zoe\u{308}";
+    let secrets = [
+        Some(nfc),
+        Some("ana"),
+        Some("Stra\u{df}e"),
+        Some("Bob"),
+        Some("Carol"),
+        None,
+    ];
+    let scenario = reindex_scenario(ReindexScenarioRequest {
+        prior_variant: Variant::EncryptedFlipOn,
+        prior_normalization: &[NormalizationStep::Uppercase],
+        candidate_variant: Variant::EncryptedUnicodeLookup,
+        successor_normalization: &[NormalizationStep::Nfc, NormalizationStep::CaseFold],
+        secrets: &secrets,
+        aliases: &[],
+        max_total_rows: 10_000,
+    })
+    .await;
+    let before = stored_envelopes_and_digests(&scenario).await;
+    let old_digest_of_nfd = scenario
+        .service
+        .blind_index(
+            "asset",
+            "secret",
+            &FieldEncryptionService::normalize(&[NormalizationStep::Uppercase], nfd),
+        )
+        .to_vec();
+    assert_ne!(
+        before[0].1.as_ref(),
+        Some(&old_digest_of_nfd),
+        "the old list keeps the two spellings apart, which is the defect"
+    );
+
+    let interrupted = apply_flip(
+        &scenario.database,
+        &scenario.package,
+        &scenario.active,
+        &scenario.keys,
+        Some(1),
+    )
+    .await;
+    assert_eq!(
+        interrupted.expect_err("the injected fault interrupts the re-index after one chunk"),
+        MigrationError::ApplyFailed
+    );
+    let checkpoint = step_snapshot(
+        &scenario.database,
+        &scenario.package,
+        "reindex-secret-lookup",
+    )
+    .await;
+    assert_eq!(checkpoint.0, "applying");
+    assert_eq!(checkpoint.1, Some(Uuid::from_u128(2)));
+    assert_eq!(checkpoint.2, 2);
+    // A committed chunk cannot be reverted: reconcile names the steps only
+    // the same target can finish, and the retried apply resumes them.
+    let assessed = reconcile(
+        &scenario.database,
+        &scenario.package,
+        &scenario.active,
+        &scenario.prior,
+        false,
+    )
+    .await
+    .expect("an interrupted re-index is an inspectable reconcile finding");
+    assert_eq!(assessed.outcome, ReconcileOutcome::Unresolvable);
+    assert_eq!(assessed.durable_step_progress, Some(true));
+    assert_eq!(
+        assessed.unresolvable_reason,
+        Some(UNRESOLVABLE_STEPS_COMMITTED)
+    );
+    assert!(!assessed.executed);
+
+    let target = apply_flip(
+        &scenario.database,
+        &scenario.package,
+        &scenario.active,
+        &scenario.keys,
+        None,
+    )
+    .await
+    .expect("the exact interrupted re-index target resumes and completes");
+    assert_ready_target(&scenario.database, &target).await;
+    let completed = step_snapshot(
+        &scenario.database,
+        &scenario.package,
+        "reindex-secret-lookup",
+    )
+    .await;
+    assert_eq!(completed.0, "completed");
+    assert_eq!(
+        completed.2, 6,
+        "the resume processes every valued or null row exactly once"
+    );
+
+    let after = stored_envelopes_and_digests(&scenario).await;
+    assert_eq!(after.len(), secrets.len());
+    for (index, secret) in secrets.iter().enumerate() {
+        assert_eq!(
+            after[index].0, before[index].0,
+            "the re-index never rewrites an envelope"
+        );
+        let expected = secret.map(|plaintext| {
+            scenario
+                .service
+                .blind_index(
+                    "asset",
+                    "secret",
+                    &FieldEncryptionService::normalize(
+                        &scenario.successor_normalization,
+                        plaintext,
+                    ),
+                )
+                .to_vec()
+        });
+        assert_eq!(after[index].1, expected, "row {index} follows the new list");
+    }
+    assert_eq!(
+        after[2].1,
+        Some(
+            scenario
+                .service
+                .blind_index(
+                    "asset",
+                    "secret",
+                    &FieldEncryptionService::normalize(
+                        &scenario.successor_normalization,
+                        "STRASSE",
+                    ),
+                )
+                .to_vec()
+        ),
+        "the sharp s and its expansion share one digest after the re-index"
+    );
+
+    // A record spelled in the decomposed form of a stored name derives the
+    // stored digest, so the unique index refuses it.
+    let entity = &scenario.candidate.entities()["asset"];
+    let table = quote(&entity.physical_table);
+    let code = quote(&entity.fields["code"].physical_name);
+    let envelope = quote(&entity.fields["secret"].physical_name);
+    let blind = quote(
+        &entity.fields["secret"]
+            .encryption
+            .as_ref()
+            .and_then(|encryption| encryption.blind_index.as_ref())
+            .expect("the candidate declares a blind index")
+            .physical_name,
+    );
+    let duplicate_id = Uuid::from_u128(100);
+    let duplicate_envelope = scenario
+        .service
+        .seal("asset", "secret", &duplicate_id.to_string(), nfd.as_bytes())
+        .expect("the duplicate seals");
+    let duplicate_digest = scenario
+        .service
+        .blind_index(
+            "asset",
+            "secret",
+            &FieldEncryptionService::normalize(&scenario.successor_normalization, nfd),
+        )
+        .to_vec();
+    let refusal = scenario
+        .database
+        .admin
+        .execute(
+            &format!(
+                "INSERT INTO registry_data.{table}
+                     (record_id, active_package_revision, {code}, {envelope}, {blind})
+                 VALUES ($1, $2, 'dup', $3, $4)"
+            ),
+            &[
+                &duplicate_id,
+                &target.activation_id,
+                &duplicate_envelope,
+                &duplicate_digest,
+            ],
+        )
+        .await
+        .expect_err("the unique blind index refuses the Unicode-equivalent spelling");
+    assert_eq!(
+        refusal.code(),
+        Some(&tokio_postgres::error::SqlState::UNIQUE_VIOLATION)
+    );
+    scenario.database.cleanup().await;
+}
+
+/// Two records that differ only by Unicode spelling collide under the new
+/// list: the re-index refuses before any digest changes, names record ids
+/// and no value, and leaves the step unstarted.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_blind_index_reindex_refuses_unicode_equivalent_duplicates_value_free() {
+    let nfc = "Zo\u{eb}-canary";
+    let nfd = "Zoe\u{308}-canary";
+    let secrets = [Some(nfc), Some("ana"), Some(nfd)];
+    let scenario = reindex_scenario(ReindexScenarioRequest {
+        prior_variant: Variant::EncryptedFlipOn,
+        prior_normalization: &[NormalizationStep::Uppercase],
+        candidate_variant: Variant::EncryptedUnicodeLookup,
+        successor_normalization: &[NormalizationStep::Nfc, NormalizationStep::CaseFold],
+        secrets: &secrets,
+        aliases: &[],
+        max_total_rows: 10_000,
+    })
+    .await;
+    let before = stored_envelopes_and_digests(&scenario).await;
+    let error = apply_flip(
+        &scenario.database,
+        &scenario.package,
+        &scenario.active,
+        &scenario.keys,
+        None,
+    )
+    .await
+    .expect_err("the Unicode-equivalent pair refuses the re-index");
+    assert_eq!(
+        error,
+        MigrationError::FieldEncryptionLookupCollision {
+            entity_id: "asset".to_owned(),
+            record_ids: vec![
+                Uuid::from_u128(1).to_string(),
+                Uuid::from_u128(3).to_string()
+            ],
+        }
+    );
+    assert_flip_value_free(
+        &error,
+        &[nfc.to_owned(), nfd.to_owned(), "canary".to_owned()],
+    );
+    assert_non_ready_target(
+        &scenario.database,
+        &scenario.active,
+        &scenario.package,
+        "failed",
+    )
+    .await;
+    let step = step_snapshot(
+        &scenario.database,
+        &scenario.package,
+        "reindex-secret-lookup",
+    )
+    .await;
+    assert_eq!(step.0, "pending");
+    assert_eq!(step.2, 0);
+    assert_eq!(
+        stored_envelopes_and_digests(&scenario).await,
+        before,
+        "a refused re-index leaves every stored column untouched"
+    );
+    scenario.database.cleanup().await;
+}
+
+/// A unique lookup holds "Zoë" spelled in NFC and in NFD. Adding `nfc` to its
+/// list would merge them, so the apply refuses, naming the two record ids and
+/// no value, before any step commits. The active catalog survives, so
+/// reconcile answers Revertible, reverts the target, and the runtime serves
+/// reads again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_refused_blind_index_reindex_stays_revertible_and_readable() {
+    let nfc = "Zo\u{eb}";
+    let nfd = "Zoe\u{308}";
+    let secrets = [Some(nfc), Some("ana"), Some(nfd)];
+    let scenario = reindex_scenario(ReindexScenarioRequest {
+        prior_variant: Variant::EncryptedFlipOn,
+        prior_normalization: &[NormalizationStep::Uppercase],
+        candidate_variant: Variant::EncryptedNfcUppercaseLookup,
+        successor_normalization: &[NormalizationStep::Nfc, NormalizationStep::Uppercase],
+        secrets: &secrets,
+        aliases: &[],
+        max_total_rows: 10_000,
+    })
+    .await;
+    let before = stored_envelopes_and_digests(&scenario).await;
+    let error = apply_flip(
+        &scenario.database,
+        &scenario.package,
+        &scenario.active,
+        &scenario.keys,
+        None,
+    )
+    .await
+    .expect_err("the NFC and NFD spellings refuse the re-index");
+    assert_eq!(
+        error,
+        MigrationError::FieldEncryptionLookupCollision {
+            entity_id: "asset".to_owned(),
+            record_ids: vec![
+                Uuid::from_u128(1).to_string(),
+                Uuid::from_u128(3).to_string()
+            ],
+        }
+    );
+    assert_flip_value_free(&error, &[nfc.to_owned(), nfd.to_owned()]);
+    assert_refused_reindex_is_revertible(&scenario, &["reindex-secret-lookup"], &before).await;
+    scenario.database.cleanup().await;
+}
+
+/// Two re-index steps where only the second collides: the first step must not
+/// commit before the second step's check passes, so the refusal stays
+/// revertible.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_blind_index_reindex_checks_every_step_before_any_commits() {
+    let nfc = "Zo\u{eb}";
+    let nfd = "Zoe\u{308}";
+    let scenario = reindex_scenario(ReindexScenarioRequest {
+        prior_variant: Variant::EncryptedPairLookups,
+        prior_normalization: &[NormalizationStep::Uppercase],
+        candidate_variant: Variant::EncryptedPairNfcLookups,
+        successor_normalization: &[NormalizationStep::Nfc, NormalizationStep::Uppercase],
+        secrets: &[Some("one"), Some("two"), Some("three")],
+        aliases: &[Some(nfc), Some("ana"), Some(nfd)],
+        max_total_rows: 10_000,
+    })
+    .await;
+    let before = stored_envelopes_and_digests(&scenario).await;
+    let error = apply_flip(
+        &scenario.database,
+        &scenario.package,
+        &scenario.active,
+        &scenario.keys,
+        None,
+    )
+    .await
+    .expect_err("the colliding alias lookup refuses the whole plan");
+    assert_eq!(
+        error,
+        MigrationError::FieldEncryptionLookupCollision {
+            entity_id: "asset".to_owned(),
+            record_ids: vec![
+                Uuid::from_u128(1).to_string(),
+                Uuid::from_u128(3).to_string()
+            ],
+        }
+    );
+    assert_flip_value_free(&error, &[nfc.to_owned(), nfd.to_owned()]);
+    assert_refused_reindex_is_revertible(
+        &scenario,
+        &["reindex-secret-lookup", "reindex-alias-lookup"],
+        &before,
+    )
+    .await;
+    scenario.database.cleanup().await;
+}
+
+/// A re-index over more rows than its step's reviewed `maxTotalRows` would
+/// stop partway and leave mixed digests, so the apply counts the rows before
+/// any write and refuses by name, for a unique and a non-unique lookup alike.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_blind_index_reindex_refuses_more_rows_than_its_ceiling() {
+    for (prior_variant, candidate_variant) in [
+        (
+            Variant::EncryptedFlipOn,
+            Variant::EncryptedNfcUppercaseLookup,
+        ),
+        (
+            Variant::EncryptedSharedLookup,
+            Variant::EncryptedSharedNfcLookup,
+        ),
+    ] {
+        let scenario = reindex_scenario(ReindexScenarioRequest {
+            prior_variant,
+            prior_normalization: &[NormalizationStep::Uppercase],
+            candidate_variant,
+            successor_normalization: &[NormalizationStep::Nfc, NormalizationStep::Uppercase],
+            secrets: &[Some("one"), Some("two"), None],
+            aliases: &[],
+            max_total_rows: 2,
+        })
+        .await;
+        let before = stored_envelopes_and_digests(&scenario).await;
+        let error = apply_flip(
+            &scenario.database,
+            &scenario.package,
+            &scenario.active,
+            &scenario.keys,
+            None,
+        )
+        .await
+        .expect_err("three rows exceed the reviewed ceiling of two");
+        assert_eq!(
+            error,
+            MigrationError::BlindIndexReindexRowLimit {
+                entity_id: "asset".to_owned(),
+                step_id: "reindex-secret-lookup".to_owned(),
+                row_count: 3,
+                maximum_total_rows: 2,
+            }
+        );
+        assert_refused_reindex_is_revertible(&scenario, &["reindex-secret-lookup"], &before).await;
+        scenario.database.cleanup().await;
+    }
+}
+
+/// The operator preflight scans a re-index step the way the apply does: it
+/// counts the rows the step walks and names the records whose new digests
+/// collide, value-free, opening the envelopes through the configured key
+/// source. Without a key source it refuses the re-index by name instead of
+/// skipping it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_operator_preflight_scans_blind_index_reindex_steps() {
+    let nfc = "Zo\u{eb}";
+    let nfd = "Zoe\u{308}";
+    let scenario = reindex_scenario(ReindexScenarioRequest {
+        prior_variant: Variant::EncryptedFlipOn,
+        prior_normalization: &[NormalizationStep::Uppercase],
+        candidate_variant: Variant::EncryptedNfcUppercaseLookup,
+        successor_normalization: &[NormalizationStep::Nfc, NormalizationStep::Uppercase],
+        secrets: &[Some(nfc), Some("ana"), Some(nfd), None],
+        aliases: &[],
+        max_total_rows: 10_000,
+    })
+    .await;
+    let predecessor_baseline = CompiledRegistryMigrationBaseline::from_compiled(
+        &scenario.active.package_digest,
+        &scenario.prior,
+    );
+    let plan = scenario
+        .package
+        .reviewed_migration_plan()
+        .expect("the successor carries its reviewed plan");
+    let request = |field_encryption| FieldEncryptionBackfillPreflightRequest {
+        expected: &scenario.active,
+        migration_role: &scenario.database.migration_role,
+        timeouts: FieldEncryptionBackfillTimeouts::new(
+            Duration::from_secs(5),
+            Duration::from_secs(5),
+        )
+        .expect("preflight timeouts are bounded"),
+        registry: &scenario.candidate,
+        plan,
+        predecessor_baseline: Some(&predecessor_baseline),
+        target_package_revision: scenario.package.package_digest(),
+        field_encryption,
+    };
+    let (mut migration, migration_task) = scenario.database.connect_migration().await;
+    assert_eq!(
+        preflight_field_encryption_backfill(&mut migration, request(None))
+            .await
+            .expect_err("a re-index needs the key to open its envelopes"),
+        FieldEncryptionBackfillPreflightError::KeySource
+    );
+    let report = preflight_field_encryption_backfill(
+        &mut migration,
+        request(Some(AppliedFieldEncryptionKeySource::new(
+            &scenario.keys.provider,
+            &scenario.keys.secrets,
+        ))),
+    )
+    .await
+    .expect("the operator preflight scans the re-index");
+    migration_task.abort();
+    assert!(report.steps.is_empty(), "the plan seals no plaintext");
+    assert_eq!(
+        report.reindex_steps,
+        vec![BlindIndexReindexStepPreflight {
+            entity_id: "asset".to_owned(),
+            step_id: "reindex-secret-lookup".to_owned(),
+            maximum_total_rows: 10_000,
+            row_count: 4,
+            fields: vec![BlindIndexReindexFieldPreflight {
+                field_id: "secret".to_owned(),
+                unique_blind_index: true,
+                duplicate_record_ids: vec![
+                    Uuid::from_u128(1).to_string(),
+                    Uuid::from_u128(3).to_string()
+                ],
+            }],
+        }]
+    );
+    let rendered = serde_json::to_string(&report).expect("the report renders");
+    assert!(!rendered.contains(nfc) && !rendered.contains(nfd));
+    scenario.database.cleanup().await;
+}
+
+/// A refused re-index left no durable trace: the target is `failed`, every
+/// step is pending, the stored columns are unchanged, reconcile answers
+/// Revertible over the intact active catalog, executing it restores the
+/// active registry, and the runtime then reads every record.
+async fn assert_refused_reindex_is_revertible(
+    scenario: &ReindexScenario,
+    step_ids: &[&str],
+    before: &[(Option<Vec<u8>>, Option<Vec<u8>>)],
+) {
+    assert_non_ready_target(
+        &scenario.database,
+        &scenario.active,
+        &scenario.package,
+        "failed",
+    )
+    .await;
+    for step_id in step_ids {
+        let step = step_snapshot(&scenario.database, &scenario.package, step_id).await;
+        assert_eq!(step.0, "pending", "{step_id} never started");
+        assert_eq!(step.2, 0, "{step_id} wrote no row");
+    }
+    assert_eq!(
+        stored_envelopes_and_digests(scenario).await,
+        before,
+        "a refused re-index leaves every stored column untouched"
+    );
+
+    let assessed = reconcile(
+        &scenario.database,
+        &scenario.package,
+        &scenario.active,
+        &scenario.prior,
+        false,
+    )
+    .await
+    .expect("the refused target is assessed");
+    assert_eq!(assessed.outcome, ReconcileOutcome::Revertible);
+    assert_eq!(assessed.active_catalog_finding, None);
+    assert_eq!(assessed.durable_step_progress, Some(false));
+    let reverted = reconcile(
+        &scenario.database,
+        &scenario.package,
+        &scenario.active,
+        &scenario.prior,
+        true,
+    )
+    .await
+    .expect("the refused target reverts");
+    assert!(reverted.executed);
+    assert_ready_target(&scenario.database, &scenario.active).await;
+    assert_eq!(
+        runtime_asset_count(scenario).await,
+        i64::try_from(before.len()).expect("the seed count fits"),
+        "the runtime reads every record after the revert"
+    );
+}
+
+/// Counts the records a runtime read transaction sees through the source view.
+async fn runtime_asset_count(scenario: &ReindexScenario) -> i64 {
+    let pool = scenario
+        .database
+        .runtime_config
+        .build_pool()
+        .expect("runtime pool builds");
+    let mut runtime = pool.get_for_test().await.expect("runtime connects");
+    let claims = ClaimContext::for_compiled(
+        &scenario.prior,
+        "asset",
+        Some("reindex-reader".to_owned()),
+        "reader",
+        None,
+        Vec::new(),
+    )
+    .expect("claim context is compiler-bound");
+    let lock_key =
+        RegistryLockKey::derive(scenario.prior.registry_id()).expect("lock key is bounded");
+    let transaction = begin_record_transaction(
+        &mut runtime,
+        lock_key,
+        Duration::from_secs(1),
+        &scenario.active,
+        &claims,
+    )
+    .await
+    .expect("the runtime opens a record transaction on the ready registry");
+    let view = &scenario.prior.entities()["asset"].source_relation.sql_name;
+    let count: i64 = transaction
+        .transaction_for_test()
+        .query_one(
+            &format!(
+                "SELECT pg_catalog.count(*) FROM registry_source.{}",
+                quote(view)
+            ),
+            &[],
+        )
+        .await
+        .expect("the runtime reads the source view")
+        .get(0);
+    transaction
+        .rollback()
+        .await
+        .expect("the read transaction rolls back");
+    count
+}
+
+/// A record whose new digest equals the stored digest of a record the walk
+/// has not reached yet is a valid end state: each chunk clears that stale
+/// digest before it writes the new ones, so the re-index completes in either
+/// record order, inside one chunk or across chunks and an interruption.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_blind_index_reindex_completes_when_a_later_record_holds_a_new_digest() {
+    // Under the predecessor's separator-stripping list "abc" and "AB-C" hold
+    // "abc" and "ABC"; under the upper-casing successor "abc" derives "ABC"
+    // and "AB-C" derives "AB-C", so the end state is unique.
+    for secrets in [
+        &[Some("abc"), Some("AB-C")][..],
+        &[Some("AB-C"), Some("abc")][..],
+    ] {
+        let scenario = reindex_scenario(ReindexScenarioRequest {
+            prior_variant: Variant::EncryptedSeparatorLookup,
+            prior_normalization: &[NormalizationStep::RemoveSeparators],
+            candidate_variant: Variant::EncryptedFlipOn,
+            successor_normalization: &[NormalizationStep::Uppercase],
+            secrets,
+            aliases: &[],
+            max_total_rows: 10_000,
+        })
+        .await;
+        let target = apply_flip(
+            &scenario.database,
+            &scenario.package,
+            &scenario.active,
+            &scenario.keys,
+            None,
+        )
+        .await
+        .expect("a later record holding a new digest does not refuse the re-index");
+        assert_ready_target(&scenario.database, &target).await;
+        assert_digests_follow_successor(&scenario, secrets).await;
+        scenario.database.cleanup().await;
+    }
+
+    // With chunks of two, the holder of "ABC" is in the second chunk: the
+    // first chunk clears it, the interruption leaves it cleared, and the
+    // resume derives its new digest.
+    let secrets = [Some("abc"), Some("xy"), Some("AB-C")];
+    let scenario = reindex_scenario(ReindexScenarioRequest {
+        prior_variant: Variant::EncryptedSeparatorLookup,
+        prior_normalization: &[NormalizationStep::RemoveSeparators],
+        candidate_variant: Variant::EncryptedFlipOn,
+        successor_normalization: &[NormalizationStep::Uppercase],
+        secrets: &secrets,
+        aliases: &[],
+        max_total_rows: 10_000,
+    })
+    .await;
+    let interrupted = apply_flip(
+        &scenario.database,
+        &scenario.package,
+        &scenario.active,
+        &scenario.keys,
+        Some(1),
+    )
+    .await;
+    assert_eq!(
+        interrupted.expect_err("the injected fault interrupts the re-index after one chunk"),
+        MigrationError::ApplyFailed
+    );
+    let stopped = stored_envelopes_and_digests(&scenario).await;
+    assert_eq!(
+        stopped[2].1, None,
+        "the first chunk cleared the stale digest the later record held"
+    );
+    let target = apply_flip(
+        &scenario.database,
+        &scenario.package,
+        &scenario.active,
+        &scenario.keys,
+        None,
+    )
+    .await
+    .expect("the interrupted re-index resumes and completes");
+    assert_ready_target(&scenario.database, &target).await;
+    assert_digests_follow_successor(&scenario, &secrets).await;
+    scenario.database.cleanup().await;
+}
+
+/// Every stored digest equals the one the successor list derives from the
+/// seeded plaintext, and no two records share one.
+async fn assert_digests_follow_successor(scenario: &ReindexScenario, secrets: &[Option<&str>]) {
+    let stored = stored_envelopes_and_digests(scenario).await;
+    assert_eq!(stored.len(), secrets.len());
+    for (index, secret) in secrets.iter().enumerate() {
+        let expected = secret.map(|plaintext| {
+            scenario
+                .service
+                .blind_index(
+                    "asset",
+                    "secret",
+                    &FieldEncryptionService::normalize(
+                        &scenario.successor_normalization,
+                        plaintext,
+                    ),
+                )
+                .to_vec()
+        });
+        assert_eq!(
+            stored[index].1, expected,
+            "row {index} follows the new list"
+        );
+    }
+    let distinct = stored
+        .iter()
+        .filter_map(|(_, digest)| digest.as_ref())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(distinct.len(), secrets.iter().flatten().count());
 }
