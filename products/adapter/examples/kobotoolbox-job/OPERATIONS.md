@@ -290,8 +290,8 @@ the previous job definition, let passes settle those items, then ship the
 change. A changed receiver stops as `adapter.job.coordinator-receiver-changed`
 instead; restoring the original receiver recovers it. A direct BReg job fences
 the same way under `adapter.job.breg-body-changed` (the mapped operation
-differs), `adapter.job.breg-receiver-changed` (another BReg deployment, caller,
-access profile, Action or mode) and `adapter.job.breg-identity-unrecorded`
+differs), `adapter.job.breg-receiver-changed` (another BReg binding, base URL, token
+endpoint, caller, TLS trust profile, access profile, Action or mode) and `adapter.job.breg-identity-unrecorded`
 (staged before schema 103); the recoveries are the same.
 
 A pass that stops as `adapter.job.identity-migration-required` found stored
